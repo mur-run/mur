@@ -75,6 +75,19 @@ enum Commands {
         #[arg(long, default_value = "0.1")]
         amount: f64,
     },
+    /// Promote a pattern's tier
+    Promote {
+        /// Pattern name
+        name: String,
+        /// Target tier (project/core)
+        #[arg(long, default_value = "project")]
+        tier: String,
+    },
+    /// Deprecate a pattern manually
+    Deprecate {
+        /// Pattern name
+        name: String,
+    },
     /// Rebuild index from YAML files
     Reindex,
     /// Show pattern connections
@@ -146,10 +159,9 @@ async fn main() -> Result<()> {
             project: _,
         } => cmd_inject(&query).await?,
         Commands::Reindex => cmd_reindex().await?,
-        Commands::Links { name: _ } => {
-            println!("🔗 Links (Phase 3)");
-            todo!()
-        }
+        Commands::Promote { name, tier } => cmd_promote(&name, &tier)?,
+        Commands::Deprecate { name } => cmd_deprecate(&name)?,
+        Commands::Links { name } => cmd_links(&name)?,
         Commands::Dashboard => {
             println!("📊 Dashboard (Phase 2)");
             todo!()
@@ -546,6 +558,38 @@ fn cmd_gc(auto: bool) -> Result<()> {
         println!("Applied {} lifecycle changes.\n", lifecycle_changes);
     }
 
+    // Link discovery pass
+    {
+        use evolve::linker::{discover_links, apply_links};
+        let mut all = store.list_all()?;
+        let mut link_count = 0;
+        for i in 0..all.len() {
+            let (left, right) = all.split_at_mut(i);
+            let (current, rest) = right.split_first_mut().unwrap();
+            let others: Vec<Pattern> = left.iter().chain(rest.iter()).cloned().collect();
+            let suggestions = discover_links(current, &others);
+            if !suggestions.is_empty() {
+                let mut others_mut: Vec<Pattern> = left.iter().chain(rest.iter()).cloned().collect();
+                apply_links(current, &mut others_mut, &suggestions);
+                store.save(current)?;
+                // Save updated targets too
+                for updated in &others_mut {
+                    if updated.links.related.contains(&current.name)
+                        || left.iter().chain(rest.iter()).any(|orig| {
+                            orig.name == updated.name && orig.links.related != updated.links.related
+                        })
+                    {
+                        store.save(updated)?;
+                    }
+                }
+                link_count += suggestions.len();
+            }
+        }
+        if link_count > 0 {
+            println!("🔗 Discovered {} new links.\n", link_count);
+        }
+    }
+
     // Second pass: find low-quality candidates for archival
     let patterns = store.list_all()?; // reload after changes
     let candidates: Vec<&Pattern> = patterns
@@ -623,6 +667,77 @@ fn cmd_migrate() -> Result<()> {
         for e in &result.errors {
             println!("   {}", e);
         }
+    }
+
+    Ok(())
+}
+
+fn cmd_promote(name: &str, tier_str: &str) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let mut pattern = store.get(name)?;
+
+    let new_tier = match tier_str {
+        "project" => Tier::Project,
+        "core" => Tier::Core,
+        _ => {
+            println!("❌ Invalid tier: {}. Use 'project' or 'core'.", tier_str);
+            return Ok(());
+        }
+    };
+
+    let old_tier = pattern.tier.clone();
+    pattern.tier = new_tier.clone();
+    pattern.updated_at = chrono::Utc::now();
+    store.save(&pattern)?;
+
+    println!(
+        "⬆️  Promoted '{}': {:?} → {:?}",
+        name, old_tier, new_tier
+    );
+    Ok(())
+}
+
+fn cmd_deprecate(name: &str) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let mut pattern = store.get(name)?;
+
+    pattern.lifecycle.status = LifecycleStatus::Deprecated;
+    pattern.updated_at = chrono::Utc::now();
+    store.save(&pattern)?;
+
+    println!("⚠️  Deprecated '{}'", name);
+    Ok(())
+}
+
+fn cmd_links(name: &str) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let pattern = store.get(name)?;
+
+    println!("🔗 Links for '{}':\n", name);
+
+    if !pattern.links.related.is_empty() {
+        println!("  Related:");
+        for r in &pattern.links.related {
+            println!("    ↔ {}", r);
+        }
+    }
+    if !pattern.links.supersedes.is_empty() {
+        println!("  Supersedes:");
+        for s in &pattern.links.supersedes {
+            println!("    → {} (deprecated)", s);
+        }
+    }
+    if !pattern.links.workflows.is_empty() {
+        println!("  Workflows:");
+        for w in &pattern.links.workflows {
+            println!("    📋 {}", w);
+        }
+    }
+    if pattern.links.related.is_empty()
+        && pattern.links.supersedes.is_empty()
+        && pattern.links.workflows.is_empty()
+    {
+        println!("  No links yet. Run `mur gc` to auto-discover links.");
     }
 
     Ok(())
