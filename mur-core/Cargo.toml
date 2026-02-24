@@ -28,3 +28,7 @@ uuid = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 dirs = "6"
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"

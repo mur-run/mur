@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 /// Global MUR configuration (~/.mur/config.yaml)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct Config {
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -17,16 +18,6 @@ pub struct Config {
     pub paths: PathConfig,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            embedding: EmbeddingConfig::default(),
-            llm: LlmConfig::default(),
-            retrieval: RetrievalConfig::default(),
-            paths: PathConfig::default(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
