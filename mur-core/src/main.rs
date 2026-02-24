@@ -145,12 +145,9 @@ async fn main() -> Result<()> {
             todo!()
         }
         Commands::Inject {
-            query: _,
+            query,
             project: _,
-        } => {
-            println!("💉 Smart inject (Phase 2)");
-            todo!()
-        }
+        } => cmd_inject(&query)?,
         Commands::Reindex => {
             println!("🔄 Reindex (Phase 2 — needs LanceDB)");
             todo!()
@@ -262,73 +259,76 @@ fn cmd_new() -> Result<()> {
 }
 
 fn cmd_search(query: &str) -> Result<()> {
+    use retrieve::gate::{evaluate_query, GateDecision};
+    use retrieve::scoring::score_and_rank;
+
+    // Adaptive gate
+    match evaluate_query(query) {
+        GateDecision::Skip(reason) => {
+            println!("⏭️  Query skipped by gate: {}", reason);
+            return Ok(());
+        }
+        GateDecision::Force => {
+            println!("⚡ Force retrieval triggered");
+        }
+        GateDecision::Pass => {}
+    }
+
     let store = YamlStore::default_store()?;
     let patterns = store.list_all()?;
+    let results = score_and_rank(query, patterns);
 
-    let query_lower = query.to_lowercase();
-    let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
-
-    let mut scored: Vec<(&Pattern, f64)> = patterns
-        .iter()
-        .filter_map(|p| {
-            let text = format!(
-                "{} {} {} {}",
-                p.name,
-                p.description,
-                p.content.as_text(),
-                p.tags.topics.join(" ")
-            )
-            .to_lowercase();
-
-            let mut score = 0.0;
-            for term in &query_terms {
-                if text.contains(term) {
-                    score += 1.0;
-                }
-                // Bonus for name match
-                if p.name.to_lowercase().contains(term) {
-                    score += 0.5;
-                }
-            }
-
-            if score > 0.0 {
-                // Weight by importance
-                score *= 0.7 + 0.3 * p.importance;
-                Some((p, score))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-    if scored.is_empty() {
+    if results.is_empty() {
         println!("No patterns found for: {}", query);
         return Ok(());
     }
 
-    println!("🔍 Found {} patterns for \"{}\":\n", scored.len(), query);
-    for (p, score) in scored.iter().take(10) {
+    println!("🔍 Found {} patterns for \"{}\":\n", results.len(), query);
+    for sp in &results {
+        let p = &sp.pattern;
         let tier_icon = match p.tier {
             Tier::Session => "📝",
             Tier::Project => "📁",
             Tier::Core => "⭐",
         };
-        let status = match p.lifecycle.status {
-            LifecycleStatus::Active => "",
-            LifecycleStatus::Deprecated => " [deprecated]",
-            LifecycleStatus::Archived => " [archived]",
-        };
         println!(
-            "  {} {} (score: {:.1}, importance: {:.0}%){}\n    {}",
+            "  {} {} (score: {:.3}, relevance: {:.3}, importance: {:.0}%)\n    {}",
             tier_icon,
             p.name,
-            score,
+            sp.score,
+            sp.relevance,
             p.importance * 100.0,
-            status,
             p.description
         );
+    }
+
+    Ok(())
+}
+
+fn cmd_inject(query: &str) -> Result<()> {
+    use inject::hook::format_for_injection;
+    use retrieve::gate::{evaluate_query, GateDecision};
+    use retrieve::scoring::score_and_rank;
+
+    match evaluate_query(query) {
+        GateDecision::Skip(reason) => {
+            eprintln!("# No patterns (gate: {})", reason);
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let store = YamlStore::default_store()?;
+    let patterns = store.list_all()?;
+    let results = score_and_rank(query, patterns);
+
+    let pattern_refs: Vec<Pattern> = results.into_iter().map(|sp| sp.pattern).collect();
+    let output = format_for_injection(&pattern_refs, 2000);
+
+    if output.is_empty() {
+        eprintln!("# No relevant patterns found");
+    } else {
+        print!("{}", output);
     }
 
     Ok(())
@@ -461,40 +461,72 @@ fn cmd_boost(name: &str, amount: f64) -> Result<()> {
 }
 
 fn cmd_feedback(name: &str, helpful: bool) -> Result<()> {
+    use evolve::feedback::{apply_feedback, FeedbackSignal};
+
     let store = YamlStore::default_store()?;
     let mut pattern = store.get(name)?;
 
-    if helpful {
-        pattern.evidence.success_signals += 1;
+    let signal = if helpful {
         println!("👍 Recorded helpful feedback for {}", name);
+        FeedbackSignal::Helpful
     } else {
-        pattern.evidence.override_signals += 1;
         println!("👎 Recorded unhelpful feedback for {}", name);
-    }
+        FeedbackSignal::Unhelpful
+    };
 
-    let eff = pattern.evidence.effectiveness();
-    pattern.updated_at = chrono::Utc::now();
+    let old_importance = pattern.importance;
+    apply_feedback(&mut pattern, signal);
     store.save(&pattern)?;
 
+    let eff = pattern.evidence.effectiveness();
     println!(
         "   Effectiveness: {:.0}% ({} success / {} override)",
         eff * 100.0,
         pattern.evidence.success_signals,
         pattern.evidence.override_signals
     );
+    println!(
+        "   Importance: {:.0}% → {:.0}%",
+        old_importance * 100.0,
+        pattern.importance * 100.0
+    );
 
     Ok(())
 }
 
 fn cmd_gc(auto: bool) -> Result<()> {
+    use evolve::lifecycle::{evaluate_lifecycle, apply_lifecycle_action, LifecycleAction};
+
     let store = YamlStore::default_store()?;
     let patterns = store.list_all()?;
 
+    // First pass: apply lifecycle evaluations (deprecate/archive)
+    let mut lifecycle_changes = 0;
+    for mut p in patterns.clone() {
+        let action = evaluate_lifecycle(&p);
+        if action != LifecycleAction::None {
+            let desc = match &action {
+                LifecycleAction::Promote(tier) => format!("promoted to {:?}", tier),
+                LifecycleAction::Deprecate => "deprecated".into(),
+                LifecycleAction::Archive => "archived".into(),
+                LifecycleAction::None => unreachable!(),
+            };
+            println!("  🔄 {} — {}", p.name, desc);
+            apply_lifecycle_action(&mut p, &action);
+            store.save(&p)?;
+            lifecycle_changes += 1;
+        }
+    }
+    if lifecycle_changes > 0 {
+        println!("Applied {} lifecycle changes.\n", lifecycle_changes);
+    }
+
+    // Second pass: find low-quality candidates for archival
+    let patterns = store.list_all()?; // reload after changes
     let candidates: Vec<&Pattern> = patterns
         .iter()
         .filter(|p| {
-            // Skip pinned
-            if p.lifecycle.pinned {
+            if p.lifecycle.pinned || p.lifecycle.status != LifecycleStatus::Active {
                 return false;
             }
             // Low confidence
