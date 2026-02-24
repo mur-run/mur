@@ -148,10 +148,7 @@ async fn main() -> Result<()> {
             query,
             project: _,
         } => cmd_inject(&query)?,
-        Commands::Reindex => {
-            println!("🔄 Reindex (Phase 2 — needs LanceDB)");
-            todo!()
-        }
+        Commands::Reindex => cmd_reindex().await?,
         Commands::Links { name: _ } => {
             println!("🔗 Links (Phase 3)");
             todo!()
@@ -599,6 +596,66 @@ fn cmd_migrate() -> Result<()> {
             println!("   {}", e);
         }
     }
+
+    Ok(())
+}
+
+async fn cmd_reindex() -> Result<()> {
+    use store::embedding::{embed, EmbeddingConfig};
+    use store::lancedb::VectorStore;
+
+    let store = YamlStore::default_store()?;
+    let patterns = store.list_all()?;
+
+    if patterns.is_empty() {
+        println!("No patterns to index.");
+        return Ok(());
+    }
+
+    let config = EmbeddingConfig::default();
+    let index_path = dirs::home_dir()
+        .expect("no home dir")
+        .join(".mur")
+        .join("index");
+
+    println!(
+        "🔄 Reindexing {} patterns using {} ({})...",
+        patterns.len(),
+        config.model,
+        match &config.provider {
+            store::embedding::EmbeddingProvider::Ollama { base_url } => base_url.clone(),
+            store::embedding::EmbeddingProvider::OpenAI { .. } => "OpenAI".into(),
+        }
+    );
+
+    let mut indexed = Vec::new();
+    let mut errors = 0;
+
+    for (i, pattern) in patterns.iter().enumerate() {
+        let text = format!("{}: {}\n{}", pattern.name, pattern.description, pattern.content.as_text());
+        match embed(&text, &config).await {
+            Ok(embedding) => {
+                indexed.push((pattern.clone(), embedding));
+                if (i + 1) % 10 == 0 {
+                    println!("  {}/{} embedded...", i + 1, patterns.len());
+                }
+            }
+            Err(e) => {
+                eprintln!("  ⚠️  {} — {}", pattern.name, e);
+                errors += 1;
+            }
+        }
+    }
+
+    let vector_store = VectorStore::open(&index_path).await?;
+    vector_store.build_index(&indexed).await?;
+
+    println!(
+        "✅ Indexed {} patterns ({} errors). Index: {}",
+        indexed.len(),
+        errors,
+        index_path.display()
+    );
 
     Ok(())
 }
