@@ -28,7 +28,87 @@ const MAX_PATTERNS: usize = 5;
 /// Max total tokens (rough: 1 token ≈ 4 chars)
 const MAX_TOKENS: usize = 2000;
 
-/// Score a set of candidate patterns against a query.
+/// Score patterns with hybrid search (vector + keyword).
+/// `vector_scores` maps pattern name → vector similarity (0-1).
+pub fn score_and_rank_hybrid(
+    query: &str,
+    candidates: Vec<Pattern>,
+    vector_scores: &std::collections::HashMap<String, f64>,
+) -> Vec<ScoredPattern> {
+    let query_lower = query.to_lowercase();
+    let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+
+    let mut scored: Vec<ScoredPattern> = candidates
+        .into_iter()
+        .filter(|p| !p.lifecycle.muted)
+        .filter(|p| p.lifecycle.status == mur_common::pattern::LifecycleStatus::Active)
+        .map(|p| {
+            let kw_relevance = keyword_relevance(&query_words, &p);
+            let vec_relevance = vector_scores.get(&p.name).copied().unwrap_or(0.0);
+            // Hybrid: weighted blend of vector and keyword relevance
+            let relevance = vec_relevance * 0.7 + kw_relevance * 0.3;
+
+            let recency = recency_score(&p);
+            let effectiveness = p.evidence.effectiveness();
+            let importance = p.importance;
+            let time_decay = time_decay_score(&p);
+            let length_norm = length_norm_score(&p);
+
+            let scope_mult = if p.applies.projects.is_empty()
+                && p.applies.languages.is_empty()
+                && p.applies.tools.is_empty()
+            {
+                0.7
+            } else {
+                1.0
+            };
+
+            let score = (relevance * W_RELEVANCE
+                + recency * W_RECENCY
+                + effectiveness * W_EFFECTIVENESS
+                + importance * W_IMPORTANCE
+                + time_decay * W_TIME_DECAY
+                + length_norm * W_LENGTH_NORM)
+                * scope_mult;
+
+            ScoredPattern {
+                pattern: p,
+                score,
+                relevance,
+            }
+        })
+        .filter(|sp| sp.score >= SCORE_FLOOR)
+        .collect();
+
+    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| {
+        let score_diff = (a.score - b.score).abs();
+        if score_diff < 0.05 {
+            tier_priority(&b.pattern.tier).cmp(&tier_priority(&a.pattern.tier))
+        } else {
+            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        }
+    });
+
+    let mut result = Vec::new();
+    let mut token_count = 0;
+    for sp in scored {
+        if result.len() >= MAX_PATTERNS {
+            break;
+        }
+        let content_len = sp.pattern.content.as_text().len();
+        let est_tokens = content_len / 4;
+        if token_count + est_tokens > MAX_TOKENS && !result.is_empty() {
+            break;
+        }
+        token_count += est_tokens;
+        result.push(sp);
+    }
+
+    result
+}
+
+/// Score a set of candidate patterns against a query (keyword-only fallback).
 /// Returns scored patterns sorted by score, filtered and budget-limited.
 pub fn score_and_rank(query: &str, candidates: Vec<Pattern>) -> Vec<ScoredPattern> {
     let query_lower = query.to_lowercase();

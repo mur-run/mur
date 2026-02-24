@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
         Commands::Inject {
             query,
             project: _,
-        } => cmd_inject(&query)?,
+        } => cmd_inject(&query).await?,
         Commands::Reindex => cmd_reindex().await?,
         Commands::Links { name: _ } => {
             println!("🔗 Links (Phase 3)");
@@ -302,10 +302,13 @@ fn cmd_search(query: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_inject(query: &str) -> Result<()> {
+async fn cmd_inject(query: &str) -> Result<()> {
     use inject::hook::format_for_injection;
     use retrieve::gate::{evaluate_query, GateDecision};
-    use retrieve::scoring::score_and_rank;
+    use retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
+    use store::embedding::{embed, EmbeddingConfig};
+    use store::lancedb::VectorStore;
+    use std::collections::HashMap;
 
     match evaluate_query(query) {
         GateDecision::Skip(reason) => {
@@ -315,9 +318,37 @@ fn cmd_inject(query: &str) -> Result<()> {
         _ => {}
     }
 
-    let store = YamlStore::default_store()?;
-    let patterns = store.list_all()?;
-    let results = score_and_rank(query, patterns);
+    let yaml_store = YamlStore::default_store()?;
+    let patterns = yaml_store.list_all()?;
+
+    // Try hybrid search if LanceDB index exists
+    let index_path = dirs::home_dir()
+        .expect("no home dir")
+        .join(".mur")
+        .join("index");
+
+    let results = if index_path.exists() {
+        // Try vector search
+        let config = EmbeddingConfig::default();
+        match embed(query, &config).await {
+            Ok(query_embedding) => {
+                let vector_store = VectorStore::open(&index_path).await?;
+                let vector_results = vector_store.search(&query_embedding, 20).await?;
+                let vector_scores: HashMap<String, f64> = vector_results
+                    .into_iter()
+                    .map(|r| (r.name, r.similarity as f64))
+                    .collect();
+                score_and_rank_hybrid(query, patterns, &vector_scores)
+            }
+            Err(_) => {
+                // Embedding failed (Ollama not running?), fall back to keyword
+                eprintln!("# Falling back to keyword search (embedding unavailable)");
+                score_and_rank(query, patterns)
+            }
+        }
+    } else {
+        score_and_rank(query, patterns)
+    };
 
     let pattern_refs: Vec<Pattern> = results.into_iter().map(|sp| sp.pattern).collect();
     let output = format_for_injection(&pattern_refs, 2000);
