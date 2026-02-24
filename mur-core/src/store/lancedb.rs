@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 const TABLE_NAME: &str = "patterns";
-const VECTOR_DIM: i32 = 768; // nomic-embed-text default
+const VECTOR_DIM: i32 = 1024; // qwen3-embedding:0.6b
 
 /// LanceDB-backed vector index for patterns.
 pub struct VectorStore {

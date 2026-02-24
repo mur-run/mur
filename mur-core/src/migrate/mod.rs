@@ -266,11 +266,12 @@ mod tests {
             content: "Do the thing".into(),
             domain: "dev".into(),
             category: "convention".into(),
-            tags: vec!["swift".into()],
+            tags: V1Tags::List(vec!["swift".into()]),
             confidence: 0.8,
             team_shared: false,
             created_at: "2026-02-16T07:54:16+08:00".into(),
             updated_at: "2026-02-16T07:54:16+08:00".into(),
+            _extra: std::collections::HashMap::new(),
         };
 
         let v2 = convert_v1_to_v2(&v1).unwrap();

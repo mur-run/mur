@@ -23,8 +23,8 @@ impl Default for EmbeddingConfig {
             provider: EmbeddingProvider::Ollama {
                 base_url: "http://localhost:11434".into(),
             },
-            model: "nomic-embed-text".into(),
-            dimensions: 768,
+            model: "qwen3-embedding:0.6b".into(),
+            dimensions: 1024,
         }
     }
 }
