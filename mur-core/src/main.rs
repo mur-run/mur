@@ -140,10 +140,7 @@ async fn main() -> Result<()> {
                 todo!()
             }
         },
-        Commands::Sync => {
-            println!("🔄 Smart sync (Phase 2)");
-            todo!()
-        }
+        Commands::Sync => cmd_sync()?,
         Commands::Inject {
             query,
             project: _,
@@ -628,6 +625,57 @@ fn cmd_migrate() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn cmd_sync() -> Result<()> {
+    use inject::sync::{default_targets, generate_sync_content, write_sync_file};
+    use retrieve::scoring::score_and_rank;
+
+    let store = YamlStore::default_store()?;
+    let patterns = store.list_all()?;
+
+    if patterns.is_empty() {
+        println!("No patterns to sync.");
+        return Ok(());
+    }
+
+    // Get current working directory for project-scoped sync
+    let cwd = std::env::current_dir()?;
+    let targets = default_targets();
+
+    for target in &targets {
+        let target_path = cwd.join(&target.file);
+
+        // Score patterns for this project context
+        let project_name = cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // Use the project name as a rough query for relevance
+        let scored = score_and_rank(&project_name, patterns.clone());
+        let top: Vec<Pattern> = scored
+            .into_iter()
+            .take(target.max_patterns)
+            .map(|sp| sp.pattern)
+            .collect();
+
+        if top.is_empty() {
+            continue;
+        }
+
+        let content = generate_sync_content(&top, &target.format);
+        write_sync_file(&target_path, &content, &target.format)?;
+        println!(
+            "  ✅ {} — wrote {} patterns to {}",
+            target.name,
+            top.len(),
+            target_path.display()
+        );
+    }
+
+    println!("🔄 Sync complete.");
     Ok(())
 }
 
