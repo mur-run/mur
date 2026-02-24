@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "mur-common",
+    "mur-core",
+    # "mur-commander",  # future
+]
+
+[workspace.package]
+version = "2.0.0-alpha.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/mur-run/mur"
+authors = ["David Chang <karajan@global-ok.com>"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
+thiserror = "2"
