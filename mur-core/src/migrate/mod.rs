@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// A v1 pattern as stored by the Go version.
+/// Uses serde(flatten) to absorb any unknown fields.
 #[derive(Debug, serde::Deserialize)]
 struct V1Pattern {
     name: String,
@@ -19,7 +20,7 @@ struct V1Pattern {
     #[serde(default)]
     category: String,
     #[serde(default)]
-    tags: Vec<String>,
+    tags: V1Tags,
     #[serde(default)]
     confidence: f64,
     #[serde(default)]
@@ -28,6 +29,29 @@ struct V1Pattern {
     created_at: String,
     #[serde(default)]
     updated_at: String,
+    // Absorb unknown fields (id, security, etc.)
+    #[serde(flatten)]
+    _extra: std::collections::HashMap<String, serde_yaml::Value>,
+}
+
+/// v1 tags can be either a list of strings or a map
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(untagged)]
+enum V1Tags {
+    List(Vec<String>),
+    Map(std::collections::HashMap<String, serde_yaml::Value>),
+    #[default]
+    Empty,
+}
+
+impl V1Tags {
+    fn to_vec(&self) -> Vec<String> {
+        match self {
+            V1Tags::List(v) => v.clone(),
+            V1Tags::Map(m) => m.keys().cloned().collect(),
+            V1Tags::Empty => vec![],
+        }
+    }
 }
 
 /// Migration result summary.
@@ -111,7 +135,7 @@ fn convert_v1_to_v2(v1: &V1Pattern) -> Result<Pattern> {
     let updated = parse_datetime(&v1.updated_at).unwrap_or_else(chrono::Utc::now);
 
     // Map v1 tags + domain to v2 tags
-    let mut topics = v1.tags.clone();
+    let mut topics = v1.tags.to_vec();
     if !v1.domain.is_empty() && v1.domain != "dev" {
         topics.push(v1.domain.clone());
     }
