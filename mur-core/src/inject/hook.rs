@@ -15,6 +15,38 @@ pub enum HookTrigger {
     Manual,
 }
 
+/// Detect what kind of hook trigger a message represents.
+pub fn detect_trigger(message: &str) -> HookTrigger {
+    let lower = message.to_lowercase();
+
+    // Error indicators
+    let error_keywords = [
+        "error", "fail", "crash", "panic", "exception", "traceback",
+        "segfault", "abort", "undefined", "cannot find", "not found",
+        "permission denied", "timeout", "refused", "broken",
+        "錯誤", "失敗", "崩潰",
+    ];
+    for kw in &error_keywords {
+        if lower.contains(kw) {
+            return HookTrigger::OnError;
+        }
+    }
+
+    // Retry indicators
+    let retry_keywords = [
+        "again", "retry", "try again", "still not", "same error",
+        "still failing", "didn't work", "not working",
+        "再試", "還是不行", "一樣的問題",
+    ];
+    for kw in &retry_keywords {
+        if lower.contains(kw) {
+            return HookTrigger::OnRetry;
+        }
+    }
+
+    HookTrigger::SessionStart
+}
+
 /// Format scored patterns for injection into a prompt.
 /// Returns content only (no metadata), within token budget.
 pub fn format_for_injection(patterns: &[Pattern], max_tokens: usize) -> String {
@@ -126,6 +158,27 @@ mod tests {
         let result = format_for_injection(&[p], 2000);
         assert!(result.contains("Do X"));
         assert!(result.contains("💡 Because Y"));
+    }
+
+    #[test]
+    fn test_detect_error_trigger() {
+        assert_eq!(detect_trigger("I got an error: cannot find module"), HookTrigger::OnError);
+        assert_eq!(detect_trigger("Build failed with exit code 1"), HookTrigger::OnError);
+        assert_eq!(detect_trigger("panic at thread main"), HookTrigger::OnError);
+        assert_eq!(detect_trigger("程式崩潰了"), HookTrigger::OnError);
+    }
+
+    #[test]
+    fn test_detect_retry_trigger() {
+        assert_eq!(detect_trigger("try again please"), HookTrigger::OnRetry);
+        assert_eq!(detect_trigger("retry the build"), HookTrigger::OnRetry);
+        assert_eq!(detect_trigger("還是不行"), HookTrigger::OnRetry);
+    }
+
+    #[test]
+    fn test_detect_session_start() {
+        assert_eq!(detect_trigger("Build a REST API for users"), HookTrigger::SessionStart);
+        assert_eq!(detect_trigger("Refactor the auth module"), HookTrigger::SessionStart);
     }
 
     #[test]

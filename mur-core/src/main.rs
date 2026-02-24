@@ -312,12 +312,20 @@ fn cmd_search(query: &str) -> Result<()> {
 }
 
 async fn cmd_inject(query: &str) -> Result<()> {
-    use inject::hook::format_for_injection;
+    use inject::hook::{detect_trigger, format_for_injection, HookTrigger};
     use retrieve::gate::{evaluate_query, GateDecision};
     use retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
     use store::embedding::{embed, EmbeddingConfig};
     use store::lancedb::VectorStore;
     use std::collections::HashMap;
+
+    // Detect trigger type
+    let trigger = detect_trigger(query);
+    match &trigger {
+        HookTrigger::OnError => eprintln!("# Trigger: OnError — searching for error-related patterns"),
+        HookTrigger::OnRetry => eprintln!("# Trigger: OnRetry — searching for previous solutions"),
+        _ => {}
+    }
 
     match evaluate_query(query) {
         GateDecision::Skip(reason) => {
