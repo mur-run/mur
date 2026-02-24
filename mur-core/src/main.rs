@@ -577,42 +577,28 @@ fn cmd_gc(auto: bool) -> Result<()> {
 }
 
 fn cmd_migrate() -> Result<()> {
-    let store = YamlStore::default_store()?;
-    let patterns = store.list_all()?;
+    use migrate::migrate_directory;
 
-    let mut migrated = 0;
-    let mut already_v2 = 0;
+    let mur_dir = dirs::home_dir()
+        .expect("no home dir")
+        .join(".mur")
+        .join("patterns");
 
-    for mut p in patterns {
-        if p.schema >= 2 {
-            already_v2 += 1;
-            continue;
+    println!("🔄 Migrating patterns in {}...", mur_dir.display());
+
+    let result = migrate_directory(&mur_dir)?;
+
+    println!("✅ Migration complete:");
+    println!("   Migrated:    {}", result.migrated);
+    println!("   Already v2:  {}", result.already_v2);
+    println!("   Skipped:     {}", result.skipped);
+
+    if !result.errors.is_empty() {
+        println!("\n⚠️  Issues:");
+        for e in &result.errors {
+            println!("   {}", e);
         }
-
-        // Migrate v1 → v2
-        p.schema = SCHEMA_VERSION;
-
-        // Convert plain content to dual-layer
-        if let Content::Plain(text) = &p.content {
-            p.content = Content::DualLayer {
-                technical: text.clone(),
-                principle: None,
-            };
-        }
-
-        // Set defaults for new fields
-        if p.tier == Tier::Session && p.importance == 0.5 {
-            // Already default, just ensure schema is set
-        }
-
-        p.updated_at = chrono::Utc::now();
-        store.save(&p)?;
-        migrated += 1;
     }
-
-    println!("🔄 Migration complete:");
-    println!("   Migrated:    {}", migrated);
-    println!("   Already v2:  {}", already_v2);
 
     Ok(())
 }
