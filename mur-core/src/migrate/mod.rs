@@ -307,4 +307,194 @@ mod tests {
             _ => panic!("expected DualLayer"),
         }
     }
+
+    #[test]
+    fn test_v1_zero_confidence_defaults_to_half() {
+        let v1 = V1Pattern {
+            name: "zero-conf".into(),
+            description: "Zero confidence".into(),
+            content: "Some content".into(),
+            domain: "dev".into(),
+            category: "pattern".into(),
+            tags: V1Tags::Empty,
+            confidence: 0.0,
+            team_shared: false,
+            created_at: "".into(),
+            updated_at: "".into(),
+            _extra: std::collections::HashMap::new(),
+        };
+        let v2 = convert_v1_to_v2(&v1).unwrap();
+        assert_eq!(v2.confidence, 0.5, "Zero confidence should default to 0.5");
+    }
+
+    #[test]
+    fn test_v1_empty_description_uses_name() {
+        let v1 = V1Pattern {
+            name: "my-cool-pattern".into(),
+            description: "".into(),
+            content: "Some content".into(),
+            domain: "dev".into(),
+            category: "pattern".into(),
+            tags: V1Tags::Empty,
+            confidence: 0.7,
+            team_shared: false,
+            created_at: "".into(),
+            updated_at: "".into(),
+            _extra: std::collections::HashMap::new(),
+        };
+        let v2 = convert_v1_to_v2(&v1).unwrap();
+        assert_eq!(
+            v2.description, "my cool pattern",
+            "Empty description should use name with dashes replaced"
+        );
+    }
+
+    #[test]
+    fn test_v1_map_tags() {
+        let mut tags_map = std::collections::HashMap::new();
+        tags_map.insert("rust".to_string(), serde_yaml::Value::Bool(true));
+        tags_map.insert("async".to_string(), serde_yaml::Value::Bool(true));
+
+        let v1 = V1Pattern {
+            name: "map-tags".into(),
+            description: "Pattern with map tags".into(),
+            content: "Content".into(),
+            domain: "dev".into(),
+            category: "pattern".into(),
+            tags: V1Tags::Map(tags_map),
+            confidence: 0.5,
+            team_shared: false,
+            created_at: "".into(),
+            updated_at: "".into(),
+            _extra: std::collections::HashMap::new(),
+        };
+        let v2 = convert_v1_to_v2(&v1).unwrap();
+        assert!(
+            v2.tags.topics.contains(&"rust".to_string())
+                || v2.tags.topics.contains(&"async".to_string()),
+            "Map tags should be extracted as topics"
+        );
+    }
+
+    #[test]
+    fn test_v1_domain_not_dev_added_to_topics() {
+        let v1 = V1Pattern {
+            name: "mobile-pattern".into(),
+            description: "Mobile dev".into(),
+            content: "Content".into(),
+            domain: "mobile".into(),
+            category: "best-practice".into(),
+            tags: V1Tags::List(vec!["swift".into()]),
+            confidence: 0.6,
+            team_shared: false,
+            created_at: "".into(),
+            updated_at: "".into(),
+            _extra: std::collections::HashMap::new(),
+        };
+        let v2 = convert_v1_to_v2(&v1).unwrap();
+        assert!(
+            v2.tags.topics.contains(&"mobile".to_string()),
+            "Non-dev domain should be added to topics"
+        );
+        assert!(
+            v2.tags.topics.contains(&"best-practice".to_string()),
+            "Non-pattern category should be added to topics"
+        );
+    }
+
+    #[test]
+    fn test_v1_dev_domain_not_added() {
+        let v1 = V1Pattern {
+            name: "dev-pattern".into(),
+            description: "Dev pattern".into(),
+            content: "Content".into(),
+            domain: "dev".into(),
+            category: "pattern".into(),
+            tags: V1Tags::List(vec!["python".into()]),
+            confidence: 0.6,
+            team_shared: false,
+            created_at: "".into(),
+            updated_at: "".into(),
+            _extra: std::collections::HashMap::new(),
+        };
+        let v2 = convert_v1_to_v2(&v1).unwrap();
+        assert!(
+            !v2.tags.topics.contains(&"dev".to_string()),
+            "Domain 'dev' should not be added to topics"
+        );
+        assert!(
+            !v2.tags.topics.contains(&"pattern".to_string()),
+            "Category 'pattern' should not be added to topics"
+        );
+    }
+
+    #[test]
+    fn test_v1_tags_deduplication() {
+        let v1 = V1Pattern {
+            name: "dup-tags".into(),
+            description: "Dup tags".into(),
+            content: "Content".into(),
+            domain: "dev".into(),
+            category: "rust".into(), // same as a tag
+            tags: V1Tags::List(vec!["rust".into(), "rust".into()]),
+            confidence: 0.5,
+            team_shared: false,
+            created_at: "".into(),
+            updated_at: "".into(),
+            _extra: std::collections::HashMap::new(),
+        };
+        let v2 = convert_v1_to_v2(&v1).unwrap();
+        let rust_count = v2.tags.topics.iter().filter(|t| *t == "rust").count();
+        assert_eq!(rust_count, 1, "Tags should be deduplicated");
+    }
+
+    #[test]
+    fn test_migrate_nonexistent_dir() {
+        let result = migrate_directory(std::path::Path::new("/nonexistent/path/abc123")).unwrap();
+        assert_eq!(result.migrated, 0);
+        assert_eq!(result.already_v2, 0);
+        assert_eq!(result.skipped, 0);
+    }
+
+    #[test]
+    fn test_v1_with_extra_fields_still_parses() {
+        let tmp = TempDir::new().unwrap();
+        let yaml = r#"
+name: with-extras
+description: Has extra fields
+content: Some content
+domain: dev
+category: pattern
+tags: []
+confidence: 0.6
+team_shared: false
+created_at: "2026-02-16T07:54:16+08:00"
+updated_at: "2026-02-16T07:54:16+08:00"
+id: some-uuid
+security: low
+custom_field: value
+"#;
+        fs::write(tmp.path().join("with-extras.yaml"), yaml).unwrap();
+        let result = migrate_directory(tmp.path()).unwrap();
+        assert_eq!(result.migrated, 1, "Extra fields should be ignored");
+    }
+
+    #[test]
+    fn test_v1_datetime_parsing_formats() {
+        // RFC3339 with timezone
+        let dt1 = parse_datetime("2026-02-16T07:54:16+08:00");
+        assert!(dt1.is_some(), "Should parse RFC3339 with timezone");
+
+        // ISO 8601 without timezone
+        let dt2 = parse_datetime("2026-02-16T07:54:16");
+        assert!(dt2.is_some(), "Should parse ISO 8601 without timezone");
+
+        // Empty string
+        let dt3 = parse_datetime("");
+        assert!(dt3.is_none(), "Empty string should return None");
+
+        // Invalid format
+        let dt4 = parse_datetime("not a date");
+        assert!(dt4.is_none(), "Invalid format should return None");
+    }
 }

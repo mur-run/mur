@@ -128,4 +128,90 @@ mod tests {
         assert!(matches!(evaluate_query("ab"), GateDecision::Skip(_)));
         assert!(matches!(evaluate_query(""), GateDecision::Skip(_)));
     }
+
+    #[test]
+    fn test_skip_whitespace_only() {
+        assert!(matches!(evaluate_query("   "), GateDecision::Skip(_)));
+    }
+
+    #[test]
+    fn test_force_best_practice() {
+        assert_eq!(
+            evaluate_query("what is the best practice for error handling"),
+            GateDecision::Force
+        );
+    }
+
+    #[test]
+    fn test_force_remember() {
+        assert_eq!(
+            evaluate_query("do you remember how we solved this before"),
+            GateDecision::Force
+        );
+    }
+
+    #[test]
+    fn test_force_how_to() {
+        assert_eq!(
+            evaluate_query("how to implement authentication"),
+            GateDecision::Force
+        );
+    }
+
+    #[test]
+    fn test_force_bug_keyword() {
+        assert_eq!(
+            evaluate_query("there is a bug in the login page"),
+            GateDecision::Force
+        );
+    }
+
+    #[test]
+    fn test_pass_normal_long_query() {
+        assert_eq!(
+            evaluate_query("create a new component for user profiles"),
+            GateDecision::Pass
+        );
+    }
+
+    #[test]
+    fn test_skip_git_commands() {
+        assert!(matches!(
+            evaluate_query("git commit -m \"fix\""),
+            GateDecision::Skip(_)
+        ));
+        assert!(matches!(
+            evaluate_query("git push origin main"),
+            GateDecision::Skip(_)
+        ));
+    }
+
+    #[test]
+    fn test_skip_various_greetings() {
+        assert!(matches!(evaluate_query("hey!"), GateDecision::Skip(_)));
+        assert!(matches!(evaluate_query("thank you"), GateDecision::Skip(_)));
+        assert!(matches!(evaluate_query("ok."), GateDecision::Skip(_)));
+        assert!(matches!(evaluate_query("bye"), GateDecision::Skip(_)));
+    }
+
+    #[test]
+    fn test_force_chinese_previously() {
+        assert_eq!(evaluate_query("以前的方法是什麼"), GateDecision::Force);
+    }
+
+    #[test]
+    fn test_force_exception_keyword() {
+        assert_eq!(
+            evaluate_query("there is an exception thrown here"),
+            GateDecision::Force
+        );
+    }
+
+    #[test]
+    fn test_force_convention_keyword() {
+        assert_eq!(
+            evaluate_query("what is the naming convention"),
+            GateDecision::Force
+        );
+    }
 }

@@ -8,6 +8,7 @@ use tracing_subscriber::EnvFilter;
 mod auth;
 mod capture;
 mod community;
+mod dashboard;
 mod evolve;
 mod inject;
 mod migrate;
@@ -331,8 +332,7 @@ async fn main() -> Result<()> {
             SessionAction::List => cmd_session_list()?,
         },
         Commands::Dashboard => {
-            println!("Dashboard (Phase 2)");
-            todo!()
+            dashboard::render_dashboard()?;
         }
         Commands::Community { action } => match action {
             CommunityAction::Publish { name } => cmd_community_publish(&name).await?,

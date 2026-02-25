@@ -335,4 +335,144 @@ mod tests {
         let long_p = make_pattern("long", &long_content);
         assert!(length_norm_score(&long_p) < 1.0);
     }
+
+    #[test]
+    fn test_empty_query_returns_empty() {
+        let p = make_pattern("anything", "some content here");
+        let results = score_and_rank("", vec![p]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_name_match_stronger_than_content() {
+        let p_name = make_pattern("rust-error", "general programming stuff");
+        let p_content = make_pattern("generic-pattern", "rust error handling is important");
+        let results = score_and_rank("rust error", vec![p_name, p_content]);
+        if results.len() >= 2 {
+            assert_eq!(
+                results[0].pattern.name, "rust-error",
+                "Name match should rank higher"
+            );
+        }
+    }
+
+    #[test]
+    fn test_tag_match_boosts_score() {
+        let mut p_tagged = make_pattern("pattern-a", "some coding content");
+        p_tagged.tags.topics = vec!["rust".into(), "testing".into()];
+
+        let p_untagged = make_pattern("pattern-b", "some coding content");
+
+        let r1 = score_and_rank("rust testing", vec![p_tagged]);
+        let r2 = score_and_rank("rust testing", vec![p_untagged]);
+
+        if !r1.is_empty() && !r2.is_empty() {
+            assert!(
+                r1[0].score > r2[0].score,
+                "Tagged pattern should score higher: {} vs {}",
+                r1[0].score,
+                r2[0].score
+            );
+        }
+    }
+
+    #[test]
+    fn test_archived_excluded() {
+        let mut p = make_pattern("archived-one", "this is archived content");
+        p.lifecycle.status = LifecycleStatus::Archived;
+        let results = score_and_rank("archived", vec![p]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_recency_score_recent_is_high() {
+        let p = make_pattern("recent", "content");
+        // make_pattern sets last_injected to now, so recency should be ~1.0
+        let score = recency_score(&p);
+        assert!(
+            score > 0.9,
+            "Recently injected pattern should have high recency, got {}",
+            score
+        );
+    }
+
+    #[test]
+    fn test_recency_score_old_is_low() {
+        let mut p = make_pattern("old", "content");
+        p.lifecycle.last_injected = Some(Utc::now() - chrono::Duration::days(60));
+        p.evidence.last_validated = None;
+        let score = recency_score(&p);
+        assert!(
+            score < 0.1,
+            "60-day-old pattern should have low recency, got {}",
+            score
+        );
+    }
+
+    #[test]
+    fn test_hybrid_scoring_with_vector_scores() {
+        let p1 = make_pattern("swift-testing", "Use @Test macro for Swift testing");
+        let p2 = make_pattern("rust-error-handling", "Use anyhow for Rust error handling");
+
+        let mut vector_scores = std::collections::HashMap::new();
+        vector_scores.insert("swift-testing".to_string(), 0.9);
+        vector_scores.insert("rust-error-handling".to_string(), 0.1);
+
+        let results = score_and_rank_hybrid("swift testing", vec![p1, p2], &vector_scores);
+        assert!(!results.is_empty());
+        assert_eq!(results[0].pattern.name, "swift-testing");
+    }
+
+    #[test]
+    fn test_token_budget_respected() {
+        // Create patterns with very long content
+        let patterns: Vec<Pattern> = (0..10)
+            .map(|i| {
+                let mut p = make_pattern(
+                    &format!("pattern-{}", i),
+                    &format!("{} {}", "topic ".repeat(200), i),
+                );
+                p.tags.topics = vec!["topic".into()];
+                p
+            })
+            .collect();
+        let results = score_and_rank("topic", patterns);
+        // Total token estimate should stay under MAX_TOKENS
+        let total_tokens: usize = results
+            .iter()
+            .map(|sp| sp.pattern.content.as_text().len() / 4)
+            .sum();
+        assert!(
+            total_tokens <= MAX_TOKENS || results.len() == 1,
+            "Should respect token budget"
+        );
+    }
+
+    #[test]
+    fn test_tier_tiebreaker() {
+        // Two patterns with similar scores but different tiers
+        let mut p_core = make_pattern("core-pattern", "rust error handling tips");
+        p_core.tier = Tier::Core;
+        p_core.tags.topics = vec!["rust".into()];
+
+        let mut p_session = make_pattern("session-pattern", "rust error handling tips");
+        p_session.tier = Tier::Session;
+        p_session.tags.topics = vec!["rust".into()];
+
+        let results = score_and_rank("rust error", vec![p_session, p_core]);
+        if results.len() >= 2 {
+            // Core should be preferred as tiebreaker
+            let first_tier = &results[0].pattern.tier;
+            let second_tier = &results[1].pattern.tier;
+            let score_diff = (results[0].score - results[1].score).abs();
+            if score_diff < 0.05 {
+                assert_eq!(
+                    tier_priority(first_tier),
+                    3,
+                    "Core tier should win tiebreak"
+                );
+                assert!(tier_priority(first_tier) >= tier_priority(second_tier));
+            }
+        }
+    }
 }

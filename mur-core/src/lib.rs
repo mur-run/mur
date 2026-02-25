@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod capture;
 pub mod community;
+pub mod dashboard;
 pub mod evolve;
 pub mod inject;
 pub mod migrate;
