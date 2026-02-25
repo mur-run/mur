@@ -102,6 +102,15 @@ enum Commands {
         /// Pattern name
         name: String,
     },
+    /// Run decay + maturity evaluation
+    Evolve {
+        /// Preview changes without saving
+        #[arg(long)]
+        dry_run: bool,
+        /// Run even if recently evolved
+        #[arg(long)]
+        force: bool,
+    },
     /// Terminal dashboard
     Dashboard,
     /// Community publish/fetch
@@ -184,6 +193,7 @@ async fn main() -> Result<()> {
         Commands::Promote { name, tier } => cmd_promote(&name, &tier)?,
         Commands::Deprecate { name } => cmd_deprecate(&name)?,
         Commands::Links { name } => cmd_links(&name)?,
+        Commands::Evolve { dry_run, force } => cmd_evolve(dry_run, force)?,
         Commands::Dashboard => {
             println!("📊 Dashboard (Phase 2)");
             todo!()
@@ -404,8 +414,25 @@ async fn cmd_inject(query: &str) -> Result<()> {
         score_and_rank(query, patterns)
     };
 
-    let pattern_refs: Vec<Pattern> = results.into_iter().map(|sp| sp.pattern).collect();
-    let output = format_unified_injection(&pattern_refs, &workflows, 2000);
+    // Filter out archived patterns, touch timestamps for injected ones
+    let mut injected_patterns: Vec<Pattern> = Vec::new();
+    for sp in results {
+        let mut p = sp.pattern;
+        if p.lifecycle.status == LifecycleStatus::Archived {
+            continue;
+        }
+        // Touch timestamps on injection
+        let now = chrono::Utc::now();
+        p.decay.last_active = Some(now);
+        p.evidence.injection_count += 1;
+        p.lifecycle.last_injected = Some(now);
+        p.updated_at = now;
+        // Save touched pattern (best-effort, don't fail injection on save error)
+        let _ = yaml_store.save(&p);
+        injected_patterns.push(p);
+    }
+
+    let output = format_unified_injection(&injected_patterns, &workflows, 2000);
 
     if output.is_empty() {
         eprintln!("# No relevant patterns found");
@@ -417,6 +444,8 @@ async fn cmd_inject(query: &str) -> Result<()> {
 }
 
 fn cmd_stats() -> Result<()> {
+    use mur_common::knowledge::Maturity;
+
     let store = YamlStore::default_store()?;
     let patterns = store.list_all()?;
 
@@ -427,6 +456,10 @@ fn cmd_stats() -> Result<()> {
     let mut active_count = 0;
     let mut deprecated_count = 0;
     let mut archived_count = 0;
+    let mut draft_count = 0;
+    let mut emerging_count = 0;
+    let mut stable_count = 0;
+    let mut canonical_count = 0;
     let mut total_importance = 0.0;
     let mut total_effectiveness = 0.0;
     let mut tracked_count = 0u64;
@@ -442,6 +475,12 @@ fn cmd_stats() -> Result<()> {
             LifecycleStatus::Active => active_count += 1,
             LifecycleStatus::Deprecated => deprecated_count += 1,
             LifecycleStatus::Archived => archived_count += 1,
+        }
+        match p.maturity {
+            Maturity::Draft => draft_count += 1,
+            Maturity::Emerging => emerging_count += 1,
+            Maturity::Stable => stable_count += 1,
+            Maturity::Canonical => canonical_count += 1,
         }
         total_importance += p.importance;
         total_injections += p.evidence.injection_count;
@@ -475,6 +514,11 @@ fn cmd_stats() -> Result<()> {
     println!("  ✅ Active:        {}", active_count);
     println!("  ⚠️  Deprecated:    {}", deprecated_count);
     println!("  📦 Archived:      {}", archived_count);
+    println!();
+    println!(
+        "By maturity:        Draft: {} | Emerging: {} | Stable: {} | Canonical: {}",
+        draft_count, emerging_count, stable_count, canonical_count
+    );
     println!();
     println!("Avg importance:     {:.0}%", avg_importance * 100.0);
     println!("Total injections:   {}", total_injections);
@@ -577,9 +621,31 @@ fn cmd_feedback(name: &str, helpful: bool) -> Result<()> {
 }
 
 fn cmd_gc(auto: bool) -> Result<()> {
+    use evolve::decay::apply_decay_all;
+    use evolve::maturity::apply_maturity_all;
     use evolve::lifecycle::{evaluate_lifecycle, apply_lifecycle_action, LifecycleAction};
+    use mur_common::knowledge::Maturity;
 
     let store = YamlStore::default_store()?;
+    let now = chrono::Utc::now();
+
+    // Run decay + maturity before lifecycle evaluation
+    let decay_report = apply_decay_all(&store, now)?;
+    if decay_report.patterns_decayed > 0 {
+        println!(
+            "📉 Decayed {} patterns ({} auto-archived).",
+            decay_report.patterns_decayed, decay_report.patterns_archived
+        );
+    }
+
+    let maturity_report = apply_maturity_all(&store, now)?;
+    if maturity_report.promotions + maturity_report.demotions > 0 {
+        println!(
+            "🎯 Maturity: {} promotions, {} demotions.",
+            maturity_report.promotions, maturity_report.demotions
+        );
+    }
+
     let patterns = store.list_all()?;
 
     // First pass: apply lifecycle evaluations (deprecate/archive)
@@ -718,6 +784,22 @@ fn cmd_gc(auto: bool) -> Result<()> {
         println!("\nRun `mur gc --auto` to archive these patterns.");
     }
 
+    // Show maturity distribution
+    let all = store.list_all()?;
+    let (mut draft, mut emerging, mut stable, mut canonical) = (0usize, 0, 0, 0);
+    for p in &all {
+        match p.maturity {
+            Maturity::Draft => draft += 1,
+            Maturity::Emerging => emerging += 1,
+            Maturity::Stable => stable += 1,
+            Maturity::Canonical => canonical += 1,
+        }
+    }
+    println!(
+        "\nMaturity: Draft: {} | Emerging: {} | Stable: {} | Canonical: {}",
+        draft, emerging, stable, canonical
+    );
+
     Ok(())
 }
 
@@ -820,10 +902,18 @@ fn cmd_links(name: &str) -> Result<()> {
 }
 
 fn cmd_sync() -> Result<()> {
+    use evolve::decay::apply_decay_all;
+    use evolve::maturity::apply_maturity_all;
     use inject::sync::{default_targets, generate_sync_content, write_sync_file};
     use retrieve::scoring::score_and_rank;
 
     let store = YamlStore::default_store()?;
+    let now = chrono::Utc::now();
+
+    // Run decay + maturity before syncing
+    let _ = apply_decay_all(&store, now)?;
+    let _ = apply_maturity_all(&store, now)?;
+
     let patterns = store.list_all()?;
 
     if patterns.is_empty() {
@@ -1087,6 +1177,89 @@ fn cmd_workflow_new() -> Result<()> {
 
     store.save(&workflow)?;
     println!("Created workflow: {}", name);
+    Ok(())
+}
+
+fn cmd_evolve(dry_run: bool, _force: bool) -> Result<()> {
+    use evolve::decay::{apply_decay_all, apply_decay_all_dry_run};
+    use evolve::maturity::{apply_maturity_all, apply_maturity_all_dry_run};
+    use mur_common::knowledge::Maturity;
+
+    let store = YamlStore::default_store()?;
+    let now = chrono::Utc::now();
+
+    if dry_run {
+        println!("🔮 Evolve (dry run) — previewing changes...\n");
+    } else {
+        println!("🔮 Evolving patterns...\n");
+    }
+
+    // Phase 1: Decay
+    let decay_report = if dry_run {
+        apply_decay_all_dry_run(&store, now)?
+    } else {
+        apply_decay_all(&store, now)?
+    };
+
+    if !decay_report.details.is_empty() {
+        println!("📉 Decay:");
+        for d in &decay_report.details {
+            let archived = if d.auto_archived { " → ARCHIVED" } else { "" };
+            println!(
+                "  {} — confidence {:.0}% → {:.0}%{}",
+                d.name,
+                d.old_confidence * 100.0,
+                d.new_confidence * 100.0,
+                archived,
+            );
+        }
+        println!();
+    }
+
+    // Phase 2: Maturity
+    let maturity_report = if dry_run {
+        apply_maturity_all_dry_run(&store, now)?
+    } else {
+        apply_maturity_all(&store, now)?
+    };
+
+    if !maturity_report.details.is_empty() {
+        println!("🎯 Maturity:");
+        for d in &maturity_report.details {
+            let arrow = if d.is_promotion { "⬆" } else { "⬇" };
+            println!(
+                "  {} {} — {:?} → {:?}",
+                arrow, d.name, d.old_maturity, d.new_maturity,
+            );
+        }
+        println!();
+    }
+
+    // Summary
+    let mode = if dry_run { " (dry run)" } else { "" };
+    println!("── Summary{} ──", mode);
+    println!("  Scanned:        {}", decay_report.patterns_scanned);
+    println!("  Decayed:        {}", decay_report.patterns_decayed);
+    println!("  Auto-archived:  {}", decay_report.patterns_archived);
+    println!("  Promotions:     {}", maturity_report.promotions);
+    println!("  Demotions:      {}", maturity_report.demotions);
+
+    // Show maturity distribution
+    let patterns = store.list_all()?;
+    let (mut draft, mut emerging, mut stable, mut canonical) = (0usize, 0, 0, 0);
+    for p in &patterns {
+        match p.maturity {
+            Maturity::Draft => draft += 1,
+            Maturity::Emerging => emerging += 1,
+            Maturity::Stable => stable += 1,
+            Maturity::Canonical => canonical += 1,
+        }
+    }
+    println!(
+        "  Maturity:       Draft: {} | Emerging: {} | Stable: {} | Canonical: {}",
+        draft, emerging, stable, canonical
+    );
+
     Ok(())
 }
 

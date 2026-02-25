@@ -16,30 +16,36 @@ pub enum FeedbackSignal {
     Unhelpful,
 }
 
-/// Apply a feedback signal to a pattern, updating evidence and importance.
+/// Apply a feedback signal to a pattern, updating evidence, importance, and confidence.
 pub fn apply_feedback(pattern: &mut Pattern, signal: FeedbackSignal) {
-    let evidence = &mut pattern.evidence;
+    let now = chrono::Utc::now();
 
     match signal {
         FeedbackSignal::Success => {
-            evidence.injection_count += 1;
-            evidence.success_signals += 1;
+            pattern.evidence.injection_count += 1;
+            pattern.evidence.success_signals += 1;
         }
         FeedbackSignal::Override => {
-            evidence.injection_count += 1;
-            evidence.override_signals += 1;
+            pattern.evidence.injection_count += 1;
+            pattern.evidence.override_signals += 1;
         }
         FeedbackSignal::Helpful => {
             // Manual boost: counts as 2 success signals
-            evidence.success_signals += 2;
+            pattern.evidence.success_signals += 2;
+            // Confidence boost: +0.05, capped at 1.0
+            pattern.confidence = (pattern.confidence + 0.05).min(1.0);
         }
         FeedbackSignal::Unhelpful => {
             // Manual penalty: counts as 2 override signals
-            evidence.override_signals += 2;
+            pattern.evidence.override_signals += 2;
+            // Confidence penalty: -0.10, floored at 0.0
+            pattern.confidence = (pattern.confidence - 0.10).max(0.0);
         }
     }
 
-    evidence.last_validated = Some(chrono::Utc::now());
+    pattern.evidence.last_validated = Some(now);
+    // Touch decay.last_active on any feedback
+    pattern.decay.last_active = Some(now);
 
     // Bayesian importance update
     pattern.importance = bayesian_update(pattern.importance, &pattern.evidence);
@@ -159,5 +165,76 @@ mod tests {
         let result = bayesian_update(0.5, &evidence);
         // Strong positive evidence should push importance high
         assert!(result > 0.8);
+    }
+
+    #[test]
+    fn test_helpful_boosts_confidence() {
+        let mut p = make_pattern();
+        p.confidence = 0.5;
+        apply_feedback(&mut p, FeedbackSignal::Helpful);
+        assert!(
+            (p.confidence - 0.55).abs() < 0.001,
+            "Helpful should boost confidence by 0.05, got {}",
+            p.confidence
+        );
+    }
+
+    #[test]
+    fn test_unhelpful_penalizes_confidence() {
+        let mut p = make_pattern();
+        p.confidence = 0.5;
+        apply_feedback(&mut p, FeedbackSignal::Unhelpful);
+        assert!(
+            (p.confidence - 0.40).abs() < 0.001,
+            "Unhelpful should decrease confidence by 0.10, got {}",
+            p.confidence
+        );
+    }
+
+    #[test]
+    fn test_confidence_capped_at_one() {
+        let mut p = make_pattern();
+        p.confidence = 0.98;
+        apply_feedback(&mut p, FeedbackSignal::Helpful);
+        assert!(
+            (p.confidence - 1.0).abs() < 0.001,
+            "Confidence should cap at 1.0, got {}",
+            p.confidence
+        );
+    }
+
+    #[test]
+    fn test_confidence_floored_at_zero() {
+        let mut p = make_pattern();
+        p.confidence = 0.05;
+        apply_feedback(&mut p, FeedbackSignal::Unhelpful);
+        assert!(
+            p.confidence.abs() < 0.001,
+            "Confidence should floor at 0.0, got {}",
+            p.confidence
+        );
+    }
+
+    #[test]
+    fn test_feedback_touches_last_active() {
+        let mut p = make_pattern();
+        assert!(p.decay.last_active.is_none());
+        apply_feedback(&mut p, FeedbackSignal::Success);
+        assert!(
+            p.decay.last_active.is_some(),
+            "Feedback should set decay.last_active"
+        );
+    }
+
+    #[test]
+    fn test_success_no_confidence_change() {
+        let mut p = make_pattern();
+        p.confidence = 0.5;
+        apply_feedback(&mut p, FeedbackSignal::Success);
+        assert!(
+            (p.confidence - 0.5).abs() < 0.001,
+            "Success should not change confidence directly, got {}",
+            p.confidence
+        );
     }
 }
