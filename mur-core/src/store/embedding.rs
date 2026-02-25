@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct EmbeddingConfig {
     pub provider: EmbeddingProvider,
     pub model: String,
+    #[allow(dead_code)] // Used by callers to pass dimensions to VectorStore
     pub dimensions: usize,
 }
 
@@ -15,6 +16,25 @@ pub struct EmbeddingConfig {
 pub enum EmbeddingProvider {
     Ollama { base_url: String },
     OpenAI { api_key: String },
+}
+
+impl EmbeddingConfig {
+    /// Create from the global mur config.
+    pub fn from_config(cfg: &mur_common::config::Config) -> Self {
+        let provider = match cfg.embedding.provider.as_str() {
+            "openai" => EmbeddingProvider::OpenAI {
+                api_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+            },
+            _ => EmbeddingProvider::Ollama {
+                base_url: cfg.embedding.ollama_endpoint.clone(),
+            },
+        };
+        Self {
+            provider,
+            model: cfg.embedding.model.clone(),
+            dimensions: cfg.embedding.dimensions,
+        }
+    }
 }
 
 impl Default for EmbeddingConfig {
@@ -38,6 +58,7 @@ pub async fn embed(text: &str, config: &EmbeddingConfig) -> Result<Vec<f32>> {
 }
 
 /// Batch embed multiple texts.
+#[allow(dead_code)] // Public API for batch operations
 pub async fn embed_batch(texts: &[String], config: &EmbeddingConfig) -> Result<Vec<Vec<f32>>> {
     // For now, sequential. Could parallelize later.
     let mut results = Vec::with_capacity(texts.len());

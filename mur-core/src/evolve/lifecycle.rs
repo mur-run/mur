@@ -1,7 +1,7 @@
 //! Pattern lifecycle management: tier promotion, deprecation, archival.
 
 use chrono::Utc;
-use mur_common::pattern::{Lifecycle, LifecycleStatus, Pattern, Tier};
+use mur_common::pattern::{LifecycleStatus, Pattern, Tier};
 
 /// Result of evaluating a pattern's lifecycle
 #[derive(Debug, PartialEq)]
@@ -98,7 +98,7 @@ pub fn apply_lifecycle_action(pattern: &mut Pattern, action: &LifecycleAction) {
     match action {
         LifecycleAction::None => {}
         LifecycleAction::Promote(tier) => {
-            pattern.tier = tier.clone();
+            pattern.tier = *tier;
             pattern.updated_at = Utc::now();
         }
         LifecycleAction::Deprecate => {

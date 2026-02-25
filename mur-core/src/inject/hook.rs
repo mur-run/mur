@@ -4,6 +4,7 @@ use mur_common::pattern::{Content, Pattern};
 
 /// When to trigger pattern retrieval
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)] // Manual variant used by CLI callers
 pub enum HookTrigger {
     /// Beginning of AI session
     SessionStart,

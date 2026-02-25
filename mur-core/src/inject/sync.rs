@@ -20,6 +20,7 @@ pub struct SyncTarget {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // YamlComment for future Aider support
 pub enum SyncFormat {
     /// Plain text with headers
     Plaintext,

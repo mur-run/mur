@@ -12,21 +12,21 @@ use std::path::Path;
 use std::sync::Arc;
 
 const TABLE_NAME: &str = "patterns";
-const VECTOR_DIM: i32 = 1024; // qwen3-embedding:0.6b
 
 /// LanceDB-backed vector index for patterns.
 pub struct VectorStore {
     db: lancedb::Connection,
+    dimensions: i32,
 }
 
 impl VectorStore {
     /// Open or create the LanceDB database at the given path.
-    pub async fn open(db_path: &Path) -> Result<Self> {
+    pub async fn open(db_path: &Path, dimensions: i32) -> Result<Self> {
         let db = lancedb::connect(db_path.to_str().unwrap())
             .execute()
             .await
             .context("opening LanceDB")?;
-        Ok(Self { db })
+        Ok(Self { db, dimensions })
     }
 
     /// Build/rebuild the entire index from patterns + their embeddings.
@@ -44,7 +44,7 @@ impl VectorStore {
             return Ok(());
         }
 
-        let schema = Self::schema();
+        let schema = Self::schema(self.dimensions);
 
         let names: Vec<&str> = patterns.iter().map(|(p, _)| p.name.as_str()).collect();
         let descriptions: Vec<&str> = patterns.iter().map(|(p, _)| p.description.as_str()).collect();
@@ -61,7 +61,7 @@ impl VectorStore {
         let all_vectors: Vec<f32> = patterns.iter().flat_map(|(_, v)| v.clone()).collect();
         let values = Float32Array::from(all_vectors);
         let field = Arc::new(Field::new("item", DataType::Float32, true));
-        let vector_array = FixedSizeListArray::new(field, VECTOR_DIM, Arc::new(values), None);
+        let vector_array = FixedSizeListArray::new(field, self.dimensions, Arc::new(values), None);
 
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -134,7 +134,7 @@ impl VectorStore {
         Ok(search_results)
     }
 
-    fn schema() -> Schema {
+    fn schema(dimensions: i32) -> Schema {
         Schema::new(vec![
             Field::new("name", DataType::Utf8, false),
             Field::new("description", DataType::Utf8, false),
@@ -145,7 +145,7 @@ impl VectorStore {
                 "vector",
                 DataType::FixedSizeList(
                     Arc::new(Field::new("item", DataType::Float32, true)),
-                    VECTOR_DIM,
+                    dimensions,
                 ),
                 false,
             ),
@@ -157,6 +157,7 @@ impl VectorStore {
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     pub name: String,
+    #[allow(dead_code)] // Exposed for callers that need raw distance
     pub distance: f32,
     pub similarity: f32,
 }
@@ -166,6 +167,8 @@ mod tests {
     use super::*;
     use mur_common::pattern::*;
     use tempfile::TempDir;
+
+    const TEST_DIM: i32 = 64;
 
     fn make_pattern(name: &str) -> Pattern {
         Pattern {
@@ -187,13 +190,13 @@ mod tests {
     }
 
     fn random_embedding() -> Vec<f32> {
-        (0..VECTOR_DIM as usize).map(|i| (i as f32 * 0.01).sin()).collect()
+        (0..TEST_DIM as usize).map(|i| (i as f32 * 0.01).sin()).collect()
     }
 
     #[tokio::test]
     async fn test_build_and_search() {
         let tmp = TempDir::new().unwrap();
-        let store = VectorStore::open(tmp.path()).await.unwrap();
+        let store = VectorStore::open(tmp.path(), TEST_DIM).await.unwrap();
 
         let patterns = vec![
             (make_pattern("pattern-a"), random_embedding()),
@@ -214,7 +217,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_index() {
         let tmp = TempDir::new().unwrap();
-        let store = VectorStore::open(tmp.path()).await.unwrap();
+        let store = VectorStore::open(tmp.path(), TEST_DIM).await.unwrap();
         let results = store.search(&random_embedding(), 5).await.unwrap();
         assert!(results.is_empty());
     }
@@ -222,7 +225,7 @@ mod tests {
     #[tokio::test]
     async fn test_rebuild_index() {
         let tmp = TempDir::new().unwrap();
-        let store = VectorStore::open(tmp.path()).await.unwrap();
+        let store = VectorStore::open(tmp.path(), TEST_DIM).await.unwrap();
 
         let patterns = vec![(make_pattern("first"), random_embedding())];
         store.build_index(&patterns).await.unwrap();

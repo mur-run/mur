@@ -24,6 +24,7 @@ struct V1Pattern {
     #[serde(default)]
     confidence: f64,
     #[serde(default)]
+    #[allow(dead_code)] // needed for v1 deserialization compatibility
     team_shared: bool,
     #[serde(default)]
     created_at: String,

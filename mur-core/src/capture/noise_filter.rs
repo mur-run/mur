@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Public API for future capture pipeline
 //! Noise filter for the capture pipeline.
 //!
 //! Filters out low-value text before pattern extraction:

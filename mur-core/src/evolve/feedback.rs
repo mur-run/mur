@@ -4,6 +4,7 @@ use mur_common::pattern::Pattern;
 
 /// Feedback signal from a session
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Success/Override used by hook integration
 pub enum FeedbackSignal {
     /// Pattern was injected and the session succeeded
     Success,
@@ -49,6 +50,7 @@ pub fn apply_feedback(pattern: &mut Pattern, signal: FeedbackSignal) {
 /// prior = current importance
 /// likelihood = effectiveness from recent evidence
 /// posterior = weighted blend of prior and likelihood
+#[must_use]
 fn bayesian_update(prior: f64, evidence: &mur_common::pattern::Evidence) -> f64 {
     let effectiveness = evidence.effectiveness();
     let total = evidence.success_signals + evidence.override_signals;

@@ -6,6 +6,3 @@ pub mod yaml;
 pub mod config;
 pub mod lancedb;
 pub mod embedding;
-
-pub use self::lancedb::VectorStore;
-pub use self::embedding::EmbeddingConfig;

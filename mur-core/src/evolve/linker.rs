@@ -114,6 +114,7 @@ fn is_supersedes(new: &Pattern, existing: &Pattern) -> bool {
 }
 
 /// Apply discovered links to patterns (mutates both sides).
+#[allow(dead_code)] // Public API for direct pattern mutation
 pub fn apply_links(
     new_pattern: &mut Pattern,
     existing: &mut [Pattern],
@@ -126,10 +127,10 @@ pub fn apply_links(
                     new_pattern.links.related.push(suggestion.target_name.clone());
                 }
                 // Bidirectional
-                if let Some(target) = existing.iter_mut().find(|p| p.name == suggestion.target_name) {
-                    if !target.links.related.contains(&new_pattern.name) {
-                        target.links.related.push(new_pattern.name.clone());
-                    }
+                if let Some(target) = existing.iter_mut().find(|p| p.name == suggestion.target_name)
+                    && !target.links.related.contains(&new_pattern.name)
+                {
+                    target.links.related.push(new_pattern.name.clone());
                 }
             }
             LinkType::Supersedes => {

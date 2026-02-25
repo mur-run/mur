@@ -91,6 +91,7 @@ impl YamlStore {
     }
 
     /// Delete a pattern by name. Returns true if it existed.
+    #[allow(dead_code)] // Public API
     pub fn delete(&self, name: &str) -> Result<bool> {
         let path = self.pattern_path(name);
         if path.exists() {
@@ -134,6 +135,7 @@ pub fn default_patterns_dir() -> PathBuf {
 }
 
 /// Default MUR root directory: ~/.mur/
+#[allow(dead_code)] // Public API
 pub fn default_mur_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))

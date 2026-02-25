@@ -119,8 +119,8 @@ impl Default for PathConfig {
 }
 
 fn default_embedding_provider() -> String { "ollama".to_string() }
-fn default_embedding_model() -> String { "nomic-embed-text".to_string() }
-fn default_dimensions() -> usize { 768 }
+fn default_embedding_model() -> String { "qwen3-embedding:0.6b".to_string() }
+fn default_dimensions() -> usize { 1024 }
 fn default_ollama_endpoint() -> String { "http://localhost:11434".to_string() }
 fn default_llm_provider() -> String { "anthropic".to_string() }
 fn default_llm_model() -> String { "claude-sonnet-4-20250514".to_string() }

@@ -203,7 +203,11 @@ fn cmd_new() -> Result<()> {
 
     println!("Technical content (end with empty line):");
     io::stdout().flush()?;
-    let technical = read_multiline()?;
+    let mut technical = read_multiline()?;
+    if technical.len() > Content::MAX_LAYER_CHARS {
+        println!("⚠️  Technical content truncated to {} chars.", Content::MAX_LAYER_CHARS);
+        technical.truncate(Content::MAX_LAYER_CHARS);
+    }
 
     println!("Principle content (optional, end with empty line):");
     io::stdout().flush()?;
@@ -211,7 +215,12 @@ fn cmd_new() -> Result<()> {
     let principle = if principle_text.is_empty() {
         None
     } else {
-        Some(principle_text)
+        let mut p = principle_text;
+        if p.len() > Content::MAX_LAYER_CHARS {
+            println!("⚠️  Principle content truncated to {} chars.", Content::MAX_LAYER_CHARS);
+            p.truncate(Content::MAX_LAYER_CHARS);
+        }
+        Some(p)
     };
 
     print!("Tags (comma-separated, e.g. swift,testing): ");
@@ -327,12 +336,9 @@ async fn cmd_inject(query: &str) -> Result<()> {
         _ => {}
     }
 
-    match evaluate_query(query) {
-        GateDecision::Skip(reason) => {
-            eprintln!("# No patterns (gate: {})", reason);
-            return Ok(());
-        }
-        _ => {}
+    if let GateDecision::Skip(reason) = evaluate_query(query) {
+        eprintln!("# No patterns (gate: {})", reason);
+        return Ok(());
     }
 
     let yaml_store = YamlStore::default_store()?;
@@ -346,10 +352,11 @@ async fn cmd_inject(query: &str) -> Result<()> {
 
     let results = if index_path.exists() {
         // Try vector search
-        let config = EmbeddingConfig::default();
+        let cfg = store::config::load_config()?;
+        let config = EmbeddingConfig::from_config(&cfg);
         match embed(query, &config).await {
             Ok(query_embedding) => {
-                let vector_store = VectorStore::open(&index_path).await?;
+                let vector_store = VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
                 let vector_results = vector_store.search(&query_embedding, 20).await?;
                 let vector_scores: HashMap<String, f64> = vector_results
                     .into_iter()
@@ -568,33 +575,64 @@ fn cmd_gc(auto: bool) -> Result<()> {
 
     // Link discovery pass
     {
-        use evolve::linker::{discover_links, apply_links};
-        let mut all = store.list_all()?;
-        let mut link_count = 0;
-        for i in 0..all.len() {
-            let (left, right) = all.split_at_mut(i);
-            let (current, rest) = right.split_first_mut().unwrap();
-            let others: Vec<Pattern> = left.iter().chain(rest.iter()).cloned().collect();
-            let suggestions = discover_links(current, &others);
-            if !suggestions.is_empty() {
-                let mut others_mut: Vec<Pattern> = left.iter().chain(rest.iter()).cloned().collect();
-                apply_links(current, &mut others_mut, &suggestions);
-                store.save(current)?;
-                // Save updated targets too
-                for updated in &others_mut {
-                    if updated.links.related.contains(&current.name)
-                        || left.iter().chain(rest.iter()).any(|orig| {
-                            orig.name == updated.name && orig.links.related != updated.links.related
-                        })
-                    {
-                        store.save(updated)?;
-                    }
-                }
-                link_count += suggestions.len();
+        use evolve::linker::{discover_links, LinkType};
+        let all = store.list_all()?;
+
+        // Phase 1: Collect all link suggestions (read-only)
+        let mut pairs: Vec<(String, String, LinkType)> = Vec::new();
+        for pattern in &all {
+            for s in discover_links(pattern, &all) {
+                pairs.push((pattern.name.clone(), s.target_name, s.link_type));
             }
         }
-        if link_count > 0 {
-            println!("🔗 Discovered {} new links.\n", link_count);
+
+        if !pairs.is_empty() {
+            // Phase 2: Apply links
+            let mut by_name: std::collections::HashMap<String, Pattern> =
+                all.into_iter().map(|p| (p.name.clone(), p)).collect();
+            let mut changed = std::collections::HashSet::new();
+            let mut link_count = 0usize;
+
+            for (source, target, link_type) in &pairs {
+                match link_type {
+                    LinkType::Related => {
+                        if let Some(p) = by_name.get_mut(source)
+                            && !p.links.related.contains(target)
+                        {
+                            p.links.related.push(target.clone());
+                            changed.insert(source.clone());
+                            link_count += 1;
+                        }
+                        if let Some(p) = by_name.get_mut(target)
+                            && !p.links.related.contains(source)
+                        {
+                            p.links.related.push(source.clone());
+                            changed.insert(target.clone());
+                            link_count += 1;
+                        }
+                    }
+                    LinkType::Supersedes => {
+                        if let Some(p) = by_name.get_mut(source)
+                            && !p.links.supersedes.contains(target)
+                        {
+                            p.links.supersedes.push(target.clone());
+                            changed.insert(source.clone());
+                            link_count += 1;
+                        }
+                    }
+                }
+            }
+
+            // Phase 3: Save changed patterns
+            for name in &changed {
+                if let Some(p) = by_name.get(name) {
+                    store.save(p)?;
+                }
+            }
+
+            if link_count > 0 {
+                println!("🔗 Discovered {} new links.\n", link_count);
+            }
         }
     }
 
@@ -693,8 +731,8 @@ fn cmd_promote(name: &str, tier_str: &str) -> Result<()> {
         }
     };
 
-    let old_tier = pattern.tier.clone();
-    pattern.tier = new_tier.clone();
+    let old_tier = pattern.tier;
+    pattern.tier = new_tier;
     pattern.updated_at = chrono::Utc::now();
     store.save(&pattern)?;
 
@@ -770,6 +808,11 @@ fn cmd_sync() -> Result<()> {
     for target in &targets {
         let target_path = cwd.join(&target.file);
 
+        // Only write to files that already exist on disk
+        if !target_path.exists() {
+            continue;
+        }
+
         // Score patterns for this project context
         let project_name = cwd
             .file_name()
@@ -814,7 +857,8 @@ async fn cmd_reindex() -> Result<()> {
         return Ok(());
     }
 
-    let config = EmbeddingConfig::default();
+    let cfg = store::config::load_config()?;
+    let config = EmbeddingConfig::from_config(&cfg);
     let index_path = dirs::home_dir()
         .expect("no home dir")
         .join(".mur")
@@ -849,7 +893,7 @@ async fn cmd_reindex() -> Result<()> {
         }
     }
 
-    let vector_store = VectorStore::open(&index_path).await?;
+    let vector_store = VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
     vector_store.build_index(&indexed).await?;
 
     println!(

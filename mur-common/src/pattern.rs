@@ -97,7 +97,7 @@ impl Content {
     pub const MAX_LAYER_CHARS: usize = 500;
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
     /// Short-lived, from a single session. Decay: 14 days half-life.
