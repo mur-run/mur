@@ -129,6 +129,12 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Show workflow composition & decomposition suggestions
+    Suggest {
+        /// Auto-create suggested workflows/patterns as drafts
+        #[arg(long)]
+        create: bool,
+    },
     /// Terminal dashboard
     Dashboard,
     /// Community publish/fetch
@@ -234,6 +240,7 @@ async fn main() -> Result<()> {
         Commands::Links { name } => cmd_links(&name)?,
         Commands::Evolve { dry_run, force } => cmd_evolve(dry_run, force)?,
         Commands::Emerge { threshold, dry_run } => cmd_emerge(threshold, dry_run)?,
+        Commands::Suggest { create } => cmd_suggest(create)?,
         Commands::Dashboard => {
             println!("📊 Dashboard (Phase 2)");
             todo!()
@@ -515,6 +522,9 @@ async fn cmd_inject(query: &str) -> Result<()> {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
             .unwrap_or_default();
         inject::hook::record_injection(query, &project_name, &injected_patterns);
+
+        // Record co-occurrence for pattern↔workflow intelligence
+        inject::hook::record_cooccurrence_for_injection(&injected_patterns);
 
         print!("{}", output);
     }
@@ -842,12 +852,14 @@ fn cmd_gc(auto: bool) -> Result<()> {
         println!("Applied {} lifecycle changes.\n", lifecycle_changes);
     }
 
-    // Link discovery pass
+    // Link discovery pass (pattern↔pattern and pattern↔workflow)
     {
-        use evolve::linker::{discover_links, LinkType};
+        use evolve::linker::{discover_links, discover_workflow_links, apply_workflow_links, LinkType};
         let all = store.list_all()?;
+        let wf_store = WorkflowYamlStore::default_store()?;
+        let workflows = wf_store.list_all()?;
 
-        // Phase 1: Collect all link suggestions (read-only)
+        // Phase 1: Collect all pattern↔pattern link suggestions (read-only)
         let mut pairs: Vec<(String, String, LinkType)> = Vec::new();
         for pattern in &all {
             for s in discover_links(pattern, &all) {
@@ -855,8 +867,23 @@ fn cmd_gc(auto: bool) -> Result<()> {
             }
         }
 
-        if !pairs.is_empty() {
-            // Phase 2: Apply links
+        // Phase 1b: Collect pattern↔workflow link suggestions
+        let mut wf_links: Vec<(String, Vec<String>)> = Vec::new();
+        if !workflows.is_empty() {
+            for pattern in &all {
+                let suggestions = discover_workflow_links(pattern, &workflows);
+                if !suggestions.is_empty() {
+                    let wf_names: Vec<String> = suggestions.iter().map(|s| s.workflow_name.clone()).collect();
+                    wf_links.push((pattern.name.clone(), wf_names));
+                }
+            }
+        }
+
+        let has_pattern_links = !pairs.is_empty();
+        let has_workflow_links = !wf_links.is_empty();
+
+        if has_pattern_links || has_workflow_links {
+            // Phase 2: Apply pattern↔pattern links
             let mut by_name: std::collections::HashMap<String, Pattern> =
                 all.into_iter().map(|p| (p.name.clone(), p)).collect();
             let mut changed = std::collections::HashSet::new();
@@ -888,6 +915,26 @@ fn cmd_gc(auto: bool) -> Result<()> {
                             changed.insert(source.clone());
                             link_count += 1;
                         }
+                    }
+                }
+            }
+
+            // Phase 2b: Apply pattern↔workflow links
+            for (pattern_name, wf_names) in &wf_links {
+                if let Some(p) = by_name.get_mut(pattern_name) {
+                    let suggestions: Vec<evolve::linker::WorkflowLinkSuggestion> = wf_names
+                        .iter()
+                        .map(|name| evolve::linker::WorkflowLinkSuggestion {
+                            workflow_name: name.clone(),
+                            score: 0.0, // score not needed for apply
+                        })
+                        .collect();
+                    let before = p.links.workflows.len();
+                    apply_workflow_links(p, &suggestions);
+                    let added = p.links.workflows.len() - before;
+                    if added > 0 {
+                        changed.insert(pattern_name.clone());
+                        link_count += added;
                     }
                 }
             }
@@ -1503,6 +1550,166 @@ fn cmd_evolve(dry_run: bool, _force: bool) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn cmd_suggest(create: bool) -> Result<()> {
+    use evolve::cooccurrence::CooccurrenceMatrix;
+    use evolve::compose::suggest_workflows_with_patterns;
+    use evolve::decompose::{analyze_workflow_for_extraction, extract_pattern_from_step};
+
+    let pattern_store = YamlStore::default_store()?;
+    let workflow_store = WorkflowYamlStore::default_store()?;
+    let patterns = pattern_store.list_all()?;
+    let workflows = workflow_store.list_all()?;
+
+    // ─── Part 1: Workflow composition from co-occurrence ─────────────
+
+    let matrix_path = CooccurrenceMatrix::default_path();
+    let matrix = CooccurrenceMatrix::load(&matrix_path)?;
+
+    println!("🔗 Knowledge ↔ Workflow Intelligence\n");
+    println!("── Co-occurrence Data ──");
+    println!("  Tracked pairs: {}", matrix.pair_count());
+
+    let suggestions = suggest_workflows_with_patterns(&matrix, 5, &patterns);
+
+    if suggestions.is_empty() {
+        println!("  No workflow composition suggestions yet.");
+        println!("  (Need 3+ patterns co-occurring 5+ times)");
+    } else {
+        println!("\n── Workflow Composition Suggestions ──\n");
+        for (i, s) in suggestions.iter().enumerate() {
+            println!(
+                "  {}. {} (score: {})",
+                i + 1,
+                s.suggested_name,
+                s.cooccurrence_score,
+            );
+            println!("     Patterns: {}", s.patterns.join(", "));
+            println!("     Trigger: {}", s.suggested_trigger);
+
+            if create {
+                if workflow_store.exists(&s.suggested_name) {
+                    println!("     -> Workflow '{}' already exists, skipping.", s.suggested_name);
+                } else {
+                    // Create a draft workflow from the suggestion
+                    let wf = mur_common::workflow::Workflow {
+                        base: KnowledgeBase {
+                            name: s.suggested_name.clone(),
+                            description: format!(
+                                "Auto-suggested workflow from {} co-occurring patterns",
+                                s.patterns.len()
+                            ),
+                            content: Content::Plain(format!(
+                                "Combines patterns: {}",
+                                s.patterns.join(", ")
+                            )),
+                            tags: collect_tags_from_patterns(&s.patterns, &patterns),
+                            ..Default::default()
+                        },
+                        steps: vec![],
+                        variables: vec![],
+                        source_sessions: vec![],
+                        trigger: s.suggested_trigger.clone(),
+                        tools: vec![],
+                        published_version: 0,
+                        permission: Default::default(),
+                    };
+                    workflow_store.save(&wf)?;
+                    println!("     -> Created draft workflow: {}", s.suggested_name);
+
+                    // Add cross-reference: link each source pattern to this workflow
+                    for pname in &s.patterns {
+                        if let Ok(mut p) = pattern_store.get(pname) {
+                            if !p.links.workflows.contains(&s.suggested_name) {
+                                p.base.links.workflows.push(s.suggested_name.clone());
+                                let _ = pattern_store.save(&p);
+                            }
+                        }
+                    }
+                }
+            }
+            println!();
+        }
+    }
+
+    // ─── Part 2: Workflow decomposition into patterns ────────────────
+
+    if !workflows.is_empty() {
+        println!("── Decomposition Candidates ──\n");
+
+        let mut any_candidates = false;
+        for wf in &workflows {
+            let candidates = analyze_workflow_for_extraction(wf, &patterns);
+            if candidates.is_empty() {
+                continue;
+            }
+            any_candidates = true;
+
+            println!("  Workflow: {} ({} candidates)", wf.name, candidates.len());
+            for c in &candidates {
+                println!(
+                    "    Step {}: \"{}\"",
+                    c.step_index + 1,
+                    c.step_description,
+                );
+                println!("      -> Pattern: {}", c.suggested_pattern_name);
+                println!("      Reason: {}", c.reason);
+
+                if create {
+                    if pattern_store.exists(&c.suggested_pattern_name) {
+                        println!("      -> Pattern '{}' already exists, skipping.", c.suggested_pattern_name);
+                    } else if let Some(pattern) = extract_pattern_from_step(wf, c.step_index) {
+                        pattern_store.save(&pattern)?;
+                        println!("      -> Created draft pattern: {}", c.suggested_pattern_name);
+                    }
+                }
+            }
+            println!();
+        }
+
+        if !any_candidates {
+            println!("  No decomposition candidates found in existing workflows.");
+        }
+    }
+
+    // ─── Summary ─────────────────────────────────────────────────────
+
+    if !create && (!suggestions.is_empty() || !workflows.is_empty()) {
+        println!("Run `mur suggest --create` to auto-create suggested items as drafts.");
+    }
+
+    Ok(())
+}
+
+/// Collect tags from a set of pattern names.
+fn collect_tags_from_patterns(
+    names: &[String],
+    patterns: &[Pattern],
+) -> mur_common::pattern::Tags {
+    let mut topics: Vec<String> = Vec::new();
+    let mut languages: Vec<String> = Vec::new();
+
+    for name in names {
+        if let Some(p) = patterns.iter().find(|p| &p.name == name) {
+            for t in &p.tags.topics {
+                if !topics.contains(t) {
+                    topics.push(t.clone());
+                }
+            }
+            for l in &p.tags.languages {
+                if !languages.contains(l) {
+                    languages.push(l.clone());
+                }
+            }
+        }
+    }
+
+    mur_common::pattern::Tags {
+        topics,
+        languages,
+        extra: Default::default(),
+    }
 }
 
 fn cmd_learn_extract(file: Option<String>, fingerprint: bool) -> Result<()> {

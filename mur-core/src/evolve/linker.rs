@@ -1,9 +1,11 @@
 //! A-Mem inspired pattern linking — Zettelkasten for patterns.
 //!
 //! When a new pattern is created, find related existing patterns
-//! and create bidirectional links.
+//! and create bidirectional links. Also discovers pattern↔workflow
+//! relationships based on tag/keyword similarity.
 
 use mur_common::pattern::Pattern;
+use mur_common::workflow::Workflow;
 
 /// Discover links between a new pattern and existing patterns.
 /// Returns pairs of (existing_pattern_name, link_type).
@@ -155,6 +157,121 @@ pub enum LinkType {
     Supersedes,
 }
 
+/// A suggested link between a pattern and a workflow.
+#[derive(Debug, Clone)]
+pub struct WorkflowLinkSuggestion {
+    /// The workflow name to link to
+    pub workflow_name: String,
+    /// Similarity score (0.0-1.0)
+    pub score: f64,
+}
+
+/// Discover pattern↔workflow links based on tag and keyword similarity.
+///
+/// For each pattern, checks all workflows and returns suggestions
+/// where there is significant overlap in tags, tools, or step descriptions.
+pub fn discover_workflow_links(
+    pattern: &Pattern,
+    workflows: &[Workflow],
+) -> Vec<WorkflowLinkSuggestion> {
+    let mut suggestions = Vec::new();
+
+    let pattern_tags: std::collections::HashSet<&str> = pattern
+        .tags
+        .topics
+        .iter()
+        .chain(pattern.tags.languages.iter())
+        .map(|s| s.as_str())
+        .collect();
+
+    let pattern_text = format!(
+        "{} {} {}",
+        pattern.name,
+        pattern.description,
+        pattern.content.as_text()
+    )
+    .to_lowercase();
+
+    let pattern_words: std::collections::HashSet<&str> = pattern_text
+        .split_whitespace()
+        .filter(|w| w.len() > 3)
+        .collect();
+
+    for workflow in workflows {
+        // Skip if already linked
+        if pattern.links.workflows.contains(&workflow.name) {
+            continue;
+        }
+
+        let wf_tags: std::collections::HashSet<&str> = workflow
+            .tags
+            .topics
+            .iter()
+            .chain(workflow.tags.languages.iter())
+            .chain(workflow.tools.iter())
+            .map(|s| s.as_str())
+            .collect();
+
+        // Build workflow text from description, content, trigger, and step descriptions
+        let mut wf_text = format!(
+            "{} {} {} {}",
+            workflow.name,
+            workflow.description,
+            workflow.content.as_text(),
+            workflow.trigger
+        );
+        for step in &workflow.steps {
+            wf_text.push(' ');
+            wf_text.push_str(&step.description);
+            if let Some(ref cmd) = step.command {
+                wf_text.push(' ');
+                wf_text.push_str(cmd);
+            }
+        }
+        let wf_text = wf_text.to_lowercase();
+
+        // Tag overlap score
+        let tag_overlap = pattern_tags.intersection(&wf_tags).count();
+        let tag_total = pattern_tags.len().max(wf_tags.len()).max(1);
+        let tag_score = tag_overlap as f64 / tag_total as f64;
+
+        // Keyword overlap
+        let wf_words: std::collections::HashSet<&str> = wf_text
+            .split_whitespace()
+            .filter(|w| w.len() > 3)
+            .collect();
+        let word_overlap = pattern_words.intersection(&wf_words).count();
+        let word_total = pattern_words.union(&wf_words).count().max(1);
+        let word_score = word_overlap as f64 / word_total as f64;
+
+        // Combined score (same weights as pattern linking)
+        let score = tag_score * 0.6 + word_score * 0.4;
+
+        if score > 0.3 {
+            suggestions.push(WorkflowLinkSuggestion {
+                workflow_name: workflow.name.clone(),
+                score,
+            });
+        }
+    }
+
+    suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    suggestions.truncate(5);
+    suggestions
+}
+
+/// Apply workflow link suggestions to a pattern.
+pub fn apply_workflow_links(
+    pattern: &mut Pattern,
+    suggestions: &[WorkflowLinkSuggestion],
+) {
+    for suggestion in suggestions {
+        if !pattern.links.workflows.contains(&suggestion.workflow_name) {
+            pattern.links.workflows.push(suggestion.workflow_name.clone());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +356,104 @@ mod tests {
 
         let links = discover_links(&new, &existing);
         assert!(links.is_empty());
+    }
+
+    // ─── Pattern ↔ Workflow link tests ───────────────────────────────
+
+    fn make_workflow(name: &str, desc: &str, topics: Vec<&str>, tools: Vec<&str>) -> Workflow {
+        use mur_common::workflow::Permission;
+        Workflow {
+            base: mur_common::knowledge::KnowledgeBase {
+                name: name.into(),
+                description: desc.into(),
+                content: Content::Plain(desc.into()),
+                tags: Tags {
+                    topics: topics.into_iter().map(String::from).collect(),
+                    languages: vec![],
+                    extra: Default::default(),
+                },
+                ..Default::default()
+            },
+            steps: vec![],
+            variables: vec![],
+            source_sessions: vec![],
+            trigger: String::new(),
+            tools: tools.into_iter().map(String::from).collect(),
+            published_version: 0,
+            permission: Permission::default(),
+        }
+    }
+
+    #[test]
+    fn test_discover_workflow_links_by_tags() {
+        let pattern = make_pattern("rust-testing", "Rust testing patterns", vec!["rust", "testing"]);
+        let workflows = vec![
+            make_workflow("rust-ci", "Rust CI pipeline", vec!["rust", "testing", "ci"], vec!["cargo"]),
+            make_workflow("python-deploy", "Deploy Python app", vec!["python", "deploy"], vec!["pip"]),
+        ];
+
+        let links = discover_workflow_links(&pattern, &workflows);
+        assert!(!links.is_empty());
+        assert_eq!(links[0].workflow_name, "rust-ci");
+    }
+
+    #[test]
+    fn test_discover_workflow_links_no_match() {
+        let pattern = make_pattern("swift-ui", "SwiftUI views", vec!["swift", "ui"]);
+        let workflows = vec![
+            make_workflow("python-deploy", "Deploy Python", vec!["python"], vec![]),
+        ];
+
+        let links = discover_workflow_links(&pattern, &workflows);
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn test_discover_workflow_links_skip_already_linked() {
+        let mut pattern = make_pattern("rust-testing", "Testing", vec!["rust", "testing"]);
+        pattern.base.links.workflows.push("rust-ci".into());
+
+        let workflows = vec![
+            make_workflow("rust-ci", "Rust CI", vec!["rust", "testing"], vec![]),
+        ];
+
+        let links = discover_workflow_links(&pattern, &workflows);
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn test_apply_workflow_links() {
+        let mut pattern = make_pattern("test-p", "test", vec!["a"]);
+        let suggestions = vec![
+            WorkflowLinkSuggestion {
+                workflow_name: "wf-1".into(),
+                score: 0.8,
+            },
+            WorkflowLinkSuggestion {
+                workflow_name: "wf-2".into(),
+                score: 0.5,
+            },
+        ];
+
+        apply_workflow_links(&mut pattern, &suggestions);
+        assert_eq!(pattern.links.workflows.len(), 2);
+        assert!(pattern.links.workflows.contains(&"wf-1".to_string()));
+        assert!(pattern.links.workflows.contains(&"wf-2".to_string()));
+    }
+
+    #[test]
+    fn test_apply_workflow_links_no_duplicates() {
+        let mut pattern = make_pattern("test-p", "test", vec!["a"]);
+        pattern.base.links.workflows.push("wf-1".into());
+
+        let suggestions = vec![
+            WorkflowLinkSuggestion {
+                workflow_name: "wf-1".into(),
+                score: 0.8,
+            },
+        ];
+
+        apply_workflow_links(&mut pattern, &suggestions);
+        assert_eq!(pattern.links.workflows.len(), 1);
     }
 }

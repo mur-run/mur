@@ -23,6 +23,7 @@ use mur_common::pattern::{Attachment, Content, Pattern};
 use mur_common::workflow::Workflow;
 
 use crate::capture::feedback::{InjectedPatternRecord, InjectionRecord, write_injection_record};
+use crate::evolve::cooccurrence::CooccurrenceMatrix;
 use crate::store::yaml::YamlStore;
 
 /// When to trigger pattern retrieval
@@ -256,6 +257,32 @@ pub fn record_injection(query: &str, project: &str, patterns: &[Pattern]) {
     // Best-effort: don't fail injection if recording fails
     if let Err(e) = write_injection_record(&record) {
         eprintln!("# Warning: failed to write injection record: {}", e);
+    }
+}
+
+/// Record co-occurrence of injected patterns to `~/.mur/cooccurrence.json`.
+///
+/// Called after a successful injection so the co-occurrence matrix tracks
+/// which patterns appear together in the same session.
+pub fn record_cooccurrence_for_injection(patterns: &[Pattern]) {
+    if patterns.len() < 2 {
+        return;
+    }
+
+    let path = CooccurrenceMatrix::default_path();
+    let mut matrix = match CooccurrenceMatrix::load(&path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("# Warning: failed to load cooccurrence matrix: {}", e);
+            CooccurrenceMatrix::new()
+        }
+    };
+
+    let names: Vec<String> = patterns.iter().map(|p| p.name.clone()).collect();
+    matrix.record_cooccurrence(&names);
+
+    if let Err(e) = matrix.save(&path) {
+        eprintln!("# Warning: failed to save cooccurrence matrix: {}", e);
     }
 }
 
