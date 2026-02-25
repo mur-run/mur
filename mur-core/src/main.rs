@@ -2438,6 +2438,166 @@ exit 0
         hooks_installed.push("Claude Code");
     }
 
+    // ─── Step G: Interactive LLM/Embedding setup ─────────────────
+    println!();
+    println!("Model setup for pattern learning & semantic search:");
+    println!("  1) Cloud — API keys required, best quality");
+    println!("  2) Local — Ollama, free, runs on your machine");
+    println!("  3) Skip — keep current config");
+    print!("Choose [1/2/3] (default: 3): ");
+    io::stdout().flush()?;
+    let mut model_choice = String::new();
+    io::stdin().read_line(&mut model_choice)?;
+    let model_choice = model_choice.trim().to_string();
+
+    match model_choice.as_str() {
+        "1" => {
+            // Cloud provider selection
+            println!();
+            println!("Cloud provider:");
+            println!("  1) OpenRouter (recommended — access to many models)");
+            println!("  2) OpenAI");
+            println!("  3) Gemini");
+            println!("  4) Anthropic");
+            print!("Choose [1/2/3/4] (default: 1): ");
+            io::stdout().flush()?;
+            let mut provider_choice = String::new();
+            io::stdin().read_line(&mut provider_choice)?;
+            let provider_choice = provider_choice.trim().to_string();
+
+            let (provider, llm_model, embed_model, env_var) = match provider_choice.as_str() {
+                "2" => (
+                    "openai",
+                    "gpt-4o-mini",
+                    "text-embedding-3-small",
+                    "OPENAI_API_KEY",
+                ),
+                "3" => (
+                    "gemini",
+                    "gemini-2.0-flash",
+                    "text-embedding-004",
+                    "GEMINI_API_KEY",
+                ),
+                "4" => (
+                    "anthropic",
+                    "claude-sonnet-4-20250514",
+                    "voyage-3-lite",
+                    "ANTHROPIC_API_KEY",
+                ),
+                _ => (
+                    "openrouter",
+                    "google/gemini-2.0-flash-exp:free",
+                    "google/text-embedding-004",
+                    "OPENROUTER_API_KEY",
+                ),
+            };
+
+            // Check for API key in environment
+            if std::env::var(env_var).is_ok() {
+                println!("  ✓ {} detected", env_var);
+            } else {
+                println!(
+                    "  ⚠ {} not set — set it before using MUR learning features",
+                    env_var
+                );
+            }
+
+            let config_content = format!(
+                r#"# MUR Configuration
+# See: https://github.com/mur-run/mur
+
+tools:
+  claude:
+    enabled: true
+  gemini:
+    enabled: true
+
+search:
+  provider: {provider}
+  model: {embed_model}
+
+learning:
+  llm:
+    provider: {provider}
+    model: {llm_model}
+"#
+            );
+            std::fs::write(&config_path, config_content)?;
+            println!("  ✓ Config updated: {} / {}", provider, llm_model);
+        }
+        "2" => {
+            // Local (Ollama) setup
+            let ollama_running = std::process::Command::new("ollama")
+                .arg("list")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if !ollama_running {
+                println!();
+                println!("  ⚠ Ollama not detected. Install from https://ollama.com");
+                println!("  Using default Ollama models in config (pull them later).");
+            } else {
+                println!("  ✓ Ollama detected");
+            }
+
+            println!();
+            println!("LLM model for pattern learning:");
+            println!("  1) llama3.2:3b (default, lightweight)");
+            println!("  2) llama3.1:8b (better quality)");
+            println!("  3) qwen3:4b (good for code)");
+            print!("Choose [1/2/3] (default: 1): ");
+            io::stdout().flush()?;
+            let mut llm_choice = String::new();
+            io::stdin().read_line(&mut llm_choice)?;
+            let llm_model = match llm_choice.trim() {
+                "2" => "llama3.1:8b",
+                "3" => "qwen3:4b",
+                _ => "llama3.2:3b",
+            };
+
+            println!();
+            println!("Embedding model for semantic search:");
+            println!("  1) qwen3-embedding:0.6b (default, fast)");
+            println!("  2) nomic-embed-text (good quality)");
+            print!("Choose [1/2] (default: 1): ");
+            io::stdout().flush()?;
+            let mut embed_choice = String::new();
+            io::stdin().read_line(&mut embed_choice)?;
+            let embed_model = match embed_choice.trim() {
+                "2" => "nomic-embed-text",
+                _ => "qwen3-embedding:0.6b",
+            };
+
+            let config_content = format!(
+                r#"# MUR Configuration
+# See: https://github.com/mur-run/mur
+
+tools:
+  claude:
+    enabled: true
+  gemini:
+    enabled: true
+
+search:
+  provider: ollama
+  model: {embed_model}
+
+learning:
+  llm:
+    provider: ollama
+    model: {llm_model}
+"#
+            );
+            std::fs::write(&config_path, config_content)?;
+            println!("  ✓ Config updated: ollama / {}", llm_model);
+        }
+        _ => {
+            // Skip — keep current config
+            println!("  Keeping current config.");
+        }
+    }
+
     // ─── Step D: Detect other tools ──────────────────────────────
     let gemini_settings = home.join(".gemini").join("settings.json");
     let cursor_rules = std::env::current_dir().ok().map(|d| d.join(".cursorrules"));
@@ -2451,6 +2611,30 @@ exit 0
         && cr.exists()
     {
         detected_tools.push("Cursor");
+    }
+
+    // Check for CLI-based AI tools via `which`
+    let cli_tools = [
+        ("codex", "Codex"),
+        ("auggie", "Auggie"),
+        ("aider", "Aider"),
+        ("openclaw", "OpenClaw"),
+        ("opencode", "OpenCode"),
+    ];
+    for (binary, name) in &cli_tools {
+        if std::process::Command::new("which")
+            .arg(binary)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            detected_tools.push(name);
+        }
+    }
+
+    // Check for GitHub Copilot config directory
+    if home.join(".config").join("github-copilot").exists() {
+        detected_tools.push("GitHub Copilot");
     }
 
     // ─── Step F: Print summary ───────────────────────────────────
