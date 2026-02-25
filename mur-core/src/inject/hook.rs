@@ -236,7 +236,12 @@ pub fn record_injection(query: &str, project: &str, patterns: &[Pattern]) {
         .map(|p| {
             let full_text = p.content.as_text();
             let snippet = if full_text.len() > 100 {
-                format!("{}...", &full_text[..100])
+                let end = full_text.char_indices()
+                    .take_while(|(i, _)| *i <= 100)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(full_text.len().min(100));
+                format!("{}...", &full_text[..end])
             } else {
                 full_text
             };
