@@ -10,6 +10,7 @@ pub mod retrieve;
 pub mod evolve;
 pub mod inject;
 pub mod migrate;
+pub mod session;
 
 pub use mur_common::pattern::Pattern;
 pub use mur_common::config::Config;

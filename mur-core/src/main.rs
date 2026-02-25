@@ -3,12 +3,14 @@ use clap::{Parser, Subcommand};
 use mur_common::knowledge::KnowledgeBase;
 use mur_common::pattern::*;
 use std::io::{self, Write};
+use tracing_subscriber::EnvFilter;
 
 mod capture;
 mod evolve;
 mod inject;
 mod migrate;
 mod retrieve;
+mod session;
 mod store;
 
 use store::yaml::YamlStore;
@@ -42,7 +44,11 @@ enum Commands {
     /// Show statistics and effectiveness
     Stats,
     /// Sync patterns to AI tools
-    Sync,
+    Sync {
+        /// Suppress output
+        #[arg(long)]
+        quiet: bool,
+    },
     /// Inject patterns for a query (hook integration)
     Inject {
         #[arg(long)]
@@ -137,6 +143,20 @@ enum Commands {
     },
     /// Terminal dashboard
     Dashboard,
+    /// Inject context-aware patterns (auto-detects project from pwd)
+    Context {
+        /// Compact output (shorter, fewer patterns)
+        #[arg(long)]
+        compact: bool,
+        /// Override auto-detected query with explicit one
+        #[arg(long)]
+        query: Option<String>,
+    },
+    /// Session recording for Claude Code hooks
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
     /// Community publish/fetch
     Community {
         #[command(subcommand)]
@@ -190,6 +210,38 @@ enum WorkflowAction {
 }
 
 #[derive(Subcommand)]
+enum SessionAction {
+    /// Start recording a session
+    Start {
+        /// Source identifier (e.g. claude-code)
+        #[arg(long, default_value = "claude-code")]
+        source: String,
+    },
+    /// Stop recording the active session
+    Stop {
+        /// Run fingerprint extraction on the recording
+        #[arg(long)]
+        analyze: bool,
+    },
+    /// Record an event to the active session
+    Record {
+        /// Event type: user, assistant, tool_call, tool_result
+        #[arg(long, name = "type")]
+        event_type: String,
+        /// Tool name (for tool_call/tool_result events)
+        #[arg(long)]
+        tool: Option<String>,
+        /// Event content
+        #[arg(long)]
+        content: String,
+    },
+    /// Show active session status
+    Status,
+    /// List past session recordings
+    List,
+}
+
+#[derive(Subcommand)]
 enum CommunityAction {
     /// Publish a pattern to mur.run
     Publish { name: String },
@@ -199,7 +251,14 @@ enum CommunityAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                EnvFilter::new("warn,lance=warn,lancedb=warn")
+            }),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     let cli = Cli::parse();
 
     match cli.command {
@@ -221,7 +280,7 @@ async fn main() -> Result<()> {
                 cmd_learn_extract(file, fingerprint)?;
             }
         },
-        Commands::Sync => cmd_sync()?,
+        Commands::Sync { quiet } => cmd_sync(quiet)?,
         Commands::Inject {
             query,
             project: _,
@@ -241,12 +300,24 @@ async fn main() -> Result<()> {
         Commands::Evolve { dry_run, force } => cmd_evolve(dry_run, force)?,
         Commands::Emerge { threshold, dry_run } => cmd_emerge(threshold, dry_run)?,
         Commands::Suggest { create } => cmd_suggest(create)?,
+        Commands::Context { compact, query } => cmd_context(query, compact).await?,
+        Commands::Session { action } => match action {
+            SessionAction::Start { source } => cmd_session_start(&source)?,
+            SessionAction::Stop { analyze } => cmd_session_stop(analyze)?,
+            SessionAction::Record {
+                event_type,
+                tool,
+                content,
+            } => cmd_session_record(&event_type, tool.as_deref(), &content)?,
+            SessionAction::Status => cmd_session_status()?,
+            SessionAction::List => cmd_session_list()?,
+        },
         Commands::Dashboard => {
-            println!("📊 Dashboard (Phase 2)");
+            println!("Dashboard (Phase 2)");
             todo!()
         }
         Commands::Community { action: _ } => {
-            println!("🌐 Community (Phase 4)");
+            println!("Community (Phase 4)");
             todo!()
         }
     }
@@ -1121,7 +1192,7 @@ fn cmd_links(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_sync() -> Result<()> {
+fn cmd_sync(quiet: bool) -> Result<()> {
     use evolve::decay::apply_decay_all;
     use evolve::maturity::apply_maturity_all;
     use inject::sync::{default_targets, generate_sync_content, write_sync_file};
@@ -1137,7 +1208,7 @@ fn cmd_sync() -> Result<()> {
     let patterns = store.list_all()?;
 
     if patterns.is_empty() {
-        println!("No patterns to sync.");
+        if !quiet { println!("No patterns to sync."); }
         return Ok(());
     }
 
@@ -1173,15 +1244,17 @@ fn cmd_sync() -> Result<()> {
 
         let content = generate_sync_content(&top, &target.format);
         write_sync_file(&target_path, &content, &target.format)?;
-        println!(
-            "  ✅ {} — wrote {} patterns to {}",
-            target.name,
-            top.len(),
-            target_path.display()
-        );
+        if !quiet {
+            println!(
+                "  {} — wrote {} patterns to {}",
+                target.name,
+                top.len(),
+                target_path.display()
+            );
+        }
     }
 
-    println!("🔄 Sync complete.");
+    if !quiet { println!("Sync complete."); }
     Ok(())
 }
 
@@ -1880,6 +1953,239 @@ fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
         println!("Created {} draft patterns (maturity: Draft, confidence: 0.2).", created);
     }
 
+    Ok(())
+}
+
+// ─── Context command ──────────────────────────────────────────────
+
+async fn cmd_context(query: Option<String>, compact: bool) -> Result<()> {
+    use retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
+    use store::embedding::{embed, EmbeddingConfig};
+    use store::lancedb::VectorStore;
+    use std::collections::HashMap;
+
+    // Auto-detect project context from cwd
+    let cwd = std::env::current_dir()?;
+    let project_name = cwd
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Build query from provided or auto-detected context
+    let effective_query = match query {
+        Some(q) => q,
+        None => {
+            // Auto-detect: project name + recent git context
+            let mut parts = vec![project_name.clone()];
+
+            // Try to get git remote for additional context
+            if let Ok(output) = std::process::Command::new("git")
+                .args(["remote", "get-url", "origin"])
+                .current_dir(&cwd)
+                .output()
+            {
+                if output.status.success() {
+                    let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    // Extract repo name from URL
+                    if let Some(name) = remote.rsplit('/').next() {
+                        let name = name.trim_end_matches(".git");
+                        if name != project_name {
+                            parts.push(name.to_string());
+                        }
+                    }
+                }
+            }
+
+            // Try to get recent file context
+            if let Ok(output) = std::process::Command::new("git")
+                .args(["diff", "--name-only", "HEAD~3..HEAD"])
+                .current_dir(&cwd)
+                .output()
+            {
+                if output.status.success() {
+                    let files = String::from_utf8_lossy(&output.stdout);
+                    for file in files.lines().take(5) {
+                        // Extract keywords from file paths
+                        let stem = std::path::Path::new(file)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("");
+                        if !stem.is_empty() && stem.len() > 2 {
+                            parts.push(stem.to_string());
+                        }
+                    }
+                }
+            }
+
+            parts.join(" ")
+        }
+    };
+
+    let yaml_store = YamlStore::default_store()?;
+    let patterns = yaml_store.list_all()?;
+    let workflow_store = WorkflowYamlStore::default_store()?;
+    let workflows = workflow_store.list_all()?;
+
+    // Try hybrid search if LanceDB index exists
+    let index_path = dirs::home_dir()
+        .expect("no home dir")
+        .join(".mur")
+        .join("index");
+
+    let results = if index_path.exists() {
+        let cfg = store::config::load_config()?;
+        let config = EmbeddingConfig::from_config(&cfg);
+        match embed(&effective_query, &config).await {
+            Ok(query_embedding) => {
+                let vector_store = VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
+                let vector_results = vector_store.search(&query_embedding, 20, None).await?;
+                let vector_scores: HashMap<String, f64> = vector_results
+                    .into_iter()
+                    .map(|r| (r.name, r.similarity as f64))
+                    .collect();
+                score_and_rank_hybrid(&effective_query, patterns, &vector_scores)
+            }
+            Err(_) => score_and_rank(&effective_query, patterns),
+        }
+    } else {
+        score_and_rank(&effective_query, patterns)
+    };
+
+    let mut injected_patterns: Vec<Pattern> = Vec::new();
+    for sp in results {
+        let mut p = sp.pattern;
+        if p.lifecycle.status == LifecycleStatus::Archived {
+            continue;
+        }
+        let now = chrono::Utc::now();
+        p.decay.last_active = Some(now);
+        p.evidence.injection_count += 1;
+        p.lifecycle.last_injected = Some(now);
+        p.updated_at = now;
+        let _ = yaml_store.save(&p);
+        injected_patterns.push(p);
+    }
+
+    let token_budget = if compact { 800 } else { 2000 };
+    let output = inject::hook::format_unified_injection_with_store(
+        &injected_patterns, &workflows, token_budget, Some(&yaml_store),
+    );
+
+    if !output.is_empty() {
+        inject::hook::record_injection(&effective_query, &project_name, &injected_patterns);
+        inject::hook::record_cooccurrence_for_injection(&injected_patterns);
+        print!("{}", output);
+    }
+
+    Ok(())
+}
+
+// ─── Session commands ─────────────────────────────────────────────
+
+fn cmd_session_start(source: &str) -> Result<()> {
+    let session = session::start(source)?;
+    eprintln!("Session started: {} (source: {})", &session.id[..8], source);
+    Ok(())
+}
+
+fn cmd_session_stop(analyze: bool) -> Result<()> {
+    match session::stop()? {
+        Some(id) => {
+            eprintln!("Session stopped: {}", &id[..8]);
+            if analyze {
+                // Run fingerprint extraction on the recording
+                let recording_path = dirs::home_dir()
+                    .expect("no home dir")
+                    .join(".mur")
+                    .join("session")
+                    .join("recordings")
+                    .join(format!("{}.jsonl", id));
+
+                if recording_path.exists() {
+                    let content = std::fs::read_to_string(&recording_path)?;
+                    if !content.trim().is_empty() {
+                        use capture::emergence::{extract_fingerprints, save_fingerprints};
+                        let fps = extract_fingerprints(&content, &id);
+                        if !fps.is_empty() {
+                            save_fingerprints(&fps)?;
+                            eprintln!("Extracted {} fingerprints from session.", fps.len());
+                        }
+                    }
+                }
+            }
+        }
+        None => {
+            eprintln!("No active session.");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_session_record(event_type: &str, tool: Option<&str>, content: &str) -> Result<()> {
+    // Validate event type
+    match event_type {
+        "user" | "assistant" | "tool_call" | "tool_result" => {}
+        _ => anyhow::bail!(
+            "Invalid event type '{}'. Use: user, assistant, tool_call, tool_result",
+            event_type
+        ),
+    }
+
+    if !session::record(event_type, tool, content)? {
+        // No active session — silently succeed (hooks shouldn't fail)
+        return Ok(());
+    }
+    Ok(())
+}
+
+fn cmd_session_status() -> Result<()> {
+    match session::get_active()? {
+        Some(session) => {
+            println!("Active session: {}", session.id);
+            println!("  Started: {}", session.started_at);
+            println!("  Source:  {}", session.source);
+
+            // Count events in the recording
+            let recording_path = dirs::home_dir()
+                .expect("no home dir")
+                .join(".mur")
+                .join("session")
+                .join("recordings")
+                .join(format!("{}.jsonl", session.id));
+
+            if recording_path.exists() {
+                let content = std::fs::read_to_string(&recording_path).unwrap_or_default();
+                let count = content.lines().filter(|l| !l.trim().is_empty()).count();
+                println!("  Events:  {}", count);
+            }
+        }
+        None => {
+            println!("No active session.");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_session_list() -> Result<()> {
+    let recordings = session::list_recordings()?;
+
+    if recordings.is_empty() {
+        println!("No session recordings found.");
+        return Ok(());
+    }
+
+    println!("Session recordings ({}):\n", recordings.len());
+    for r in &recordings {
+        let time: chrono::DateTime<chrono::Utc> = r.modified.into();
+        let short_id = if r.id.len() > 8 { &r.id[..8] } else { &r.id };
+        println!(
+            "  {} — {} events, {} bytes ({})",
+            short_id,
+            r.event_count,
+            r.file_size,
+            time.format("%Y-%m-%d %H:%M"),
+        );
+    }
     Ok(())
 }
 
