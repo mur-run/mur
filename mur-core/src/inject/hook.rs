@@ -1,7 +1,28 @@
 //! Hook/inject: format patterns and workflows for injection into AI tool prompts.
+//!
+//! ## Post-session feedback integration
+//!
+//! After injection, we write `~/.mur/last_injection.json` so that
+//! `mur feedback auto` can analyze the session transcript and update
+//! pattern confidence. Claude Code hooks can trigger this automatically:
+//!
+//! ```json
+//! // .claude/hooks.json (future integration)
+//! {
+//!   "post_session": [{
+//!     "command": "mur feedback auto --file /path/to/transcript"
+//!   }]
+//! }
+//! ```
+//!
+// TODO(phase-2): Integrate with Claude Code post-session hooks when the
+// hooks API supports session-end events. For now, `mur feedback auto`
+// is run manually or via shell scripts.
 
 use mur_common::pattern::{Content, Pattern};
 use mur_common::workflow::Workflow;
+
+use crate::capture::feedback::{InjectedPatternRecord, InjectionRecord, write_injection_record};
 
 /// When to trigger pattern retrieval
 #[derive(Debug, Clone, PartialEq)]
@@ -152,6 +173,40 @@ pub fn format_unified_injection(
     }
 
     output.trim_end().to_string()
+}
+
+/// Record which patterns were injected to `~/.mur/last_injection.json`.
+///
+/// Called after a successful injection so `mur feedback auto` can later
+/// analyze the session transcript against these patterns.
+pub fn record_injection(query: &str, project: &str, patterns: &[Pattern]) {
+    let records: Vec<InjectedPatternRecord> = patterns
+        .iter()
+        .map(|p| {
+            let full_text = p.content.as_text();
+            let snippet = if full_text.len() > 100 {
+                format!("{}...", &full_text[..100])
+            } else {
+                full_text
+            };
+            InjectedPatternRecord {
+                name: p.name.clone(),
+                snippet,
+            }
+        })
+        .collect();
+
+    let record = InjectionRecord {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        query: query.to_string(),
+        project: project.to_string(),
+        patterns: records,
+    };
+
+    // Best-effort: don't fail injection if recording fails
+    if let Err(e) = write_injection_record(&record) {
+        eprintln!("# Warning: failed to write injection record: {}", e);
+    }
 }
 
 fn format_content(content: &Content) -> String {

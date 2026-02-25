@@ -135,6 +135,15 @@ enum FeedbackAction {
     Helpful { name: String },
     /// Mark a pattern as unhelpful
     Unhelpful { name: String },
+    /// Auto-analyze session transcript against injected patterns
+    Auto {
+        /// Path to session transcript (reads stdin if omitted)
+        #[arg(long)]
+        file: Option<String>,
+        /// Preview changes without saving
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -170,6 +179,7 @@ async fn main() -> Result<()> {
         Commands::Feedback { action } => match action {
             FeedbackAction::Helpful { name } => cmd_feedback(&name, true)?,
             FeedbackAction::Unhelpful { name } => cmd_feedback(&name, false)?,
+            FeedbackAction::Auto { file, dry_run } => cmd_feedback_auto(file, dry_run)?,
         },
         Commands::Gc { auto } => cmd_gc(auto)?,
         Commands::Migrate => cmd_migrate()?,
@@ -437,6 +447,13 @@ async fn cmd_inject(query: &str) -> Result<()> {
     if output.is_empty() {
         eprintln!("# No relevant patterns found");
     } else {
+        // Record what was injected for post-session feedback analysis
+        let project_name = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_default();
+        inject::hook::record_injection(query, &project_name, &injected_patterns);
+
         print!("{}", output);
     }
 
@@ -616,6 +633,100 @@ fn cmd_feedback(name: &str, helpful: bool) -> Result<()> {
         old_importance * 100.0,
         pattern.importance * 100.0
     );
+
+    Ok(())
+}
+
+fn cmd_feedback_auto(file: Option<String>, dry_run: bool) -> Result<()> {
+    use capture::feedback::{analyze_session_feedback, read_injection_record, SignalType};
+    use evolve::feedback::{apply_feedback, FeedbackSignal};
+
+    // 1. Read injection record
+    let record = match read_injection_record() {
+        Ok(r) => r,
+        Err(e) => {
+            println!("❌ No injection record found (~/.mur/last_injection.json): {}", e);
+            println!("   Run `mur inject` first, then analyze the session.");
+            return Ok(());
+        }
+    };
+
+    if record.patterns.is_empty() {
+        println!("No patterns were injected in the last session.");
+        return Ok(());
+    }
+
+    // 2. Read transcript
+    let transcript = match file {
+        Some(path) => std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("Failed to read transcript file '{}': {}", path, e))?,
+        None => {
+            // Read from stdin
+            let mut buf = String::new();
+            io::Read::read_to_string(&mut io::stdin(), &mut buf)?;
+            buf
+        }
+    };
+
+    if transcript.trim().is_empty() {
+        println!("❌ Empty transcript. Provide a session transcript via --file or stdin.");
+        return Ok(());
+    }
+
+    // 3. Analyze
+    let results = analyze_session_feedback(&transcript, &record.patterns);
+
+    // 4. Report and apply
+    let store = YamlStore::default_store()?;
+    let mode = if dry_run { " (dry run)" } else { "" };
+    println!("🔍 Post-session feedback{}\n", mode);
+    println!("   Injection: {} ({})", record.query, record.timestamp);
+    println!("   Patterns analyzed: {}\n", results.len());
+
+    for fb in &results {
+        let (icon, label) = match fb.signal {
+            SignalType::Reinforced => ("✅", "Reinforced"),
+            SignalType::Contradicted => ("❌", "Contradicted"),
+            SignalType::Ignored => ("⏭️ ", "Ignored"),
+        };
+        let delta = if fb.confidence_delta >= 0.0 {
+            format!("+{:.2}", fb.confidence_delta)
+        } else {
+            format!("{:.2}", fb.confidence_delta)
+        };
+        print!("   {} {}: {} ({})", icon, fb.pattern_name, label, delta);
+        if let Some(ev) = &fb.evidence {
+            print!("\n      Evidence: \"{}\"", ev);
+        }
+        println!();
+
+        if !dry_run {
+            // Apply confidence delta via existing feedback system
+            if let Ok(mut pattern) = store.get(&fb.pattern_name) {
+                let signal = match fb.signal {
+                    SignalType::Reinforced => FeedbackSignal::Success,
+                    SignalType::Contradicted => FeedbackSignal::Unhelpful,
+                    SignalType::Ignored => FeedbackSignal::Override,
+                };
+                // For auto feedback, apply the specific confidence delta
+                // rather than the default feedback amounts
+                let old_confidence = pattern.confidence;
+                apply_feedback(&mut pattern, signal);
+                // Override confidence with our computed delta instead
+                pattern.confidence = (old_confidence + fb.confidence_delta).clamp(0.0, 1.0);
+                let _ = store.save(&pattern);
+            }
+        }
+    }
+
+    let reinforced = results.iter().filter(|r| r.signal == SignalType::Reinforced).count();
+    let contradicted = results.iter().filter(|r| r.signal == SignalType::Contradicted).count();
+    let ignored = results.iter().filter(|r| r.signal == SignalType::Ignored).count();
+
+    println!("\n── Summary{} ──", mode);
+    println!("   Reinforced:   {}", reinforced);
+    println!("   Contradicted: {}", contradicted);
+    println!("   Ignored:      {}", ignored);
 
     Ok(())
 }
