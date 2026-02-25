@@ -120,6 +120,15 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Detect emergent patterns from cross-session behaviors
+    Emerge {
+        /// Minimum number of sessions for a behavior to be considered emergent
+        #[arg(long, default_value = "3")]
+        threshold: usize,
+        /// Preview candidates without creating patterns
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Terminal dashboard
     Dashboard,
     /// Community publish/fetch
@@ -135,6 +144,9 @@ enum LearnAction {
     Extract {
         #[arg(short, long)]
         file: Option<String>,
+        /// Also extract and save behavior fingerprints for emergence detection
+        #[arg(long)]
+        fingerprint: bool,
     },
 }
 
@@ -199,9 +211,8 @@ async fn main() -> Result<()> {
         Commands::Gc { auto } => cmd_gc(auto)?,
         Commands::Migrate => cmd_migrate()?,
         Commands::Learn { action } => match action {
-            LearnAction::Extract { file: _ } => {
-                println!("📚 Extract requires LLM integration (Phase 1, Week 3)");
-                todo!()
+            LearnAction::Extract { file, fingerprint } => {
+                cmd_learn_extract(file, fingerprint)?;
             }
         },
         Commands::Sync => cmd_sync()?,
@@ -222,6 +233,7 @@ async fn main() -> Result<()> {
         Commands::Deprecate { name } => cmd_deprecate(&name)?,
         Commands::Links { name } => cmd_links(&name)?,
         Commands::Evolve { dry_run, force } => cmd_evolve(dry_run, force)?,
+        Commands::Emerge { threshold, dry_run } => cmd_emerge(threshold, dry_run)?,
         Commands::Dashboard => {
             println!("📊 Dashboard (Phase 2)");
             todo!()
@@ -1489,6 +1501,177 @@ fn cmd_evolve(dry_run: bool, _force: bool) -> Result<()> {
         "  Maturity:       Draft: {} | Emerging: {} | Stable: {} | Canonical: {}",
         draft, emerging, stable, canonical
     );
+
+    Ok(())
+}
+
+fn cmd_learn_extract(file: Option<String>, fingerprint: bool) -> Result<()> {
+    // Read transcript
+    let transcript = match file {
+        Some(path) => std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("Failed to read transcript file '{}': {}", path, e))?,
+        None => {
+            let mut buf = String::new();
+            io::Read::read_to_string(&mut io::stdin(), &mut buf)?;
+            buf
+        }
+    };
+
+    if transcript.trim().is_empty() {
+        println!("Empty transcript. Provide a session transcript via --file or stdin.");
+        return Ok(());
+    }
+
+    // Pattern extraction still requires LLM integration
+    println!("Pattern extraction requires LLM integration (coming soon).");
+
+    // Fingerprint extraction (no LLM needed)
+    if fingerprint {
+        use capture::emergence::{extract_fingerprints, save_fingerprints, prune_fingerprints};
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let fps = extract_fingerprints(&transcript, &session_id);
+
+        if fps.is_empty() {
+            println!("No behavior fingerprints detected in transcript.");
+        } else {
+            save_fingerprints(&fps)?;
+            println!(
+                "Extracted {} behavior fingerprints from session {}",
+                fps.len(),
+                &session_id[..8]
+            );
+
+            // Auto-prune fingerprints older than 90 days
+            let pruned = prune_fingerprints(90)?;
+            if pruned > 0 {
+                println!("Pruned {} fingerprints older than 90 days.", pruned);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
+    use capture::emergence::{
+        detect_emergent, load_fingerprints, prune_fingerprints,
+    };
+
+    // Auto-prune old fingerprints first
+    let pruned = prune_fingerprints(90)?;
+    if pruned > 0 {
+        println!("Pruned {} fingerprints older than 90 days.\n", pruned);
+    }
+
+    // Load all fingerprints
+    let fingerprints = load_fingerprints()?;
+    if fingerprints.is_empty() {
+        println!("No fingerprints found. Run `mur learn extract --fingerprint` on session transcripts first.");
+        return Ok(());
+    }
+
+    let session_count: std::collections::HashSet<&str> = fingerprints
+        .iter()
+        .map(|fp| fp.session_id.as_str())
+        .collect();
+
+    println!(
+        "Loaded {} fingerprints from {} sessions.\n",
+        fingerprints.len(),
+        session_count.len()
+    );
+
+    // Detect emergent patterns
+    let candidates = detect_emergent(&fingerprints, threshold);
+
+    if candidates.is_empty() {
+        println!(
+            "No emergent patterns found (threshold: {} sessions).\nKeep running `mur learn extract --fingerprint` to build up the fingerprint database.",
+            threshold
+        );
+        return Ok(());
+    }
+
+    let mode = if dry_run { " (dry run)" } else { "" };
+    println!(
+        "Found {} emergent patterns from {} sessions{}\n",
+        candidates.len(),
+        session_count.len(),
+        mode
+    );
+
+    let store = YamlStore::default_store()?;
+    let mut created = 0;
+
+    for (i, candidate) in candidates.iter().enumerate() {
+        println!(
+            "{}. {} (seen in {} sessions)",
+            i + 1,
+            candidate.suggested_name,
+            candidate.session_count
+        );
+        println!("   Behavior: {}", candidate.behavior);
+        println!("   Keywords: {}", candidate.keywords.join(", "));
+        println!("   Sessions: {}", candidate.session_ids.join(", "));
+
+        if !candidate.evidence.is_empty() {
+            println!("   Evidence:");
+            for ev in &candidate.evidence {
+                println!("     - {}", ev);
+            }
+        }
+
+        if !dry_run {
+            // Create a draft pattern
+            let name = &candidate.suggested_name;
+            if store.exists(name) {
+                println!("   -> Pattern '{}' already exists, skipping.", name);
+            } else {
+                let pattern = Pattern {
+                    base: KnowledgeBase {
+                        schema: mur_common::pattern::SCHEMA_VERSION,
+                        name: name.clone(),
+                        description: format!(
+                            "Emergent: {} (detected across {} sessions)",
+                            candidate.behavior, candidate.session_count
+                        ),
+                        content: mur_common::pattern::Content::DualLayer {
+                            technical: candidate.suggested_content.clone(),
+                            principle: None,
+                        },
+                        tier: mur_common::pattern::Tier::Session,
+                        importance: 0.3,
+                        confidence: 0.2,
+                        tags: mur_common::pattern::Tags {
+                            languages: vec![],
+                            topics: candidate.keywords.clone(),
+                            extra: Default::default(),
+                        },
+                        evidence: mur_common::pattern::Evidence {
+                            source_sessions: candidate.session_ids.clone(),
+                            first_seen: Some(chrono::Utc::now()),
+                            ..Default::default()
+                        },
+                        maturity: mur_common::knowledge::Maturity::Draft,
+                        ..Default::default()
+                    },
+                    attachments: vec![],
+                };
+                store.save(&pattern)?;
+                println!("   -> Created draft pattern: {}", name);
+                created += 1;
+            }
+        }
+
+        println!();
+    }
+
+    if dry_run {
+        println!("Run without --dry-run to create these as draft patterns.");
+    } else if created > 0 {
+        println!("Created {} draft patterns (maturity: Draft, confidence: 0.2).", created);
+    }
 
     Ok(())
 }
