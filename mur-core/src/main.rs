@@ -11,8 +11,10 @@ mod community;
 mod dashboard;
 mod evolve;
 mod inject;
+mod interactive;
 mod migrate;
 mod retrieve;
+mod server;
 mod session;
 mod store;
 
@@ -174,6 +176,31 @@ enum Commands {
         /// Install Claude Code hooks (PostToolUse, Stop, UserPromptSubmit)
         #[arg(long)]
         hooks: bool,
+    },
+    /// Start local API server for web dashboard
+    Serve {
+        /// Port to listen on
+        #[arg(long, default_value = "3847")]
+        port: u16,
+        /// Open browser after starting
+        #[arg(long)]
+        open: bool,
+        /// Read-only mode (reject all write operations)
+        #[arg(long)]
+        readonly: bool,
+    },
+    /// Explain why a pattern was (or would be) injected
+    Why {
+        /// Pattern name
+        name: String,
+    },
+    /// View and edit a pattern with preview and diff
+    Edit {
+        /// Pattern name
+        name: String,
+        /// Quick inline field edit (skip $EDITOR)
+        #[arg(long)]
+        quick: bool,
     },
 }
 
@@ -344,6 +371,13 @@ async fn main() -> Result<()> {
         Commands::Login => cmd_login().await?,
         Commands::Logout => cmd_logout()?,
         Commands::Init { hooks } => cmd_init(hooks)?,
+        Commands::Serve {
+            port,
+            open,
+            readonly,
+        } => cmd_serve(port, open, readonly).await?,
+        Commands::Why { name } => cmd_why(&name)?,
+        Commands::Edit { name, quick } => cmd_edit(&name, quick)?,
     }
 
     Ok(())
@@ -353,6 +387,12 @@ async fn main() -> Result<()> {
 
 fn cmd_new(diagram_path: Option<String>) -> Result<()> {
     let store = YamlStore::default_store()?;
+
+    // Use interactive mode when on a TTY and no diagram given
+    if std::io::IsTerminal::is_terminal(&std::io::stdin()) && diagram_path.is_none() {
+        let _ = interactive::interactive_new(&store)?;
+        return Ok(());
+    }
 
     print!("Pattern name (kebab-case): ");
     io::stdout().flush()?;
@@ -3121,6 +3161,166 @@ learning:
         println!("    5. Run `mur community list` to browse community patterns");
     }
     println!();
+
+    Ok(())
+}
+
+// ─── Phase 0 + Phase 4 commands ─────────────────────────────────
+
+async fn cmd_serve(port: u16, open: bool, readonly: bool) -> Result<()> {
+    let mur_dir = dirs::home_dir().expect("no home dir").join(".mur");
+
+    let state = server::AppState {
+        patterns_dir: mur_dir.join("patterns"),
+        workflows_dir: mur_dir.join("workflows"),
+        config: server::ServerConfig { readonly },
+    };
+
+    if open {
+        let url = format!("http://localhost:{}", port);
+        eprintln!("Opening {}...", url);
+        // Best-effort: open browser
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open").arg(&url).spawn();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+        }
+    }
+
+    server::run_server(state, port).await
+}
+
+fn cmd_why(name: &str) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let pattern = store.get(name)?;
+    interactive::explain_why(&pattern, &store)
+}
+
+fn cmd_edit(name: &str, quick: bool) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let old_pattern = store.get(name)?;
+
+    // Show preview
+    interactive::show_edit_preview(&old_pattern);
+
+    if quick {
+        // Quick inline edit
+        use dialoguer::Select;
+
+        let fields = &["description", "confidence", "importance", "tier", "tags"];
+        let field_idx = Select::new()
+            .with_prompt("  Which field?")
+            .items(fields)
+            .default(0)
+            .interact()?;
+
+        let mut pattern = old_pattern.clone();
+
+        match fields[field_idx] {
+            "description" => {
+                let new_val: String = dialoguer::Input::new()
+                    .with_prompt("  New description")
+                    .default(pattern.description.clone())
+                    .interact_text()?;
+                pattern.description = new_val;
+            }
+            "confidence" => {
+                let new_val: String = dialoguer::Input::new()
+                    .with_prompt(&format!(
+                        "  New confidence (current: {:.2})",
+                        pattern.confidence
+                    ))
+                    .default(format!("{:.2}", pattern.confidence))
+                    .interact_text()?;
+                pattern.confidence = new_val
+                    .parse()
+                    .unwrap_or(pattern.confidence)
+                    .clamp(0.0, 1.0);
+            }
+            "importance" => {
+                let new_val: String = dialoguer::Input::new()
+                    .with_prompt(&format!(
+                        "  New importance (current: {:.2})",
+                        pattern.importance
+                    ))
+                    .default(format!("{:.2}", pattern.importance))
+                    .interact_text()?;
+                pattern.importance = new_val
+                    .parse()
+                    .unwrap_or(pattern.importance)
+                    .clamp(0.0, 1.0);
+            }
+            "tier" => {
+                let tier_options = &["session", "project", "core"];
+                let tier_idx = Select::new()
+                    .with_prompt("  Select tier")
+                    .items(tier_options)
+                    .default(match pattern.tier {
+                        Tier::Session => 0,
+                        Tier::Project => 1,
+                        Tier::Core => 2,
+                    })
+                    .interact()?;
+                pattern.tier = match tier_idx {
+                    1 => Tier::Project,
+                    2 => Tier::Core,
+                    _ => Tier::Session,
+                };
+            }
+            "tags" => {
+                let current = pattern.tags.topics.join(", ");
+                let new_val: String = dialoguer::Input::new()
+                    .with_prompt("  Tags (comma-separated)")
+                    .default(current)
+                    .interact_text()?;
+                pattern.tags.topics = new_val
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            _ => unreachable!(),
+        }
+
+        pattern.updated_at = chrono::Utc::now();
+        interactive::show_edit_diff(&old_pattern, &pattern);
+
+        let apply = dialoguer::Confirm::new()
+            .with_prompt("  Apply changes?")
+            .default(true)
+            .interact()?;
+
+        if apply {
+            store.save(&pattern)?;
+            println!("  {} Saved.", console::style("OK").green().bold());
+        } else {
+            println!("  Discarded.");
+        }
+    } else {
+        // Full edit: open in $EDITOR
+        let yaml_path = dirs::home_dir()
+            .expect("no home dir")
+            .join(".mur")
+            .join("patterns")
+            .join(format!("{}.yaml", name));
+
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+        let status = std::process::Command::new(&editor)
+            .arg(&yaml_path)
+            .status()?;
+
+        if !status.success() {
+            println!("  Editor exited with error.");
+            return Ok(());
+        }
+
+        // Reload and show diff
+        let new_pattern = store.get(name)?;
+        interactive::show_edit_diff(&old_pattern, &new_pattern);
+    }
 
     Ok(())
 }
