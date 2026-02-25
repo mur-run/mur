@@ -2417,17 +2417,29 @@ exit 0
 
             // Remove any existing mur-managed hooks (by checking command contains mur hooks dir)
             arr.retain(|entry| {
+                // Check flat format: { command: "..." }
                 if let Some(cmd) = entry.get("command").and_then(|c| c.as_str()) {
-                    !cmd.contains(mur_hook_marker) && !cmd.contains(".mur/hooks/")
-                } else {
-                    true
+                    return !cmd.contains(mur_hook_marker) && !cmd.contains(".mur/hooks/");
                 }
+                // Check nested format: { hooks: [{ command: "..." }] }
+                if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+                    return !hooks.iter().any(|h| {
+                        h.get("command")
+                            .and_then(|c| c.as_str())
+                            .map(|c| c.contains(".mur/hooks/"))
+                            .unwrap_or(false)
+                    });
+                }
+                true
             });
 
-            // Add our hook
+            // Add our hook (Claude Code format: { hooks: [...], matcher: "" })
             arr.push(serde_json::json!({
-                "type": "command",
-                "command": format!("bash {}", script_path),
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("bash {}", script_path),
+                }],
+                "matcher": ""
             }));
         }
 
