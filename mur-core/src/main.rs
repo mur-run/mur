@@ -162,6 +162,12 @@ enum Commands {
         #[command(subcommand)]
         action: CommunityAction,
     },
+    /// Initialize MUR directory and optionally install hooks
+    Init {
+        /// Install Claude Code hooks (PostToolUse, Stop, UserPromptSubmit)
+        #[arg(long)]
+        hooks: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -320,6 +326,7 @@ async fn main() -> Result<()> {
             println!("Community (Phase 4)");
             todo!()
         }
+        Commands::Init { hooks } => cmd_init(hooks)?
     }
 
     Ok(())
@@ -2186,6 +2193,269 @@ fn cmd_session_list() -> Result<()> {
             time.format("%Y-%m-%d %H:%M"),
         );
     }
+    Ok(())
+}
+
+// ─── Init command ─────────────────────────────────────────────────
+
+fn cmd_init(hooks_flag: bool) -> Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let mur_dir = home.join(".mur");
+
+    // ─── Step A: Create directory structure ───────────────────────
+    let dirs_to_create = [
+        mur_dir.clone(),
+        mur_dir.join("patterns"),
+        mur_dir.join("workflows"),
+        mur_dir.join("session").join("recordings"),
+        mur_dir.join("hooks"),
+        mur_dir.join("index"),
+    ];
+    for d in &dirs_to_create {
+        std::fs::create_dir_all(d)?;
+    }
+
+    // ─── Step E: Write default config.yaml if not exists ─────────
+    let config_path = mur_dir.join("config.yaml");
+    if !config_path.exists() {
+        let default_config = r#"# MUR Configuration
+# See: https://github.com/mur-run/mur
+
+tools:
+  claude:
+    enabled: true
+  gemini:
+    enabled: true
+
+search:
+  provider: ollama
+  model: qwen3-embedding:0.6b
+
+learning:
+  llm:
+    provider: ollama
+    model: llama3.2:3b
+"#;
+        std::fs::write(&config_path, default_config)?;
+    }
+
+    // ─── Determine whether to install hooks ──────────────────────
+    let install_hooks = if hooks_flag {
+        true
+    } else {
+        // Interactive prompt
+        print!("Install Claude Code hooks? [Y/n] ");
+        io::stdout().flush()?;
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        let answer = answer.trim().to_lowercase();
+        answer.is_empty() || answer == "y" || answer == "yes"
+    };
+
+    let mut hooks_installed = Vec::new();
+
+    if install_hooks {
+        // ─── Step B: Write hook scripts ──────────────────────────
+        let on_prompt = r#"#!/bin/bash
+# mur-managed-hook v5
+INPUT=$(cat /dev/stdin 2>/dev/null || echo '{}')
+MUR=$(which mur 2>/dev/null || echo "mur")
+$MUR context --compact 2>/dev/null || true
+if [ -f ~/.mur/session/active.json ]; then
+  PROMPT=$(echo "$INPUT" | jq -r '.prompt // empty' 2>/dev/null)
+  if [ -n "$PROMPT" ]; then
+    $MUR session record --event-type user --content "$PROMPT" 2>/dev/null || true
+  fi
+fi
+exit 0
+"#;
+
+        let on_tool = r#"#!/bin/bash
+# mur-managed-hook v5
+MUR=$(which mur 2>/dev/null || echo "mur")
+if [ -f ~/.mur/session/active.json ]; then
+  INPUT=$(cat /dev/stdin 2>/dev/null || echo '{}')
+  TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
+  TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // {}' 2>/dev/null)
+  if [ -n "$TOOL" ]; then
+    $MUR session record --event-type tool_call --tool "$TOOL" --content "$TOOL_INPUT" 2>/dev/null || true
+  fi
+fi
+"#;
+
+        let on_stop = r#"#!/bin/bash
+# mur-managed-hook v5
+INPUT=$(cat /dev/stdin 2>/dev/null || echo '{}')
+MUR=$(which mur 2>/dev/null || echo "mur")
+if [ -f ~/.mur/session/active.json ]; then
+  STOP_REASON=$(echo "$INPUT" | jq -r '.stop_reason // "turn_end"' 2>/dev/null)
+  $MUR session record --event-type assistant --content "[stop: $STOP_REASON]" 2>/dev/null || true
+fi
+($MUR sync --quiet 2>/dev/null &)
+($MUR evolve 2>/dev/null &)
+exit 0
+"#;
+
+        let hooks = [
+            ("on-prompt.sh", on_prompt),
+            ("on-tool.sh", on_tool),
+            ("on-stop.sh", on_stop),
+        ];
+
+        for (filename, content) in &hooks {
+            let path = mur_dir.join("hooks").join(filename);
+            std::fs::write(&path, content)?;
+            // Make executable
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+            }
+        }
+
+        // ─── Step C: Install Claude Code hooks in settings.json ──
+        let claude_dir = home.join(".claude");
+        std::fs::create_dir_all(&claude_dir)?;
+        let settings_path = claude_dir.join("settings.json");
+
+        let mut settings: serde_json::Value = if settings_path.exists() {
+            let content = std::fs::read_to_string(&settings_path)?;
+            serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        let hooks_dir = mur_dir.join("hooks");
+        let mur_hook_marker = "mur-managed-hook";
+
+        // Define the hooks we want to install
+        let hook_defs = [
+            (
+                "UserPromptSubmit",
+                hooks_dir.join("on-prompt.sh").to_string_lossy().to_string(),
+            ),
+            (
+                "PostToolUse",
+                hooks_dir.join("on-tool.sh").to_string_lossy().to_string(),
+            ),
+            (
+                "Stop",
+                hooks_dir.join("on-stop.sh").to_string_lossy().to_string(),
+            ),
+        ];
+
+        let hooks_obj = settings
+            .as_object_mut()
+            .unwrap()
+            .entry("hooks")
+            .or_insert_with(|| serde_json::json!({}));
+
+        for (event_name, script_path) in &hook_defs {
+            let event_arr = hooks_obj
+                .as_object_mut()
+                .unwrap()
+                .entry(*event_name)
+                .or_insert_with(|| serde_json::json!([]));
+
+            let arr = event_arr.as_array_mut().unwrap();
+
+            // Remove any existing mur-managed hooks (by checking command contains mur hooks dir)
+            arr.retain(|entry| {
+                if let Some(cmd) = entry.get("command").and_then(|c| c.as_str()) {
+                    !cmd.contains(mur_hook_marker) && !cmd.contains(".mur/hooks/")
+                } else {
+                    true
+                }
+            });
+
+            // Add our hook
+            arr.push(serde_json::json!({
+                "type": "command",
+                "command": format!("bash {}", script_path),
+            }));
+        }
+
+        // Write settings back with pretty formatting
+        let pretty = serde_json::to_string_pretty(&settings)?;
+        std::fs::write(&settings_path, pretty)?;
+
+        hooks_installed.push("Claude Code");
+    }
+
+    // ─── Step D: Detect other tools ──────────────────────────────
+    let gemini_settings = home.join(".gemini").join("settings.json");
+    let cursor_rules = std::env::current_dir()
+        .ok()
+        .map(|d| d.join(".cursorrules"));
+
+    let mut detected_tools = Vec::new();
+
+    if gemini_settings.exists() || home.join(".gemini").exists() {
+        detected_tools.push("Gemini CLI");
+    }
+    if let Some(ref cr) = cursor_rules {
+        if cr.exists() {
+            detected_tools.push("Cursor");
+        }
+    }
+
+    // ─── Step F: Print summary ───────────────────────────────────
+    let pattern_count = if mur_dir.join("patterns").exists() {
+        std::fs::read_dir(mur_dir.join("patterns"))
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .map(|ext| ext == "yaml" || ext == "yml")
+                            .unwrap_or(false)
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    println!();
+    println!("✅ MUR initialized!");
+    println!();
+    println!("  📁 Data directory: ~/.mur/");
+    if !hooks_installed.is_empty() {
+        println!("  🪝 Hooks installed: {}", hooks_installed.join(", "));
+    } else {
+        println!("  🪝 Hooks: not installed (run `mur init --hooks` to install)");
+    }
+    println!(
+        "  📝 Patterns: {} {}",
+        pattern_count,
+        if pattern_count == 0 {
+            "(run `mur new` to create your first)"
+        } else {
+            ""
+        }
+    );
+
+    // Show detected tools
+    if !detected_tools.is_empty() {
+        println!();
+        println!("  Detected tools: {}", detected_tools.join(", "));
+        if detected_tools.contains(&"Gemini CLI") {
+            println!("    💡 Gemini CLI: add hooks to ~/.gemini/settings.json");
+        }
+        if detected_tools.contains(&"Cursor") {
+            println!("    💡 Cursor: run `mur sync` to sync patterns to .cursorrules");
+        }
+    }
+
+    println!();
+    println!("  Next steps:");
+    println!("    1. Start using Claude Code normally — MUR injects patterns automatically");
+    println!("    2. Run `mur sync` to sync patterns to other AI tools");
+    println!("    3. Run `mur search <query>` to find patterns");
+    println!();
+
     Ok(())
 }
 
