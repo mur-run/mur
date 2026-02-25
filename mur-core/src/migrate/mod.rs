@@ -1,6 +1,7 @@
 //! Migration from Mur v1 (Go) patterns to v2 (Rust) schema.
 
 use anyhow::{Context, Result};
+use mur_common::knowledge::KnowledgeBase;
 use mur_common::pattern::*;
 use std::collections::HashMap;
 use std::fs;
@@ -153,30 +154,34 @@ fn convert_v1_to_v2(v1: &V1Pattern) -> Result<Pattern> {
     };
 
     Ok(Pattern {
-        schema: 2,
-        name: v1.name.clone(),
-        description,
-        content: Content::DualLayer {
-            technical: v1.content.clone(),
-            principle: None,
+        base: KnowledgeBase {
+            schema: 2,
+            name: v1.name.clone(),
+            description,
+            content: Content::DualLayer {
+                technical: v1.content.clone(),
+                principle: None,
+            },
+            tier: Tier::Session, // default, user can promote later
+            importance: 0.5,
+            confidence: if v1.confidence > 0.0 { v1.confidence } else { 0.5 },
+            tags: Tags {
+                languages: vec![],
+                topics,
+                extra: HashMap::new(),
+            },
+            applies: Applies::default(),
+            evidence: Evidence {
+                first_seen: Some(created),
+                ..Evidence::default()
+            },
+            links: Links::default(),
+            lifecycle: Lifecycle::default(),
+            created_at: created,
+            updated_at: updated,
+            ..Default::default()
         },
-        tier: Tier::Session, // default, user can promote later
-        importance: 0.5,
-        confidence: if v1.confidence > 0.0 { v1.confidence } else { 0.5 },
-        tags: Tags {
-            languages: vec![],
-            topics,
-            extra: HashMap::new(),
-        },
-        applies: Applies::default(),
-        evidence: Evidence {
-            first_seen: Some(created),
-            ..Evidence::default()
-        },
-        links: Links::default(),
-        lifecycle: Lifecycle::default(),
-        created_at: created,
-        updated_at: updated,
+        attachments: vec![],
     })
 }
 

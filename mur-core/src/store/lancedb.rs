@@ -1,4 +1,4 @@
-//! LanceDB vector store for semantic search over patterns.
+//! LanceDB vector store for semantic search over patterns and workflows.
 //!
 //! YAML remains the source of truth. LanceDB is a rebuildable index.
 
@@ -8,12 +8,13 @@ use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use mur_common::pattern::Pattern;
+use mur_common::workflow::Workflow;
 use std::path::Path;
 use std::sync::Arc;
 
 const TABLE_NAME: &str = "patterns";
 
-/// LanceDB-backed vector index for patterns.
+/// LanceDB-backed vector index for patterns and workflows.
 pub struct VectorStore {
     db: lancedb::Connection,
     dimensions: i32,
@@ -30,6 +31,7 @@ impl VectorStore {
     }
 
     /// Build/rebuild the entire index from patterns + their embeddings.
+    #[allow(dead_code)] // Public API, used by tests
     pub async fn build_index(
         &self,
         patterns: &[(Pattern, Vec<f32>)],
@@ -56,6 +58,7 @@ impl VectorStore {
             .collect();
         let tier_refs: Vec<&str> = tiers.iter().map(|s| s.as_str()).collect();
         let importances: Vec<f32> = patterns.iter().map(|(p, _)| p.importance as f32).collect();
+        let item_types: Vec<&str> = vec!["pattern"; patterns.len()];
 
         // Build FixedSizeList for vectors
         let all_vectors: Vec<f32> = patterns.iter().flat_map(|(_, v)| v.clone()).collect();
@@ -71,6 +74,7 @@ impl VectorStore {
                 Arc::new(StringArray::from(content_refs)),
                 Arc::new(StringArray::from(tier_refs)),
                 Arc::new(Float32Array::from(importances)),
+                Arc::new(StringArray::from(item_types)),
                 Arc::new(vector_array),
             ],
         )?;
@@ -85,11 +89,85 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Search for similar patterns by embedding vector.
+    /// Build/rebuild a unified index from patterns AND workflows with their embeddings.
+    pub async fn build_unified_index(
+        &self,
+        patterns: &[(Pattern, Vec<f32>)],
+        workflows: &[(Workflow, Vec<f32>)],
+    ) -> Result<()> {
+        // Drop existing table if any
+        let tables = self.db.table_names().execute().await?;
+        if tables.contains(&TABLE_NAME.to_string()) {
+            self.db.drop_table(TABLE_NAME, &[]).await?;
+        }
+
+        let total = patterns.len() + workflows.len();
+        if total == 0 {
+            return Ok(());
+        }
+
+        let schema = Self::schema(self.dimensions);
+
+        // Collect fields from patterns
+        let mut names: Vec<String> = patterns.iter().map(|(p, _)| p.name.clone()).collect();
+        let mut descriptions: Vec<String> = patterns.iter().map(|(p, _)| p.description.clone()).collect();
+        let mut contents: Vec<String> = patterns.iter().map(|(p, _)| p.content.as_text()).collect();
+        let mut tiers: Vec<String> = patterns.iter().map(|(p, _)| format!("{:?}", p.tier).to_lowercase()).collect();
+        let mut importances: Vec<f32> = patterns.iter().map(|(p, _)| p.importance as f32).collect();
+        let mut item_types: Vec<String> = vec!["pattern".into(); patterns.len()];
+        let mut all_vectors: Vec<f32> = patterns.iter().flat_map(|(_, v)| v.clone()).collect();
+
+        // Append fields from workflows
+        for (w, v) in workflows {
+            names.push(w.name.clone());
+            descriptions.push(w.description.clone());
+            contents.push(w.content.as_text());
+            tiers.push(format!("{:?}", w.tier).to_lowercase());
+            importances.push(w.importance as f32);
+            item_types.push("workflow".into());
+            all_vectors.extend(v.iter());
+        }
+
+        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let desc_refs: Vec<&str> = descriptions.iter().map(|s| s.as_str()).collect();
+        let content_refs: Vec<&str> = contents.iter().map(|s| s.as_str()).collect();
+        let tier_refs: Vec<&str> = tiers.iter().map(|s| s.as_str()).collect();
+        let type_refs: Vec<&str> = item_types.iter().map(|s| s.as_str()).collect();
+
+        let values = Float32Array::from(all_vectors);
+        let field = Arc::new(Field::new("item", DataType::Float32, true));
+        let vector_array = FixedSizeListArray::new(field, self.dimensions, Arc::new(values), None);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(StringArray::from(name_refs)),
+                Arc::new(StringArray::from(desc_refs)),
+                Arc::new(StringArray::from(content_refs)),
+                Arc::new(StringArray::from(tier_refs)),
+                Arc::new(Float32Array::from(importances)),
+                Arc::new(StringArray::from(type_refs)),
+                Arc::new(vector_array),
+            ],
+        )?;
+
+        let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
+        let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
+        self.db
+            .create_table(TABLE_NAME, reader)
+            .execute()
+            .await?;
+
+        Ok(())
+    }
+
+    /// Search for similar items by embedding vector.
+    /// Optionally filter by item_type ("pattern" or "workflow").
     pub async fn search(
         &self,
         query_embedding: &[f32],
         limit: usize,
+        item_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
         let tables = self.db.table_names().execute().await?;
         if !tables.contains(&TABLE_NAME.to_string()) {
@@ -98,9 +176,15 @@ impl VectorStore {
 
         let table = self.db.open_table(TABLE_NAME).execute().await?;
 
-        let results = table
+        let mut query = table
             .vector_search(query_embedding)
-            .context("vector search")?
+            .context("vector search")?;
+
+        if let Some(t) = item_type {
+            query = query.only_if(format!("item_type = '{}'", t));
+        }
+
+        let results = query
             .limit(limit)
             .execute()
             .await?
@@ -121,12 +205,18 @@ impl VectorStore {
                 .as_any()
                 .downcast_ref::<Float32Array>()
                 .unwrap();
+            let types = batch
+                .column_by_name("item_type")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
 
             for i in 0..batch.num_rows() {
                 search_results.push(SearchResult {
                     name: names.value(i).to_string(),
                     distance: distances.value(i),
                     similarity: 1.0 / (1.0 + distances.value(i)),
+                    item_type: types
+                        .map(|t| t.value(i).to_string())
+                        .unwrap_or_else(|| "pattern".into()),
                 });
             }
         }
@@ -141,6 +231,7 @@ impl VectorStore {
             Field::new("content", DataType::Utf8, false),
             Field::new("tier", DataType::Utf8, false),
             Field::new("importance", DataType::Float32, false),
+            Field::new("item_type", DataType::Utf8, false),
             Field::new(
                 "vector",
                 DataType::FixedSizeList(
@@ -160,6 +251,8 @@ pub struct SearchResult {
     #[allow(dead_code)] // Exposed for callers that need raw distance
     pub distance: f32,
     pub similarity: f32,
+    #[allow(dead_code)] // Public API for callers that filter by type
+    pub item_type: String,
 }
 
 #[cfg(test)]
@@ -172,20 +265,42 @@ mod tests {
 
     fn make_pattern(name: &str) -> Pattern {
         Pattern {
-            schema: 2,
-            name: name.into(),
-            description: format!("About {}", name),
-            content: Content::Plain("test content".into()),
-            tier: Tier::Session,
-            importance: 0.5,
-            confidence: 0.5,
-            tags: Tags::default(),
-            applies: Applies::default(),
-            evidence: Evidence::default(),
-            links: Links::default(),
-            lifecycle: Lifecycle::default(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            base: mur_common::knowledge::KnowledgeBase {
+                schema: 2,
+                name: name.into(),
+                description: format!("About {}", name),
+                content: Content::Plain("test content".into()),
+                tier: Tier::Session,
+                importance: 0.5,
+                confidence: 0.5,
+                tags: Tags::default(),
+                applies: Applies::default(),
+                evidence: Evidence::default(),
+                links: Links::default(),
+                lifecycle: Lifecycle::default(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                ..Default::default()
+            },
+            attachments: vec![],
+        }
+    }
+
+    fn make_workflow(name: &str) -> Workflow {
+        Workflow {
+            base: mur_common::knowledge::KnowledgeBase {
+                name: name.into(),
+                description: format!("Workflow: {}", name),
+                content: Content::Plain("workflow content".into()),
+                ..Default::default()
+            },
+            steps: vec![],
+            variables: vec![],
+            source_sessions: vec![],
+            trigger: String::new(),
+            tools: vec![],
+            published_version: 0,
+            permission: Default::default(),
         }
     }
 
@@ -209,16 +324,17 @@ mod tests {
 
         store.build_index(&patterns).await.unwrap();
 
-        let results = store.search(&random_embedding(), 5).await.unwrap();
+        let results = store.search(&random_embedding(), 5, None).await.unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].name, "pattern-a");
+        assert_eq!(results[0].item_type, "pattern");
     }
 
     #[tokio::test]
     async fn test_empty_index() {
         let tmp = TempDir::new().unwrap();
         let store = VectorStore::open(tmp.path(), TEST_DIM).await.unwrap();
-        let results = store.search(&random_embedding(), 5).await.unwrap();
+        let results = store.search(&random_embedding(), 5, None).await.unwrap();
         assert!(results.is_empty());
     }
 
@@ -240,8 +356,35 @@ mod tests {
         ];
         store.build_index(&patterns2).await.unwrap();
 
-        let results = store.search(&random_embedding(), 10).await.unwrap();
+        let results = store.search(&random_embedding(), 10, None).await.unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|r| r.name != "first"));
+    }
+
+    #[tokio::test]
+    async fn test_unified_index() {
+        let tmp = TempDir::new().unwrap();
+        let store = VectorStore::open(tmp.path(), TEST_DIM).await.unwrap();
+
+        let patterns = vec![(make_pattern("pat-a"), random_embedding())];
+        let workflows = vec![(make_workflow("wf-a"), {
+            let mut v = random_embedding();
+            v[0] += 1.0;
+            v
+        })];
+
+        store.build_unified_index(&patterns, &workflows).await.unwrap();
+
+        // Search all
+        let results = store.search(&random_embedding(), 10, None).await.unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Filter to patterns only
+        let pat_results = store.search(&random_embedding(), 10, Some("pattern")).await.unwrap();
+        assert!(pat_results.iter().all(|r| r.item_type == "pattern"));
+
+        // Filter to workflows only
+        let wf_results = store.search(&random_embedding(), 10, Some("workflow")).await.unwrap();
+        assert!(wf_results.iter().all(|r| r.item_type == "workflow"));
     }
 }

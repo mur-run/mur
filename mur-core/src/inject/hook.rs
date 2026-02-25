@@ -1,6 +1,7 @@
-//! Hook/inject: format patterns for injection into AI tool prompts.
+//! Hook/inject: format patterns and workflows for injection into AI tool prompts.
 
 use mur_common::pattern::{Content, Pattern};
+use mur_common::workflow::Workflow;
 
 /// When to trigger pattern retrieval
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +51,7 @@ pub fn detect_trigger(message: &str) -> HookTrigger {
 
 /// Format scored patterns for injection into a prompt.
 /// Returns content only (no metadata), within token budget.
+#[allow(dead_code)] // Used by tests and as public API
 pub fn format_for_injection(patterns: &[Pattern], max_tokens: usize) -> String {
     if patterns.is_empty() {
         return String::new();
@@ -75,7 +77,85 @@ pub fn format_for_injection(patterns: &[Pattern], max_tokens: usize) -> String {
 }
 
 fn format_pattern_entry(pattern: &Pattern, index: usize) -> String {
-    let content = match &pattern.content {
+    let content = format_content(&pattern.content);
+    format!(
+        "### {}. {}\n{}\n",
+        index,
+        pattern.description,
+        content.trim()
+    )
+}
+
+/// Format a single workflow entry for injection.
+pub fn format_workflow_entry(workflow: &Workflow, index: usize) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("### {}. [Workflow] {}\n", index, workflow.description));
+
+    // Content
+    let content = format_content(&workflow.content);
+    s.push_str(content.trim());
+    s.push('\n');
+
+    // Steps summary
+    if !workflow.steps.is_empty() {
+        s.push_str("Steps:\n");
+        for step in &workflow.steps {
+            s.push_str(&format!("  {}. {}", step.order, step.description));
+            if let Some(cmd) = &step.command {
+                s.push_str(&format!(" (`{}`)", cmd));
+            }
+            s.push('\n');
+        }
+    }
+
+    s.push('\n');
+    s
+}
+
+/// Format both patterns and workflows for unified injection.
+pub fn format_unified_injection(
+    patterns: &[Pattern],
+    workflows: &[Workflow],
+    max_tokens: usize,
+) -> String {
+    if patterns.is_empty() && workflows.is_empty() {
+        return String::new();
+    }
+
+    let mut output = String::from("## Relevant knowledge from your learning history\n\n");
+    let mut token_count = output.len() / 4;
+    let mut index = 1;
+
+    // Patterns first
+    for pattern in patterns {
+        let entry = format_pattern_entry(pattern, index);
+        let entry_tokens = entry.len() / 4;
+        if token_count + entry_tokens > max_tokens && index > 1 {
+            break;
+        }
+        output.push_str(&entry);
+        output.push('\n');
+        token_count += entry_tokens;
+        index += 1;
+    }
+
+    // Then workflows
+    for workflow in workflows {
+        let entry = format_workflow_entry(workflow, index);
+        let entry_tokens = entry.len() / 4;
+        if token_count + entry_tokens > max_tokens && index > 1 {
+            break;
+        }
+        output.push_str(&entry);
+        token_count += entry_tokens;
+        index += 1;
+    }
+
+    output.trim_end().to_string()
+}
+
+fn format_content(content: &Content) -> String {
+    match content {
         Content::DualLayer {
             technical,
             principle,
@@ -88,37 +168,63 @@ fn format_pattern_entry(pattern: &Pattern, index: usize) -> String {
             s
         }
         Content::Plain(s) => s.clone(),
-    };
-
-    format!(
-        "### {}. {}\n{}\n",
-        index,
-        pattern.description,
-        content.trim()
-    )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mur_common::knowledge::KnowledgeBase;
     use mur_common::pattern::*;
+    use mur_common::workflow::{Step, FailureAction};
 
     fn make_pattern(desc: &str, content: &str) -> Pattern {
         Pattern {
-            schema: 2,
-            name: "test".into(),
-            description: desc.into(),
-            content: Content::Plain(content.into()),
-            tier: Tier::Session,
-            importance: 0.5,
-            confidence: 0.5,
-            tags: Tags::default(),
-            applies: Applies::default(),
-            evidence: Evidence::default(),
-            links: Links::default(),
-            lifecycle: Lifecycle::default(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            base: KnowledgeBase {
+                schema: 2,
+                name: "test".into(),
+                description: desc.into(),
+                content: Content::Plain(content.into()),
+                tier: Tier::Session,
+                importance: 0.5,
+                confidence: 0.5,
+                tags: Tags::default(),
+                applies: Applies::default(),
+                evidence: Evidence::default(),
+                links: Links::default(),
+                lifecycle: Lifecycle::default(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                ..Default::default()
+            },
+            attachments: vec![],
+        }
+    }
+
+    fn make_workflow(desc: &str) -> Workflow {
+        Workflow {
+            base: KnowledgeBase {
+                name: "test-wf".into(),
+                description: desc.into(),
+                content: Content::Plain("workflow content".into()),
+                ..Default::default()
+            },
+            steps: vec![
+                Step {
+                    order: 1,
+                    description: "Run tests".into(),
+                    command: Some("cargo test".into()),
+                    tool: Some("cargo".into()),
+                    needs_approval: false,
+                    on_failure: FailureAction::Abort,
+                },
+            ],
+            variables: vec![],
+            source_sessions: vec![],
+            trigger: String::new(),
+            tools: vec![],
+            published_version: 0,
+            permission: Default::default(),
         }
     }
 
@@ -138,23 +244,27 @@ mod tests {
     #[test]
     fn test_dual_layer() {
         let p = Pattern {
-            schema: 2,
-            name: "test".into(),
-            description: "Test".into(),
-            content: Content::DualLayer {
-                technical: "Do X".into(),
-                principle: Some("Because Y".into()),
+            base: KnowledgeBase {
+                schema: 2,
+                name: "test".into(),
+                description: "Test".into(),
+                content: Content::DualLayer {
+                    technical: "Do X".into(),
+                    principle: Some("Because Y".into()),
+                },
+                tier: Tier::Session,
+                importance: 0.5,
+                confidence: 0.5,
+                tags: Tags::default(),
+                applies: Applies::default(),
+                evidence: Evidence::default(),
+                links: Links::default(),
+                lifecycle: Lifecycle::default(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                ..Default::default()
             },
-            tier: Tier::Session,
-            importance: 0.5,
-            confidence: 0.5,
-            tags: Tags::default(),
-            applies: Applies::default(),
-            evidence: Evidence::default(),
-            links: Links::default(),
-            lifecycle: Lifecycle::default(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            attachments: vec![],
         };
         let result = format_for_injection(&[p], 2000);
         assert!(result.contains("Do X"));
@@ -191,5 +301,32 @@ mod tests {
         // Should not include all 20 patterns
         let count = result.matches("###").count();
         assert!(count < 20);
+    }
+
+    #[test]
+    fn test_format_workflow_entry() {
+        let wf = make_workflow("Deploy to production");
+        let entry = format_workflow_entry(&wf, 1);
+        assert!(entry.contains("[Workflow]"));
+        assert!(entry.contains("Deploy to production"));
+        assert!(entry.contains("cargo test"));
+        assert!(entry.contains("Run tests"));
+    }
+
+    #[test]
+    fn test_unified_injection() {
+        let patterns = vec![make_pattern("Use testing", "Use @Test macro")];
+        let workflows = vec![make_workflow("Deploy flow")];
+        let result = format_unified_injection(&patterns, &workflows, 5000);
+        assert!(result.contains("Relevant knowledge"));
+        assert!(result.contains("Use testing"));
+        assert!(result.contains("[Workflow]"));
+        assert!(result.contains("Deploy flow"));
+    }
+
+    #[test]
+    fn test_unified_injection_empty() {
+        let result = format_unified_injection(&[], &[], 5000);
+        assert_eq!(result, "");
     }
 }

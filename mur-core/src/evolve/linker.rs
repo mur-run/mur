@@ -162,24 +162,28 @@ mod tests {
 
     fn make_pattern(name: &str, desc: &str, topics: Vec<&str>) -> Pattern {
         Pattern {
-            schema: 2,
-            name: name.into(),
-            description: desc.into(),
-            content: Content::Plain(desc.into()),
-            tier: Tier::Session,
-            importance: 0.5,
-            confidence: 0.5,
-            tags: Tags {
-                topics: topics.into_iter().map(String::from).collect(),
-                languages: vec![],
-                extra: Default::default(),
+            base: mur_common::knowledge::KnowledgeBase {
+                schema: 2,
+                name: name.into(),
+                description: desc.into(),
+                content: Content::Plain(desc.into()),
+                tier: Tier::Session,
+                importance: 0.5,
+                confidence: 0.5,
+                tags: Tags {
+                    topics: topics.into_iter().map(String::from).collect(),
+                    languages: vec![],
+                    extra: Default::default(),
+                },
+                applies: Applies::default(),
+                evidence: Evidence::default(),
+                links: Links::default(),
+                lifecycle: Lifecycle::default(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                ..Default::default()
             },
-            applies: Applies::default(),
-            evidence: Evidence::default(),
-            links: Links::default(),
-            lifecycle: Lifecycle::default(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            attachments: vec![],
         }
     }
 

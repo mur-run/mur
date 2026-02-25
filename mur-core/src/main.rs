@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use mur_common::knowledge::KnowledgeBase;
 use mur_common::pattern::*;
 use std::io::{self, Write};
 
@@ -11,6 +12,7 @@ mod retrieve;
 mod store;
 
 use store::yaml::YamlStore;
+use store::workflow_yaml::WorkflowYamlStore;
 
 #[derive(Parser)]
 #[command(name = "mur", version, about = "Continuous learning for AI assistants")]
@@ -88,6 +90,11 @@ enum Commands {
         /// Pattern name
         name: String,
     },
+    /// Manage workflows
+    Workflow {
+        #[command(subcommand)]
+        action: WorkflowAction,
+    },
     /// Rebuild index from YAML files
     Reindex,
     /// Show pattern connections
@@ -119,6 +126,16 @@ enum FeedbackAction {
     Helpful { name: String },
     /// Mark a pattern as unhelpful
     Unhelpful { name: String },
+}
+
+#[derive(Subcommand)]
+enum WorkflowAction {
+    /// List all workflows
+    List,
+    /// Show a workflow by name
+    Show { name: String },
+    /// Create a new workflow interactively
+    New,
 }
 
 #[derive(Subcommand)]
@@ -158,6 +175,11 @@ async fn main() -> Result<()> {
             query,
             project: _,
         } => cmd_inject(&query).await?,
+        Commands::Workflow { action } => match action {
+            WorkflowAction::List => cmd_workflow_list()?,
+            WorkflowAction::Show { name } => cmd_workflow_show(&name)?,
+            WorkflowAction::New => cmd_workflow_new()?,
+        },
         Commands::Reindex => cmd_reindex().await?,
         Commands::Promote { name, tier } => cmd_promote(&name, &tier)?,
         Commands::Deprecate { name } => cmd_deprecate(&name)?,
@@ -245,27 +267,31 @@ fn cmd_new() -> Result<()> {
     };
 
     let pattern = Pattern {
-        schema: SCHEMA_VERSION,
-        name: name.clone(),
-        description: desc,
-        content: Content::DualLayer {
-            technical,
-            principle,
+        base: KnowledgeBase {
+            schema: SCHEMA_VERSION,
+            name: name.clone(),
+            description: desc,
+            content: Content::DualLayer {
+                technical,
+                principle,
+            },
+            tier,
+            importance: 0.5,
+            confidence: 0.9, // manually created = high confidence
+            tags: Tags {
+                languages: vec![],
+                topics: topic_tags,
+                extra: Default::default(),
+            },
+            applies: Applies::default(),
+            evidence: Evidence::default(),
+            links: Links::default(),
+            lifecycle: Lifecycle::default(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            ..Default::default()
         },
-        tier,
-        importance: 0.5,
-        confidence: 0.9, // manually created = high confidence
-        tags: Tags {
-            languages: vec![],
-            topics: topic_tags,
-            extra: Default::default(),
-        },
-        applies: Applies::default(),
-        evidence: Evidence::default(),
-        links: Links::default(),
-        lifecycle: Lifecycle::default(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        attachments: vec![],
     };
 
     store.save(&pattern)?;
@@ -321,7 +347,7 @@ fn cmd_search(query: &str) -> Result<()> {
 }
 
 async fn cmd_inject(query: &str) -> Result<()> {
-    use inject::hook::{detect_trigger, format_for_injection, HookTrigger};
+    use inject::hook::{detect_trigger, format_unified_injection, HookTrigger};
     use retrieve::gate::{evaluate_query, GateDecision};
     use retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
     use store::embedding::{embed, EmbeddingConfig};
@@ -344,6 +370,10 @@ async fn cmd_inject(query: &str) -> Result<()> {
     let yaml_store = YamlStore::default_store()?;
     let patterns = yaml_store.list_all()?;
 
+    // Also load workflows
+    let workflow_store = WorkflowYamlStore::default_store()?;
+    let workflows = workflow_store.list_all()?;
+
     // Try hybrid search if LanceDB index exists
     let index_path = dirs::home_dir()
         .expect("no home dir")
@@ -357,7 +387,7 @@ async fn cmd_inject(query: &str) -> Result<()> {
         match embed(query, &config).await {
             Ok(query_embedding) => {
                 let vector_store = VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
-                let vector_results = vector_store.search(&query_embedding, 20).await?;
+                let vector_results = vector_store.search(&query_embedding, 20, None).await?;
                 let vector_scores: HashMap<String, f64> = vector_results
                     .into_iter()
                     .map(|r| (r.name, r.similarity as f64))
@@ -375,7 +405,7 @@ async fn cmd_inject(query: &str) -> Result<()> {
     };
 
     let pattern_refs: Vec<Pattern> = results.into_iter().map(|sp| sp.pattern).collect();
-    let output = format_for_injection(&pattern_refs, 2000);
+    let output = format_unified_injection(&pattern_refs, &workflows, 2000);
 
     if output.is_empty() {
         eprintln!("# No relevant patterns found");
@@ -849,11 +879,13 @@ async fn cmd_reindex() -> Result<()> {
     use store::embedding::{embed, EmbeddingConfig};
     use store::lancedb::VectorStore;
 
-    let store = YamlStore::default_store()?;
-    let patterns = store.list_all()?;
+    let pattern_store = YamlStore::default_store()?;
+    let patterns = pattern_store.list_all()?;
+    let workflow_store = WorkflowYamlStore::default_store()?;
+    let workflows = workflow_store.list_all()?;
 
-    if patterns.is_empty() {
-        println!("No patterns to index.");
+    if patterns.is_empty() && workflows.is_empty() {
+        println!("No patterns or workflows to index.");
         return Ok(());
     }
 
@@ -865,8 +897,9 @@ async fn cmd_reindex() -> Result<()> {
         .join("index");
 
     println!(
-        "🔄 Reindexing {} patterns using {} ({})...",
+        "🔄 Reindexing {} patterns + {} workflows using {} ({})...",
         patterns.len(),
+        workflows.len(),
         config.model,
         match &config.provider {
             store::embedding::EmbeddingProvider::Ollama { base_url } => base_url.clone(),
@@ -874,16 +907,18 @@ async fn cmd_reindex() -> Result<()> {
         }
     );
 
-    let mut indexed = Vec::new();
+    let mut indexed_patterns = Vec::new();
+    let mut indexed_workflows = Vec::new();
     let mut errors = 0;
+    let total = patterns.len() + workflows.len();
 
     for (i, pattern) in patterns.iter().enumerate() {
         let text = format!("{}: {}\n{}", pattern.name, pattern.description, pattern.content.as_text());
         match embed(&text, &config).await {
             Ok(embedding) => {
-                indexed.push((pattern.clone(), embedding));
+                indexed_patterns.push((pattern.clone(), embedding));
                 if (i + 1) % 10 == 0 {
-                    println!("  {}/{} embedded...", i + 1, patterns.len());
+                    println!("  {}/{} embedded...", i + 1, total);
                 }
             }
             Err(e) => {
@@ -893,16 +928,165 @@ async fn cmd_reindex() -> Result<()> {
         }
     }
 
+    for (i, workflow) in workflows.iter().enumerate() {
+        let text = format!("{}: {}\n{}", workflow.name, workflow.description, workflow.content.as_text());
+        match embed(&text, &config).await {
+            Ok(embedding) => {
+                indexed_workflows.push((workflow.clone(), embedding));
+                let idx = patterns.len() + i + 1;
+                if idx % 10 == 0 {
+                    println!("  {}/{} embedded...", idx, total);
+                }
+            }
+            Err(e) => {
+                eprintln!("  ⚠️  {} — {}", workflow.name, e);
+                errors += 1;
+            }
+        }
+    }
+
     let vector_store = VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
-    vector_store.build_index(&indexed).await?;
+    vector_store.build_unified_index(&indexed_patterns, &indexed_workflows).await?;
 
     println!(
-        "✅ Indexed {} patterns ({} errors). Index: {}",
-        indexed.len(),
+        "✅ Indexed {} patterns + {} workflows ({} errors). Index: {}",
+        indexed_patterns.len(),
+        indexed_workflows.len(),
         errors,
         index_path.display()
     );
 
+    Ok(())
+}
+
+fn cmd_workflow_list() -> Result<()> {
+    let store = WorkflowYamlStore::default_store()?;
+    let workflows = store.list_all()?;
+
+    if workflows.is_empty() {
+        println!("No workflows found. Create one with `mur workflow new`.");
+        return Ok(());
+    }
+
+    println!("📋 Workflows ({}):\n", workflows.len());
+    for w in &workflows {
+        let steps = w.steps.len();
+        println!("  {} — {} ({} steps)", w.name, w.description, steps);
+    }
+
+    Ok(())
+}
+
+fn cmd_workflow_show(name: &str) -> Result<()> {
+    let store = WorkflowYamlStore::default_store()?;
+    let w = store.get(name)?;
+
+    println!("📋 Workflow: {}\n", w.name);
+    println!("Description: {}", w.description);
+    println!("Content: {}", w.content.as_text());
+
+    if !w.steps.is_empty() {
+        println!("\nSteps:");
+        for step in &w.steps {
+            print!("  {}. {}", step.order, step.description);
+            if let Some(cmd) = &step.command {
+                print!(" (`{}`)", cmd);
+            }
+            println!();
+        }
+    }
+
+    if !w.tools.is_empty() {
+        println!("\nTools: {}", w.tools.join(", "));
+    }
+
+    if !w.trigger.is_empty() {
+        println!("Trigger: {}", w.trigger);
+    }
+
+    Ok(())
+}
+
+fn cmd_workflow_new() -> Result<()> {
+    use mur_common::workflow::{Step, FailureAction};
+
+    let store = WorkflowYamlStore::default_store()?;
+
+    print!("Workflow name (kebab-case): ");
+    io::stdout().flush()?;
+    let mut name = String::new();
+    io::stdin().read_line(&mut name)?;
+    let name = name.trim().to_string();
+
+    if name.is_empty() {
+        println!("Name cannot be empty.");
+        return Ok(());
+    }
+    if store.exists(&name) {
+        println!("Workflow '{}' already exists.", name);
+        return Ok(());
+    }
+
+    print!("Description: ");
+    io::stdout().flush()?;
+    let mut desc = String::new();
+    io::stdin().read_line(&mut desc)?;
+    let desc = desc.trim().to_string();
+
+    print!("Trigger (when to use, e.g. 'when deploying to production'): ");
+    io::stdout().flush()?;
+    let mut trigger = String::new();
+    io::stdin().read_line(&mut trigger)?;
+    let trigger = trigger.trim().to_string();
+
+    println!("Steps (enter description, empty line to finish):");
+    let mut steps = Vec::new();
+    let mut order = 1u32;
+    loop {
+        print!("  Step {}: ", order);
+        io::stdout().flush()?;
+        let mut step_desc = String::new();
+        io::stdin().read_line(&mut step_desc)?;
+        let step_desc = step_desc.trim().to_string();
+        if step_desc.is_empty() {
+            break;
+        }
+
+        print!("    Command (optional): ");
+        io::stdout().flush()?;
+        let mut cmd = String::new();
+        io::stdin().read_line(&mut cmd)?;
+        let cmd = cmd.trim().to_string();
+
+        steps.push(Step {
+            order,
+            description: step_desc,
+            command: if cmd.is_empty() { None } else { Some(cmd) },
+            tool: None,
+            needs_approval: false,
+            on_failure: FailureAction::Abort,
+        });
+        order += 1;
+    }
+
+    let workflow = mur_common::workflow::Workflow {
+        base: KnowledgeBase {
+            name: name.clone(),
+            description: desc,
+            content: Content::Plain(trigger.clone()),
+            ..Default::default()
+        },
+        steps,
+        variables: vec![],
+        source_sessions: vec![],
+        trigger,
+        tools: vec![],
+        published_version: 0,
+        permission: Default::default(),
+    };
+
+    store.save(&workflow)?;
+    println!("Created workflow: {}", name);
     Ok(())
 }
 

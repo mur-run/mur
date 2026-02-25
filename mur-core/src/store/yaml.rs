@@ -150,23 +150,27 @@ mod tests {
 
     fn make_test_pattern(name: &str) -> Pattern {
         Pattern {
-            schema: 2,
-            name: name.to_string(),
-            description: format!("Test pattern: {}", name),
-            content: Content::DualLayer {
-                technical: "Use foo instead of bar.".to_string(),
-                principle: Some("Always prefer foo for consistency.".to_string()),
+            base: mur_common::knowledge::KnowledgeBase {
+                schema: 2,
+                name: name.to_string(),
+                description: format!("Test pattern: {}", name),
+                content: Content::DualLayer {
+                    technical: "Use foo instead of bar.".to_string(),
+                    principle: Some("Always prefer foo for consistency.".to_string()),
+                },
+                tier: Tier::Session,
+                importance: 0.7,
+                confidence: 0.8,
+                tags: Tags::default(),
+                applies: Applies::default(),
+                evidence: Evidence::default(),
+                links: Links::default(),
+                lifecycle: Lifecycle::default(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                ..Default::default()
             },
-            tier: Tier::Session,
-            importance: 0.7,
-            confidence: 0.8,
-            tags: Tags::default(),
-            applies: Applies::default(),
-            evidence: Evidence::default(),
-            links: Links::default(),
-            lifecycle: Lifecycle::default(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            attachments: vec![],
         }
     }
 
@@ -290,5 +294,80 @@ mod tests {
         ev.success_signals = 8;
         ev.override_signals = 2;
         assert!((ev.effectiveness() - 0.8).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_pattern_backward_compat_flat_yaml() -> Result<()> {
+        // Simulate a v2 YAML file with flat fields (as stored on disk via serde(flatten))
+        let yaml = r#"
+schema: 2
+name: backward-test
+description: Test backward compat
+content:
+  technical: Use foo
+  principle: Because bar
+tier: project
+importance: 0.7
+confidence: 0.8
+tags:
+  languages: []
+  topics:
+    - rust
+applies:
+  projects: []
+  languages: []
+  tools: []
+  auto_scope: false
+evidence:
+  source_sessions: []
+  injection_count: 0
+  success_signals: 0
+  override_signals: 0
+links:
+  related: []
+  supersedes: []
+  workflows: []
+lifecycle:
+  status: active
+  pinned: false
+  muted: false
+created_at: "2026-02-20T00:00:00Z"
+updated_at: "2026-02-20T00:00:00Z"
+attachments: []
+"#;
+
+        let pattern: Pattern = serde_yaml::from_str(yaml)?;
+        assert_eq!(pattern.name, "backward-test");
+        assert_eq!(pattern.schema, 2);
+        assert_eq!(pattern.tier, Tier::Project);
+        assert!((pattern.importance - 0.7).abs() < 0.001);
+
+        // Roundtrip: serialize and deserialize again
+        let yaml2 = serde_yaml::to_string(&pattern)?;
+        let pattern2: Pattern = serde_yaml::from_str(&yaml2)?;
+        assert_eq!(pattern2.name, "backward-test");
+        assert_eq!(pattern2.tier, Tier::Project);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pattern_serde_roundtrip() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let store = YamlStore::new(tmp.path().to_path_buf())?;
+
+        let pattern = make_test_pattern("roundtrip-test");
+        store.save(&pattern)?;
+
+        // Read raw YAML and verify flat structure (no nested `base:` key)
+        let raw = std::fs::read_to_string(tmp.path().join("roundtrip-test.yaml"))?;
+        assert!(raw.contains("name: roundtrip-test"));
+        assert!(!raw.contains("base:"), "YAML should be flat, not nested under 'base:'");
+
+        let loaded = store.get("roundtrip-test")?;
+        assert_eq!(loaded.name, "roundtrip-test");
+        assert_eq!(loaded.attachments.len(), 0);
+
+        Ok(())
     }
 }

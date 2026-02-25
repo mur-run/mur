@@ -229,29 +229,33 @@ mod tests {
 
     fn make_pattern(name: &str, content: &str) -> Pattern {
         Pattern {
-            schema: 2,
-            name: name.into(),
-            description: format!("About {}", name),
-            content: Content::Plain(content.into()),
-            tier: Tier::Session,
-            importance: 0.5,
-            confidence: 0.5,
-            tags: Tags::default(),
-            applies: Applies::default(),
-            evidence: Evidence {
-                injection_count: 5,
-                success_signals: 3,
-                override_signals: 1,
-                last_validated: Some(Utc::now()),
-                ..Evidence::default()
+            base: mur_common::knowledge::KnowledgeBase {
+                schema: 2,
+                name: name.into(),
+                description: format!("About {}", name),
+                content: Content::Plain(content.into()),
+                tier: Tier::Session,
+                importance: 0.5,
+                confidence: 0.5,
+                tags: Tags::default(),
+                applies: Applies::default(),
+                evidence: Evidence {
+                    injection_count: 5,
+                    success_signals: 3,
+                    override_signals: 1,
+                    last_validated: Some(Utc::now()),
+                    ..Evidence::default()
+                },
+                links: Links::default(),
+                lifecycle: Lifecycle {
+                    last_injected: Some(Utc::now()),
+                    ..Lifecycle::default()
+                },
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                ..Default::default()
             },
-            links: Links::default(),
-            lifecycle: Lifecycle {
-                last_injected: Some(Utc::now()),
-                ..Lifecycle::default()
-            },
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            attachments: vec![],
         }
     }
 

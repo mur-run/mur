@@ -120,20 +120,24 @@ mod tests {
 
     fn make_pattern() -> Pattern {
         Pattern {
-            schema: 2,
-            name: "test".into(),
-            description: "test".into(),
-            content: Content::Plain("test".into()),
-            tier: Tier::Session,
-            importance: 0.5,
-            confidence: 0.5,
-            tags: Tags::default(),
-            applies: Applies::default(),
-            evidence: Evidence::default(),
-            links: Links::default(),
-            lifecycle: Lifecycle::default(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            base: mur_common::knowledge::KnowledgeBase {
+                schema: 2,
+                name: "test".into(),
+                description: "test".into(),
+                content: Content::Plain("test".into()),
+                tier: Tier::Session,
+                importance: 0.5,
+                confidence: 0.5,
+                tags: Tags::default(),
+                applies: Applies::default(),
+                evidence: Evidence::default(),
+                links: Links::default(),
+                lifecycle: Lifecycle::default(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                ..Default::default()
+            },
+            attachments: vec![],
         }
     }
 
