@@ -140,9 +140,10 @@ pub fn extract_pattern_from_step(workflow: &Workflow, step_index: usize) -> Opti
 
     // Copy tool info to tags if present
     if let Some(ref tool) = step.tool
-        && !pattern.tags.topics.contains(tool) {
-            pattern.base.tags.topics.push(tool.clone());
-        }
+        && !pattern.tags.topics.contains(tool)
+    {
+        pattern.base.tags.topics.push(tool.clone());
+    }
 
     Some(pattern)
 }

@@ -1752,10 +1752,11 @@ fn cmd_suggest(create: bool) -> Result<()> {
                     // Add cross-reference: link each source pattern to this workflow
                     for pname in &s.patterns {
                         if let Ok(mut p) = pattern_store.get(pname)
-                            && !p.links.workflows.contains(&s.suggested_name) {
-                                p.base.links.workflows.push(s.suggested_name.clone());
-                                let _ = pattern_store.save(&p);
-                            }
+                            && !p.links.workflows.contains(&s.suggested_name)
+                        {
+                            p.base.links.workflows.push(s.suggested_name.clone());
+                            let _ = pattern_store.save(&p);
+                        }
                     }
                 }
             }
@@ -2042,35 +2043,37 @@ async fn cmd_context(query: Option<String>, compact: bool) -> Result<()> {
                 .args(["remote", "get-url", "origin"])
                 .current_dir(&cwd)
                 .output()
-                && output.status.success() {
-                    let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    // Extract repo name from URL
-                    if let Some(name) = remote.rsplit('/').next() {
-                        let name = name.trim_end_matches(".git");
-                        if name != project_name {
-                            parts.push(name.to_string());
-                        }
+                && output.status.success()
+            {
+                let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                // Extract repo name from URL
+                if let Some(name) = remote.rsplit('/').next() {
+                    let name = name.trim_end_matches(".git");
+                    if name != project_name {
+                        parts.push(name.to_string());
                     }
                 }
+            }
 
             // Try to get recent file context
             if let Ok(output) = std::process::Command::new("git")
                 .args(["diff", "--name-only", "HEAD~3..HEAD"])
                 .current_dir(&cwd)
                 .output()
-                && output.status.success() {
-                    let files = String::from_utf8_lossy(&output.stdout);
-                    for file in files.lines().take(5) {
-                        // Extract keywords from file paths
-                        let stem = std::path::Path::new(file)
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("");
-                        if !stem.is_empty() && stem.len() > 2 {
-                            parts.push(stem.to_string());
-                        }
+                && output.status.success()
+            {
+                let files = String::from_utf8_lossy(&output.stdout);
+                for file in files.lines().take(5) {
+                    // Extract keywords from file paths
+                    let stem = std::path::Path::new(file)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    if !stem.is_empty() && stem.len() > 2 {
+                        parts.push(stem.to_string());
                     }
                 }
+            }
 
             parts.join(" ")
         }
@@ -2445,9 +2448,10 @@ exit 0
         detected_tools.push("Gemini CLI");
     }
     if let Some(ref cr) = cursor_rules
-        && cr.exists() {
-            detected_tools.push("Cursor");
-        }
+        && cr.exists()
+    {
+        detected_tools.push("Cursor");
+    }
 
     // ─── Step F: Print summary ───────────────────────────────────
     let pattern_count = if mur_dir.join("patterns").exists() {
