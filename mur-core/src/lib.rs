@@ -4,7 +4,9 @@
 //! retrieval, and evolution. Used by the `mur` CLI binary
 //! and by MUR Commander (daemon).
 
+pub mod auth;
 pub mod capture;
+pub mod community;
 pub mod evolve;
 pub mod inject;
 pub mod migrate;

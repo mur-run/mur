@@ -5,7 +5,9 @@ use mur_common::pattern::*;
 use std::io::{self, Write};
 use tracing_subscriber::EnvFilter;
 
+mod auth;
 mod capture;
+mod community;
 mod evolve;
 mod inject;
 mod migrate;
@@ -162,6 +164,10 @@ enum Commands {
         #[command(subcommand)]
         action: CommunityAction,
     },
+    /// Log in to mur community
+    Login,
+    /// Log out from mur community
+    Logout,
     /// Initialize MUR directory and optionally install hooks
     Init {
         /// Install Claude Code hooks (PostToolUse, Stop, UserPromptSubmit)
@@ -249,10 +255,20 @@ enum SessionAction {
 
 #[derive(Subcommand)]
 enum CommunityAction {
-    /// Publish a pattern to mur.run
+    /// Publish a pattern to the community
     Publish { name: String },
-    /// Fetch a pattern from mur.run
-    Fetch { name: String },
+    /// Fetch (copy) a community pattern by ID
+    Fetch { id: String },
+    /// Search community patterns
+    Search { query: String },
+    /// List community patterns
+    List {
+        /// Sort order: popular, recent, trending, stars
+        #[arg(long, default_value = "popular")]
+        sort: String,
+    },
+    /// Star a community pattern
+    Star { id: String },
 }
 
 #[tokio::main]
@@ -318,10 +334,15 @@ async fn main() -> Result<()> {
             println!("Dashboard (Phase 2)");
             todo!()
         }
-        Commands::Community { action: _ } => {
-            println!("Community (Phase 4)");
-            todo!()
-        }
+        Commands::Community { action } => match action {
+            CommunityAction::Publish { name } => cmd_community_publish(&name).await?,
+            CommunityAction::Fetch { id } => cmd_community_fetch(&id).await?,
+            CommunityAction::Search { query } => cmd_community_search(&query).await?,
+            CommunityAction::List { sort } => cmd_community_list(&sort).await?,
+            CommunityAction::Star { id } => cmd_community_star(&id).await?,
+        },
+        Commands::Login => cmd_login().await?,
+        Commands::Logout => cmd_logout()?,
         Commands::Init { hooks } => cmd_init(hooks)?,
     }
 
@@ -2253,6 +2274,184 @@ fn cmd_session_list() -> Result<()> {
 
 // ─── Init command ─────────────────────────────────────────────────
 
+// ─── Auth commands ───────────────────────────────────────────────
+
+async fn cmd_login() -> Result<()> {
+    if let Some(_tokens) = auth::load_tokens() {
+        println!("Already logged in. Run `mur logout` first to re-authenticate.");
+        return Ok(());
+    }
+
+    println!("Logging in to mur community...");
+    let client = reqwest::Client::new();
+    let tokens = auth::device_code_flow(&client).await?;
+    auth::save_tokens(&tokens)?;
+    println!();
+    println!("  Logged in successfully! Token stored in ~/.mur/auth.json");
+    Ok(())
+}
+
+fn cmd_logout() -> Result<()> {
+    auth::clear_tokens()?;
+    println!("Logged out. Auth tokens removed.");
+    Ok(())
+}
+
+// ─── Community commands ─────────────────────────────────────────
+
+async fn cmd_community_publish(name: &str) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let pattern = store.get(name)?;
+
+    let description = pattern.base.description.clone();
+
+    let content = match &pattern.base.content {
+        Content::DualLayer {
+            technical,
+            principle,
+        } => {
+            if let Some(p) = principle {
+                format!("{}\n\n---\n\n{}", technical, p)
+            } else {
+                technical.clone()
+            }
+        }
+        Content::Plain(s) => s.clone(),
+    };
+
+    let mut tags: Vec<String> = pattern.base.tags.languages.clone();
+    tags.extend(pattern.base.tags.topics.clone());
+
+    let category = pattern.base.tags.topics.first().cloned();
+
+    let client = reqwest::Client::new();
+    let resp = community::share(
+        &client,
+        name,
+        &description,
+        &content,
+        &tags,
+        category.as_deref(),
+    )
+    .await?;
+
+    println!("  Published '{}' to community!", name);
+    println!("  Pattern ID: {}", resp.pattern_id);
+    Ok(())
+}
+
+async fn cmd_community_fetch(id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let resp = community::copy_pattern(&client, id).await?;
+
+    // Save as a session-tier pattern locally
+    let mur_dir = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?
+        .join(".mur");
+    let patterns_dir = mur_dir.join("patterns");
+    std::fs::create_dir_all(&patterns_dir)?;
+
+    let slug = resp.name.to_lowercase().replace(' ', "-");
+    let path = patterns_dir.join(format!("{}.yaml", slug));
+
+    // Build a minimal Pattern and save as YAML
+    let tags_vec: Vec<String> = match &resp.tags {
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect(),
+        _ => vec![],
+    };
+
+    let pattern = mur_common::pattern::Pattern {
+        base: KnowledgeBase {
+            name: resp.name.clone(),
+            description: resp.description.clone(),
+            content: Content::Plain(resp.content.clone()),
+            tier: Tier::Session,
+            tags: Tags {
+                languages: vec![],
+                topics: tags_vec,
+                extra: std::collections::HashMap::new(),
+            },
+            ..Default::default()
+        },
+        attachments: vec![],
+    };
+
+    let yaml = serde_yaml::to_string(&pattern)?;
+    std::fs::write(&path, yaml)?;
+
+    println!("  Fetched '{}' to {}", resp.name, path.display());
+    Ok(())
+}
+
+async fn cmd_community_search(query: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let resp = community::search(&client, query).await?;
+
+    if resp.patterns.is_empty() {
+        println!("  No patterns found for '{}'", query);
+        return Ok(());
+    }
+
+    println!("  Found {} pattern(s) for '{}':\n", resp.count, query);
+    print_pattern_table(&resp.patterns);
+    Ok(())
+}
+
+async fn cmd_community_list(sort: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let resp = community::list(&client, Some(sort)).await?;
+
+    if resp.patterns.is_empty() {
+        println!("  No community patterns yet.");
+        return Ok(());
+    }
+
+    println!(
+        "  {} community pattern(s) (sorted by {}):\n",
+        resp.count, sort
+    );
+    print_pattern_table(&resp.patterns);
+    Ok(())
+}
+
+async fn cmd_community_star(id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    community::star(&client, id).await?;
+    println!("  Starred pattern {}", id);
+    Ok(())
+}
+
+fn print_pattern_table(patterns: &[community::CommunityPattern]) {
+    // Header
+    println!(
+        "  {:<36}  {:<30}  {:>5}  {:>5}  {}",
+        "ID", "NAME", "STARS", "COPIES", "AUTHOR"
+    );
+    println!("  {}", "-".repeat(100));
+    for p in patterns {
+        let author = p.author_login.as_deref().unwrap_or(&p.author_name);
+        println!(
+            "  {:<36}  {:<30}  {:>5}  {:>5}  {}",
+            p.id,
+            truncate(&p.name, 30),
+            p.star_count,
+            p.copy_count,
+            author
+        );
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max - 3])
+    }
+}
+
 fn cmd_init(hooks_flag: bool) -> Result<()> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
@@ -2802,6 +3001,27 @@ learning:
         }
     }
 
+    // ─── Step H: Community sharing opt-in ──────────────────────────
+    println!();
+    print!("Enable community pattern sharing? [y/N] ");
+    io::stdout().flush()?;
+    let mut community_answer = String::new();
+    io::stdin().read_line(&mut community_answer)?;
+    let community_enabled = {
+        let a = community_answer.trim().to_lowercase();
+        a == "y" || a == "yes"
+    };
+
+    if community_enabled {
+        // Update config to enable community
+        if let Ok(mut config) = store::config::load_config() {
+            config.community.enabled = true;
+            let _ = store::config::save_config(&config);
+        }
+        println!("  Community sharing enabled.");
+        println!("  Run `mur login` to authenticate and start sharing patterns.");
+    }
+
     // ─── Step D: Detect other tools ──────────────────────────────
     let gemini_settings = home.join(".gemini").join("settings.json");
     let cursor_rules = std::env::current_dir().ok().map(|d| d.join(".cursorrules"));
@@ -2896,6 +3116,10 @@ learning:
     println!("    1. Start using Claude Code normally — MUR injects patterns automatically");
     println!("    2. Run `mur sync` to sync patterns to other AI tools");
     println!("    3. Run `mur search <query>` to find patterns");
+    if community_enabled {
+        println!("    4. Run `mur login` to authenticate for community sharing");
+        println!("    5. Run `mur community list` to browse community patterns");
+    }
     println!();
 
     Ok(())

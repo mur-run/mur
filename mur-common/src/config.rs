@@ -15,6 +15,40 @@ pub struct Config {
 
     #[serde(default)]
     pub paths: PathConfig,
+
+    #[serde(default)]
+    pub server: ServerConfig,
+
+    #[serde(default)]
+    pub community: CommunityConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    /// Server URL (default: https://mur-server.fly.dev)
+    #[serde(default = "default_server_url")]
+    pub url: String,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            url: default_server_url(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommunityConfig {
+    /// Whether community pattern sharing is enabled
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl Default for CommunityConfig {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,4 +184,7 @@ fn default_mur_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
         .join(".mur")
+}
+fn default_server_url() -> String {
+    "https://mur-server.fly.dev".to_string()
 }
