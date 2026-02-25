@@ -15,7 +15,7 @@ pub struct AuthTokens {
     pub expires_in: u64,
 }
 
-/// Response from POST /api/v1/auth/device/code
+/// Response from POST /api/v1/core/auth/device/code
 #[derive(Debug, Deserialize)]
 pub struct DeviceCodeResponse {
     pub device_code: String,
@@ -25,7 +25,7 @@ pub struct DeviceCodeResponse {
     pub interval: u64,
 }
 
-/// Response from POST /api/v1/auth/device/token
+/// Response from POST /api/v1/core/auth/device/token
 #[derive(Debug, Deserialize)]
 pub struct DeviceTokenResponse {
     pub access_token: String,
@@ -99,7 +99,7 @@ pub async fn device_code_flow(client: &reqwest::Client) -> Result<AuthTokens> {
 
     // Step 1: Request device code
     let resp = client
-        .post(format!("{}/api/v1/auth/device/code", base))
+        .post(format!("{}/api/v1/core/auth/device/code", base))
         .send()
         .await
         .context("Failed to connect to mur server")?;
@@ -140,7 +140,7 @@ pub async fn device_code_flow(client: &reqwest::Client) -> Result<AuthTokens> {
         tokio::time::sleep(interval).await;
 
         let resp = client
-            .post(format!("{}/api/v1/auth/device/token", base))
+            .post(format!("{}/api/v1/core/auth/device/token", base))
             .json(&serde_json::json!({
                 "device_code": device.device_code,
             }))

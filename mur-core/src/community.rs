@@ -98,7 +98,7 @@ pub struct StatsResponse {
 pub async fn search(client: &reqwest::Client, query: &str) -> Result<SearchResponse> {
     let base = auth::server_url();
     let url = format!(
-        "{}/api/v1/community/patterns/search?q={}",
+        "{}/api/v1/core/community/patterns/search?q={}",
         base,
         urlencoded(query)
     );
@@ -121,7 +121,7 @@ pub async fn search(client: &reqwest::Client, query: &str) -> Result<SearchRespo
 /// List community patterns with optional sort.
 pub async fn list(client: &reqwest::Client, sort: Option<&str>) -> Result<PatternsListResponse> {
     let base = auth::server_url();
-    let mut url = format!("{}/api/v1/community/patterns", base);
+    let mut url = format!("{}/api/v1/core/community/patterns", base);
     if let Some(sort) = sort {
         url = format!("{}?sort={}", url, urlencoded(sort));
     }
@@ -144,7 +144,7 @@ pub async fn list(client: &reqwest::Client, sort: Option<&str>) -> Result<Patter
 /// Get popular patterns.
 pub async fn popular(client: &reqwest::Client) -> Result<PatternsListResponse> {
     let base = auth::server_url();
-    let url = format!("{}/api/v1/community/patterns/popular", base);
+    let url = format!("{}/api/v1/core/community/patterns/popular", base);
 
     let resp = client
         .get(&url)
@@ -164,7 +164,7 @@ pub async fn popular(client: &reqwest::Client) -> Result<PatternsListResponse> {
 /// Get recent patterns.
 pub async fn recent(client: &reqwest::Client) -> Result<PatternsListResponse> {
     let base = auth::server_url();
-    let url = format!("{}/api/v1/community/patterns/recent", base);
+    let url = format!("{}/api/v1/core/community/patterns/recent", base);
 
     let resp = client
         .get(&url)
@@ -191,7 +191,7 @@ pub async fn share(
     category: Option<&str>,
 ) -> Result<ShareResponse> {
     let base = auth::server_url();
-    let url = format!("{}/api/v1/community/patterns/share", base);
+    let url = format!("{}/api/v1/core/community/patterns/share", base);
 
     let req = auth::auth_request(client, reqwest::Method::POST, &url).await?;
 
@@ -226,7 +226,10 @@ pub async fn share(
 /// Copy (fetch) a community pattern. Requires auth.
 pub async fn copy_pattern(client: &reqwest::Client, pattern_id: &str) -> Result<CopyResponse> {
     let base = auth::server_url();
-    let url = format!("{}/api/v1/community/patterns/{}/copy", base, pattern_id);
+    let url = format!(
+        "{}/api/v1/core/community/patterns/{}/copy",
+        base, pattern_id
+    );
 
     let req = auth::auth_request(client, reqwest::Method::POST, &url).await?;
 
@@ -248,7 +251,10 @@ pub async fn copy_pattern(client: &reqwest::Client, pattern_id: &str) -> Result<
 /// Star a community pattern. Requires auth.
 pub async fn star(client: &reqwest::Client, pattern_id: &str) -> Result<()> {
     let base = auth::server_url();
-    let url = format!("{}/api/v1/community/patterns/{}/star", base, pattern_id);
+    let url = format!(
+        "{}/api/v1/core/community/patterns/{}/star",
+        base, pattern_id
+    );
 
     let req = auth::auth_request(client, reqwest::Method::POST, &url).await?;
 
@@ -269,7 +275,7 @@ pub async fn star(client: &reqwest::Client, pattern_id: &str) -> Result<()> {
 /// Get community stats.
 pub async fn stats(client: &reqwest::Client) -> Result<StatsResponse> {
     let base = auth::server_url();
-    let url = format!("{}/api/v1/community/stats", base);
+    let url = format!("{}/api/v1/core/community/stats", base);
 
     let resp = client
         .get(&url)
