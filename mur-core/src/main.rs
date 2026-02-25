@@ -2476,7 +2476,10 @@ exit 0
         });
 
         // Merge: preserve existing hooks, overwrite mur-managed ones
-        let existing_hooks = auggie_settings.get("hooks").cloned().unwrap_or(serde_json::json!({}));
+        let existing_hooks = auggie_settings
+            .get("hooks")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
         let mut merged = existing_hooks.as_object().cloned().unwrap_or_default();
         for (k, v) in mur_hooks.as_object().unwrap() {
             merged.insert(k.clone(), v.clone());
@@ -2513,7 +2516,10 @@ exit 0
             }]
         });
 
-        let existing_hooks = gemini_settings.get("hooks").cloned().unwrap_or(serde_json::json!({}));
+        let existing_hooks = gemini_settings
+            .get("hooks")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
         let mut merged = existing_hooks.as_object().cloned().unwrap_or_default();
         for (k, v) in mur_hooks.as_object().unwrap() {
             merged.insert(k.clone(), v.clone());
@@ -2586,7 +2592,8 @@ exit 0
         ]);
 
         // Replace existing mur hooks, keep others
-        let existing_hooks = oc_config.get("hooks")
+        let existing_hooks = oc_config
+            .get("hooks")
             .and_then(|h| h.as_array())
             .cloned()
             .unwrap_or_default();
