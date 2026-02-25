@@ -3170,10 +3170,12 @@ learning:
 async fn cmd_serve(port: u16, open: bool, readonly: bool) -> Result<()> {
     let mur_dir = dirs::home_dir().expect("no home dir").join(".mur");
 
+    let (events_tx, _) = tokio::sync::broadcast::channel(64);
     let state = server::AppState {
         patterns_dir: mur_dir.join("patterns"),
         workflows_dir: mur_dir.join("workflows"),
         config: server::ServerConfig { readonly },
+        events_tx,
     };
 
     if open {

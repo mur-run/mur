@@ -13,8 +13,10 @@ use axum::response::IntoResponse;
 use axum::routing::{delete, get, post, put};
 use serde::{Deserialize, Serialize};
 use axum::body::Body;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::header;
 use rust_embed::Embed;
+use tokio::sync::broadcast;
 use tower_http::cors::{AllowHeaders, AllowMethods, CorsLayer};
 
 use mur_common::knowledge::{KnowledgeBase, Maturity};
@@ -51,6 +53,7 @@ pub struct AppState {
     pub patterns_dir: PathBuf,
     pub workflows_dir: PathBuf,
     pub config: ServerConfig,
+    pub events_tx: broadcast::Sender<String>,
 }
 
 impl AppState {
@@ -149,11 +152,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/links/{id}", get(get_links))
         // Search
         .route("/api/v1/search", post(search_patterns))
-        // Convenience aliases (frontend compat)
-        .route("/health", get(health))
-        .route("/patterns", get(list_patterns))
-        .route("/patterns/{id}", get(get_pattern))
-        .route("/workflows", get(list_workflows))
+        // WebSocket for real-time events
+        .route("/api/v1/ws", get(ws_handler))
         .layer(cors)
         .with_state(Arc::new(state))
         // Fallback: serve embedded web UI
@@ -172,6 +172,28 @@ pub async fn run_server(state: AppState, port: u16) -> anyhow::Result<()> {
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────
+
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_ws(socket, state))
+}
+
+async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
+    let mut rx = state.events_tx.subscribe();
+    while let Ok(msg) = rx.recv().await {
+        if socket.send(Message::Text(msg.into())).await.is_err() {
+            break;
+        }
+    }
+}
+
+/// Broadcast an event to all connected WebSocket clients.
+fn notify(state: &AppState, event_type: &str, id: &str) {
+    let msg = serde_json::json!({ "type": event_type, "id": id, "ts": chrono::Utc::now().to_rfc3339() });
+    let _ = state.events_tx.send(msg.to_string());
+}
 
 async fn serve_web_ui(uri: axum::http::Uri) -> impl IntoResponse {
     let path = uri.path().trim_start_matches('/');
@@ -340,6 +362,7 @@ async fn create_pattern(
     };
 
     store.save(&pattern).map_err(AppError::Internal)?;
+    notify(&state, "pattern:created", &req.name);
     let count = store.list_names().map(|n| n.len()).unwrap_or(0);
     Ok((StatusCode::CREATED, wrap(pattern, count)))
 }
@@ -396,6 +419,7 @@ async fn update_pattern(
 
     pattern.updated_at = chrono::Utc::now();
     store.save(&pattern).map_err(AppError::Internal)?;
+    notify(&state, "pattern:updated", &id);
     let count = store.list_names().map(|n| n.len()).unwrap_or(0);
     Ok(wrap(pattern, count))
 }
@@ -414,6 +438,7 @@ async fn delete_pattern(
     if !deleted {
         return Err(AppError::NotFound(format!("Pattern '{}' not found", id)));
     }
+    notify(&state, "pattern:deleted", &id);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -486,6 +511,7 @@ async fn create_workflow(
     };
 
     store.save(&workflow).map_err(AppError::Internal)?;
+    notify(&state, "workflow:created", &req.name);
     let p_store = state.pattern_store()?;
     let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
     Ok((StatusCode::CREATED, wrap(workflow, count)))
@@ -519,6 +545,7 @@ async fn update_workflow(
 
     workflow.updated_at = chrono::Utc::now();
     store.save(&workflow).map_err(AppError::Internal)?;
+    notify(&state, "workflow:updated", &id);
     let p_store = state.pattern_store()?;
     let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
     Ok(wrap(workflow, count))
@@ -538,6 +565,7 @@ async fn delete_workflow(
     if !deleted {
         return Err(AppError::NotFound(format!("Workflow '{}' not found", id)));
     }
+    notify(&state, "workflow:deleted", &id);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -731,10 +759,12 @@ mod tests {
         let workflows_dir = tmp.path().join("workflows");
         std::fs::create_dir_all(&patterns_dir).unwrap();
         std::fs::create_dir_all(&workflows_dir).unwrap();
+        let (events_tx, _) = broadcast::channel(64);
         AppState {
             patterns_dir,
             workflows_dir,
             config: ServerConfig { readonly: false },
+            events_tx,
         }
     }
 
