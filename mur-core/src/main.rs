@@ -2485,9 +2485,9 @@ exit 0
                     "ANTHROPIC_API_KEY",
                 ),
                 _ => (
-                    "openrouter",
-                    "google/gemini-2.0-flash-exp:free",
-                    "google/text-embedding-004",
+                    "openai",
+                    "google/gemini-2.5-flash",
+                    "openai/text-embedding-3-small",
                     "OPENROUTER_API_KEY",
                 ),
             };
@@ -2502,6 +2502,33 @@ exit 0
                 );
             }
 
+            // OpenRouter uses OpenAI-compatible API
+            let is_openrouter = env_var == "OPENROUTER_API_KEY";
+            let openai_url_line = if is_openrouter {
+                "\n  openai_url: https://openrouter.ai/api/v1"
+            } else {
+                ""
+            };
+            let llm_openai_url_line = if is_openrouter {
+                "\n    openai_url: https://openrouter.ai/api/v1"
+            } else {
+                ""
+            };
+            // For OpenRouter, embedding uses Ollama locally (free + fast)
+            let (search_section, display_provider) = if is_openrouter {
+                (
+                    "search:\n  provider: ollama\n  model: qwen3-embedding".to_string(),
+                    "openrouter (LLM) + ollama (search)",
+                )
+            } else {
+                (
+                    format!(
+                        "search:\n  provider: {provider}\n  model: {embed_model}\n  api_key_env: {env_var}{openai_url_line}"
+                    ),
+                    provider,
+                )
+            };
+
             let config_content = format!(
                 r#"# MUR Configuration
 # See: https://github.com/mur-run/mur
@@ -2512,18 +2539,17 @@ tools:
   gemini:
     enabled: true
 
-search:
-  provider: {provider}
-  model: {embed_model}
+{search_section}
 
 learning:
   llm:
     provider: {provider}
     model: {llm_model}
+    api_key_env: {env_var}{llm_openai_url_line}
 "#
             );
             std::fs::write(&config_path, config_content)?;
-            println!("  ✓ Config updated: {} / {}", provider, llm_model);
+            println!("  ✓ Config updated: {} / {}", display_provider, llm_model);
         }
         "2" => {
             // Local (Ollama) setup
