@@ -50,7 +50,7 @@ impl VectorStore {
 
         let names: Vec<&str> = patterns.iter().map(|(p, _)| p.name.as_str()).collect();
         let descriptions: Vec<&str> = patterns.iter().map(|(p, _)| p.description.as_str()).collect();
-        let contents: Vec<String> = patterns.iter().map(|(p, _)| p.content.as_text()).collect();
+        let contents: Vec<String> = patterns.iter().map(|(p, _)| content_with_attachment_descriptions(p)).collect();
         let content_refs: Vec<&str> = contents.iter().map(|s| s.as_str()).collect();
         let tiers: Vec<String> = patterns
             .iter()
@@ -111,7 +111,7 @@ impl VectorStore {
         // Collect fields from patterns
         let mut names: Vec<String> = patterns.iter().map(|(p, _)| p.name.clone()).collect();
         let mut descriptions: Vec<String> = patterns.iter().map(|(p, _)| p.description.clone()).collect();
-        let mut contents: Vec<String> = patterns.iter().map(|(p, _)| p.content.as_text()).collect();
+        let mut contents: Vec<String> = patterns.iter().map(|(p, _)| content_with_attachment_descriptions(p)).collect();
         let mut tiers: Vec<String> = patterns.iter().map(|(p, _)| format!("{:?}", p.tier).to_lowercase()).collect();
         let mut importances: Vec<f32> = patterns.iter().map(|(p, _)| p.importance as f32).collect();
         let mut item_types: Vec<String> = vec!["pattern".into(); patterns.len()];
@@ -244,6 +244,18 @@ impl VectorStore {
     }
 }
 
+/// Build the content string for indexing, including attachment descriptions.
+fn content_with_attachment_descriptions(pattern: &Pattern) -> String {
+    let mut text = pattern.content.as_text();
+    for att in &pattern.attachments {
+        if !att.description.is_empty() {
+            text.push_str("\n\n");
+            text.push_str(&att.description);
+        }
+    }
+    text
+}
+
 /// Result of a vector search.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -359,6 +371,51 @@ mod tests {
         let results = store.search(&random_embedding(), 10, None).await.unwrap();
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|r| r.name != "first"));
+    }
+
+    #[test]
+    fn test_content_with_attachment_descriptions() {
+        let mut p = make_pattern("attach-test");
+        assert_eq!(
+            super::content_with_attachment_descriptions(&p),
+            "test content"
+        );
+
+        // Add attachments with descriptions
+        p.attachments = vec![
+            mur_common::pattern::Attachment {
+                att_type: mur_common::pattern::AttachmentType::Diagram,
+                format: mur_common::pattern::AttachmentFormat::Mermaid,
+                path: "attach-test/arch.mermaid".into(),
+                description: "System architecture overview".into(),
+            },
+            mur_common::pattern::Attachment {
+                att_type: mur_common::pattern::AttachmentType::Image,
+                format: mur_common::pattern::AttachmentFormat::Png,
+                path: "attach-test/screen.png".into(),
+                description: "Dashboard screenshot".into(),
+            },
+        ];
+
+        let text = super::content_with_attachment_descriptions(&p);
+        assert!(text.contains("test content"));
+        assert!(text.contains("System architecture overview"));
+        assert!(text.contains("Dashboard screenshot"));
+    }
+
+    #[test]
+    fn test_content_with_empty_attachment_descriptions() {
+        let mut p = make_pattern("empty-desc");
+        p.attachments = vec![mur_common::pattern::Attachment {
+            att_type: mur_common::pattern::AttachmentType::Diagram,
+            format: mur_common::pattern::AttachmentFormat::Mermaid,
+            path: "empty-desc/flow.mermaid".into(),
+            description: "".into(), // empty description
+        }];
+
+        let text = super::content_with_attachment_descriptions(&p);
+        // Should not add extra newlines for empty descriptions
+        assert_eq!(text, "test content");
     }
 
     #[tokio::test]

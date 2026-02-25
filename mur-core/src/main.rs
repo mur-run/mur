@@ -24,7 +24,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Create a new pattern interactively
-    New,
+    New {
+        /// Path to a diagram file to attach (mermaid, plantuml)
+        #[arg(long)]
+        diagram: Option<String>,
+    },
     /// Search patterns (keyword match)
     Search {
         /// Search query
@@ -90,6 +94,11 @@ enum Commands {
         /// Pattern name
         name: String,
     },
+    /// View and manage individual patterns
+    Pattern {
+        #[command(subcommand)]
+        action: PatternAction,
+    },
     /// Manage workflows
     Workflow {
         #[command(subcommand)]
@@ -147,6 +156,12 @@ enum FeedbackAction {
 }
 
 #[derive(Subcommand)]
+enum PatternAction {
+    /// Show a pattern by name (with attachments)
+    Show { name: String },
+}
+
+#[derive(Subcommand)]
 enum WorkflowAction {
     /// List all workflows
     List,
@@ -170,7 +185,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::New => cmd_new()?,
+        Commands::New { diagram } => cmd_new(diagram)?,
         Commands::Search { query } => cmd_search(&query)?,
         Commands::Stats => cmd_stats()?,
         Commands::Pin { name } => cmd_set_lifecycle(&name, "pin")?,
@@ -194,6 +209,9 @@ async fn main() -> Result<()> {
             query,
             project: _,
         } => cmd_inject(&query).await?,
+        Commands::Pattern { action } => match action {
+            PatternAction::Show { name } => cmd_pattern_show(&name)?,
+        },
         Commands::Workflow { action } => match action {
             WorkflowAction::List => cmd_workflow_list()?,
             WorkflowAction::Show { name } => cmd_workflow_show(&name)?,
@@ -219,7 +237,7 @@ async fn main() -> Result<()> {
 
 // ─── Command implementations ───────────────────────────────────────
 
-fn cmd_new() -> Result<()> {
+fn cmd_new(diagram_path: Option<String>) -> Result<()> {
     let store = YamlStore::default_store()?;
 
     print!("Pattern name (kebab-case): ");
@@ -286,6 +304,36 @@ fn cmd_new() -> Result<()> {
         _ => Tier::Session,
     };
 
+    // Handle --diagram flag
+    let mut attachments = Vec::new();
+    if let Some(ref diagram_file) = diagram_path {
+        let source = std::path::Path::new(diagram_file);
+        if !source.exists() {
+            println!("❌ Diagram file not found: {}", diagram_file);
+            return Ok(());
+        }
+
+        // Copy to assets dir and detect format
+        let (relative_path, format) = store.copy_diagram_to_assets(&name, source)?;
+        let att_type = AttachmentType::from_format(&format);
+
+        // Prompt for description
+        print!("Diagram description: ");
+        io::stdout().flush()?;
+        let mut diagram_desc = String::new();
+        io::stdin().read_line(&mut diagram_desc)?;
+        let diagram_desc = diagram_desc.trim().to_string();
+
+        attachments.push(Attachment {
+            att_type,
+            format: format.clone(),
+            path: relative_path.clone(),
+            description: diagram_desc,
+        });
+
+        println!("📎 Attached {} diagram: {}", format.fence_lang(), relative_path);
+    }
+
     let pattern = Pattern {
         base: KnowledgeBase {
             schema: SCHEMA_VERSION,
@@ -311,7 +359,7 @@ fn cmd_new() -> Result<()> {
             updated_at: chrono::Utc::now(),
             ..Default::default()
         },
-        attachments: vec![],
+        attachments,
     };
 
     store.save(&pattern)?;
@@ -367,7 +415,7 @@ fn cmd_search(query: &str) -> Result<()> {
 }
 
 async fn cmd_inject(query: &str) -> Result<()> {
-    use inject::hook::{detect_trigger, format_unified_injection, HookTrigger};
+    use inject::hook::{detect_trigger, HookTrigger};
     use retrieve::gate::{evaluate_query, GateDecision};
     use retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
     use store::embedding::{embed, EmbeddingConfig};
@@ -442,7 +490,9 @@ async fn cmd_inject(query: &str) -> Result<()> {
         injected_patterns.push(p);
     }
 
-    let output = format_unified_injection(&injected_patterns, &workflows, 2000);
+    let output = inject::hook::format_unified_injection_with_store(
+        &injected_patterns, &workflows, 2000, Some(&yaml_store),
+    );
 
     if output.is_empty() {
         eprintln!("# No relevant patterns found");
@@ -1114,7 +1164,14 @@ async fn cmd_reindex() -> Result<()> {
     let total = patterns.len() + workflows.len();
 
     for (i, pattern) in patterns.iter().enumerate() {
-        let text = format!("{}: {}\n{}", pattern.name, pattern.description, pattern.content.as_text());
+        let mut text = format!("{}: {}\n{}", pattern.name, pattern.description, pattern.content.as_text());
+        // Include attachment descriptions in embedding text for better search
+        for att in &pattern.attachments {
+            if !att.description.is_empty() {
+                text.push_str("\n\n");
+                text.push_str(&att.description);
+            }
+        }
         match embed(&text, &config).await {
             Ok(embedding) => {
                 indexed_patterns.push((pattern.clone(), embedding));
@@ -1203,6 +1260,68 @@ fn cmd_workflow_show(name: &str) -> Result<()> {
 
     if !w.trigger.is_empty() {
         println!("Trigger: {}", w.trigger);
+    }
+
+    Ok(())
+}
+
+fn cmd_pattern_show(name: &str) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let p = store.get(name)?;
+
+    println!("📋 Pattern: {}\n", p.name);
+    println!("Description: {}", p.description);
+    println!("Tier: {:?} | Maturity: {:?} | Status: {:?}", p.tier, p.maturity, p.lifecycle.status);
+    println!(
+        "Importance: {:.0}% | Confidence: {:.0}%",
+        p.importance * 100.0,
+        p.confidence * 100.0
+    );
+
+    println!("\nContent:");
+    match &p.content {
+        Content::DualLayer { technical, principle } => {
+            println!("  Technical: {}", technical);
+            if let Some(pr) = principle {
+                println!("  Principle: {}", pr);
+            }
+        }
+        Content::Plain(s) => println!("  {}", s),
+    }
+
+    if !p.tags.topics.is_empty() {
+        println!("\nTags: {}", p.tags.topics.join(", "));
+    }
+
+    if p.evidence.injection_count > 0 {
+        println!(
+            "\nEvidence: {} injections, {:.0}% effectiveness",
+            p.evidence.injection_count,
+            p.evidence.effectiveness() * 100.0,
+        );
+    }
+
+    // Show attachments
+    if !p.attachments.is_empty() {
+        println!("\nAttachments ({}):", p.attachments.len());
+        for att in &p.attachments {
+            println!(
+                "  📎 [{:?}] {} — {}",
+                att.att_type, att.path, att.description
+            );
+            // For text-based diagrams, print content inline
+            if att.format.is_text_based() {
+                if let Some(content) = store.resolve_attachment_content(att) {
+                    println!("  ```{}", att.format.fence_lang());
+                    for line in content.lines() {
+                        println!("  {}", line);
+                    }
+                    println!("  ```");
+                } else {
+                    println!("  (file not found: {})", att.path);
+                }
+            }
+        }
     }
 
     Ok(())

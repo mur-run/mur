@@ -66,6 +66,44 @@ pub enum AttachmentFormat {
     #[serde(rename = "plantuml")]
     PlantUml,
     Png,
+    Svg,
+}
+
+impl AttachmentFormat {
+    /// Whether this format is text-based (can be inlined into prompts).
+    pub fn is_text_based(&self) -> bool {
+        matches!(self, AttachmentFormat::Mermaid | AttachmentFormat::PlantUml)
+    }
+
+    /// Detect format from file extension.
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "mmd" | "mermaid" => Some(AttachmentFormat::Mermaid),
+            "puml" | "plantuml" => Some(AttachmentFormat::PlantUml),
+            "png" => Some(AttachmentFormat::Png),
+            "svg" => Some(AttachmentFormat::Svg),
+            _ => None,
+        }
+    }
+
+    /// The markdown code fence language tag for text-based formats.
+    pub fn fence_lang(&self) -> &str {
+        match self {
+            AttachmentFormat::Mermaid => "mermaid",
+            AttachmentFormat::PlantUml => "plantuml",
+            _ => "",
+        }
+    }
+}
+
+impl AttachmentType {
+    /// Infer attachment type from format.
+    pub fn from_format(format: &AttachmentFormat) -> Self {
+        match format {
+            AttachmentFormat::Mermaid | AttachmentFormat::PlantUml => AttachmentType::Diagram,
+            AttachmentFormat::Png | AttachmentFormat::Svg => AttachmentType::Image,
+        }
+    }
 }
 
 /// Dual-layer content inspired by LanceDB Pro Plugin Rule 6.
@@ -228,4 +266,81 @@ pub fn default_importance() -> f64 {
 }
 pub fn default_confidence() -> f64 {
     0.5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_attachment_format_is_text_based() {
+        assert!(AttachmentFormat::Mermaid.is_text_based());
+        assert!(AttachmentFormat::PlantUml.is_text_based());
+        assert!(!AttachmentFormat::Png.is_text_based());
+        assert!(!AttachmentFormat::Svg.is_text_based());
+    }
+
+    #[test]
+    fn test_attachment_format_from_extension() {
+        assert_eq!(AttachmentFormat::from_extension("mmd"), Some(AttachmentFormat::Mermaid));
+        assert_eq!(AttachmentFormat::from_extension("mermaid"), Some(AttachmentFormat::Mermaid));
+        assert_eq!(AttachmentFormat::from_extension("puml"), Some(AttachmentFormat::PlantUml));
+        assert_eq!(AttachmentFormat::from_extension("plantuml"), Some(AttachmentFormat::PlantUml));
+        assert_eq!(AttachmentFormat::from_extension("png"), Some(AttachmentFormat::Png));
+        assert_eq!(AttachmentFormat::from_extension("svg"), Some(AttachmentFormat::Svg));
+        assert_eq!(AttachmentFormat::from_extension("jpg"), None);
+        assert_eq!(AttachmentFormat::from_extension(""), None);
+        // Case insensitive
+        assert_eq!(AttachmentFormat::from_extension("MMD"), Some(AttachmentFormat::Mermaid));
+    }
+
+    #[test]
+    fn test_attachment_format_fence_lang() {
+        assert_eq!(AttachmentFormat::Mermaid.fence_lang(), "mermaid");
+        assert_eq!(AttachmentFormat::PlantUml.fence_lang(), "plantuml");
+        assert_eq!(AttachmentFormat::Png.fence_lang(), "");
+    }
+
+    #[test]
+    fn test_attachment_type_from_format() {
+        assert_eq!(AttachmentType::from_format(&AttachmentFormat::Mermaid), AttachmentType::Diagram);
+        assert_eq!(AttachmentType::from_format(&AttachmentFormat::PlantUml), AttachmentType::Diagram);
+        assert_eq!(AttachmentType::from_format(&AttachmentFormat::Png), AttachmentType::Image);
+        assert_eq!(AttachmentType::from_format(&AttachmentFormat::Svg), AttachmentType::Image);
+    }
+
+    #[test]
+    fn test_attachment_serde() {
+        let att = Attachment {
+            att_type: AttachmentType::Diagram,
+            format: AttachmentFormat::Mermaid,
+            path: "my-pattern/arch.mermaid".to_string(),
+            description: "Architecture diagram".to_string(),
+        };
+
+        let yaml = serde_yaml::to_string(&att).unwrap();
+        assert!(yaml.contains("type: diagram"));
+        assert!(yaml.contains("format: mermaid"));
+        assert!(yaml.contains("path: my-pattern/arch.mermaid"));
+        assert!(yaml.contains("description: Architecture diagram"));
+
+        let deserialized: Attachment = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.att_type, AttachmentType::Diagram);
+        assert_eq!(deserialized.format, AttachmentFormat::Mermaid);
+    }
+
+    #[test]
+    fn test_attachment_svg_serde() {
+        let att = Attachment {
+            att_type: AttachmentType::Image,
+            format: AttachmentFormat::Svg,
+            path: "my-pattern/logo.svg".to_string(),
+            description: "Logo".to_string(),
+        };
+
+        let yaml = serde_yaml::to_string(&att).unwrap();
+        let deserialized: Attachment = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.format, AttachmentFormat::Svg);
+        assert_eq!(deserialized.att_type, AttachmentType::Image);
+    }
 }

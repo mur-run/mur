@@ -19,10 +19,11 @@
 // hooks API supports session-end events. For now, `mur feedback auto`
 // is run manually or via shell scripts.
 
-use mur_common::pattern::{Content, Pattern};
+use mur_common::pattern::{Attachment, Content, Pattern};
 use mur_common::workflow::Workflow;
 
 use crate::capture::feedback::{InjectedPatternRecord, InjectionRecord, write_injection_record};
+use crate::store::yaml::YamlStore;
 
 /// When to trigger pattern retrieval
 #[derive(Debug, Clone, PartialEq)]
@@ -74,6 +75,15 @@ pub fn detect_trigger(message: &str) -> HookTrigger {
 /// Returns content only (no metadata), within token budget.
 #[allow(dead_code)] // Used by tests and as public API
 pub fn format_for_injection(patterns: &[Pattern], max_tokens: usize) -> String {
+    format_for_injection_with_store(patterns, max_tokens, None)
+}
+
+/// Format scored patterns with optional YamlStore for resolving diagram attachments.
+pub fn format_for_injection_with_store(
+    patterns: &[Pattern],
+    max_tokens: usize,
+    store: Option<&YamlStore>,
+) -> String {
     if patterns.is_empty() {
         return String::new();
     }
@@ -82,7 +92,7 @@ pub fn format_for_injection(patterns: &[Pattern], max_tokens: usize) -> String {
     let mut token_count = output.len() / 4; // rough estimate
 
     for (i, pattern) in patterns.iter().enumerate() {
-        let entry = format_pattern_entry(pattern, i + 1);
+        let entry = format_pattern_entry(pattern, i + 1, store);
         let entry_tokens = entry.len() / 4;
 
         if token_count + entry_tokens > max_tokens && i > 0 {
@@ -97,14 +107,43 @@ pub fn format_for_injection(patterns: &[Pattern], max_tokens: usize) -> String {
     output.trim_end().to_string()
 }
 
-fn format_pattern_entry(pattern: &Pattern, index: usize) -> String {
+fn format_pattern_entry(pattern: &Pattern, index: usize, store: Option<&YamlStore>) -> String {
     let content = format_content(&pattern.content);
-    format!(
+    let mut entry = format!(
         "### {}. {}\n{}\n",
         index,
         pattern.description,
         content.trim()
-    )
+    );
+
+    // Inline diagram attachments
+    for attachment in &pattern.attachments {
+        entry.push_str(&format_attachment_for_injection(attachment, store));
+    }
+
+    entry
+}
+
+/// Format an attachment for injection into a prompt.
+/// Text-based diagrams are inlined; images get description only.
+fn format_attachment_for_injection(attachment: &Attachment, store: Option<&YamlStore>) -> String {
+    if attachment.format.is_text_based() {
+        // Try to resolve and inline the diagram content
+        let content = store.and_then(|s| s.resolve_attachment_content(attachment));
+        if let Some(diagram) = content {
+            return format!(
+                "\n## Diagram: {}\n```{}\n{}\n```\n",
+                attachment.description,
+                attachment.format.fence_lang(),
+                diagram.trim()
+            );
+        }
+        // Couldn't resolve — fall back to description only
+        format!("\n📎 Diagram: {} ({})\n", attachment.description, attachment.path)
+    } else {
+        // Binary attachment — description only
+        format!("\n📎 {}: {}\n", attachment.description, attachment.path)
+    }
 }
 
 /// Format a single workflow entry for injection.
@@ -134,10 +173,21 @@ pub fn format_workflow_entry(workflow: &Workflow, index: usize) -> String {
 }
 
 /// Format both patterns and workflows for unified injection.
+#[allow(dead_code)] // Used by tests and as public API
 pub fn format_unified_injection(
     patterns: &[Pattern],
     workflows: &[Workflow],
     max_tokens: usize,
+) -> String {
+    format_unified_injection_with_store(patterns, workflows, max_tokens, None)
+}
+
+/// Format both patterns and workflows with optional store for diagram resolution.
+pub fn format_unified_injection_with_store(
+    patterns: &[Pattern],
+    workflows: &[Workflow],
+    max_tokens: usize,
+    store: Option<&YamlStore>,
 ) -> String {
     if patterns.is_empty() && workflows.is_empty() {
         return String::new();
@@ -149,7 +199,7 @@ pub fn format_unified_injection(
 
     // Patterns first
     for pattern in patterns {
-        let entry = format_pattern_entry(pattern, index);
+        let entry = format_pattern_entry(pattern, index, store);
         let entry_tokens = entry.len() / 4;
         if token_count + entry_tokens > max_tokens && index > 1 {
             break;
@@ -383,5 +433,109 @@ mod tests {
     fn test_unified_injection_empty() {
         let result = format_unified_injection(&[], &[], 5000);
         assert_eq!(result, "");
+    }
+
+    // ─── Phase 3: Diagram attachment injection tests ────────────
+
+    #[test]
+    fn test_injection_with_diagram_attachment_no_store() {
+        let p = Pattern {
+            base: KnowledgeBase {
+                schema: 2,
+                name: "arch-pattern".into(),
+                description: "Architecture pattern".into(),
+                content: Content::Plain("Use microservices.".into()),
+                tier: Tier::Core,
+                importance: 0.8,
+                confidence: 0.9,
+                ..Default::default()
+            },
+            attachments: vec![Attachment {
+                att_type: AttachmentType::Diagram,
+                format: AttachmentFormat::Mermaid,
+                path: "arch-pattern/overview.mermaid".into(),
+                description: "System architecture".into(),
+            }],
+        };
+
+        // Without store, diagram can't be resolved — should show path fallback
+        let result = format_for_injection(&[p], 5000);
+        assert!(result.contains("Architecture pattern"));
+        assert!(result.contains("Use microservices"));
+        assert!(result.contains("Diagram: System architecture"));
+        assert!(result.contains("arch-pattern/overview.mermaid"));
+    }
+
+    #[test]
+    fn test_injection_with_diagram_attachment_with_store() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let store = crate::store::yaml::YamlStore::new(tmp.path().to_path_buf()).unwrap();
+
+        // Create the diagram file
+        let assets_dir = tmp.path().join("arch-pattern");
+        std::fs::create_dir_all(&assets_dir).unwrap();
+        std::fs::write(
+            assets_dir.join("overview.mermaid"),
+            "graph TD\n    A[Client]-->B[Server]\n    B-->C[Database]",
+        )
+        .unwrap();
+
+        let p = Pattern {
+            base: KnowledgeBase {
+                schema: 2,
+                name: "arch-pattern".into(),
+                description: "Architecture pattern".into(),
+                content: Content::Plain("Use microservices.".into()),
+                ..Default::default()
+            },
+            attachments: vec![Attachment {
+                att_type: AttachmentType::Diagram,
+                format: AttachmentFormat::Mermaid,
+                path: "arch-pattern/overview.mermaid".into(),
+                description: "System architecture".into(),
+            }],
+        };
+
+        let result = format_for_injection_with_store(&[p], 5000, Some(&store));
+        assert!(result.contains("## Diagram: System architecture"));
+        assert!(result.contains("```mermaid"));
+        assert!(result.contains("A[Client]-->B[Server]"));
+        assert!(result.contains("```"));
+    }
+
+    #[test]
+    fn test_injection_image_attachment_description_only() {
+        let p = Pattern {
+            base: KnowledgeBase {
+                schema: 2,
+                name: "ui-pattern".into(),
+                description: "UI pattern".into(),
+                content: Content::Plain("Use dark theme.".into()),
+                ..Default::default()
+            },
+            attachments: vec![Attachment {
+                att_type: AttachmentType::Image,
+                format: AttachmentFormat::Png,
+                path: "ui-pattern/screenshot.png".into(),
+                description: "Dark mode screenshot".into(),
+            }],
+        };
+
+        let result = format_for_injection(&[p], 5000);
+        assert!(result.contains("Dark mode screenshot"));
+        // Should NOT contain mermaid code fence
+        assert!(!result.contains("```mermaid"));
+        assert!(!result.contains("```png"));
+    }
+
+    #[test]
+    fn test_pattern_without_attachments_unchanged() {
+        let p = make_pattern("No attachments", "Use foo bar.");
+        let result = format_for_injection(&[p], 5000);
+        assert!(result.contains("No attachments"));
+        assert!(result.contains("Use foo bar"));
+        // No attachment markers
+        assert!(!result.contains("Diagram:"));
+        assert!(!result.contains("📎"));
     }
 }

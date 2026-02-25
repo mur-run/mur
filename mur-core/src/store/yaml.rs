@@ -5,9 +5,9 @@
 //! with atomic writes (temp file + rename) for safety.
 
 use anyhow::{Context, Result};
-use mur_common::pattern::Pattern;
+use mur_common::pattern::{Attachment, AttachmentFormat, Pattern};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The YAML pattern store.
 pub struct YamlStore {
@@ -123,6 +123,68 @@ impl YamlStore {
     /// Get the file path for a pattern name.
     fn pattern_path(&self, name: &str) -> PathBuf {
         self.patterns_dir.join(format!("{}.yaml", name))
+    }
+
+    /// Get the assets directory for a pattern (e.g. ~/.mur/patterns/<name>/).
+    pub fn pattern_assets_dir(&self, name: &str) -> PathBuf {
+        self.patterns_dir.join(name)
+    }
+
+    /// Ensure the assets directory exists for a pattern.
+    pub fn ensure_assets_dir(&self, name: &str) -> Result<PathBuf> {
+        let dir = self.pattern_assets_dir(name);
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("Failed to create assets dir: {}", dir.display()))?;
+        Ok(dir)
+    }
+
+    /// Copy a diagram file into the pattern's assets directory.
+    /// Returns the relative path (from patterns dir) and detected format.
+    pub fn copy_diagram_to_assets(
+        &self,
+        pattern_name: &str,
+        source_path: &Path,
+    ) -> Result<(String, AttachmentFormat)> {
+        let ext = source_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let format = AttachmentFormat::from_extension(ext)
+            .with_context(|| format!("Unsupported diagram extension: .{}", ext))?;
+
+        let file_name = source_path
+            .file_name()
+            .with_context(|| "Invalid source path")?;
+
+        let assets_dir = self.ensure_assets_dir(pattern_name)?;
+        let dest = assets_dir.join(file_name);
+        fs::copy(source_path, &dest)
+            .with_context(|| format!("Failed to copy diagram to {}", dest.display()))?;
+
+        // Relative path: <pattern-name>/<filename>
+        let relative = format!("{}/{}", pattern_name, file_name.to_string_lossy());
+        Ok((relative, format))
+    }
+
+    /// Resolve the content of a text-based attachment file.
+    /// Returns None for binary formats (png/svg) or if the file doesn't exist.
+    pub fn resolve_attachment_content(&self, attachment: &Attachment) -> Option<String> {
+        if !attachment.format.is_text_based() {
+            return None;
+        }
+
+        let full_path = self.patterns_dir.join(&attachment.path);
+        match fs::read_to_string(&full_path) {
+            Ok(content) => Some(content),
+            Err(e) => {
+                tracing::warn!(
+                    "Could not read attachment {}: {}",
+                    full_path.display(),
+                    e
+                );
+                None
+            }
+        }
     }
 }
 
@@ -367,6 +429,279 @@ attachments: []
         let loaded = store.get("roundtrip-test")?;
         assert_eq!(loaded.name, "roundtrip-test");
         assert_eq!(loaded.attachments.len(), 0);
+
+        Ok(())
+    }
+
+    // ─── Phase 3: Attachment tests ────────────────────────────────
+
+    #[test]
+    fn test_attachment_serde_roundtrip() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let store = YamlStore::new(tmp.path().to_path_buf())?;
+
+        let mut pattern = make_test_pattern("with-diagram");
+        pattern.attachments = vec![
+            Attachment {
+                att_type: AttachmentType::Diagram,
+                format: AttachmentFormat::Mermaid,
+                path: "with-diagram/arch.mermaid".to_string(),
+                description: "System architecture overview".to_string(),
+            },
+            Attachment {
+                att_type: AttachmentType::Image,
+                format: AttachmentFormat::Png,
+                path: "with-diagram/screenshot.png".to_string(),
+                description: "UI screenshot".to_string(),
+            },
+        ];
+        store.save(&pattern)?;
+
+        let loaded = store.get("with-diagram")?;
+        assert_eq!(loaded.attachments.len(), 2);
+        assert_eq!(loaded.attachments[0].att_type, AttachmentType::Diagram);
+        assert_eq!(loaded.attachments[0].format, AttachmentFormat::Mermaid);
+        assert_eq!(loaded.attachments[0].path, "with-diagram/arch.mermaid");
+        assert_eq!(loaded.attachments[0].description, "System architecture overview");
+        assert_eq!(loaded.attachments[1].att_type, AttachmentType::Image);
+        assert_eq!(loaded.attachments[1].format, AttachmentFormat::Png);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_backward_compat_no_attachments() -> Result<()> {
+        // YAML without attachments field should still load fine
+        let yaml = r#"
+schema: 2
+name: no-attachments
+description: Old pattern without attachments
+content:
+  technical: Use foo
+tier: session
+importance: 0.5
+confidence: 0.5
+tags:
+  languages: []
+  topics: []
+applies:
+  projects: []
+  languages: []
+  tools: []
+  auto_scope: false
+evidence:
+  source_sessions: []
+  injection_count: 0
+  success_signals: 0
+  override_signals: 0
+links:
+  related: []
+  supersedes: []
+  workflows: []
+lifecycle:
+  status: active
+  pinned: false
+  muted: false
+created_at: "2026-02-20T00:00:00Z"
+updated_at: "2026-02-20T00:00:00Z"
+"#;
+
+        let pattern: Pattern = serde_yaml::from_str(yaml)?;
+        assert_eq!(pattern.name, "no-attachments");
+        assert!(pattern.attachments.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_attachment_content_mermaid() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let store = YamlStore::new(tmp.path().to_path_buf())?;
+
+        // Create assets directory and a mermaid file
+        let assets_dir = store.ensure_assets_dir("test-pattern")?;
+        let diagram_content = "graph TD\n    A-->B\n    B-->C";
+        std::fs::write(assets_dir.join("arch.mermaid"), diagram_content)?;
+
+        let attachment = Attachment {
+            att_type: AttachmentType::Diagram,
+            format: AttachmentFormat::Mermaid,
+            path: "test-pattern/arch.mermaid".to_string(),
+            description: "Architecture".to_string(),
+        };
+
+        let resolved = store.resolve_attachment_content(&attachment);
+        assert_eq!(resolved, Some(diagram_content.to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_attachment_content_plantuml() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let store = YamlStore::new(tmp.path().to_path_buf())?;
+
+        let assets_dir = store.ensure_assets_dir("puml-test")?;
+        let puml = "@startuml\nAlice -> Bob: hello\n@enduml";
+        std::fs::write(assets_dir.join("seq.puml"), puml)?;
+
+        let attachment = Attachment {
+            att_type: AttachmentType::Diagram,
+            format: AttachmentFormat::PlantUml,
+            path: "puml-test/seq.puml".to_string(),
+            description: "Sequence diagram".to_string(),
+        };
+
+        let resolved = store.resolve_attachment_content(&attachment);
+        assert_eq!(resolved, Some(puml.to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_attachment_binary_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let store = YamlStore::new(tmp.path().to_path_buf()).unwrap();
+
+        let attachment = Attachment {
+            att_type: AttachmentType::Image,
+            format: AttachmentFormat::Png,
+            path: "test/img.png".to_string(),
+            description: "screenshot".to_string(),
+        };
+
+        // Binary format should always return None
+        assert!(store.resolve_attachment_content(&attachment).is_none());
+    }
+
+    #[test]
+    fn test_resolve_attachment_missing_file_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let store = YamlStore::new(tmp.path().to_path_buf()).unwrap();
+
+        let attachment = Attachment {
+            att_type: AttachmentType::Diagram,
+            format: AttachmentFormat::Mermaid,
+            path: "nonexistent/missing.mermaid".to_string(),
+            description: "missing diagram".to_string(),
+        };
+
+        // Non-existent file should gracefully return None
+        assert!(store.resolve_attachment_content(&attachment).is_none());
+    }
+
+    #[test]
+    fn test_copy_diagram_to_assets() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let store = YamlStore::new(tmp.path().to_path_buf())?;
+
+        // Create a source diagram file
+        let source_dir = TempDir::new()?;
+        let source_file = source_dir.path().join("system-overview.mermaid");
+        std::fs::write(&source_file, "graph TD\n    A-->B")?;
+
+        let (relative_path, format) = store.copy_diagram_to_assets("my-pattern", &source_file)?;
+
+        assert_eq!(format, AttachmentFormat::Mermaid);
+        assert_eq!(relative_path, "my-pattern/system-overview.mermaid");
+
+        // Verify the file was copied
+        let copied = tmp.path().join("my-pattern").join("system-overview.mermaid");
+        assert!(copied.exists());
+        assert_eq!(std::fs::read_to_string(copied)?, "graph TD\n    A-->B");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_copy_diagram_plantuml_extension() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let store = YamlStore::new(tmp.path().to_path_buf())?;
+
+        let source_dir = TempDir::new()?;
+        let source_file = source_dir.path().join("flow.puml");
+        std::fs::write(&source_file, "@startuml\nA->B\n@enduml")?;
+
+        let (_, format) = store.copy_diagram_to_assets("puml-pattern", &source_file)?;
+        assert_eq!(format, AttachmentFormat::PlantUml);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_copy_diagram_mmd_extension() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let store = YamlStore::new(tmp.path().to_path_buf())?;
+
+        let source_dir = TempDir::new()?;
+        let source_file = source_dir.path().join("flow.mmd");
+        std::fs::write(&source_file, "graph LR\n    X-->Y")?;
+
+        let (_, format) = store.copy_diagram_to_assets("mmd-pattern", &source_file)?;
+        assert_eq!(format, AttachmentFormat::Mermaid);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_attachment_yaml_with_attachments_field() -> Result<()> {
+        // Test YAML parsing with the attachments field populated
+        let yaml = r#"
+schema: 2
+name: diagrammed
+description: Pattern with diagram
+content:
+  technical: Use microservices
+tier: core
+importance: 0.8
+confidence: 0.9
+tags:
+  languages: []
+  topics:
+    - architecture
+applies:
+  projects: []
+  languages: []
+  tools: []
+  auto_scope: false
+evidence:
+  source_sessions: []
+  injection_count: 5
+  success_signals: 4
+  override_signals: 1
+links:
+  related: []
+  supersedes: []
+  workflows: []
+lifecycle:
+  status: active
+  pinned: false
+  muted: false
+created_at: "2026-02-20T00:00:00Z"
+updated_at: "2026-02-20T00:00:00Z"
+attachments:
+  - type: diagram
+    format: mermaid
+    path: diagrammed/overview.mermaid
+    description: System architecture overview
+  - type: image
+    format: svg
+    path: diagrammed/logo.svg
+    description: Project logo
+"#;
+
+        let pattern: Pattern = serde_yaml::from_str(yaml)?;
+        assert_eq!(pattern.name, "diagrammed");
+        assert_eq!(pattern.attachments.len(), 2);
+        assert_eq!(pattern.attachments[0].format, AttachmentFormat::Mermaid);
+        assert_eq!(pattern.attachments[1].format, AttachmentFormat::Svg);
+        assert_eq!(pattern.attachments[1].att_type, AttachmentType::Image);
+
+        // Roundtrip
+        let yaml2 = serde_yaml::to_string(&pattern)?;
+        let pattern2: Pattern = serde_yaml::from_str(&yaml2)?;
+        assert_eq!(pattern2.attachments.len(), 2);
+        assert_eq!(pattern2.attachments[0].description, "System architecture overview");
 
         Ok(())
     }
