@@ -2513,6 +2513,90 @@ exit 0
         hooks_installed.push("Gemini CLI");
     }
 
+    // ─── Step C4: Install GitHub Copilot CLI hooks ───────────────
+    // Copilot CLI reads hooks from .github/hooks/ in cwd, but also supports
+    // a global config at ~/.copilot/hooks.json
+    let copilot_dir = home.join(".copilot");
+    if copilot_dir.exists() {
+        let hooks_dir = mur_dir.join("hooks");
+        let prompt_script = hooks_dir.join("on-prompt.sh");
+        let stop_script = hooks_dir.join("on-stop.sh");
+
+        let copilot_hooks_dir = copilot_dir.join("hooks");
+        std::fs::create_dir_all(&copilot_hooks_dir)?;
+
+        let hooks_json = serde_json::json!({
+            "version": 1,
+            "hooks": {
+                "sessionStart": [{
+                    "type": "command",
+                    "bash": format!("bash {}", prompt_script.display()),
+                    "timeoutSec": 30
+                }],
+                "sessionEnd": [{
+                    "type": "command",
+                    "bash": format!("bash {}", stop_script.display()),
+                    "timeoutSec": 30
+                }]
+            }
+        });
+
+        let hooks_path = copilot_hooks_dir.join("mur-hooks.json");
+        let pretty = serde_json::to_string_pretty(&hooks_json)?;
+        std::fs::write(&hooks_path, pretty)?;
+        hooks_installed.push("Copilot CLI");
+    }
+
+    // ─── Step C5: Install OpenClaw hooks ─────────────────────────
+    let openclaw_config_path = home.join(".openclaw").join("config.json");
+    if openclaw_config_path.exists() {
+        let hooks_dir = mur_dir.join("hooks");
+        let prompt_script = hooks_dir.join("on-prompt.sh");
+        let stop_script = hooks_dir.join("on-stop.sh");
+
+        let mut oc_config: serde_json::Value = {
+            let data = std::fs::read_to_string(&openclaw_config_path)?;
+            serde_json::from_str(&data).unwrap_or(serde_json::json!({}))
+        };
+
+        // OpenClaw uses a hooks array in config.json
+        let mur_hooks = serde_json::json!([
+            {
+                "id": "mur-on-prompt",
+                "event": "session.start",
+                "command": format!("bash {}", prompt_script.display())
+            },
+            {
+                "id": "mur-on-stop",
+                "event": "session.end",
+                "command": format!("bash {}", stop_script.display())
+            }
+        ]);
+
+        // Replace existing mur hooks, keep others
+        let existing_hooks = oc_config.get("hooks")
+            .and_then(|h| h.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut kept: Vec<serde_json::Value> = existing_hooks
+            .into_iter()
+            .filter(|h| {
+                h.get("id")
+                    .and_then(|id| id.as_str())
+                    .map(|id| !id.starts_with("mur-"))
+                    .unwrap_or(true)
+            })
+            .collect();
+        if let Some(arr) = mur_hooks.as_array() {
+            kept.extend(arr.clone());
+        }
+        oc_config["hooks"] = serde_json::Value::Array(kept);
+
+        let pretty = serde_json::to_string_pretty(&oc_config)?;
+        std::fs::write(&openclaw_config_path, pretty)?;
+        hooks_installed.push("OpenClaw");
+    }
+
     // ─── Step G: Interactive LLM/Embedding setup ─────────────────
     println!();
     println!("Model setup for pattern learning & semantic search:");
