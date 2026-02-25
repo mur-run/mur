@@ -2438,6 +2438,81 @@ exit 0
         hooks_installed.push("Claude Code");
     }
 
+    // ─── Step C2: Install Auggie hooks in settings.json ──────────
+    let auggie_dir = home.join(".augment");
+    if auggie_dir.exists() {
+        let auggie_settings_path = auggie_dir.join("settings.json");
+        let mut auggie_settings: serde_json::Value = if auggie_settings_path.exists() {
+            let data = std::fs::read_to_string(&auggie_settings_path)?;
+            serde_json::from_str(&data).unwrap_or(serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        let hooks_dir = mur_dir.join("hooks");
+        let prompt_script = hooks_dir.join("on-prompt.sh");
+        let stop_script = hooks_dir.join("on-stop.sh");
+
+        // Auggie uses SessionStart / Stop hook events
+        let mur_hooks = serde_json::json!({
+            "SessionStart": [{
+                "hooks": [{"type": "command", "command": format!("bash {}", prompt_script.display())}]
+            }],
+            "Stop": [{
+                "hooks": [{"type": "command", "command": format!("bash {}", stop_script.display())}]
+            }]
+        });
+
+        // Merge: preserve existing hooks, overwrite mur-managed ones
+        let existing_hooks = auggie_settings.get("hooks").cloned().unwrap_or(serde_json::json!({}));
+        let mut merged = existing_hooks.as_object().cloned().unwrap_or_default();
+        for (k, v) in mur_hooks.as_object().unwrap() {
+            merged.insert(k.clone(), v.clone());
+        }
+        auggie_settings["hooks"] = serde_json::Value::Object(merged);
+
+        let pretty = serde_json::to_string_pretty(&auggie_settings)?;
+        std::fs::write(&auggie_settings_path, pretty)?;
+        hooks_installed.push("Auggie");
+    }
+
+    // ─── Step C3: Install Gemini CLI hooks in settings.json ──────
+    let gemini_dir = home.join(".gemini");
+    if gemini_dir.exists() {
+        let gemini_settings_path = gemini_dir.join("settings.json");
+        let mut gemini_settings: serde_json::Value = if gemini_settings_path.exists() {
+            let data = std::fs::read_to_string(&gemini_settings_path)?;
+            serde_json::from_str(&data).unwrap_or(serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        let hooks_dir = mur_dir.join("hooks");
+        let prompt_script = hooks_dir.join("on-prompt.sh");
+        let stop_script = hooks_dir.join("on-stop.sh");
+
+        // Gemini uses different event names
+        let mur_hooks = serde_json::json!({
+            "BeforeAgent": [{
+                "hooks": [{"type": "command", "command": format!("bash {}", prompt_script.display())}]
+            }],
+            "SessionEnd": [{
+                "hooks": [{"type": "command", "command": format!("bash {}", stop_script.display())}]
+            }]
+        });
+
+        let existing_hooks = gemini_settings.get("hooks").cloned().unwrap_or(serde_json::json!({}));
+        let mut merged = existing_hooks.as_object().cloned().unwrap_or_default();
+        for (k, v) in mur_hooks.as_object().unwrap() {
+            merged.insert(k.clone(), v.clone());
+        }
+        gemini_settings["hooks"] = serde_json::Value::Object(merged);
+
+        let pretty = serde_json::to_string_pretty(&gemini_settings)?;
+        std::fs::write(&gemini_settings_path, pretty)?;
+        hooks_installed.push("Gemini CLI");
+    }
+
     // ─── Step G: Interactive LLM/Embedding setup ─────────────────
     println!();
     println!("Model setup for pattern learning & semantic search:");
