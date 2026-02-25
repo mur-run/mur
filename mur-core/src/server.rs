@@ -12,9 +12,24 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post, put};
 use serde::{Deserialize, Serialize};
+use axum::body::Body;
+use axum::http::header;
+use rust_embed::Embed;
 use tower_http::cors::{AllowHeaders, AllowMethods, CorsLayer};
 
 use mur_common::knowledge::{KnowledgeBase, Maturity};
+
+#[derive(Embed)]
+#[folder = "$MUR_WEB_DIST"]
+#[prefix = ""]
+#[include = "*.html"]
+#[include = "*.js"]
+#[include = "*.css"]
+#[include = "*.svg"]
+#[include = "*.png"]
+#[include = "*.ico"]
+#[include = "*.woff2"]
+struct WebAssets;
 use mur_common::pattern::*;
 use mur_common::workflow::Workflow;
 
@@ -134,8 +149,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/links/{id}", get(get_links))
         // Search
         .route("/api/v1/search", post(search_patterns))
+        // Convenience aliases (frontend compat)
+        .route("/health", get(health))
+        .route("/patterns", get(list_patterns))
+        .route("/patterns/{id}", get(get_pattern))
+        .route("/workflows", get(list_workflows))
         .layer(cors)
         .with_state(Arc::new(state))
+        // Fallback: serve embedded web UI
+        .fallback(get(serve_web_ui))
 }
 
 /// Start the API server on the given port.
@@ -150,6 +172,36 @@ pub async fn run_server(state: AppState, port: u16) -> anyhow::Result<()> {
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────
+
+async fn serve_web_ui(uri: axum::http::Uri) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+    // Try exact file first, then fallback to index.html (SPA)
+    let file = WebAssets::get(path).or_else(|| WebAssets::get("index.html"));
+    match file {
+        Some(content) => {
+            let mime = if path.ends_with(".js") {
+                "application/javascript"
+            } else if path.ends_with(".css") {
+                "text/css"
+            } else if path.ends_with(".svg") {
+                "image/svg+xml"
+            } else if path.ends_with(".png") {
+                "image/png"
+            } else if path.ends_with(".woff2") {
+                "font/woff2"
+            } else {
+                "text/html"
+            };
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime)],
+                Body::from(content.data.to_vec()),
+            )
+                .into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "Not found").into_response(),
+    }
+}
 
 async fn health() -> impl IntoResponse {
     Json(serde_json::json!({
