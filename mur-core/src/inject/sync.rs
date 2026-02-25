@@ -116,7 +116,9 @@ pub fn write_sync_file(path: &Path, content: &str, format: &SyncFormat) -> Resul
     let output = match format {
         SyncFormat::Markdown => {
             // Replace between markers, or append
-            if let (Some(start), Some(end)) = (existing.find(marker_start), existing.find(marker_end)) {
+            if let (Some(start), Some(end)) =
+                (existing.find(marker_start), existing.find(marker_end))
+            {
                 let end = end + marker_end.len();
                 format!("{}{}{}", &existing[..start], content, &existing[end..])
             } else if existing.is_empty() {

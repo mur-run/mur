@@ -41,9 +41,8 @@ static TOOL_CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Shell command pattern: matches common shell invocations in transcripts.
-static COMMAND_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)(?:^|\n)\s*(?:\$|>|%)\s+(.+?)(?:\n|$)"#).unwrap()
-});
+static COMMAND_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?m)(?:^|\n)\s*(?:\$|>|%)\s+(.+?)(?:\n|$)"#).unwrap());
 
 /// Bare command pattern: matches backtick-wrapped commands (e.g., cargo test, npm run build)
 static BARE_COMMAND_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -62,25 +61,65 @@ static CORRECTION_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Common technical keywords for extraction (lowercase).
 const TECH_TERMS: &[&str] = &[
-    "async", "await", "test", "testing", "debug", "build", "deploy", "lint",
-    "format", "refactor", "migrate", "error", "handle", "parse", "serialize",
-    "cache", "index", "query", "fetch", "render", "compile", "bundle",
-    "config", "install", "update", "delete", "create", "read", "write",
-    "api", "database", "server", "client", "auth", "token", "session",
-    "component", "module", "function", "struct", "trait", "interface",
-    "docker", "kubernetes", "ci", "cd", "pipeline", "hook", "middleware",
+    "async",
+    "await",
+    "test",
+    "testing",
+    "debug",
+    "build",
+    "deploy",
+    "lint",
+    "format",
+    "refactor",
+    "migrate",
+    "error",
+    "handle",
+    "parse",
+    "serialize",
+    "cache",
+    "index",
+    "query",
+    "fetch",
+    "render",
+    "compile",
+    "bundle",
+    "config",
+    "install",
+    "update",
+    "delete",
+    "create",
+    "read",
+    "write",
+    "api",
+    "database",
+    "server",
+    "client",
+    "auth",
+    "token",
+    "session",
+    "component",
+    "module",
+    "function",
+    "struct",
+    "trait",
+    "interface",
+    "docker",
+    "kubernetes",
+    "ci",
+    "cd",
+    "pipeline",
+    "hook",
+    "middleware",
 ];
 
 /// Common stop-words to exclude from keyword extraction.
 const STOP_WORDS: &[&str] = &[
-    "the", "and", "for", "use", "with", "this", "that", "from", "are", "was",
-    "were", "been", "being", "have", "has", "had", "does", "did", "will",
-    "would", "could", "should", "may", "might", "can", "shall", "not", "but",
-    "all", "any", "each", "every", "both", "few", "more", "most", "other",
-    "some", "such", "only", "than", "too", "very", "just", "into", "also",
-    "how", "when", "where", "which", "while", "who", "whom", "what", "why",
-    "new", "old", "let", "you", "your", "its", "our", "out",
-    "file", "line", "code", "here", "there", "then", "now",
+    "the", "and", "for", "use", "with", "this", "that", "from", "are", "was", "were", "been",
+    "being", "have", "has", "had", "does", "did", "will", "would", "could", "should", "may",
+    "might", "can", "shall", "not", "but", "all", "any", "each", "every", "both", "few", "more",
+    "most", "other", "some", "such", "only", "than", "too", "very", "just", "into", "also", "how",
+    "when", "where", "which", "while", "who", "whom", "what", "why", "new", "old", "let", "you",
+    "your", "its", "our", "out", "file", "line", "code", "here", "there", "then", "now",
 ];
 
 /// Extract behavior fingerprints from a session transcript.
@@ -92,10 +131,7 @@ const STOP_WORDS: &[&str] = &[
 /// - Correction patterns ("actually, do X instead")
 ///
 /// Returns one fingerprint per distinct behavior detected.
-pub fn extract_fingerprints(
-    transcript: &str,
-    session_id: &str,
-) -> Vec<BehaviorFingerprint> {
+pub fn extract_fingerprints(transcript: &str, session_id: &str) -> Vec<BehaviorFingerprint> {
     let now = Utc::now();
     let mut fingerprints = Vec::new();
 
@@ -106,7 +142,9 @@ pub fn extract_fingerprints(
     fingerprints.extend(extract_command_fingerprints(transcript, session_id, now));
 
     // 3. File type patterns
-    fingerprints.extend(extract_file_pattern_fingerprints(transcript, session_id, now));
+    fingerprints.extend(extract_file_pattern_fingerprints(
+        transcript, session_id, now,
+    ));
 
     // 4. Correction patterns
     fingerprints.extend(extract_correction_fingerprints(transcript, session_id, now));
@@ -243,7 +281,10 @@ fn extract_file_pattern_fingerprints(
             fingerprints.push(BehaviorFingerprint {
                 id: uuid::Uuid::new_v4().to_string(),
                 session_id: session_id.to_string(),
-                behavior: format!("File pattern: frequently edits .{} files ({} times)", ext, count),
+                behavior: format!(
+                    "File pattern: frequently edits .{} files ({} times)",
+                    ext, count
+                ),
                 keywords: vec![ext.clone(), "file-pattern".to_string()],
                 timestamp: now,
             });
@@ -310,10 +351,7 @@ pub fn detect_emergent(
     // For each cluster, check if it meets the session threshold
     let mut candidates = Vec::new();
     for cluster in &clusters {
-        let session_ids: HashSet<&str> = cluster
-            .iter()
-            .map(|fp| fp.session_id.as_str())
-            .collect();
+        let session_ids: HashSet<&str> = cluster.iter().map(|fp| fp.session_id.as_str()).collect();
 
         if session_ids.len() >= threshold {
             candidates.push(build_candidate(cluster, &session_ids));
@@ -358,12 +396,9 @@ fn cluster_fingerprints(fingerprints: &[BehaviorFingerprint]) -> Vec<Vec<&Behavi
 
     // Collect clusters
     let mut cluster_map: HashMap<usize, Vec<&BehaviorFingerprint>> = HashMap::new();
-    for i in 0..n {
+    for (i, fp) in fingerprints.iter().enumerate() {
         let root = find(&mut parent, i);
-        cluster_map
-            .entry(root)
-            .or_default()
-            .push(&fingerprints[i]);
+        cluster_map.entry(root).or_default().push(fp);
     }
 
     cluster_map.into_values().collect()
@@ -518,9 +553,7 @@ pub fn prune_fingerprints(max_age_days: i64) -> anyhow::Result<usize> {
     let all = load_fingerprints()?;
     let cutoff = Utc::now() - Duration::days(max_age_days);
 
-    let (kept, pruned): (Vec<_>, Vec<_>) = all
-        .into_iter()
-        .partition(|fp| fp.timestamp >= cutoff);
+    let (kept, pruned): (Vec<_>, Vec<_>) = all.into_iter().partition(|fp| fp.timestamp >= cutoff);
 
     let pruned_count = pruned.len();
 
@@ -582,9 +615,7 @@ fn extract_text_keywords(text: &str) -> Vec<String> {
     let mut keywords: Vec<String> = lower
         .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
         .filter(|w| {
-            w.len() >= 3
-                && !STOP_WORDS.contains(w)
-                && (TECH_TERMS.contains(w) || w.len() >= 4)
+            w.len() >= 3 && !STOP_WORDS.contains(w) && (TECH_TERMS.contains(w) || w.len() >= 4)
         })
         .map(String::from)
         .collect();
@@ -601,8 +632,7 @@ pub fn generate_suggested_name(keywords: &[String]) -> String {
     let name_parts: Vec<&str> = keywords
         .iter()
         .filter(|k| {
-            !["tool-sequence", "command", "file-pattern", "correction"]
-                .contains(&k.as_str())
+            !["tool-sequence", "command", "file-pattern", "correction"].contains(&k.as_str())
         })
         .take(4)
         .map(|s| s.as_str())
@@ -616,19 +646,19 @@ pub fn generate_suggested_name(keywords: &[String]) -> String {
     // Sanitize to valid kebab-case
     let sanitized: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
-    sanitized
-        .trim_matches('-')
-        .to_lowercase()
+    sanitized.trim_matches('-').to_lowercase()
 }
 
 /// Generate suggested pattern content from an emergent candidate.
-fn generate_suggested_content(
-    behavior: &str,
-    keywords: &[String],
-    evidence: &[String],
-) -> String {
+fn generate_suggested_content(behavior: &str, keywords: &[String], evidence: &[String]) -> String {
     let mut content = format!("Emergent behavior detected: {}\n\n", behavior);
     content.push_str(&format!("Keywords: {}\n\n", keywords.join(", ")));
     content.push_str("Evidence from sessions:\n");
@@ -708,17 +738,27 @@ tool_call: Bash
 result: tests pass
 "#;
         let fps = extract_fingerprints(transcript, "session-1");
-        let tool_fps: Vec<_> = fps.iter().filter(|f| f.behavior.contains("Tool sequence")).collect();
+        let tool_fps: Vec<_> = fps
+            .iter()
+            .filter(|f| f.behavior.contains("Tool sequence"))
+            .collect();
         assert!(!tool_fps.is_empty());
         // Should find read → edit, edit → bash, read → edit → bash
-        assert!(tool_fps.iter().any(|f| f.behavior.contains("read") && f.behavior.contains("edit")));
+        assert!(
+            tool_fps
+                .iter()
+                .any(|f| f.behavior.contains("read") && f.behavior.contains("edit"))
+        );
     }
 
     #[test]
     fn test_extract_command_fingerprints() {
         let transcript = "Running `cargo test --release` to verify\nThen `cargo build`\n";
         let fps = extract_fingerprints(transcript, "session-2");
-        let cmd_fps: Vec<_> = fps.iter().filter(|f| f.behavior.starts_with("Command:")).collect();
+        let cmd_fps: Vec<_> = fps
+            .iter()
+            .filter(|f| f.behavior.starts_with("Command:"))
+            .collect();
         assert!(cmd_fps.iter().any(|f| f.behavior.contains("cargo test")));
     }
 
@@ -732,8 +772,15 @@ Edit src/utils.rs
 Read src/types.rs
 ";
         let fps = extract_fingerprints(transcript, "session-3");
-        let file_fps: Vec<_> = fps.iter().filter(|f| f.behavior.contains("File pattern")).collect();
-        assert!(file_fps.iter().any(|f| f.keywords.contains(&"rs".to_string())));
+        let file_fps: Vec<_> = fps
+            .iter()
+            .filter(|f| f.behavior.contains("File pattern"))
+            .collect();
+        assert!(
+            file_fps
+                .iter()
+                .any(|f| f.keywords.contains(&"rs".to_string()))
+        );
     }
 
     #[test]
@@ -745,9 +792,16 @@ User: Actually, use the tracing crate for structured logging instead
 AI: Updated to use tracing.
 ";
         let fps = extract_fingerprints(transcript, "session-4");
-        let corr_fps: Vec<_> = fps.iter().filter(|f| f.behavior.starts_with("Correction:")).collect();
+        let corr_fps: Vec<_> = fps
+            .iter()
+            .filter(|f| f.behavior.starts_with("Correction:"))
+            .collect();
         assert!(!corr_fps.is_empty());
-        assert!(corr_fps.iter().any(|f| f.keywords.contains(&"tracing".to_string())));
+        assert!(
+            corr_fps
+                .iter()
+                .any(|f| f.keywords.contains(&"tracing".to_string()))
+        );
     }
 
     // ─── Emergence detection ─────────────────────────────────
@@ -961,7 +1015,10 @@ AI: Updated to use tracing.
             .collect();
 
         let cutoff = Utc::now() - Duration::days(90);
-        let kept: Vec<_> = all.into_iter().filter(|fp| fp.timestamp >= cutoff).collect();
+        let kept: Vec<_> = all
+            .into_iter()
+            .filter(|fp| fp.timestamp >= cutoff)
+            .collect();
 
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].id, "recent");
@@ -971,11 +1028,7 @@ AI: Updated to use tracing.
 
     #[test]
     fn test_suggested_name_from_keywords() {
-        let keywords = vec![
-            "cargo".into(),
-            "test".into(),
-            "command".into(),
-        ];
+        let keywords = vec!["cargo".into(), "test".into(), "command".into()];
         let name = generate_suggested_name(&keywords);
         assert_eq!(name, "cargo-test");
     }
@@ -997,11 +1050,7 @@ AI: Updated to use tracing.
 
     #[test]
     fn test_suggested_name_filters_meta_keywords() {
-        let keywords = vec![
-            "tool-sequence".into(),
-            "read".into(),
-            "edit".into(),
-        ];
+        let keywords = vec!["tool-sequence".into(), "read".into(), "edit".into()];
         let name = generate_suggested_name(&keywords);
         assert!(!name.contains("tool-sequence"));
         assert!(name.contains("read"));
@@ -1045,9 +1094,18 @@ AI: Updated to use tracing.
     fn test_full_emergence_pipeline() {
         // Simulate 3 sessions where user consistently runs cargo test after editing
         let session_transcripts = vec![
-            ("s1", "tool_call: Read\ntool_call: Edit\nRunning `cargo test`\ntool_call: Read"),
-            ("s2", "tool_call: Read\ntool_call: Edit\nRunning `cargo test --release`\ntool_call: Read"),
-            ("s3", "tool_call: Read\ntool_call: Edit\nRunning `cargo test`\ntool_call: Bash"),
+            (
+                "s1",
+                "tool_call: Read\ntool_call: Edit\nRunning `cargo test`\ntool_call: Read",
+            ),
+            (
+                "s2",
+                "tool_call: Read\ntool_call: Edit\nRunning `cargo test --release`\ntool_call: Read",
+            ),
+            (
+                "s3",
+                "tool_call: Read\ntool_call: Edit\nRunning `cargo test`\ntool_call: Bash",
+            ),
         ];
 
         let mut all_fingerprints = Vec::new();
@@ -1063,20 +1121,20 @@ AI: Updated to use tracing.
         let candidates = detect_emergent(&all_fingerprints, 3);
         // At minimum, the tool sequence "read → edit" should be detected
         // across all 3 sessions
-        let has_tool_sequence = candidates
-            .iter()
-            .any(|c| c.session_count >= 3);
+        let has_tool_sequence = candidates.iter().any(|c| c.session_count >= 3);
 
         // If clustering works, we should find at least one emergent pattern
         // The exact count depends on similarity thresholds
-        assert!(has_tool_sequence || !candidates.is_empty() || {
-            // Fallback: verify fingerprints were extracted from all sessions
-            let sessions: HashSet<&str> = all_fingerprints
-                .iter()
-                .map(|fp| fp.session_id.as_str())
-                .collect();
-            sessions.len() == 3
-        });
+        assert!(
+            has_tool_sequence || !candidates.is_empty() || {
+                // Fallback: verify fingerprints were extracted from all sessions
+                let sessions: HashSet<&str> = all_fingerprints
+                    .iter()
+                    .map(|fp| fp.session_id.as_str())
+                    .collect();
+                sessions.len() == 3
+            }
+        );
     }
 
     // ─── Normalize command ───────────────────────────────────

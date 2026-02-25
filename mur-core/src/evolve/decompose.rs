@@ -26,17 +26,42 @@ pub struct DecompositionCandidate {
 
 /// Keywords that indicate project-specific steps (not good candidates).
 const PROJECT_SPECIFIC_KEYWORDS: &[&str] = &[
-    "deploy to", "push to", "merge into", "our", "the team",
-    "production", "staging", "specific", "internal",
-    "company", "org", "repo",
+    "deploy to",
+    "push to",
+    "merge into",
+    "our",
+    "the team",
+    "production",
+    "staging",
+    "specific",
+    "internal",
+    "company",
+    "org",
+    "repo",
 ];
 
 /// Keywords that indicate generic, reusable steps (good candidates).
 const GENERIC_KEYWORDS: &[&str] = &[
-    "run tests", "lint", "format", "check", "validate", "build",
-    "install", "update", "clean", "reset", "backup", "restore",
-    "generate", "compile", "analyze", "audit", "verify",
-    "setup", "configure", "initialize",
+    "run tests",
+    "lint",
+    "format",
+    "check",
+    "validate",
+    "build",
+    "install",
+    "update",
+    "clean",
+    "reset",
+    "backup",
+    "restore",
+    "generate",
+    "compile",
+    "analyze",
+    "audit",
+    "verify",
+    "setup",
+    "configure",
+    "initialize",
 ];
 
 /// Analyze a workflow's steps for pattern extraction candidates.
@@ -49,10 +74,7 @@ pub fn analyze_workflow_for_extraction(
     workflow: &Workflow,
     existing_patterns: &[Pattern],
 ) -> Vec<DecompositionCandidate> {
-    let existing_names: Vec<String> = existing_patterns
-        .iter()
-        .map(|p| p.name.clone())
-        .collect();
+    let existing_names: Vec<String> = existing_patterns.iter().map(|p| p.name.clone()).collect();
     let existing_content: Vec<String> = existing_patterns
         .iter()
         .map(|p| p.content.as_text().to_lowercase())
@@ -117,11 +139,10 @@ pub fn extract_pattern_from_step(workflow: &Workflow, step_index: usize) -> Opti
     };
 
     // Copy tool info to tags if present
-    if let Some(ref tool) = step.tool {
-        if !pattern.tags.topics.contains(tool) {
+    if let Some(ref tool) = step.tool
+        && !pattern.tags.topics.contains(tool) {
             pattern.base.tags.topics.push(tool.clone());
         }
-    }
 
     Some(pattern)
 }
@@ -146,7 +167,11 @@ fn is_covered_by_existing(
         let name_words: Vec<&str> = name.split('-').collect();
         let overlap = desc_words
             .iter()
-            .filter(|w| name_words.iter().any(|nw| nw.contains(*w) || w.contains(nw)))
+            .filter(|w| {
+                name_words
+                    .iter()
+                    .any(|nw| nw.contains(*w) || w.contains(nw))
+            })
             .count();
         if overlap >= 2 || (desc_words.len() <= 3 && overlap >= 1) {
             return true;
@@ -155,10 +180,7 @@ fn is_covered_by_existing(
 
     // Check if existing pattern content matches significantly
     for content in existing_content {
-        let matching_words = desc_words
-            .iter()
-            .filter(|w| content.contains(*w))
-            .count();
+        let matching_words = desc_words.iter().filter(|w| content.contains(*w)).count();
         let ratio = matching_words as f64 / desc_words.len() as f64;
         if ratio > 0.6 {
             return true;
@@ -233,10 +255,7 @@ fn is_stop_word(word: &str) -> bool {
 }
 
 /// Generate pattern content from a workflow step.
-fn generate_pattern_content(
-    step: &mur_common::workflow::Step,
-    workflow: &Workflow,
-) -> String {
+fn generate_pattern_content(step: &mur_common::workflow::Step, workflow: &Workflow) -> String {
     let mut content = step.description.clone();
 
     if let Some(ref cmd) = step.command {
@@ -247,10 +266,7 @@ fn generate_pattern_content(
         content.push_str(&format!("\nTool: {}", tool));
     }
 
-    content.push_str(&format!(
-        "\n\nExtracted from workflow: {}",
-        workflow.name
-    ));
+    content.push_str(&format!("\n\nExtracted from workflow: {}", workflow.name));
 
     content
 }
@@ -308,7 +324,11 @@ mod tests {
         let workflow = make_workflow_with_steps(
             "deploy-flow",
             vec![
-                make_step(1, "Run tests to verify everything works", Some("cargo test")),
+                make_step(
+                    1,
+                    "Run tests to verify everything works",
+                    Some("cargo test"),
+                ),
                 make_step(2, "Deploy to our production server", None),
                 make_step(3, "Build the release binary", Some("cargo build --release")),
             ],
@@ -318,7 +338,10 @@ mod tests {
         // Step 1 (run tests) and step 3 (build) should be candidates
         // Step 2 (deploy to our production) is project-specific
         assert!(candidates.len() >= 2);
-        let descs: Vec<&str> = candidates.iter().map(|c| c.step_description.as_str()).collect();
+        let descs: Vec<&str> = candidates
+            .iter()
+            .map(|c| c.step_description.as_str())
+            .collect();
         assert!(descs.iter().any(|d| d.contains("Run tests")));
         assert!(descs.iter().any(|d| d.contains("Build")));
         assert!(!descs.iter().any(|d| d.contains("Deploy to our")));
@@ -334,14 +357,18 @@ mod tests {
             ],
         );
 
-        let existing = vec![
-            make_pattern("cargo-test-usage", "Always run cargo test before committing"),
-        ];
+        let existing = vec![make_pattern(
+            "cargo-test-usage",
+            "Always run cargo test before committing",
+        )];
 
         let candidates = analyze_workflow_for_extraction(&workflow, &existing);
         // Step 1 should be skipped because "cargo-test" matches
         // Step 2 should be a candidate
-        let descs: Vec<&str> = candidates.iter().map(|c| c.step_description.as_str()).collect();
+        let descs: Vec<&str> = candidates
+            .iter()
+            .map(|c| c.step_description.as_str())
+            .collect();
         assert!(!descs.iter().any(|d| d.contains("cargo tests")));
         assert!(descs.iter().any(|d| d.contains("Lint")));
     }
@@ -359,9 +386,7 @@ mod tests {
     fn test_extract_pattern_from_step() {
         let workflow = make_workflow_with_steps(
             "ci-flow",
-            vec![
-                make_step(1, "Run lint checks", Some("cargo clippy")),
-            ],
+            vec![make_step(1, "Run lint checks", Some("cargo clippy"))],
         );
 
         let pattern = extract_pattern_from_step(&workflow, 0).unwrap();

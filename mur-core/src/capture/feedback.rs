@@ -146,13 +146,11 @@ fn analyze_single_pattern(
 
 /// Common English stop-words that are too generic for keyword matching.
 const STOP_WORDS: &[&str] = &[
-    "the", "and", "for", "use", "with", "this", "that", "from", "are", "was",
-    "were", "been", "being", "have", "has", "had", "does", "did", "will",
-    "would", "could", "should", "may", "might", "can", "shall", "not", "but",
-    "all", "any", "each", "every", "both", "few", "more", "most", "other",
-    "some", "such", "only", "than", "too", "very", "just", "into", "also",
-    "how", "when", "where", "which", "while", "who", "whom", "what", "why",
-    "new", "old",
+    "the", "and", "for", "use", "with", "this", "that", "from", "are", "was", "were", "been",
+    "being", "have", "has", "had", "does", "did", "will", "would", "could", "should", "may",
+    "might", "can", "shall", "not", "but", "all", "any", "each", "every", "both", "few", "more",
+    "most", "other", "some", "such", "only", "than", "too", "very", "just", "into", "also", "how",
+    "when", "where", "which", "while", "who", "whom", "what", "why", "new", "old",
 ];
 
 /// Extract meaningful keywords from text (lowered, deduped, no stop words).
@@ -188,11 +186,7 @@ fn is_cjk(c: char) -> bool {
 ///
 /// A "contradiction" is: a line contains BOTH a negative phrase AND
 /// at least one keyword from the pattern snippet.
-fn find_contradiction(
-    lines: &[&str],
-    keywords: &[&str],
-    snippet: &str,
-) -> Option<String> {
+fn find_contradiction(lines: &[&str], keywords: &[&str], snippet: &str) -> Option<String> {
     let snippet_lower = snippet.to_lowercase();
     let snippet_words: Vec<&str> = snippet_lower
         .split(|c: char| !c.is_alphanumeric() && !is_cjk(c))
@@ -224,15 +218,23 @@ fn find_contradiction(
         all_terms.dedup();
 
         let all_phrases: Vec<&str> = if has_en {
-            CONTRADICTION_EN.iter().filter(|p| lower_line.contains(**p)).copied().collect()
+            CONTRADICTION_EN
+                .iter()
+                .filter(|p| lower_line.contains(**p))
+                .copied()
+                .collect()
         } else {
-            CONTRADICTION_ZH.iter().filter(|p| lower_line.contains(**p)).copied().collect()
+            CONTRADICTION_ZH
+                .iter()
+                .filter(|p| lower_line.contains(**p))
+                .copied()
+                .collect()
         };
 
         let has_nearby_keyword = all_phrases.iter().any(|phrase| {
-            all_terms.iter().any(|term| {
-                is_near(&lower_line, phrase, term, 10)
-            })
+            all_terms
+                .iter()
+                .any(|term| is_near(&lower_line, phrase, term, 10))
         });
 
         if has_nearby_keyword {
@@ -303,7 +305,7 @@ pub fn write_injection_record(record: &InjectionRecord) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(record)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     std::fs::write(&path, json)
 }
 
@@ -338,7 +340,10 @@ mod tests {
     #[test]
     fn test_contradiction_dont_use() {
         let transcript = "User: How should I test?\nAI: Use XCTest.\nUser: No, don't use XCTest, use Swift Testing instead.";
-        let injected = vec![record("xctest-pattern", "Use XCTest framework for unit tests")];
+        let injected = vec![record(
+            "xctest-pattern",
+            "Use XCTest framework for unit tests",
+        )];
         let results = analyze_session_feedback(transcript, &injected);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].signal, SignalType::Contradicted);
@@ -348,8 +353,12 @@ mod tests {
 
     #[test]
     fn test_contradiction_wrong() {
-        let transcript = "The approach in the pattern is wrong, we should use async/await instead of callbacks.";
-        let injected = vec![record("callback-pattern", "Use callbacks for async operations")];
+        let transcript =
+            "The approach in the pattern is wrong, we should use async/await instead of callbacks.";
+        let injected = vec![record(
+            "callback-pattern",
+            "Use callbacks for async operations",
+        )];
         let results = analyze_session_feedback(transcript, &injected);
         assert_eq!(results[0].signal, SignalType::Contradicted);
     }
@@ -357,7 +366,10 @@ mod tests {
     #[test]
     fn test_contradiction_actually() {
         let transcript = "Actually, you should avoid using that deprecated API.";
-        let injected = vec![record("old-api", "Use the legacy API for backward compatibility")];
+        let injected = vec![record(
+            "old-api",
+            "Use the legacy API for backward compatibility",
+        )];
         let results = analyze_session_feedback(transcript, &injected);
         assert_eq!(results[0].signal, SignalType::Contradicted);
     }
@@ -365,7 +377,10 @@ mod tests {
     #[test]
     fn test_contradiction_instead_of() {
         let transcript = "Instead of Redux, use Zustand for state management.";
-        let injected = vec![record("redux-pattern", "Use Redux for global state management")];
+        let injected = vec![record(
+            "redux-pattern",
+            "Use Redux for global state management",
+        )];
         let results = analyze_session_feedback(transcript, &injected);
         assert_eq!(results[0].signal, SignalType::Contradicted);
     }
@@ -400,8 +415,12 @@ mod tests {
 
     #[test]
     fn test_reinforcement_keywords_present() {
-        let transcript = "I applied the @Test macro from Swift Testing and it worked great. The tests pass now.";
-        let injected = vec![record("swift-testing", "Use @Test macro instead of XCTest assertions")];
+        let transcript =
+            "I applied the @Test macro from Swift Testing and it worked great. The tests pass now.";
+        let injected = vec![record(
+            "swift-testing",
+            "Use @Test macro instead of XCTest assertions",
+        )];
         let results = analyze_session_feedback(transcript, &injected);
         assert_eq!(results[0].signal, SignalType::Reinforced);
         assert_eq!(results[0].confidence_delta, 0.03);
@@ -438,9 +457,15 @@ User: But don't use that old logging approach, use tracing instead.
 AI: Updated to use tracing for structured logging.";
 
         let injected = vec![
-            record("error-handling", "Use Result<T, Error> for error propagation"),
+            record(
+                "error-handling",
+                "Use Result<T, Error> for error propagation",
+            ),
             record("old-logging", "Use the log crate with env_logger"),
-            record("unused-pattern", "Apply flexbox grid layout for responsive CSS design"),
+            record(
+                "unused-pattern",
+                "Apply flexbox grid layout for responsive CSS design",
+            ),
         ];
 
         let results = analyze_session_feedback(transcript, &injected);
@@ -467,12 +492,10 @@ AI: Updated to use tracing for structured logging.";
             timestamp: "2026-02-25T12:00:00Z".into(),
             query: "fix this bug".into(),
             project: "my-project".into(),
-            patterns: vec![
-                InjectedPatternRecord {
-                    name: "swift-testing".into(),
-                    snippet: "Use @Test macro instead of...".into(),
-                },
-            ],
+            patterns: vec![InjectedPatternRecord {
+                name: "swift-testing".into(),
+                snippet: "Use @Test macro instead of...".into(),
+            }],
         };
 
         let json = serde_json::to_string_pretty(&record).unwrap();
@@ -496,12 +519,10 @@ AI: Updated to use tracing for structured logging.";
             timestamp: "2026-02-25T12:00:00Z".into(),
             query: "fix this bug".into(),
             project: "my-project".into(),
-            patterns: vec![
-                InjectedPatternRecord {
-                    name: "test-pat".into(),
-                    snippet: "Test snippet content".into(),
-                },
-            ],
+            patterns: vec![InjectedPatternRecord {
+                name: "test-pat".into(),
+                snippet: "Test snippet content".into(),
+            }],
         };
 
         // Write
@@ -569,8 +590,14 @@ Human: Also, don't use unwrap() directly in production code.
 Assistant: Understood, I'll use the ? operator for safe unwinding.";
 
         let injected = vec![
-            record("anyhow-errors", "Use anyhow::Result for application error handling"),
-            record("unwrap-ok", "Use unwrap() for cases where None is impossible"),
+            record(
+                "anyhow-errors",
+                "Use anyhow::Result for application error handling",
+            ),
+            record(
+                "unwrap-ok",
+                "Use unwrap() for cases where None is impossible",
+            ),
         ];
 
         let results = analyze_session_feedback(transcript, &injected);

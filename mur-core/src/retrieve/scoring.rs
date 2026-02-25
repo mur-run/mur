@@ -109,7 +109,9 @@ where
         if score_diff < 0.05 {
             tier_priority(&b.pattern.tier).cmp(&tier_priority(&a.pattern.tier))
         } else {
-            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         }
     });
 
@@ -288,7 +290,10 @@ mod tests {
     fn test_max_patterns_limit() {
         let patterns: Vec<Pattern> = (0..10)
             .map(|i| {
-                let mut p = make_pattern(&format!("pattern-{}", i), &format!("content about topic {}", i));
+                let mut p = make_pattern(
+                    &format!("pattern-{}", i),
+                    &format!("content about topic {}", i),
+                );
                 p.tags.topics = vec!["topic".into()];
                 p
             })
@@ -316,7 +321,10 @@ mod tests {
         let r2 = score_and_rank("swift testing", vec![p_unscoped]);
 
         if !r1.is_empty() && !r2.is_empty() {
-            assert!(r1[0].score > r2[0].score, "scoped pattern should score higher");
+            assert!(
+                r1[0].score > r2[0].score,
+                "scoped pattern should score higher"
+            );
         }
     }
 

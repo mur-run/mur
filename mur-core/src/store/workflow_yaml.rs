@@ -18,8 +18,12 @@ impl WorkflowYamlStore {
     /// Create a new WorkflowYamlStore pointing at the given directory.
     /// Creates the directory if it doesn't exist.
     pub fn new(workflows_dir: PathBuf) -> Result<Self> {
-        fs::create_dir_all(&workflows_dir)
-            .with_context(|| format!("Failed to create workflows dir: {}", workflows_dir.display()))?;
+        fs::create_dir_all(&workflows_dir).with_context(|| {
+            format!(
+                "Failed to create workflows dir: {}",
+                workflows_dir.display()
+            )
+        })?;
         Ok(Self { workflows_dir })
     }
 
@@ -121,7 +125,7 @@ mod tests {
     use super::*;
     use mur_common::knowledge::KnowledgeBase;
     use mur_common::pattern::Content;
-    use mur_common::workflow::{Step, FailureAction};
+    use mur_common::workflow::{FailureAction, Step};
     use tempfile::TempDir;
 
     fn make_test_workflow(name: &str) -> Workflow {
@@ -132,16 +136,14 @@ mod tests {
                 content: Content::Plain(format!("Steps for {}", name)),
                 ..Default::default()
             },
-            steps: vec![
-                Step {
-                    order: 1,
-                    description: "First step".into(),
-                    command: Some("echo hello".into()),
-                    tool: Some("bash".into()),
-                    needs_approval: false,
-                    on_failure: FailureAction::Abort,
-                },
-            ],
+            steps: vec![Step {
+                order: 1,
+                description: "First step".into(),
+                command: Some("echo hello".into()),
+                tool: Some("bash".into()),
+                needs_approval: false,
+                on_failure: FailureAction::Abort,
+            }],
             variables: vec![],
             source_sessions: vec![],
             trigger: String::new(),

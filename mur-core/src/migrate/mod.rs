@@ -76,7 +76,10 @@ pub fn migrate_directory(patterns_dir: &Path) -> Result<MigrateResult> {
     let entries: Vec<PathBuf> = fs::read_dir(patterns_dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "yaml" || ext == "yml"))
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|ext| ext == "yaml" || ext == "yml")
+        })
         .collect();
 
     for path in entries {
@@ -85,7 +88,9 @@ pub fn migrate_directory(patterns_dir: &Path) -> Result<MigrateResult> {
             Ok(MigrateFileResult::AlreadyV2) => result.already_v2 += 1,
             Ok(MigrateFileResult::Skipped(reason)) => {
                 result.skipped += 1;
-                result.errors.push(format!("{}: {}", path.display(), reason));
+                result
+                    .errors
+                    .push(format!("{}: {}", path.display(), reason));
             }
             Err(e) => {
                 result.skipped += 1;
@@ -164,7 +169,11 @@ fn convert_v1_to_v2(v1: &V1Pattern) -> Result<Pattern> {
             },
             tier: Tier::Session, // default, user can promote later
             importance: 0.5,
-            confidence: if v1.confidence > 0.0 { v1.confidence } else { 0.5 },
+            confidence: if v1.confidence > 0.0 {
+                v1.confidence
+            } else {
+                0.5
+            },
             tags: Tags {
                 languages: vec![],
                 topics,
@@ -288,7 +297,10 @@ mod tests {
         assert!(v2.tags.topics.contains(&"convention".to_string()));
         assert!(v2.tags.topics.contains(&"swift".to_string()));
         match &v2.content {
-            Content::DualLayer { technical, principle } => {
+            Content::DualLayer {
+                technical,
+                principle,
+            } => {
                 assert_eq!(technical, "Do the thing");
                 assert!(principle.is_none());
             }

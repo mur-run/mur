@@ -104,7 +104,10 @@ mod tests {
         let mut p = make_pattern();
         let old = p.importance;
         apply_feedback(&mut p, FeedbackSignal::Success);
-        assert!(p.importance >= old, "importance should not decrease on success");
+        assert!(
+            p.importance >= old,
+            "importance should not decrease on success"
+        );
         assert_eq!(p.evidence.injection_count, 1);
         assert_eq!(p.evidence.success_signals, 1);
     }
@@ -121,7 +124,10 @@ mod tests {
         for _ in 0..5 {
             apply_feedback(&mut p, FeedbackSignal::Override);
         }
-        assert!(p.importance < 0.9, "importance should decrease after overrides");
+        assert!(
+            p.importance < 0.9,
+            "importance should decrease after overrides"
+        );
     }
 
     #[test]

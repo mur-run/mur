@@ -282,16 +282,37 @@ mod tests {
 
     #[test]
     fn test_attachment_format_from_extension() {
-        assert_eq!(AttachmentFormat::from_extension("mmd"), Some(AttachmentFormat::Mermaid));
-        assert_eq!(AttachmentFormat::from_extension("mermaid"), Some(AttachmentFormat::Mermaid));
-        assert_eq!(AttachmentFormat::from_extension("puml"), Some(AttachmentFormat::PlantUml));
-        assert_eq!(AttachmentFormat::from_extension("plantuml"), Some(AttachmentFormat::PlantUml));
-        assert_eq!(AttachmentFormat::from_extension("png"), Some(AttachmentFormat::Png));
-        assert_eq!(AttachmentFormat::from_extension("svg"), Some(AttachmentFormat::Svg));
+        assert_eq!(
+            AttachmentFormat::from_extension("mmd"),
+            Some(AttachmentFormat::Mermaid)
+        );
+        assert_eq!(
+            AttachmentFormat::from_extension("mermaid"),
+            Some(AttachmentFormat::Mermaid)
+        );
+        assert_eq!(
+            AttachmentFormat::from_extension("puml"),
+            Some(AttachmentFormat::PlantUml)
+        );
+        assert_eq!(
+            AttachmentFormat::from_extension("plantuml"),
+            Some(AttachmentFormat::PlantUml)
+        );
+        assert_eq!(
+            AttachmentFormat::from_extension("png"),
+            Some(AttachmentFormat::Png)
+        );
+        assert_eq!(
+            AttachmentFormat::from_extension("svg"),
+            Some(AttachmentFormat::Svg)
+        );
         assert_eq!(AttachmentFormat::from_extension("jpg"), None);
         assert_eq!(AttachmentFormat::from_extension(""), None);
         // Case insensitive
-        assert_eq!(AttachmentFormat::from_extension("MMD"), Some(AttachmentFormat::Mermaid));
+        assert_eq!(
+            AttachmentFormat::from_extension("MMD"),
+            Some(AttachmentFormat::Mermaid)
+        );
     }
 
     #[test]
@@ -303,10 +324,22 @@ mod tests {
 
     #[test]
     fn test_attachment_type_from_format() {
-        assert_eq!(AttachmentType::from_format(&AttachmentFormat::Mermaid), AttachmentType::Diagram);
-        assert_eq!(AttachmentType::from_format(&AttachmentFormat::PlantUml), AttachmentType::Diagram);
-        assert_eq!(AttachmentType::from_format(&AttachmentFormat::Png), AttachmentType::Image);
-        assert_eq!(AttachmentType::from_format(&AttachmentFormat::Svg), AttachmentType::Image);
+        assert_eq!(
+            AttachmentType::from_format(&AttachmentFormat::Mermaid),
+            AttachmentType::Diagram
+        );
+        assert_eq!(
+            AttachmentType::from_format(&AttachmentFormat::PlantUml),
+            AttachmentType::Diagram
+        );
+        assert_eq!(
+            AttachmentType::from_format(&AttachmentFormat::Png),
+            AttachmentType::Image
+        );
+        assert_eq!(
+            AttachmentType::from_format(&AttachmentFormat::Svg),
+            AttachmentType::Image
+        );
     }
 
     #[test]

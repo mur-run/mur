@@ -3,7 +3,9 @@
 //! YAML remains the source of truth. LanceDB is a rebuildable index.
 
 use anyhow::{Context, Result};
-use arrow_array::{Float32Array, RecordBatch, RecordBatchIterator, StringArray, FixedSizeListArray};
+use arrow_array::{
+    FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,
+};
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
@@ -32,10 +34,7 @@ impl VectorStore {
 
     /// Build/rebuild the entire index from patterns + their embeddings.
     #[allow(dead_code)] // Public API, used by tests
-    pub async fn build_index(
-        &self,
-        patterns: &[(Pattern, Vec<f32>)],
-    ) -> Result<()> {
+    pub async fn build_index(&self, patterns: &[(Pattern, Vec<f32>)]) -> Result<()> {
         // Drop existing table if any
         let tables = self.db.table_names().execute().await?;
         if tables.contains(&TABLE_NAME.to_string()) {
@@ -49,8 +48,14 @@ impl VectorStore {
         let schema = Self::schema(self.dimensions);
 
         let names: Vec<&str> = patterns.iter().map(|(p, _)| p.name.as_str()).collect();
-        let descriptions: Vec<&str> = patterns.iter().map(|(p, _)| p.description.as_str()).collect();
-        let contents: Vec<String> = patterns.iter().map(|(p, _)| content_with_attachment_descriptions(p)).collect();
+        let descriptions: Vec<&str> = patterns
+            .iter()
+            .map(|(p, _)| p.description.as_str())
+            .collect();
+        let contents: Vec<String> = patterns
+            .iter()
+            .map(|(p, _)| content_with_attachment_descriptions(p))
+            .collect();
         let content_refs: Vec<&str> = contents.iter().map(|s| s.as_str()).collect();
         let tiers: Vec<String> = patterns
             .iter()
@@ -81,10 +86,7 @@ impl VectorStore {
 
         let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
         let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
-        self.db
-            .create_table(TABLE_NAME, reader)
-            .execute()
-            .await?;
+        self.db.create_table(TABLE_NAME, reader).execute().await?;
 
         Ok(())
     }
@@ -110,9 +112,18 @@ impl VectorStore {
 
         // Collect fields from patterns
         let mut names: Vec<String> = patterns.iter().map(|(p, _)| p.name.clone()).collect();
-        let mut descriptions: Vec<String> = patterns.iter().map(|(p, _)| p.description.clone()).collect();
-        let mut contents: Vec<String> = patterns.iter().map(|(p, _)| content_with_attachment_descriptions(p)).collect();
-        let mut tiers: Vec<String> = patterns.iter().map(|(p, _)| format!("{:?}", p.tier).to_lowercase()).collect();
+        let mut descriptions: Vec<String> = patterns
+            .iter()
+            .map(|(p, _)| p.description.clone())
+            .collect();
+        let mut contents: Vec<String> = patterns
+            .iter()
+            .map(|(p, _)| content_with_attachment_descriptions(p))
+            .collect();
+        let mut tiers: Vec<String> = patterns
+            .iter()
+            .map(|(p, _)| format!("{:?}", p.tier).to_lowercase())
+            .collect();
         let mut importances: Vec<f32> = patterns.iter().map(|(p, _)| p.importance as f32).collect();
         let mut item_types: Vec<String> = vec!["pattern".into(); patterns.len()];
         let mut all_vectors: Vec<f32> = patterns.iter().flat_map(|(_, v)| v.clone()).collect();
@@ -153,10 +164,7 @@ impl VectorStore {
 
         let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
         let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
-        self.db
-            .create_table(TABLE_NAME, reader)
-            .execute()
-            .await?;
+        self.db.create_table(TABLE_NAME, reader).execute().await?;
 
         Ok(())
     }
@@ -317,7 +325,9 @@ mod tests {
     }
 
     fn random_embedding() -> Vec<f32> {
-        (0..TEST_DIM as usize).map(|i| (i as f32 * 0.01).sin()).collect()
+        (0..TEST_DIM as usize)
+            .map(|i| (i as f32 * 0.01).sin())
+            .collect()
     }
 
     #[tokio::test]
@@ -430,18 +440,27 @@ mod tests {
             v
         })];
 
-        store.build_unified_index(&patterns, &workflows).await.unwrap();
+        store
+            .build_unified_index(&patterns, &workflows)
+            .await
+            .unwrap();
 
         // Search all
         let results = store.search(&random_embedding(), 10, None).await.unwrap();
         assert_eq!(results.len(), 2);
 
         // Filter to patterns only
-        let pat_results = store.search(&random_embedding(), 10, Some("pattern")).await.unwrap();
+        let pat_results = store
+            .search(&random_embedding(), 10, Some("pattern"))
+            .await
+            .unwrap();
         assert!(pat_results.iter().all(|r| r.item_type == "pattern"));
 
         // Filter to workflows only
-        let wf_results = store.search(&random_embedding(), 10, Some("workflow")).await.unwrap();
+        let wf_results = store
+            .search(&random_embedding(), 10, Some("workflow"))
+            .await
+            .unwrap();
         assert!(wf_results.iter().all(|r| r.item_type == "workflow"));
     }
 }

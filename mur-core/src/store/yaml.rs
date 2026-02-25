@@ -19,8 +19,9 @@ impl YamlStore {
     /// Create a new YamlStore pointing at the given patterns directory.
     /// Creates the directory if it doesn't exist.
     pub fn new(patterns_dir: PathBuf) -> Result<Self> {
-        fs::create_dir_all(&patterns_dir)
-            .with_context(|| format!("Failed to create patterns dir: {}", patterns_dir.display()))?;
+        fs::create_dir_all(&patterns_dir).with_context(|| {
+            format!("Failed to create patterns dir: {}", patterns_dir.display())
+        })?;
         Ok(Self { patterns_dir })
     }
 
@@ -41,9 +42,10 @@ impl YamlStore {
             let path = entry.path();
             if (path.extension().and_then(|e| e.to_str()) == Some("yaml")
                 || path.extension().and_then(|e| e.to_str()) == Some("yml"))
-                && let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    names.push(stem.to_string());
-                }
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                names.push(stem.to_string());
+            }
         }
         names.sort();
         Ok(names)
@@ -177,11 +179,7 @@ impl YamlStore {
         match fs::read_to_string(&full_path) {
             Ok(content) => Some(content),
             Err(e) => {
-                tracing::warn!(
-                    "Could not read attachment {}: {}",
-                    full_path.display(),
-                    e
-                );
+                tracing::warn!("Could not read attachment {}: {}", full_path.display(), e);
                 None
             }
         }
@@ -251,7 +249,10 @@ mod tests {
 
         // Check dual-layer content
         match &loaded.content {
-            Content::DualLayer { technical, principle } => {
+            Content::DualLayer {
+                technical,
+                principle,
+            } => {
                 assert!(technical.contains("foo"));
                 assert!(principle.as_ref().unwrap().contains("consistency"));
             }
@@ -424,7 +425,10 @@ attachments: []
         // Read raw YAML and verify flat structure (no nested `base:` key)
         let raw = std::fs::read_to_string(tmp.path().join("roundtrip-test.yaml"))?;
         assert!(raw.contains("name: roundtrip-test"));
-        assert!(!raw.contains("base:"), "YAML should be flat, not nested under 'base:'");
+        assert!(
+            !raw.contains("base:"),
+            "YAML should be flat, not nested under 'base:'"
+        );
 
         let loaded = store.get("roundtrip-test")?;
         assert_eq!(loaded.name, "roundtrip-test");
@@ -462,7 +466,10 @@ attachments: []
         assert_eq!(loaded.attachments[0].att_type, AttachmentType::Diagram);
         assert_eq!(loaded.attachments[0].format, AttachmentFormat::Mermaid);
         assert_eq!(loaded.attachments[0].path, "with-diagram/arch.mermaid");
-        assert_eq!(loaded.attachments[0].description, "System architecture overview");
+        assert_eq!(
+            loaded.attachments[0].description,
+            "System architecture overview"
+        );
         assert_eq!(loaded.attachments[1].att_type, AttachmentType::Image);
         assert_eq!(loaded.attachments[1].format, AttachmentFormat::Png);
 
@@ -606,7 +613,10 @@ updated_at: "2026-02-20T00:00:00Z"
         assert_eq!(relative_path, "my-pattern/system-overview.mermaid");
 
         // Verify the file was copied
-        let copied = tmp.path().join("my-pattern").join("system-overview.mermaid");
+        let copied = tmp
+            .path()
+            .join("my-pattern")
+            .join("system-overview.mermaid");
         assert!(copied.exists());
         assert_eq!(std::fs::read_to_string(copied)?, "graph TD\n    A-->B");
 
@@ -701,7 +711,10 @@ attachments:
         let yaml2 = serde_yaml::to_string(&pattern)?;
         let pattern2: Pattern = serde_yaml::from_str(&yaml2)?;
         assert_eq!(pattern2.attachments.len(), 2);
-        assert_eq!(pattern2.attachments[0].description, "System architecture overview");
+        assert_eq!(
+            pattern2.attachments[0].description,
+            "System architecture overview"
+        );
 
         Ok(())
     }

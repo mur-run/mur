@@ -23,9 +23,23 @@ static SKIP_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 static FORCE_KEYWORDS: LazyLock<Vec<&str>> = LazyLock::new(|| {
     vec![
-        "error", "fail", "bug", "fix", "crash", "exception", "panic",
-        "remember", "上次", "之前", "以前", "怎麼", "how to", "how do",
-        "best practice", "convention", "pattern",
+        "error",
+        "fail",
+        "bug",
+        "fix",
+        "crash",
+        "exception",
+        "panic",
+        "remember",
+        "上次",
+        "之前",
+        "以前",
+        "怎麼",
+        "how to",
+        "how do",
+        "best practice",
+        "convention",
+        "pattern",
     ]
 });
 
@@ -75,13 +89,19 @@ mod tests {
 
     #[test]
     fn test_skip_commands() {
-        assert!(matches!(evaluate_query("git status"), GateDecision::Skip(_)));
+        assert!(matches!(
+            evaluate_query("git status"),
+            GateDecision::Skip(_)
+        ));
         assert!(matches!(evaluate_query("ls -la"), GateDecision::Skip(_)));
     }
 
     #[test]
     fn test_force_error() {
-        assert_eq!(evaluate_query("I got an error with swift build"), GateDecision::Force);
+        assert_eq!(
+            evaluate_query("I got an error with swift build"),
+            GateDecision::Force
+        );
         assert_eq!(evaluate_query("how to fix this crash"), GateDecision::Force);
     }
 
@@ -93,8 +113,14 @@ mod tests {
 
     #[test]
     fn test_pass_normal() {
-        assert_eq!(evaluate_query("implement a REST API for users"), GateDecision::Pass);
-        assert_eq!(evaluate_query("refactor the auth module"), GateDecision::Pass);
+        assert_eq!(
+            evaluate_query("implement a REST API for users"),
+            GateDecision::Pass
+        );
+        assert_eq!(
+            evaluate_query("refactor the auth module"),
+            GateDecision::Pass
+        );
     }
 
     #[test]

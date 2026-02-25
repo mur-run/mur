@@ -85,9 +85,7 @@ impl CooccurrenceMatrix {
     pub fn all_pairs(&self) -> Vec<((String, String), u32)> {
         self.pairs
             .iter()
-            .filter_map(|(key, &count)| {
-                Self::decode_pair_key(key).map(|pair| (pair, count))
-            })
+            .filter_map(|(key, &count)| Self::decode_pair_key(key).map(|pair| (pair, count)))
             .collect()
     }
 

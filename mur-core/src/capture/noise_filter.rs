@@ -123,10 +123,19 @@ mod tests {
         assert_eq!(filter("ok"), FilterResult::Noise(NoiseReason::TooShort));
         // "好" is 3 bytes in UTF-8, passes TooShort but hits SingleWord
         // These are long enough to hit SingleWord before Greeting
-        assert_eq!(filter("Hello!"), FilterResult::Noise(NoiseReason::SingleWord));
-        assert_eq!(filter("thanks"), FilterResult::Noise(NoiseReason::SingleWord));
+        assert_eq!(
+            filter("Hello!"),
+            FilterResult::Noise(NoiseReason::SingleWord)
+        );
+        assert_eq!(
+            filter("thanks"),
+            FilterResult::Noise(NoiseReason::SingleWord)
+        );
         // Multi-word greetings
-        assert_eq!(filter("thank you"), FilterResult::Noise(NoiseReason::Greeting));
+        assert_eq!(
+            filter("thank you"),
+            FilterResult::Noise(NoiseReason::Greeting)
+        );
         assert_eq!(filter("got it"), FilterResult::Noise(NoiseReason::Greeting));
         // CJK greetings — "好" is 3 bytes, passes TooShort, hits SingleWord
         assert_eq!(filter("好"), FilterResult::Noise(NoiseReason::SingleWord));
@@ -146,7 +155,10 @@ mod tests {
     fn test_single_word_filtered() {
         assert_eq!(filter("test"), FilterResult::Noise(NoiseReason::SingleWord));
         assert_eq!(filter("sure"), FilterResult::Noise(NoiseReason::SingleWord));
-        assert_eq!(filter("whatever"), FilterResult::Noise(NoiseReason::SingleWord));
+        assert_eq!(
+            filter("whatever"),
+            FilterResult::Noise(NoiseReason::SingleWord)
+        );
     }
 
     #[test]
@@ -167,7 +179,10 @@ mod tests {
         assert_eq!(filter("好的"), FilterResult::Noise(NoiseReason::SingleWord));
         assert_eq!(filter("嗯嗯"), FilterResult::Noise(NoiseReason::SingleWord));
         // Multi-word CJK that's still short
-        assert_eq!(filter("是的 好"), FilterResult::Noise(NoiseReason::ShortCjk));
+        assert_eq!(
+            filter("是的 好"),
+            FilterResult::Noise(NoiseReason::ShortCjk)
+        );
         assert_eq!(filter("好 嗎"), FilterResult::Noise(NoiseReason::ShortCjk));
     }
 

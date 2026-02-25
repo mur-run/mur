@@ -325,7 +325,10 @@ mod tests {
 
         let now = Utc::now();
         let report = apply_decay_all(&store, now)?;
-        assert_eq!(report.patterns_decayed, 0, "Pinned patterns should skip decay");
+        assert_eq!(
+            report.patterns_decayed, 0,
+            "Pinned patterns should skip decay"
+        );
 
         let loaded = store.get("pinned")?;
         assert!(
@@ -347,7 +350,10 @@ mod tests {
         store.save(&p)?;
 
         let report = apply_decay_all(&store, Utc::now())?;
-        assert_eq!(report.patterns_decayed, 0, "Muted patterns should skip decay");
+        assert_eq!(
+            report.patterns_decayed, 0,
+            "Muted patterns should skip decay"
+        );
 
         Ok(())
     }

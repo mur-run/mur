@@ -1,5 +1,5 @@
-pub mod cooccurrence;
 pub mod compose;
+pub mod cooccurrence;
 pub mod decay;
 pub mod decompose;
 pub mod feedback;

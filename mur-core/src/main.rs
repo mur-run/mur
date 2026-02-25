@@ -13,8 +13,8 @@ mod retrieve;
 mod session;
 mod store;
 
-use store::yaml::YamlStore;
 use store::workflow_yaml::WorkflowYamlStore;
+use store::yaml::YamlStore;
 
 #[derive(Parser)]
 #[command(name = "mur", version, about = "Continuous learning for AI assistants")]
@@ -259,9 +259,8 @@ enum CommunityAction {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                EnvFilter::new("warn,lance=warn,lancedb=warn")
-            }),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("warn,lance=warn,lancedb=warn")),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -287,10 +286,7 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Sync { quiet } => cmd_sync(quiet)?,
-        Commands::Inject {
-            query,
-            project: _,
-        } => cmd_inject(&query).await?,
+        Commands::Inject { query, project: _ } => cmd_inject(&query).await?,
         Commands::Pattern { action } => match action {
             PatternAction::Show { name } => cmd_pattern_show(&name)?,
         },
@@ -326,7 +322,7 @@ async fn main() -> Result<()> {
             println!("Community (Phase 4)");
             todo!()
         }
-        Commands::Init { hooks } => cmd_init(hooks)?
+        Commands::Init { hooks } => cmd_init(hooks)?,
     }
 
     Ok(())
@@ -362,7 +358,10 @@ fn cmd_new(diagram_path: Option<String>) -> Result<()> {
     io::stdout().flush()?;
     let mut technical = read_multiline()?;
     if technical.len() > Content::MAX_LAYER_CHARS {
-        println!("⚠️  Technical content truncated to {} chars.", Content::MAX_LAYER_CHARS);
+        println!(
+            "⚠️  Technical content truncated to {} chars.",
+            Content::MAX_LAYER_CHARS
+        );
         technical.truncate(Content::MAX_LAYER_CHARS);
     }
 
@@ -374,7 +373,10 @@ fn cmd_new(diagram_path: Option<String>) -> Result<()> {
     } else {
         let mut p = principle_text;
         if p.len() > Content::MAX_LAYER_CHARS {
-            println!("⚠️  Principle content truncated to {} chars.", Content::MAX_LAYER_CHARS);
+            println!(
+                "⚠️  Principle content truncated to {} chars.",
+                Content::MAX_LAYER_CHARS
+            );
             p.truncate(Content::MAX_LAYER_CHARS);
         }
         Some(p)
@@ -428,7 +430,11 @@ fn cmd_new(diagram_path: Option<String>) -> Result<()> {
             description: diagram_desc,
         });
 
-        println!("📎 Attached {} diagram: {}", format.fence_lang(), relative_path);
+        println!(
+            "📎 Attached {} diagram: {}",
+            format.fence_lang(),
+            relative_path
+        );
     }
 
     let pattern = Pattern {
@@ -465,7 +471,7 @@ fn cmd_new(diagram_path: Option<String>) -> Result<()> {
 }
 
 fn cmd_search(query: &str) -> Result<()> {
-    use retrieve::gate::{evaluate_query, GateDecision};
+    use retrieve::gate::{GateDecision, evaluate_query};
     use retrieve::scoring::score_and_rank;
 
     // Adaptive gate
@@ -512,17 +518,19 @@ fn cmd_search(query: &str) -> Result<()> {
 }
 
 async fn cmd_inject(query: &str) -> Result<()> {
-    use inject::hook::{detect_trigger, HookTrigger};
-    use retrieve::gate::{evaluate_query, GateDecision};
+    use inject::hook::{HookTrigger, detect_trigger};
+    use retrieve::gate::{GateDecision, evaluate_query};
     use retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
-    use store::embedding::{embed, EmbeddingConfig};
-    use store::lancedb::VectorStore;
     use std::collections::HashMap;
+    use store::embedding::{EmbeddingConfig, embed};
+    use store::lancedb::VectorStore;
 
     // Detect trigger type
     let trigger = detect_trigger(query);
     match &trigger {
-        HookTrigger::OnError => eprintln!("# Trigger: OnError — searching for error-related patterns"),
+        HookTrigger::OnError => {
+            eprintln!("# Trigger: OnError — searching for error-related patterns")
+        }
         HookTrigger::OnRetry => eprintln!("# Trigger: OnRetry — searching for previous solutions"),
         _ => {}
     }
@@ -551,7 +559,8 @@ async fn cmd_inject(query: &str) -> Result<()> {
         let config = EmbeddingConfig::from_config(&cfg);
         match embed(query, &config).await {
             Ok(query_embedding) => {
-                let vector_store = VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
+                let vector_store =
+                    VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
                 let vector_results = vector_store.search(&query_embedding, 20, None).await?;
                 let vector_scores: HashMap<String, f64> = vector_results
                     .into_iter()
@@ -588,7 +597,10 @@ async fn cmd_inject(query: &str) -> Result<()> {
     }
 
     let output = inject::hook::format_unified_injection_with_store(
-        &injected_patterns, &workflows, 2000, Some(&yaml_store),
+        &injected_patterns,
+        &workflows,
+        2000,
+        Some(&yaml_store),
     );
 
     if output.is_empty() {
@@ -754,7 +766,7 @@ fn cmd_boost(name: &str, amount: f64) -> Result<()> {
 }
 
 fn cmd_feedback(name: &str, helpful: bool) -> Result<()> {
-    use evolve::feedback::{apply_feedback, FeedbackSignal};
+    use evolve::feedback::{FeedbackSignal, apply_feedback};
 
     let store = YamlStore::default_store()?;
     let mut pattern = store.get(name)?;
@@ -788,14 +800,17 @@ fn cmd_feedback(name: &str, helpful: bool) -> Result<()> {
 }
 
 fn cmd_feedback_auto(file: Option<String>, dry_run: bool) -> Result<()> {
-    use capture::feedback::{analyze_session_feedback, read_injection_record, SignalType};
-    use evolve::feedback::{apply_feedback, FeedbackSignal};
+    use capture::feedback::{SignalType, analyze_session_feedback, read_injection_record};
+    use evolve::feedback::{FeedbackSignal, apply_feedback};
 
     // 1. Read injection record
     let record = match read_injection_record() {
         Ok(r) => r,
         Err(e) => {
-            println!("❌ No injection record found (~/.mur/last_injection.json): {}", e);
+            println!(
+                "❌ No injection record found (~/.mur/last_injection.json): {}",
+                e
+            );
             println!("   Run `mur inject` first, then analyze the session.");
             return Ok(());
         }
@@ -869,9 +884,18 @@ fn cmd_feedback_auto(file: Option<String>, dry_run: bool) -> Result<()> {
         }
     }
 
-    let reinforced = results.iter().filter(|r| r.signal == SignalType::Reinforced).count();
-    let contradicted = results.iter().filter(|r| r.signal == SignalType::Contradicted).count();
-    let ignored = results.iter().filter(|r| r.signal == SignalType::Ignored).count();
+    let reinforced = results
+        .iter()
+        .filter(|r| r.signal == SignalType::Reinforced)
+        .count();
+    let contradicted = results
+        .iter()
+        .filter(|r| r.signal == SignalType::Contradicted)
+        .count();
+    let ignored = results
+        .iter()
+        .filter(|r| r.signal == SignalType::Ignored)
+        .count();
 
     println!("\n── Summary{} ──", mode);
     println!("   Reinforced:   {}", reinforced);
@@ -883,8 +907,8 @@ fn cmd_feedback_auto(file: Option<String>, dry_run: bool) -> Result<()> {
 
 fn cmd_gc(auto: bool) -> Result<()> {
     use evolve::decay::apply_decay_all;
+    use evolve::lifecycle::{LifecycleAction, apply_lifecycle_action, evaluate_lifecycle};
     use evolve::maturity::apply_maturity_all;
-    use evolve::lifecycle::{evaluate_lifecycle, apply_lifecycle_action, LifecycleAction};
     use mur_common::knowledge::Maturity;
 
     let store = YamlStore::default_store()?;
@@ -932,7 +956,9 @@ fn cmd_gc(auto: bool) -> Result<()> {
 
     // Link discovery pass (pattern↔pattern and pattern↔workflow)
     {
-        use evolve::linker::{discover_links, discover_workflow_links, apply_workflow_links, LinkType};
+        use evolve::linker::{
+            LinkType, apply_workflow_links, discover_links, discover_workflow_links,
+        };
         let all = store.list_all()?;
         let wf_store = WorkflowYamlStore::default_store()?;
         let workflows = wf_store.list_all()?;
@@ -951,7 +977,10 @@ fn cmd_gc(auto: bool) -> Result<()> {
             for pattern in &all {
                 let suggestions = discover_workflow_links(pattern, &workflows);
                 if !suggestions.is_empty() {
-                    let wf_names: Vec<String> = suggestions.iter().map(|s| s.workflow_name.clone()).collect();
+                    let wf_names: Vec<String> = suggestions
+                        .iter()
+                        .map(|s| s.workflow_name.clone())
+                        .collect();
                     wf_links.push((pattern.name.clone(), wf_names));
                 }
             }
@@ -1056,15 +1085,15 @@ fn cmd_gc(auto: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "🧹 Found {} patterns for cleanup:\n",
-        candidates.len()
-    );
+    println!("🧹 Found {} patterns for cleanup:\n", candidates.len());
     for p in &candidates {
         let reason = if p.confidence < 0.5 {
             format!("low confidence ({:.0}%)", p.confidence * 100.0)
         } else {
-            format!("low effectiveness ({:.0}%)", p.evidence.effectiveness() * 100.0)
+            format!(
+                "low effectiveness ({:.0}%)",
+                p.evidence.effectiveness() * 100.0
+            )
         };
         println!("  {} — {}", p.name, reason);
     }
@@ -1146,10 +1175,7 @@ fn cmd_promote(name: &str, tier_str: &str) -> Result<()> {
     pattern.updated_at = chrono::Utc::now();
     store.save(&pattern)?;
 
-    println!(
-        "⬆️  Promoted '{}': {:?} → {:?}",
-        name, old_tier, new_tier
-    );
+    println!("⬆️  Promoted '{}': {:?} → {:?}", name, old_tier, new_tier);
     Ok(())
 }
 
@@ -1215,7 +1241,9 @@ fn cmd_sync(quiet: bool) -> Result<()> {
     let patterns = store.list_all()?;
 
     if patterns.is_empty() {
-        if !quiet { println!("No patterns to sync."); }
+        if !quiet {
+            println!("No patterns to sync.");
+        }
         return Ok(());
     }
 
@@ -1261,12 +1289,14 @@ fn cmd_sync(quiet: bool) -> Result<()> {
         }
     }
 
-    if !quiet { println!("Sync complete."); }
+    if !quiet {
+        println!("Sync complete.");
+    }
     Ok(())
 }
 
 async fn cmd_reindex() -> Result<()> {
-    use store::embedding::{embed, EmbeddingConfig};
+    use store::embedding::{EmbeddingConfig, embed};
     use store::lancedb::VectorStore;
 
     let pattern_store = YamlStore::default_store()?;
@@ -1303,7 +1333,12 @@ async fn cmd_reindex() -> Result<()> {
     let total = patterns.len() + workflows.len();
 
     for (i, pattern) in patterns.iter().enumerate() {
-        let mut text = format!("{}: {}\n{}", pattern.name, pattern.description, pattern.content.as_text());
+        let mut text = format!(
+            "{}: {}\n{}",
+            pattern.name,
+            pattern.description,
+            pattern.content.as_text()
+        );
         // Include attachment descriptions in embedding text for better search
         for att in &pattern.attachments {
             if !att.description.is_empty() {
@@ -1326,7 +1361,12 @@ async fn cmd_reindex() -> Result<()> {
     }
 
     for (i, workflow) in workflows.iter().enumerate() {
-        let text = format!("{}: {}\n{}", workflow.name, workflow.description, workflow.content.as_text());
+        let text = format!(
+            "{}: {}\n{}",
+            workflow.name,
+            workflow.description,
+            workflow.content.as_text()
+        );
         match embed(&text, &config).await {
             Ok(embedding) => {
                 indexed_workflows.push((workflow.clone(), embedding));
@@ -1343,7 +1383,9 @@ async fn cmd_reindex() -> Result<()> {
     }
 
     let vector_store = VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
-    vector_store.build_unified_index(&indexed_patterns, &indexed_workflows).await?;
+    vector_store
+        .build_unified_index(&indexed_patterns, &indexed_workflows)
+        .await?;
 
     println!(
         "✅ Indexed {} patterns + {} workflows ({} errors). Index: {}",
@@ -1410,7 +1452,10 @@ fn cmd_pattern_show(name: &str) -> Result<()> {
 
     println!("📋 Pattern: {}\n", p.name);
     println!("Description: {}", p.description);
-    println!("Tier: {:?} | Maturity: {:?} | Status: {:?}", p.tier, p.maturity, p.lifecycle.status);
+    println!(
+        "Tier: {:?} | Maturity: {:?} | Status: {:?}",
+        p.tier, p.maturity, p.lifecycle.status
+    );
     println!(
         "Importance: {:.0}% | Confidence: {:.0}%",
         p.importance * 100.0,
@@ -1419,7 +1464,10 @@ fn cmd_pattern_show(name: &str) -> Result<()> {
 
     println!("\nContent:");
     match &p.content {
-        Content::DualLayer { technical, principle } => {
+        Content::DualLayer {
+            technical,
+            principle,
+        } => {
             println!("  Technical: {}", technical);
             if let Some(pr) = principle {
                 println!("  Principle: {}", pr);
@@ -1467,7 +1515,7 @@ fn cmd_pattern_show(name: &str) -> Result<()> {
 }
 
 fn cmd_workflow_new() -> Result<()> {
-    use mur_common::workflow::{Step, FailureAction};
+    use mur_common::workflow::{FailureAction, Step};
 
     let store = WorkflowYamlStore::default_store()?;
 
@@ -1633,8 +1681,8 @@ fn cmd_evolve(dry_run: bool, _force: bool) -> Result<()> {
 }
 
 fn cmd_suggest(create: bool) -> Result<()> {
-    use evolve::cooccurrence::CooccurrenceMatrix;
     use evolve::compose::suggest_workflows_with_patterns;
+    use evolve::cooccurrence::CooccurrenceMatrix;
     use evolve::decompose::{analyze_workflow_for_extraction, extract_pattern_from_step};
 
     let pattern_store = YamlStore::default_store()?;
@@ -1670,7 +1718,10 @@ fn cmd_suggest(create: bool) -> Result<()> {
 
             if create {
                 if workflow_store.exists(&s.suggested_name) {
-                    println!("     -> Workflow '{}' already exists, skipping.", s.suggested_name);
+                    println!(
+                        "     -> Workflow '{}' already exists, skipping.",
+                        s.suggested_name
+                    );
                 } else {
                     // Create a draft workflow from the suggestion
                     let wf = mur_common::workflow::Workflow {
@@ -1700,12 +1751,11 @@ fn cmd_suggest(create: bool) -> Result<()> {
 
                     // Add cross-reference: link each source pattern to this workflow
                     for pname in &s.patterns {
-                        if let Ok(mut p) = pattern_store.get(pname) {
-                            if !p.links.workflows.contains(&s.suggested_name) {
+                        if let Ok(mut p) = pattern_store.get(pname)
+                            && !p.links.workflows.contains(&s.suggested_name) {
                                 p.base.links.workflows.push(s.suggested_name.clone());
                                 let _ = pattern_store.save(&p);
                             }
-                        }
                     }
                 }
             }
@@ -1728,20 +1778,22 @@ fn cmd_suggest(create: bool) -> Result<()> {
 
             println!("  Workflow: {} ({} candidates)", wf.name, candidates.len());
             for c in &candidates {
-                println!(
-                    "    Step {}: \"{}\"",
-                    c.step_index + 1,
-                    c.step_description,
-                );
+                println!("    Step {}: \"{}\"", c.step_index + 1, c.step_description,);
                 println!("      -> Pattern: {}", c.suggested_pattern_name);
                 println!("      Reason: {}", c.reason);
 
                 if create {
                     if pattern_store.exists(&c.suggested_pattern_name) {
-                        println!("      -> Pattern '{}' already exists, skipping.", c.suggested_pattern_name);
+                        println!(
+                            "      -> Pattern '{}' already exists, skipping.",
+                            c.suggested_pattern_name
+                        );
                     } else if let Some(pattern) = extract_pattern_from_step(wf, c.step_index) {
                         pattern_store.save(&pattern)?;
-                        println!("      -> Created draft pattern: {}", c.suggested_pattern_name);
+                        println!(
+                            "      -> Created draft pattern: {}",
+                            c.suggested_pattern_name
+                        );
                     }
                 }
             }
@@ -1763,10 +1815,7 @@ fn cmd_suggest(create: bool) -> Result<()> {
 }
 
 /// Collect tags from a set of pattern names.
-fn collect_tags_from_patterns(
-    names: &[String],
-    patterns: &[Pattern],
-) -> mur_common::pattern::Tags {
+fn collect_tags_from_patterns(names: &[String], patterns: &[Pattern]) -> mur_common::pattern::Tags {
     let mut topics: Vec<String> = Vec::new();
     let mut languages: Vec<String> = Vec::new();
 
@@ -1814,7 +1863,7 @@ fn cmd_learn_extract(file: Option<String>, fingerprint: bool) -> Result<()> {
 
     // Fingerprint extraction (no LLM needed)
     if fingerprint {
-        use capture::emergence::{extract_fingerprints, save_fingerprints, prune_fingerprints};
+        use capture::emergence::{extract_fingerprints, prune_fingerprints, save_fingerprints};
 
         let session_id = uuid::Uuid::new_v4().to_string();
         let fps = extract_fingerprints(&transcript, &session_id);
@@ -1841,9 +1890,7 @@ fn cmd_learn_extract(file: Option<String>, fingerprint: bool) -> Result<()> {
 }
 
 fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
-    use capture::emergence::{
-        detect_emergent, load_fingerprints, prune_fingerprints,
-    };
+    use capture::emergence::{detect_emergent, load_fingerprints, prune_fingerprints};
 
     // Auto-prune old fingerprints first
     let pruned = prune_fingerprints(90)?;
@@ -1854,7 +1901,9 @@ fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
     // Load all fingerprints
     let fingerprints = load_fingerprints()?;
     if fingerprints.is_empty() {
-        println!("No fingerprints found. Run `mur learn extract --fingerprint` on session transcripts first.");
+        println!(
+            "No fingerprints found. Run `mur learn extract --fingerprint` on session transcripts first."
+        );
         return Ok(());
     }
 
@@ -1957,7 +2006,10 @@ fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
     if dry_run {
         println!("Run without --dry-run to create these as draft patterns.");
     } else if created > 0 {
-        println!("Created {} draft patterns (maturity: Draft, confidence: 0.2).", created);
+        println!(
+            "Created {} draft patterns (maturity: Draft, confidence: 0.2).",
+            created
+        );
     }
 
     Ok(())
@@ -1967,9 +2019,9 @@ fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
 
 async fn cmd_context(query: Option<String>, compact: bool) -> Result<()> {
     use retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
-    use store::embedding::{embed, EmbeddingConfig};
-    use store::lancedb::VectorStore;
     use std::collections::HashMap;
+    use store::embedding::{EmbeddingConfig, embed};
+    use store::lancedb::VectorStore;
 
     // Auto-detect project context from cwd
     let cwd = std::env::current_dir()?;
@@ -1990,8 +2042,7 @@ async fn cmd_context(query: Option<String>, compact: bool) -> Result<()> {
                 .args(["remote", "get-url", "origin"])
                 .current_dir(&cwd)
                 .output()
-            {
-                if output.status.success() {
+                && output.status.success() {
                     let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     // Extract repo name from URL
                     if let Some(name) = remote.rsplit('/').next() {
@@ -2001,15 +2052,13 @@ async fn cmd_context(query: Option<String>, compact: bool) -> Result<()> {
                         }
                     }
                 }
-            }
 
             // Try to get recent file context
             if let Ok(output) = std::process::Command::new("git")
                 .args(["diff", "--name-only", "HEAD~3..HEAD"])
                 .current_dir(&cwd)
                 .output()
-            {
-                if output.status.success() {
+                && output.status.success() {
                     let files = String::from_utf8_lossy(&output.stdout);
                     for file in files.lines().take(5) {
                         // Extract keywords from file paths
@@ -2022,7 +2071,6 @@ async fn cmd_context(query: Option<String>, compact: bool) -> Result<()> {
                         }
                     }
                 }
-            }
 
             parts.join(" ")
         }
@@ -2044,7 +2092,8 @@ async fn cmd_context(query: Option<String>, compact: bool) -> Result<()> {
         let config = EmbeddingConfig::from_config(&cfg);
         match embed(&effective_query, &config).await {
             Ok(query_embedding) => {
-                let vector_store = VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
+                let vector_store =
+                    VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
                 let vector_results = vector_store.search(&query_embedding, 20, None).await?;
                 let vector_scores: HashMap<String, f64> = vector_results
                     .into_iter()
@@ -2075,7 +2124,10 @@ async fn cmd_context(query: Option<String>, compact: bool) -> Result<()> {
 
     let token_budget = if compact { 800 } else { 2000 };
     let output = inject::hook::format_unified_injection_with_store(
-        &injected_patterns, &workflows, token_budget, Some(&yaml_store),
+        &injected_patterns,
+        &workflows,
+        token_budget,
+        Some(&yaml_store),
     );
 
     if !output.is_empty() {
@@ -2199,7 +2251,8 @@ fn cmd_session_list() -> Result<()> {
 // ─── Init command ─────────────────────────────────────────────────
 
 fn cmd_init(hooks_flag: bool) -> Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let mur_dir = home.join(".mur");
 
     // ─── Step A: Create directory structure ───────────────────────
@@ -2384,20 +2437,17 @@ exit 0
 
     // ─── Step D: Detect other tools ──────────────────────────────
     let gemini_settings = home.join(".gemini").join("settings.json");
-    let cursor_rules = std::env::current_dir()
-        .ok()
-        .map(|d| d.join(".cursorrules"));
+    let cursor_rules = std::env::current_dir().ok().map(|d| d.join(".cursorrules"));
 
     let mut detected_tools = Vec::new();
 
     if gemini_settings.exists() || home.join(".gemini").exists() {
         detected_tools.push("Gemini CLI");
     }
-    if let Some(ref cr) = cursor_rules {
-        if cr.exists() {
+    if let Some(ref cr) = cursor_rules
+        && cr.exists() {
             detected_tools.push("Cursor");
         }
-    }
 
     // ─── Step F: Print summary ───────────────────────────────────
     let pattern_count = if mur_dir.join("patterns").exists() {

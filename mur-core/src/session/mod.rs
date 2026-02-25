@@ -218,7 +218,11 @@ mod tests {
             source: "test".to_string(),
         };
         let active_path = session_dir.join("active.json");
-        fs::write(&active_path, serde_json::to_string_pretty(&session).unwrap()).unwrap();
+        fs::write(
+            &active_path,
+            serde_json::to_string_pretty(&session).unwrap(),
+        )
+        .unwrap();
 
         // Verify it can be read back
         let content = fs::read_to_string(&active_path).unwrap();
@@ -228,9 +232,24 @@ mod tests {
         // Write events to JSONL
         let recording_path = recordings_dir.join("abc-123.jsonl");
         let events = vec![
-            SessionEvent { timestamp: 1000, event_type: "user".to_string(), tool: None, content: "hello".to_string() },
-            SessionEvent { timestamp: 2000, event_type: "assistant".to_string(), tool: None, content: "hi".to_string() },
-            SessionEvent { timestamp: 3000, event_type: "tool_call".to_string(), tool: Some("Bash".to_string()), content: "ls".to_string() },
+            SessionEvent {
+                timestamp: 1000,
+                event_type: "user".to_string(),
+                tool: None,
+                content: "hello".to_string(),
+            },
+            SessionEvent {
+                timestamp: 2000,
+                event_type: "assistant".to_string(),
+                tool: None,
+                content: "hi".to_string(),
+            },
+            SessionEvent {
+                timestamp: 3000,
+                event_type: "tool_call".to_string(),
+                tool: Some("Bash".to_string()),
+                content: "ls".to_string(),
+            },
         ];
 
         let mut file = fs::File::create(&recording_path).unwrap();
@@ -284,7 +303,8 @@ mod tests {
 
     #[test]
     fn test_session_event_deserialization() {
-        let json = r#"{"timestamp":1708848000000,"type":"tool_call","tool":"Read","content":"file.rs"}"#;
+        let json =
+            r#"{"timestamp":1708848000000,"type":"tool_call","tool":"Read","content":"file.rs"}"#;
         let event: SessionEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.event_type, "tool_call");
         assert_eq!(event.tool.as_deref(), Some("Read"));

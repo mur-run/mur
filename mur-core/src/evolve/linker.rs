@@ -86,7 +86,11 @@ pub fn discover_links(new_pattern: &Pattern, existing: &[Pattern]) -> Vec<LinkSu
     }
 
     // Sort by score descending, limit to top 5
-    suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    suggestions.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     suggestions.truncate(5);
     suggestions
 }
@@ -95,7 +99,12 @@ pub fn discover_links(new_pattern: &Pattern, existing: &[Pattern]) -> Vec<LinkSu
 fn is_supersedes(new: &Pattern, existing: &Pattern) -> bool {
     // Same name prefix suggests replacement
     let new_base = new.name.split('-').take(2).collect::<Vec<_>>().join("-");
-    let existing_base = existing.name.split('-').take(2).collect::<Vec<_>>().join("-");
+    let existing_base = existing
+        .name
+        .split('-')
+        .take(2)
+        .collect::<Vec<_>>()
+        .join("-");
 
     if new_base == existing_base && new.name != existing.name {
         return true;
@@ -126,18 +135,30 @@ pub fn apply_links(
         match suggestion.link_type {
             LinkType::Related => {
                 if !new_pattern.links.related.contains(&suggestion.target_name) {
-                    new_pattern.links.related.push(suggestion.target_name.clone());
+                    new_pattern
+                        .links
+                        .related
+                        .push(suggestion.target_name.clone());
                 }
                 // Bidirectional
-                if let Some(target) = existing.iter_mut().find(|p| p.name == suggestion.target_name)
+                if let Some(target) = existing
+                    .iter_mut()
+                    .find(|p| p.name == suggestion.target_name)
                     && !target.links.related.contains(&new_pattern.name)
                 {
                     target.links.related.push(new_pattern.name.clone());
                 }
             }
             LinkType::Supersedes => {
-                if !new_pattern.links.supersedes.contains(&suggestion.target_name) {
-                    new_pattern.links.supersedes.push(suggestion.target_name.clone());
+                if !new_pattern
+                    .links
+                    .supersedes
+                    .contains(&suggestion.target_name)
+                {
+                    new_pattern
+                        .links
+                        .supersedes
+                        .push(suggestion.target_name.clone());
                 }
             }
         }
@@ -236,10 +257,8 @@ pub fn discover_workflow_links(
         let tag_score = tag_overlap as f64 / tag_total as f64;
 
         // Keyword overlap
-        let wf_words: std::collections::HashSet<&str> = wf_text
-            .split_whitespace()
-            .filter(|w| w.len() > 3)
-            .collect();
+        let wf_words: std::collections::HashSet<&str> =
+            wf_text.split_whitespace().filter(|w| w.len() > 3).collect();
         let word_overlap = pattern_words.intersection(&wf_words).count();
         let word_total = pattern_words.union(&wf_words).count().max(1);
         let word_score = word_overlap as f64 / word_total as f64;
@@ -255,19 +274,23 @@ pub fn discover_workflow_links(
         }
     }
 
-    suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    suggestions.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     suggestions.truncate(5);
     suggestions
 }
 
 /// Apply workflow link suggestions to a pattern.
-pub fn apply_workflow_links(
-    pattern: &mut Pattern,
-    suggestions: &[WorkflowLinkSuggestion],
-) {
+pub fn apply_workflow_links(pattern: &mut Pattern, suggestions: &[WorkflowLinkSuggestion]) {
     for suggestion in suggestions {
         if !pattern.links.workflows.contains(&suggestion.workflow_name) {
-            pattern.links.workflows.push(suggestion.workflow_name.clone());
+            pattern
+                .links
+                .workflows
+                .push(suggestion.workflow_name.clone());
         }
     }
 }
@@ -306,10 +329,22 @@ mod tests {
 
     #[test]
     fn test_discover_related_by_tags() {
-        let new = make_pattern("swift-testing-v2", "Swift Testing with macros", vec!["swift", "testing"]);
+        let new = make_pattern(
+            "swift-testing-v2",
+            "Swift Testing with macros",
+            vec!["swift", "testing"],
+        );
         let existing = vec![
-            make_pattern("swift-testing-v1", "Old XCTest patterns", vec!["swift", "testing"]),
-            make_pattern("rust-error-handling", "Anyhow usage", vec!["rust", "errors"]),
+            make_pattern(
+                "swift-testing-v1",
+                "Old XCTest patterns",
+                vec!["swift", "testing"],
+            ),
+            make_pattern(
+                "rust-error-handling",
+                "Anyhow usage",
+                vec!["rust", "errors"],
+            ),
         ];
 
         let links = discover_links(&new, &existing);
@@ -319,7 +354,11 @@ mod tests {
 
     #[test]
     fn test_supersedes_detection() {
-        let new = make_pattern("swift-testing-v2", "Use @Test instead of XCTest", vec!["swift"]);
+        let new = make_pattern(
+            "swift-testing-v2",
+            "Use @Test instead of XCTest",
+            vec!["swift"],
+        );
         let old = make_pattern("swift-testing-v1", "Use XCTest", vec!["swift"]);
 
         let links = discover_links(&new, &[old]);
@@ -352,7 +391,11 @@ mod tests {
     #[test]
     fn test_no_links_for_unrelated() {
         let new = make_pattern("swift-ui", "SwiftUI views", vec!["swift", "ui"]);
-        let existing = vec![make_pattern("python-django", "Django ORM", vec!["python", "django"])];
+        let existing = vec![make_pattern(
+            "python-django",
+            "Django ORM",
+            vec!["python", "django"],
+        )];
 
         let links = discover_links(&new, &existing);
         assert!(links.is_empty());
@@ -386,10 +429,24 @@ mod tests {
 
     #[test]
     fn test_discover_workflow_links_by_tags() {
-        let pattern = make_pattern("rust-testing", "Rust testing patterns", vec!["rust", "testing"]);
+        let pattern = make_pattern(
+            "rust-testing",
+            "Rust testing patterns",
+            vec!["rust", "testing"],
+        );
         let workflows = vec![
-            make_workflow("rust-ci", "Rust CI pipeline", vec!["rust", "testing", "ci"], vec!["cargo"]),
-            make_workflow("python-deploy", "Deploy Python app", vec!["python", "deploy"], vec!["pip"]),
+            make_workflow(
+                "rust-ci",
+                "Rust CI pipeline",
+                vec!["rust", "testing", "ci"],
+                vec!["cargo"],
+            ),
+            make_workflow(
+                "python-deploy",
+                "Deploy Python app",
+                vec!["python", "deploy"],
+                vec!["pip"],
+            ),
         ];
 
         let links = discover_workflow_links(&pattern, &workflows);
@@ -400,9 +457,12 @@ mod tests {
     #[test]
     fn test_discover_workflow_links_no_match() {
         let pattern = make_pattern("swift-ui", "SwiftUI views", vec!["swift", "ui"]);
-        let workflows = vec![
-            make_workflow("python-deploy", "Deploy Python", vec!["python"], vec![]),
-        ];
+        let workflows = vec![make_workflow(
+            "python-deploy",
+            "Deploy Python",
+            vec!["python"],
+            vec![],
+        )];
 
         let links = discover_workflow_links(&pattern, &workflows);
         assert!(links.is_empty());
@@ -413,9 +473,12 @@ mod tests {
         let mut pattern = make_pattern("rust-testing", "Testing", vec!["rust", "testing"]);
         pattern.base.links.workflows.push("rust-ci".into());
 
-        let workflows = vec![
-            make_workflow("rust-ci", "Rust CI", vec!["rust", "testing"], vec![]),
-        ];
+        let workflows = vec![make_workflow(
+            "rust-ci",
+            "Rust CI",
+            vec!["rust", "testing"],
+            vec![],
+        )];
 
         let links = discover_workflow_links(&pattern, &workflows);
         assert!(links.is_empty());
@@ -446,12 +509,10 @@ mod tests {
         let mut pattern = make_pattern("test-p", "test", vec!["a"]);
         pattern.base.links.workflows.push("wf-1".into());
 
-        let suggestions = vec![
-            WorkflowLinkSuggestion {
-                workflow_name: "wf-1".into(),
-                score: 0.8,
-            },
-        ];
+        let suggestions = vec![WorkflowLinkSuggestion {
+            workflow_name: "wf-1".into(),
+            score: 0.8,
+        }];
 
         apply_workflow_links(&mut pattern, &suggestions);
         assert_eq!(pattern.links.workflows.len(), 1);

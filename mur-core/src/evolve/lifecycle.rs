@@ -63,7 +63,10 @@ fn should_deprecate(pattern: &Pattern) -> bool {
     }
 
     // 90 days no injection
-    let last_used = pattern.lifecycle.last_injected.unwrap_or(pattern.created_at);
+    let last_used = pattern
+        .lifecycle
+        .last_injected
+        .unwrap_or(pattern.created_at);
     let days_since = (Utc::now() - last_used).num_days();
     days_since >= 90
 }
@@ -147,7 +150,10 @@ mod tests {
         p.evidence.injection_count = 5;
         p.evidence.success_signals = 4;
         p.evidence.override_signals = 1; // 80% effectiveness
-        assert_eq!(evaluate_lifecycle(&p), LifecycleAction::Promote(Tier::Project));
+        assert_eq!(
+            evaluate_lifecycle(&p),
+            LifecycleAction::Promote(Tier::Project)
+        );
     }
 
     #[test]

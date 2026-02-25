@@ -2,8 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Global MUR configuration (~/.mur/config.yaml)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -17,7 +16,6 @@ pub struct Config {
     #[serde(default)]
     pub paths: PathConfig,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
@@ -118,16 +116,36 @@ impl Default for PathConfig {
     }
 }
 
-fn default_embedding_provider() -> String { "ollama".to_string() }
-fn default_embedding_model() -> String { "qwen3-embedding:0.6b".to_string() }
-fn default_dimensions() -> usize { 1024 }
-fn default_ollama_endpoint() -> String { "http://localhost:11434".to_string() }
-fn default_llm_provider() -> String { "anthropic".to_string() }
-fn default_llm_model() -> String { "claude-sonnet-4-20250514".to_string() }
-fn default_max_patterns() -> usize { 5 }
-fn default_max_tokens() -> usize { 2000 }
-fn default_min_score() -> f64 { 0.35 }
-fn default_mmr_threshold() -> f64 { 0.85 }
+fn default_embedding_provider() -> String {
+    "ollama".to_string()
+}
+fn default_embedding_model() -> String {
+    "qwen3-embedding:0.6b".to_string()
+}
+fn default_dimensions() -> usize {
+    1024
+}
+fn default_ollama_endpoint() -> String {
+    "http://localhost:11434".to_string()
+}
+fn default_llm_provider() -> String {
+    "anthropic".to_string()
+}
+fn default_llm_model() -> String {
+    "claude-sonnet-4-20250514".to_string()
+}
+fn default_max_patterns() -> usize {
+    5
+}
+fn default_max_tokens() -> usize {
+    2000
+}
+fn default_min_score() -> f64 {
+    0.35
+}
+fn default_mmr_threshold() -> f64 {
+    0.85
+}
 fn default_mur_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))

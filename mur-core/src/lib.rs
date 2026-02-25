@@ -5,13 +5,13 @@
 //! and by MUR Commander (daemon).
 
 pub mod capture;
-pub mod store;
-pub mod retrieve;
 pub mod evolve;
 pub mod inject;
 pub mod migrate;
+pub mod retrieve;
 pub mod session;
+pub mod store;
 
-pub use mur_common::pattern::Pattern;
 pub use mur_common::config::Config;
 pub use mur_common::event::MurEvent;
+pub use mur_common::pattern::Pattern;

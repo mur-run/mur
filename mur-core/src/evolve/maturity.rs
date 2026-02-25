@@ -105,6 +105,7 @@ fn is_inactive_beyond(pattern: &Pattern, now: DateTime<Utc>, factor: f64) -> boo
 
 /// Report from applying maturity evaluation across all patterns.
 #[derive(Debug, Default)]
+#[allow(dead_code)]
 pub struct MaturityReport {
     pub patterns_scanned: usize,
     pub promotions: usize,

@@ -26,10 +26,7 @@ pub struct WorkflowSuggestion {
 /// Only suggests when `min_patterns`+ patterns co-occur `threshold`+ times.
 /// Default: 3+ patterns, 5+ co-occurrences.
 #[allow(dead_code)] // Public API, used by tests
-pub fn suggest_workflows(
-    matrix: &CooccurrenceMatrix,
-    threshold: u32,
-) -> Vec<WorkflowSuggestion> {
+pub fn suggest_workflows(matrix: &CooccurrenceMatrix, threshold: u32) -> Vec<WorkflowSuggestion> {
     suggest_workflows_with_patterns(matrix, threshold, &[])
 }
 
@@ -193,7 +190,11 @@ mod tests {
         let suggestions = suggest_workflows_with_patterns(&matrix, 5, &patterns);
         assert_eq!(suggestions.len(), 1);
         let trigger = &suggestions[0].suggested_trigger;
-        assert!(trigger.contains("rust"), "trigger should mention rust: {}", trigger);
+        assert!(
+            trigger.contains("rust"),
+            "trigger should mention rust: {}",
+            trigger
+        );
     }
 
     #[test]
@@ -212,7 +213,15 @@ mod tests {
         ];
         let names: Vec<String> = patterns.iter().map(|p| p.name.clone()).collect();
         let trigger = generate_trigger(&names, &patterns);
-        assert!(trigger.contains("rust"), "trigger should mention rust: {}", trigger);
-        assert!(trigger.contains("testing"), "trigger should mention testing: {}", trigger);
+        assert!(
+            trigger.contains("rust"),
+            "trigger should mention rust: {}",
+            trigger
+        );
+        assert!(
+            trigger.contains("testing"),
+            "trigger should mention testing: {}",
+            trigger
+        );
     }
 }

@@ -46,10 +46,24 @@ pub fn detect_trigger(message: &str) -> HookTrigger {
 
     // Error indicators
     let error_keywords = [
-        "error", "fail", "crash", "panic", "exception", "traceback",
-        "segfault", "abort", "undefined", "cannot find", "not found",
-        "permission denied", "timeout", "refused", "broken",
-        "錯誤", "失敗", "崩潰",
+        "error",
+        "fail",
+        "crash",
+        "panic",
+        "exception",
+        "traceback",
+        "segfault",
+        "abort",
+        "undefined",
+        "cannot find",
+        "not found",
+        "permission denied",
+        "timeout",
+        "refused",
+        "broken",
+        "錯誤",
+        "失敗",
+        "崩潰",
     ];
     for kw in &error_keywords {
         if lower.contains(kw) {
@@ -59,9 +73,17 @@ pub fn detect_trigger(message: &str) -> HookTrigger {
 
     // Retry indicators
     let retry_keywords = [
-        "again", "retry", "try again", "still not", "same error",
-        "still failing", "didn't work", "not working",
-        "再試", "還是不行", "一樣的問題",
+        "again",
+        "retry",
+        "try again",
+        "still not",
+        "same error",
+        "still failing",
+        "didn't work",
+        "not working",
+        "再試",
+        "還是不行",
+        "一樣的問題",
     ];
     for kw in &retry_keywords {
         if lower.contains(kw) {
@@ -140,7 +162,10 @@ fn format_attachment_for_injection(attachment: &Attachment, store: Option<&YamlS
             );
         }
         // Couldn't resolve — fall back to description only
-        format!("\n📎 Diagram: {} ({})\n", attachment.description, attachment.path)
+        format!(
+            "\n📎 Diagram: {} ({})\n",
+            attachment.description, attachment.path
+        )
     } else {
         // Binary attachment — description only
         format!("\n📎 {}: {}\n", attachment.description, attachment.path)
@@ -150,7 +175,10 @@ fn format_attachment_for_injection(attachment: &Attachment, store: Option<&YamlS
 /// Format a single workflow entry for injection.
 pub fn format_workflow_entry(workflow: &Workflow, index: usize) -> String {
     let mut s = String::new();
-    s.push_str(&format!("### {}. [Workflow] {}\n", index, workflow.description));
+    s.push_str(&format!(
+        "### {}. [Workflow] {}\n",
+        index, workflow.description
+    ));
 
     // Content
     let content = format_content(&workflow.content);
@@ -236,7 +264,8 @@ pub fn record_injection(query: &str, project: &str, patterns: &[Pattern]) {
         .map(|p| {
             let full_text = p.content.as_text();
             let snippet = if full_text.len() > 100 {
-                let end = full_text.char_indices()
+                let end = full_text
+                    .char_indices()
                     .take_while(|(i, _)| *i <= 100)
                     .last()
                     .map(|(i, c)| i + c.len_utf8())
@@ -313,7 +342,7 @@ mod tests {
     use super::*;
     use mur_common::knowledge::KnowledgeBase;
     use mur_common::pattern::*;
-    use mur_common::workflow::{Step, FailureAction};
+    use mur_common::workflow::{FailureAction, Step};
 
     fn make_pattern(desc: &str, content: &str) -> Pattern {
         Pattern {
@@ -346,16 +375,14 @@ mod tests {
                 content: Content::Plain("workflow content".into()),
                 ..Default::default()
             },
-            steps: vec![
-                Step {
-                    order: 1,
-                    description: "Run tests".into(),
-                    command: Some("cargo test".into()),
-                    tool: Some("cargo".into()),
-                    needs_approval: false,
-                    on_failure: FailureAction::Abort,
-                },
-            ],
+            steps: vec![Step {
+                order: 1,
+                description: "Run tests".into(),
+                command: Some("cargo test".into()),
+                tool: Some("cargo".into()),
+                needs_approval: false,
+                on_failure: FailureAction::Abort,
+            }],
             variables: vec![],
             source_sessions: vec![],
             trigger: String::new(),
@@ -410,8 +437,14 @@ mod tests {
 
     #[test]
     fn test_detect_error_trigger() {
-        assert_eq!(detect_trigger("I got an error: cannot find module"), HookTrigger::OnError);
-        assert_eq!(detect_trigger("Build failed with exit code 1"), HookTrigger::OnError);
+        assert_eq!(
+            detect_trigger("I got an error: cannot find module"),
+            HookTrigger::OnError
+        );
+        assert_eq!(
+            detect_trigger("Build failed with exit code 1"),
+            HookTrigger::OnError
+        );
         assert_eq!(detect_trigger("panic at thread main"), HookTrigger::OnError);
         assert_eq!(detect_trigger("程式崩潰了"), HookTrigger::OnError);
     }
@@ -425,8 +458,14 @@ mod tests {
 
     #[test]
     fn test_detect_session_start() {
-        assert_eq!(detect_trigger("Build a REST API for users"), HookTrigger::SessionStart);
-        assert_eq!(detect_trigger("Refactor the auth module"), HookTrigger::SessionStart);
+        assert_eq!(
+            detect_trigger("Build a REST API for users"),
+            HookTrigger::SessionStart
+        );
+        assert_eq!(
+            detect_trigger("Refactor the auth module"),
+            HookTrigger::SessionStart
+        );
     }
 
     #[test]

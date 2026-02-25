@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::pattern::{
-    Applies, Content, Evidence, Lifecycle, Links, Tags, Tier,
-    default_confidence, default_importance, default_schema,
+    Applies, Content, Evidence, Lifecycle, Links, Tags, Tier, default_confidence,
+    default_importance, default_schema,
 };
 
 /// Maturity level for knowledge items.
