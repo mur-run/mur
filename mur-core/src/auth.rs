@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Device code authentication flow for mur community features.
 
 use anyhow::{Context, Result};
@@ -35,6 +36,7 @@ pub struct DeviceTokenResponse {
 
 /// Error response from the server.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ErrorResponse {
     pub error: String,
     #[serde(default)]

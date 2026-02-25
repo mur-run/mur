@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Community API client for browsing, sharing, and fetching patterns.
 
 use anyhow::{Context, Result};
@@ -81,6 +82,7 @@ pub struct CopyResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct StatsResponse {
     #[serde(rename = "totalPatterns")]
     pub total_patterns: u64,
