@@ -7,15 +7,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Json, Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::routing::{delete, get, post, put};
-use serde::{Deserialize, Serialize};
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Json, Path, Query, State};
+use axum::http::StatusCode;
 use axum::http::header;
+use axum::response::IntoResponse;
+use axum::routing::{delete, get, post, put};
 use rust_embed::Embed;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tower_http::cors::{AllowHeaders, AllowMethods, CorsLayer};
 
@@ -166,7 +166,11 @@ pub fn build_router(state: AppState) -> Router {
 
 /// Start the API server on the given port.
 /// If `open_url` is Some, opens the browser after binding.
-pub async fn run_server(state: AppState, port: u16, open_url: Option<String>) -> anyhow::Result<()> {
+pub async fn run_server(
+    state: AppState,
+    port: u16,
+    open_url: Option<String>,
+) -> anyhow::Result<()> {
     let app = build_router(state);
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -177,11 +181,19 @@ pub async fn run_server(state: AppState, port: u16, open_url: Option<String>) ->
     if let Some(url) = open_url {
         // Open browser after bind (server is ready)
         #[cfg(target_os = "macos")]
-        { let _ = std::process::Command::new("open").arg(&url).spawn(); }
+        {
+            let _ = std::process::Command::new("open").arg(&url).spawn();
+        }
         #[cfg(target_os = "linux")]
-        { let _ = std::process::Command::new("xdg-open").arg(&url).spawn(); }
+        {
+            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+        }
         #[cfg(target_os = "windows")]
-        { let _ = std::process::Command::new("cmd").args(["/C", "start", &url]).spawn(); }
+        {
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", &url])
+                .spawn();
+        }
     }
 
     axum::serve(listener, app).await?;
@@ -190,10 +202,7 @@ pub async fn run_server(state: AppState, port: u16, open_url: Option<String>) ->
 
 // ─── Handlers ──────────────────────────────────────────────────────
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 
@@ -208,7 +217,8 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
 
 /// Broadcast an event to all connected WebSocket clients.
 fn notify(state: &AppState, event_type: &str, id: &str) {
-    let msg = serde_json::json!({ "type": event_type, "id": id, "ts": chrono::Utc::now().to_rfc3339() });
+    let msg =
+        serde_json::json!({ "type": event_type, "id": id, "ts": chrono::Utc::now().to_rfc3339() });
     let _ = state.events_tx.send(msg.to_string());
 }
 

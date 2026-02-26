@@ -38,17 +38,11 @@ impl Default for ServerConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CommunityConfig {
     /// Whether community pattern sharing is enabled
     #[serde(default)]
     pub enabled: bool,
-}
-
-impl Default for CommunityConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
