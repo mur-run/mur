@@ -2722,12 +2722,19 @@ exit 0
 
         let hooks_dir = mur_dir.join("hooks");
         let prompt_script = hooks_dir.join("on-prompt.sh");
+        let tool_script = hooks_dir.join("on-tool.sh");
         let stop_script = hooks_dir.join("on-stop.sh");
 
-        // Auggie uses SessionStart / Stop hook events
+        // Auggie supports full Claude Code-compatible hooks:
+        // PreToolUse, PostToolUse, Stop, SessionStart, SessionEnd
         let mur_hooks = serde_json::json!({
-            "SessionStart": [{
-                "hooks": [{"type": "command", "command": format!("bash {}", prompt_script.display())}]
+            "PreToolUse": [{
+                "hooks": [{"type": "command", "command": format!("bash {}", prompt_script.display())}],
+                "matcher": ""
+            }],
+            "PostToolUse": [{
+                "hooks": [{"type": "command", "command": format!("bash {}", tool_script.display())}],
+                "matcher": ""
             }],
             "Stop": [{
                 "hooks": [{"type": "command", "command": format!("bash {}", stop_script.display())}]
