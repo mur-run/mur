@@ -21,6 +21,8 @@ use tower_http::cors::{AllowHeaders, AllowMethods, CorsLayer};
 
 use mur_common::knowledge::{KnowledgeBase, Maturity};
 
+// Web UI assets — set MUR_WEB_DIST env at build time for full dashboard,
+// falls back to a placeholder page if not set.
 #[derive(Embed)]
 #[folder = "$MUR_WEB_DIST"]
 #[prefix = ""]
@@ -31,6 +33,7 @@ use mur_common::knowledge::{KnowledgeBase, Maturity};
 #[include = "*.png"]
 #[include = "*.ico"]
 #[include = "*.woff2"]
+#[include = "*.json"]
 struct WebAssets;
 use mur_common::pattern::*;
 use mur_common::workflow::Workflow;
@@ -161,12 +164,25 @@ pub fn build_router(state: AppState) -> Router {
 }
 
 /// Start the API server on the given port.
-pub async fn run_server(state: AppState, port: u16) -> anyhow::Result<()> {
+/// If `open_url` is Some, opens the browser after binding.
+pub async fn run_server(state: AppState, port: u16, open_url: Option<String>) -> anyhow::Result<()> {
     let app = build_router(state);
     let addr = format!("0.0.0.0:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     eprintln!("🚀 MUR server listening on http://localhost:{}", port);
-    eprintln!("   CORS: localhost:5173, mur.run");
+    eprintln!("   Dashboard: http://localhost:{}", port);
+    eprintln!("   API: http://localhost:{}/api/v1/", port);
+
+    if let Some(url) = open_url {
+        // Open browser after bind (server is ready)
+        #[cfg(target_os = "macos")]
+        { let _ = std::process::Command::new("open").arg(&url).spawn(); }
+        #[cfg(target_os = "linux")]
+        { let _ = std::process::Command::new("xdg-open").arg(&url).spawn(); }
+        #[cfg(target_os = "windows")]
+        { let _ = std::process::Command::new("cmd").args(["/C", "start", &url]).spawn(); }
+    }
+
     axum::serve(listener, app).await?;
     Ok(())
 }

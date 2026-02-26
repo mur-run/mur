@@ -3178,21 +3178,13 @@ async fn cmd_serve(port: u16, open: bool, readonly: bool) -> Result<()> {
         events_tx,
     };
 
-    if open {
-        let url = format!("http://localhost:{}", port);
-        eprintln!("Opening {}...", url);
-        // Best-effort: open browser
-        #[cfg(target_os = "macos")]
-        {
-            let _ = std::process::Command::new("open").arg(&url).spawn();
-        }
-        #[cfg(target_os = "linux")]
-        {
-            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-        }
-    }
+    let open_url = if open {
+        Some(format!("http://localhost:{}", port))
+    } else {
+        None
+    };
 
-    server::run_server(state, port).await
+    server::run_server(state, port, open_url).await
 }
 
 fn cmd_why(name: &str) -> Result<()> {
