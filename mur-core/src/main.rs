@@ -3035,6 +3035,45 @@ export const MurPlugin = async ({{ project, $ }}) => {{
         hooks_installed.push("OpenCode");
     }
 
+    // ─── Step C8b: Install Amp hooks ──────────────────────────────
+    // Amp uses Claude Code hook format in AGENTS.md frontmatter or ~/.amp/hooks.json
+    // Also supports .agents/skills/ for skills
+    let amp_exists = std::process::Command::new("which")
+        .arg("amp")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if amp_exists {
+        let amp_dir = home.join(".amp");
+        std::fs::create_dir_all(&amp_dir)?;
+        let hooks_dir = mur_dir.join("hooks");
+        let prompt_script = hooks_dir.join("on-prompt.sh");
+        let tool_script = hooks_dir.join("on-tool.sh");
+        let stop_script = hooks_dir.join("on-stop.sh");
+
+        // Amp uses same format as Claude Code hooks
+        let hooks_path = amp_dir.join("hooks.json");
+        let amp_hooks = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "hooks": [{"type": "command", "command": format!("bash {}", prompt_script.display())}],
+                    "matcher": ""
+                }],
+                "PostToolUse": [{
+                    "hooks": [{"type": "command", "command": format!("bash {}", tool_script.display())}],
+                    "matcher": ""
+                }],
+                "Stop": [{
+                    "hooks": [{"type": "command", "command": format!("bash {}", stop_script.display())}],
+                    "matcher": ""
+                }]
+            }
+        });
+        let pretty = serde_json::to_string_pretty(&amp_hooks)?;
+        std::fs::write(&hooks_path, pretty)?;
+        hooks_installed.push("Amp");
+    }
+
     // ─── Step C9: Generate context files for file-based tools ────
     // Aider, Cline, Windsurf, Amazon Q use file-based instructions
     // Generate a shared mur context file that can be referenced
@@ -3080,6 +3119,19 @@ Run `mur learn` to extract new patterns from recent sessions.
         std::fs::write(&aider_conf, aider_config)?;
         hooks_installed.push("Aider");
     }
+
+    // ─── Step C10: Detect and print setup hints for file-based tools ─
+    // Zed reads: .rules > .cursorrules > .windsurfrules > AGENTS.md (first match wins)
+    // Junie reads: .junie/guidelines.md
+    // Trae reads: .trae/rules/
+    // These are project-level, so we just print hints
+    let file_based_hints: Vec<(&str, &str)> = vec![
+        ("Zed", "Add `See ~/.mur/context.md` to your AGENTS.md or .rules file"),
+        ("Junie", "Add `See ~/.mur/context.md` to .junie/guidelines.md"),
+        ("Trae", "Add `See ~/.mur/context.md` to .trae/rules/mur.md"),
+        ("Cline/Roo", "Add `See ~/.mur/context.md` to .clinerules"),
+        ("Windsurf", "Add `See ~/.mur/context.md` to .windsurfrules"),
+    ];
 
     // ─── Step G: Interactive LLM/Embedding setup ─────────────────
     println!();
@@ -3310,6 +3362,8 @@ learning:
         ("aider", "Aider"),
         ("openclaw", "OpenClaw"),
         ("opencode", "OpenCode"),
+        ("amp", "Amp"),
+        ("zed", "Zed"),
     ];
     for (binary, name) in &cli_tools {
         if std::process::Command::new("which")
@@ -3344,6 +3398,16 @@ learning:
     // Check for Amazon Q
     if home.join(".amazonq").exists() {
         detected_tools.push("Amazon Q");
+    }
+
+    // Check for JetBrains Junie
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd.join(".junie").exists() {
+            detected_tools.push("Junie");
+        }
+        if cwd.join(".trae").exists() {
+            detected_tools.push("Trae");
+        }
     }
 
     // ─── Step F: Print summary ───────────────────────────────────
@@ -3387,19 +3451,25 @@ learning:
     // Show detected tools
     if !detected_tools.is_empty() {
         println!();
-        println!("  Detected tools: {}", detected_tools.join(", "));
-        if detected_tools.contains(&"Gemini CLI") {
-            println!("    💡 Gemini CLI: add hooks to ~/.gemini/settings.json");
-        }
-        if detected_tools.contains(&"Cursor") {
-            println!("    💡 Cursor: run `mur sync` to sync patterns to .cursorrules");
+        println!("  🔍 Detected tools: {}", detected_tools.join(", "));
+    }
+
+    // Show file-based tool hints
+    let show_hints: Vec<_> = file_based_hints.iter()
+        .filter(|(tool, _)| detected_tools.contains(tool))
+        .collect();
+    if !show_hints.is_empty() {
+        println!();
+        println!("  📝 File-based tools (add MUR context manually):");
+        for (tool, hint) in &show_hints {
+            println!("    💡 {}: {}", tool, hint);
         }
     }
 
     println!();
     println!("  Next steps:");
-    println!("    1. Start using Claude Code normally — MUR injects patterns automatically");
-    println!("    2. Run `mur sync` to sync patterns to other AI tools");
+    println!("    1. Start coding — MUR injects patterns automatically via hooks");
+    println!("    2. Run `mur context --file` to update context for file-based tools");
     println!("    3. Run `mur search <query>` to find patterns");
     if community_enabled {
         println!("    4. Run `mur login` to authenticate for community sharing");
