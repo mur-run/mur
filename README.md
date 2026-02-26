@@ -260,7 +260,7 @@ tools:
 
 ## System Requirements
 
-- **Platforms:** macOS, Linux
+- **Platforms:** macOS, Linux, Windows
 - **Optional:** Ollama (for local embeddings and LLM extraction)
 - **Optional:** OpenAI API key (for cloud embeddings)
 

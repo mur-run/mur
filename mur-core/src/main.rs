@@ -2765,10 +2765,15 @@ exit 0
         let prompt_script = hooks_dir.join("on-prompt.sh");
         let stop_script = hooks_dir.join("on-stop.sh");
 
-        // Gemini uses different event names
+        let tool_script = hooks_dir.join("on-tool.sh");
+
+        // Gemini CLI v0.26.0+ hook events
         let mur_hooks = serde_json::json!({
             "BeforeAgent": [{
                 "hooks": [{"type": "command", "command": format!("bash {}", prompt_script.display())}]
+            }],
+            "AfterTool": [{
+                "hooks": [{"type": "command", "command": format!("bash {}", tool_script.display())}]
             }],
             "SessionEnd": [{
                 "hooks": [{"type": "command", "command": format!("bash {}", stop_script.display())}]
@@ -2791,34 +2796,62 @@ exit 0
     }
 
     // ─── Step C4: Install GitHub Copilot CLI hooks ───────────────
-    // Copilot CLI reads hooks from .github/hooks/ in cwd, but also supports
-    // a global config at ~/.copilot/hooks.json
-    let copilot_dir = home.join(".copilot");
-    if copilot_dir.exists() {
+    // Copilot CLI (GA 2026-02-25) reads hooks from:
+    //   - ~/.github/hooks.json (global)
+    //   - .github/hooks.json (project-level)
+    // Format: { version: 1, hooks: { eventName: [{ type, bash, timeoutSec }] } }
+    // Events: sessionStart, sessionEnd, userPromptSubmitted, preToolUse, postToolUse
+    let copilot_hooks_dir = home.join(".github");
+    {
+        std::fs::create_dir_all(&copilot_hooks_dir)?;
         let hooks_dir = mur_dir.join("hooks");
         let prompt_script = hooks_dir.join("on-prompt.sh");
+        let tool_script = hooks_dir.join("on-tool.sh");
         let stop_script = hooks_dir.join("on-stop.sh");
 
-        let copilot_hooks_dir = copilot_dir.join("hooks");
-        std::fs::create_dir_all(&copilot_hooks_dir)?;
+        let hooks_path = copilot_hooks_dir.join("hooks.json");
+        let mut hooks_json: serde_json::Value = if hooks_path.exists() {
+            let data = std::fs::read_to_string(&hooks_path)?;
+            serde_json::from_str(&data).unwrap_or(serde_json::json!({"version": 1, "hooks": {}}))
+        } else {
+            serde_json::json!({"version": 1, "hooks": {}})
+        };
 
-        let hooks_json = serde_json::json!({
-            "version": 1,
-            "hooks": {
-                "sessionStart": [{
-                    "type": "command",
-                    "bash": format!("bash {}", prompt_script.display()),
-                    "timeoutSec": 30
-                }],
-                "sessionEnd": [{
-                    "type": "command",
-                    "bash": format!("bash {}", stop_script.display()),
-                    "timeoutSec": 30
-                }]
-            }
-        });
+        let mur_marker = ".mur/hooks/";
+        let hook_defs = [
+            ("sessionStart", format!("bash {}", prompt_script.display())),
+            ("userPromptSubmitted", format!("bash {}", prompt_script.display())),
+            ("postToolUse", format!("bash {}", tool_script.display())),
+            ("sessionEnd", format!("bash {}", stop_script.display())),
+        ];
 
-        let hooks_path = copilot_hooks_dir.join("mur-hooks.json");
+        let hooks_obj = hooks_json
+            .as_object_mut()
+            .unwrap()
+            .entry("hooks")
+            .or_insert_with(|| serde_json::json!({}));
+
+        for (event_name, script_cmd) in &hook_defs {
+            let event_arr = hooks_obj
+                .as_object_mut()
+                .unwrap()
+                .entry(*event_name)
+                .or_insert_with(|| serde_json::json!([]));
+            let arr = event_arr.as_array_mut().unwrap();
+            // Remove existing mur hooks
+            arr.retain(|entry| {
+                entry.get("bash").and_then(|c| c.as_str())
+                    .map(|c| !c.contains(mur_marker))
+                    .unwrap_or(true)
+            });
+            arr.push(serde_json::json!({
+                "type": "command",
+                "bash": script_cmd,
+                "comment": "mur-managed-hook",
+                "timeoutSec": 30
+            }));
+        }
+
         let pretty = serde_json::to_string_pretty(&hooks_json)?;
         std::fs::write(&hooks_path, pretty)?;
         hooks_installed.push("Copilot CLI");
@@ -2950,7 +2983,59 @@ exit 0
         hooks_installed.push("Codex CLI");
     }
 
-    // ─── Step C8: Generate context files for file-based tools ────
+    // ─── Step C8a: Install OpenCode plugin ─────────────────────────
+    // OpenCode uses JS/TS plugins in ~/.config/opencode/plugins/
+    let opencode_plugins = home.join(".config").join("opencode").join("plugins");
+    if home.join(".config").join("opencode").exists() || std::process::Command::new("which")
+        .arg("opencode")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        std::fs::create_dir_all(&opencode_plugins)?;
+        let plugin_path = opencode_plugins.join("mur-plugin.ts");
+        let hooks_dir = mur_dir.join("hooks");
+        let plugin_content = format!(r#"// MUR learning plugin for OpenCode
+// Auto-generated by `mur init --hooks`
+import {{ execSync }} from "child_process";
+
+export const MurPlugin = async ({{ project, $ }}) => {{
+  // Inject MUR context at session start
+  try {{
+    execSync("bash {on_prompt}", {{ stdio: "pipe", timeout: 30000 }});
+  }} catch (_) {{}}
+
+  return {{
+    "session.created": async (_input) => {{
+      try {{
+        execSync("bash {on_prompt}", {{ stdio: "pipe", timeout: 30000 }});
+      }} catch (_) {{}}
+    }},
+    "tool.execute.after": async (_input) => {{
+      try {{
+        execSync("bash {on_tool}", {{ stdio: "pipe", timeout: 10000 }});
+      }} catch (_) {{}}
+    }},
+    "session.updated": async (input) => {{
+      // On session end, trigger learning
+      if (input?.status === "complete" || input?.status === "error") {{
+        try {{
+          execSync("bash {on_stop}", {{ stdio: "pipe", timeout: 30000 }});
+        }} catch (_) {{}}
+      }}
+    }},
+  }};
+}};
+"#,
+            on_prompt = hooks_dir.join("on-prompt.sh").display(),
+            on_tool = hooks_dir.join("on-tool.sh").display(),
+            on_stop = hooks_dir.join("on-stop.sh").display(),
+        );
+        std::fs::write(&plugin_path, plugin_content)?;
+        hooks_installed.push("OpenCode");
+    }
+
+    // ─── Step C9: Generate context files for file-based tools ────
     // Aider, Cline, Windsurf, Amazon Q use file-based instructions
     // Generate a shared mur context file that can be referenced
     let mur_context_path = mur_dir.join("context.md");
