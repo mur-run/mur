@@ -3348,6 +3348,8 @@ learning:
 
     if gemini_settings.exists() || home.join(".gemini").exists() {
         detected_tools.push("Gemini CLI");
+        // Antigravity uses Gemini under the hood — same hooks apply
+        detected_tools.push("Antigravity");
     }
     if let Some(ref cr) = cursor_rules
         && cr.exists()
