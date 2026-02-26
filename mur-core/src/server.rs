@@ -130,6 +130,7 @@ pub fn build_router(state: AppState) -> Router {
             "http://localhost:5173".parse().unwrap(),
             "https://mur.run".parse().unwrap(),
             "https://www.mur.run".parse().unwrap(),
+            "https://mur-run.github.io".parse().unwrap(),
         ])
         .allow_methods(AllowMethods::any())
         .allow_headers(AllowHeaders::any());
