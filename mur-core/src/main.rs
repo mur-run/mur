@@ -156,6 +156,9 @@ enum Commands {
         /// Override auto-detected query with explicit one
         #[arg(long)]
         query: Option<String>,
+        /// Write context to ~/.mur/context.md for file-based tools (Aider, Cline, Windsurf)
+        #[arg(long)]
+        file: bool,
     },
     /// Session recording for Claude Code hooks
     Session {
@@ -346,7 +349,7 @@ async fn main() -> Result<()> {
         Commands::Evolve { dry_run, force } => cmd_evolve(dry_run, force)?,
         Commands::Emerge { threshold, dry_run } => cmd_emerge(threshold, dry_run)?,
         Commands::Suggest { create } => cmd_suggest(create)?,
-        Commands::Context { compact, query } => cmd_context(query, compact).await?,
+        Commands::Context { compact, query, file } => cmd_context(query, compact, file).await?,
         Commands::Session { action } => match action {
             SessionAction::Start { source } => cmd_session_start(&source)?,
             SessionAction::Stop { analyze } => cmd_session_stop(analyze)?,
@@ -2079,7 +2082,7 @@ fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
 
 // ─── Context command ──────────────────────────────────────────────
 
-async fn cmd_context(query: Option<String>, compact: bool) -> Result<()> {
+async fn cmd_context(query: Option<String>, compact: bool, write_file: bool) -> Result<()> {
     use retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
     use std::collections::HashMap;
     use store::embedding::{EmbeddingConfig, embed};
@@ -2197,7 +2200,24 @@ async fn cmd_context(query: Option<String>, compact: bool) -> Result<()> {
     if !output.is_empty() {
         inject::hook::record_injection(&effective_query, &project_name, &injected_patterns);
         inject::hook::record_cooccurrence_for_injection(&injected_patterns);
-        print!("{}", output);
+
+        if write_file {
+            // Write to ~/.mur/context.md for file-based tools
+            let context_path = dirs::home_dir()
+                .expect("no home dir")
+                .join(".mur")
+                .join("context.md");
+            let file_content = format!(
+                "# MUR Context (auto-generated)\n# Query: {}\n# Updated: {}\n\n{}\n",
+                effective_query,
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                output
+            );
+            std::fs::write(&context_path, file_content)?;
+            eprintln!("📝 Context written to {}", context_path.display());
+        } else {
+            print!("{}", output);
+        }
     }
 
     Ok(())
@@ -2855,6 +2875,127 @@ exit 0
         hooks_installed.push("OpenClaw");
     }
 
+    // ─── Step C6: Install Cursor hooks ────────────────────────────
+    let cursor_dir = home.join(".cursor");
+    if cursor_dir.exists() {
+        let hooks_dir = mur_dir.join("hooks");
+        let prompt_script = hooks_dir.join("on-prompt.sh");
+        let tool_script = hooks_dir.join("on-tool.sh");
+        let stop_script = hooks_dir.join("on-stop.sh");
+
+        let cursor_hooks_path = cursor_dir.join("hooks.json");
+        let mut cursor_hooks: serde_json::Value = if cursor_hooks_path.exists() {
+            let data = std::fs::read_to_string(&cursor_hooks_path)?;
+            serde_json::from_str(&data).unwrap_or(serde_json::json!({"version": 1, "hooks": {}}))
+        } else {
+            serde_json::json!({"version": 1, "hooks": {}})
+        };
+
+        let mur_hook_marker = "mur-managed-hook";
+
+        // Cursor hooks format: { version: 1, hooks: { eventName: [{ command: "..." }] } }
+        let hook_defs = [
+            ("beforeSubmitPrompt", prompt_script.to_string_lossy().to_string()),
+            ("beforeShellExecution", tool_script.to_string_lossy().to_string()),
+            ("stop", stop_script.to_string_lossy().to_string()),
+        ];
+
+        let hooks_obj = cursor_hooks
+            .as_object_mut()
+            .unwrap()
+            .entry("hooks")
+            .or_insert_with(|| serde_json::json!({}));
+
+        for (event_name, script_path) in &hook_defs {
+            let event_arr = hooks_obj
+                .as_object_mut()
+                .unwrap()
+                .entry(*event_name)
+                .or_insert_with(|| serde_json::json!([]));
+            let arr = event_arr.as_array_mut().unwrap();
+            arr.retain(|entry| {
+                entry
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .map(|c| !c.contains(mur_hook_marker) && !c.contains(".mur/hooks/"))
+                    .unwrap_or(true)
+            });
+            arr.push(serde_json::json!({
+                "command": format!("bash {}", script_path)
+            }));
+        }
+
+        let pretty = serde_json::to_string_pretty(&cursor_hooks)?;
+        std::fs::write(&cursor_hooks_path, pretty)?;
+        hooks_installed.push("Cursor");
+    }
+
+    // ─── Step C7: Install Codex CLI integration ──────────────────
+    let codex_dir = home.join(".codex");
+    if codex_dir.exists() {
+        // Codex reads AGENTS.md — we add a mur context section
+        // Also set developer_instructions in config.toml
+        let config_path = codex_dir.join("config.toml");
+        if config_path.exists() {
+            let mut config_content = std::fs::read_to_string(&config_path)?;
+            let mur_instruction = "# mur-managed: inject learning context\n# Run `mur context --compact` before sessions for pattern injection\n";
+            if !config_content.contains("mur-managed") {
+                config_content.push_str(&format!(
+                    "\n{}\ndeveloper_instructions = \"Before coding, check if mur has relevant patterns: run `mur context --compact` in the project directory.\"\n",
+                    mur_instruction
+                ));
+                std::fs::write(&config_path, config_content)?;
+            }
+        }
+        hooks_installed.push("Codex CLI");
+    }
+
+    // ─── Step C8: Generate context files for file-based tools ────
+    // Aider, Cline, Windsurf, Amazon Q use file-based instructions
+    // Generate a shared mur context file that can be referenced
+    let mur_context_path = mur_dir.join("context.md");
+    let mur_context = r#"# MUR Context
+# Auto-generated by `mur init --hooks`. Updated by `mur context --file`.
+# This file is referenced by Aider, Cline, Windsurf, and other file-based tools.
+
+## How to use MUR with this tool
+
+MUR captures learning patterns from your coding sessions.
+Run `mur context` to see relevant patterns for your current project.
+Run `mur search <query>` to find specific patterns.
+Run `mur learn` to extract new patterns from recent sessions.
+
+## Quick reference
+
+- Patterns: ~/.mur/patterns/
+- Workflows: ~/.mur/workflows/
+- Dashboard: `mur serve --open`
+"#;
+    std::fs::write(&mur_context_path, mur_context)?;
+
+    // Aider: add to .aider.conf.yml if it exists
+    let aider_conf = home.join(".aider.conf.yml");
+    if aider_conf.exists() {
+        let content = std::fs::read_to_string(&aider_conf)?;
+        if !content.contains(".mur/context.md") {
+            let mut new_content = content;
+            new_content.push_str(&format!(
+                "\n# mur-managed: auto-load learning context\nread:\n  - {}\n",
+                mur_context_path.display()
+            ));
+            std::fs::write(&aider_conf, new_content)?;
+            hooks_installed.push("Aider");
+        }
+    } else {
+        // Create minimal .aider.conf.yml
+        let aider_config = format!(
+            "# mur-managed: auto-load learning context\nread:\n  - {}\n",
+            mur_context_path.display()
+        );
+        std::fs::write(&aider_conf, aider_config)?;
+        hooks_installed.push("Aider");
+    }
+
     // ─── Step G: Interactive LLM/Embedding setup ─────────────────
     println!();
     println!("Model setup for pattern learning & semantic search:");
@@ -3097,8 +3238,27 @@ learning:
     }
 
     // Check for GitHub Copilot config directory
-    if home.join(".config").join("github-copilot").exists() {
+    if home.join(".config").join("github-copilot").exists() || home.join(".copilot").exists() {
         detected_tools.push("GitHub Copilot");
+    }
+
+    // Check for Cline/Roo (VS Code extension — detect .clinerules in cwd)
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd.join(".clinerules").exists() || cwd.join(".roomodes").exists() {
+            detected_tools.push("Cline/Roo");
+        }
+    }
+
+    // Check for Windsurf
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd.join(".windsurfrules").exists() || cwd.join(".windsurf").exists() {
+            detected_tools.push("Windsurf");
+        }
+    }
+
+    // Check for Amazon Q
+    if home.join(".amazonq").exists() {
+        detected_tools.push("Amazon Q");
     }
 
     // ─── Step F: Print summary ───────────────────────────────────
