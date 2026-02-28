@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "mur-common",
     "mur-core",
-    # "mur-commander",  # future
+    # "mur-commander",  # separate crate — v0.2.0 released
 ]
 
 [workspace.package]
