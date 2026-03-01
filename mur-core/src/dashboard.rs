@@ -263,18 +263,17 @@ fn render_recent_feedback_hint() {
 
     if path.exists() {
         header("Recent Injection");
-        if let Ok(data) = std::fs::read_to_string(&path) {
-            if let Ok(record) =
+        if let Ok(data) = std::fs::read_to_string(&path)
+            && let Ok(record) =
                 serde_json::from_str::<crate::capture::feedback::InjectionRecord>(&data)
-            {
-                row("Query", &truncate(&record.query, 40));
-                row("Project", &record.project);
-                row("Patterns injected", &record.patterns.len().to_string());
-                for p in record.patterns.iter().take(5) {
-                    println!("    {DIM}• {}{RESET}", p.name);
-                }
-                println!("  {DIM}Run `mur feedback auto` to analyze session outcome{RESET}");
+        {
+            row("Query", &truncate(&record.query, 40));
+            row("Project", &record.project);
+            row("Patterns injected", &record.patterns.len().to_string());
+            for p in record.patterns.iter().take(5) {
+                println!("    {DIM}• {}{RESET}", p.name);
             }
+            println!("  {DIM}Run `mur feedback auto` to analyze session outcome{RESET}");
         }
         footer();
     }
@@ -305,6 +304,8 @@ mod tests {
                 confidence: 0.5,
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         }
     }

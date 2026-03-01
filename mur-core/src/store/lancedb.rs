@@ -302,6 +302,8 @@ mod tests {
                 updated_at: chrono::Utc::now(),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         }
     }

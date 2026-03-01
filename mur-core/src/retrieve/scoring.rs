@@ -1,7 +1,19 @@
 //! Multi-signal scoring pipeline for pattern retrieval.
 
 use chrono::Utc;
-use mur_common::pattern::{Pattern, Tier};
+use mur_common::pattern::{Origin, Pattern, PatternKind, Tier};
+
+/// Caller-supplied scope context used to make preference/procedure boosts
+/// accurate rather than using heuristics like `origin.is_some()`.
+#[derive(Debug, Clone, Default)]
+pub struct ScopeContext {
+    /// The active user identifier (matches `Origin::user`).
+    pub user: Option<String>,
+    /// The active platform/tool (matches `Origin::platform`).
+    pub platform: Option<String>,
+    /// The task description — used to detect task-type queries for Procedure boost.
+    pub task: Option<String>,
+}
 
 /// A pattern with its computed relevance score.
 #[derive(Debug, Clone)]
@@ -28,17 +40,28 @@ const MAX_PATTERNS: usize = 5;
 /// Max total tokens (rough: 1 token ≈ 4 chars)
 const MAX_TOKENS: usize = 2000;
 
-/// Score patterns with hybrid search (vector + keyword).
+/// Score patterns with hybrid search (vector + keyword), no scope context.
 /// `vector_scores` maps pattern name → vector similarity (0-1).
 pub fn score_and_rank_hybrid(
     query: &str,
     candidates: Vec<Pattern>,
     vector_scores: &std::collections::HashMap<String, f64>,
 ) -> Vec<ScoredPattern> {
+    score_and_rank_hybrid_with_scope(query, candidates, vector_scores, None)
+}
+
+/// Score patterns with hybrid search and optional scope context for accurate
+/// preference/procedure boosts.
+pub fn score_and_rank_hybrid_with_scope(
+    query: &str,
+    candidates: Vec<Pattern>,
+    vector_scores: &std::collections::HashMap<String, f64>,
+    scope: Option<&ScopeContext>,
+) -> Vec<ScoredPattern> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
 
-    score_and_rank_inner(&query_words, candidates, |words, p| {
+    score_and_rank_inner(&query_words, candidates, scope, |words, p| {
         let kw_relevance = keyword_relevance(words, p);
         let vec_relevance = vector_scores.get(&p.name).copied().unwrap_or(0.0);
         vec_relevance * 0.7 + kw_relevance * 0.3
@@ -48,10 +71,19 @@ pub fn score_and_rank_hybrid(
 /// Score a set of candidate patterns against a query (keyword-only fallback).
 /// Returns scored patterns sorted by score, filtered and budget-limited.
 pub fn score_and_rank(query: &str, candidates: Vec<Pattern>) -> Vec<ScoredPattern> {
+    score_and_rank_with_scope(query, candidates, None)
+}
+
+/// Score with keyword-only relevance and optional scope context.
+pub fn score_and_rank_with_scope(
+    query: &str,
+    candidates: Vec<Pattern>,
+    scope: Option<&ScopeContext>,
+) -> Vec<ScoredPattern> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
 
-    score_and_rank_inner(&query_words, candidates, |words, p| {
+    score_and_rank_inner(&query_words, candidates, scope, |words, p| {
         keyword_relevance(words, p)
     })
 }
@@ -60,6 +92,7 @@ pub fn score_and_rank(query: &str, candidates: Vec<Pattern>) -> Vec<ScoredPatter
 fn score_and_rank_inner<F>(
     query_words: &[&str],
     candidates: Vec<Pattern>,
+    scope: Option<&ScopeContext>,
     relevance_fn: F,
 ) -> Vec<ScoredPattern>
 where
@@ -86,13 +119,17 @@ where
                 1.0
             };
 
-            let score = (relevance * W_RELEVANCE
+            let base_score = (relevance * W_RELEVANCE
                 + recency * W_RECENCY
                 + effectiveness * W_EFFECTIVENESS
                 + importance * W_IMPORTANCE
                 + time_decay * W_TIME_DECAY
                 + length_norm * W_LENGTH_NORM)
                 * scope_mult;
+
+            // Kind-aware boost: scope-aware preference/procedure boost
+            let kind_boost = kind_score_boost(&p, query_words, scope);
+            let score = base_score + kind_boost;
 
             ScoredPattern {
                 pattern: p,
@@ -224,6 +261,85 @@ fn tier_priority(tier: &Tier) -> u8 {
     }
 }
 
+/// Returns true if `scope` matches the pattern's origin user/platform.
+/// A match requires that the scope field is present AND the pattern's origin
+/// contains the same value.  Missing scope = no scope match (no boost).
+fn scope_matches_origin(scope: Option<&ScopeContext>, origin: Option<&Origin>) -> bool {
+    let Some(sc) = scope else { return false };
+    let Some(orig) = origin else { return false };
+
+    let user_match = sc
+        .user
+        .as_deref()
+        .map(|u| orig.user.as_deref() == Some(u))
+        .unwrap_or(false);
+    let platform_match = sc
+        .platform
+        .as_deref()
+        .map(|p| orig.platform.as_deref() == Some(p))
+        .unwrap_or(false);
+
+    user_match || platform_match
+}
+
+/// Returns true when the query or the task description looks like a how-to request.
+fn is_task_query(query_words: &[&str], scope: Option<&ScopeContext>) -> bool {
+    const TASK_INDICATORS: &[&str] = &[
+        "how",
+        "steps",
+        "process",
+        "deploy",
+        "setup",
+        "install",
+        "build",
+        "run",
+        "create",
+        "configure",
+        "guide",
+        "tutorial",
+    ];
+    if query_words.iter().any(|w| TASK_INDICATORS.contains(w)) {
+        return true;
+    }
+    // Also check the explicit task field in scope
+    if let Some(sc) = scope
+        && let Some(task) = &sc.task
+    {
+        let task_lower = task.to_lowercase();
+        return TASK_INDICATORS.iter().any(|kw| task_lower.contains(kw));
+    }
+    false
+}
+
+/// Kind-aware scoring boost.
+///
+/// - **Preference / Behavioral**: +0.1 when scope user/platform matches the
+///   pattern's origin — i.e., this preference actually belongs to the caller.
+///   No boost (0.0) when the scope doesn't match or isn't provided.
+/// - **Procedure**: +0.1 when the query or `scope.task` indicates a how-to
+///   request.
+/// - **Technical / Fact / None**: 0.0 (unchanged).
+fn kind_score_boost(pattern: &Pattern, query_words: &[&str], scope: Option<&ScopeContext>) -> f64 {
+    match pattern.effective_kind() {
+        PatternKind::Preference | PatternKind::Behavioral => {
+            // Only boost when the scope actually matches this pattern's origin.
+            if scope_matches_origin(scope, pattern.origin.as_ref()) {
+                0.1
+            } else {
+                0.0
+            }
+        }
+        PatternKind::Procedure => {
+            if is_task_query(query_words, scope) {
+                0.1
+            } else {
+                0.0
+            }
+        }
+        PatternKind::Technical | PatternKind::Fact => 0.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,6 +373,8 @@ mod tests {
                 updated_at: Utc::now(),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         }
     }
@@ -474,5 +592,98 @@ mod tests {
                 assert!(tier_priority(first_tier) >= tier_priority(second_tier));
             }
         }
+    }
+
+    #[test]
+    fn test_kind_boost_preference_with_matching_scope() {
+        use mur_common::pattern::{Origin, OriginTrigger};
+        let mut p = make_pattern("user-pref", "user prefers dark mode");
+        p.kind = Some(PatternKind::Preference);
+        p.origin = Some(Origin {
+            source: "commander".into(),
+            trigger: OriginTrigger::UserExplicit,
+            user: Some("david".into()),
+            platform: None,
+            confidence: 1.0,
+        });
+        // Scope matches origin user → boost
+        let scope = ScopeContext {
+            user: Some("david".into()),
+            ..Default::default()
+        };
+        let boost = kind_score_boost(&p, &["dark", "mode"], Some(&scope));
+        assert!((boost - 0.1).abs() < 0.001, "Expected 0.1, got {boost}");
+    }
+
+    #[test]
+    fn test_kind_boost_preference_no_scope_no_boost() {
+        use mur_common::pattern::{Origin, OriginTrigger};
+        let mut p = make_pattern("user-pref", "user prefers dark mode");
+        p.kind = Some(PatternKind::Preference);
+        p.origin = Some(Origin {
+            source: "commander".into(),
+            trigger: OriginTrigger::UserExplicit,
+            user: Some("david".into()),
+            platform: None,
+            confidence: 1.0,
+        });
+        // No scope provided → no boost
+        let boost = kind_score_boost(&p, &["dark", "mode"], None);
+        assert!((boost - 0.0).abs() < 0.001, "Expected 0.0, got {boost}");
+    }
+
+    #[test]
+    fn test_kind_boost_preference_wrong_user_no_boost() {
+        use mur_common::pattern::{Origin, OriginTrigger};
+        let mut p = make_pattern("user-pref", "user prefers dark mode");
+        p.kind = Some(PatternKind::Preference);
+        p.origin = Some(Origin {
+            source: "commander".into(),
+            trigger: OriginTrigger::UserExplicit,
+            user: Some("alice".into()),
+            platform: None,
+            confidence: 1.0,
+        });
+        let scope = ScopeContext {
+            user: Some("bob".into()), // different user
+            ..Default::default()
+        };
+        let boost = kind_score_boost(&p, &["dark", "mode"], Some(&scope));
+        assert!(
+            (boost - 0.0).abs() < 0.001,
+            "Expected 0.0 for mismatched user, got {boost}"
+        );
+    }
+
+    #[test]
+    fn test_kind_boost_procedure_on_how_query() {
+        let mut p = make_pattern("deploy-steps", "how to deploy to production");
+        p.kind = Some(PatternKind::Procedure);
+        let boost = kind_score_boost(&p, &["how", "deploy"], None);
+        assert!((boost - 0.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_kind_boost_procedure_via_scope_task() {
+        let mut p = make_pattern("deploy-steps", "deploy to production");
+        p.kind = Some(PatternKind::Procedure);
+        let scope = ScopeContext {
+            task: Some("how to set up the environment".into()),
+            ..Default::default()
+        };
+        // query has no task indicators but scope.task does
+        let boost = kind_score_boost(&p, &["deploy"], Some(&scope));
+        assert!(
+            (boost - 0.1).abs() < 0.001,
+            "Expected 0.1 via scope.task, got {boost}"
+        );
+    }
+
+    #[test]
+    fn test_kind_boost_technical_unchanged() {
+        let p = make_pattern("tech-pattern", "use anyhow for errors");
+        // kind is None (default Technical)
+        let boost = kind_score_boost(&p, &["error", "handling"], None);
+        assert!((boost - 0.0).abs() < 0.001);
     }
 }

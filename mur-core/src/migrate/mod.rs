@@ -190,6 +190,8 @@ fn convert_v1_to_v2(v1: &V1Pattern) -> Result<Pattern> {
             updated_at: updated,
             ..Default::default()
         },
+        kind: None,
+        origin: None,
         attachments: vec![],
     })
 }

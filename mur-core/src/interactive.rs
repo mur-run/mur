@@ -248,6 +248,8 @@ pub fn interactive_new(store: &YamlStore) -> Result<Option<String>> {
             updated_at: chrono::Utc::now(),
             ..Default::default()
         },
+        kind: None,
+        origin: None,
         attachments: vec![],
     };
 
@@ -610,6 +612,8 @@ mod tests {
                 content: Content::Plain("Content".to_string()),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         };
 
@@ -627,6 +631,8 @@ mod tests {
                 confidence: 0.5,
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         };
 
@@ -655,6 +661,8 @@ mod tests {
                 },
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         };
         store.save(&pattern).unwrap();
@@ -675,6 +683,8 @@ mod tests {
                 content: Content::Plain("content".to_string()),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         };
         pattern.lifecycle.muted = true;
@@ -697,6 +707,8 @@ mod tests {
                 },
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         };
 

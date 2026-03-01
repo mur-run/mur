@@ -8,6 +8,7 @@ use tracing_subscriber::EnvFilter;
 mod auth;
 mod capture;
 mod community;
+mod context_api;
 mod dashboard;
 mod evolve;
 mod inject;
@@ -130,6 +131,9 @@ enum Commands {
         /// Run even if recently evolved
         #[arg(long)]
         force: bool,
+        /// Run full consolidation (dedup, contradiction, promotion, decay, archival)
+        #[arg(long)]
+        consolidate: bool,
     },
     /// Detect emergent patterns from cross-session behaviors
     Emerge {
@@ -159,6 +163,18 @@ enum Commands {
         /// Write context to ~/.mur/context.md for file-based tools (Aider, Cline, Windsurf)
         #[arg(long)]
         file: bool,
+        /// Token budget (default: 2000)
+        #[arg(long, default_value = "2000")]
+        budget: usize,
+        /// Source tool identifier (default: "cli")
+        #[arg(long, default_value = "cli")]
+        source: String,
+        /// Output as JSON instead of formatted text
+        #[arg(long)]
+        json: bool,
+        /// Scope filter (repeatable key=value, e.g. --scope user=david --scope project=mur)
+        #[arg(long)]
+        scope: Vec<String>,
     },
     /// Session recording for Claude Code hooks
     Session {
@@ -204,6 +220,30 @@ enum Commands {
         /// Quick inline field edit (skip $EDITOR)
         #[arg(long)]
         quick: bool,
+    },
+    /// Import/export patterns in MKEF (MUR Knowledge Exchange Format)
+    Exchange {
+        #[command(subcommand)]
+        action: ExchangeAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ExchangeAction {
+    /// Import a single MKEF file
+    Import {
+        /// Path to MKEF YAML file
+        file: String,
+    },
+    /// Import all MKEF files from ~/.mur/exchange/
+    ImportAll,
+    /// Export a pattern to MKEF format
+    Export {
+        /// Pattern name to export
+        name: String,
+        /// Output directory (default: ~/.mur/exchange/)
+        #[arg(long)]
+        dir: Option<String>,
     },
 }
 
@@ -346,14 +386,28 @@ async fn main() -> Result<()> {
         Commands::Promote { name, tier } => cmd_promote(&name, &tier)?,
         Commands::Deprecate { name } => cmd_deprecate(&name)?,
         Commands::Links { name } => cmd_links(&name)?,
-        Commands::Evolve { dry_run, force } => cmd_evolve(dry_run, force)?,
+        Commands::Evolve {
+            dry_run,
+            force,
+            consolidate,
+        } => {
+            if consolidate {
+                cmd_consolidate(dry_run)?;
+            } else {
+                cmd_evolve(dry_run, force)?;
+            }
+        }
         Commands::Emerge { threshold, dry_run } => cmd_emerge(threshold, dry_run)?,
         Commands::Suggest { create } => cmd_suggest(create)?,
         Commands::Context {
             compact,
             query,
             file,
-        } => cmd_context(query, compact, file).await?,
+            budget,
+            source,
+            json,
+            scope,
+        } => cmd_context(query, compact, file, budget, source, json, scope).await?,
         Commands::Session { action } => match action {
             SessionAction::Start { source } => cmd_session_start(&source)?,
             SessionAction::Stop { analyze } => cmd_session_stop(analyze)?,
@@ -385,6 +439,11 @@ async fn main() -> Result<()> {
         } => cmd_serve(port, open, readonly).await?,
         Commands::Why { name } => cmd_why(&name)?,
         Commands::Edit { name, quick } => cmd_edit(&name, quick)?,
+        Commands::Exchange { action } => match action {
+            ExchangeAction::Import { file } => cmd_exchange_import(&file)?,
+            ExchangeAction::ImportAll => cmd_exchange_import_all()?,
+            ExchangeAction::Export { name, dir } => cmd_exchange_export(&name, dir)?,
+        },
     }
 
     Ok(())
@@ -530,6 +589,8 @@ fn cmd_new(diagram_path: Option<String>) -> Result<()> {
             updated_at: chrono::Utc::now(),
             ..Default::default()
         },
+        kind: None,
+        origin: None,
         attachments,
     };
 
@@ -1665,6 +1726,85 @@ fn cmd_workflow_new() -> Result<()> {
     Ok(())
 }
 
+// ─── Exchange commands ────────────────────────────────────────────
+
+fn cmd_exchange_import(file: &str) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let path = std::path::Path::new(file);
+    match store::exchange::import_mkef_file(path, &store)? {
+        Some(name) => println!("✅ Imported pattern: {}", name),
+        None => println!("⏭️  Pattern already exists, skipped"),
+    }
+    Ok(())
+}
+
+fn cmd_exchange_import_all() -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let exchange_dir = store::exchange::default_exchange_dir();
+    let imported = store::exchange::import_mkef_dir(&exchange_dir, &store)?;
+    if imported.is_empty() {
+        println!("No new patterns to import from {}", exchange_dir.display());
+    } else {
+        println!("✅ Imported {} patterns:", imported.len());
+        for name in &imported {
+            println!("  - {}", name);
+        }
+    }
+    Ok(())
+}
+
+fn cmd_exchange_export(name: &str, dir: Option<String>) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let pattern = store.get(name)?;
+    let exchange_dir = dir
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(store::exchange::default_exchange_dir);
+    let path = store::exchange::export_mkef(&pattern, &exchange_dir)?;
+    println!("✅ Exported to {}", path.display());
+    Ok(())
+}
+
+fn cmd_consolidate(dry_run: bool) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let mode = if dry_run { "dry run" } else { "live" };
+    println!("🧹 Consolidating patterns ({})...\n", mode);
+
+    let report = evolve::consolidate::consolidate(&store, dry_run)?;
+
+    println!("Scanned: {} patterns", report.patterns_scanned);
+    if report.duplicates_merged > 0 {
+        println!("  🔗 Merged {} duplicates", report.duplicates_merged);
+    }
+    if report.contradictions_resolved > 0 {
+        println!(
+            "  ⚡ Resolved {} contradictions",
+            report.contradictions_resolved
+        );
+    }
+    if report.promotions > 0 {
+        println!("  ⬆️  Promoted {} patterns", report.promotions);
+    }
+    if report.patterns_decayed > 0 {
+        println!("  📉 Decayed {} patterns", report.patterns_decayed);
+    }
+    if report.patterns_archived > 0 {
+        println!("  📦 Archived {} patterns", report.patterns_archived);
+    }
+
+    if !report.details.is_empty() {
+        println!();
+        for d in &report.details {
+            println!("  {} [{}] {}", d.pattern_name, d.action, d.detail);
+        }
+    }
+
+    if dry_run {
+        println!("\n(dry run — no changes saved)");
+    }
+
+    Ok(())
+}
+
 fn cmd_evolve(dry_run: bool, _force: bool) -> Result<()> {
     use evolve::decay::{apply_decay_all, apply_decay_all_dry_run};
     use evolve::maturity::{apply_maturity_all, apply_maturity_all_dry_run};
@@ -2061,6 +2201,8 @@ fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
                         maturity: mur_common::knowledge::Maturity::Draft,
                         ..Default::default()
                     },
+                    kind: None,
+                    origin: None,
                     attachments: vec![],
                 };
                 store.save(&pattern)?;
@@ -2086,11 +2228,35 @@ fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
 
 // ─── Context command ──────────────────────────────────────────────
 
-async fn cmd_context(query: Option<String>, compact: bool, write_file: bool) -> Result<()> {
-    use retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
+async fn cmd_context(
+    query: Option<String>,
+    compact: bool,
+    write_file: bool,
+    budget: usize,
+    source: String,
+    json_output: bool,
+    scope_args: Vec<String>,
+) -> Result<()> {
+    use retrieve::scoring::{
+        ScopeContext, score_and_rank_hybrid_with_scope, score_and_rank_with_scope,
+    };
     use std::collections::HashMap;
     use store::embedding::{EmbeddingConfig, embed};
     use store::lancedb::VectorStore;
+
+    // Parse scope arguments (key=value pairs)
+    let mut scope = context_api::ContextScope::default();
+    for arg in &scope_args {
+        if let Some((key, value)) = arg.split_once('=') {
+            match key {
+                "user" => scope.user = Some(value.to_string()),
+                "project" => scope.project = Some(value.to_string()),
+                "task" => scope.task = Some(value.to_string()),
+                "platform" => scope.platform = Some(value.to_string()),
+                _ => eprintln!("Warning: unknown scope key '{}'", key),
+            }
+        }
+    }
 
     // Auto-detect project context from cwd
     let cwd = std::env::current_dir()?;
@@ -2152,6 +2318,15 @@ async fn cmd_context(query: Option<String>, compact: bool, write_file: bool) -> 
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
+    // Build scope context for accurate preference/procedure scoring boosts.
+    // `source` tells us the calling tool (e.g. "claude-code"), which maps
+    // to `origin.platform` for preference matching.
+    let score_scope = ScopeContext {
+        user: scope.user.clone(),
+        platform: scope.platform.clone().or_else(|| Some(source.clone())),
+        task: scope.task.clone(),
+    };
+
     // Try hybrid search if LanceDB index exists
     let index_path = dirs::home_dir()
         .expect("no home dir")
@@ -2170,12 +2345,17 @@ async fn cmd_context(query: Option<String>, compact: bool, write_file: bool) -> 
                     .into_iter()
                     .map(|r| (r.name, r.similarity as f64))
                     .collect();
-                score_and_rank_hybrid(&effective_query, patterns, &vector_scores)
+                score_and_rank_hybrid_with_scope(
+                    &effective_query,
+                    patterns,
+                    &vector_scores,
+                    Some(&score_scope),
+                )
             }
-            Err(_) => score_and_rank(&effective_query, patterns),
+            Err(_) => score_and_rank_with_scope(&effective_query, patterns, Some(&score_scope)),
         }
     } else {
-        score_and_rank(&effective_query, patterns)
+        score_and_rank_with_scope(&effective_query, patterns, Some(&score_scope))
     };
 
     let mut injected_patterns: Vec<Pattern> = Vec::new();
@@ -2193,7 +2373,47 @@ async fn cmd_context(query: Option<String>, compact: bool, write_file: bool) -> 
         injected_patterns.push(p);
     }
 
-    let token_budget = if compact { 800 } else { 2000 };
+    let token_budget = if compact { 800 } else { budget };
+
+    // If JSON output requested, build ContextResponse from the already-scored
+    // injected_patterns (same hybrid pipeline as text path, same project scope).
+    if json_output {
+        use context_api::{ContextResponse, ScoredPatternResponse};
+        let response_patterns: Vec<ScoredPatternResponse> = injected_patterns
+            .iter()
+            .map(|p| {
+                let kind_str = match p.effective_kind() {
+                    mur_common::pattern::PatternKind::Technical => "technical",
+                    mur_common::pattern::PatternKind::Preference => "preference",
+                    mur_common::pattern::PatternKind::Fact => "fact",
+                    mur_common::pattern::PatternKind::Procedure => "procedure",
+                    mur_common::pattern::PatternKind::Behavioral => "behavioral",
+                };
+                ScoredPatternResponse {
+                    name: p.name.clone(),
+                    description: p.description.clone(),
+                    score: p.importance, // best proxy available after injection update
+                    kind: kind_str.to_string(),
+                }
+            })
+            .collect();
+        let formatted = inject::hook::format_unified_injection_with_store(
+            &injected_patterns,
+            &workflows,
+            token_budget,
+            Some(&yaml_store),
+        );
+        let resp = ContextResponse {
+            tokens_used: formatted.len() / 4,
+            injection_ids: injected_patterns.iter().map(|p| p.name.clone()).collect(),
+            patterns: response_patterns,
+            formatted,
+        };
+        let json = serde_json::to_string_pretty(&resp)?;
+        println!("{json}");
+        return Ok(());
+    }
+
     let output = inject::hook::format_unified_injection_with_store(
         &injected_patterns,
         &workflows,
@@ -2440,6 +2660,8 @@ async fn cmd_community_fetch(id: &str) -> Result<()> {
             },
             ..Default::default()
         },
+        kind: None,
+        origin: None,
         attachments: vec![],
     };
 
@@ -2491,8 +2713,8 @@ async fn cmd_community_star(id: &str) -> Result<()> {
 fn print_pattern_table(patterns: &[community::CommunityPattern]) {
     // Header
     println!(
-        "  {:<36}  {:<30}  {:>5}  {:>5}  {}",
-        "ID", "NAME", "STARS", "COPIES", "AUTHOR"
+        "  {:<36}  {:<30}  {:>5}  {:>5}  AUTHOR",
+        "ID", "NAME", "STARS", "COPIES"
     );
     println!("  {}", "-".repeat(100));
     for p in patterns {
@@ -3414,17 +3636,17 @@ learning:
     }
 
     // Check for Cline/Roo (VS Code extension — detect .clinerules in cwd)
-    if let Ok(cwd) = std::env::current_dir() {
-        if cwd.join(".clinerules").exists() || cwd.join(".roomodes").exists() {
-            detected_tools.push("Cline/Roo");
-        }
+    if let Ok(cwd) = std::env::current_dir()
+        && (cwd.join(".clinerules").exists() || cwd.join(".roomodes").exists())
+    {
+        detected_tools.push("Cline/Roo");
     }
 
     // Check for Windsurf
-    if let Ok(cwd) = std::env::current_dir() {
-        if cwd.join(".windsurfrules").exists() || cwd.join(".windsurf").exists() {
-            detected_tools.push("Windsurf");
-        }
+    if let Ok(cwd) = std::env::current_dir()
+        && (cwd.join(".windsurfrules").exists() || cwd.join(".windsurf").exists())
+    {
+        detected_tools.push("Windsurf");
     }
 
     // Check for Amazon Q
@@ -3522,6 +3744,7 @@ async fn cmd_serve(port: u16, open: bool, readonly: bool) -> Result<()> {
     let state = server::AppState {
         patterns_dir: mur_dir.join("patterns"),
         workflows_dir: mur_dir.join("workflows"),
+        index_dir: mur_dir.join("index"),
         config: server::ServerConfig { readonly },
         events_tx,
     };
@@ -3571,7 +3794,7 @@ fn cmd_edit(name: &str, quick: bool) -> Result<()> {
             }
             "confidence" => {
                 let new_val: String = dialoguer::Input::new()
-                    .with_prompt(&format!(
+                    .with_prompt(format!(
                         "  New confidence (current: {:.2})",
                         pattern.confidence
                     ))
@@ -3584,7 +3807,7 @@ fn cmd_edit(name: &str, quick: bool) -> Result<()> {
             }
             "importance" => {
                 let new_val: String = dialoguer::Input::new()
-                    .with_prompt(&format!(
+                    .with_prompt(format!(
                         "  New importance (current: {:.2})",
                         pattern.importance
                     ))

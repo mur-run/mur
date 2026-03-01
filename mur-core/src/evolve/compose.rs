@@ -123,6 +123,8 @@ mod tests {
                 },
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         }
     }

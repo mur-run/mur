@@ -167,13 +167,13 @@ pub async fn device_code_flow(client: &reqwest::Client) -> Result<AuthTokens> {
         }
 
         // Check if it's authorization_pending (expected) or a real error
-        if let Ok(err) = resp.json::<ErrorResponse>().await {
-            if err.error == "expired_token" {
-                println!();
-                anyhow::bail!("Device code expired. Please try again.");
-            }
-            // authorization_pending — keep polling
+        if let Ok(err) = resp.json::<ErrorResponse>().await
+            && err.error == "expired_token"
+        {
+            println!();
+            anyhow::bail!("Device code expired. Please try again.");
         }
+        // authorization_pending — keep polling
 
         print!(".");
         let _ = std::io::Write::flush(&mut std::io::stdout());

@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod capture;
 pub mod community;
+pub mod context_api;
 pub mod dashboard;
 pub mod evolve;
 pub mod inject;

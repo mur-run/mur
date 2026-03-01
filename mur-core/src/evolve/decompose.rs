@@ -135,6 +135,8 @@ pub fn extract_pattern_from_step(workflow: &Workflow, step_index: usize) -> Opti
             },
             ..Default::default()
         },
+        kind: None,
+        origin: None,
         attachments: vec![],
     };
 
@@ -316,6 +318,8 @@ mod tests {
                 content: Content::Plain(content.into()),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         }
     }

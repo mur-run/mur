@@ -222,6 +222,8 @@ mod tests {
                 updated_at: Utc::now(),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         }
     }

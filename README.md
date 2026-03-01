@@ -80,8 +80,8 @@ Patterns start as **Draft**, get promoted through **Emerging → Stable → Cano
 
 | Feature | Description |
 |---------|-------------|
-| **Continuous Learning** | Extract patterns from Claude Code, Gemini CLI, and other AI sessions |
-| **Universal Sync** | Patterns sync to Claude Code, Gemini CLI, Auggie, Cursor, Windsurf, Codex, Aider, Continue |
+| **Continuous Learning** | Extract patterns from Claude Code, Gemini CLI, Cursor, and other AI sessions |
+| **Universal Sync** | 16+ tools: Claude Code, Gemini CLI, Auggie, Cursor, Copilot CLI, OpenClaw, OpenCode, Amp, Codex, Aider, Windsurf, Zed, Junie, Trae, Cline, Amazon Q |
 | **Semantic Search** | LanceDB vector search + BM25 hybrid ranking (Ollama or OpenAI embeddings) |
 | **Pattern Maturity** | Draft → Emerging → Stable → Canonical with auto-promotion and demotion |
 | **Automatic Decay** | Exponential half-life system — unused patterns fade, pinned patterns persist |

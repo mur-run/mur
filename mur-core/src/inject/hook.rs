@@ -19,7 +19,7 @@
 // hooks API supports session-end events. For now, `mur feedback auto`
 // is run manually or via shell scripts.
 
-use mur_common::pattern::{Attachment, Content, Pattern};
+use mur_common::pattern::{Attachment, Content, Pattern, PatternKind};
 use mur_common::workflow::Workflow;
 
 use crate::capture::feedback::{InjectedPatternRecord, InjectionRecord, write_injection_record};
@@ -102,6 +102,7 @@ pub fn format_for_injection(patterns: &[Pattern], max_tokens: usize) -> String {
 }
 
 /// Format scored patterns with optional YamlStore for resolving diagram attachments.
+/// Groups patterns by kind when mixed kinds are present.
 pub fn format_for_injection_with_store(
     patterns: &[Pattern],
     max_tokens: usize,
@@ -111,8 +112,29 @@ pub fn format_for_injection_with_store(
         return String::new();
     }
 
+    // Use flat (backward-compatible) format when every pattern has no explicit
+    // kind set OR is explicitly Technical.  Fact, Procedure, Preference, and
+    // Behavioral patterns trigger grouped output.
+    let all_technical_or_unset = patterns
+        .iter()
+        .all(|p| p.kind.is_none() || p.kind == Some(PatternKind::Technical));
+
+    if all_technical_or_unset {
+        return format_flat_injection(patterns, max_tokens, store);
+    }
+
+    // Group patterns by kind category
+    format_grouped_injection(patterns, max_tokens, store)
+}
+
+/// Original flat format — used when all patterns are Technical/None.
+fn format_flat_injection(
+    patterns: &[Pattern],
+    max_tokens: usize,
+    store: Option<&YamlStore>,
+) -> String {
     let mut output = String::from("## Relevant patterns from your learning history\n\n");
-    let mut token_count = output.len() / 4; // rough estimate
+    let mut token_count = output.len() / 4;
 
     for (i, pattern) in patterns.iter().enumerate() {
         let entry = format_pattern_entry(pattern, i + 1, store);
@@ -128,6 +150,101 @@ pub fn format_for_injection_with_store(
     }
 
     output.trim_end().to_string()
+}
+
+/// Kind category for grouping injection output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum KindGroup {
+    Preferences,
+    Procedures,
+    Knowledge,
+}
+
+impl KindGroup {
+    fn from_kind(kind: PatternKind) -> Self {
+        match kind {
+            PatternKind::Preference | PatternKind::Behavioral => KindGroup::Preferences,
+            PatternKind::Procedure => KindGroup::Procedures,
+            PatternKind::Technical | PatternKind::Fact => KindGroup::Knowledge,
+        }
+    }
+
+    fn header(&self) -> &'static str {
+        match self {
+            KindGroup::Preferences => "## User Preferences",
+            KindGroup::Procedures => "## Procedures",
+            KindGroup::Knowledge => "## Knowledge",
+        }
+    }
+}
+
+/// Grouped format — patterns grouped by kind with appropriate formatting.
+fn format_grouped_injection(
+    patterns: &[Pattern],
+    max_tokens: usize,
+    store: Option<&YamlStore>,
+) -> String {
+    let mut output = String::from("## Relevant knowledge from your learning history\n\n");
+    let mut token_count = output.len() / 4;
+
+    // Group patterns maintaining relative order within groups
+    let group_order = [
+        KindGroup::Preferences,
+        KindGroup::Procedures,
+        KindGroup::Knowledge,
+    ];
+    let mut index = 1;
+
+    for group in &group_order {
+        let group_patterns: Vec<&Pattern> = patterns
+            .iter()
+            .filter(|p| KindGroup::from_kind(p.effective_kind()) == *group)
+            .collect();
+
+        if group_patterns.is_empty() {
+            continue;
+        }
+
+        let header = format!("{}\n\n", group.header());
+        let header_tokens = header.len() / 4;
+        if token_count + header_tokens > max_tokens && index > 1 {
+            break;
+        }
+        output.push_str(&header);
+        token_count += header_tokens;
+
+        for pattern in group_patterns {
+            let entry = match group {
+                KindGroup::Preferences => format_preference_entry(pattern),
+                KindGroup::Procedures => format_procedure_entry(pattern),
+                KindGroup::Knowledge => format_pattern_entry(pattern, index, store),
+            };
+            let entry_tokens = entry.len() / 4;
+
+            if token_count + entry_tokens > max_tokens && index > 1 {
+                break;
+            }
+
+            output.push_str(&entry);
+            output.push('\n');
+            token_count += entry_tokens;
+            index += 1;
+        }
+    }
+
+    output.trim_end().to_string()
+}
+
+/// Format a preference pattern as a bullet point.
+fn format_preference_entry(pattern: &Pattern) -> String {
+    let content = format_content(&pattern.content);
+    format!("- **{}**: {}\n", pattern.description, content.trim())
+}
+
+/// Format a procedure pattern as numbered steps.
+fn format_procedure_entry(pattern: &Pattern) -> String {
+    let content = format_content(&pattern.content);
+    format!("### {}\n{}\n", pattern.description, content.trim())
 }
 
 fn format_pattern_entry(pattern: &Pattern, index: usize, store: Option<&YamlStore>) -> String {
@@ -363,6 +480,8 @@ mod tests {
                 updated_at: chrono::Utc::now(),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         }
     }
@@ -428,6 +547,8 @@ mod tests {
                 updated_at: chrono::Utc::now(),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         };
         let result = format_for_injection(&[p], 2000);
@@ -521,6 +642,8 @@ mod tests {
                 confidence: 0.9,
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![Attachment {
                 att_type: AttachmentType::Diagram,
                 format: AttachmentFormat::Mermaid,
@@ -559,6 +682,8 @@ mod tests {
                 content: Content::Plain("Use microservices.".into()),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![Attachment {
                 att_type: AttachmentType::Diagram,
                 format: AttachmentFormat::Mermaid,
@@ -584,6 +709,8 @@ mod tests {
                 content: Content::Plain("Use dark theme.".into()),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![Attachment {
                 att_type: AttachmentType::Image,
                 format: AttachmentFormat::Png,
@@ -608,5 +735,83 @@ mod tests {
         // No attachment markers
         assert!(!result.contains("Diagram:"));
         assert!(!result.contains("📎"));
+    }
+
+    // ─── Kind-aware formatting tests ────────────────────────────
+
+    #[test]
+    fn test_mixed_kind_injection_grouped() {
+        let mut p_pref = make_pattern("Prefer Chinese", "Always use Traditional Chinese");
+        p_pref.kind = Some(PatternKind::Preference);
+
+        let mut p_proc = make_pattern("Deploy steps", "1. Run tests 2. Build 3. Deploy");
+        p_proc.kind = Some(PatternKind::Procedure);
+
+        let p_tech = make_pattern("Use @Test", "Use @Test macro for Swift testing");
+        // kind is None = Technical
+
+        let result = format_for_injection(&[p_pref, p_proc, p_tech], 5000);
+        assert!(
+            result.contains("User Preferences"),
+            "Should have Preferences header"
+        );
+        assert!(
+            result.contains("Procedures"),
+            "Should have Procedures header"
+        );
+        assert!(result.contains("Knowledge"), "Should have Knowledge header");
+        assert!(result.contains("Traditional Chinese"));
+        assert!(result.contains("Deploy steps"));
+        assert!(result.contains("@Test macro"));
+    }
+
+    #[test]
+    fn test_all_technical_uses_flat_format() {
+        let p1 = make_pattern("Pattern A", "Content A");
+        let p2 = make_pattern("Pattern B", "Content B");
+        let result = format_for_injection(&[p1, p2], 5000);
+        // Should use the old flat format header
+        assert!(result.contains("Relevant patterns from your learning history"));
+        // Should NOT have kind-group headers
+        assert!(!result.contains("User Preferences"));
+        assert!(!result.contains("Procedures"));
+    }
+
+    #[test]
+    fn test_explicit_technical_kind_still_flat() {
+        // explicit kind=Technical should still use flat format
+        let mut p1 = make_pattern("Pattern A", "Content A");
+        p1.kind = Some(PatternKind::Technical);
+        let mut p2 = make_pattern("Pattern B", "Content B");
+        p2.kind = Some(PatternKind::Technical);
+        let result = format_for_injection(&[p1, p2], 5000);
+        assert!(result.contains("Relevant patterns from your learning history"));
+        assert!(!result.contains("Knowledge"));
+    }
+
+    #[test]
+    fn test_explicit_fact_kind_triggers_grouped_format() {
+        // Fact with explicit kind → grouped (even though it's in Knowledge group)
+        let mut p1 = make_pattern("Server address", "prod.example.com:8080");
+        p1.kind = Some(PatternKind::Fact);
+        let result = format_for_injection(&[p1], 5000);
+        assert!(
+            result.contains("Relevant knowledge from your learning history"),
+            "Explicit Fact kind should use grouped header"
+        );
+        assert!(result.contains("Knowledge"));
+    }
+
+    #[test]
+    fn test_preferences_as_bullet_list() {
+        let mut p = make_pattern("Short responses", "Keep answers concise");
+        p.kind = Some(PatternKind::Preference);
+
+        let mut p2 = make_pattern("Tech pattern", "Use Rust");
+        p2.kind = Some(PatternKind::Technical);
+
+        let result = format_for_injection(&[p, p2], 5000);
+        // Preferences should be bullet points
+        assert!(result.contains("- **"));
     }
 }

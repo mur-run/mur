@@ -38,7 +38,11 @@ struct WebAssets;
 use mur_common::pattern::*;
 use mur_common::workflow::Workflow;
 
+use crate::context_api;
 use crate::retrieve::scoring::{ScoredPattern, score_and_rank};
+use crate::store::config::load_config;
+use crate::store::embedding::{EmbeddingConfig, embed};
+use crate::store::lancedb::VectorStore;
 use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
@@ -55,6 +59,9 @@ pub struct ServerConfig {
 pub struct AppState {
     pub patterns_dir: PathBuf,
     pub workflows_dir: PathBuf,
+    /// Path to the LanceDB vector index (`~/.mur/index`).
+    /// When present the context endpoint uses hybrid scoring.
+    pub index_dir: PathBuf,
     pub config: ServerConfig,
     pub events_tx: broadcast::Sender<String>,
 }
@@ -156,6 +163,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/links/{id}", get(get_links))
         // Search
         .route("/api/v1/search", post(search_patterns))
+        // Context API (retrieve, ingest, feedback)
+        .route("/api/v1/context", post(context_retrieve))
+        .route("/api/v1/ingest", post(context_ingest))
+        .route("/api/v1/feedback", post(context_feedback))
         // WebSocket for real-time events
         .route("/api/v1/ws", get(ws_handler))
         .layer(cors)
@@ -385,6 +396,8 @@ async fn create_pattern(
             updated_at: chrono::Utc::now(),
             ..Default::default()
         },
+        kind: None,
+        origin: None,
         attachments: vec![],
     };
 
@@ -771,6 +784,88 @@ async fn search_patterns(
     Ok(wrap(results, count))
 }
 
+// ─── Context API Handlers ─────────────────────────────────────────
+
+async fn context_retrieve(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<context_api::ContextRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let store = state.pattern_store()?;
+
+    // Attempt hybrid (vector + keyword) scoring when the LanceDB index exists.
+    // Falls back to keyword-only when the index is absent or embedding fails.
+    let vector_scores = if state.index_dir.exists() {
+        match load_config() {
+            Ok(cfg) => {
+                let emb_cfg = EmbeddingConfig::from_config(&cfg);
+                match embed(&req.query, &emb_cfg).await {
+                    Ok(query_embedding) => {
+                        match VectorStore::open(&state.index_dir, cfg.embedding.dimensions as i32)
+                            .await
+                        {
+                            Ok(vs) => {
+                                vs.search(&query_embedding, 20, None)
+                                    .await
+                                    .ok()
+                                    .map(|results| {
+                                        results
+                                            .into_iter()
+                                            .map(|r| (r.name, r.similarity as f64))
+                                            .collect::<std::collections::HashMap<_, _>>()
+                                    })
+                            }
+                            Err(_) => None,
+                        }
+                    }
+                    Err(_) => None,
+                }
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let resp =
+        context_api::retrieve(&req, &store, vector_scores.as_ref()).map_err(AppError::Internal)?;
+    let count = store.list_names().map(|n| n.len()).unwrap_or(0);
+    Ok(wrap(resp, count))
+}
+
+async fn context_ingest(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<context_api::IngestRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    if state.config.readonly {
+        return Err(AppError::Readonly);
+    }
+    let store = state.pattern_store()?;
+    let resp = context_api::ingest(&req, &store).map_err(AppError::Internal)?;
+    notify(&state, "pattern:ingested", &resp.pattern_id);
+    let count = store.list_names().map(|n| n.len()).unwrap_or(0);
+    Ok((StatusCode::CREATED, wrap(resp, count)))
+}
+
+async fn context_feedback(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<context_api::FeedbackRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    if state.config.readonly {
+        return Err(AppError::Readonly);
+    }
+    let store = state.pattern_store()?;
+
+    // Check pattern exists first for a clear 404
+    store
+        .get(&req.pattern_id)
+        .map_err(|_| AppError::NotFound(format!("Pattern '{}' not found", req.pattern_id)))?;
+
+    context_api::submit_feedback(&req, &store).map_err(AppError::Internal)?;
+    notify(&state, "pattern:feedback", &req.pattern_id);
+    let count = store.list_names().map(|n| n.len()).unwrap_or(0);
+    Ok(wrap(serde_json::json!({"ok": true}), count))
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -784,12 +879,14 @@ mod tests {
     fn test_state(tmp: &tempfile::TempDir) -> AppState {
         let patterns_dir = tmp.path().join("patterns");
         let workflows_dir = tmp.path().join("workflows");
+        let index_dir = tmp.path().join("index"); // non-existent → keyword-only fallback
         std::fs::create_dir_all(&patterns_dir).unwrap();
         std::fs::create_dir_all(&workflows_dir).unwrap();
         let (events_tx, _) = broadcast::channel(64);
         AppState {
             patterns_dir,
             workflows_dir,
+            index_dir,
             config: ServerConfig { readonly: false },
             events_tx,
         }
@@ -818,6 +915,8 @@ mod tests {
                 updated_at: chrono::Utc::now(),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         }
     }
@@ -1293,5 +1392,126 @@ mod tests {
         let related = json["data"]["related"].as_array().unwrap();
         assert_eq!(related.len(), 1);
         assert_eq!(related[0], "other-pattern");
+    }
+
+    // ─── Context API endpoint tests ────────────────────────────
+
+    #[tokio::test]
+    async fn test_context_retrieve_200() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(&tmp);
+        let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
+        store.save(&make_test_pattern("ctx-pattern")).unwrap();
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/context")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"query":"rust testing","source":"test"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert!(json["data"]["patterns"].is_array());
+        assert!(json["data"]["formatted"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_context_ingest_201() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(&tmp);
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/ingest")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"content":"Run tests before deploy","category":"procedure","source":"test","name":"test-deploy-rule"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let json = body_json(resp).await;
+        assert_eq!(json["data"]["action"], "created");
+    }
+
+    #[tokio::test]
+    async fn test_context_ingest_readonly_403() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_readonly(&tmp);
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/ingest")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"content":"test","category":"fact","source":"x"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_context_feedback_200() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(&tmp);
+        let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
+        store.save(&make_test_pattern("fb-pattern")).unwrap();
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/feedback")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"pattern_id":"fb-pattern","signal":"success","source":"test"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_context_feedback_404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(&tmp);
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/feedback")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"pattern_id":"nonexistent","signal":"success","source":"test"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

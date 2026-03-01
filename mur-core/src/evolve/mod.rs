@@ -1,5 +1,7 @@
+#[allow(dead_code)]
 pub mod commander_bridge;
 pub mod compose;
+pub mod consolidate;
 pub mod cooccurrence;
 pub mod decay;
 pub mod decompose;
@@ -17,6 +19,7 @@ use self::commander_bridge::{CommanderBridge, WorkflowPreview};
 ///
 /// Returns previews for patterns that are candidates. Callers decide whether
 /// to present them to the user or auto-save.
+#[allow(dead_code)]
 pub fn suggest_commander_workflows(
     bridge: &CommanderBridge,
     patterns: &[Pattern],
@@ -27,10 +30,7 @@ pub fn suggest_commander_workflows(
         .filter_map(|c| {
             let pattern = patterns.iter().find(|p| p.name == c.pattern_name)?;
             // Skip if workflow already exists on disk
-            if commander_bridge::workflow_exists(
-                &bridge.config.workflows_dir,
-                &pattern.name,
-            ) {
+            if commander_bridge::workflow_exists(&bridge.config.workflows_dir, &pattern.name) {
                 return None;
             }
             bridge.suggest_workflow(pattern).ok().flatten()

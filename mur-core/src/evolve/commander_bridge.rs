@@ -5,9 +5,10 @@
 //! workflow YAML files.
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use mur_common::knowledge::KnowledgeBase;
-use mur_common::pattern::{Content, Pattern};
 use mur_common::knowledge::Maturity;
+use mur_common::pattern::{Content, Origin, OriginTrigger, Pattern, PatternKind, Tier};
 use mur_common::workflow::{FailureAction, Permission, Step, Workflow};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,23 +65,8 @@ pub struct WorkflowPreview {
 
 /// Keywords that signal a pattern contains automatable actions.
 const ACTION_KEYWORDS: &[&str] = &[
-    "run ",
-    "execute",
-    "build",
-    "test",
-    "deploy",
-    "install",
-    "compile",
-    "lint",
-    "format",
-    "check",
-    "cargo ",
-    "npm ",
-    "make ",
-    "docker ",
-    "git ",
-    "curl ",
-    "mkdir ",
+    "run ", "execute", "build", "test", "deploy", "install", "compile", "lint", "format", "check",
+    "cargo ", "npm ", "make ", "docker ", "git ", "curl ", "mkdir ",
 ];
 
 impl CommanderBridge {
@@ -213,10 +199,7 @@ impl CommanderBridge {
         let tools = collect_tools(pattern, &steps);
 
         let trigger = if !pattern.tags.topics.is_empty() {
-            format!(
-                "when working with {}",
-                pattern.tags.topics.join(" and ")
-            )
+            format!("when working with {}", pattern.tags.topics.join(" and "))
         } else {
             format!("when applying {}", pattern.name)
         };
@@ -231,7 +214,7 @@ impl CommanderBridge {
                     pattern.name
                 ),
                 content: pattern.content.clone(),
-                tier: pattern.tier.clone(),
+                tier: pattern.tier,
                 tags: pattern.tags.clone(),
                 applies: pattern.applies.clone(),
                 ..Default::default()
@@ -345,10 +328,10 @@ fn infer_tool(command: &str, pattern: &Pattern) -> Option<String> {
 fn collect_tools(pattern: &Pattern, steps: &[Step]) -> Vec<String> {
     let mut tools: Vec<String> = pattern.applies.tools.clone();
     for step in steps {
-        if let Some(ref t) = step.tool {
-            if !tools.contains(t) {
-                tools.push(t.clone());
-            }
+        if let Some(ref t) = step.tool
+            && !tools.contains(t)
+        {
+            tools.push(t.clone());
         }
     }
     tools
@@ -360,11 +343,124 @@ pub fn workflow_exists(workflows_dir: &Path, pattern_name: &str) -> bool {
     path.exists()
 }
 
+// ─── Bidirectional Knowledge Sync ─────────────────────────────────
+
+/// Convert a Commander memory fact (markdown text) into a MUR Pattern.
+///
+/// Infers the `PatternKind` from the content:
+/// - "prefer"/"always"/"never" → Preference or Behavioral
+/// - numbered steps → Procedure
+/// - else → Fact
+pub fn fact_to_pattern(fact_text: &str, source_file: Option<&str>) -> Pattern {
+    let lower = fact_text.to_lowercase();
+    let kind = if lower.contains("prefer") || lower.contains("favourite") || lower.contains("like ")
+    {
+        PatternKind::Preference
+    } else if lower.contains("never ")
+        || lower.contains("always ")
+        || lower.contains("don't ")
+        || lower.contains("do not ")
+    {
+        PatternKind::Behavioral
+    } else if lower.contains("1.") || lower.contains("step ") || lower.contains("first,") {
+        PatternKind::Procedure
+    } else {
+        PatternKind::Fact
+    };
+
+    // Generate name from first 50 chars
+    let name: String = fact_text
+        .chars()
+        .take(50)
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let name = name.trim_matches('-').replace("--", "-");
+    let name = if name.is_empty() {
+        format!("commander-fact-{}", Utc::now().timestamp())
+    } else {
+        name
+    };
+
+    let description: String = fact_text.chars().take(100).collect();
+
+    Pattern {
+        base: KnowledgeBase {
+            schema: 2,
+            name,
+            description,
+            content: Content::Plain(fact_text.to_string()),
+            tier: Tier::Session,
+            importance: 0.5,
+            confidence: 0.7,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            ..Default::default()
+        },
+        kind: Some(kind),
+        origin: Some(Origin {
+            source: "commander".to_string(),
+            trigger: OriginTrigger::UserExplicit,
+            user: None,
+            platform: source_file.map(|s| s.to_string()),
+            confidence: 0.8,
+        }),
+        attachments: vec![],
+    }
+}
+
+/// Convert a MUR Pattern into Commander-compatible markdown rule text.
+pub fn pattern_to_rule(pattern: &Pattern) -> String {
+    let content = match &pattern.content {
+        Content::DualLayer {
+            technical,
+            principle,
+        } => {
+            let mut s = technical.clone();
+            if let Some(p) = principle {
+                s.push_str("\n\n");
+                s.push_str(p);
+            }
+            s
+        }
+        Content::Plain(s) => s.clone(),
+    };
+
+    match pattern.effective_kind() {
+        PatternKind::Preference | PatternKind::Behavioral => {
+            format!("- **{}**: {}", pattern.description, content.trim())
+        }
+        PatternKind::Procedure => {
+            format!("### {}\n{}", pattern.description, content.trim())
+        }
+        _ => {
+            format!("### {}\n{}", pattern.description, content.trim())
+        }
+    }
+}
+
+/// Resolve a sync conflict between an incoming pattern and an existing one.
+/// Returns true if the incoming pattern should win (replace existing).
+pub fn should_replace(incoming: &Pattern, existing: &Pattern) -> bool {
+    // Higher confidence wins
+    let conf_diff = incoming.confidence - existing.confidence;
+    if conf_diff.abs() > 0.05 {
+        return conf_diff > 0.0;
+    }
+    // Same confidence: more recent wins
+    incoming.updated_at > existing.updated_at
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mur_common::knowledge::{Evidence, Links};
     use mur_common::pattern::Tags;
+    use mur_common::pattern::{Evidence, Links};
     use tempfile::TempDir;
 
     fn make_automatable_pattern(name: &str) -> Pattern {
@@ -390,6 +486,8 @@ mod tests {
                 links: Links::default(),
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         }
     }
@@ -405,6 +503,8 @@ mod tests {
                 maturity: Maturity::Draft,
                 ..Default::default()
             },
+            kind: None,
+            origin: None,
             attachments: vec![],
         }
     }
@@ -524,7 +624,8 @@ mod tests {
 
     #[test]
     fn test_extract_steps_with_dollar_prefix() {
-        let content = "$ cargo build\n$ cargo test --release\nSome description line\n$ cargo clippy";
+        let content =
+            "$ cargo build\n$ cargo test --release\nSome description line\n$ cargo clippy";
         let pattern = make_automatable_pattern("test");
         let steps = extract_steps(content, &pattern);
 
@@ -598,10 +699,7 @@ mod tests {
         let config = CommanderBridgeConfig::default();
         assert!(config.auto_suggest);
         assert!(config.workflows_dir.to_string_lossy().contains(".mur"));
-        assert!(config
-            .workflows_dir
-            .to_string_lossy()
-            .contains("workflows"));
+        assert!(config.workflows_dir.to_string_lossy().contains("workflows"));
     }
 
     #[test]
@@ -615,10 +713,7 @@ mod tests {
             infer_tool("docker compose up", &pattern),
             Some("docker".to_string())
         );
-        assert_eq!(
-            infer_tool("npm install", &pattern),
-            Some("npm".to_string())
-        );
+        assert_eq!(infer_tool("npm install", &pattern), Some("npm".to_string()));
         assert_eq!(
             infer_tool("git push origin main", &pattern),
             Some("git".to_string())
@@ -651,5 +746,72 @@ mod tests {
 
         let tools = collect_tools(&pattern, &steps);
         assert_eq!(tools, vec!["cargo", "npm"]);
+    }
+
+    // ─── Fact/Pattern conversion tests ────────────────────────────
+
+    #[test]
+    fn test_fact_to_pattern_preference() {
+        let p = fact_to_pattern("User prefers Traditional Chinese responses", None);
+        assert_eq!(p.effective_kind(), PatternKind::Preference);
+        assert!(p.origin.is_some());
+        assert_eq!(p.origin.as_ref().unwrap().source, "commander");
+    }
+
+    #[test]
+    fn test_fact_to_pattern_behavioral() {
+        let p = fact_to_pattern("Never reply to messages from other users", None);
+        assert_eq!(p.effective_kind(), PatternKind::Behavioral);
+    }
+
+    #[test]
+    fn test_fact_to_pattern_procedure() {
+        let p = fact_to_pattern("1. Run tests 2. Build 3. Deploy to staging", None);
+        assert_eq!(p.effective_kind(), PatternKind::Procedure);
+    }
+
+    #[test]
+    fn test_fact_to_pattern_fact() {
+        let p = fact_to_pattern("The server runs on port 8080", None);
+        assert_eq!(p.effective_kind(), PatternKind::Fact);
+    }
+
+    #[test]
+    fn test_pattern_to_rule_preference() {
+        let mut p = make_automatable_pattern("pref");
+        p.kind = Some(PatternKind::Preference);
+        p.base.description = "Use Chinese".into();
+        p.base.content = Content::Plain("Always respond in Traditional Chinese".into());
+        let rule = pattern_to_rule(&p);
+        assert!(rule.contains("Use Chinese"));
+        assert!(rule.starts_with("- **"));
+    }
+
+    #[test]
+    fn test_pattern_to_rule_technical() {
+        let p = make_automatable_pattern("tech");
+        let rule = pattern_to_rule(&p);
+        assert!(rule.contains("###"));
+    }
+
+    #[test]
+    fn test_should_replace_higher_confidence() {
+        let mut incoming = make_automatable_pattern("a");
+        incoming.base.confidence = 0.9;
+        let mut existing = make_automatable_pattern("b");
+        existing.base.confidence = 0.7;
+        assert!(should_replace(&incoming, &existing));
+        assert!(!should_replace(&existing, &incoming));
+    }
+
+    #[test]
+    fn test_should_replace_same_confidence_newer_wins() {
+        let mut incoming = make_automatable_pattern("a");
+        incoming.base.confidence = 0.8;
+        incoming.base.updated_at = chrono::Utc::now();
+        let mut existing = make_automatable_pattern("b");
+        existing.base.confidence = 0.8;
+        existing.base.updated_at = chrono::Utc::now() - chrono::Duration::days(30);
+        assert!(should_replace(&incoming, &existing));
     }
 }
