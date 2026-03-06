@@ -2275,6 +2275,60 @@ async fn cmd_context(
 
     // Auto-detect project context from cwd
     let cwd = std::env::current_dir()?;
+
+    // Auto-detect and generate starter patterns for new projects
+    if !capture::starter::is_known_project(&cwd)? {
+        let starter_store = YamlStore::default_store()?;
+        let existing: std::collections::HashSet<String> =
+            starter_store.list_names()?.into_iter().collect();
+        let starters = capture::starter::generate_starter_patterns(&cwd, &existing)?;
+        if !starters.is_empty() {
+            let lang_name = capture::starter::detect_language_name(&cwd)
+                .unwrap_or_else(|| "unknown".to_string());
+            if !compact {
+                eprintln!(
+                    "New project detected: {} ({} starter patterns generated)",
+                    lang_name,
+                    starters.len()
+                );
+            }
+            let generated_names: Vec<String> =
+                starters.iter().map(|p| p.name.clone()).collect();
+            let deps: Vec<String> = starters
+                .iter()
+                .flat_map(|p| p.tags.topics.iter().filter(|t| t.as_str() != "starter").cloned())
+                .collect();
+            for p in &starters {
+                starter_store.save(p)?;
+            }
+            capture::starter::mark_project_known(
+                &cwd,
+                capture::starter::ProjectInfo {
+                    path: cwd.to_string_lossy().to_string(),
+                    language: capture::starter::detect_language(&cwd)
+                        .unwrap_or(capture::starter::Language::Rust),
+                    deps,
+                    generated_at: chrono::Utc::now().to_rfc3339(),
+                    patterns_generated: generated_names,
+                },
+            )?;
+        } else {
+            // No patterns generated but still mark as known to avoid re-scanning
+            if let Some(lang) = capture::starter::detect_language(&cwd) {
+                capture::starter::mark_project_known(
+                    &cwd,
+                    capture::starter::ProjectInfo {
+                        path: cwd.to_string_lossy().to_string(),
+                        language: lang,
+                        deps: vec![],
+                        generated_at: chrono::Utc::now().to_rfc3339(),
+                        patterns_generated: vec![],
+                    },
+                )?;
+            }
+        }
+    }
+
     let project_name = cwd
         .file_name()
         .map(|n| n.to_string_lossy().to_string())

@@ -38,6 +38,8 @@ pub enum OriginTrigger {
     CommunityShared,
     /// Auto-consolidated during memory consolidation
     AutoConsolidated,
+    /// Automatically generated (e.g. starter patterns)
+    Automatic,
 }
 
 /// Provenance metadata — where and how a pattern was learned.
