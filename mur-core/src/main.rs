@@ -13,7 +13,6 @@ mod dashboard;
 mod evolve;
 mod inject;
 mod interactive;
-mod migrate;
 mod retrieve;
 mod server;
 mod session;
@@ -67,8 +66,7 @@ enum Commands {
         #[command(subcommand)]
         action: FeedbackAction,
     },
-    /// Migrate v1 patterns to v2 schema
-    Migrate,
+
     /// Garbage collect low-quality patterns
     Gc {
         /// Auto-archive without prompting
@@ -176,7 +174,7 @@ enum Commands {
         #[arg(long)]
         scope: Vec<String>,
     },
-    /// Session recording for Claude Code hooks
+    /// Session recording for AI tool hooks
     Session {
         #[command(subcommand)]
         action: SessionAction,
@@ -192,7 +190,7 @@ enum Commands {
     Logout,
     /// Initialize MUR directory and optionally install hooks
     Init {
-        /// Install Claude Code hooks (PostToolUse, Stop, UserPromptSubmit)
+        /// Install hooks for detected AI tools
         #[arg(long)]
         hooks: bool,
     },
@@ -366,7 +364,7 @@ async fn main() -> Result<()> {
             FeedbackAction::Auto { file, dry_run } => cmd_feedback_auto(file, dry_run)?,
         },
         Commands::Gc { auto } => cmd_gc(auto)?,
-        Commands::Migrate => cmd_migrate()?,
+
         Commands::Learn { action } => match action {
             LearnAction::Extract { file, fingerprint } => {
                 cmd_learn_extract(file, fingerprint)?;
@@ -1259,32 +1257,7 @@ fn cmd_gc(auto: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_migrate() -> Result<()> {
-    use migrate::migrate_directory;
 
-    let mur_dir = dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("patterns");
-
-    println!("🔄 Migrating patterns in {}...", mur_dir.display());
-
-    let result = migrate_directory(&mur_dir)?;
-
-    println!("✅ Migration complete:");
-    println!("   Migrated:    {}", result.migrated);
-    println!("   Already v2:  {}", result.already_v2);
-    println!("   Skipped:     {}", result.skipped);
-
-    if !result.errors.is_empty() {
-        println!("\n⚠️  Issues:");
-        for e in &result.errors {
-            println!("   {}", e);
-        }
-    }
-
-    Ok(())
-}
 
 fn cmd_promote(name: &str, tier_str: &str) -> Result<()> {
     let store = YamlStore::default_store()?;
@@ -2785,7 +2758,7 @@ learning:
         true
     } else {
         // Interactive prompt
-        print!("Install Claude Code hooks? [Y/n] ");
+        print!("Install hooks for AI tools? [Y/n] ");
         io::stdout().flush()?;
         let mut answer = String::new();
         io::stdin().read_line(&mut answer)?;
@@ -3397,6 +3370,9 @@ Run `mur learn` to extract new patterns from recent sessions.
     io::stdin().read_line(&mut model_choice)?;
     let model_choice = model_choice.trim().to_string();
 
+    // Load config (just written with defaults above)
+    let mut config = store::config::load_config()?;
+
     match model_choice.as_str() {
         "1" => {
             // Cloud provider selection
@@ -3412,32 +3388,41 @@ Run `mur learn` to extract new patterns from recent sessions.
             io::stdin().read_line(&mut provider_choice)?;
             let provider_choice = provider_choice.trim().to_string();
 
-            let (provider, llm_model, embed_model, env_var) = match provider_choice.as_str() {
-                "2" => (
-                    "openai",
-                    "gpt-4o-mini",
-                    "text-embedding-3-small",
-                    "OPENAI_API_KEY",
-                ),
-                "3" => (
-                    "gemini",
-                    "gemini-2.0-flash",
-                    "text-embedding-004",
-                    "GEMINI_API_KEY",
-                ),
-                "4" => (
-                    "anthropic",
-                    "claude-sonnet-4-20250514",
-                    "voyage-3-lite",
-                    "ANTHROPIC_API_KEY",
-                ),
-                _ => (
-                    "openai",
-                    "google/gemini-2.5-flash",
-                    "openai/text-embedding-3-small",
-                    "OPENROUTER_API_KEY",
-                ),
-            };
+            let (provider, llm_model, embed_provider, embed_model, env_var, is_openrouter) =
+                match provider_choice.as_str() {
+                    "2" => (
+                        "openai",
+                        "gpt-4o-mini",
+                        "openai",
+                        "text-embedding-3-small",
+                        "OPENAI_API_KEY",
+                        false,
+                    ),
+                    "3" => (
+                        "gemini",
+                        "gemini-2.0-flash",
+                        "gemini",
+                        "text-embedding-004",
+                        "GEMINI_API_KEY",
+                        false,
+                    ),
+                    "4" => (
+                        "anthropic",
+                        "claude-sonnet-4-20250514",
+                        "anthropic",
+                        "voyage-3-lite",
+                        "ANTHROPIC_API_KEY",
+                        false,
+                    ),
+                    _ => (
+                        "openai",
+                        "google/gemini-2.5-flash",
+                        "ollama",
+                        "qwen3-embedding:0.6b",
+                        "OPENROUTER_API_KEY",
+                        true,
+                    ),
+                };
 
             // Check for API key in environment
             if std::env::var(env_var).is_ok() {
@@ -3449,53 +3434,36 @@ Run `mur learn` to extract new patterns from recent sessions.
                 );
             }
 
-            // OpenRouter uses OpenAI-compatible API
-            let is_openrouter = env_var == "OPENROUTER_API_KEY";
-            let openai_url_line = if is_openrouter {
-                "\n  openai_url: https://openrouter.ai/api/v1"
+            let openrouter_url = "https://openrouter.ai/api/v1".to_string();
+
+            // Update embedding config
+            config.embedding.provider = embed_provider.to_string();
+            config.embedding.model = embed_model.to_string();
+            if !is_openrouter {
+                config.embedding.api_key_env = Some(env_var.to_string());
+                config.embedding.openai_url = None;
             } else {
-                ""
-            };
-            let llm_openai_url_line = if is_openrouter {
-                "\n    openai_url: https://openrouter.ai/api/v1"
+                config.embedding.api_key_env = None;
+                config.embedding.openai_url = None;
+            }
+
+            // Update LLM config
+            config.llm.provider = provider.to_string();
+            config.llm.model = llm_model.to_string();
+            config.llm.api_key_env = Some(env_var.to_string());
+            config.llm.openai_url = if is_openrouter {
+                Some(openrouter_url)
             } else {
-                ""
-            };
-            // For OpenRouter, embedding uses Ollama locally (free + fast)
-            let (search_section, display_provider) = if is_openrouter {
-                (
-                    "search:\n  provider: ollama\n  model: qwen3-embedding".to_string(),
-                    "openrouter (LLM) + ollama (search)",
-                )
-            } else {
-                (
-                    format!(
-                        "search:\n  provider: {provider}\n  model: {embed_model}\n  api_key_env: {env_var}{openai_url_line}"
-                    ),
-                    provider,
-                )
+                None
             };
 
-            let config_content = format!(
-                r#"# MUR Configuration
-# See: https://github.com/mur-run/mur
+            store::config::save_config(&config)?;
 
-tools:
-  claude:
-    enabled: true
-  gemini:
-    enabled: true
-
-{search_section}
-
-learning:
-  llm:
-    provider: {provider}
-    model: {llm_model}
-    api_key_env: {env_var}{llm_openai_url_line}
-"#
-            );
-            std::fs::write(&config_path, config_content)?;
+            let display_provider = if is_openrouter {
+                "openrouter (LLM) + ollama (search)"
+            } else {
+                provider
+            };
             println!("  ✓ Config updated: {} / {}", display_provider, llm_model);
         }
         "2" => {
@@ -3542,27 +3510,19 @@ learning:
                 _ => "qwen3-embedding:0.6b",
             };
 
-            let config_content = format!(
-                r#"# MUR Configuration
-# See: https://github.com/mur-run/mur
+            // Update embedding config
+            config.embedding.provider = "ollama".to_string();
+            config.embedding.model = embed_model.to_string();
+            config.embedding.api_key_env = None;
+            config.embedding.openai_url = None;
 
-tools:
-  claude:
-    enabled: true
-  gemini:
-    enabled: true
+            // Update LLM config
+            config.llm.provider = "ollama".to_string();
+            config.llm.model = llm_model.to_string();
+            config.llm.api_key_env = None;
+            config.llm.openai_url = None;
 
-search:
-  provider: ollama
-  model: {embed_model}
-
-learning:
-  llm:
-    provider: ollama
-    model: {llm_model}
-"#
-            );
-            std::fs::write(&config_path, config_content)?;
+            store::config::save_config(&config)?;
             println!("  ✓ Config updated: ollama / {}", llm_model);
         }
         _ => {
@@ -3583,11 +3543,10 @@ learning:
     };
 
     if community_enabled {
-        // Update config to enable community
-        if let Ok(mut config) = store::config::load_config() {
-            config.community.enabled = true;
-            let _ = store::config::save_config(&config);
-        }
+        // Reload config in case model setup saved changes
+        config = store::config::load_config().unwrap_or(config);
+        config.community.enabled = true;
+        let _ = store::config::save_config(&config);
         println!("  Community sharing enabled.");
         println!("  Run `mur login` to authenticate and start sharing patterns.");
     }

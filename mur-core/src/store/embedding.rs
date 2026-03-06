@@ -22,9 +22,16 @@ impl EmbeddingConfig {
     /// Create from the global mur config.
     pub fn from_config(cfg: &mur_common::config::Config) -> Self {
         let provider = match cfg.embedding.provider.as_str() {
-            "openai" => EmbeddingProvider::OpenAI {
-                api_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-            },
+            "openai" | "gemini" | "anthropic" => {
+                // Resolve API key from api_key_env or fall back to OPENAI_API_KEY
+                let api_key = cfg
+                    .embedding
+                    .api_key_env
+                    .as_deref()
+                    .and_then(|env| std::env::var(env).ok())
+                    .unwrap_or_else(|| std::env::var("OPENAI_API_KEY").unwrap_or_default());
+                EmbeddingProvider::OpenAI { api_key }
+            }
             _ => EmbeddingProvider::Ollama {
                 base_url: cfg.embedding.ollama_endpoint.clone(),
             },

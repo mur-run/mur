@@ -47,7 +47,7 @@ pub struct CommunityConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
-    /// "ollama" or "openai"
+    /// "ollama", "openai", "gemini", or "anthropic"
     #[serde(default = "default_embedding_provider")]
     pub provider: String,
 
@@ -62,6 +62,14 @@ pub struct EmbeddingConfig {
     /// Ollama endpoint
     #[serde(default = "default_ollama_endpoint")]
     pub ollama_endpoint: String,
+
+    /// API key env var name (e.g. "OPENAI_API_KEY")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+
+    /// Custom OpenAI-compatible API URL (e.g. for OpenRouter)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_url: Option<String>,
 }
 
 impl Default for EmbeddingConfig {
@@ -71,13 +79,15 @@ impl Default for EmbeddingConfig {
             model: default_embedding_model(),
             dimensions: default_dimensions(),
             ollama_endpoint: default_ollama_endpoint(),
+            api_key_env: None,
+            openai_url: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    /// "anthropic", "openai", or "ollama"
+    /// "anthropic", "openai", "gemini", or "ollama"
     #[serde(default = "default_llm_provider")]
     pub provider: String,
 
@@ -85,8 +95,12 @@ pub struct LlmConfig {
     pub model: String,
 
     /// API key env var name (e.g. "ANTHROPIC_API_KEY")
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
+
+    /// Custom OpenAI-compatible API URL (e.g. for OpenRouter)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_url: Option<String>,
 }
 
 impl Default for LlmConfig {
@@ -95,6 +109,7 @@ impl Default for LlmConfig {
             provider: default_llm_provider(),
             model: default_llm_model(),
             api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+            openai_url: None,
         }
     }
 }
