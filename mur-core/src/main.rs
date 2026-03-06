@@ -1391,10 +1391,44 @@ fn cmd_sync(quiet: bool) -> Result<()> {
         }
     }
 
+    // ─── Ensure skills are installed ───────────────────────────
+    let home = dirs::home_dir().expect("no home dir");
+    let skill_installed = ensure_mur_skill(&home)?;
+    if !quiet && skill_installed {
+        println!("  🎓 MUR skill installed/updated for AI tools");
+    }
+
     if !quiet {
         println!("Sync complete.");
     }
     Ok(())
+}
+
+/// Install/update the MUR skill for AI tools that support skills.
+/// Returns true if any skill was written.
+fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
+    let skill_content = include_str!("mur_skill.md");
+
+    // Claude Code: ~/.claude/skills/mur/
+    if home.join(".claude").exists() {
+        let claude_skill = home.join(".claude").join("skills").join("mur");
+        std::fs::create_dir_all(&claude_skill)?;
+        std::fs::write(claude_skill.join("SKILL.md"), skill_content)?;
+    }
+
+    // Auggie: ~/.augment/skills/mur/
+    if home.join(".augment").exists() {
+        let auggie_skill = home.join(".augment").join("skills").join("mur");
+        std::fs::create_dir_all(&auggie_skill)?;
+        std::fs::write(auggie_skill.join("SKILL.md"), skill_content)?;
+    }
+
+    // OpenClaw: ~/.agents/skills/mur/
+    let agents_skill = home.join(".agents").join("skills").join("mur");
+    std::fs::create_dir_all(&agents_skill)?;
+    std::fs::write(agents_skill.join("SKILL.md"), skill_content)?;
+
+    Ok(true)
 }
 
 async fn cmd_reindex() -> Result<()> {
@@ -3357,6 +3391,13 @@ Run `mur learn` to extract new patterns from recent sessions.
         ("Cline/Roo", "Add `See ~/.mur/context.md` to .clinerules"),
         ("Windsurf", "Add `See ~/.mur/context.md` to .windsurfrules"),
     ];
+
+    // ─── Step C11: Install AI tool skills ────────────────────────
+    // Skills teach AI tools about mur commands and how to interact
+    // with the pattern system (feedback, create, search, etc.)
+    if install_hooks {
+        let _ = ensure_mur_skill(&home);
+    }
 
     // ─── Step G: Interactive LLM/Embedding setup ─────────────────
     println!();
