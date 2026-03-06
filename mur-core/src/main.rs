@@ -2832,15 +2832,34 @@ fi
 "#;
 
         let on_stop = r#"#!/bin/bash
-# mur-managed-hook v5
+# mur-managed-hook v6
 INPUT=$(cat /dev/stdin 2>/dev/null || echo '{}')
 MUR=$(which mur 2>/dev/null || echo "mur")
+
+# Record session stop event
 if [ -f ~/.mur/session/active.json ]; then
   STOP_REASON=$(echo "$INPUT" | jq -r '.stop_reason // "turn_end"' 2>/dev/null)
   $MUR session record --event-type assistant --content "[stop: $STOP_REASON]" 2>/dev/null || true
 fi
-($MUR sync --quiet 2>/dev/null &)
-($MUR evolve 2>/dev/null &)
+
+# Background: full learning pipeline
+(
+  # 1. Sync patterns to AI tool configs
+  $MUR sync --quiet 2>/dev/null
+
+  # 2. Run decay + maturity evaluation
+  $MUR evolve 2>/dev/null
+
+  # 3. Extract behavior fingerprints from latest session (no LLM, pure regex)
+  LATEST=$(ls -t ~/.mur/session/recordings/*.jsonl 2>/dev/null | head -1)
+  if [ -n "$LATEST" ]; then
+    $MUR learn extract --file "$LATEST" --fingerprint 2>/dev/null
+  fi
+
+  # 4. Detect emergent patterns from accumulated fingerprints (no LLM)
+  $MUR emerge 2>/dev/null
+) &
+
 exit 0
 "#;
 
