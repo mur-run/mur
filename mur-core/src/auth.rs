@@ -163,8 +163,8 @@ pub async fn device_code_flow(client: &reqwest::Client) -> Result<AuthTokens> {
 
         if status.is_success() {
             // Try to parse the token response
-            let token_resp: DeviceTokenResponse = serde_json::from_str(&body)
-                .with_context(|| {
+            let token_resp: DeviceTokenResponse =
+                serde_json::from_str(&body).with_context(|| {
                     format!(
                         "Server returned 200 but response could not be parsed as token. Body: {}",
                         body

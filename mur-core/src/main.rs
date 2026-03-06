@@ -224,6 +224,15 @@ enum Commands {
         #[command(subcommand)]
         action: ExchangeAction,
     },
+    /// Import rules from AI tool config files (.cursorrules, CLAUDE.md, etc.)
+    Import {
+        /// Files to import (auto-detects if not specified)
+        #[arg(long)]
+        file: Option<Vec<String>>,
+        /// Preview what would be imported without saving
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -442,6 +451,7 @@ async fn main() -> Result<()> {
             ExchangeAction::ImportAll => cmd_exchange_import_all()?,
             ExchangeAction::Export { name, dir } => cmd_exchange_export(&name, dir)?,
         },
+        Commands::Import { file, dry_run } => cmd_import(file, dry_run)?,
     }
 
     Ok(())
@@ -1256,8 +1266,6 @@ fn cmd_gc(auto: bool) -> Result<()> {
 
     Ok(())
 }
-
-
 
 fn cmd_promote(name: &str, tier_str: &str) -> Result<()> {
     let store = YamlStore::default_store()?;
@@ -2745,6 +2753,89 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+fn cmd_import(files: Option<Vec<String>>, dry_run: bool) -> Result<()> {
+    use capture::import;
+
+    let cwd = std::env::current_dir()?;
+
+    let paths: Vec<std::path::PathBuf> = if let Some(files) = files {
+        files.into_iter().map(std::path::PathBuf::from).collect()
+    } else {
+        let detected = import::detect_files(&cwd);
+        if detected.is_empty() {
+            println!("No AI tool config files found in current directory.");
+            println!(
+                "Supported: {}",
+                [
+                    ".cursorrules",
+                    ".windsurfrules",
+                    ".clinerules",
+                    "CLAUDE.md",
+                    "AGENTS.md",
+                    ".github/copilot-instructions.md"
+                ]
+                .join(", ")
+            );
+            return Ok(());
+        }
+        detected
+    };
+
+    let store = YamlStore::default_store()?;
+    let existing: std::collections::HashSet<String> = store.list_names()?.into_iter().collect();
+
+    let mut all_candidates = Vec::new();
+    for path in &paths {
+        match import::extract_from_file(path) {
+            Ok(candidates) => {
+                let filename = path.file_name().unwrap_or_default().to_string_lossy();
+                println!("  Found: {} ({} rules)", filename, candidates.len());
+                all_candidates.extend(candidates);
+            }
+            Err(e) => {
+                eprintln!("  Warning: failed to read {}: {}", path.display(), e);
+            }
+        }
+    }
+
+    if all_candidates.is_empty() {
+        println!("No importable rules found.");
+        return Ok(());
+    }
+
+    let patterns = import::candidates_to_patterns(all_candidates, &existing);
+
+    if patterns.is_empty() {
+        println!("All rules already exist as patterns. Nothing to import.");
+        return Ok(());
+    }
+
+    if dry_run {
+        println!();
+        println!("Would import {} patterns:", patterns.len());
+        for p in &patterns {
+            println!(
+                "  - {} ({:?}) [{}]",
+                p.name,
+                p.effective_kind(),
+                p.origin
+                    .as_ref()
+                    .map(|o| o.platform.as_deref().unwrap_or(""))
+                    .unwrap_or("")
+            );
+        }
+        return Ok(());
+    }
+
+    let count = patterns.len();
+    for pattern in &patterns {
+        store.save(pattern)?;
+    }
+    println!("Imported {} patterns (Project tier)", count);
+
+    Ok(())
+}
+
 fn cmd_init(hooks_flag: bool) -> Result<()> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
@@ -3418,6 +3509,55 @@ Run `mur learn` to extract new patterns from recent sessions.
         let _ = ensure_mur_skill(&home);
     }
 
+    // ─── Step C12: Scan for existing AI tool rules ────────────────
+    if let Ok(cwd) = std::env::current_dir() {
+        use capture::import;
+
+        let detected_files = import::detect_files(&cwd);
+        if !detected_files.is_empty() {
+            println!();
+            println!("  Scanning for existing AI tool rules...");
+
+            let mut file_summaries = Vec::new();
+            let mut all_candidates = Vec::new();
+            for path in &detected_files {
+                if let Ok(candidates) = import::extract_from_file(path) {
+                    let filename = path.file_name().unwrap_or_default().to_string_lossy();
+                    file_summaries.push(format!("{} ({} rules)", filename, candidates.len()));
+                    all_candidates.extend(candidates);
+                }
+            }
+
+            if !all_candidates.is_empty() {
+                for summary in &file_summaries {
+                    println!("     Found: {}", summary);
+                }
+
+                print!("\n  Import as MUR patterns? [Y/n] ");
+                io::stdout().flush()?;
+                let mut import_answer = String::new();
+                io::stdin().read_line(&mut import_answer)?;
+                let import_answer = import_answer.trim().to_lowercase();
+                let do_import =
+                    import_answer.is_empty() || import_answer == "y" || import_answer == "yes";
+
+                if do_import {
+                    let store = YamlStore::default_store()?;
+                    let existing: std::collections::HashSet<String> =
+                        store.list_names()?.into_iter().collect();
+                    let patterns = import::candidates_to_patterns(all_candidates, &existing);
+                    let count = patterns.len();
+                    for pattern in &patterns {
+                        store.save(pattern)?;
+                    }
+                    println!("  Imported {} patterns (Project tier)", count);
+                    println!();
+                    println!("  These patterns now work across ALL your AI tools.");
+                }
+            }
+        }
+    }
+
     // ─── Step G: Interactive LLM/Embedding setup ─────────────────
     println!();
     println!("Model setup — MUR uses two types of models:");
@@ -3532,8 +3672,8 @@ Run `mur learn` to extract new patterns from recent sessions.
 
     // Helper: select cloud embedding provider
     let select_cloud_embedding = |config: &mut mur_common::config::Config,
-                                   llm_provider: &str,
-                                   llm_env_var: &str|
+                                  llm_provider: &str,
+                                  llm_env_var: &str|
      -> Result<()> {
         println!();
         println!("Embedding provider:");
@@ -3572,12 +3712,15 @@ Run `mur learn` to extract new patterns from recent sessions.
     match model_choice {
         "1" => {
             // Cloud LLM + local embedding (recommended)
-            let (_provider, _env_var, llm_model, is_openrouter) =
-                select_cloud_llm(&mut config)?;
+            let (_provider, _env_var, llm_model, is_openrouter) = select_cloud_llm(&mut config)?;
             select_ollama_embedding(&mut config)?;
 
             store::config::save_config(&config)?;
-            let llm_display = if is_openrouter { "openrouter" } else { _provider };
+            let llm_display = if is_openrouter {
+                "openrouter"
+            } else {
+                _provider
+            };
             println!(
                 "  ✓ Config: {} (LLM) + ollama/{} (search) / {}",
                 llm_display, config.embedding.model, llm_model
@@ -3585,8 +3728,7 @@ Run `mur learn` to extract new patterns from recent sessions.
         }
         "2" => {
             // All cloud
-            let (provider, env_var, llm_model, is_openrouter) =
-                select_cloud_llm(&mut config)?;
+            let (provider, env_var, llm_model, is_openrouter) = select_cloud_llm(&mut config)?;
 
             if is_openrouter {
                 // OpenRouter doesn't offer embeddings, use cloud or ollama
@@ -3617,7 +3759,11 @@ Run `mur learn` to extract new patterns from recent sessions.
             }
 
             store::config::save_config(&config)?;
-            let llm_display = if is_openrouter { "openrouter" } else { provider };
+            let llm_display = if is_openrouter {
+                "openrouter"
+            } else {
+                provider
+            };
             println!(
                 "  ✓ Config: {} (LLM) + {}/{} (search) / {}",
                 llm_display, config.embedding.provider, config.embedding.model, llm_model
