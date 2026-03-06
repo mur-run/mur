@@ -3375,9 +3375,9 @@ Run `mur learn` to extract new patterns from recent sessions.
 
     match model_choice.as_str() {
         "1" => {
-            // Cloud provider selection
+            // ── Cloud LLM provider selection ─────────────────────
             println!();
-            println!("Cloud provider:");
+            println!("Cloud provider for pattern learning (LLM):");
             println!("  1) OpenRouter (recommended — access to many models)");
             println!("  2) OpenAI");
             println!("  3) Gemini");
@@ -3388,7 +3388,7 @@ Run `mur learn` to extract new patterns from recent sessions.
             io::stdin().read_line(&mut provider_choice)?;
             let provider_choice = provider_choice.trim().to_string();
 
-            let (provider, llm_model, embed_provider, embed_model, env_var, is_openrouter) =
+            let (provider, llm_model, default_embed_provider, default_embed_model, env_var, is_openrouter) =
                 match provider_choice.as_str() {
                     "2" => (
                         "openai",
@@ -3434,20 +3434,62 @@ Run `mur learn` to extract new patterns from recent sessions.
                 );
             }
 
-            let openrouter_url = "https://openrouter.ai/api/v1".to_string();
+            // ── Embedding provider selection for semantic search ─
+            println!();
+            println!("Embedding for semantic search:");
+            if is_openrouter {
+                // OpenRouter doesn't have great embedding support, default to ollama
+                println!("  1) Local Ollama — qwen3-embedding:0.6b (free, recommended)");
+                println!("  2) OpenAI — text-embedding-3-small (requires OPENAI_API_KEY)");
+                print!("Choose [1/2] (default: 1): ");
+                io::stdout().flush()?;
+                let mut embed_choice = String::new();
+                io::stdin().read_line(&mut embed_choice)?;
+                let embed_choice = embed_choice.trim().to_string();
 
-            // Update embedding config
-            config.embedding.provider = embed_provider.to_string();
-            config.embedding.model = embed_model.to_string();
-            if !is_openrouter {
-                config.embedding.api_key_env = Some(env_var.to_string());
+                let (embed_provider, embed_model, embed_key_env) = match embed_choice.as_str() {
+                    "2" => ("openai", "text-embedding-3-small", Some("OPENAI_API_KEY")),
+                    _ => ("ollama", "qwen3-embedding:0.6b", None),
+                };
+
+                config.embedding.provider = embed_provider.to_string();
+                config.embedding.model = embed_model.to_string();
+                config.embedding.api_key_env = embed_key_env.map(|s| s.to_string());
                 config.embedding.openai_url = None;
             } else {
-                config.embedding.api_key_env = None;
-                config.embedding.openai_url = None;
+                // For direct providers, offer same-provider or ollama
+                let provider_label = match provider {
+                    "openai" => format!("OpenAI — {} (same API key)", default_embed_model),
+                    "gemini" => format!("Gemini — {} (same API key)", default_embed_model),
+                    "anthropic" => format!("Voyage — {} (same API key)", default_embed_model),
+                    _ => format!("{} — {}", provider, default_embed_model),
+                };
+                println!("  1) {} (recommended)", provider_label);
+                println!("  2) Local Ollama — qwen3-embedding:0.6b (free)");
+                print!("Choose [1/2] (default: 1): ");
+                io::stdout().flush()?;
+                let mut embed_choice = String::new();
+                io::stdin().read_line(&mut embed_choice)?;
+                let embed_choice = embed_choice.trim().to_string();
+
+                match embed_choice.as_str() {
+                    "2" => {
+                        config.embedding.provider = "ollama".to_string();
+                        config.embedding.model = "qwen3-embedding:0.6b".to_string();
+                        config.embedding.api_key_env = None;
+                        config.embedding.openai_url = None;
+                    }
+                    _ => {
+                        config.embedding.provider = default_embed_provider.to_string();
+                        config.embedding.model = default_embed_model.to_string();
+                        config.embedding.api_key_env = Some(env_var.to_string());
+                        config.embedding.openai_url = None;
+                    }
+                }
             }
 
             // Update LLM config
+            let openrouter_url = "https://openrouter.ai/api/v1".to_string();
             config.llm.provider = provider.to_string();
             config.llm.model = llm_model.to_string();
             config.llm.api_key_env = Some(env_var.to_string());
@@ -3459,12 +3501,17 @@ Run `mur learn` to extract new patterns from recent sessions.
 
             store::config::save_config(&config)?;
 
-            let display_provider = if is_openrouter {
-                "openrouter (LLM) + ollama (search)"
+            let embed_display = if config.embedding.provider == "ollama" {
+                "ollama"
             } else {
-                provider
+                &config.embedding.provider
             };
-            println!("  ✓ Config updated: {} / {}", display_provider, llm_model);
+            println!(
+                "  ✓ Config updated: {} (LLM) + {} (search) / {}",
+                if is_openrouter { "openrouter" } else { provider },
+                embed_display,
+                llm_model
+            );
         }
         "2" => {
             // Local (Ollama) setup
