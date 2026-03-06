@@ -12,7 +12,6 @@ pub mod dashboard;
 pub mod evolve;
 pub mod inject;
 pub mod interactive;
-pub mod migrate;
 pub mod retrieve;
 pub mod server;
 pub mod session;

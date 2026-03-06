@@ -46,9 +46,6 @@ mur sync
 ```bash
 # From source
 cargo install --git https://github.com/mur-run/mur.git
-
-# Upgrading from v1 (Go)?
-mur migrate
 ```
 
 </details>
@@ -126,6 +123,7 @@ v2 patterns have dual-layer content (technical + principle), evidence tracking, 
 
 | Command | Description |
 |---------|-------------|
+| `mur init` | Interactive setup wizard (models, hooks, config) |
 | `mur new <name>` | Create a new pattern |
 | `mur search <query>` | Semantic + keyword hybrid search |
 | `mur inject` | Inject matching patterns into context |
@@ -139,12 +137,15 @@ v2 patterns have dual-layer content (technical + principle), evidence tracking, 
 | `mur feedback auto` | Run post-session contradiction detection |
 | `mur feedback helpful/unhelpful` | Manual feedback on last injection |
 | `mur learn extract` | Extract patterns from AI session transcripts |
+| `mur exchange import <file>` | Import patterns in MKEF format |
+| `mur exchange export <name>` | Export a pattern to MKEF format |
 
 <details>
 <summary>All commands</summary>
 
 ```
 mur
+├── init [--hooks]     Interactive setup wizard
 ├── new                Create pattern
 ├── search             Semantic + BM25 hybrid search
 ├── inject             Inject patterns into context
@@ -153,12 +154,17 @@ mur
 ├── stats              Library statistics
 ├── dashboard          Pattern health overview
 ├── evolve             Run maturity lifecycle
+│   └── --consolidate  Full dedup + contradiction + decay cycle
 ├── emerge             Cross-session emergence detection
 ├── suggest            Composition / decomposition suggestions
 ├── feedback
 │   ├── auto           Post-session contradiction detection
 │   ├── helpful        Mark last injection as helpful
 │   └── unhelpful      Mark last injection as unhelpful
+├── exchange
+│   ├── import         Import MKEF pattern file
+│   ├── import-all     Import all from ~/.mur/exchange/
+│   └── export         Export pattern to MKEF format
 ├── workflow
 │   ├── list           List workflows
 │   ├── show           Show workflow details
@@ -171,7 +177,6 @@ mur
 │   └── list           List past sessions
 ├── pattern show       Show pattern details
 ├── learn extract      Extract patterns from transcripts
-├── migrate            Migrate from v1
 ├── gc                 Garbage collect expired patterns
 ├── pin                Pin pattern (skip decay)
 ├── mute               Mute pattern from injection
@@ -190,12 +195,12 @@ mur
 Find patterns by meaning, not just keywords:
 
 ```bash
-# With OpenAI (recommended, ~$0.001 per 200 patterns)
-export OPENAI_API_KEY=sk-...
+# With Ollama (free, local — recommended)
+ollama pull qwen3-embedding:0.6b
 mur reindex
 
-# With Ollama (free, local)
-ollama pull qwen3-embedding
+# With OpenAI (~$0.001 per 200 patterns)
+export OPENAI_API_KEY=sk-...
 mur reindex
 
 # Search naturally
@@ -221,8 +226,6 @@ MUR uses LanceDB for vector storage and combines semantic similarity with BM25 k
 | Binary | ~15MB | ~3.6MB (arm64 release) |
 | Tests | ~40 | 200+ |
 
-Upgrading? Just run `mur migrate`.
-
 For the Go v1, see [mur-core](https://github.com/mur-run/mur-core).
 
 ## Architecture
@@ -238,17 +241,18 @@ mur-core/       CLI + all logic (capture → store → retrieve → evolve → i
 
 ```yaml
 # ~/.mur/config.yaml
-search:
-  provider: openai              # openai | ollama
-  model: text-embedding-3-small
-  api_key_env: OPENAI_API_KEY
+embedding:
+  provider: ollama              # ollama | openai | gemini | anthropic
+  model: qwen3-embedding:0.6b  # default; see mur init for all options
+  dimensions: 1024
 
-tools:
-  claude:
-    enabled: true
-  gemini:
-    enabled: true
+llm:
+  provider: anthropic           # anthropic | openai | gemini | ollama
+  model: claude-sonnet-4-20250514
+  api_key_env: ANTHROPIC_API_KEY
 ```
+
+Run `mur init` for an interactive setup wizard that explains each option and configures everything for you.
 
 ## Privacy & Security
 

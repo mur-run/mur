@@ -4,6 +4,17 @@ MUR automatically injects relevant patterns at session start via hooks.
 The patterns you see in "Relevant patterns/knowledge from your learning history"
 come from MUR's pattern store (`~/.mur/patterns/`).
 
+## How Injection Works
+
+At each session start, MUR:
+1. Scores all patterns against the current project context
+2. Ranks by relevance (keyword match, tags, recency, confidence, tier)
+3. Applies MMR diversity filter (removes near-duplicates)
+4. Injects only the **top 5 patterns** within a **2000 token budget**
+
+Even with hundreds of patterns stored, only the most relevant few are injected.
+These limits are configurable in `~/.mur/config.yaml` under `retrieval:`.
+
 ## Available Commands
 
 Run these in the terminal when appropriate:
@@ -16,6 +27,7 @@ Run these in the terminal when appropriate:
 - `mur stats` — Show pattern statistics
 - `mur sync` — Sync patterns to other AI tool configs
 - `mur evolve` — Run decay + maturity evaluation
+- `mur reindex` — Rebuild semantic search index
 
 ## When to Give Feedback
 
@@ -32,8 +44,8 @@ Patterns have three tiers based on their scope:
 
 ## Pattern Lifecycle
 
-Patterns evolve over time through maturity stages:
-- **Emerging** → **Draft** → **Stable** → **Canonical**
+Patterns evolve through maturity stages based on usage:
+- **Draft** → **Emerging** → **Stable** → **Canonical**
 - Confidence decays if patterns aren't used (half-life based)
 - Patterns auto-archive below 0.1 confidence
 - Your feedback directly influences confidence and importance scores
