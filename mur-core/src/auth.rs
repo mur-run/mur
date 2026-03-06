@@ -149,31 +149,67 @@ pub async fn device_code_flow(client: &reqwest::Client) -> Result<AuthTokens> {
 
         let resp = match resp {
             Ok(r) => r,
-            Err(_) => continue,
+            Err(e) => {
+                tracing::debug!("Token poll network error: {}", e);
+                continue;
+            }
         };
 
-        if resp.status().is_success() {
-            let token_resp: DeviceTokenResponse =
-                resp.json().await.context("Invalid token response")?;
+        let status = resp.status();
+
+        // Read the body once as text so we can inspect and re-parse
+        let body = resp.text().await.unwrap_or_default();
+        tracing::debug!("Token poll response: status={}, body={}", status, body);
+
+        if status.is_success() {
+            // Try to parse the token response
+            let token_resp: DeviceTokenResponse = serde_json::from_str(&body)
+                .with_context(|| {
+                    format!(
+                        "Server returned 200 but response could not be parsed as token. Body: {}",
+                        body
+                    )
+                })?;
             println!(" done!");
-            let tokens = AuthTokens {
+            return Ok(AuthTokens {
                 access_token: token_resp.access_token,
                 refresh_token: token_resp.refresh_token,
                 token_type: token_resp.token_type,
                 expires_in: token_resp.expires_in,
-            };
-            save_tokens(&tokens)?;
-            return Ok(tokens);
+            });
         }
 
-        // Check if it's authorization_pending (expected) or a real error
-        if let Ok(err) = resp.json::<ErrorResponse>().await
-            && err.error == "expired_token"
-        {
-            println!();
-            anyhow::bail!("Device code expired. Please try again.");
+        // Non-success status — parse error to decide whether to keep polling
+        if let Ok(err) = serde_json::from_str::<ErrorResponse>(&body) {
+            match err.error.as_str() {
+                // RFC 8628: user hasn't completed auth yet — keep polling
+                "authorization_pending" => {}
+                // RFC 8628: polling too fast — back off and keep polling
+                "slow_down" => {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+                // Token expired — stop
+                "expired_token" => {
+                    println!();
+                    anyhow::bail!("Device code expired. Please try again.");
+                }
+                // User denied access — stop
+                "access_denied" => {
+                    println!();
+                    anyhow::bail!("Authorization denied by user.");
+                }
+                // Unknown error — log and keep polling (may be transient)
+                other => {
+                    tracing::warn!("Unexpected auth error: {}", other);
+                }
+            }
+        } else {
+            tracing::warn!(
+                "Token poll returned non-JSON error (status {}): {}",
+                status,
+                body
+            );
         }
-        // authorization_pending — keep polling
 
         print!(".");
         let _ = std::io::Write::flush(&mut std::io::stdout());

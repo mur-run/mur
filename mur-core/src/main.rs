@@ -2571,7 +2571,7 @@ async fn cmd_login() -> Result<()> {
     let tokens = auth::device_code_flow(&client).await?;
     auth::save_tokens(&tokens)?;
     println!();
-    println!("  Logged in successfully! Token stored in ~/.mur/auth.json");
+    println!("  ✅ Logged in successfully! Token stored in ~/.mur/auth.json");
     Ok(())
 }
 
