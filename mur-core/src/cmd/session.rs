@@ -100,6 +100,53 @@ pub(crate) fn cmd_session_status() -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn cmd_session_review(id_prefix: &str) -> Result<()> {
+    let full_id = session::find_recording_by_prefix(id_prefix)?
+        .ok_or_else(|| anyhow::anyhow!("No session found matching prefix '{}'", id_prefix))?;
+
+    let port = 3847u16;
+    let url = format!("http://localhost:{}/#/sessions/{}/review", port, full_id);
+
+    // Check if server is already running
+    let server_running = std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok();
+
+    if !server_running {
+        eprintln!("Starting server on port {}...", port);
+        // Start server in the background
+        let exe = std::env::current_exe().unwrap_or_else(|_| "mur".into());
+        std::process::Command::new(exe)
+            .args(["serve", "--port", &port.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok();
+        // Brief wait for server to bind
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    eprintln!(
+        "Opening session {} in browser...",
+        &full_id[..8.min(full_id.len())]
+    );
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(&url).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", &url])
+            .spawn();
+    }
+
+    Ok(())
+}
+
 pub(crate) fn cmd_session_list() -> Result<()> {
     let recordings = session::list_recordings()?;
 

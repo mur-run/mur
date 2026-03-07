@@ -142,6 +142,47 @@ pub struct RecordingInfo {
     pub modified: std::time::SystemTime,
 }
 
+/// Read and parse all events from a session recording.
+pub fn read_events(id: &str) -> Result<Vec<SessionEvent>> {
+    let path = recordings_dir().join(format!("{}.jsonl", id));
+    if !path.exists() {
+        anyhow::bail!("Recording not found: {}", id);
+    }
+
+    let content = fs::read_to_string(&path).context("Failed to read recording file")?;
+    let mut events = Vec::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: SessionEvent =
+            serde_json::from_str(line).context("Failed to parse session event")?;
+        events.push(event);
+    }
+    Ok(events)
+}
+
+/// Find a full session ID from a prefix.
+pub fn find_recording_by_prefix(prefix: &str) -> Result<Option<String>> {
+    let dir = recordings_dir();
+    if !dir.exists() {
+        return Ok(None);
+    }
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            && stem.starts_with(prefix)
+        {
+            return Ok(Some(stem.to_string()));
+        }
+    }
+    Ok(None)
+}
+
 /// List past session recordings.
 pub fn list_recordings() -> Result<Vec<RecordingInfo>> {
     let dir = recordings_dir();

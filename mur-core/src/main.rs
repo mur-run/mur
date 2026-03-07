@@ -387,6 +387,11 @@ enum SessionAction {
     Status,
     /// List past session recordings
     List,
+    /// Open session review in the web dashboard
+    Review {
+        /// Session ID prefix
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -569,6 +574,7 @@ async fn main() -> Result<()> {
             } => cmd::session::cmd_session_record(&event_type, tool.as_deref(), &content)?,
             SessionAction::Status => cmd::session::cmd_session_status()?,
             SessionAction::List => cmd::session::cmd_session_list()?,
+            SessionAction::Review { id } => cmd::session::cmd_session_review(&id)?,
         },
         Commands::Dashboard => {
             dashboard::render_dashboard()?;

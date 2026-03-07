@@ -167,6 +167,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/context", post(context_retrieve))
         .route("/api/v1/ingest", post(context_ingest))
         .route("/api/v1/feedback", post(context_feedback))
+        // Sessions
+        .route("/api/v1/sessions", get(list_sessions))
+        .route("/api/v1/sessions/{id}", get(get_session))
+        .route("/api/v1/sessions/{id}/events", get(get_session_events))
         // WebSocket for real-time events
         .route("/api/v1/ws", get(ws_handler))
         .layer(cors)
@@ -864,6 +868,98 @@ async fn context_feedback(
     notify(&state, "pattern:feedback", &req.pattern_id);
     let count = store.list_names().map(|n| n.len()).unwrap_or(0);
     Ok(wrap(serde_json::json!({"ok": true}), count))
+}
+
+// ─── Session handlers ──────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct SessionInfo {
+    id: String,
+    event_count: usize,
+    file_size: u64,
+    modified_at: String,
+}
+
+#[derive(Serialize)]
+struct SessionDetail {
+    id: String,
+    event_count: usize,
+    file_size: u64,
+    modified_at: String,
+    events: Vec<crate::session::SessionEvent>,
+}
+
+async fn list_sessions(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<Vec<SessionInfo>>>, AppError> {
+    let recordings = crate::session::list_recordings().map_err(AppError::Internal)?;
+    let count = state
+        .pattern_store()
+        .ok()
+        .and_then(|s| s.list_names().ok())
+        .map(|n| n.len())
+        .unwrap_or(0);
+
+    let sessions: Vec<SessionInfo> = recordings
+        .into_iter()
+        .map(|r| {
+            let modified_at: chrono::DateTime<chrono::Utc> = r.modified.into();
+            SessionInfo {
+                id: r.id,
+                event_count: r.event_count,
+                file_size: r.file_size,
+                modified_at: modified_at.to_rfc3339(),
+            }
+        })
+        .collect();
+
+    Ok(wrap(sessions, count))
+}
+
+async fn get_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<SessionDetail>>, AppError> {
+    let recordings = crate::session::list_recordings().map_err(AppError::Internal)?;
+    let rec = recordings
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or_else(|| AppError::NotFound(format!("Session '{}' not found", id)))?;
+
+    let events = crate::session::read_events(&id).map_err(AppError::Internal)?;
+    let modified_at: chrono::DateTime<chrono::Utc> = rec.modified.into();
+    let count = state
+        .pattern_store()
+        .ok()
+        .and_then(|s| s.list_names().ok())
+        .map(|n| n.len())
+        .unwrap_or(0);
+
+    Ok(wrap(
+        SessionDetail {
+            id: rec.id,
+            event_count: rec.event_count,
+            file_size: rec.file_size,
+            modified_at: modified_at.to_rfc3339(),
+            events,
+        },
+        count,
+    ))
+}
+
+async fn get_session_events(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<Vec<crate::session::SessionEvent>>>, AppError> {
+    let events = crate::session::read_events(&id)
+        .map_err(|_| AppError::NotFound(format!("Session '{}' not found", id)))?;
+    let count = state
+        .pattern_store()
+        .ok()
+        .and_then(|s| s.list_names().ok())
+        .map(|n| n.len())
+        .unwrap_or(0);
+    Ok(wrap(events, count))
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────
