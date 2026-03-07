@@ -503,7 +503,7 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Sync { quiet, project } => cmd::sync_cmd::cmd_sync(quiet, project)?,
-        Commands::Inject { query, project: _ } => cmd::misc::cmd_inject(&query).await?,
+        Commands::Inject { query, project: _ } => cmd::inject_cmd::cmd_inject(&query).await?,
         Commands::Pattern { action } => match action {
             PatternAction::Show { name } => cmd::pattern::cmd_pattern_show(&name)?,
         },
@@ -512,7 +512,7 @@ async fn main() -> Result<()> {
             WorkflowAction::Show { name } => cmd::workflow::cmd_workflow_show(&name)?,
             WorkflowAction::New => cmd::workflow::cmd_workflow_new()?,
         },
-        Commands::Reindex => cmd::misc::cmd_reindex().await?,
+        Commands::Reindex => cmd::reindex::cmd_reindex().await?,
         Commands::Promote { name, tier } => cmd::pattern::cmd_promote(&name, &tier)?,
         Commands::Deprecate { name } => cmd::pattern::cmd_deprecate(&name)?,
         Commands::Links { name } => cmd::pattern::cmd_links(&name)?,
@@ -524,13 +524,13 @@ async fn main() -> Result<()> {
         } => {
             if let Some(action) = action {
                 match action {
-                    EvolveAction::Compose { create } => cmd::misc::cmd_evolve_compose(create)?,
-                    EvolveAction::Cooccurrence { min } => cmd::misc::cmd_evolve_cooccurrence(min)?,
+                    EvolveAction::Compose { create } => cmd::evolve_cmd::cmd_evolve_compose(create)?,
+                    EvolveAction::Cooccurrence { min } => cmd::evolve_cmd::cmd_evolve_cooccurrence(min)?,
                 }
             } else if consolidate {
-                cmd::misc::cmd_consolidate(dry_run)?;
+                cmd::evolve_cmd::cmd_consolidate(dry_run)?;
             } else {
-                cmd::misc::cmd_evolve(dry_run, force)?;
+                cmd::evolve_cmd::cmd_evolve(dry_run, force)?;
             }
         }
         Commands::Gep { action } => match action {
@@ -599,8 +599,8 @@ async fn main() -> Result<()> {
             port,
             open,
             readonly,
-        } => cmd::misc::cmd_serve(port, open, readonly).await?,
-        Commands::Why { name } => cmd::misc::cmd_why(&name)?,
+        } => cmd::server_cmd::cmd_serve(port, open, readonly).await?,
+        Commands::Why { name } => cmd::inject_cmd::cmd_why(&name)?,
         Commands::Edit { name, quick } => cmd::pattern::cmd_edit(&name, quick)?,
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
@@ -612,17 +612,4 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn read_multiline() -> Result<String> {
-    let mut lines = Vec::new();
-    loop {
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line)?;
-        if line.trim().is_empty() {
-            break;
-        }
-        lines.push(line);
-    }
-    Ok(lines.join("").trim_end().to_string())
 }

@@ -39,7 +39,7 @@ pub(crate) fn cmd_new(diagram_path: Option<String>) -> Result<()> {
 
     println!("Technical content (end with empty line):");
     io::stdout().flush()?;
-    let mut technical = crate::read_multiline()?;
+    let mut technical = crate::cmd::read_multiline()?;
     if technical.len() > Content::MAX_LAYER_CHARS {
         println!(
             "⚠️  Technical content truncated to {} chars.",
@@ -50,7 +50,7 @@ pub(crate) fn cmd_new(diagram_path: Option<String>) -> Result<()> {
 
     println!("Principle content (optional, end with empty line):");
     io::stdout().flush()?;
-    let principle_text = crate::read_multiline()?;
+    let principle_text = crate::cmd::read_multiline()?;
     let principle = if principle_text.is_empty() {
         None
     } else {
