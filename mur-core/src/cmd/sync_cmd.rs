@@ -343,6 +343,31 @@ pub(crate) fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
     use crate::retrieve::scoring::score_and_rank;
     use inject::sync::{default_targets, generate_sync_content, write_sync_file};
 
+    // ─── Heartbeat: register device activity ──────────────────
+    if let Some(tokens) = crate::auth::load_tokens() {
+        let base = crate::auth::server_url();
+        let _ = std::process::Command::new("curl")
+            .args([
+                "-sf",
+                "--max-time",
+                "5",
+                "-X",
+                "POST",
+                "-H",
+                &format!("Authorization: Bearer {}", tokens.access_token),
+                "-H",
+                &format!("X-Device-ID: {}", crate::auth::get_device_id()),
+                "-H",
+                &format!("X-Device-Name: {}", crate::auth::get_device_name()),
+                "-H",
+                &format!("X-Device-OS: {}", crate::auth::get_device_os()),
+                &format!("{}/api/v1/core/devices/heartbeat", base),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+
     // ─── Device sync first (cloud or git) ─────────────────────
     // Failures warn but don't block tool sync
     if let Err(e) = device_sync(quiet, DeviceSyncDirection::Both)
