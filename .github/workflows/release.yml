@@ -18,7 +18,7 @@ jobs:
             os: macos-latest
             name: mur-aarch64-apple-darwin
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-13
             name: mur-x86_64-apple-darwin
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
