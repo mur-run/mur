@@ -539,6 +539,13 @@ pub(crate) async fn cmd_login() -> Result<()> {
     let client = reqwest::Client::new();
     let tokens = crate::auth::device_code_flow(&client).await?;
     crate::auth::save_tokens(&tokens)?;
+
+    // Ping server to register device
+    let base = crate::auth::server_url();
+    let me_url = format!("{}/api/v1/core/auth/me", base);
+    let req = crate::auth::auth_request(&client, reqwest::Method::GET, &me_url).await?;
+    let _ = req.send().await;
+
     println!();
     println!("  ✅ Logged in successfully! Token stored in ~/.mur/auth.json");
     Ok(())
