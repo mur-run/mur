@@ -447,30 +447,85 @@ pub(crate) fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
 }
 
 /// Install/update the MUR skill for AI tools that support skills.
+/// Writes canonical copies to ~/.mur/skills/ and symlinks from tool dirs.
 /// Returns true if any skill was written.
 pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
-    let skill_content = include_str!("../mur_skill.md");
+    let skills: &[(&str, &str)] = &[
+        ("mur", include_str!("../mur_skill.md")),
+        ("mur-in", include_str!("../mur_in_skill.md")),
+        ("mur-out", include_str!("../mur_out_skill.md")),
+    ];
 
-    // Claude Code: ~/.claude/skills/mur/
-    if home.join(".claude").exists() {
-        let claude_skill = home.join(".claude").join("skills").join("mur");
-        std::fs::create_dir_all(&claude_skill)?;
-        std::fs::write(claude_skill.join("SKILL.md"), skill_content)?;
+    let mur_skills_dir = home.join(".mur").join("skills");
+
+    // Write canonical copies to ~/.mur/skills/<name>/SKILL.md
+    for (name, content) in skills {
+        let dir = mur_skills_dir.join(name);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("SKILL.md"), content)?;
     }
 
-    // Auggie: ~/.augment/skills/mur/
-    if home.join(".augment").exists() {
-        let auggie_skill = home.join(".augment").join("skills").join("mur");
-        std::fs::create_dir_all(&auggie_skill)?;
-        std::fs::write(auggie_skill.join("SKILL.md"), skill_content)?;
-    }
+    // Tool dirs to symlink into
+    let tool_dirs: &[&str] = &[".claude", ".augment", ".agents"];
 
-    // OpenClaw: ~/.agents/skills/mur/
-    let agents_skill = home.join(".agents").join("skills").join("mur");
-    std::fs::create_dir_all(&agents_skill)?;
-    std::fs::write(agents_skill.join("SKILL.md"), skill_content)?;
+    for tool_dir_name in tool_dirs {
+        let tool_base = home.join(tool_dir_name);
+        if !tool_base.exists() && *tool_dir_name != ".agents" {
+            continue;
+        }
+        let tool_skills = tool_base.join("skills");
+        std::fs::create_dir_all(&tool_skills)?;
+
+        for (name, _) in skills {
+            let canonical = mur_skills_dir.join(name);
+            let link = tool_skills.join(name);
+            symlink_skill_dir(&canonical, &link)?;
+        }
+    }
 
     Ok(true)
+}
+
+/// Create a symlink from `link` -> `target`. If `link` exists as a regular
+/// directory, remove it first. If it's already a correct symlink, skip.
+fn symlink_skill_dir(target: &std::path::Path, link: &std::path::Path) -> Result<()> {
+    if link.exists() || link.symlink_metadata().is_ok() {
+        // Check if it's already a correct symlink
+        if let Ok(existing) = std::fs::read_link(link)
+            && existing == target
+        {
+            return Ok(());
+        }
+        // Remove old dir or wrong symlink
+        if link.is_dir()
+            && !link
+                .symlink_metadata()
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false)
+        {
+            std::fs::remove_dir_all(link)?;
+        } else {
+            std::fs::remove_file(link)?;
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        // Fallback: copy the directory contents
+        std::fs::create_dir_all(link)?;
+        for entry in std::fs::read_dir(target)? {
+            let entry = entry?;
+            let dest = link.join(entry.file_name());
+            std::fs::copy(entry.path(), dest)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// Build a richer query for project-aware sync by detecting language and git context.

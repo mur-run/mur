@@ -1,3 +1,7 @@
+---
+name: mur
+description: "Continuous learning — auto-injects relevant patterns from your learning history"
+---
 # MUR — Continuous Learning for AI Assistants
 
 MUR automatically injects relevant patterns at session start via hooks.
