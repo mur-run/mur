@@ -7,3 +7,4 @@ pub mod feedback;
 pub mod import;
 pub mod noise_filter;
 pub mod starter;
+pub mod style;
