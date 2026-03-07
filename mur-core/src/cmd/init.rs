@@ -1015,7 +1015,7 @@ Run `mur learn` to extract new patterns from recent sessions.
     println!("  2) Git sync (free)");
     println!("     Use your own git repo to sync ~/.mur/patterns/");
     println!("  3) Skip (local only)");
-    print!("Choose [1/2/3] (default: 3): ");
+    print!("Choose [1/2/3] (default: 1): ");
     io::stdout().flush()?;
     let mut sync_choice = String::new();
     io::stdin().read_line(&mut sync_choice)?;
@@ -1024,7 +1024,7 @@ Run `mur learn` to extract new patterns from recent sessions.
     config = crate::store::config::load_config().unwrap_or(config);
 
     match sync_choice {
-        "1" => {
+        "" | "1" => {
             config.sync.method = "cloud".to_string();
             config.sync.auto = true;
             config.sync.git_remote = None;

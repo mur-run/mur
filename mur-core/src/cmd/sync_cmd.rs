@@ -134,10 +134,11 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
 
             match direction {
                 DeviceSyncDirection::Pull => {
+                    let branch = detect_git_branch(&mur_dir);
                     if !quiet {
                         eprintln!("  📥 Git pull...");
                     }
-                    match run_git_in(&mur_dir, &["pull", "--rebase", "origin", "main"]) {
+                    match run_git_in(&mur_dir, &["pull", "--rebase", "origin", &branch]) {
                         Ok(_) => {
                             if !quiet {
                                 eprintln!("  ✓ Git pull complete.");
@@ -151,6 +152,7 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                     }
                 }
                 DeviceSyncDirection::Push => {
+                    let branch = detect_git_branch(&mur_dir);
                     if !quiet {
                         eprintln!("  📤 Git push...");
                     }
@@ -160,7 +162,7 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                         run_git_in(&mur_dir, &["commit", "-m", "mur: auto-sync patterns"]);
                     // Commit may fail if nothing changed — that's fine
                     if commit_result.is_ok() {
-                        match run_git_in(&mur_dir, &["push", "origin", "main"]) {
+                        match run_git_in(&mur_dir, &["push", "origin", &branch]) {
                             Ok(_) => {
                                 if !quiet {
                                     eprintln!("  ✓ Git push complete.");
@@ -207,6 +209,32 @@ impl DeviceSyncDirection {
     }
 }
 
+/// Detect the default branch name (main or master).
+fn detect_git_branch(dir: &std::path::Path) -> String {
+    // Try to get current branch
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .output()
+    {
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !branch.is_empty() && branch != "HEAD" {
+            return branch;
+        }
+    }
+    // Fallback: check if main or master exists
+    if std::process::Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", "refs/heads/main"])
+        .current_dir(dir)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        return "main".to_string();
+    }
+    "main".to_string()
+}
+
 fn run_git_in(dir: &std::path::Path, args: &[&str]) -> Result<String> {
     let output = std::process::Command::new("git")
         .args(args)
@@ -234,7 +262,23 @@ fn apply_cloud_pull(body: &str, mur_dir: &std::path::Path) -> Result<()> {
 }
 
 fn build_cloud_push_payload(patterns_dir: &std::path::Path) -> Result<String> {
-    let mut map = std::collections::HashMap::new();
+    use std::collections::HashMap;
+
+    let mut map = HashMap::new();
+    let sync_state_path = patterns_dir
+        .parent()
+        .unwrap_or(patterns_dir)
+        .join(".sync_hashes.json");
+
+    // Load previous sync hashes
+    let prev_hashes: HashMap<String, String> = if sync_state_path.exists() {
+        serde_json::from_str(&std::fs::read_to_string(&sync_state_path)?).unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    let mut new_hashes = HashMap::new();
+
     if patterns_dir.exists() {
         for entry in std::fs::read_dir(patterns_dir)? {
             let entry = entry?;
@@ -246,11 +290,32 @@ fn build_cloud_push_payload(patterns_dir: &std::path::Path) -> Result<String> {
                     .to_string_lossy()
                     .to_string();
                 let content = std::fs::read_to_string(&path)?;
-                map.insert(name, content);
+                // Simple hash for change detection
+                let hash = format!("{:x}", md5_simple(&content));
+                new_hashes.insert(name.clone(), hash.clone());
+
+                // Only include if changed since last sync
+                if prev_hashes.get(&name).map(|h| h.as_str()) != Some(&hash) {
+                    map.insert(name, content);
+                }
             }
         }
     }
+
+    // Save new hashes for next sync
+    if let Ok(json) = serde_json::to_string(&new_hashes) {
+        let _ = std::fs::write(&sync_state_path, json);
+    }
+
     Ok(serde_json::to_string(&map)?)
+}
+
+/// Simple hash for change detection (not cryptographic).
+fn md5_simple(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub(crate) fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
