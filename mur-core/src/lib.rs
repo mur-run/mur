@@ -10,6 +10,7 @@ pub mod community;
 pub mod context_api;
 pub mod dashboard;
 pub mod evolve;
+pub mod gep;
 pub mod inject;
 pub mod interactive;
 pub mod llm;
@@ -17,6 +18,7 @@ pub mod retrieve;
 pub mod server;
 pub mod session;
 pub mod store;
+pub mod team;
 
 pub use mur_common::config::Config;
 pub use mur_common::event::MurEvent;

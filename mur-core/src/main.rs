@@ -407,12 +407,47 @@ enum CommunityAction {
     },
     /// Star a community pattern
     Star { id: String },
+    /// Report effectiveness of a community pattern
+    Report {
+        /// Pattern name or ID
+        name: String,
+        /// Effectiveness score (0.0-1.0)
+        #[arg(long)]
+        effectiveness: f64,
+        /// Number of sessions used
+        #[arg(long)]
+        sessions: u32,
+    },
     /// List available community packs
     Packs,
     /// View or install a community pack
     Pack {
         #[command(subcommand)]
         action: PackAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum TeamAction {
+    /// List team patterns
+    List {
+        /// Team ID
+        #[arg(long, env = "MUR_TEAM_ID")]
+        team: String,
+    },
+    /// Share a pattern to your team
+    Share {
+        /// Pattern name
+        name: String,
+        /// Team ID
+        #[arg(long, env = "MUR_TEAM_ID")]
+        team: String,
+    },
+    /// Pull latest team patterns
+    Sync {
+        /// Team ID
+        #[arg(long, env = "MUR_TEAM_ID")]
+        team: String,
     },
 }
 
@@ -501,6 +536,10 @@ async fn main() -> Result<()> {
                 cmd_evolve(dry_run, force)?;
             }
         }
+        Commands::Gep { action } => match action {
+            GepAction::Evolve => cmd_gep_evolve()?,
+            GepAction::Status => cmd_gep_status()?,
+        },
         Commands::Emerge { threshold, dry_run } => cmd_emerge(threshold, dry_run)?,
         Commands::Suggest { create } => cmd_suggest(create)?,
         Commands::Context {
@@ -532,11 +571,21 @@ async fn main() -> Result<()> {
             CommunityAction::Search { query } => cmd_community_search(&query).await?,
             CommunityAction::List { sort } => cmd_community_list(&sort).await?,
             CommunityAction::Star { id } => cmd_community_star(&id).await?,
+            CommunityAction::Report {
+                name,
+                effectiveness,
+                sessions,
+            } => cmd_community_report(&name, effectiveness, sessions).await?,
             CommunityAction::Packs => cmd_community_packs().await?,
             CommunityAction::Pack { action } => match action {
                 PackAction::Install { id } => cmd_community_pack_install(&id).await?,
                 PackAction::Show { id } => cmd_community_pack_show(&id).await?,
             },
+        },
+        Commands::Team { action } => match action {
+            TeamAction::List { team } => cmd_team_list(&team).await?,
+            TeamAction::Share { name, team } => cmd_team_share(&name, &team).await?,
+            TeamAction::Sync { team } => cmd_team_sync(&team).await?,
         },
         Commands::Login => cmd_login().await?,
         Commands::Logout => cmd_logout()?,
@@ -3221,15 +3270,97 @@ fn cmd_logout() -> Result<()> {
     Ok(())
 }
 
+// ─── GEP commands ──────────────────────────────────────────────
+
+fn cmd_gep_evolve() -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let patterns = store.list_all()?;
+
+    if patterns.is_empty() {
+        println!("  No patterns to evolve.");
+        return Ok(());
+    }
+
+    let before_stats = gep::population_stats(&patterns);
+    println!(
+        "  Before: {} patterns, avg fitness {:.3}",
+        before_stats.count, before_stats.avg_fitness
+    );
+
+    // Use neutral feedback for evolution (the mutation step still recomputes fitness)
+    let evolved = gep::evolve_generation(&patterns, &[]);
+
+    // Save evolved patterns
+    let mut updated = 0;
+    for ep in &evolved {
+        // Only save if the pattern name matches an existing one (skip crossover children)
+        if store.exists(&ep.name) {
+            store.save(ep)?;
+            updated += 1;
+        }
+    }
+
+    let after_stats = gep::population_stats(&evolved);
+    println!(
+        "  After:  {} patterns, avg fitness {:.3}",
+        after_stats.count, after_stats.avg_fitness
+    );
+    println!("  Updated {} patterns.", updated);
+    Ok(())
+}
+
+fn cmd_gep_status() -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let patterns = store.list_all()?;
+
+    if patterns.is_empty() {
+        println!("  No patterns in store.");
+        return Ok(());
+    }
+
+    let stats = gep::population_stats(&patterns);
+    println!("  GEP Population Status");
+    println!("  ─────────────────────");
+    println!("  Patterns:           {}", stats.count);
+    println!("  Avg fitness:        {:.3}", stats.avg_fitness);
+    println!("  Max fitness:        {:.3}", stats.max_fitness);
+    println!("  Min fitness:        {:.3}", stats.min_fitness);
+    println!("  Avg effectiveness:  {:.3}", stats.avg_effectiveness);
+
+    // Show top 5 by fitness
+    let genes: Vec<gep::GepGene> = patterns
+        .iter()
+        .map(|p| gep::GepGene::from_pattern(p.clone()))
+        .collect();
+    let top = gep::select(&genes, 5);
+    if !top.is_empty() {
+        println!("\n  Top patterns by fitness:");
+        for g in &top {
+            println!(
+                "    {:<30} fitness={:.3}  effectiveness={:.3}",
+                g.pattern.name,
+                g.fitness,
+                g.pattern.evidence.effectiveness()
+            );
+        }
+    }
+
+    Ok(())
+}
+
 // ─── Community commands ─────────────────────────────────────────
 
 async fn cmd_community_publish(name: &str) -> Result<()> {
     let store = YamlStore::default_store()?;
     let pattern = store.get(name)?;
 
-    let description = pattern.base.description.clone();
+    // Sanitize before publishing
+    let mut publish_pattern = pattern.clone();
+    community::sanitize_pattern(&mut publish_pattern);
 
-    let content = match &pattern.base.content {
+    let description = publish_pattern.base.description.clone();
+
+    let content = match &publish_pattern.base.content {
         Content::DualLayer {
             technical,
             principle,
@@ -3243,10 +3374,10 @@ async fn cmd_community_publish(name: &str) -> Result<()> {
         Content::Plain(s) => s.clone(),
     };
 
-    let mut tags: Vec<String> = pattern.base.tags.languages.clone();
-    tags.extend(pattern.base.tags.topics.clone());
+    let mut tags: Vec<String> = publish_pattern.base.tags.languages.clone();
+    tags.extend(publish_pattern.base.tags.topics.clone());
 
-    let category = pattern.base.tags.topics.first().cloned();
+    let category = publish_pattern.base.tags.topics.first().cloned();
 
     let client = reqwest::Client::new();
     let resp = community::share(
@@ -3261,6 +3392,17 @@ async fn cmd_community_publish(name: &str) -> Result<()> {
 
     println!("  Published '{}' to community!", name);
     println!("  Pattern ID: {}", resp.pattern_id);
+    Ok(())
+}
+
+async fn cmd_community_report(name: &str, effectiveness: f64, sessions: u32) -> Result<()> {
+    if !(0.0..=1.0).contains(&effectiveness) {
+        anyhow::bail!("Effectiveness must be between 0.0 and 1.0");
+    }
+
+    let client = reqwest::Client::new();
+    let resp = community::report_effectiveness(&client, name, effectiveness, sessions).await?;
+    println!("  {}", resp.message);
     Ok(())
 }
 
@@ -3452,6 +3594,123 @@ async fn cmd_community_pack_install(id: &str) -> Result<()> {
         installed,
         resp.patterns.len(),
         resp.pack.name
+    );
+    Ok(())
+}
+
+// ─── Team commands ──────────────────────────────────────────────
+
+async fn cmd_team_list(team_id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let resp = team::list_team_patterns(&client, team_id).await?;
+
+    if resp.patterns.is_empty() {
+        println!("  No patterns shared in team '{}'.", team_id);
+        return Ok(());
+    }
+
+    println!("  {} pattern(s) in team '{}':\n", resp.count, team_id);
+    println!(
+        "  {:<30}  {:>8}  {:>12}  {:<15}  TAGS",
+        "NAME", "MEMBERS", "EFFECTIVENESS", "SHARED BY"
+    );
+    println!("  {}", "-".repeat(90));
+    for p in &resp.patterns {
+        let tags = p.tags.join(", ");
+        println!(
+            "  {:<30}  {:>8}  {:>11.1}%  {:<15}  {}",
+            truncate(&p.name, 30),
+            p.members_using,
+            p.combined_effectiveness * 100.0,
+            truncate(&p.shared_by, 15),
+            truncate(&tags, 25),
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_team_share(name: &str, team_id: &str) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let pattern = store.get(name)?;
+
+    let mut tags: Vec<String> = pattern.base.tags.languages.clone();
+    tags.extend(pattern.base.tags.topics.clone());
+
+    // Sanitize before sharing
+    let mut sanitize_pattern = pattern.clone();
+    community::sanitize_pattern(&mut sanitize_pattern);
+
+    let sanitized_content = sanitize_pattern.base.content.as_text();
+    let sanitized_desc = sanitize_pattern.base.description.clone();
+
+    let client = reqwest::Client::new();
+    let resp = team::share_to_team(
+        &client,
+        team_id,
+        name,
+        &sanitized_desc,
+        &sanitized_content,
+        &tags,
+    )
+    .await?;
+
+    println!("  Shared '{}' to team '{}'!", name, team_id);
+    println!("  Pattern ID: {}", resp.pattern_id);
+    Ok(())
+}
+
+async fn cmd_team_sync(team_id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let resp = team::sync_team(&client, team_id).await?;
+
+    if resp.patterns.is_empty() {
+        println!("  No new patterns to sync from team '{}'.", team_id);
+        return Ok(());
+    }
+
+    let store = YamlStore::default_store()?;
+    let mut synced = 0;
+
+    for tp in &resp.patterns {
+        let slug = tp.name.to_lowercase().replace(' ', "-");
+        if store.exists(&slug) {
+            println!("  Skipped '{}' (already exists)", tp.name);
+            continue;
+        }
+
+        let pattern = Pattern {
+            base: KnowledgeBase {
+                name: slug,
+                description: tp.description.clone(),
+                content: Content::Plain(tp.content.clone()),
+                tier: Tier::Project,
+                tags: Tags {
+                    languages: vec![],
+                    topics: tp.tags.clone(),
+                    extra: std::collections::HashMap::new(),
+                },
+                ..Default::default()
+            },
+            kind: None,
+            origin: Some(Origin {
+                source: format!("team:{}", team_id),
+                trigger: OriginTrigger::CommunityShared,
+                user: None,
+                platform: None,
+                confidence: 0.7,
+            }),
+            attachments: vec![],
+        };
+        store.save(&pattern)?;
+        println!("  Synced: {}", tp.name);
+        synced += 1;
+    }
+
+    println!(
+        "\n  Synced {} of {} patterns from team '{}'.",
+        synced,
+        resp.patterns.len(),
+        team_id
     );
     Ok(())
 }
