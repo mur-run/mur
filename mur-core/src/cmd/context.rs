@@ -16,6 +16,7 @@ pub(crate) async fn cmd_context(
     json_output: bool,
     scope_args: Vec<String>,
 ) -> Result<()> {
+    crate::auth::heartbeat();
     use crate::retrieve::scoring::{
         ScopeContext, score_and_rank_hybrid_with_scope, score_and_rank_with_scope,
     };

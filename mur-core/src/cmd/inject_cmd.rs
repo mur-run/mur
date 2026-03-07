@@ -7,6 +7,7 @@ use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
 pub(crate) async fn cmd_inject(query: &str) -> Result<()> {
+    crate::auth::heartbeat();
     use crate::retrieve::gate::{GateDecision, evaluate_query};
     use crate::retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
     use crate::store::embedding::{EmbeddingConfig, embed};

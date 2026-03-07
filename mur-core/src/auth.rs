@@ -267,6 +267,35 @@ pub async fn auth_request(
         .header("X-Device-OS", get_device_os()))
 }
 
+/// Fire-and-forget heartbeat ping to register device activity.
+/// Uses a background thread with reqwest blocking client to avoid needing async.
+pub fn heartbeat() {
+    let tokens = match load_tokens() {
+        Some(t) => t,
+        None => return,
+    };
+    let base = server_url();
+    let url = format!("{}/api/v1/core/devices/heartbeat", base);
+    let device_id = get_device_id();
+    let device_name = get_device_name();
+    let device_os = get_device_os();
+
+    std::thread::spawn(move || {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build();
+        if let Ok(client) = client {
+            let _ = client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", tokens.access_token))
+                .header("X-Device-ID", device_id)
+                .header("X-Device-Name", device_name)
+                .header("X-Device-OS", device_os)
+                .send();
+        }
+    });
+}
+
 fn open_url(url: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {

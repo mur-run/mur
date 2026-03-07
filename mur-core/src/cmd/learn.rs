@@ -12,6 +12,7 @@ pub(crate) async fn cmd_learn_extract(
     fingerprint: bool,
     use_llm: bool,
 ) -> Result<()> {
+    crate::auth::heartbeat();
     // Read transcript
     let transcript = match file {
         Some(path) => std::fs::read_to_string(&path)
