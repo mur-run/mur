@@ -217,7 +217,7 @@ pub async fn device_code_flow(client: &reqwest::Client) -> Result<AuthTokens> {
 }
 
 /// Get a stable device ID based on hostname.
-fn get_device_id() -> String {
+pub fn get_device_id() -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let hostname = hostname::get()
@@ -230,7 +230,7 @@ fn get_device_id() -> String {
 }
 
 /// Get the device name (hostname).
-fn get_device_name() -> String {
+pub fn get_device_name() -> String {
     hostname::get()
         .unwrap_or_default()
         .to_string_lossy()
@@ -238,7 +238,7 @@ fn get_device_name() -> String {
 }
 
 /// Get the OS name.
-fn get_device_os() -> String {
+pub fn get_device_os() -> String {
     std::env::consts::OS.to_string()
 }
 

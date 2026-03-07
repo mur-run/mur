@@ -20,18 +20,22 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
             let mur_dir = dirs::home_dir()
                 .ok_or_else(|| anyhow::anyhow!("no home dir"))?
                 .join(".mur");
-            let token_path = mur_dir.join("auth_token");
-            if !token_path.exists() {
-                if !quiet {
-                    eprintln!("  ⚠ Not authenticated. Run `mur login` for cloud sync.");
+            let token = match crate::auth::load_tokens() {
+                Some(t) => t.access_token,
+                None => {
+                    if !quiet {
+                        eprintln!("  ⚠ Not authenticated. Run `mur login` for cloud sync.");
+                    }
+                    return Ok(());
                 }
-                return Ok(());
-            }
-            let token = std::fs::read_to_string(&token_path)?.trim().to_string();
+            };
 
             match direction {
                 DeviceSyncDirection::Pull => {
                     let url = format!("{}/api/sync/pull", server_url);
+                    let device_id = crate::auth::get_device_id();
+                    let device_name = crate::auth::get_device_name();
+                    let device_os = crate::auth::get_device_os();
                     let output = std::process::Command::new("curl")
                         .args([
                             "-sf",
@@ -39,6 +43,12 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                             "10",
                             "-H",
                             &format!("Authorization: Bearer {}", token),
+                            "-H",
+                            &format!("X-Device-ID: {}", device_id),
+                            "-H",
+                            &format!("X-Device-Name: {}", device_name),
+                            "-H",
+                            &format!("X-Device-OS: {}", device_os),
                             &url,
                         ])
                         .output();
@@ -71,6 +81,9 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                     let url = format!("{}/api/sync/push", server_url);
                     let patterns_dir = mur_dir.join("patterns");
                     let payload = build_cloud_push_payload(&patterns_dir)?;
+                    let device_id = crate::auth::get_device_id();
+                    let device_name = crate::auth::get_device_name();
+                    let device_os = crate::auth::get_device_os();
                     let output = std::process::Command::new("curl")
                         .args([
                             "-sf",
@@ -80,6 +93,12 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                             "POST",
                             "-H",
                             &format!("Authorization: Bearer {}", token),
+                            "-H",
+                            &format!("X-Device-ID: {}", device_id),
+                            "-H",
+                            &format!("X-Device-Name: {}", device_name),
+                            "-H",
+                            &format!("X-Device-OS: {}", device_os),
                             "-H",
                             "Content-Type: application/json",
                             "-d",
