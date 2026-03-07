@@ -12,6 +12,7 @@ pub mod dashboard;
 pub mod evolve;
 pub mod inject;
 pub mod interactive;
+pub mod llm;
 pub mod retrieve;
 pub mod server;
 pub mod session;
