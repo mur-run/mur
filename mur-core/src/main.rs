@@ -524,8 +524,12 @@ async fn main() -> Result<()> {
         } => {
             if let Some(action) = action {
                 match action {
-                    EvolveAction::Compose { create } => cmd::evolve_cmd::cmd_evolve_compose(create)?,
-                    EvolveAction::Cooccurrence { min } => cmd::evolve_cmd::cmd_evolve_cooccurrence(min)?,
+                    EvolveAction::Compose { create } => {
+                        cmd::evolve_cmd::cmd_evolve_compose(create)?
+                    }
+                    EvolveAction::Cooccurrence { min } => {
+                        cmd::evolve_cmd::cmd_evolve_cooccurrence(min)?
+                    }
                 }
             } else if consolidate {
                 cmd::evolve_cmd::cmd_consolidate(dry_run)?;
