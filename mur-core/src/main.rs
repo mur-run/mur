@@ -54,6 +54,9 @@ enum Commands {
         /// Suppress output
         #[arg(long)]
         quiet: bool,
+        /// Force project-aware sync (prioritize patterns matching project tags/language)
+        #[arg(long)]
+        project: bool,
     },
     /// Inject patterns for a query (hook integration)
     Inject {
@@ -133,6 +136,8 @@ enum Commands {
         /// Run full consolidation (dedup, contradiction, promotion, decay, archival)
         #[arg(long)]
         consolidate: bool,
+        #[command(subcommand)]
+        action: Option<EvolveAction>,
     },
     /// Detect emergent patterns from cross-session behaviors
     Emerge {
@@ -225,6 +230,12 @@ enum Commands {
         #[command(subcommand)]
         action: ExchangeAction,
     },
+    /// Analyze source files to detect coding conventions and generate a code-style pattern
+    Analyze {
+        /// Preview detected conventions without saving
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Import rules from AI tool config files (.cursorrules, CLAUDE.md, etc.)
     Import {
         /// Files to import (auto-detects if not specified)
@@ -268,6 +279,15 @@ enum LearnAction {
         #[arg(long)]
         llm: bool,
     },
+    /// Analyze patterns across projects to find universal patterns
+    Cross {
+        /// Minimum number of projects a pattern must be used in for auto-promotion
+        #[arg(long, default_value = "3")]
+        min_projects: usize,
+        /// Preview changes without saving
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -291,6 +311,22 @@ enum FeedbackAction {
 enum PatternAction {
     /// Show a pattern by name (with attachments)
     Show { name: String },
+}
+
+#[derive(Subcommand)]
+enum EvolveAction {
+    /// Show workflow composition suggestions from co-occurrence patterns
+    Compose {
+        /// Auto-create suggested workflows as drafts
+        #[arg(long)]
+        create: bool,
+    },
+    /// Show the pattern co-occurrence matrix
+    Cooccurrence {
+        /// Minimum count to display a pair
+        #[arg(long, default_value = "2")]
+        min: u32,
+    },
 }
 
 #[derive(Subcommand)]
@@ -407,8 +443,14 @@ async fn main() -> Result<()> {
             } => {
                 cmd_learn_extract(file, fingerprint, llm).await?;
             }
+            LearnAction::Cross {
+                min_projects,
+                dry_run,
+            } => {
+                cmd_learn_cross(min_projects, dry_run)?;
+            }
         },
-        Commands::Sync { quiet } => cmd_sync(quiet)?,
+        Commands::Sync { quiet, project } => cmd_sync(quiet, project)?,
         Commands::Inject { query, project: _ } => cmd_inject(&query).await?,
         Commands::Pattern { action } => match action {
             PatternAction::Show { name } => cmd_pattern_show(&name)?,
@@ -426,8 +468,14 @@ async fn main() -> Result<()> {
             dry_run,
             force,
             consolidate,
+            action,
         } => {
-            if consolidate {
+            if let Some(action) = action {
+                match action {
+                    EvolveAction::Compose { create } => cmd_evolve_compose(create)?,
+                    EvolveAction::Cooccurrence { min } => cmd_evolve_cooccurrence(min)?,
+                }
+            } else if consolidate {
                 cmd_consolidate(dry_run)?;
             } else {
                 cmd_evolve(dry_run, force)?;
@@ -485,6 +533,7 @@ async fn main() -> Result<()> {
             ExchangeAction::ImportAll => cmd_exchange_import_all()?,
             ExchangeAction::Export { name, dir } => cmd_exchange_export(&name, dir)?,
         },
+        Commands::Analyze { dry_run } => cmd_analyze(dry_run)?,
         Commands::Import { file, dry_run } => cmd_import(file, dry_run)?,
     }
 
@@ -638,6 +687,37 @@ fn cmd_new(diagram_path: Option<String>) -> Result<()> {
 
     store.save(&pattern)?;
     println!("✅ Created pattern: {}", name);
+
+    // Auto-discover links to existing patterns
+    let existing = store.list_all()?;
+    let suggestions = evolve::linker::discover_links(&pattern, &existing);
+    if !suggestions.is_empty() {
+        let mut pattern = store.get(&name)?;
+        for s in &suggestions {
+            match s.link_type {
+                evolve::linker::LinkType::Related => {
+                    if !pattern.links.related.contains(&s.target_name) {
+                        pattern.links.related.push(s.target_name.clone());
+                    }
+                    // Bidirectional
+                    if let Ok(mut target) = store.get(&s.target_name)
+                        && !target.links.related.contains(&name)
+                    {
+                        target.links.related.push(name.clone());
+                        let _ = store.save(&target);
+                    }
+                }
+                evolve::linker::LinkType::Supersedes => {
+                    if !pattern.links.supersedes.contains(&s.target_name) {
+                        pattern.links.supersedes.push(s.target_name.clone());
+                    }
+                }
+            }
+            println!("  🔗 Linked to: {} ({:?})", s.target_name, s.link_type);
+        }
+        store.save(&pattern)?;
+    }
+
     Ok(())
 }
 
@@ -750,6 +830,10 @@ async fn cmd_inject(query: &str) -> Result<()> {
     };
 
     // Filter out archived patterns, touch timestamps for injected ones
+    let project_name = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_default();
     let mut injected_patterns: Vec<Pattern> = Vec::new();
     for sp in results {
         let mut p = sp.pattern;
@@ -762,6 +846,10 @@ async fn cmd_inject(query: &str) -> Result<()> {
         p.evidence.injection_count += 1;
         p.lifecycle.last_injected = Some(now);
         p.updated_at = now;
+        // Track project usage for cross-project learning
+        if !project_name.is_empty() && !p.applies.projects.contains(&project_name) {
+            p.applies.projects.push(project_name.clone());
+        }
         // Save touched pattern (best-effort, don't fail injection on save error)
         let _ = yaml_store.save(&p);
         injected_patterns.push(p);
@@ -777,11 +865,6 @@ async fn cmd_inject(query: &str) -> Result<()> {
     if output.is_empty() {
         eprintln!("# No relevant patterns found");
     } else {
-        // Record what was injected for post-session feedback analysis
-        let project_name = std::env::current_dir()
-            .ok()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            .unwrap_or_default();
         inject::hook::record_injection(query, &project_name, &injected_patterns);
 
         // Record co-occurrence for pattern↔workflow intelligence
@@ -1369,7 +1452,7 @@ fn cmd_links(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_sync(quiet: bool) -> Result<()> {
+fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
     use evolve::decay::apply_decay_all;
     use evolve::maturity::apply_maturity_all;
     use inject::sync::{default_targets, generate_sync_content, write_sync_file};
@@ -1395,6 +1478,18 @@ fn cmd_sync(quiet: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let targets = default_targets();
 
+    // Build project-aware query when --project is set
+    let project_name = cwd
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let sync_query = if project_aware {
+        build_project_sync_query(&cwd, &project_name)
+    } else {
+        project_name.clone()
+    };
+
     for target in &targets {
         let target_path = cwd.join(&target.file);
 
@@ -1403,14 +1498,45 @@ fn cmd_sync(quiet: bool) -> Result<()> {
             continue;
         }
 
-        // Score patterns for this project context
-        let project_name = cwd
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let mut scored = score_and_rank(&sync_query, patterns.clone());
 
-        // Use the project name as a rough query for relevance
-        let scored = score_and_rank(&project_name, patterns.clone());
+        // When project-aware, additionally boost patterns whose applies.projects
+        // or tags.languages match the current project
+        if project_aware {
+            let detected_lang = capture::starter::detect_language_name(&cwd);
+            for sp in &mut scored {
+                let p = &sp.pattern;
+                // Boost patterns that explicitly list this project
+                if p.applies
+                    .projects
+                    .iter()
+                    .any(|proj| proj == &project_name || proj == "*")
+                {
+                    sp.score *= 1.3;
+                }
+                // Boost patterns matching detected language
+                if let Some(ref lang) = detected_lang {
+                    let lang_lower = lang.to_lowercase();
+                    if p.tags
+                        .languages
+                        .iter()
+                        .any(|l| l.to_lowercase() == lang_lower)
+                        || p.applies
+                            .languages
+                            .iter()
+                            .any(|l| l.to_lowercase() == lang_lower)
+                    {
+                        sp.score *= 1.2;
+                    }
+                }
+            }
+            scored.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
         let top: Vec<Pattern> = scored
             .into_iter()
             .take(target.max_patterns)
@@ -1831,7 +1957,13 @@ fn cmd_consolidate(dry_run: bool) -> Result<()> {
         );
     }
     if report.promotions > 0 {
-        println!("  ⬆️  Promoted {} patterns", report.promotions);
+        println!("  ⬆️  Promoted {} patterns (tier)", report.promotions);
+    }
+    if report.maturity_promotions + report.maturity_demotions > 0 {
+        println!(
+            "  🎯 Maturity: {} promotions, {} demotions",
+            report.maturity_promotions, report.maturity_demotions
+        );
     }
     if report.patterns_decayed > 0 {
         println!("  📉 Decayed {} patterns", report.patterns_decayed);
@@ -1933,6 +2065,122 @@ fn cmd_evolve(dry_run: bool, _force: bool) -> Result<()> {
         "  Maturity:       Draft: {} | Emerging: {} | Stable: {} | Canonical: {}",
         draft, emerging, stable, canonical
     );
+
+    Ok(())
+}
+
+fn cmd_evolve_compose(create: bool) -> Result<()> {
+    use evolve::compose::suggest_workflows_with_patterns;
+    use evolve::cooccurrence::CooccurrenceMatrix;
+
+    let pattern_store = YamlStore::default_store()?;
+    let workflow_store = WorkflowYamlStore::default_store()?;
+    let patterns = pattern_store.list_all()?;
+
+    let matrix_path = CooccurrenceMatrix::default_path();
+    let matrix = CooccurrenceMatrix::load(&matrix_path)?;
+
+    println!("🔗 Workflow Composition from Co-occurrence\n");
+    println!("  Tracked pairs: {}", matrix.pair_count());
+
+    let suggestions = suggest_workflows_with_patterns(&matrix, 5, &patterns);
+
+    if suggestions.is_empty() {
+        println!("  No workflow composition suggestions yet.");
+        println!("  (Need 3+ patterns co-occurring 5+ times)");
+        return Ok(());
+    }
+
+    println!();
+    for (i, s) in suggestions.iter().enumerate() {
+        println!(
+            "  {}. {} (score: {})",
+            i + 1,
+            s.suggested_name,
+            s.cooccurrence_score,
+        );
+        println!("     Patterns: {}", s.patterns.join(", "));
+        println!("     Trigger: {}", s.suggested_trigger);
+
+        if create {
+            if workflow_store.exists(&s.suggested_name) {
+                println!(
+                    "     -> Workflow '{}' already exists, skipping.",
+                    s.suggested_name
+                );
+            } else {
+                let wf = mur_common::workflow::Workflow {
+                    base: KnowledgeBase {
+                        name: s.suggested_name.clone(),
+                        description: format!(
+                            "Auto-suggested workflow from {} co-occurring patterns",
+                            s.patterns.len()
+                        ),
+                        content: Content::Plain(format!(
+                            "Combines patterns: {}",
+                            s.patterns.join(", ")
+                        )),
+                        tags: collect_tags_from_patterns(&s.patterns, &patterns),
+                        ..Default::default()
+                    },
+                    steps: vec![],
+                    variables: vec![],
+                    source_sessions: vec![],
+                    trigger: s.suggested_trigger.clone(),
+                    tools: vec![],
+                    published_version: 0,
+                    permission: Default::default(),
+                };
+                workflow_store.save(&wf)?;
+                println!("     -> Created draft workflow: {}", s.suggested_name);
+            }
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+fn cmd_evolve_cooccurrence(min_count: u32) -> Result<()> {
+    use evolve::cooccurrence::CooccurrenceMatrix;
+
+    let matrix_path = CooccurrenceMatrix::default_path();
+    let matrix = CooccurrenceMatrix::load(&matrix_path)?;
+
+    println!("📊 Co-occurrence Matrix\n");
+    println!("  Total tracked pairs: {}", matrix.pair_count());
+
+    let mut pairs = matrix.all_pairs();
+    pairs.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let filtered: Vec<_> = pairs
+        .iter()
+        .filter(|(_, count)| *count >= min_count)
+        .collect();
+    if filtered.is_empty() {
+        println!("  No pairs with count >= {}", min_count);
+        return Ok(());
+    }
+
+    println!("  Pairs with count >= {}:\n", min_count);
+    for ((a, b), count) in &filtered {
+        println!("    {} <-> {} : {}", a, b, count);
+    }
+
+    // Show clusters
+    let clusters = matrix.find_clusters(min_count);
+    if !clusters.is_empty() {
+        println!("\n  Clusters (connected components):\n");
+        for (i, c) in clusters.iter().enumerate() {
+            println!(
+                "    {}. {} (score: {})",
+                i + 1,
+                c.suggested_workflow_name,
+                c.total_cooccurrences
+            );
+            println!("       Patterns: {}", c.pattern_names.join(", "));
+        }
+    }
 
     Ok(())
 }
@@ -2099,6 +2347,92 @@ fn collect_tags_from_patterns(names: &[String], patterns: &[Pattern]) -> mur_com
     }
 }
 
+/// Build a richer query for project-aware sync by detecting language and git context.
+fn build_project_sync_query(cwd: &std::path::Path, project_name: &str) -> String {
+    let mut parts = vec![project_name.to_string()];
+
+    // Detect language
+    if let Some(lang) = capture::starter::detect_language_name(cwd) {
+        parts.push(lang);
+    }
+
+    // Try git remote for extra context
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .output()
+        && output.status.success()
+    {
+        let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if let Some(name) = remote.rsplit('/').next() {
+            let name = name.trim_end_matches(".git");
+            if name != project_name {
+                parts.push(name.to_string());
+            }
+        }
+    }
+
+    parts.join(" ")
+}
+
+/// Cross-project learning: find patterns used across multiple projects and auto-promote.
+fn cmd_learn_cross(min_projects: usize, dry_run: bool) -> Result<()> {
+    let store = YamlStore::default_store()?;
+    let patterns = store.list_all()?;
+
+    println!("🌐 Cross-project pattern analysis\n");
+
+    // Analyze which patterns are used across projects.
+    // Use applies.projects and evidence (injection from different project contexts).
+    let mut candidates: Vec<(String, usize)> = Vec::new();
+
+    for p in &patterns {
+        let project_count = p.applies.projects.len();
+        if project_count >= min_projects && p.tier != Tier::Core {
+            candidates.push((p.name.clone(), project_count));
+        }
+    }
+
+    if candidates.is_empty() {
+        println!("  No patterns found used in {}+ projects.", min_projects);
+        println!("  Patterns learn project associations via injection (mur context/inject).");
+        println!("  Tip: add projects manually with `mur edit <pattern> --quick`.");
+        return Ok(());
+    }
+
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+    println!(
+        "  Found {} patterns used across {}+ projects:\n",
+        candidates.len(),
+        min_projects
+    );
+
+    for (name, count) in &candidates {
+        let p = store.get(name)?;
+        let action = if dry_run { "(would promote)" } else { "" };
+        println!(
+            "  {} — {} projects, tier: {:?} {}",
+            name, count, p.tier, action
+        );
+
+        if !dry_run {
+            let mut p = p;
+            let old_tier = p.tier;
+            p.tier = Tier::Core;
+            p.updated_at = chrono::Utc::now();
+            store.save(&p)?;
+            println!("    ⬆️  {:?} → Core", old_tier);
+        }
+    }
+
+    if dry_run {
+        println!("\n(dry run — no changes saved)");
+    }
+
+    Ok(())
+}
+
 async fn cmd_learn_extract(file: Option<String>, fingerprint: bool, use_llm: bool) -> Result<()> {
     // Read transcript
     let transcript = match file {
@@ -2154,6 +2488,7 @@ Return ONLY the JSON array, no markdown fences or other text."#;
                     println!("LLM returned no extractable patterns.");
                 } else {
                     let mut saved = 0;
+                    let existing = store.list_all()?;
                     for p in &parsed {
                         if store.exists(&p.name) {
                             println!("  Skipped '{}' (already exists)", p.name);
@@ -2162,6 +2497,34 @@ Return ONLY the JSON array, no markdown fences or other text."#;
                         store.save(p)?;
                         println!("  Saved pattern: {}", p.name);
                         saved += 1;
+
+                        // Auto-discover links
+                        let suggestions = evolve::linker::discover_links(p, &existing);
+                        if !suggestions.is_empty() {
+                            let mut linked = store.get(&p.name)?;
+                            for s in &suggestions {
+                                match s.link_type {
+                                    evolve::linker::LinkType::Related => {
+                                        if !linked.links.related.contains(&s.target_name) {
+                                            linked.links.related.push(s.target_name.clone());
+                                        }
+                                        if let Ok(mut target) = store.get(&s.target_name)
+                                            && !target.links.related.contains(&p.name)
+                                        {
+                                            target.links.related.push(p.name.clone());
+                                            let _ = store.save(&target);
+                                        }
+                                    }
+                                    evolve::linker::LinkType::Supersedes => {
+                                        if !linked.links.supersedes.contains(&s.target_name) {
+                                            linked.links.supersedes.push(s.target_name.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            store.save(&linked)?;
+                            println!("    🔗 Linked to {} patterns", suggestions.len());
+                        }
                     }
                     println!(
                         "\nExtracted {} patterns, saved {} new.",
@@ -2622,6 +2985,10 @@ async fn cmd_context(
         p.evidence.injection_count += 1;
         p.lifecycle.last_injected = Some(now);
         p.updated_at = now;
+        // Track project usage for cross-project learning
+        if !project_name.is_empty() && !p.applies.projects.contains(&project_name) {
+            p.applies.projects.push(project_name.clone());
+        }
         let _ = yaml_store.save(&p);
         injected_patterns.push(p);
     }
@@ -3095,6 +3462,91 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         format!("{}...", &s[..max - 3])
     }
+}
+
+fn cmd_analyze(dry_run: bool) -> Result<()> {
+    use capture::style::{analyze_style, format_as_pattern_content};
+
+    let cwd = std::env::current_dir()?;
+    let language = capture::starter::detect_language_name(&cwd);
+
+    let language = match language {
+        Some(lang) => lang,
+        None => {
+            println!("Could not detect project language. Run from a project directory.");
+            return Ok(());
+        }
+    };
+
+    println!("🔍 Analyzing {} project...\n", language);
+
+    let analysis = analyze_style(&cwd, &language);
+
+    if analysis.files_scanned == 0 {
+        println!("  No source files found to analyze.");
+        return Ok(());
+    }
+
+    println!("  Files scanned:     {}", analysis.files_scanned);
+    println!("  Naming convention: {}", analysis.naming);
+    println!("  Indentation:       {}", analysis.indentation);
+    println!("  Max line length:   {} chars", analysis.max_line_length);
+    println!("  Import ordering:   {}", analysis.import_ordering);
+
+    let project_name = cwd
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let pattern_name = format!("{}-code-style", project_name);
+    let content = format_as_pattern_content(&analysis);
+
+    if dry_run {
+        println!("\n  Would create pattern: {}", pattern_name);
+        println!("  Content:\n    {}", content.replace('\n', "\n    "));
+        println!("\n(dry run — no changes saved)");
+    } else {
+        let store = YamlStore::default_store()?;
+
+        let pattern = Pattern {
+            base: KnowledgeBase {
+                schema: SCHEMA_VERSION,
+                name: pattern_name.clone(),
+                description: format!("Code style conventions for {} ({})", project_name, language),
+                content: Content::Plain(content),
+                tier: Tier::Project,
+                importance: 0.6,
+                confidence: 0.8,
+                tags: Tags {
+                    languages: vec![language.to_lowercase()],
+                    topics: vec!["code-style".into(), "conventions".into()],
+                    extra: Default::default(),
+                },
+                applies: Applies {
+                    projects: vec![project_name.clone()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            kind: Some(PatternKind::Preference),
+            origin: None,
+            attachments: vec![],
+        };
+
+        if store.exists(&pattern_name) {
+            // Update existing
+            let mut existing = store.get(&pattern_name)?;
+            existing.content = pattern.content.clone();
+            existing.updated_at = chrono::Utc::now();
+            store.save(&existing)?;
+            println!("\n  Updated pattern: {}", pattern_name);
+        } else {
+            store.save(&pattern)?;
+            println!("\n  Created pattern: {}", pattern_name);
+        }
+    }
+
+    Ok(())
 }
 
 fn cmd_import(files: Option<Vec<String>>, dry_run: bool) -> Result<()> {
