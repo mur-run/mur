@@ -106,12 +106,10 @@ fn extract_cargo_deps(dir: &Path) -> Vec<String> {
                 || trimmed.starts_with("[dev-dependencies.");
             continue;
         }
-        if in_deps {
-            if let Some(name) = trimmed.split('=').next() {
-                let name = name.trim();
-                if !name.is_empty() && !name.starts_with('#') {
-                    deps.push(name.to_string());
-                }
+        if in_deps && let Some(name) = trimmed.split('=').next() {
+            let name = name.trim();
+            if !name.is_empty() && !name.starts_with('#') {
+                deps.push(name.to_string());
             }
         }
     }
@@ -223,7 +221,11 @@ fn extract_python_deps(dir: &Path) -> Vec<String> {
 
 fn parse_python_dep_items(line: &str, deps: &mut Vec<String>) {
     // Handle quoted dependency strings like "fastapi>=0.100"
-    let trimmed = line.trim().trim_matches('"').trim_matches('\'').trim_matches(',');
+    let trimmed = line
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_matches(',');
     if trimmed.is_empty() || trimmed == "]" {
         return;
     }
@@ -265,10 +267,10 @@ fn extract_go_deps(dir: &Path) -> Vec<String> {
         // Single-line require
         if trimmed.starts_with("require ") && !trimmed.contains('(') {
             let rest = trimmed.trim_start_matches("require ");
-            if let Some(path) = rest.split_whitespace().next() {
-                if let Some(name) = path.rsplit('/').next() {
-                    deps.push(name.to_string());
-                }
+            if let Some(path) = rest.split_whitespace().next()
+                && let Some(name) = path.rsplit('/').next()
+            {
+                deps.push(name.to_string());
             }
         }
     }
@@ -396,7 +398,6 @@ const TEMPLATES: &[StarterTemplate] = &[
         content: "This project uses reqwest for HTTP requests. Reuse a reqwest::Client instance (it pools connections internally). Use .json(&body) for POST bodies and .json::<T>() to deserialize responses. Always check .error_for_status()? to convert HTTP errors into Results. Set timeouts with ClientBuilder::timeout().",
         kind: PatternKind::Technical,
     },
-
     // ── Swift ──
     StarterTemplate {
         lang: Language::Swift,
@@ -430,7 +431,6 @@ const TEMPLATES: &[StarterTemplate] = &[
         content: "This project uses SwiftData. Define models with @Model macro and use modelContainer modifier on the root view. Query data with @Query property wrapper. Use modelContext.insert() and modelContext.delete() for mutations. Define relationships with arrays of other @Model types. Use #Predicate for type-safe filtering.",
         kind: PatternKind::Technical,
     },
-
     // ── JavaScript/TypeScript ──
     StarterTemplate {
         lang: Language::JavaScript,
@@ -520,7 +520,6 @@ const TEMPLATES: &[StarterTemplate] = &[
         content: "This project uses Prisma with TypeScript. The generated PrismaClient provides full type safety. Use Prisma.ModelGetPayload<> for typed query results with includes. Define models in schema.prisma and run npx prisma generate to update types. Use transactions with prisma.$transaction() for multi-step operations.",
         kind: PatternKind::Technical,
     },
-
     // ── Python ──
     StarterTemplate {
         lang: Language::Python,
@@ -562,7 +561,6 @@ const TEMPLATES: &[StarterTemplate] = &[
         content: "This project uses SQLAlchemy. Use the 2.0 style with mapped_column() and DeclarativeBase. Create sessions with Session(engine) and use context managers for automatic cleanup. Use select() statements with session.execute() instead of the legacy query() API. Define relationships with relationship() and back_populates.",
         kind: PatternKind::Technical,
     },
-
     // ── Go ──
     StarterTemplate {
         lang: Language::Go,
@@ -588,7 +586,6 @@ const TEMPLATES: &[StarterTemplate] = &[
         content: "This project uses GORM. Define models as structs with gorm.Model embedded for ID/timestamps. Use db.AutoMigrate() for schema sync. Chain scopes with .Where().Order().Limit() for queries. Use db.Transaction() for multi-step operations. Preload associations with .Preload() and define them with proper foreign key tags.",
         kind: PatternKind::Technical,
     },
-
     // ── PHP ──
     StarterTemplate {
         lang: Language::Php,
@@ -621,9 +618,7 @@ fn projects_dir() -> PathBuf {
 fn project_hash(path: &Path) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    let canonical = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf());
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut hasher = DefaultHasher::new();
     canonical.hash(&mut hasher);
     format!("{:012x}", hasher.finish())
@@ -652,7 +647,13 @@ pub fn mark_project_known(path: &Path, info: ProjectInfo) -> Result<()> {
 fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .replace("--", "-")
         .trim_matches('-')
@@ -685,8 +686,7 @@ pub fn generate_starter_patterns(
 
         // Check if this dependency is in the project
         // For packages with slashes (laravel/framework), also check the full name
-        let dep_found = dep_set.contains(t.dep)
-            || dep_set.contains(&slugify(t.dep).as_str());
+        let dep_found = dep_set.contains(t.dep) || dep_set.contains(&slugify(t.dep).as_str());
         if !dep_found {
             continue;
         }
@@ -742,6 +742,153 @@ pub fn detect_language_name(cwd: &Path) -> Option<String> {
     detect_language(cwd).map(|l| l.to_string())
 }
 
+// ─── LLM-Enhanced Starters ──────────────────────────────────────────
+
+/// Generate project-specific starter patterns using an LLM.
+#[allow(dead_code)] // Public API — used via lib.rs by mur-commander and future callers
+///
+/// Sends the project's README, detected language, and dependencies to the LLM
+/// for intelligent pattern generation. Falls back to built-in templates if the
+/// LLM call fails.
+pub async fn generate_llm_enhanced_starters(
+    project_dir: &Path,
+    lang: Language,
+    deps: &[String],
+    config: &mur_common::config::LlmConfig,
+) -> Result<Vec<Pattern>> {
+    // Gather project context
+    let readme = read_project_readme(project_dir).unwrap_or_default();
+    let deps_str = deps.join(", ");
+
+    let system = r#"You are MUR, a pattern generation engine. Given a project's language, dependencies, and README, generate practical coding patterns.
+
+Return a JSON array of patterns. Each pattern object has:
+- "name": kebab-case identifier (e.g. "rust-error-handling-anyhow")
+- "description": one-line summary
+- "technical": detailed technical guidance (the actual coding pattern)
+- "tags": array of topic strings
+- "importance": 0.3-0.8 float
+
+Generate 3-8 patterns that are specific to THIS project's stack.
+Return ONLY the JSON array, no markdown fences or other text."#;
+
+    let prompt = format!("Language: {lang}\nDependencies: {deps_str}\n\nREADME:\n{readme}");
+
+    match crate::llm::llm_complete(config, system, &prompt).await {
+        Ok(response) => {
+            let patterns = parse_llm_starter_patterns(&response, lang);
+            if patterns.is_empty() {
+                tracing::info!("LLM returned no patterns, falling back to built-in");
+                let existing = HashSet::new();
+                generate_starter_patterns(project_dir, &existing)
+            } else {
+                Ok(patterns)
+            }
+        }
+        Err(e) => {
+            tracing::warn!("LLM starter generation failed: {e}, falling back to built-in");
+            let existing = HashSet::new();
+            generate_starter_patterns(project_dir, &existing)
+        }
+    }
+}
+
+#[allow(dead_code)] // Called from generate_llm_enhanced_starters (pub API)
+fn read_project_readme(dir: &Path) -> Option<String> {
+    for name in &["README.md", "README.rst", "README.txt", "README"] {
+        let path = dir.join(name);
+        if let Ok(content) = fs::read_to_string(&path) {
+            // Truncate to keep within prompt limits
+            let max = 8000;
+            if content.len() > max {
+                return Some(content[..max].to_string());
+            }
+            return Some(content);
+        }
+    }
+    None
+}
+
+#[allow(dead_code)] // Called from generate_llm_enhanced_starters (pub API)
+fn parse_llm_starter_patterns(response: &str, lang: Language) -> Vec<Pattern> {
+    let json_str = response
+        .trim()
+        .strip_prefix("```json")
+        .or_else(|| response.trim().strip_prefix("```"))
+        .unwrap_or(response.trim());
+    let json_str = json_str.strip_suffix("```").unwrap_or(json_str).trim();
+
+    #[derive(Deserialize)]
+    struct LlmStarter {
+        name: String,
+        description: String,
+        technical: String,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default = "default_imp")]
+        importance: f64,
+    }
+    fn default_imp() -> f64 {
+        0.5
+    }
+
+    let items: Vec<LlmStarter> = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Failed to parse LLM starter JSON: {e}");
+            return vec![];
+        }
+    };
+
+    let now = Utc::now();
+    items
+        .into_iter()
+        .filter(|p| !p.name.is_empty() && !p.technical.is_empty())
+        .map(|p| {
+            use mur_common::pattern::*;
+            Pattern {
+                base: KnowledgeBase {
+                    name: p.name,
+                    description: p.description,
+                    content: Content::DualLayer {
+                        technical: p.technical,
+                        principle: None,
+                    },
+                    tier: Tier::Project,
+                    importance: p.importance.clamp(0.0, 1.0),
+                    confidence: 0.5,
+                    tags: Tags {
+                        languages: vec![lang.as_str().to_string()],
+                        topics: {
+                            let mut t = vec!["starter".to_string(), "llm-generated".to_string()];
+                            t.extend(p.tags);
+                            t
+                        },
+                        extra: Default::default(),
+                    },
+                    applies: Applies {
+                        languages: vec![lang.as_str().to_string()],
+                        ..Default::default()
+                    },
+                    maturity: Maturity::Draft,
+                    created_at: now,
+                    updated_at: now,
+                    ..Default::default()
+                },
+                kind: Some(PatternKind::Technical),
+                origin: Some(Origin {
+                    source: "llm-starter".to_string(),
+                    trigger: OriginTrigger::Automatic,
+                    user: None,
+                    platform: None,
+                    confidence: 0.5,
+                }),
+                attachments: vec![],
+            }
+        })
+        .collect()
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -759,7 +906,11 @@ mod tests {
     #[test]
     fn test_detect_language_swift() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("Package.swift"), "// swift-tools-version:5.9").unwrap();
+        fs::write(
+            dir.path().join("Package.swift"),
+            "// swift-tools-version:5.9",
+        )
+        .unwrap();
         assert_eq!(detect_language(dir.path()), Some(Language::Swift));
     }
 
@@ -832,7 +983,8 @@ mod tests {
         fs::write(
             dir.path().join("requirements.txt"),
             "fastapi>=0.100\npandas==2.0\n# comment\npytest\n",
-        ).unwrap();
+        )
+        .unwrap();
         let deps = extract_python_deps(dir.path());
         assert!(deps.contains(&"fastapi".to_string()));
         assert!(deps.contains(&"pandas".to_string()));
@@ -857,7 +1009,8 @@ mod tests {
         fs::write(
             dir.path().join("Cargo.toml"),
             "[package]\nname = \"test\"\n\n[dependencies]\ntokio = \"1\"\nserde = \"1\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let existing = HashSet::new();
         let patterns = generate_starter_patterns(dir.path(), &existing).unwrap();
         assert!(!patterns.is_empty());
@@ -874,7 +1027,8 @@ mod tests {
         fs::write(
             dir.path().join("Cargo.toml"),
             "[package]\nname = \"test\"\n\n[dependencies]\ntokio = \"1\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let mut existing = HashSet::new();
         existing.insert("rust-async-runtime-tokio".to_string());
         let patterns = generate_starter_patterns(dir.path(), &existing).unwrap();
@@ -888,7 +1042,8 @@ mod tests {
         fs::write(
             dir.path().join("Cargo.toml"),
             "[package]\nname = \"test\"\n\n[dependencies]\nsome-obscure-crate = \"1\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let existing = HashSet::new();
         let patterns = generate_starter_patterns(dir.path(), &existing).unwrap();
         assert!(patterns.is_empty());
@@ -941,7 +1096,8 @@ mod tests {
         fs::write(
             dir.path().join("Cargo.toml"),
             "[package]\nname = \"test\"\n\n[dependencies]\ntokio = \"1\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let patterns = generate_starter_patterns(dir.path(), &HashSet::new()).unwrap();
         let p = &patterns[0];
         assert_eq!(p.tier, Tier::Project);
@@ -984,7 +1140,8 @@ let package = Package(
     ]
 )
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         let deps = extract_swift_deps(dir.path());
         assert!(deps.contains(&"swift-testing".to_string()));
         assert!(deps.contains(&"SwiftUI".to_string()));
