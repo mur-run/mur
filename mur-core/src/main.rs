@@ -11,6 +11,7 @@ mod community;
 mod context_api;
 mod dashboard;
 mod evolve;
+mod gep;
 mod inject;
 mod interactive;
 mod llm;
@@ -18,6 +19,7 @@ mod retrieve;
 mod server;
 mod session;
 mod store;
+mod team;
 
 use store::workflow_yaml::WorkflowYamlStore;
 use store::yaml::YamlStore;
@@ -139,6 +141,11 @@ enum Commands {
         #[command(subcommand)]
         action: Option<EvolveAction>,
     },
+    /// Gene Evolution Protocol
+    Gep {
+        #[command(subcommand)]
+        action: GepAction,
+    },
     /// Detect emergent patterns from cross-session behaviors
     Emerge {
         /// Minimum number of sessions for a behavior to be considered emergent
@@ -189,6 +196,11 @@ enum Commands {
     Community {
         #[command(subcommand)]
         action: CommunityAction,
+    },
+    /// Team shared patterns
+    Team {
+        #[command(subcommand)]
+        action: TeamAction,
     },
     /// Log in to mur community
     Login,
@@ -311,6 +323,14 @@ enum FeedbackAction {
 enum PatternAction {
     /// Show a pattern by name (with attachments)
     Show { name: String },
+}
+
+#[derive(Subcommand)]
+enum GepAction {
+    /// Run one GEP evolution generation
+    Evolve,
+    /// Show population fitness statistics
+    Status,
 }
 
 #[derive(Subcommand)]

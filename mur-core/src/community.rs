@@ -2,6 +2,7 @@
 //! Community API client for browsing, sharing, and fetching patterns.
 
 use anyhow::{Context, Result};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::auth;
@@ -402,4 +403,168 @@ fn urlencoded(s: &str) -> String {
             c => format!("%{:02X}", c as u32),
         })
         .collect()
+}
+
+// ─── Effectiveness Reporting ────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct EffectivenessResponse {
+    pub message: String,
+}
+
+/// Report how well a community pattern worked for you.
+pub async fn report_effectiveness(
+    client: &reqwest::Client,
+    pattern_id: &str,
+    effectiveness: f64,
+    sessions_used: u32,
+) -> Result<EffectivenessResponse> {
+    let base = auth::server_url();
+    let url = format!(
+        "{}/api/v1/core/community/patterns/{}/effectiveness",
+        base, pattern_id
+    );
+
+    let req = auth::auth_request(client, reqwest::Method::POST, &url).await?;
+
+    let resp = req
+        .json(&serde_json::json!({
+            "effectiveness": effectiveness,
+            "sessions_used": sessions_used,
+        }))
+        .send()
+        .await
+        .context("Failed to connect to mur server")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Report effectiveness failed ({}): {}", status, body);
+    }
+
+    resp.json().await.context("Invalid effectiveness response")
+}
+
+// ─── Sanitization ───────────────────────────────────────────────
+
+/// Sanitize a pattern before publishing: strip personal paths, usernames, API keys.
+pub fn sanitize_pattern(pattern: &mut mur_common::pattern::Pattern) {
+    let scrub = |s: &mut String| {
+        // Home directory paths (macOS, Linux, Windows)
+        let home_re = Regex::new(r"(?i)/(?:Users|home)/[a-zA-Z0-9._-]+").unwrap();
+        *s = home_re.replace_all(s, "/Users/<USER>").to_string();
+        let win_re = Regex::new(r"(?i)C:\\Users\\[a-zA-Z0-9._-]+").unwrap();
+        *s = win_re.replace_all(s, "C:\\Users\\<USER>").to_string();
+
+        // API keys / tokens (common patterns: sk-..., ghp_..., Bearer ..., etc.)
+        let key_re =
+            Regex::new(r"(?i)(sk-|ghp_|gho_|github_pat_|xoxb-|xoxp-|Bearer\s+)[a-zA-Z0-9_-]{10,}")
+                .unwrap();
+        *s = key_re.replace_all(s, "<REDACTED>").to_string();
+
+        // Generic long hex/base64 tokens (40+ chars of hex or alphanumeric)
+        let token_re = Regex::new(r"\b[a-fA-F0-9]{40,}\b").unwrap();
+        *s = token_re.replace_all(s, "<REDACTED_TOKEN>").to_string();
+    };
+
+    match &mut pattern.base.content {
+        mur_common::pattern::Content::DualLayer {
+            technical,
+            principle,
+        } => {
+            scrub(technical);
+            if let Some(p) = principle {
+                scrub(p);
+            }
+        }
+        mur_common::pattern::Content::Plain(s) => {
+            scrub(s);
+        }
+    }
+
+    // Also scrub description
+    let mut desc = pattern.base.description.clone();
+    let home_re = Regex::new(r"(?i)/(?:Users|home)/[a-zA-Z0-9._-]+").unwrap();
+    desc = home_re.replace_all(&desc, "/Users/<USER>").to_string();
+    let win_re = Regex::new(r"(?i)C:\\Users\\[a-zA-Z0-9._-]+").unwrap();
+    desc = win_re.replace_all(&desc, "C:\\Users\\<USER>").to_string();
+    pattern.base.description = desc;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_strips_home_paths() {
+        let mut pattern = mur_common::pattern::Pattern {
+            base: mur_common::knowledge::KnowledgeBase {
+                name: "test".into(),
+                description: "Config at /Users/david/.config".into(),
+                content: mur_common::pattern::Content::Plain(
+                    "Edit /Users/david/Projects/foo and /home/alice/bar".into(),
+                ),
+                ..Default::default()
+            },
+            kind: None,
+            origin: None,
+            attachments: vec![],
+        };
+        sanitize_pattern(&mut pattern);
+        let text = pattern.base.content.as_text();
+        assert!(!text.contains("david"));
+        assert!(!text.contains("alice"));
+        assert!(text.contains("<USER>"));
+        assert!(!pattern.base.description.contains("david"));
+    }
+
+    #[test]
+    fn test_sanitize_strips_api_keys() {
+        let mut pattern = mur_common::pattern::Pattern {
+            base: mur_common::knowledge::KnowledgeBase {
+                name: "test".into(),
+                description: "test".into(),
+                content: mur_common::pattern::Content::Plain(
+                    "Use key sk-1234567890abcdefghij for API access".into(),
+                ),
+                ..Default::default()
+            },
+            kind: None,
+            origin: None,
+            attachments: vec![],
+        };
+        sanitize_pattern(&mut pattern);
+        let text = pattern.base.content.as_text();
+        assert!(!text.contains("sk-1234567890"));
+        assert!(text.contains("<REDACTED>"));
+    }
+
+    #[test]
+    fn test_sanitize_dual_layer_content() {
+        let mut pattern = mur_common::pattern::Pattern {
+            base: mur_common::knowledge::KnowledgeBase {
+                name: "test".into(),
+                description: "test".into(),
+                content: mur_common::pattern::Content::DualLayer {
+                    technical: "Path: /home/bob/code".into(),
+                    principle: Some("Token: ghp_abcdefghijklmnop1234".into()),
+                },
+                ..Default::default()
+            },
+            kind: None,
+            origin: None,
+            attachments: vec![],
+        };
+        sanitize_pattern(&mut pattern);
+        if let mur_common::pattern::Content::DualLayer {
+            technical,
+            principle,
+        } = &pattern.base.content
+        {
+            assert!(!technical.contains("bob"));
+            assert!(!principle.as_ref().unwrap().contains("ghp_"));
+        } else {
+            panic!("Expected DualLayer");
+        }
+    }
 }
