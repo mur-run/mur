@@ -25,7 +25,7 @@ pub struct WorkflowSuggestion {
 ///
 /// Only suggests when `min_patterns`+ patterns co-occur `threshold`+ times.
 /// Default: 3+ patterns, 5+ co-occurrences.
-#[allow(dead_code)] // Public API, used by tests
+#[allow(dead_code)] // Used by tests
 pub fn suggest_workflows(matrix: &CooccurrenceMatrix, threshold: u32) -> Vec<WorkflowSuggestion> {
     suggest_workflows_with_patterns(matrix, threshold, &[])
 }

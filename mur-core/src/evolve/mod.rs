@@ -1,4 +1,4 @@
-#[allow(dead_code)]
+#[allow(dead_code)] // Commander bridge — used by mur-commander crate
 pub mod commander_bridge;
 pub mod compose;
 pub mod consolidate;
@@ -19,7 +19,7 @@ use self::commander_bridge::{CommanderBridge, WorkflowPreview};
 ///
 /// Returns previews for patterns that are candidates. Callers decide whether
 /// to present them to the user or auto-save.
-#[allow(dead_code)]
+#[allow(dead_code)] // Used by mur-commander
 pub fn suggest_commander_workflows(
     bridge: &CommanderBridge,
     patterns: &[Pattern],

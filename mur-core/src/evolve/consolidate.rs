@@ -10,6 +10,7 @@ use crate::store::yaml::YamlStore;
 
 use super::decay;
 use super::lifecycle::{self, LifecycleAction};
+use super::maturity;
 
 /// Report from a consolidation run.
 #[derive(Debug, Default, Serialize)]
@@ -18,6 +19,8 @@ pub struct ConsolidationReport {
     pub duplicates_merged: usize,
     pub contradictions_resolved: usize,
     pub promotions: usize,
+    pub maturity_promotions: usize,
+    pub maturity_demotions: usize,
     pub patterns_decayed: usize,
     pub patterns_archived: usize,
     pub details: Vec<ConsolidationDetail>,
@@ -49,8 +52,29 @@ pub fn consolidate(store: &YamlStore, dry_run: bool) -> Result<ConsolidationRepo
     let patterns = store.list_all()?; // reload after dedup
     promotion_pass(&patterns, store, dry_run, &mut report)?;
 
-    // Phase 4: Decay + archival
+    // Phase 3b: Maturity evaluation (Draft→Emerging→Stable→Canonical)
     let now = Utc::now();
+    let maturity_report = if dry_run {
+        maturity::apply_maturity_all_dry_run(store, now)?
+    } else {
+        maturity::apply_maturity_all(store, now)?
+    };
+    report.maturity_promotions += maturity_report.promotions;
+    report.maturity_demotions += maturity_report.demotions;
+    for d in &maturity_report.details {
+        let action_str = if d.is_promotion {
+            "maturity-promoted"
+        } else {
+            "maturity-demoted"
+        };
+        report.details.push(ConsolidationDetail {
+            pattern_name: d.name.clone(),
+            action: action_str.into(),
+            detail: format!("{:?} → {:?}", d.old_maturity, d.new_maturity),
+        });
+    }
+
+    // Phase 4: Decay + archival
     if dry_run {
         let decay_report = decay::apply_decay_all_dry_run(store, now)?;
         report.patterns_decayed += decay_report.patterns_decayed;

@@ -4,7 +4,6 @@ use mur_common::pattern::Pattern;
 
 /// Feedback signal from a session
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Success/Override used by hook integration
 pub enum FeedbackSignal {
     /// Pattern was injected and the session succeeded
     Success,
