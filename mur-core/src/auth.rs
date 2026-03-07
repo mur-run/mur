@@ -216,6 +216,32 @@ pub async fn device_code_flow(client: &reqwest::Client) -> Result<AuthTokens> {
     }
 }
 
+/// Get a stable device ID based on hostname.
+fn get_device_id() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let hostname = hostname::get()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mut hasher = DefaultHasher::new();
+    hostname.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
+
+/// Get the device name (hostname).
+fn get_device_name() -> String {
+    hostname::get()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
+}
+
+/// Get the OS name.
+fn get_device_os() -> String {
+    std::env::consts::OS.to_string()
+}
+
 /// Build a reqwest client with auth header if tokens are available.
 pub fn authenticated_client() -> Result<(reqwest::Client, Option<AuthTokens>)> {
     let tokens = load_tokens();
@@ -235,7 +261,10 @@ pub async fn auth_request(
 
     Ok(client
         .request(method, url)
-        .header("Authorization", format!("Bearer {}", tokens.access_token)))
+        .header("Authorization", format!("Bearer {}", tokens.access_token))
+        .header("X-Device-ID", get_device_id())
+        .header("X-Device-Name", get_device_name())
+        .header("X-Device-OS", get_device_os()))
 }
 
 fn open_url(url: &str) -> Result<()> {
