@@ -13,6 +13,7 @@ mod dashboard;
 mod evolve;
 mod inject;
 mod interactive;
+mod llm;
 mod retrieve;
 mod server;
 mod session;
@@ -263,6 +264,9 @@ enum LearnAction {
         /// Also extract and save behavior fingerprints for emergence detection
         #[arg(long)]
         fingerprint: bool,
+        /// Use LLM to analyze transcript and extract patterns
+        #[arg(long)]
+        llm: bool,
     },
 }
 
@@ -347,6 +351,27 @@ enum CommunityAction {
     },
     /// Star a community pattern
     Star { id: String },
+    /// List available community packs
+    Packs,
+    /// View or install a community pack
+    Pack {
+        #[command(subcommand)]
+        action: PackAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum PackAction {
+    /// Install a community pack (downloads all its patterns)
+    Install {
+        /// Pack ID
+        id: String,
+    },
+    /// Show details of a community pack
+    Show {
+        /// Pack ID
+        id: String,
+    },
 }
 
 #[tokio::main]
@@ -375,8 +400,12 @@ async fn main() -> Result<()> {
         Commands::Gc { auto } => cmd_gc(auto)?,
 
         Commands::Learn { action } => match action {
-            LearnAction::Extract { file, fingerprint } => {
-                cmd_learn_extract(file, fingerprint)?;
+            LearnAction::Extract {
+                file,
+                fingerprint,
+                llm,
+            } => {
+                cmd_learn_extract(file, fingerprint, llm).await?;
             }
         },
         Commands::Sync { quiet } => cmd_sync(quiet)?,
@@ -435,6 +464,11 @@ async fn main() -> Result<()> {
             CommunityAction::Search { query } => cmd_community_search(&query).await?,
             CommunityAction::List { sort } => cmd_community_list(&sort).await?,
             CommunityAction::Star { id } => cmd_community_star(&id).await?,
+            CommunityAction::Packs => cmd_community_packs().await?,
+            CommunityAction::Pack { action } => match action {
+                PackAction::Install { id } => cmd_community_pack_install(&id).await?,
+                PackAction::Show { id } => cmd_community_pack_show(&id).await?,
+            },
         },
         Commands::Login => cmd_login().await?,
         Commands::Logout => cmd_logout()?,
@@ -2065,7 +2099,7 @@ fn collect_tags_from_patterns(names: &[String], patterns: &[Pattern]) -> mur_com
     }
 }
 
-fn cmd_learn_extract(file: Option<String>, fingerprint: bool) -> Result<()> {
+async fn cmd_learn_extract(file: Option<String>, fingerprint: bool, use_llm: bool) -> Result<()> {
     // Read transcript
     let transcript = match file {
         Some(path) => std::fs::read_to_string(&path)
@@ -2082,8 +2116,70 @@ fn cmd_learn_extract(file: Option<String>, fingerprint: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Pattern extraction still requires LLM integration
-    println!("Pattern extraction requires LLM integration (coming soon).");
+    // LLM-based pattern extraction
+    if use_llm {
+        let config = store::config::load_config()?;
+        let store = YamlStore::default_store()?;
+
+        println!("Analyzing transcript with LLM ({})...", config.llm.model);
+
+        let system = r#"You are MUR, a pattern extraction engine. Analyze the given AI assistant session transcript and extract reusable patterns.
+
+Return a JSON array of patterns. Each pattern object has:
+- "name": kebab-case identifier (e.g. "rust-error-handling")
+- "description": one-line summary
+- "technical": technical content (the actual pattern/rule/practice)
+- "principle": optional higher-level principle behind it
+- "tags": array of topic strings
+- "tier": "session" | "project" | "core"
+- "importance": 0.0-1.0 float
+
+Only extract genuinely reusable patterns — skip trivial or one-off interactions.
+Return ONLY the JSON array, no markdown fences or other text."#;
+
+        // Truncate very long transcripts to fit context window
+        let max_chars = 100_000;
+        let truncated = if transcript.len() > max_chars {
+            &transcript[..max_chars]
+        } else {
+            &transcript
+        };
+
+        let prompt = format!("Extract patterns from this session transcript:\n\n{truncated}");
+
+        match llm::llm_complete(&config.llm, system, &prompt).await {
+            Ok(response) => {
+                let parsed = parse_llm_patterns(&response);
+                if parsed.is_empty() {
+                    println!("LLM returned no extractable patterns.");
+                } else {
+                    let mut saved = 0;
+                    for p in &parsed {
+                        if store.exists(&p.name) {
+                            println!("  Skipped '{}' (already exists)", p.name);
+                            continue;
+                        }
+                        store.save(p)?;
+                        println!("  Saved pattern: {}", p.name);
+                        saved += 1;
+                    }
+                    println!(
+                        "\nExtracted {} patterns, saved {} new.",
+                        parsed.len(),
+                        saved
+                    );
+                }
+            }
+            Err(e) => {
+                println!("LLM extraction failed: {e}");
+                println!("Hint: check your API key and config with `mur config`.");
+            }
+        }
+    } else {
+        println!(
+            "Pattern extraction requires --llm flag. Usage: mur learn extract --llm --file transcript.txt"
+        );
+    }
 
     // Fingerprint extraction (no LLM needed)
     if fingerprint {
@@ -2111,6 +2207,89 @@ fn cmd_learn_extract(file: Option<String>, fingerprint: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Parse the LLM JSON response into Pattern objects.
+fn parse_llm_patterns(response: &str) -> Vec<Pattern> {
+    // Strip markdown fences if present
+    let json_str = response
+        .trim()
+        .strip_prefix("```json")
+        .or_else(|| response.trim().strip_prefix("```"))
+        .unwrap_or(response.trim());
+    let json_str = json_str.strip_suffix("```").unwrap_or(json_str).trim();
+
+    #[derive(serde::Deserialize)]
+    struct LlmPattern {
+        name: String,
+        description: String,
+        technical: String,
+        #[serde(default)]
+        principle: Option<String>,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default = "default_tier_str")]
+        tier: String,
+        #[serde(default = "default_importance")]
+        importance: f64,
+    }
+    fn default_tier_str() -> String {
+        "session".to_string()
+    }
+    fn default_importance() -> f64 {
+        0.5
+    }
+
+    let items: Vec<LlmPattern> = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Failed to parse LLM pattern JSON: {e}");
+            return vec![];
+        }
+    };
+
+    let now = chrono::Utc::now();
+    items
+        .into_iter()
+        .filter(|p| !p.name.is_empty() && !p.technical.is_empty())
+        .map(|p| {
+            let tier = match p.tier.as_str() {
+                "core" => Tier::Core,
+                "project" => Tier::Project,
+                _ => Tier::Session,
+            };
+            Pattern {
+                base: KnowledgeBase {
+                    name: p.name,
+                    description: p.description,
+                    content: Content::DualLayer {
+                        technical: p.technical,
+                        principle: p.principle,
+                    },
+                    tier,
+                    importance: p.importance.clamp(0.0, 1.0),
+                    confidence: 0.6,
+                    tags: Tags {
+                        topics: p.tags,
+                        ..Default::default()
+                    },
+                    maturity: mur_common::knowledge::Maturity::Draft,
+                    created_at: now,
+                    updated_at: now,
+                    ..Default::default()
+                },
+                kind: None,
+                origin: Some(Origin {
+                    source: "llm-extract".to_string(),
+                    trigger: OriginTrigger::Automatic,
+                    user: None,
+                    platform: None,
+                    confidence: 0.6,
+                }),
+                attachments: vec![],
+            }
+        })
+        .collect()
 }
 
 fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
@@ -2292,11 +2471,16 @@ async fn cmd_context(
                     starters.len()
                 );
             }
-            let generated_names: Vec<String> =
-                starters.iter().map(|p| p.name.clone()).collect();
+            let generated_names: Vec<String> = starters.iter().map(|p| p.name.clone()).collect();
             let deps: Vec<String> = starters
                 .iter()
-                .flat_map(|p| p.tags.topics.iter().filter(|t| t.as_str() != "starter").cloned())
+                .flat_map(|p| {
+                    p.tags
+                        .topics
+                        .iter()
+                        .filter(|t| t.as_str() != "starter")
+                        .cloned()
+                })
                 .collect();
             for p in &starters {
                 starter_store.save(p)?;
@@ -2776,6 +2960,112 @@ async fn cmd_community_star(id: &str) -> Result<()> {
     let client = reqwest::Client::new();
     community::star(&client, id).await?;
     println!("  Starred pattern {}", id);
+    Ok(())
+}
+
+async fn cmd_community_packs() -> Result<()> {
+    let client = reqwest::Client::new();
+    let resp = community::list_packs(&client).await?;
+
+    if resp.packs.is_empty() {
+        println!("  No community packs available yet.");
+        return Ok(());
+    }
+
+    println!("  {} community pack(s):\n", resp.count);
+    println!(
+        "  {:<36}  {:<25}  {:>8}  {:<15}  TAGS",
+        "ID", "NAME", "PATTERNS", "AUTHOR"
+    );
+    println!("  {}", "-".repeat(100));
+    for pack in &resp.packs {
+        let tags = pack.tags.join(", ");
+        println!(
+            "  {:<36}  {:<25}  {:>8}  {:<15}  {}",
+            pack.id,
+            truncate(&pack.name, 25),
+            pack.pattern_count,
+            truncate(&pack.author, 15),
+            truncate(&tags, 30),
+        );
+    }
+    println!("\n  Install a pack: mur community pack install <id>");
+    Ok(())
+}
+
+async fn cmd_community_pack_show(id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let resp = community::fetch_pack(&client, id).await?;
+
+    println!("  Pack: {}", resp.pack.name);
+    println!("  Description: {}", resp.pack.description);
+    println!("  Author: {}", resp.pack.author);
+    println!("  Patterns: {}", resp.pack.pattern_count);
+    if !resp.pack.tags.is_empty() {
+        println!("  Tags: {}", resp.pack.tags.join(", "));
+    }
+    println!();
+
+    if !resp.patterns.is_empty() {
+        println!("  Included patterns:");
+        for p in &resp.patterns {
+            println!("    - {} — {}", p.name, truncate(&p.description, 60));
+        }
+    }
+
+    println!("\n  Install: mur community pack install {id}");
+    Ok(())
+}
+
+async fn cmd_community_pack_install(id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let resp = community::install_pack(&client, id).await?;
+
+    let store = YamlStore::default_store()?;
+    let mut installed = 0;
+
+    for cp in &resp.patterns {
+        let slug = cp.name.to_lowercase().replace(' ', "-");
+        if store.exists(&slug) {
+            println!("  Skipped '{}' (already exists)", cp.name);
+            continue;
+        }
+
+        let tags_vec: Vec<String> = cp.tags.clone();
+        let pattern = Pattern {
+            base: KnowledgeBase {
+                name: slug,
+                description: cp.description.clone(),
+                content: Content::Plain(cp.content.clone()),
+                tier: Tier::Project,
+                tags: Tags {
+                    languages: vec![],
+                    topics: tags_vec,
+                    extra: std::collections::HashMap::new(),
+                },
+                ..Default::default()
+            },
+            kind: None,
+            origin: Some(Origin {
+                source: format!("pack:{}", id),
+                trigger: OriginTrigger::Automatic,
+                user: None,
+                platform: None,
+                confidence: 0.7,
+            }),
+            attachments: vec![],
+        };
+        store.save(&pattern)?;
+        println!("  Installed: {}", cp.name);
+        installed += 1;
+    }
+
+    println!(
+        "\n  Installed {} of {} patterns from pack '{}'.",
+        installed,
+        resp.patterns.len(),
+        resp.pack.name
+    );
     Ok(())
 }
 
