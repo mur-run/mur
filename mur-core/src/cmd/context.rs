@@ -23,6 +23,16 @@ pub(crate) async fn cmd_context(
     use crate::store::lancedb::VectorStore;
     use std::collections::HashMap;
 
+    // Auto-pull from device sync if configured
+    if let Ok(config) = crate::store::config::load_config()
+        && config.sync.auto
+        && config.sync.method != "local"
+        && let Err(e) =
+            super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Pull)
+    {
+        eprintln!("  ⚠ Auto-pull failed: {}", e);
+    }
+
     // Parse scope arguments (key=value pairs)
     let mut scope = context_api::ContextScope::default();
     for arg in &scope_args {

@@ -1006,6 +1006,59 @@ Run `mur learn` to extract new patterns from recent sessions.
         println!("  Run `mur login` to authenticate and start sharing patterns.");
     }
 
+    // ─── Step I: Device sync setup ──────────────────────────────
+    println!();
+    println!("Device sync — keep patterns in sync across machines:");
+    println!();
+    println!("  1) Cloud sync (recommended)");
+    println!("     Auto conflict resolution, 3-month free trial, just works.");
+    println!("  2) Git sync (free)");
+    println!("     Use your own git repo to sync ~/.mur/patterns/");
+    println!("  3) Skip (local only)");
+    print!("Choose [1/2/3] (default: 3): ");
+    io::stdout().flush()?;
+    let mut sync_choice = String::new();
+    io::stdin().read_line(&mut sync_choice)?;
+    let sync_choice = sync_choice.trim();
+
+    config = crate::store::config::load_config().unwrap_or(config);
+
+    match sync_choice {
+        "1" => {
+            config.sync.method = "cloud".to_string();
+            config.sync.auto = true;
+            config.sync.git_remote = None;
+            crate::store::config::save_config(&config)?;
+            println!("  ✓ Cloud sync enabled (auto-sync on).");
+            println!("  Run `mur login` to authenticate and activate sync.");
+        }
+        "2" => {
+            config.sync.method = "git".to_string();
+            config.sync.auto = true;
+            print!("  Git remote URL (e.g. git@github.com:you/mur-data.git): ");
+            io::stdout().flush()?;
+            let mut remote_url = String::new();
+            io::stdin().read_line(&mut remote_url)?;
+            let remote_url = remote_url.trim().to_string();
+            if !remote_url.is_empty() {
+                config.sync.git_remote = Some(remote_url.clone());
+                println!("  ✓ Git sync enabled with remote: {}", remote_url);
+            } else {
+                println!(
+                    "  ⚠ No remote URL provided. Set sync.git_remote in ~/.mur/config.yaml later."
+                );
+            }
+            crate::store::config::save_config(&config)?;
+        }
+        _ => {
+            config.sync.method = "local".to_string();
+            config.sync.auto = false;
+            config.sync.git_remote = None;
+            crate::store::config::save_config(&config)?;
+            println!("  Keeping local only. Run `mur init` again to enable sync later.");
+        }
+    }
+
     // ─── Step D: Detect other tools ──────────────────────────────
     let gemini_settings = home.join(".gemini").join("settings.json");
     let cursor_rules = std::env::current_dir().ok().map(|d| d.join(".cursorrules"));

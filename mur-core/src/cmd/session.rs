@@ -33,6 +33,16 @@ pub(crate) fn cmd_session_stop(analyze: bool) -> Result<()> {
                     }
                 }
             }
+
+            // Auto-push to device sync if configured
+            if let Ok(config) = crate::store::config::load_config()
+                && config.sync.auto
+                && config.sync.method != "local"
+                && let Err(e) =
+                    super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push)
+            {
+                eprintln!("  ⚠ Auto-push failed: {}", e);
+            }
         }
         None => {
             eprintln!("No active session.");

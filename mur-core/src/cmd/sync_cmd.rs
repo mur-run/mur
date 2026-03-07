@@ -5,11 +5,267 @@ use crate::capture;
 use crate::inject;
 use crate::store::yaml::YamlStore;
 
+/// Run device sync (cloud API or git pull/commit/push) based on config.
+/// Returns Ok(()) on success, warns on failure but doesn't block.
+pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result<()> {
+    let config = crate::store::config::load_config()?;
+
+    match config.sync.method.as_str() {
+        "cloud" => {
+            if !quiet {
+                eprintln!("  ☁ Cloud sync ({})...", direction.label());
+            }
+            // Cloud sync via server API — requires authentication
+            let server_url = &config.server.url;
+            let mur_dir = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("no home dir"))?
+                .join(".mur");
+            let token_path = mur_dir.join("auth_token");
+            if !token_path.exists() {
+                if !quiet {
+                    eprintln!("  ⚠ Not authenticated. Run `mur login` for cloud sync.");
+                }
+                return Ok(());
+            }
+            let token = std::fs::read_to_string(&token_path)?.trim().to_string();
+
+            match direction {
+                DeviceSyncDirection::Pull => {
+                    let url = format!("{}/api/sync/pull", server_url);
+                    let output = std::process::Command::new("curl")
+                        .args([
+                            "-sf",
+                            "--max-time",
+                            "10",
+                            "-H",
+                            &format!("Authorization: Bearer {}", token),
+                            &url,
+                        ])
+                        .output();
+                    match output {
+                        Ok(o) if o.status.success() => {
+                            let body = String::from_utf8_lossy(&o.stdout);
+                            if body.trim() != "{}" && !body.trim().is_empty() {
+                                apply_cloud_pull(&body, &mur_dir)?;
+                                if !quiet {
+                                    eprintln!("  ✓ Cloud pull complete.");
+                                }
+                            } else if !quiet {
+                                eprintln!("  ✓ Already up to date.");
+                            }
+                        }
+                        Ok(o) => {
+                            if !quiet {
+                                let stderr = String::from_utf8_lossy(&o.stderr);
+                                eprintln!("  ⚠ Cloud pull failed: {}", stderr.trim());
+                            }
+                        }
+                        Err(e) => {
+                            if !quiet {
+                                eprintln!("  ⚠ Cloud pull failed: {}", e);
+                            }
+                        }
+                    }
+                }
+                DeviceSyncDirection::Push => {
+                    let url = format!("{}/api/sync/push", server_url);
+                    let patterns_dir = mur_dir.join("patterns");
+                    let payload = build_cloud_push_payload(&patterns_dir)?;
+                    let output = std::process::Command::new("curl")
+                        .args([
+                            "-sf",
+                            "--max-time",
+                            "15",
+                            "-X",
+                            "POST",
+                            "-H",
+                            &format!("Authorization: Bearer {}", token),
+                            "-H",
+                            "Content-Type: application/json",
+                            "-d",
+                            &payload,
+                            &url,
+                        ])
+                        .output();
+                    match output {
+                        Ok(o) if o.status.success() => {
+                            if !quiet {
+                                eprintln!("  ✓ Cloud push complete.");
+                            }
+                        }
+                        Ok(o) => {
+                            if !quiet {
+                                let stderr = String::from_utf8_lossy(&o.stderr);
+                                eprintln!("  ⚠ Cloud push failed: {}", stderr.trim());
+                            }
+                        }
+                        Err(e) => {
+                            if !quiet {
+                                eprintln!("  ⚠ Cloud push failed: {}", e);
+                            }
+                        }
+                    }
+                }
+                DeviceSyncDirection::Both => {
+                    device_sync(quiet, DeviceSyncDirection::Pull)?;
+                    device_sync(quiet, DeviceSyncDirection::Push)?;
+                }
+            }
+        }
+        "git" => {
+            let remote = config.sync.git_remote.as_deref().unwrap_or("");
+            if remote.is_empty() {
+                if !quiet {
+                    eprintln!(
+                        "  ⚠ Git sync configured but no remote URL set. Update sync.git_remote in config."
+                    );
+                }
+                return Ok(());
+            }
+            let mur_dir = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("no home dir"))?
+                .join(".mur");
+
+            // Initialize git repo in ~/.mur if needed
+            if !mur_dir.join(".git").exists() {
+                run_git_in(&mur_dir, &["init"])?;
+                run_git_in(&mur_dir, &["remote", "add", "origin", remote])?;
+            }
+
+            match direction {
+                DeviceSyncDirection::Pull => {
+                    if !quiet {
+                        eprintln!("  📥 Git pull...");
+                    }
+                    match run_git_in(&mur_dir, &["pull", "--rebase", "origin", "main"]) {
+                        Ok(_) => {
+                            if !quiet {
+                                eprintln!("  ✓ Git pull complete.");
+                            }
+                        }
+                        Err(e) => {
+                            if !quiet {
+                                eprintln!("  ⚠ Git pull failed: {}", e);
+                            }
+                        }
+                    }
+                }
+                DeviceSyncDirection::Push => {
+                    if !quiet {
+                        eprintln!("  📤 Git push...");
+                    }
+                    let _ =
+                        run_git_in(&mur_dir, &["add", "patterns/", "workflows/", "config.yaml"]);
+                    let commit_result =
+                        run_git_in(&mur_dir, &["commit", "-m", "mur: auto-sync patterns"]);
+                    // Commit may fail if nothing changed — that's fine
+                    if commit_result.is_ok() {
+                        match run_git_in(&mur_dir, &["push", "origin", "main"]) {
+                            Ok(_) => {
+                                if !quiet {
+                                    eprintln!("  ✓ Git push complete.");
+                                }
+                            }
+                            Err(e) => {
+                                if !quiet {
+                                    eprintln!("  ⚠ Git push failed: {}", e);
+                                }
+                            }
+                        }
+                    } else if !quiet {
+                        eprintln!("  ✓ Nothing to push (no changes).");
+                    }
+                }
+                DeviceSyncDirection::Both => {
+                    device_sync(quiet, DeviceSyncDirection::Pull)?;
+                    device_sync(quiet, DeviceSyncDirection::Push)?;
+                }
+            }
+        }
+        _ => {
+            // "local" or unknown — no device sync
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DeviceSyncDirection {
+    Pull,
+    Push,
+    Both,
+}
+
+impl DeviceSyncDirection {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Pull => "pull",
+            Self::Push => "push",
+            Self::Both => "pull+push",
+        }
+    }
+}
+
+fn run_git_in(dir: &std::path::Path, args: &[&str]) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        anyhow::bail!("git {} failed: {}", args.join(" "), stderr)
+    }
+}
+
+fn apply_cloud_pull(body: &str, mur_dir: &std::path::Path) -> Result<()> {
+    // Parse JSON response containing pattern YAML content keyed by name
+    let patterns: std::collections::HashMap<String, String> = serde_json::from_str(body)?;
+    let patterns_dir = mur_dir.join("patterns");
+    std::fs::create_dir_all(&patterns_dir)?;
+    for (name, yaml_content) in &patterns {
+        let safe_name = name.replace(['/', '\\', '.'], "_");
+        let path = patterns_dir.join(format!("{}.yaml", safe_name));
+        std::fs::write(&path, yaml_content)?;
+    }
+    Ok(())
+}
+
+fn build_cloud_push_payload(patterns_dir: &std::path::Path) -> Result<String> {
+    let mut map = std::collections::HashMap::new();
+    if patterns_dir.exists() {
+        for entry in std::fs::read_dir(patterns_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
+                let name = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let content = std::fs::read_to_string(&path)?;
+                map.insert(name, content);
+            }
+        }
+    }
+    Ok(serde_json::to_string(&map)?)
+}
+
 pub(crate) fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
     use crate::evolve::decay::apply_decay_all;
     use crate::evolve::maturity::apply_maturity_all;
     use crate::retrieve::scoring::score_and_rank;
     use inject::sync::{default_targets, generate_sync_content, write_sync_file};
+
+    // ─── Device sync first (cloud or git) ─────────────────────
+    // Failures warn but don't block tool sync
+    if let Err(e) = device_sync(quiet, DeviceSyncDirection::Both)
+        && !quiet
+    {
+        eprintln!("  ⚠ Device sync error: {}", e);
+    }
 
     let store = YamlStore::default_store()?;
     let now = chrono::Utc::now();

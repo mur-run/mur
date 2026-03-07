@@ -21,6 +21,28 @@ pub struct Config {
 
     #[serde(default)]
     pub community: CommunityConfig,
+
+    #[serde(default)]
+    pub sync: SyncConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SyncConfig {
+    /// Sync method: "cloud", "git", or "local"
+    #[serde(default = "default_sync_method")]
+    pub method: String,
+
+    /// Git remote URL for git sync
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_remote: Option<String>,
+
+    /// Auto-sync on context pull / session stop
+    #[serde(default)]
+    pub auto: bool,
+}
+
+fn default_sync_method() -> String {
+    "local".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
