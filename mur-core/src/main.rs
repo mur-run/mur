@@ -160,6 +160,9 @@ enum Commands {
     Dashboard,
     /// Inject context-aware patterns (auto-detects project from pwd)
     Context {
+        /// Quiet mode — only output injected patterns, suppress evolution/stats
+        #[arg(long, short)]
+        quiet: bool,
         /// Compact output (shorter, fewer patterns)
         #[arg(long)]
         compact: bool,
@@ -544,6 +547,7 @@ async fn main() -> Result<()> {
         Commands::Emerge { threshold, dry_run } => cmd::learn::cmd_emerge(threshold, dry_run)?,
         Commands::Suggest { create } => cmd::workflow::cmd_suggest(create)?,
         Commands::Context {
+            quiet,
             compact,
             query,
             file,
@@ -551,7 +555,10 @@ async fn main() -> Result<()> {
             source,
             json,
             scope,
-        } => cmd::context::cmd_context(query, compact, file, budget, source, json, scope).await?,
+        } => {
+            cmd::context::cmd_context(query, compact, file, budget, source, json, scope, quiet)
+                .await?
+        }
         Commands::Session { action } => match action {
             SessionAction::Start { source } => cmd::session::cmd_session_start(&source)?,
             SessionAction::Stop { analyze } => cmd::session::cmd_session_stop(analyze)?,

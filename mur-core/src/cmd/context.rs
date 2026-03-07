@@ -7,6 +7,7 @@ use crate::inject;
 use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn cmd_context(
     query: Option<String>,
     compact: bool,
@@ -15,6 +16,7 @@ pub(crate) async fn cmd_context(
     source: String,
     json_output: bool,
     scope_args: Vec<String>,
+    quiet: bool,
 ) -> Result<()> {
     crate::auth::heartbeat();
     use crate::retrieve::scoring::{
@@ -25,7 +27,8 @@ pub(crate) async fn cmd_context(
     use std::collections::HashMap;
 
     // Auto-pull from device sync if configured
-    if let Ok(config) = crate::store::config::load_config()
+    if !quiet
+        && let Ok(config) = crate::store::config::load_config()
         && config.sync.auto
         && config.sync.method != "local"
         && let Err(e) =
@@ -60,7 +63,7 @@ pub(crate) async fn cmd_context(
         if !starters.is_empty() {
             let lang_name = capture::starter::detect_language_name(&cwd)
                 .unwrap_or_else(|| "unknown".to_string());
-            if !compact {
+            if !compact && !quiet {
                 eprintln!(
                     "New project detected: {} ({} starter patterns generated)",
                     lang_name,
