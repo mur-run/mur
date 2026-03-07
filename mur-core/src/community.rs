@@ -292,6 +292,106 @@ pub async fn stats(client: &reqwest::Client) -> Result<StatsResponse> {
     resp.json().await.context("Invalid stats response")
 }
 
+// ─── Community Packs ────────────────────────────────────────────────
+
+/// A curated collection of patterns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Pack {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub pattern_count: u64,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PacksListResponse {
+    pub packs: Vec<Pack>,
+    #[serde(default)]
+    pub count: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PackDetailResponse {
+    pub pack: Pack,
+    pub patterns: Vec<CommunityPattern>,
+}
+
+/// List available community packs.
+pub async fn list_packs(client: &reqwest::Client) -> Result<PacksListResponse> {
+    let base = auth::server_url();
+    let url = format!("{}/api/v1/core/community/packs", base);
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .context("Failed to connect to mur server")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("List packs failed ({status}): {body}");
+    }
+
+    resp.json().await.context("Invalid packs list response")
+}
+
+/// Fetch a pack by ID (returns pack info + its patterns).
+pub async fn fetch_pack(client: &reqwest::Client, id: &str) -> Result<PackDetailResponse> {
+    let base = auth::server_url();
+    let url = format!("{}/api/v1/core/community/packs/{}", base, urlencoded(id));
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .context("Failed to connect to mur server")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Fetch pack failed ({status}): {body}");
+    }
+
+    resp.json().await.context("Invalid pack response")
+}
+
+/// Install a pack: fetch all its patterns and save them locally.
+pub async fn install_pack(client: &reqwest::Client, id: &str) -> Result<PackDetailResponse> {
+    let base = auth::server_url();
+    let url = format!(
+        "{}/api/v1/core/community/packs/{}/install",
+        base,
+        urlencoded(id)
+    );
+
+    let req = auth::auth_request(client, reqwest::Method::POST, &url).await?;
+
+    let resp = req
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .context("Failed to connect to mur server")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Install pack failed ({status}): {body}");
+    }
+
+    resp.json().await.context("Invalid install pack response")
+}
+
 fn urlencoded(s: &str) -> String {
     s.chars()
         .map(|c| match c {
