@@ -80,7 +80,7 @@ LanceDB vector index is always rebuildable from YAML via `mur reindex`.
 - **`community.rs`** — Community pattern browser
 - **`dashboard.rs`** — Terminal overview
 - **`interactive.rs`** — `dialoguer`-powered interactive pattern creation
-- **`migrate/`** — v1 (Go flat YAML) → v2 schema migration
+- **`migrate/`** — legacy schema migration (rarely needed)
 - **`auth.rs`** — Trust levels for community patterns
 
 ## Development Notes
