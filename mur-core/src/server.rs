@@ -524,6 +524,12 @@ pub struct CreateWorkflowRequest {
     pub trigger: Option<String>,
     #[serde(default)]
     pub tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub steps: Option<Vec<String>>,
+    #[serde(default)]
+    pub variables: Option<Vec<Variable>>,
+    #[serde(default)]
+    pub source_sessions: Option<Vec<String>>,
 }
 
 async fn create_workflow(
@@ -541,6 +547,20 @@ async fn create_workflow(
         )));
     }
 
+    // Convert step description strings → Step structs
+    let steps: Vec<Step> = req.steps.unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(i, desc)| Step {
+            order: (i + 1) as u32,
+            description: desc,
+            command: None,
+            tool: None,
+            needs_approval: false,
+            on_failure: Default::default(),
+        })
+        .collect();
+
     let workflow = Workflow {
         base: KnowledgeBase {
             name: req.name.clone(),
@@ -552,9 +572,9 @@ async fn create_workflow(
         },
         trigger: req.trigger.unwrap_or_default(),
         tools: req.tools.unwrap_or_default(),
-        steps: vec![],
-        variables: vec![],
-        source_sessions: vec![],
+        steps,
+        variables: req.variables.unwrap_or_default(),
+        source_sessions: req.source_sessions.unwrap_or_default(),
         published_version: 0,
         permission: Default::default(),
     };
@@ -590,6 +610,27 @@ async fn update_workflow(
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect();
+    }
+    if let Some(steps) = updates.get("steps").and_then(|v| v.as_array()) {
+        workflow.steps = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| {
+                v.as_str().map(|s| Step {
+                    order: (i + 1) as u32,
+                    description: s.to_string(),
+                    command: None,
+                    tool: None,
+                    needs_approval: false,
+                    on_failure: Default::default(),
+                })
+            })
+            .collect();
+    }
+    if let Some(vars) = updates.get("variables") {
+        if let Ok(parsed) = serde_json::from_value::<Vec<Variable>>(vars.clone()) {
+            workflow.variables = parsed;
+        }
     }
 
     workflow.updated_at = chrono::Utc::now();
