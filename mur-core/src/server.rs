@@ -36,7 +36,7 @@ use mur_common::knowledge::{KnowledgeBase, Maturity};
 #[include = "*.json"]
 struct WebAssets;
 use mur_common::pattern::*;
-use mur_common::workflow::Workflow;
+use mur_common::workflow::{Step, Workflow};
 
 use crate::context_api;
 use crate::retrieve::scoring::{ScoredPattern, score_and_rank};
@@ -171,6 +171,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/sessions", get(list_sessions))
         .route("/api/v1/sessions/{id}", get(get_session))
         .route("/api/v1/sessions/{id}/events", get(get_session_events))
+        // Extract workflow draft from session
+        .route(
+            "/api/v1/workflows/extract-from-session/{session_id}",
+            post(extract_workflow_from_session),
+        )
         // WebSocket for real-time events
         .route("/api/v1/ws", get(ws_handler))
         .layer(cors)
@@ -960,6 +965,90 @@ async fn get_session_events(
         .map(|n| n.len())
         .unwrap_or(0);
     Ok(wrap(events, count))
+}
+
+/// Extract a draft workflow from session events.
+///
+/// Reads the session recording, picks out `tool_call` events, and returns
+/// a Workflow object (not saved) for the frontend to preview/edit before saving.
+async fn extract_workflow_from_session(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let events = crate::session::read_events(&session_id)
+        .map_err(|_| AppError::NotFound(format!("Session '{}' not found", session_id)))?;
+
+    let tool_calls: Vec<&crate::session::SessionEvent> = events
+        .iter()
+        .filter(|e| e.event_type == "tool_call")
+        .collect();
+
+    let steps: Vec<Step> = tool_calls
+        .iter()
+        .enumerate()
+        .map(|(i, evt)| {
+            let tool_name = evt.tool.clone().unwrap_or_default();
+            let description = if evt.content.len() > 200 {
+                format!("{}: {}…", tool_name, &evt.content[..200])
+            } else if tool_name.is_empty() {
+                evt.content.clone()
+            } else {
+                format!("{}: {}", tool_name, evt.content)
+            };
+            Step {
+                order: (i + 1) as u32,
+                description,
+                command: if tool_name == "Bash" {
+                    Some(evt.content.clone())
+                } else {
+                    None
+                },
+                tool: evt.tool.clone(),
+                needs_approval: false,
+                on_failure: Default::default(),
+            }
+        })
+        .collect();
+
+    // Collect unique tools used
+    let mut tools: Vec<String> = tool_calls
+        .iter()
+        .filter_map(|e| e.tool.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    tools.sort();
+
+    let workflow = Workflow {
+        base: KnowledgeBase {
+            name: format!("session-{}", &session_id[..8.min(session_id.len())]),
+            description: format!(
+                "Workflow extracted from session {} ({} steps)",
+                &session_id[..8.min(session_id.len())],
+                steps.len()
+            ),
+            content: Content::Plain(String::new()),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            ..Default::default()
+        },
+        steps,
+        tools,
+        source_sessions: vec![session_id],
+        trigger: String::new(),
+        variables: vec![],
+        published_version: 0,
+        permission: Default::default(),
+    };
+
+    let count = state
+        .pattern_store()
+        .ok()
+        .and_then(|s| s.list_names().ok())
+        .map(|n| n.len())
+        .unwrap_or(0);
+
+    Ok(wrap(workflow, count))
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────
