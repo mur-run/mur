@@ -77,36 +77,52 @@ Session Review 頁面
   - 回傳 Workflow object（未存檔，讓前端 preview/edit）
   - 前端編輯後用 `POST /api/v1/workflows` 存檔
 
-### 3. Commander 資料存取邊界
+### 3. 資料存取邊界：共享知識 vs 運營資料
 
-**原則：同一台機器上，Commander 直接讀 mur 的資料，不複製。**
+**原則：分界線不是「誰能寫」，而是「資料的性質」。**
+
+Commander 不只是讀者 — 它是學習迴路的一部分。Commander 執行 workflow 的過程中會
+提取 patterns、修復 workflows、錄製 sessions，這些學習成果應該回到共享知識庫，
+不是存在 commander 自己的 silo 裡（否則造成 split brain）。
 
 ```
 ~/.mur/
-├── patterns/        ← mur owns (read/write), commander reads
-├── workflows/       ← mur owns (read/write), commander reads
-├── session/         ← mur owns (read/write), commander reads
+├── patterns/        ← 共享知識（mur + commander 都可讀寫）
+├── workflows/       ← 共享知識（mur + commander 都可讀寫）
+├── session/         ← 共享知識（mur + commander 都可讀寫）
 ├── config.yaml      ← mur config
-└── commander/       ← commander owns (read/write), mur doesn't touch
-    ├── config.toml
-    ├── schedules/   ← cron/trigger definitions per workflow
-    ├── executions/  ← execution history & results
-    └── audit/       ← hash-chained audit log
+├── index/           ← mur vector index（從 patterns rebuild）
+└── commander/       ← commander 運營資料（只有 commander 讀寫）
+    ├── config.toml  ← commander config（LLM providers, platforms）
+    ├── executions/  ← 執行歷史、logs、結果、timing
+    ├── schedules/   ← cron/trigger 定義（哪個 workflow 排什麼時間）
+    └── audit/       ← hash-chained audit trail
 ```
 
-**存取規則：**
-- Commander **讀取** `~/.mur/workflows/` 和 `~/.mur/patterns/`（唯讀）
-- Commander **寫入** `~/.mur/commander/`（排程、執行記錄、audit）
-- Commander 不修改 mur 的 YAML files
-- 不需要 sync 機制或 `commander_sync` 欄位 — 同機器直接讀
+| 目錄 | 性質 | 讀寫者 |
+|------|------|--------|
+| `patterns/` | 知識（what we know） | mur + commander |
+| `workflows/` | 知識（what we know） | mur + commander |
+| `session/` | 知識（what we know） | mur + commander |
+| `commander/` | 運營（what we did） | commander only |
 
-**Commander 擴充欄位存在哪？**
-- Commander 對 workflow 加的 schedule/notify/permissions 存在 `~/.mur/commander/schedules/{workflow-name}.yaml`
-- 不汙染 mur 的 workflow YAML
+**為什麼共享知識目錄要雙向讀寫：**
+- Commander 從執行中提取 pattern → 存到 `patterns/`，mur 立刻能 inject
+- Commander 透過 NL 或健康度修復建立/更新 workflow → 存到 `workflows/`，mur dashboard 立刻看到
+- Commander 錄製的 session → 存到 `session/`，mur session review 能看到
+- `mur sync` 推送所有 patterns（不管是誰建的）到 AI tools
+- Single source of truth，零 sync 成本
 
-**未來跨機器場景：**
-- 如果需要跨機器（mur on laptop, commander on server），再設計 publish/subscribe 機制
-- Commander 的雲端同步只同步 `commander/` 目錄，不動 mur 的原始資料
+**寫入安全：**
+- mur-core 已使用 atomic writes（temp file + rename）
+- Commander 使用相同的寫入機制
+- 實務上不會有並發衝突：人類透過 mur 編輯（慢）vs commander 自動化（事件觸發）
+- 未來若需要：用 `updated_at` timestamp 做 last-writer-wins
+
+**Commander 的 schedule/notify 等擴充欄位：**
+- 存在 `commander/schedules/{workflow-name}.yaml`
+- 不汙染 mur 的 workflow YAML（mur 不需要知道排程資訊）
+- Commander UI 合併顯示：workflow 本體（from `workflows/`）+ 排程（from `commander/schedules/`）
 
 ### 4. Workflow 類型轉換
 
