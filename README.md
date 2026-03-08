@@ -1,7 +1,7 @@
 # MUR
 
-[![Go Version (v1)](https://img.shields.io/github/go-mod/go-version/mur-run/mur-core?label=v1%20%28Go%29)](https://github.com/mur-run/mur-core)
 [![Release](https://img.shields.io/github/v/release/mur-run/mur)](https://github.com/mur-run/mur/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Continuous learning for AI assistants.**
 
@@ -27,16 +27,16 @@ With MUR:
 ## Quick Start
 
 ```bash
-# Install
+# Install via Homebrew (macOS)
 brew tap mur-run/tap && brew install mur
+
+# Interactive setup — configures embeddings, hooks, and sync targets
+mur init
 
 # Create your first pattern
 mur new "prefer-swift-testing"
 
-# Search your patterns
-mur search "testing conventions"
-
-# Sync to all your AI tools
+# Sync to all your AI tools (Claude Code, Gemini CLI, Cursor, etc.)
 mur sync
 ```
 
@@ -44,8 +44,13 @@ mur sync
 <summary>Other install methods</summary>
 
 ```bash
-# From source
+# From source (requires Rust toolchain)
 cargo install --git https://github.com/mur-run/mur.git
+
+# Or clone and build
+git clone https://github.com/mur-run/mur.git
+cd mur
+cargo build --release
 ```
 
 </details>
@@ -62,11 +67,10 @@ cargo install --git https://github.com/mur-run/mur.git
               │                                            │
               ▼                                            │
  AI responds with your preferences                        │
- "Using @Test as you prefer, with #expect()..."           │
               │                                            │
               ▼                                            │
  Post-session feedback loop ◄─────────────────────────────┘
- • Contradiction detection (English + Chinese)
+ • Contradiction detection
  • Pattern reinforcement / decay
  • Cross-session emergence clustering
 ```
@@ -79,18 +83,130 @@ Patterns start as **Draft**, get promoted through **Emerging → Stable → Cano
 |---------|-------------|
 | **Continuous Learning** | Extract patterns from Claude Code, Gemini CLI, Cursor, and other AI sessions |
 | **Universal Sync** | 16+ tools: Claude Code, Gemini CLI, Auggie, Cursor, Copilot CLI, OpenClaw, OpenCode, Amp, Codex, Aider, Windsurf, Zed, Junie, Trae, Cline, Amazon Q |
-| **Semantic Search** | LanceDB vector search + BM25 hybrid ranking (Ollama or OpenAI embeddings) |
+| **Semantic Search** | LanceDB vector search + BM25 hybrid ranking |
+| **Embedded Dashboard** | Built-in web UI for pattern management, workflow editing, and session review |
+| **Workflow Engine** | Multi-step workflows with variables, tools, and session extraction |
+| **Session Recording** | Record AI sessions, review events, extract reusable workflows |
 | **Pattern Maturity** | Draft → Emerging → Stable → Canonical with auto-promotion and demotion |
-| **Automatic Decay** | Exponential half-life system — unused patterns fade, pinned patterns persist |
-| **Feedback Loop** | Post-session contradiction and reinforcement detection (English + Chinese) |
-| **Diagram Attachments** | Mermaid and PlantUML diagrams inline-injected with patterns |
-| **Cross-Session Emergence** | Behavior fingerprinting + Jaccard clustering detects recurring themes |
-| **Knowledge Intelligence** | Co-occurrence tracking, composition suggestions, pattern decomposition |
-| **Workflow Engine** | Separate from patterns — multi-step workflows with variables and permissions |
-| **Pattern Linking** | Zettelkasten-style bidirectional links between patterns |
-| **Pattern Tiers** | Session (14d half-life) → Project (90d) → Core (365d) |
-| **Security** | Injection scanning, trust levels, content hashing |
-| **Local First** | All data on your machine. YAML is source of truth, vector index is rebuildable |
+| **Automatic Decay** | Exponential half-life — unused patterns fade, pinned patterns persist |
+| **Multi-language** | Dashboard UI in English, 繁體中文, 简体中文 |
+| **Local First** | All data on your machine. YAML is source of truth |
+
+## Dashboard
+
+MUR includes a built-in web dashboard for visual management:
+
+```bash
+# Start the dashboard
+mur serve
+
+# Opens at http://localhost:3847
+```
+
+The dashboard provides:
+- **Pattern management** — view, edit, filter by maturity/tier/tags, bulk operations
+- **Workflow editor** — create, edit, and search workflows with semantic search
+- **Session review** — browse recordings, extract workflows from sessions
+- **Statistics** — confidence distribution, maturity breakdown, decay warnings
+- **Settings** — data source config, export/import, theme toggle
+
+## Workflows
+
+Workflows are reusable multi-step procedures extracted from your sessions:
+
+```bash
+# Record a session
+mur session start
+# ... do your work in an AI CLI ...
+mur session stop
+
+# Extract a workflow from the session (via dashboard)
+mur serve
+# → Sessions → Select session → "Extract Workflow"
+
+# Or create manually
+mur workflow new "deploy-staging"
+
+# Search workflows (semantic + keyword)
+mur workflow search "deploy process"
+
+# Show workflow as AI-readable prompt
+mur workflow show "deploy-staging" --md
+
+# Run a workflow (outputs executable prompt for AI)
+mur run "deploy"
+```
+
+Workflows support:
+- **Variables** — string, url, path, number, bool, array types with defaults
+- **Tool detection** — auto-detects agent-browser, MCP servers, etc.
+- **Smart extraction** — heuristic title, description, and variable detection from session recordings
+
+## CLI Commands
+
+```
+mur
+├── init               Interactive setup wizard
+├── new <name>         Create a new pattern
+├── search <query>     Semantic + keyword hybrid search
+├── inject             Inject matching patterns into context
+├── context            Preview what would be injected
+├── sync               Sync patterns to all AI tools + auto-reindex
+├── serve              Start the web dashboard
+├── stats              Pattern library statistics
+├── evolve             Run maturity promotion/demotion cycle
+├── emerge             Detect cross-session emergence clusters
+├── suggest            Composition / decomposition suggestions
+├── feedback
+│   ├── auto           Post-session contradiction detection
+│   ├── helpful        Mark last injection as helpful
+│   └── unhelpful      Mark last injection as unhelpful
+├── workflow
+│   ├── list           List all workflows
+│   ├── show <name>    Show workflow details (--md for AI format)
+│   ├── search <q>     Semantic search workflows
+│   └── new <name>     Create a new workflow
+├── run <query>        Find and output workflow as executable prompt
+├── session
+│   ├── start          Start recording a session
+│   ├── stop           Stop recording
+│   ├── record         Record an event
+│   ├── status         Current session status
+│   └── list           List past sessions
+├── learn extract      Extract patterns from AI transcripts
+├── exchange
+│   ├── import         Import pattern file (MKEF format)
+│   └── export         Export pattern to MKEF
+├── pattern show       Show pattern details
+├── gc                 Garbage collect expired patterns
+├── pin / mute / boost Pattern management shortcuts
+├── promote            Manually promote maturity
+├── deprecate          Deprecate a pattern
+├── reindex            Rebuild vector search index
+├── links              Show pattern links
+└── community          Browse community patterns
+```
+
+## Semantic Search
+
+Find patterns by meaning, not just keywords:
+
+```bash
+# With Ollama (free, local — recommended)
+ollama pull qwen3-embedding:0.6b
+mur reindex
+
+# With OpenAI
+export OPENAI_API_KEY=sk-...
+mur reindex
+
+# Search naturally
+mur search "how to handle authentication errors"
+# → error-handling-auth (0.84)
+# → retry-with-backoff  (0.71)
+```
+
+> **Note:** Semantic search requires an embedding provider (Ollama or OpenAI). Without one, MUR falls back to keyword search. Run `mur init` to configure.
 
 ## Pattern Format
 
@@ -117,156 +233,67 @@ applies:
   languages: [swift]
 ```
 
-v2 patterns have dual-layer content (technical + principle), evidence tracking, confidence scoring, and bidirectional links — a significant upgrade from v1's flat format.
-
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `mur init` | Interactive setup wizard (models, hooks, config) |
-| `mur new <name>` | Create a new pattern |
-| `mur search <query>` | Semantic + keyword hybrid search |
-| `mur inject` | Inject matching patterns into context |
-| `mur context` | Show what would be injected |
-| `mur sync` | Sync patterns to all configured AI tools |
-| `mur stats` | Pattern library statistics |
-| `mur dashboard` | Overview of patterns, maturity, and health |
-| `mur evolve` | Run maturity promotion/demotion cycle |
-| `mur emerge` | Detect cross-session emergence clusters |
-| `mur suggest` | Get composition and decomposition suggestions |
-| `mur feedback auto` | Run post-session contradiction detection |
-| `mur feedback helpful/unhelpful` | Manual feedback on last injection |
-| `mur learn extract` | Extract patterns from AI session transcripts |
-| `mur exchange import <file>` | Import patterns in MKEF format |
-| `mur exchange export <name>` | Export a pattern to MKEF format |
-
-<details>
-<summary>All commands</summary>
-
-```
-mur
-├── init [--hooks]     Interactive setup wizard
-├── new                Create pattern
-├── search             Semantic + BM25 hybrid search
-├── inject             Inject patterns into context
-├── context            Preview injection context
-├── sync               Sync to AI tools
-├── stats              Library statistics
-├── dashboard          Pattern health overview
-├── evolve             Run maturity lifecycle
-│   └── --consolidate  Full dedup + contradiction + decay cycle
-├── emerge             Cross-session emergence detection
-├── suggest            Composition / decomposition suggestions
-├── feedback
-│   ├── auto           Post-session contradiction detection
-│   ├── helpful        Mark last injection as helpful
-│   └── unhelpful      Mark last injection as unhelpful
-├── exchange
-│   ├── import         Import MKEF pattern file
-│   ├── import-all     Import all from ~/.mur/exchange/
-│   └── export         Export pattern to MKEF format
-├── workflow
-│   ├── list           List workflows
-│   ├── show           Show workflow details
-│   └── new            Create workflow
-├── session
-│   ├── start          Start recording
-│   ├── stop           Stop recording
-│   ├── record         Record an event
-│   ├── status         Current session status
-│   └── list           List past sessions
-├── pattern show       Show pattern details
-├── learn extract      Extract patterns from transcripts
-├── gc                 Garbage collect expired patterns
-├── pin                Pin pattern (skip decay)
-├── mute               Mute pattern from injection
-├── boost              Boost pattern importance
-├── promote            Manually promote maturity
-├── deprecate          Deprecate a pattern
-├── reindex            Rebuild vector index
-├── links              Show pattern links
-└── community          Browse community patterns
-```
-
-</details>
-
-## Semantic Search
-
-Find patterns by meaning, not just keywords:
-
-```bash
-# With Ollama (free, local — recommended)
-ollama pull qwen3-embedding:0.6b
-mur reindex
-
-# With OpenAI (~$0.001 per 200 patterns)
-export OPENAI_API_KEY=sk-...
-mur reindex
-
-# Search naturally
-mur search "how to handle authentication errors"
-# → error-handling-auth (0.84)
-# → retry-with-backoff  (0.71)
-```
-
-MUR uses LanceDB for vector storage and combines semantic similarity with BM25 keyword scoring for hybrid ranked results.
-
-## v1 → v2
-
-| | v1 (Go) | v2 (Rust) |
-|---|---|---|
-| Retrieval | Tag matching, full dump | Semantic + BM25 hybrid, scored top-k |
-| Lifecycle | Patterns live forever | Auto promote/demote with exponential decay |
-| Feedback | None | Full closed loop — inject → track → evolve |
-| Quality | No filter, junk accumulates | Noise filter + dedup + contradiction detection |
-| Pattern format | Flat YAML | Dual-layer content + evidence + links |
-| Storage | YAML only | YAML (truth) + LanceDB vector index |
-| Emergence | None | Cross-session behavior fingerprinting |
-| Intelligence | None | Co-occurrence tracking + composition suggestions |
-| Binary | ~15MB | ~3.6MB (arm64 release) |
-| Tests | ~40 | 200+ |
-
-For the Go v1, see [mur-core](https://github.com/mur-run/mur-core).
-
-## Architecture
-
-```
-mur-common/     Shared types (Pattern, Workflow, KnowledgeBase, Config, Event)
-mur-core/       CLI + all logic (capture → store → retrieve → evolve → inject)
-```
-
-~12,000 lines of Rust. 200+ tests. YAML as source of truth with a rebuildable LanceDB vector index.
-
 ## Configuration
 
 ```yaml
 # ~/.mur/config.yaml
 embedding:
   provider: ollama              # ollama | openai | gemini | anthropic
-  model: qwen3-embedding:0.6b  # default; see mur init for all options
+  model: qwen3-embedding:0.6b  # run mur init for options
   dimensions: 1024
 
 llm:
-  provider: anthropic           # anthropic | openai | gemini | ollama
+  provider: anthropic
   model: claude-sonnet-4-20250514
   api_key_env: ANTHROPIC_API_KEY
 ```
 
-Run `mur init` for an interactive setup wizard that explains each option and configures everything for you.
+Run `mur init` for an interactive setup wizard.
+
+## AI Tool Integration
+
+MUR syncs patterns to your AI tools via their native skill/rules systems:
+
+| Tool | Sync Target |
+|------|-------------|
+| Claude Code | `~/.claude/CLAUDE.md` |
+| Gemini CLI | `~/.gemini/GEMINI.md` |
+| Cursor | `.cursor/rules/` |
+| OpenClaw | `~/.agents/skills/mur/` |
+| Auggie | `~/.augment/skills/mur/` |
+| Others | See `mur init --hooks` |
+
+```bash
+# Sync once
+mur sync
+
+# Auto-inject before each AI session (via shell hooks)
+mur init --hooks
+```
 
 ## Privacy & Security
 
 - **100% local** — all patterns stored on your machine (`~/.mur/`)
-- **No telemetry** — no usage data collected
-- **Injection scanning** — patterns are checked for prompt injection attempts
+- **No telemetry** — zero usage data collected
+- **Injection scanning** — patterns checked for prompt injection attempts
 - **Content hashing** — tamper detection on pattern files
-- **Trust levels** — community patterns are sandboxed from local ones
+- **Trust levels** — community patterns sandboxed from local ones
+
+## Architecture
+
+```
+mur-common/     Shared types (Pattern, Workflow, KnowledgeBase, Config)
+mur-core/       CLI + server + all logic
+```
+
+~12,000 lines of Rust. YAML as source of truth with a rebuildable LanceDB vector index.
 
 ## System Requirements
 
-- **Platforms:** macOS, Linux, Windows
-- **Optional:** Ollama (for local embeddings and LLM extraction)
-- **Optional:** OpenAI API key (for cloud embeddings)
+- **macOS** (Apple Silicon or Intel) — primary platform
+- **Linux** — supported
+- **Optional:** [Ollama](https://ollama.com) for local embeddings (recommended)
+- **Optional:** OpenAI API key for cloud embeddings
 
 ## Contributing
 
