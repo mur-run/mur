@@ -1,6 +1,6 @@
 ---
-name: mur-workflow
-description: "Run saved workflows with mur. Trigger: /mur-run, /mur-workflow, 'mur run', 'run workflow', or 'use the workflow'. Searches and executes step-by-step task sequences with variables and tools."
+name: mur-run
+description: "Run saved workflows with mur. Trigger: /mur-run, 'mur run', 'run workflow', or 'use the workflow'. Searches and executes step-by-step task sequences with variables and tools."
 ---
 # MUR Workflow Runner
 

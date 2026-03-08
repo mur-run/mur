@@ -539,7 +539,7 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
         ("mur", include_str!("../mur_skill.md")),
         ("mur-in", include_str!("../mur_in_skill.md")),
         ("mur-out", include_str!("../mur_out_skill.md")),
-        ("mur-workflow", include_str!("../mur_workflow_skill.md")),
+        ("mur-run", include_str!("../mur_workflow_skill.md")),
     ];
 
     let mur_skills_dir = home.join(".mur").join("skills");
