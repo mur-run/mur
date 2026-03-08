@@ -668,6 +668,15 @@ async fn update_workflow(
         .get(&id)
         .map_err(|_| AppError::NotFound(format!("Workflow '{}' not found", id)))?;
 
+    // Handle rename: update name + delete old file
+    let old_name = id.clone();
+    if let Some(new_name) = updates.get("name").and_then(|v| v.as_str())
+        && !new_name.is_empty()
+        && new_name != id
+    {
+        workflow.name = new_name.to_string();
+    }
+
     if let Some(desc) = updates.get("description").and_then(|v| v.as_str()) {
         workflow.description = desc.to_string();
     }
@@ -704,7 +713,13 @@ async fn update_workflow(
 
     workflow.updated_at = chrono::Utc::now();
     store.save(&workflow).map_err(AppError::Internal)?;
-    notify(&state, "workflow:updated", &id);
+
+    // If renamed, delete the old file
+    if workflow.name != old_name {
+        let _ = store.delete(&old_name);
+    }
+
+    notify(&state, "workflow:updated", &workflow.name);
     let p_store = state.pattern_store()?;
     let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
     Ok(wrap(workflow, count))

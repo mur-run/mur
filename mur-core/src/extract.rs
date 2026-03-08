@@ -208,24 +208,42 @@ fn detect_variables(msg: Option<&str>, _tools: &[String]) -> Vec<Variable> {
         });
     }
 
-    // 2. URLs and site names
     let words: Vec<&str> = msg.split_whitespace().collect();
-    for (i, word) in words.iter().enumerate() {
-        let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '/');
+
+    // 2. URLs
+    for word in &words {
+        let w =
+            word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '/' && c != ':');
         if w.starts_with("http://") || w.starts_with("https://") {
             variables.push(Variable {
                 name: "url".to_string(),
                 var_type: VarType::Url,
                 required: true,
                 default_value: Some(w.to_string()),
-                description: "Target URL to search".to_string(),
+                description: "Target URL".to_string(),
             });
-        } else if i > 0
-            && words[i - 1].to_lowercase() == "in"
-            && w.len() > 2
+        }
+    }
+
+    // 3. Site names after "in" / "on" / "from" (e.g., "in pchome", "on Amazon")
+    let site_prepositions = ["in", "on", "from", "at"];
+    let noise_words = [
+        "the", "this", "that", "and", "for", "it", "them", "all", "each", "order", "browser",
+        "terminal", "parallel", "sequence", "markdown", "json",
+    ];
+    for (i, word) in words.iter().enumerate() {
+        if i == 0 {
+            continue;
+        }
+        let prev = words[i - 1].to_lowercase();
+        if !site_prepositions.contains(&prev.as_str()) {
+            continue;
+        }
+        let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '-');
+        if w.len() > 2
             && w.chars()
                 .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
-            && !["the", "this", "that", "and", "for"].contains(&w.to_lowercase().as_str())
+            && !noise_words.contains(&w.to_lowercase().as_str())
             && !variables
                 .iter()
                 .any(|v| v.name == "url" || v.name == "target_site")
@@ -237,6 +255,92 @@ fn detect_variables(msg: Option<&str>, _tools: &[String]) -> Vec<Variable> {
                 default_value: Some(w.to_string()),
                 description: "Website or service to search in".to_string(),
             });
+        }
+    }
+
+    // 4. File paths
+    for word in &words {
+        let w = word.trim_matches(|c: char| c == '\'' || c == '"');
+        if (w.starts_with('/') || w.starts_with("~/") || w.starts_with("./"))
+            && w.len() > 2
+            && !variables.iter().any(|v| v.name == "file_path")
+        {
+            variables.push(Variable {
+                name: "file_path".to_string(),
+                var_type: VarType::Path,
+                required: true,
+                default_value: Some(w.to_string()),
+                description: "File or directory path".to_string(),
+            });
+        }
+    }
+
+    // 5. Numbers with units (e.g., "top 5", "last 10", "3 pages")
+    let quantity_triggers = ["top", "last", "first", "limit", "max", "min"];
+    for (i, word) in words.iter().enumerate() {
+        let w = word.trim_matches(|c: char| !c.is_alphanumeric());
+        if let Ok(_n) = w.parse::<u32>() {
+            // Check if preceded by a quantity trigger
+            let has_trigger =
+                i > 0 && quantity_triggers.contains(&words[i - 1].to_lowercase().as_str());
+            if has_trigger && !variables.iter().any(|v| v.name == "count") {
+                variables.push(Variable {
+                    name: "count".to_string(),
+                    var_type: VarType::Number,
+                    required: false,
+                    default_value: Some(w.to_string()),
+                    description: "Number of items to process".to_string(),
+                });
+            }
+        }
+    }
+
+    // 6. Capitalized multi-word names (likely product/proper nouns) — only if no quoted values found
+    if quoted_values.is_empty() {
+        let action_words = [
+            "find", "search", "get", "check", "compare", "buy", "look", "fetch", "download",
+            "install", "update", "review", "analyze", "monitor",
+        ];
+        let stop_words = [
+            "the", "a", "an", "in", "on", "at", "for", "to", "of", "and", "or", "with", "from",
+            "by", "is", "it", "be", "use", "using", "prices", "price", "cost", "results", "data",
+            "info", "details",
+        ];
+
+        // Find consecutive capitalized words (2+ words) after an action verb
+        let mut found_action = false;
+        let mut cap_run: Vec<&str> = Vec::new();
+
+        for word in &words {
+            let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+            if action_words.contains(&clean.to_lowercase().as_str()) {
+                found_action = true;
+                cap_run.clear();
+                continue;
+            }
+            if found_action && !clean.is_empty() {
+                let first_char = clean.chars().next().unwrap_or(' ');
+                if first_char.is_uppercase() && !stop_words.contains(&clean.to_lowercase().as_str())
+                {
+                    cap_run.push(clean);
+                } else if !cap_run.is_empty() {
+                    // End of capitalized run
+                    break;
+                }
+            }
+        }
+
+        if cap_run.len() >= 2 {
+            let name = cap_run.join(" ");
+            if !variables.iter().any(|v| v.name == "product_name") {
+                variables.push(Variable {
+                    name: "product_name".to_string(),
+                    var_type: VarType::String,
+                    required: true,
+                    default_value: Some(name),
+                    description: "Target product or search term".to_string(),
+                });
+            }
         }
     }
 
@@ -341,9 +445,44 @@ mod tests {
     #[test]
     fn test_detect_variables_url() {
         let vars = detect_variables(Some("check https://example.com for updates"), &[]);
-        assert_eq!(vars.len(), 1);
-        assert_eq!(vars[0].name, "url");
-        assert_eq!(vars[0].var_type, VarType::Url);
+        assert!(
+            vars.iter()
+                .any(|v| v.name == "url" && v.var_type == VarType::Url)
+        );
+    }
+
+    #[test]
+    fn test_detect_variables_file_path() {
+        let vars = detect_variables(Some("read ~/Documents/report.pdf and summarize"), &[]);
+        assert!(
+            vars.iter()
+                .any(|v| v.name == "file_path" && v.var_type == VarType::Path)
+        );
+    }
+
+    #[test]
+    fn test_detect_variables_count() {
+        let vars = detect_variables(Some("find top 5 results for shoes"), &[]);
+        assert!(
+            vars.iter()
+                .any(|v| v.name == "count" && v.default_value == Some("5".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_detect_variables_capitalized_product() {
+        let vars = detect_variables(Some("find AirPods Pro 3 prices on pchome"), &[]);
+        assert!(vars.iter().any(|v| v.name == "product_name"));
+        assert!(vars.iter().any(|v| v.name == "target_site"));
+    }
+
+    #[test]
+    fn test_detect_variables_on_preposition() {
+        let vars = detect_variables(Some("search for prices on Amazon"), &[]);
+        assert!(
+            vars.iter()
+                .any(|v| v.name == "target_site" && v.default_value == Some("Amazon".to_string()))
+        );
     }
 
     #[test]
