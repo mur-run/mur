@@ -1079,22 +1079,31 @@ async fn extract_workflow_from_session(
     let mut variables = Vec::new();
     if let Some(ref msg) = first_user_msg {
         // 1. Quoted strings → likely product names, search terms
+        // Support straight quotes ('/"") and smart/curly quotes (\u{2018}\u{2019}\u{201C}\u{201D})
         let mut in_quote = false;
-        let mut quote_char = '\'';
+        let mut close_char = '\'';
         let mut current = String::new();
         let mut quoted_values = Vec::new();
 
+        let open_close: &[(char, char)] = &[
+            ('\'', '\''), ('"', '"'),
+            ('\u{2018}', '\u{2019}'),  // ' '
+            ('\u{201C}', '\u{201D}'),  // " "
+        ];
+
         for ch in msg.chars() {
-            if !in_quote && (ch == '\'' || ch == '"') {
-                in_quote = true;
-                quote_char = ch;
-                current.clear();
-            } else if in_quote && ch == quote_char {
+            if !in_quote {
+                if let Some(&(_, close)) = open_close.iter().find(|&&(open, _)| open == ch) {
+                    in_quote = true;
+                    close_char = close;
+                    current.clear();
+                }
+            } else if ch == close_char {
                 in_quote = false;
                 if !current.trim().is_empty() {
                     quoted_values.push(current.trim().to_string());
                 }
-            } else if in_quote {
+            } else {
                 current.push(ch);
             }
         }
