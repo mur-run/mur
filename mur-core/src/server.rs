@@ -969,8 +969,9 @@ async fn get_session_events(
 
 /// Extract a draft workflow from session events.
 ///
-/// Reads the session recording, picks out `tool_call` events, and returns
-/// a Workflow object (not saved) for the frontend to preview/edit before saving.
+/// Reads the session recording, filters noise (mur commands, turn markers),
+/// identifies tools used, and generates a meaningful title/description
+/// from the session context.
 async fn extract_workflow_from_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -978,31 +979,127 @@ async fn extract_workflow_from_session(
     let events = crate::session::read_events(&session_id)
         .map_err(|_| AppError::NotFound(format!("Session '{}' not found", session_id)))?;
 
+    // ── Noise filter patterns ───────────────────────────────────────
+    let noise_commands = [
+        "mur session start",
+        "mur session stop",
+        "mur session record",
+        "mur sync",
+        "mur context",
+        "mur inject",
+        "/mur:in",
+        "/mur:out",
+        "/mur-in",
+        "/mur-out",
+    ];
+    let noise_content = ["[stop: turn_end]", "[stop:", "turn_end"];
+
+    let is_noise = |evt: &crate::session::SessionEvent| -> bool {
+        let c = evt.content.to_lowercase();
+        // Filter mur infrastructure commands
+        if noise_commands.iter().any(|n| c.contains(n)) {
+            return true;
+        }
+        // Filter turn markers and empty content
+        if noise_content.iter().any(|n| c.contains(n)) {
+            return true;
+        }
+        if evt.content.trim().is_empty() {
+            return true;
+        }
+        false
+    };
+
+    // ── Extract user intent from first user message ─────────────────
+    let first_user_msg = events
+        .iter()
+        .find(|e| e.event_type == "user" && !is_noise(e))
+        .map(|e| e.content.trim().to_string());
+
+    // ── Filter tool_calls, remove noise ─────────────────────────────
     let tool_calls: Vec<&crate::session::SessionEvent> = events
         .iter()
-        .filter(|e| e.event_type == "tool_call")
+        .filter(|e| e.event_type == "tool_call" && !is_noise(e))
         .collect();
 
+    // ── Parse command from JSON content ─────────────────────────────
+    fn parse_tool_content(content: &str) -> (Option<String>, Option<String>) {
+        // Try to parse as JSON: {"command":"...", "description":"..."}
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(content) {
+            let cmd = v.get("command").and_then(|c| c.as_str()).map(String::from);
+            let desc = v.get("description").and_then(|d| d.as_str()).map(String::from);
+            return (cmd, desc);
+        }
+        (None, None)
+    }
+
+    // ── Detect tools/agents used ────────────────────────────────────
+    let mut detected_tools = std::collections::HashSet::new();
+    let mut detected_agents = std::collections::HashSet::new();
+
+    for evt in &tool_calls {
+        if let Some(ref tool) = evt.tool {
+            detected_tools.insert(tool.clone());
+        }
+        let c = &evt.content;
+        // Detect agent-browser, mcp servers, agent skills, etc.
+        for pattern in ["agent-browser", "agent-", "mcp-server", "mcp_server"] {
+            if c.contains(pattern) {
+                // Extract the specific tool name
+                if let Some(pos) = c.find(pattern) {
+                    let rest = &c[pos..];
+                    let name: String = rest
+                        .chars()
+                        .take_while(|ch| ch.is_alphanumeric() || *ch == '-' || *ch == '_')
+                        .collect();
+                    if !name.is_empty() {
+                        detected_agents.insert(name);
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Build steps with clean descriptions ─────────────────────────
     let steps: Vec<Step> = tool_calls
         .iter()
         .enumerate()
         .map(|(i, evt)| {
             let tool_name = evt.tool.clone().unwrap_or_default();
-            let description = if evt.content.len() > 200 {
-                format!("{}: {}…", tool_name, &evt.content[..200])
+            let (parsed_cmd, parsed_desc) = parse_tool_content(&evt.content);
+
+            // Use parsed description if available, otherwise generate one
+            let description = if let Some(ref desc) = parsed_desc {
+                desc.clone()
+            } else if let Some(ref cmd) = parsed_cmd {
+                // Summarize the command
+                let short_cmd = if cmd.len() > 80 {
+                    format!("{}…", &cmd[..80])
+                } else {
+                    cmd.clone()
+                };
+                format!("{}: {}", tool_name, short_cmd)
+            } else if evt.content.len() > 120 {
+                format!("{}: {}…", tool_name, &evt.content[..120])
             } else if tool_name.is_empty() {
                 evt.content.clone()
             } else {
                 format!("{}: {}", tool_name, evt.content)
             };
-            Step {
-                order: (i + 1) as u32,
-                description,
-                command: if tool_name == "Bash" {
+
+            // Extract actual command string
+            let command = parsed_cmd.or_else(|| {
+                if tool_name == "Bash" {
                     Some(evt.content.clone())
                 } else {
                     None
-                },
+                }
+            });
+
+            Step {
+                order: (i + 1) as u32,
+                description,
+                command,
                 tool: evt.tool.clone(),
                 needs_approval: false,
                 on_failure: Default::default(),
@@ -1010,24 +1107,67 @@ async fn extract_workflow_from_session(
         })
         .collect();
 
-    // Collect unique tools used
-    let mut tools: Vec<String> = tool_calls
-        .iter()
-        .filter_map(|e| e.tool.clone())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
+    // ── Generate meaningful title and description ────────────────────
+    let (name, description) = if let Some(ref user_msg) = first_user_msg {
+        // Derive name from user intent (kebab-case, max 50 chars)
+        let name_raw: String = user_msg
+            .chars()
+            .take(50)
+            .map(|c| {
+                if c.is_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        // Clean up consecutive dashes and trim
+        let name = name_raw
+            .split('-')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+
+        let desc = format!("{}", user_msg);
+        (name, desc)
+    } else {
+        // Fallback: derive from tools used
+        let tools_summary = if !detected_agents.is_empty() {
+            detected_agents.iter().cloned().collect::<Vec<_>>().join(", ")
+        } else if !detected_tools.is_empty() {
+            detected_tools.iter().cloned().collect::<Vec<_>>().join(", ")
+        } else {
+            "unknown".to_string()
+        };
+        (
+            format!(
+                "session-{}",
+                &session_id[..8.min(session_id.len())]
+            ),
+            format!(
+                "Workflow using {} ({} steps)",
+                tools_summary,
+                steps.len()
+            ),
+        )
+    };
+
+    // ── Collect all tools ───────────────────────────────────────────
+    let mut tools: Vec<String> = detected_tools.into_iter().collect();
+    for agent in &detected_agents {
+        if !tools.contains(agent) {
+            tools.push(agent.clone());
+        }
+    }
     tools.sort();
 
     let workflow = Workflow {
         base: KnowledgeBase {
-            name: format!("session-{}", &session_id[..8.min(session_id.len())]),
-            description: format!(
-                "Workflow extracted from session {} ({} steps)",
-                &session_id[..8.min(session_id.len())],
-                steps.len()
+            name,
+            description,
+            content: Content::Plain(
+                first_user_msg.unwrap_or_default(),
             ),
-            content: Content::Plain(String::new()),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             ..Default::default()
