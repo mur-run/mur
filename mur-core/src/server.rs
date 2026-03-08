@@ -163,6 +163,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/links/{id}", get(get_links))
         // Search
         .route("/api/v1/search", post(search_patterns))
+        .route("/api/v1/workflows/search", post(search_workflows))
         // Context API (retrieve, ingest, feedback)
         .route("/api/v1/context", post(context_retrieve))
         .route("/api/v1/ingest", post(context_ingest))
@@ -492,6 +493,74 @@ async fn delete_pattern(
 }
 
 // ── Workflows ──────────────────────────────────────────────────────
+
+/// Semantic + keyword search for workflows.
+async fn search_workflows(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SearchRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let store = state.workflow_store()?;
+    let all_workflows = store.list_all().map_err(AppError::Internal)?;
+    let count = all_workflows.len();
+
+    if all_workflows.is_empty() {
+        return Ok(wrap(Vec::<SearchResult>::new(), 0));
+    }
+
+    // Try semantic search via LanceDB
+    let mut results: Vec<SearchResult> = Vec::new();
+
+    if state.index_dir.exists() {
+        if let Ok(cfg) = load_config() {
+            let emb_cfg = EmbeddingConfig::from_config(&cfg);
+            if let Ok(query_embedding) = embed(&req.query, &emb_cfg).await {
+                if let Ok(vector_store) =
+                    VectorStore::open(&state.index_dir, cfg.embedding.dimensions as i32).await
+                {
+                    if let Ok(vector_results) =
+                        vector_store.search(&query_embedding, req.limit, Some("workflow")).await
+                    {
+                        for r in vector_results {
+                            if let Some(w) = all_workflows.iter().find(|w| w.name == r.name) {
+                                results.push(SearchResult {
+                                    name: w.name.clone(),
+                                    description: w.description.clone(),
+                                    score: r.similarity as f64,
+                                    relevance: r.similarity as f64,
+                                    tier: "workflow".into(),
+                                    maturity: String::new(),
+                                    confidence: r.similarity as f64,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback to keyword search if no semantic results
+    if results.is_empty() {
+        let q = req.query.to_lowercase();
+        for w in &all_workflows {
+            let text = format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
+            if text.contains(&q) {
+                results.push(SearchResult {
+                    name: w.name.clone(),
+                    description: w.description.clone(),
+                    score: 0.5,
+                    relevance: 0.5,
+                    tier: "workflow".into(),
+                    maturity: String::new(),
+                    confidence: 0.5,
+                });
+            }
+        }
+    }
+
+    results.truncate(req.limit);
+    Ok(wrap(results, count))
+}
 
 async fn list_workflows(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, AppError> {
     let wf_store = state.workflow_store()?;
