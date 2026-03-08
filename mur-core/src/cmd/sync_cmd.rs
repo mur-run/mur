@@ -544,6 +544,23 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
 
     let mur_skills_dir = home.join(".mur").join("skills");
 
+    // Clean up deprecated/renamed skills
+    let deprecated_skills = ["mur-workflow"];
+    let tool_dirs: &[&str] = &[".claude", ".augment", ".agents"];
+    for old_name in &deprecated_skills {
+        let old_canonical = mur_skills_dir.join(old_name);
+        if old_canonical.exists() {
+            let _ = std::fs::remove_dir_all(&old_canonical);
+        }
+        for tool_dir_name in tool_dirs {
+            let old_link = home.join(tool_dir_name).join("skills").join(old_name);
+            if old_link.exists() || old_link.symlink_metadata().is_ok() {
+                let _ = std::fs::remove_file(&old_link);
+                let _ = std::fs::remove_dir_all(&old_link);
+            }
+        }
+    }
+
     // Write canonical copies to ~/.mur/skills/<name>/SKILL.md
     for (name, content) in skills {
         let dir = mur_skills_dir.join(name);
