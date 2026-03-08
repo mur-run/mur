@@ -293,14 +293,29 @@ fn format_attachment_for_injection(attachment: &Attachment, store: Option<&YamlS
 pub fn format_workflow_entry(workflow: &Workflow, index: usize) -> String {
     let mut s = String::new();
     s.push_str(&format!(
-        "### {}. [Workflow] {}\n",
-        index, workflow.description
+        "### {}. [Workflow: {}] {}\n",
+        index, workflow.name, workflow.description
     ));
+    s.push_str("**Follow this workflow if the task matches.** ");
+    s.push_str("Run `mur workflow show ");
+    s.push_str(&workflow.name);
+    s.push_str(" --md` for full details.\n");
 
-    // Content
-    let content = format_content(&workflow.content);
-    s.push_str(content.trim());
-    s.push('\n');
+    // Variables
+    if !workflow.variables.is_empty() {
+        s.push_str("Variables: ");
+        let vars: Vec<String> = workflow.variables.iter().map(|v| {
+            let default = v.default_value.as_deref().unwrap_or("?");
+            format!("`{}`={}", v.name, default)
+        }).collect();
+        s.push_str(&vars.join(", "));
+        s.push('\n');
+    }
+
+    // Tools
+    if !workflow.tools.is_empty() {
+        s.push_str(&format!("Tools: {}\n", workflow.tools.join(", ")));
+    }
 
     // Steps summary
     if !workflow.steps.is_empty() {

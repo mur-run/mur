@@ -7,6 +7,115 @@ use crate::evolve;
 use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
+/// Run a workflow — output as executable prompt for AI consumption.
+/// Accepts exact name or semantic query.
+pub(crate) async fn cmd_workflow_run(query: &str) -> Result<()> {
+    use crate::store::embedding::{EmbeddingConfig, embed};
+    use crate::store::lancedb::VectorStore;
+
+    let store = WorkflowYamlStore::default_store()?;
+
+    // Try exact match first
+    if let Ok(w) = store.get(query) {
+        print_workflow_prompt(&w);
+        return Ok(());
+    }
+
+    // Semantic search
+    let index_path = dirs::home_dir()
+        .expect("no home dir")
+        .join(".mur")
+        .join("index");
+
+    let mut best_name: Option<String> = None;
+
+    if index_path.exists() {
+        let cfg = crate::store::config::load_config()?;
+        let config = EmbeddingConfig::from_config(&cfg);
+        if let Ok(query_embedding) = embed(query, &config).await {
+            let vector_store =
+                VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
+            let results = vector_store.search(&query_embedding, 1, Some("workflow")).await?;
+            if let Some(r) = results.first() {
+                if r.similarity > 0.5 {
+                    best_name = Some(r.name.clone());
+                }
+            }
+        }
+    }
+
+    // Fallback: keyword search
+    if best_name.is_none() {
+        let all = store.list_all()?;
+        let q = query.to_lowercase();
+        best_name = all.iter()
+            .find(|w| {
+                let text = format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
+                text.contains(&q)
+            })
+            .map(|w| w.name.clone());
+    }
+
+    match best_name {
+        Some(name) => {
+            let w = store.get(&name)?;
+            print_workflow_prompt(&w);
+        }
+        None => {
+            eprintln!("No matching workflow found for: {}", query);
+            eprintln!("Available workflows:");
+            let all = store.list_all()?;
+            for w in &all {
+                eprintln!("  {} — {}", w.name, w.description);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Print a workflow as an executable prompt for AI.
+fn print_workflow_prompt(w: &mur_common::workflow::Workflow) {
+    println!("# Workflow: {}\n", w.name);
+    println!("{}\n", w.description);
+
+    if !w.variables.is_empty() {
+        println!("## Variables\n");
+        for v in &w.variables {
+            let req = if v.required { "required" } else { "optional" };
+            let default = v.default_value.as_deref().unwrap_or("-");
+            println!("- `{}` ({}, {}): {} — default: `{}`", v.name, v.var_type, req, v.description, default);
+        }
+        println!();
+    }
+
+    if !w.tools.is_empty() {
+        println!("## Tools\n");
+        for t in &w.tools {
+            println!("- {}", t);
+        }
+        println!();
+    }
+
+    if !w.steps.is_empty() {
+        println!("## Steps\n");
+        println!("Execute these steps in order:\n");
+        for step in &w.steps {
+            if let Some(cmd) = &step.command {
+                println!("{}. {} (`{}`)", step.order, step.description, cmd);
+            } else {
+                println!("{}. {}", step.order, step.description);
+            }
+        }
+        println!();
+    }
+
+    if !w.trigger.is_empty() {
+        println!("## Trigger\n");
+        println!("{}\n", w.trigger);
+    }
+}
+
 pub(crate) fn cmd_workflow_list() -> Result<()> {
     let store = WorkflowYamlStore::default_store()?;
     let workflows = store.list_all()?;

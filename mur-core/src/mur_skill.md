@@ -33,6 +33,17 @@ Run these in the terminal when appropriate:
 - `mur evolve` — Run decay + maturity evaluation
 - `mur reindex` — Rebuild semantic search index
 
+## Workflows in Injection
+
+If you see `[Workflow: <name>]` entries in the injected context, these are saved
+task sequences. **Follow the workflow steps** instead of starting from scratch:
+
+1. Run `mur workflow show <name> --md` to get full details (variables, tools, steps)
+2. Substitute variables from the user's request
+3. Execute steps in order
+
+Or use `mur run <name>` for a ready-to-execute prompt.
+
 ## When to Give Feedback
 
 - If an injected pattern helped you solve the task → `mur feedback helpful <name>`

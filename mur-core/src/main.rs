@@ -62,6 +62,11 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Run a workflow by name or semantic query
+    Run {
+        /// Workflow name or search query
+        query: String,
+    },
     /// Report pattern feedback
     Feedback {
         #[command(subcommand)]
@@ -525,6 +530,7 @@ async fn main() -> Result<()> {
         },
         Commands::Sync { quiet, project } => cmd::sync_cmd::cmd_sync(quiet, project)?,
         Commands::Inject { query, project: _ } => cmd::inject_cmd::cmd_inject(&query).await?,
+        Commands::Run { query } => cmd::workflow::cmd_workflow_run(&query).await?,
         Commands::Pattern { action } => match action {
             PatternAction::Show { name } => cmd::pattern::cmd_pattern_show(&name)?,
         },
