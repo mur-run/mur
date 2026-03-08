@@ -39,7 +39,7 @@ pub(crate) async fn cmd_workflow_run(query: &str) -> Result<()> {
                 .search(&query_embedding, 1, Some("workflow"))
                 .await?;
             if let Some(r) = results.first()
-                && r.similarity > 0.5
+                && r.similarity > 0.6
             {
                 best_name = Some(r.name.clone());
             }
