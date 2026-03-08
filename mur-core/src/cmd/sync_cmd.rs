@@ -337,7 +337,7 @@ fn md5_simple(s: &str) -> u64 {
     hasher.finish()
 }
 
-pub(crate) fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
+pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
     use crate::evolve::decay::apply_decay_all;
     use crate::evolve::maturity::apply_maturity_all;
     use crate::retrieve::scoring::score_and_rank;
@@ -462,10 +462,73 @@ pub(crate) fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
         println!("  🎓 MUR skill installed/updated for AI tools");
     }
 
+    // ─── Auto-reindex if dirty ───────────────────────────────
+    let index_dirty = is_index_dirty(&home);
+    if index_dirty {
+        if !quiet {
+            println!("  🔄 Index outdated — reindexing...");
+        }
+        match crate::cmd::reindex::cmd_reindex().await {
+            Ok(()) => {}
+            Err(e) => {
+                if !quiet {
+                    eprintln!("  ⚠ Reindex skipped: {} (run `mur reindex` manually or start Ollama)", e);
+                }
+            }
+        }
+    } else if !quiet {
+        println!("  ✅ Index up to date");
+    }
+
     if !quiet {
         println!("Sync complete.");
     }
     Ok(())
+}
+
+/// Check if the LanceDB index is stale compared to pattern/workflow YAML files.
+fn is_index_dirty(home: &std::path::Path) -> bool {
+    let mur_dir = home.join(".mur");
+    let index_dir = mur_dir.join("index");
+
+    // No index → dirty
+    if !index_dir.exists() {
+        return true;
+    }
+
+    // Get index mtime (use the directory mtime as proxy)
+    let index_mtime = match std::fs::metadata(&index_dir).and_then(|m| m.modified()) {
+        Ok(t) => t,
+        Err(_) => return true,
+    };
+
+    // Check all YAML files in patterns/ and workflows/
+    let dirs_to_check = [
+        mur_dir.join("patterns"),
+        mur_dir.join("workflows"),
+    ];
+
+    for dir in &dirs_to_check {
+        if !dir.exists() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
+                    if let Ok(meta) = std::fs::metadata(&path) {
+                        if let Ok(mtime) = meta.modified() {
+                            if mtime > index_mtime {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
 }
 
 /// Install/update the MUR skill for AI tools that support skills.

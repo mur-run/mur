@@ -528,7 +528,7 @@ async fn main() -> Result<()> {
                 cmd::learn::cmd_learn_cross(min_projects, dry_run)?;
             }
         },
-        Commands::Sync { quiet, project } => cmd::sync_cmd::cmd_sync(quiet, project)?,
+        Commands::Sync { quiet, project } => cmd::sync_cmd::cmd_sync(quiet, project).await?,
         Commands::Inject { query, project: _ } => cmd::inject_cmd::cmd_inject(&query).await?,
         Commands::Run { query } => cmd::workflow::cmd_workflow_run(&query).await?,
         Commands::Pattern { action } => match action {
