@@ -5,9 +5,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Build
+# Build (without embedded dashboard — fallback placeholder page)
 cargo build --workspace
 cargo build --release
+
+# Build with embedded web dashboard (RECOMMENDED for releases)
+# Must build mur-web first, then point MUR_WEB_DIST to its dist/
+cd ~/Projects/mur-web && npm run build
+MUR_WEB_DIST=$HOME/Projects/mur-web/dist cargo build --release
+# Or use the convenience script:
+./build.sh
 
 # Test (all crates)
 cargo test --workspace
