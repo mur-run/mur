@@ -124,6 +124,19 @@ pub enum VarType {
     Array,
 }
 
+impl std::fmt::Display for VarType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VarType::String => write!(f, "string"),
+            VarType::Path => write!(f, "path"),
+            VarType::Url => write!(f, "url"),
+            VarType::Number => write!(f, "number"),
+            VarType::Bool => write!(f, "bool"),
+            VarType::Array => write!(f, "array"),
+        }
+    }
+}
+
 /// Permission level for workflow execution.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]

@@ -25,33 +25,173 @@ pub(crate) fn cmd_workflow_list() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn cmd_workflow_show(name: &str) -> Result<()> {
+pub(crate) fn cmd_workflow_show(name: &str, markdown: bool) -> Result<()> {
     let store = WorkflowYamlStore::default_store()?;
     let w = store.get(name)?;
 
-    println!("📋 Workflow: {}\n", w.name);
-    println!("Description: {}", w.description);
-    println!("Content: {}", w.content.as_text());
+    if markdown {
+        // Markdown output optimized for AI consumption
+        println!("# {}\n", w.name);
+        println!("{}\n", w.description);
 
-    if !w.steps.is_empty() {
-        println!("\nSteps:");
-        for step in &w.steps {
-            print!("  {}. {}", step.order, step.description);
-            if let Some(cmd) = &step.command {
-                print!(" (`{}`)", cmd);
+        if !w.variables.is_empty() {
+            println!("## Variables\n");
+            for v in &w.variables {
+                let req = if v.required { "required" } else { "optional" };
+                let default = v.default_value.as_deref().unwrap_or("-");
+                println!("- `{}` ({}, {}): {} — default: `{}`", v.name, v.var_type, req, v.description, default);
             }
             println!();
         }
+
+        if !w.tools.is_empty() {
+            println!("## Tools\n");
+            for t in &w.tools {
+                println!("- {}", t);
+            }
+            println!();
+        }
+
+        if !w.steps.is_empty() {
+            println!("## Steps\n");
+            for step in &w.steps {
+                if let Some(cmd) = &step.command {
+                    println!("{}. {} (`{}`)", step.order, step.description, cmd);
+                } else {
+                    println!("{}. {}", step.order, step.description);
+                }
+            }
+            println!();
+        }
+
+        if !w.trigger.is_empty() {
+            println!("## Trigger\n");
+            println!("{}\n", w.trigger);
+        }
+    } else {
+        // Human-readable output
+        println!("📋 Workflow: {}\n", w.name);
+        println!("Description: {}", w.description);
+
+        let content_text = w.content.as_text();
+        if !content_text.is_empty() {
+            println!("Content: {}", content_text);
+        }
+
+        if !w.variables.is_empty() {
+            println!("\nVariables:");
+            for v in &w.variables {
+                let req = if v.required { "required" } else { "optional" };
+                let default = v.default_value.as_deref().unwrap_or("-");
+                println!("  ${} ({}): {} [{}] default={}", v.name, v.var_type, v.description, req, default);
+            }
+        }
+
+        if !w.steps.is_empty() {
+            println!("\nSteps:");
+            for step in &w.steps {
+                print!("  {}. {}", step.order, step.description);
+                if let Some(cmd) = &step.command {
+                    print!(" (`{}`)", cmd);
+                }
+                println!();
+            }
+        }
+
+        if !w.tools.is_empty() {
+            println!("\nTools: {}", w.tools.join(", "));
+        }
+
+        if !w.trigger.is_empty() {
+            println!("Trigger: {}", w.trigger);
+        }
     }
 
-    if !w.tools.is_empty() {
-        println!("\nTools: {}", w.tools.join(", "));
+    Ok(())
+}
+
+/// Semantic search for workflows using LanceDB embeddings.
+pub(crate) async fn cmd_workflow_search(query: &str, limit: usize) -> Result<()> {
+    use crate::store::embedding::{EmbeddingConfig, embed};
+    use crate::store::lancedb::VectorStore;
+
+    let store = WorkflowYamlStore::default_store()?;
+    let all_workflows = store.list_all()?;
+
+    if all_workflows.is_empty() {
+        println!("No workflows found. Create one with `mur workflow new` or extract from a session.");
+        return Ok(());
     }
 
-    if !w.trigger.is_empty() {
-        println!("Trigger: {}", w.trigger);
+    let index_path = dirs::home_dir()
+        .expect("no home dir")
+        .join(".mur")
+        .join("index");
+
+    if index_path.exists() {
+        // Semantic search via LanceDB
+        let cfg = crate::store::config::load_config()?;
+        let config = EmbeddingConfig::from_config(&cfg);
+        match embed(query, &config).await {
+            Ok(query_embedding) => {
+                let vector_store =
+                    VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
+                // Search with item_type filter = "workflow"
+                let results = vector_store.search(&query_embedding, limit, Some("workflow")).await?;
+
+                if results.is_empty() {
+                    println!("No matching workflows found for: {}", query);
+                    return Ok(());
+                }
+
+                println!("🔍 Workflow search: \"{}\"\n", query);
+                for (i, r) in results.iter().enumerate() {
+                    // Find the full workflow to show details
+                    if let Some(w) = all_workflows.iter().find(|w| w.name == r.name) {
+                        let steps = w.steps.len();
+                        let tools = if w.tools.is_empty() { String::new() } else { format!(" [{}]", w.tools.join(", ")) };
+                        let score = (r.similarity * 100.0) as u32;
+                        println!("  {}. {} ({}% match, {} steps){}", i + 1, w.name, score, steps, tools);
+                        println!("     {}", w.description);
+                    } else {
+                        println!("  {}. {} ({:.0}% match)", i + 1, r.name, r.similarity * 100.0);
+                    }
+                }
+                println!("\nUse `mur workflow show <name>` for full details.");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("⚠ Embedding unavailable ({}), falling back to keyword search", e);
+            }
+        }
     }
 
+    // Fallback: keyword search
+    let query_lower = query.to_lowercase();
+    let mut matches: Vec<_> = all_workflows
+        .iter()
+        .filter_map(|w| {
+            let text = format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
+            if text.contains(&query_lower) {
+                Some(w)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if matches.is_empty() {
+        println!("No matching workflows found for: {}", query);
+        return Ok(());
+    }
+
+    println!("🔍 Workflow search: \"{}\" ({} results)\n", query, matches.len());
+    for (i, w) in matches.iter().enumerate() {
+        let tools = if w.tools.is_empty() { String::new() } else { format!(" [{}]", w.tools.join(", ")) };
+        println!("  {}. {} ({} steps){}", i + 1, w.name, w.steps.len(), tools);
+        println!("     {}", w.description);
+    }
+    println!("\nUse `mur workflow show <name>` for full details.");
     Ok(())
 }
 

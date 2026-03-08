@@ -352,7 +352,20 @@ enum WorkflowAction {
     /// List all workflows
     List,
     /// Show a workflow by name
-    Show { name: String },
+    Show {
+        name: String,
+        /// Output as markdown (optimized for AI consumption)
+        #[arg(long)]
+        md: bool,
+    },
+    /// Semantic search for workflows (uses LanceDB if available)
+    Search {
+        /// Search query
+        query: String,
+        /// Max results
+        #[arg(long, default_value = "5")]
+        limit: usize,
+    },
     /// Create a new workflow interactively
     New,
 }
@@ -517,7 +530,10 @@ async fn main() -> Result<()> {
         },
         Commands::Workflow { action } => match action {
             WorkflowAction::List => cmd::workflow::cmd_workflow_list()?,
-            WorkflowAction::Show { name } => cmd::workflow::cmd_workflow_show(&name)?,
+            WorkflowAction::Show { name, md } => cmd::workflow::cmd_workflow_show(&name, md)?,
+            WorkflowAction::Search { query, limit } => {
+                cmd::workflow::cmd_workflow_search(&query, limit).await?
+            }
             WorkflowAction::New => cmd::workflow::cmd_workflow_new()?,
         },
         Commands::Reindex => cmd::reindex::cmd_reindex().await?,
