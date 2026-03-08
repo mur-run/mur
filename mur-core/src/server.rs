@@ -36,7 +36,7 @@ use mur_common::knowledge::{KnowledgeBase, Maturity};
 #[include = "*.json"]
 struct WebAssets;
 use mur_common::pattern::*;
-use mur_common::workflow::{Step, Workflow};
+use mur_common::workflow::{Step, VarType, Variable, Workflow};
 
 use crate::context_api;
 use crate::retrieve::scoring::{ScoredPattern, score_and_rank};
@@ -970,8 +970,8 @@ async fn get_session_events(
 /// Extract a draft workflow from session events.
 ///
 /// Reads the session recording, filters noise (mur commands, turn markers),
-/// identifies tools used, and generates a meaningful title/description
-/// from the session context.
+/// identifies tools used, detects variables, and generates a concise
+/// title/description from the session context.
 async fn extract_workflow_from_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -979,52 +979,33 @@ async fn extract_workflow_from_session(
     let events = crate::session::read_events(&session_id)
         .map_err(|_| AppError::NotFound(format!("Session '{}' not found", session_id)))?;
 
-    // ── Noise filter patterns ───────────────────────────────────────
-    let noise_commands = [
-        "mur session start",
-        "mur session stop",
-        "mur session record",
-        "mur sync",
-        "mur context",
-        "mur inject",
-        "/mur:in",
-        "/mur:out",
-        "/mur-in",
-        "/mur-out",
+    // ── Noise filter ────────────────────────────────────────────────
+    let noise_patterns = [
+        "mur session start", "mur session stop", "mur session record",
+        "mur sync", "mur context", "mur inject",
+        "/mur:in", "/mur:out", "/mur-in", "/mur-out",
+        "[stop: turn_end]", "[stop:", "turn_end",
     ];
-    let noise_content = ["[stop: turn_end]", "[stop:", "turn_end"];
 
     let is_noise = |evt: &crate::session::SessionEvent| -> bool {
         let c = evt.content.to_lowercase();
-        // Filter mur infrastructure commands
-        if noise_commands.iter().any(|n| c.contains(n)) {
-            return true;
-        }
-        // Filter turn markers and empty content
-        if noise_content.iter().any(|n| c.contains(n)) {
-            return true;
-        }
-        if evt.content.trim().is_empty() {
-            return true;
-        }
-        false
+        noise_patterns.iter().any(|n| c.contains(n)) || evt.content.trim().is_empty()
     };
 
-    // ── Extract user intent from first user message ─────────────────
+    // ── Extract user intent ─────────────────────────────────────────
     let first_user_msg = events
         .iter()
         .find(|e| e.event_type == "user" && !is_noise(e))
         .map(|e| e.content.trim().to_string());
 
-    // ── Filter tool_calls, remove noise ─────────────────────────────
+    // ── Filter tool_calls ───────────────────────────────────────────
     let tool_calls: Vec<&crate::session::SessionEvent> = events
         .iter()
         .filter(|e| e.event_type == "tool_call" && !is_noise(e))
         .collect();
 
-    // ── Parse command from JSON content ─────────────────────────────
+    // ── Parse JSON tool content ─────────────────────────────────────
     fn parse_tool_content(content: &str) -> (Option<String>, Option<String>) {
-        // Try to parse as JSON: {"command":"...", "description":"..."}
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(content) {
             let cmd = v.get("command").and_then(|c| c.as_str()).map(String::from);
             let desc = v.get("description").and_then(|d| d.as_str()).map(String::from);
@@ -1033,34 +1014,32 @@ async fn extract_workflow_from_session(
         (None, None)
     }
 
-    // ── Detect tools/agents used ────────────────────────────────────
+    // ── Detect tools/agents ─────────────────────────────────────────
     let mut detected_tools = std::collections::HashSet::new();
-    let mut detected_agents = std::collections::HashSet::new();
 
     for evt in &tool_calls {
         if let Some(ref tool) = evt.tool {
             detected_tools.insert(tool.clone());
         }
+        // Detect agent/mcp tools from content
         let c = &evt.content;
-        // Detect agent-browser, mcp servers, agent skills, etc.
-        for pattern in ["agent-browser", "agent-", "mcp-server", "mcp_server"] {
-            if c.contains(pattern) {
-                // Extract the specific tool name
-                if let Some(pos) = c.find(pattern) {
-                    let rest = &c[pos..];
-                    let name: String = rest
-                        .chars()
-                        .take_while(|ch| ch.is_alphanumeric() || *ch == '-' || *ch == '_')
-                        .collect();
-                    if !name.is_empty() {
-                        detected_agents.insert(name);
-                    }
+        for prefix in ["agent-browser", "agent-", "mcp-server-", "mcp_server_"] {
+            if let Some(pos) = c.find(prefix) {
+                let name: String = c[pos..]
+                    .chars()
+                    .take_while(|ch| ch.is_alphanumeric() || *ch == '-' || *ch == '_')
+                    .collect();
+                if !name.is_empty() {
+                    detected_tools.insert(name);
                 }
             }
         }
     }
 
-    // ── Build steps with clean descriptions ─────────────────────────
+    let mut tools: Vec<String> = detected_tools.into_iter().collect();
+    tools.sort();
+
+    // ── Build steps ─────────────────────────────────────────────────
     let steps: Vec<Step> = tool_calls
         .iter()
         .enumerate()
@@ -1068,32 +1047,21 @@ async fn extract_workflow_from_session(
             let tool_name = evt.tool.clone().unwrap_or_default();
             let (parsed_cmd, parsed_desc) = parse_tool_content(&evt.content);
 
-            // Use parsed description if available, otherwise generate one
-            let description = if let Some(ref desc) = parsed_desc {
-                desc.clone()
-            } else if let Some(ref cmd) = parsed_cmd {
-                // Summarize the command
-                let short_cmd = if cmd.len() > 80 {
-                    format!("{}…", &cmd[..80])
+            let description = parsed_desc.unwrap_or_else(|| {
+                if let Some(ref cmd) = parsed_cmd {
+                    let short = if cmd.len() > 80 { format!("{}…", &cmd[..80]) } else { cmd.clone() };
+                    format!("{}: {}", tool_name, short)
+                } else if evt.content.len() > 120 {
+                    format!("{}: {}…", tool_name, &evt.content[..120])
+                } else if tool_name.is_empty() {
+                    evt.content.clone()
                 } else {
-                    cmd.clone()
-                };
-                format!("{}: {}", tool_name, short_cmd)
-            } else if evt.content.len() > 120 {
-                format!("{}: {}…", tool_name, &evt.content[..120])
-            } else if tool_name.is_empty() {
-                evt.content.clone()
-            } else {
-                format!("{}: {}", tool_name, evt.content)
-            };
-
-            // Extract actual command string
-            let command = parsed_cmd.or_else(|| {
-                if tool_name == "Bash" {
-                    Some(evt.content.clone())
-                } else {
-                    None
+                    format!("{}: {}", tool_name, evt.content)
                 }
+            });
+
+            let command = parsed_cmd.or_else(|| {
+                if tool_name == "Bash" { Some(evt.content.clone()) } else { None }
             });
 
             Step {
@@ -1107,67 +1075,154 @@ async fn extract_workflow_from_session(
         })
         .collect();
 
-    // ── Generate meaningful title and description ────────────────────
-    let (name, description) = if let Some(ref user_msg) = first_user_msg {
-        // Derive name from user intent (kebab-case, max 50 chars)
-        let name_raw: String = user_msg
-            .chars()
-            .take(50)
-            .map(|c| {
-                if c.is_alphanumeric() {
-                    c.to_ascii_lowercase()
-                } else {
-                    '-'
+    // ── Detect variables from user message ──────────────────────────
+    let mut variables = Vec::new();
+    if let Some(ref msg) = first_user_msg {
+        // 1. Quoted strings → likely product names, search terms
+        let mut in_quote = false;
+        let mut quote_char = '\'';
+        let mut current = String::new();
+        let mut quoted_values = Vec::new();
+
+        for ch in msg.chars() {
+            if !in_quote && (ch == '\'' || ch == '"') {
+                in_quote = true;
+                quote_char = ch;
+                current.clear();
+            } else if in_quote && ch == quote_char {
+                in_quote = false;
+                if !current.trim().is_empty() {
+                    quoted_values.push(current.trim().to_string());
                 }
-            })
-            .collect();
-        // Clean up consecutive dashes and trim
-        let name = name_raw
-            .split('-')
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("-");
+            } else if in_quote {
+                current.push(ch);
+            }
+        }
 
-        let desc = format!("{}", user_msg);
-        (name, desc)
-    } else {
-        // Fallback: derive from tools used
-        let tools_summary = if !detected_agents.is_empty() {
-            detected_agents.iter().cloned().collect::<Vec<_>>().join(", ")
-        } else if !detected_tools.is_empty() {
-            detected_tools.iter().cloned().collect::<Vec<_>>().join(", ")
-        } else {
-            "unknown".to_string()
-        };
-        (
-            format!(
-                "session-{}",
-                &session_id[..8.min(session_id.len())]
-            ),
-            format!(
-                "Workflow using {} ({} steps)",
-                tools_summary,
-                steps.len()
-            ),
-        )
-    };
+        // First quoted value is likely the subject/product
+        if let Some(subject) = quoted_values.first() {
+            variables.push(Variable {
+                name: "product_name".to_string(),
+                var_type: VarType::String,
+                required: true,
+                default_value: Some(subject.clone()),
+                description: "Target product or search term".to_string(),
+            });
+        }
 
-    // ── Collect all tools ───────────────────────────────────────────
-    let mut tools: Vec<String> = detected_tools.into_iter().collect();
-    for agent in &detected_agents {
-        if !tools.contains(agent) {
-            tools.push(agent.clone());
+        // 2. Detect URLs and site names
+        let words: Vec<&str> = msg.split_whitespace().collect();
+        for (i, word) in words.iter().enumerate() {
+            let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '/');
+            // URL patterns
+            if w.starts_with("http://") || w.starts_with("https://") {
+                variables.push(Variable {
+                    name: "url".to_string(),
+                    var_type: VarType::Url,
+                    required: true,
+                    default_value: Some(w.to_string()),
+                    description: "Target URL to search".to_string(),
+                });
+            }
+            // Site name after "in" (e.g., "in pchome")
+            else if i > 0 && words[i - 1].to_lowercase() == "in"
+                && w.len() > 2
+                && w.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+                && !["the", "this", "that", "and", "for"].contains(&w.to_lowercase().as_str())
+            {
+                // Check if already captured as URL
+                if !variables.iter().any(|v| v.name == "url" || v.name == "target_site") {
+                    variables.push(Variable {
+                        name: "target_site".to_string(),
+                        var_type: VarType::String,
+                        required: true,
+                        default_value: Some(w.to_string()),
+                        description: "Website or service to search in".to_string(),
+                    });
+                }
+            }
         }
     }
-    tools.sort();
+
+    // ── Generate concise title ──────────────────────────────────────
+    // Strategy: extract action verb + key subject, skip filler words.
+    // e.g., "use agent-browser to find the prices of 'AirPods Pro 3' in pchome"
+    //      → "find-product-prices"
+    let stop_words = [
+        "a", "an", "the", "to", "of", "in", "on", "at", "for", "and", "or",
+        "is", "it", "be", "use", "using", "with", "from", "by", "that", "this",
+        "should", "can", "you", "if", "have", "has", "then", "first", "also",
+        "notice", "note",
+    ];
+
+    let name = if let Some(ref msg) = first_user_msg {
+        // Remove quoted strings (they're variables, not the action)
+        let mut clean = msg.clone();
+        for qv in &variables {
+            if let Some(ref dv) = qv.default_value {
+                clean = clean.replace(&format!("'{}'", dv), "");
+                clean = clean.replace(&format!("\"{}\"", dv), "");
+                clean = clean.replace(dv, "");
+            }
+        }
+
+        // Extract meaningful words
+        let meaningful: Vec<String> = clean
+            .split(|c: char| !c.is_alphanumeric() && c != '-')
+            .filter(|w| !w.is_empty())
+            .map(|w| w.to_lowercase())
+            .filter(|w| !stop_words.contains(&w.as_str()))
+            .filter(|w| w.len() > 1)
+            // Skip tool names (they go in the tools field)
+            .filter(|w| !tools.iter().any(|t| t.to_lowercase().contains(w)))
+            .take(4)
+            .collect();
+
+        if meaningful.is_empty() {
+            format!("session-{}", &session_id[..8.min(session_id.len())])
+        } else {
+            meaningful.join("-")
+        }
+    } else {
+        format!("session-{}", &session_id[..8.min(session_id.len())])
+    };
+
+    // ── Generate description ────────────────────────────────────────
+    // Style: concise action description, mention tools used.
+    // e.g., "Search and compare product prices on e-commerce sites using agent-browser.
+    //        Handles banner dismissal and search navigation."
+    let description = if let Some(ref msg) = first_user_msg {
+        // Build a clean description from steps + tools
+        let tools_str = if tools.is_empty() {
+            String::new()
+        } else {
+            format!(" Uses {}.", tools.join(", "))
+        };
+
+        let steps_summary = if steps.len() <= 3 {
+            steps.iter().map(|s| s.description.clone()).collect::<Vec<_>>().join(", then ")
+        } else {
+            format!("{} steps from session recording", steps.len())
+        };
+
+        // If the user message is short enough, use it directly + tools
+        if msg.len() <= 100 {
+            format!("{}.{}", msg.trim_end_matches('.'), tools_str)
+        } else {
+            // Truncate user intent and append tools
+            let short: String = msg.chars().take(100).collect();
+            format!("{}…{}", short.trim_end_matches('.'), tools_str)
+        }
+    } else {
+        let tools_str = if tools.is_empty() { "various tools".to_string() } else { tools.join(", ") };
+        format!("Extracted workflow with {} steps using {}.", steps.len(), tools_str)
+    };
 
     let workflow = Workflow {
         base: KnowledgeBase {
             name,
             description,
-            content: Content::Plain(
-                first_user_msg.unwrap_or_default(),
-            ),
+            content: Content::Plain(first_user_msg.unwrap_or_default()),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             ..Default::default()
@@ -1176,7 +1231,7 @@ async fn extract_workflow_from_session(
         tools,
         source_sessions: vec![session_id],
         trigger: String::new(),
-        variables: vec![],
+        variables,
         published_version: 0,
         permission: Default::default(),
     };

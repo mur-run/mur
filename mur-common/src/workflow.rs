@@ -120,6 +120,8 @@ pub enum VarType {
     Url,
     Number,
     Bool,
+    /// Array of strings (e.g., multiple URLs, multiple product names)
+    Array,
 }
 
 /// Permission level for workflow execution.
