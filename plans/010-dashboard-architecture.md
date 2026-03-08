@@ -77,29 +77,36 @@ Session Review 頁面
   - 回傳 Workflow object（未存檔，讓前端 preview/edit）
   - 前端編輯後用 `POST /api/v1/workflows` 存檔
 
-### 3. Commander Sync 安全邊界
+### 3. Commander 資料存取邊界
 
-**原則：Commander 只能拿到明確授權的 workflow。**
+**原則：同一台機器上，Commander 直接讀 mur 的資料，不複製。**
 
-```yaml
-# ~/.mur/workflows/deploy-production.yaml
-name: deploy-production
-description: Deploy to production
-published_version: 1        # > 0 表示已 publish
-commander_sync: true         # 明確 opt-in
+```
+~/.mur/
+├── patterns/        ← mur owns (read/write), commander reads
+├── workflows/       ← mur owns (read/write), commander reads
+├── session/         ← mur owns (read/write), commander reads
+├── config.yaml      ← mur config
+└── commander/       ← commander owns (read/write), mur doesn't touch
+    ├── config.toml
+    ├── schedules/   ← cron/trigger definitions per workflow
+    ├── executions/  ← execution history & results
+    └── audit/       ← hash-chained audit log
 ```
 
-**Sync 規則：**
-- `mur sync` 時，只有 `commander_sync: true` 的 workflow 會推給 commander
-- Commander 收到後存自己的副本（`~/.mur/commander/workflows/`）
-- Commander 不直接讀 `~/.mur/workflows/`
-- Commander 的 workflow 有額外欄位（schedule, notify, permissions）是 mur 不管的
-- 反向同步：commander 編輯後的 workflow 不會回寫 mur-core 的 YAML
+**存取規則：**
+- Commander **讀取** `~/.mur/workflows/` 和 `~/.mur/patterns/`（唯讀）
+- Commander **寫入** `~/.mur/commander/`（排程、執行記錄、audit）
+- Commander 不修改 mur 的 YAML files
+- 不需要 sync 機制或 `commander_sync` 欄位 — 同機器直接讀
 
-**安全保證：**
-- mur patterns 永遠不會推給 commander（不同 domain）
-- Commander 雲端同步（如果有）只同步 commander 自己的 workflows
-- 每台機器的 commander 只看到自己本機 + 明確 sync 過來的 workflow
+**Commander 擴充欄位存在哪？**
+- Commander 對 workflow 加的 schedule/notify/permissions 存在 `~/.mur/commander/schedules/{workflow-name}.yaml`
+- 不汙染 mur 的 workflow YAML
+
+**未來跨機器場景：**
+- 如果需要跨機器（mur on laptop, commander on server），再設計 publish/subscribe 機制
+- Commander 的雲端同步只同步 `commander/` 目錄，不動 mur 的原始資料
 
 ### 4. Workflow 類型轉換
 
