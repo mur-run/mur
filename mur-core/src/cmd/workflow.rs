@@ -35,11 +35,13 @@ pub(crate) async fn cmd_workflow_run(query: &str) -> Result<()> {
         if let Ok(query_embedding) = embed(query, &config).await {
             let vector_store =
                 VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
-            let results = vector_store.search(&query_embedding, 1, Some("workflow")).await?;
-            if let Some(r) = results.first() {
-                if r.similarity > 0.5 {
-                    best_name = Some(r.name.clone());
-                }
+            let results = vector_store
+                .search(&query_embedding, 1, Some("workflow"))
+                .await?;
+            if let Some(r) = results.first()
+                && r.similarity > 0.5
+            {
+                best_name = Some(r.name.clone());
             }
         }
     }
@@ -48,9 +50,11 @@ pub(crate) async fn cmd_workflow_run(query: &str) -> Result<()> {
     if best_name.is_none() {
         let all = store.list_all()?;
         let q = query.to_lowercase();
-        best_name = all.iter()
+        best_name = all
+            .iter()
             .find(|w| {
-                let text = format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
+                let text =
+                    format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
                 text.contains(&q)
             })
             .map(|w| w.name.clone());
@@ -84,7 +88,10 @@ fn print_workflow_prompt(w: &mur_common::workflow::Workflow) {
         for v in &w.variables {
             let req = if v.required { "required" } else { "optional" };
             let default = v.default_value.as_deref().unwrap_or("-");
-            println!("- `{}` ({}, {}): {} — default: `{}`", v.name, v.var_type, req, v.description, default);
+            println!(
+                "- `{}` ({}, {}): {} — default: `{}`",
+                v.name, v.var_type, req, v.description, default
+            );
         }
         println!();
     }
@@ -148,7 +155,10 @@ pub(crate) fn cmd_workflow_show(name: &str, markdown: bool) -> Result<()> {
             for v in &w.variables {
                 let req = if v.required { "required" } else { "optional" };
                 let default = v.default_value.as_deref().unwrap_or("-");
-                println!("- `{}` ({}, {}): {} — default: `{}`", v.name, v.var_type, req, v.description, default);
+                println!(
+                    "- `{}` ({}, {}): {} — default: `{}`",
+                    v.name, v.var_type, req, v.description, default
+                );
             }
             println!();
         }
@@ -192,7 +202,10 @@ pub(crate) fn cmd_workflow_show(name: &str, markdown: bool) -> Result<()> {
             for v in &w.variables {
                 let req = if v.required { "required" } else { "optional" };
                 let default = v.default_value.as_deref().unwrap_or("-");
-                println!("  ${} ({}): {} [{}] default={}", v.name, v.var_type, v.description, req, default);
+                println!(
+                    "  ${} ({}): {} [{}] default={}",
+                    v.name, v.var_type, v.description, req, default
+                );
             }
         }
 
@@ -228,7 +241,9 @@ pub(crate) async fn cmd_workflow_search(query: &str, limit: usize) -> Result<()>
     let all_workflows = store.list_all()?;
 
     if all_workflows.is_empty() {
-        println!("No workflows found. Create one with `mur workflow new` or extract from a session.");
+        println!(
+            "No workflows found. Create one with `mur workflow new` or extract from a session."
+        );
         return Ok(());
     }
 
@@ -246,7 +261,9 @@ pub(crate) async fn cmd_workflow_search(query: &str, limit: usize) -> Result<()>
                 let vector_store =
                     VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
                 // Search with item_type filter = "workflow"
-                let results = vector_store.search(&query_embedding, limit, Some("workflow")).await?;
+                let results = vector_store
+                    .search(&query_embedding, limit, Some("workflow"))
+                    .await?;
 
                 if results.is_empty() {
                     println!("No matching workflows found for: {}", query);
@@ -258,34 +275,49 @@ pub(crate) async fn cmd_workflow_search(query: &str, limit: usize) -> Result<()>
                     // Find the full workflow to show details
                     if let Some(w) = all_workflows.iter().find(|w| w.name == r.name) {
                         let steps = w.steps.len();
-                        let tools = if w.tools.is_empty() { String::new() } else { format!(" [{}]", w.tools.join(", ")) };
+                        let tools = if w.tools.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [{}]", w.tools.join(", "))
+                        };
                         let score = (r.similarity * 100.0) as u32;
-                        println!("  {}. {} ({}% match, {} steps){}", i + 1, w.name, score, steps, tools);
+                        println!(
+                            "  {}. {} ({}% match, {} steps){}",
+                            i + 1,
+                            w.name,
+                            score,
+                            steps,
+                            tools
+                        );
                         println!("     {}", w.description);
                     } else {
-                        println!("  {}. {} ({:.0}% match)", i + 1, r.name, r.similarity * 100.0);
+                        println!(
+                            "  {}. {} ({:.0}% match)",
+                            i + 1,
+                            r.name,
+                            r.similarity * 100.0
+                        );
                     }
                 }
                 println!("\nUse `mur workflow show <name>` for full details.");
                 return Ok(());
             }
             Err(e) => {
-                eprintln!("⚠ Embedding unavailable ({}), falling back to keyword search", e);
+                eprintln!(
+                    "⚠ Embedding unavailable ({}), falling back to keyword search",
+                    e
+                );
             }
         }
     }
 
     // Fallback: keyword search
     let query_lower = query.to_lowercase();
-    let mut matches: Vec<_> = all_workflows
+    let matches: Vec<_> = all_workflows
         .iter()
-        .filter_map(|w| {
+        .filter(|w| {
             let text = format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
-            if text.contains(&query_lower) {
-                Some(w)
-            } else {
-                None
-            }
+            text.contains(&query_lower)
         })
         .collect();
 
@@ -294,9 +326,17 @@ pub(crate) async fn cmd_workflow_search(query: &str, limit: usize) -> Result<()>
         return Ok(());
     }
 
-    println!("🔍 Workflow search: \"{}\" ({} results)\n", query, matches.len());
+    println!(
+        "🔍 Workflow search: \"{}\" ({} results)\n",
+        query,
+        matches.len()
+    );
     for (i, w) in matches.iter().enumerate() {
-        let tools = if w.tools.is_empty() { String::new() } else { format!(" [{}]", w.tools.join(", ")) };
+        let tools = if w.tools.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", w.tools.join(", "))
+        };
         println!("  {}. {} ({} steps){}", i + 1, w.name, w.steps.len(), tools);
         println!("     {}", w.description);
     }

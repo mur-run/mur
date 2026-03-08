@@ -510,30 +510,28 @@ async fn search_workflows(
     // Try semantic search via LanceDB
     let mut results: Vec<SearchResult> = Vec::new();
 
-    if state.index_dir.exists() {
-        if let Ok(cfg) = load_config() {
-            let emb_cfg = EmbeddingConfig::from_config(&cfg);
-            if let Ok(query_embedding) = embed(&req.query, &emb_cfg).await {
-                if let Ok(vector_store) =
-                    VectorStore::open(&state.index_dir, cfg.embedding.dimensions as i32).await
-                {
-                    if let Ok(vector_results) =
-                        vector_store.search(&query_embedding, req.limit, Some("workflow")).await
-                    {
-                        for r in vector_results {
-                            if let Some(w) = all_workflows.iter().find(|w| w.name == r.name) {
-                                results.push(SearchResult {
-                                    name: w.name.clone(),
-                                    description: w.description.clone(),
-                                    score: r.similarity as f64,
-                                    relevance: r.similarity as f64,
-                                    tier: "workflow".into(),
-                                    maturity: String::new(),
-                                    confidence: r.similarity as f64,
-                                });
-                            }
-                        }
-                    }
+    if state.index_dir.exists()
+        && let Ok(cfg) = load_config()
+    {
+        let emb_cfg = EmbeddingConfig::from_config(&cfg);
+        if let Ok(query_embedding) = embed(&req.query, &emb_cfg).await
+            && let Ok(vector_store) =
+                VectorStore::open(&state.index_dir, cfg.embedding.dimensions as i32).await
+            && let Ok(vector_results) = vector_store
+                .search(&query_embedding, req.limit, Some("workflow"))
+                .await
+        {
+            for r in vector_results {
+                if let Some(w) = all_workflows.iter().find(|w| w.name == r.name) {
+                    results.push(SearchResult {
+                        name: w.name.clone(),
+                        description: w.description.clone(),
+                        score: r.similarity as f64,
+                        relevance: r.similarity as f64,
+                        tier: "workflow".into(),
+                        maturity: String::new(),
+                        confidence: r.similarity as f64,
+                    });
                 }
             }
         }
@@ -617,7 +615,9 @@ async fn create_workflow(
     }
 
     // Convert step description strings → Step structs
-    let steps: Vec<Step> = req.steps.unwrap_or_default()
+    let steps: Vec<Step> = req
+        .steps
+        .unwrap_or_default()
         .into_iter()
         .enumerate()
         .map(|(i, desc)| Step {
@@ -696,10 +696,10 @@ async fn update_workflow(
             })
             .collect();
     }
-    if let Some(vars) = updates.get("variables") {
-        if let Ok(parsed) = serde_json::from_value::<Vec<Variable>>(vars.clone()) {
-            workflow.variables = parsed;
-        }
+    if let Some(vars) = updates.get("variables")
+        && let Ok(parsed) = serde_json::from_value::<Vec<Variable>>(vars.clone())
+    {
+        workflow.variables = parsed;
     }
 
     workflow.updated_at = chrono::Utc::now();
@@ -1091,10 +1091,19 @@ async fn extract_workflow_from_session(
 
     // ── Noise filter ────────────────────────────────────────────────
     let noise_patterns = [
-        "mur session start", "mur session stop", "mur session record",
-        "mur sync", "mur context", "mur inject",
-        "/mur:in", "/mur:out", "/mur-in", "/mur-out",
-        "[stop: turn_end]", "[stop:", "turn_end",
+        "mur session start",
+        "mur session stop",
+        "mur session record",
+        "mur sync",
+        "mur context",
+        "mur inject",
+        "/mur:in",
+        "/mur:out",
+        "/mur-in",
+        "/mur-out",
+        "[stop: turn_end]",
+        "[stop:",
+        "turn_end",
     ];
 
     let is_noise = |evt: &crate::session::SessionEvent| -> bool {
@@ -1118,7 +1127,10 @@ async fn extract_workflow_from_session(
     fn parse_tool_content(content: &str) -> (Option<String>, Option<String>) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(content) {
             let cmd = v.get("command").and_then(|c| c.as_str()).map(String::from);
-            let desc = v.get("description").and_then(|d| d.as_str()).map(String::from);
+            let desc = v
+                .get("description")
+                .and_then(|d| d.as_str())
+                .map(String::from);
             return (cmd, desc);
         }
         (None, None)
@@ -1159,7 +1171,11 @@ async fn extract_workflow_from_session(
 
             let description = parsed_desc.unwrap_or_else(|| {
                 if let Some(ref cmd) = parsed_cmd {
-                    let short = if cmd.len() > 80 { format!("{}…", &cmd[..80]) } else { cmd.clone() };
+                    let short = if cmd.len() > 80 {
+                        format!("{}…", &cmd[..80])
+                    } else {
+                        cmd.clone()
+                    };
                     format!("{}: {}", tool_name, short)
                 } else if evt.content.len() > 120 {
                     format!("{}: {}…", tool_name, &evt.content[..120])
@@ -1171,7 +1187,11 @@ async fn extract_workflow_from_session(
             });
 
             let command = parsed_cmd.or_else(|| {
-                if tool_name == "Bash" { Some(evt.content.clone()) } else { None }
+                if tool_name == "Bash" {
+                    Some(evt.content.clone())
+                } else {
+                    None
+                }
             });
 
             Step {
@@ -1196,9 +1216,10 @@ async fn extract_workflow_from_session(
         let mut quoted_values = Vec::new();
 
         let open_close: &[(char, char)] = &[
-            ('\'', '\''), ('"', '"'),
-            ('\u{2018}', '\u{2019}'),  // ' '
-            ('\u{201C}', '\u{201D}'),  // " "
+            ('\'', '\''),
+            ('"', '"'),
+            ('\u{2018}', '\u{2019}'), // ' '
+            ('\u{201C}', '\u{201D}'), // " "
         ];
 
         for ch in msg.chars() {
@@ -1244,13 +1265,18 @@ async fn extract_workflow_from_session(
                 });
             }
             // Site name after "in" (e.g., "in pchome")
-            else if i > 0 && words[i - 1].to_lowercase() == "in"
+            else if i > 0
+                && words[i - 1].to_lowercase() == "in"
                 && w.len() > 2
-                && w.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+                && w.chars()
+                    .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
                 && !["the", "this", "that", "and", "for"].contains(&w.to_lowercase().as_str())
             {
                 // Check if already captured as URL
-                if !variables.iter().any(|v| v.name == "url" || v.name == "target_site") {
+                if !variables
+                    .iter()
+                    .any(|v| v.name == "url" || v.name == "target_site")
+                {
                     variables.push(Variable {
                         name: "target_site".to_string(),
                         var_type: VarType::String,
@@ -1268,10 +1294,9 @@ async fn extract_workflow_from_session(
     // e.g., "use agent-browser to find the prices of 'AirPods Pro 3' in pchome"
     //      → "find-product-prices"
     let stop_words = [
-        "a", "an", "the", "to", "of", "in", "on", "at", "for", "and", "or",
-        "is", "it", "be", "use", "using", "with", "from", "by", "that", "this",
-        "should", "can", "you", "if", "have", "has", "then", "first", "also",
-        "notice", "note",
+        "a", "an", "the", "to", "of", "in", "on", "at", "for", "and", "or", "is", "it", "be",
+        "use", "using", "with", "from", "by", "that", "this", "should", "can", "you", "if", "have",
+        "has", "then", "first", "also", "notice", "note",
     ];
 
     let name = if let Some(ref msg) = first_user_msg {
@@ -1318,8 +1343,12 @@ async fn extract_workflow_from_session(
             format!(" Uses {}.", tools.join(", "))
         };
 
-        let steps_summary = if steps.len() <= 3 {
-            steps.iter().map(|s| s.description.clone()).collect::<Vec<_>>().join(", then ")
+        let _steps_summary = if steps.len() <= 3 {
+            steps
+                .iter()
+                .map(|s| s.description.clone())
+                .collect::<Vec<_>>()
+                .join(", then ")
         } else {
             format!("{} steps from session recording", steps.len())
         };
@@ -1333,8 +1362,16 @@ async fn extract_workflow_from_session(
             format!("{}…{}", short.trim_end_matches('.'), tools_str)
         }
     } else {
-        let tools_str = if tools.is_empty() { "various tools".to_string() } else { tools.join(", ") };
-        format!("Extracted workflow with {} steps using {}.", steps.len(), tools_str)
+        let tools_str = if tools.is_empty() {
+            "various tools".to_string()
+        } else {
+            tools.join(", ")
+        };
+        format!(
+            "Extracted workflow with {} steps using {}.",
+            steps.len(),
+            tools_str
+        )
     };
 
     let workflow = Workflow {

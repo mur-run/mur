@@ -472,7 +472,10 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
             Ok(()) => {}
             Err(e) => {
                 if !quiet {
-                    eprintln!("  ⚠ Reindex skipped: {} (run `mur reindex` manually or start Ollama)", e);
+                    eprintln!(
+                        "  ⚠ Reindex skipped: {} (run `mur reindex` manually or start Ollama)",
+                        e
+                    );
                 }
             }
         }
@@ -503,10 +506,7 @@ fn is_index_dirty(home: &std::path::Path) -> bool {
     };
 
     // Check all YAML files in patterns/ and workflows/
-    let dirs_to_check = [
-        mur_dir.join("patterns"),
-        mur_dir.join("workflows"),
-    ];
+    let dirs_to_check = [mur_dir.join("patterns"), mur_dir.join("workflows")];
 
     for dir in &dirs_to_check {
         if !dir.exists() {
@@ -515,14 +515,12 @@ fn is_index_dirty(home: &std::path::Path) -> bool {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
-                    if let Ok(meta) = std::fs::metadata(&path) {
-                        if let Ok(mtime) = meta.modified() {
-                            if mtime > index_mtime {
-                                return true;
-                            }
-                        }
-                    }
+                if path.extension().and_then(|e| e.to_str()) == Some("yaml")
+                    && let Ok(meta) = std::fs::metadata(&path)
+                    && let Ok(mtime) = meta.modified()
+                    && mtime > index_mtime
+                {
+                    return true;
                 }
             }
         }

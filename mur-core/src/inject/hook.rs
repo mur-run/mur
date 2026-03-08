@@ -304,10 +304,14 @@ pub fn format_workflow_entry(workflow: &Workflow, index: usize) -> String {
     // Variables
     if !workflow.variables.is_empty() {
         s.push_str("Variables: ");
-        let vars: Vec<String> = workflow.variables.iter().map(|v| {
-            let default = v.default_value.as_deref().unwrap_or("?");
-            format!("`{}`={}", v.name, default)
-        }).collect();
+        let vars: Vec<String> = workflow
+            .variables
+            .iter()
+            .map(|v| {
+                let default = v.default_value.as_deref().unwrap_or("?");
+                format!("`{}`={}", v.name, default)
+            })
+            .collect();
         s.push_str(&vars.join(", "));
         s.push('\n');
     }
@@ -619,7 +623,7 @@ mod tests {
     fn test_format_workflow_entry() {
         let wf = make_workflow("Deploy to production");
         let entry = format_workflow_entry(&wf, 1);
-        assert!(entry.contains("[Workflow]"));
+        assert!(entry.contains("[Workflow:"));
         assert!(entry.contains("Deploy to production"));
         assert!(entry.contains("cargo test"));
         assert!(entry.contains("Run tests"));
@@ -632,7 +636,7 @@ mod tests {
         let result = format_unified_injection(&patterns, &workflows, 5000);
         assert!(result.contains("Relevant knowledge"));
         assert!(result.contains("Use testing"));
-        assert!(result.contains("[Workflow]"));
+        assert!(result.contains("[Workflow:"));
         assert!(result.contains("Deploy flow"));
     }
 
