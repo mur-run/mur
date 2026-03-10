@@ -19,8 +19,8 @@ pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool) -> Result<()>
         let expr = parse_pipeline_expr(query)
             .map_err(|e| anyhow::anyhow!("pipeline parse error: {}", e))?;
         let store = WorkflowYamlStore::default_store()?;
-        let executor = crate::executor::pipeline::PipelineExecutor::new(store)
-            .with_fail_fast(fail_fast);
+        let executor =
+            crate::executor::pipeline::PipelineExecutor::new(store).with_fail_fast(fail_fast);
         let output = executor.execute(&expr, None).await?;
         if output.exit_code != 0 {
             eprintln!(

@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn test_no_self_link() {
         let p = make_pattern("test", "test", vec!["a"]);
-        let links = discover_links(&p, &[p.clone()]);
+        let links = discover_links(&p, std::slice::from_ref(&p));
         assert!(links.is_empty());
     }
 

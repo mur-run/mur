@@ -14,6 +14,10 @@ use futures::Future;
 use mur_common::pipeline::{PipelineExpr, PipelineOutput, PipelineStatus, inject_input};
 use tokio_util::sync::CancellationToken;
 
+/// Type alias for the result vector from `tokio::spawn` join_all in parallel execution.
+type ParallelJoinResults =
+    Vec<std::result::Result<(String, Result<PipelineOutput>, f64), tokio::task::JoinError>>;
+
 use crate::store::workflow_yaml::WorkflowYamlStore;
 
 /// Executes pipeline expressions against the workflow store.
@@ -102,8 +106,8 @@ impl PipelineExecutor {
                 let all = self.store.list_all()?;
                 let q = id.to_lowercase();
                 match all.into_iter().find(|w| {
-                    let text =
-                        format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
+                    let text = format!("{} {} {}", w.name, w.description, w.tools.join(" "))
+                        .to_lowercase();
                     text.contains(&q)
                 }) {
                     Some(w) => w,
@@ -124,9 +128,7 @@ impl PipelineExecutor {
         };
 
         // Extract input text for {{input}} substitution
-        let input_text = input
-            .as_ref()
-            .and_then(|p| p.output_text.as_deref());
+        let input_text = input.as_ref().and_then(|p| p.output_text.as_deref());
 
         eprintln!("▶ Running workflow: {}", workflow.name);
 
@@ -327,8 +329,8 @@ impl PipelineExecutor {
         handles: Vec<tokio::task::JoinHandle<(String, Result<PipelineOutput>, f64)>>,
         start: Instant,
     ) -> Result<PipelineOutput> {
-        use futures::stream::FuturesUnordered;
         use futures::StreamExt;
+        use futures::stream::FuturesUnordered;
 
         let mut futs: FuturesUnordered<_> = handles.into_iter().collect();
         let mut outputs: Vec<(String, PipelineOutput)> = Vec::new();
@@ -338,10 +340,7 @@ impl PipelineExecutor {
             match join_result {
                 Ok((label, Ok(output), elapsed)) => {
                     if output.exit_code != 0 {
-                        eprintln!(
-                            "❌ [parallel] Failed: {} ({:.1}s)",
-                            label, elapsed
-                        );
+                        eprintln!("❌ [parallel] Failed: {} ({:.1}s)", label, elapsed);
                         if first_error.is_none() {
                             first_error = Some(output.clone());
                             // Cancel remaining branches
@@ -350,18 +349,12 @@ impl PipelineExecutor {
                         }
                         outputs.push((label, output));
                     } else {
-                        eprintln!(
-                            "✅ [parallel] Done: {} ({:.1}s)",
-                            label, elapsed
-                        );
+                        eprintln!("✅ [parallel] Done: {} ({:.1}s)", label, elapsed);
                         outputs.push((label, output));
                     }
                 }
                 Ok((label, Err(e), elapsed)) => {
-                    eprintln!(
-                        "❌ [parallel] Failed: {} ({:.1}s) — {}",
-                        label, elapsed, e
-                    );
+                    eprintln!("❌ [parallel] Failed: {} ({:.1}s) — {}", label, elapsed, e);
                     let err_output = PipelineOutput {
                         workflow_id: label.clone(),
                         status: PipelineStatus::Failed,
@@ -402,7 +395,7 @@ impl PipelineExecutor {
     /// Merge results from join_all (non-fail-fast path).
     fn merge_parallel_results(
         &self,
-        results: Vec<std::result::Result<(String, Result<PipelineOutput>, f64), tokio::task::JoinError>>,
+        results: ParallelJoinResults,
         start: Instant,
     ) -> Result<PipelineOutput> {
         let mut outputs: Vec<(String, PipelineOutput)> = Vec::new();
@@ -470,10 +463,10 @@ impl PipelineExecutor {
             if output.duration_ms > max_duration {
                 max_duration = output.duration_ms;
             }
-            if let Some(text) = &output.output_text {
-                if !text.is_empty() {
-                    texts.push(text.clone());
-                }
+            if let Some(text) = &output.output_text
+                && !text.is_empty()
+            {
+                texts.push(text.clone());
             }
             if let Some(data) = &output.output_data {
                 data_entries.push(data.clone());
@@ -524,7 +517,7 @@ fn expr_label(expr: &PipelineExpr) -> String {
             format!("{} && {}", expr_label(left), expr_label(right))
         }
         PipelineExpr::Parallel(exprs) => {
-            let labels: Vec<String> = exprs.iter().map(|e| expr_label(e)).collect();
+            let labels: Vec<String> = exprs.iter().map(expr_label).collect();
             labels.join(", ")
         }
     }
@@ -587,9 +580,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
 
-        let wf = make_workflow("echo-test", vec![
-            shell_step(1, "Echo hello", "echo hello-world"),
-        ]);
+        let wf = make_workflow(
+            "echo-test",
+            vec![shell_step(1, "Echo hello", "echo hello-world")],
+        );
         store.save(&wf).unwrap();
 
         let executor = PipelineExecutor::new(store);
@@ -606,9 +600,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
 
-        let wf = make_workflow("injector", vec![
-            shell_step(1, "Echo input", "echo '{{input}}'"),
-        ]);
+        let wf = make_workflow(
+            "injector",
+            vec![shell_step(1, "Echo input", "echo '{{input}}'")],
+        );
         store.save(&wf).unwrap();
 
         let executor = PipelineExecutor::new(store);
@@ -633,9 +628,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
 
-        let wf = make_workflow("prompt-inject", vec![
-            prompt_step(1, "Analyze: {{input}}"),
-        ]);
+        let wf = make_workflow("prompt-inject", vec![prompt_step(1, "Analyze: {{input}}")]);
         store.save(&wf).unwrap();
 
         let executor = PipelineExecutor::new(store);
@@ -660,14 +653,20 @@ mod tests {
         let store = make_store(&tmp);
 
         // w1: produces "hello"
-        store.save(&make_workflow("w1", vec![
-            shell_step(1, "Produce", "echo hello"),
-        ])).unwrap();
+        store
+            .save(&make_workflow(
+                "w1",
+                vec![shell_step(1, "Produce", "echo hello")],
+            ))
+            .unwrap();
 
         // w2: receives {{input}}, transforms it
-        store.save(&make_workflow("w2", vec![
-            shell_step(1, "Transform", "echo got-{{input}}"),
-        ])).unwrap();
+        store
+            .save(&make_workflow(
+                "w2",
+                vec![shell_step(1, "Transform", "echo got-{{input}}")],
+            ))
+            .unwrap();
 
         let executor = PipelineExecutor::new(store);
         let expr = PipelineExpr::Pipe(
@@ -686,12 +685,18 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
 
-        store.save(&make_workflow("fail-w", vec![
-            shell_step(1, "Fail", "exit 1"),
-        ])).unwrap();
-        store.save(&make_workflow("never-run", vec![
-            shell_step(1, "Should not run", "echo nope"),
-        ])).unwrap();
+        store
+            .save(&make_workflow(
+                "fail-w",
+                vec![shell_step(1, "Fail", "exit 1")],
+            ))
+            .unwrap();
+        store
+            .save(&make_workflow(
+                "never-run",
+                vec![shell_step(1, "Should not run", "echo nope")],
+            ))
+            .unwrap();
 
         let executor = PipelineExecutor::new(store);
         let expr = PipelineExpr::Pipe(
@@ -709,9 +714,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
 
-        store.save(&make_workflow("json-w", vec![
-            shell_step(1, "JSON output", r#"echo '{"key":"value"}'"#),
-        ])).unwrap();
+        store
+            .save(&make_workflow(
+                "json-w",
+                vec![shell_step(1, "JSON output", r#"echo '{"key":"value"}'"#)],
+            ))
+            .unwrap();
 
         let executor = PipelineExecutor::new(store);
         let expr = PipelineExpr::Single("json-w".into());
@@ -728,9 +736,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
 
-        store.save(&make_workflow("no-input", vec![
-            shell_step(1, "Echo", "echo 'before-{{input}}-after'"),
-        ])).unwrap();
+        store
+            .save(&make_workflow(
+                "no-input",
+                vec![shell_step(1, "Echo", "echo 'before-{{input}}-after'")],
+            ))
+            .unwrap();
 
         let executor = PipelineExecutor::new(store);
         let expr = PipelineExpr::Single("no-input".into());
@@ -744,15 +755,24 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
 
-        store.save(&make_workflow("p1", vec![
-            shell_step(1, "Start", "echo start"),
-        ])).unwrap();
-        store.save(&make_workflow("p2", vec![
-            shell_step(1, "Middle", "echo mid-{{input}}"),
-        ])).unwrap();
-        store.save(&make_workflow("p3", vec![
-            shell_step(1, "End", "echo end-{{input}}"),
-        ])).unwrap();
+        store
+            .save(&make_workflow(
+                "p1",
+                vec![shell_step(1, "Start", "echo start")],
+            ))
+            .unwrap();
+        store
+            .save(&make_workflow(
+                "p2",
+                vec![shell_step(1, "Middle", "echo mid-{{input}}")],
+            ))
+            .unwrap();
+        store
+            .save(&make_workflow(
+                "p3",
+                vec![shell_step(1, "End", "echo end-{{input}}")],
+            ))
+            .unwrap();
 
         let executor = PipelineExecutor::new(store);
         // p1 | p2 | p3
@@ -883,10 +903,7 @@ mod tests {
         let store = make_store(&tmp);
 
         store
-            .save(&make_workflow(
-                "ok-w",
-                vec![shell_step(1, "OK", "echo ok")],
-            ))
+            .save(&make_workflow("ok-w", vec![shell_step(1, "OK", "echo ok")]))
             .unwrap();
         store
             .save(&make_workflow(

@@ -330,7 +330,8 @@ mod tests {
             Content::Plain(s) => assert!(s.contains("v1")),
             Content::DualLayer { technical, .. } => {
                 // serde_yaml may deserialize plain string as DualLayer with just technical
-                assert!(technical.contains("v1") || true); // flexible
+                // Content may vary depending on deserialization; just check it's non-empty
+                assert!(!technical.is_empty());
             }
         }
 

@@ -558,12 +558,13 @@ mod tests {
     #[test]
     fn test_canonical_gets_confidence_boost() {
         let bridge = CommanderBridge::with_defaults();
-        let mut stable = make_automatable_pattern("stable");
+        let stable = make_automatable_pattern("stable");
         let mut canonical = make_automatable_pattern("canonical");
         canonical.base.maturity = Maturity::Canonical;
 
-        let stable_candidates = bridge.detect_workflow_candidates(&[stable.clone()]);
-        let canonical_candidates = bridge.detect_workflow_candidates(&[canonical.clone()]);
+        let stable_candidates = bridge.detect_workflow_candidates(std::slice::from_ref(&stable));
+        let canonical_candidates =
+            bridge.detect_workflow_candidates(std::slice::from_ref(&canonical));
 
         assert!(canonical_candidates[0].confidence > stable_candidates[0].confidence);
     }

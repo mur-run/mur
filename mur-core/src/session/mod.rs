@@ -389,7 +389,7 @@ mod tests {
     fn test_recording_info_sorting() {
         use std::time::{Duration, SystemTime};
 
-        let mut recordings = vec![
+        let mut recordings = [
             RecordingInfo {
                 id: "old".to_string(),
                 event_count: 5,

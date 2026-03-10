@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn test_ensure_default_templates() {
-        let tmp = tempfile::tempdir().unwrap();
+        let _tmp = tempfile::tempdir().unwrap();
         // We can't easily test ensure_default_templates because it writes to ~/.mur/
         // but we can verify Template::all() is consistent
         assert_eq!(Template::all().len(), 5);

@@ -244,10 +244,7 @@ mod tests {
 
     #[test]
     fn test_empty_input() {
-        assert_eq!(
-            parse_pipeline_expr(""),
-            Err(PipelineParseError::EmptyInput)
-        );
+        assert_eq!(parse_pipeline_expr(""), Err(PipelineParseError::EmptyInput));
     }
 
     #[test]
