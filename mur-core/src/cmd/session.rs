@@ -147,6 +147,171 @@ pub(crate) fn cmd_session_review(id_prefix: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn cmd_session_show(id_prefix: &str, last: Option<usize>, json: bool) -> Result<()> {
+    let full_id = session::find_recording_by_prefix(id_prefix)?
+        .ok_or_else(|| anyhow::anyhow!("No session found matching prefix '{}'", id_prefix))?;
+
+    let meta = session::load_meta_pub(&full_id);
+    let events = session::read_events(&full_id)?;
+
+    if json {
+        #[derive(serde::Serialize)]
+        struct SessionJson {
+            id: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            meta: Option<session::SessionMeta>,
+            events: Vec<session::SessionEvent>,
+        }
+
+        let display_events = if let Some(n) = last {
+            events
+                .into_iter()
+                .rev()
+                .take(n)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect()
+        } else {
+            events
+        };
+
+        let output = SessionJson {
+            id: full_id,
+            meta,
+            events: display_events,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    // Pretty-print header
+    let short_id = if full_id.len() > 8 {
+        &full_id[..8]
+    } else {
+        &full_id
+    };
+    println!("Session {}", short_id);
+    println!("{}", "─".repeat(60));
+
+    if let Some(ref m) = meta {
+        println!("  ID:      {}", m.id);
+        println!("  Source:  {}", m.source);
+        if let Some(ref title) = m.title {
+            println!("  Title:   {}", title);
+        }
+        println!("  Started: {}", m.started_at);
+        if let Some(ref stopped) = m.stopped_at {
+            println!("  Stopped: {}", stopped);
+            // Calculate duration
+            if let (Ok(start), Ok(end)) = (
+                chrono::DateTime::parse_from_rfc3339(&m.started_at),
+                chrono::DateTime::parse_from_rfc3339(stopped),
+            ) {
+                let dur = end.signed_duration_since(start);
+                let secs = dur.num_seconds();
+                if secs >= 3600 {
+                    println!(
+                        "  Duration: {}h {}m {}s",
+                        secs / 3600,
+                        (secs % 3600) / 60,
+                        secs % 60
+                    );
+                } else if secs >= 60 {
+                    println!("  Duration: {}m {}s", secs / 60, secs % 60);
+                } else {
+                    println!("  Duration: {}s", secs);
+                }
+            }
+        } else {
+            println!("  Stopped: (still active)");
+        }
+        println!(
+            "  Turns:   {} user, {} assistant",
+            m.user_turns, m.assistant_turns
+        );
+        if !m.tools_used.is_empty() {
+            println!("  Tools:   {}", m.tools_used.join(", "));
+        }
+    } else {
+        println!("  ID: {}", full_id);
+        println!("  (no metadata file found)");
+    }
+
+    println!();
+
+    // Determine events to display
+    let display_events: Vec<&session::SessionEvent> = if let Some(n) = last {
+        events
+            .iter()
+            .rev()
+            .take(n)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
+    } else {
+        events.iter().collect()
+    };
+
+    if display_events.is_empty() {
+        println!("  (no events)");
+        return Ok(());
+    }
+
+    // Use first event timestamp as baseline for relative time
+    let base_ts = events.first().map(|e| e.timestamp).unwrap_or(0);
+
+    // Detect if stdout is a terminal (for content truncation)
+    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+
+    println!("Events ({}):", display_events.len());
+    println!();
+
+    for event in &display_events {
+        let rel_ms = event.timestamp.saturating_sub(base_ts);
+        let rel_secs = rel_ms / 1000;
+        let time_str = if rel_secs >= 3600 {
+            format!(
+                "+{}:{:02}:{:02}",
+                rel_secs / 3600,
+                (rel_secs % 3600) / 60,
+                rel_secs % 60
+            )
+        } else {
+            format!("+{:02}:{:02}", rel_secs / 60, rel_secs % 60)
+        };
+
+        let (icon, label) = match event.event_type.as_str() {
+            "user" => ("👤", "user".to_string()),
+            "assistant" => ("🤖", "assistant".to_string()),
+            "tool_call" => (
+                "🔧",
+                if let Some(ref t) = event.tool {
+                    format!("tool_call({})", t)
+                } else {
+                    "tool_call".to_string()
+                },
+            ),
+            "tool_result" => ("📋", "tool_result".to_string()),
+            _ => ("  ", event.event_type.clone()),
+        };
+
+        let content = if is_tty && event.content.len() > 200 {
+            format!("{}…", &event.content[..200])
+        } else {
+            event.content.clone()
+        };
+
+        // Replace newlines with spaces for single-line display
+        let content = content.replace('\n', " ").replace('\r', "");
+
+        println!("  {} {} {} {}", time_str, icon, label, content);
+    }
+
+    Ok(())
+}
+
 pub(crate) fn cmd_session_list() -> Result<()> {
     let recordings = session::list_recordings()?;
 

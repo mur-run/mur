@@ -415,6 +415,17 @@ enum SessionAction {
         /// Session ID prefix
         id: String,
     },
+    /// Show session details and events
+    Show {
+        /// Session ID or prefix
+        id: String,
+        /// Show only the last N events
+        #[arg(long)]
+        last: Option<usize>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -604,6 +615,9 @@ async fn main() -> Result<()> {
             SessionAction::Status => cmd::session::cmd_session_status()?,
             SessionAction::List => cmd::session::cmd_session_list()?,
             SessionAction::Review { id } => cmd::session::cmd_session_review(&id)?,
+            SessionAction::Show { id, last, json } => {
+                cmd::session::cmd_session_show(&id, last, json)?
+            }
         },
         Commands::Dashboard => {
             dashboard::render_dashboard()?;

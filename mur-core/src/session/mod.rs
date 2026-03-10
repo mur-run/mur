@@ -68,6 +68,11 @@ fn load_meta(id: &str) -> Option<SessionMeta> {
     serde_json::from_str(&content).ok()
 }
 
+/// Public accessor for loading session metadata.
+pub fn load_meta_pub(id: &str) -> Option<SessionMeta> {
+    load_meta(id)
+}
+
 fn save_meta(meta: &SessionMeta) -> Result<()> {
     let path = meta_path(&meta.id);
     let json = serde_json::to_string_pretty(meta)?;
