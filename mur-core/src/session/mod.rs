@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -44,6 +45,65 @@ fn active_path() -> PathBuf {
     session_dir().join("active.json")
 }
 
+/// Metadata about a session, persisted alongside the recording as `.meta.json`.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SessionMeta {
+    pub id: String,
+    pub source: String,
+    pub started_at: String,
+    pub stopped_at: Option<String>,
+    pub title: Option<String>,
+    pub tools_used: Vec<String>,
+    pub user_turns: usize,
+    pub assistant_turns: usize,
+}
+
+fn meta_path(id: &str) -> PathBuf {
+    recordings_dir().join(format!("{}.meta.json", id))
+}
+
+fn load_meta(id: &str) -> Option<SessionMeta> {
+    let path = meta_path(id);
+    let content = fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn save_meta(meta: &SessionMeta) -> Result<()> {
+    let path = meta_path(&meta.id);
+    let json = serde_json::to_string_pretty(meta)?;
+    fs::write(&path, json).context("Failed to write session meta")?;
+    Ok(())
+}
+
+/// Returns true if the event should be skipped (noise).
+pub fn should_skip(event_type: &str, content: &str) -> bool {
+    let trimmed = content.trim();
+
+    // Skip empty assistant responses or marker-only responses
+    if event_type == "assistant" {
+        if trimmed.is_empty() {
+            return true;
+        }
+        if trimmed == "[stop: turn_end]"
+            || trimmed == "[stop: end_turn]"
+            || trimmed.starts_with("[stop:")
+        {
+            return true;
+        }
+    }
+
+    // Skip mur's own session management commands in tool_call events
+    if event_type == "tool_call"
+        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed)
+        && let Some(cmd) = parsed.get("command").and_then(|v| v.as_str())
+        && cmd.starts_with("mur session")
+    {
+        return true;
+    }
+
+    false
+}
+
 /// Start a new recording session.
 pub fn start(source: &str) -> Result<ActiveSession> {
     let dir = session_dir();
@@ -69,6 +129,19 @@ pub fn start(source: &str) -> Result<ActiveSession> {
     let recording = recordings_dir().join(format!("{}.jsonl", session.id));
     fs::File::create(&recording).context("Failed to create recording file")?;
 
+    // Create initial session meta
+    let meta = SessionMeta {
+        id: session.id.clone(),
+        source: session.source.clone(),
+        started_at: session.started_at.clone(),
+        stopped_at: None,
+        title: None,
+        tools_used: vec![],
+        user_turns: 0,
+        assistant_turns: 0,
+    };
+    save_meta(&meta)?;
+
     Ok(session)
 }
 
@@ -83,6 +156,12 @@ pub fn stop() -> Result<Option<String>> {
     let session: ActiveSession = serde_json::from_str(&content)?;
     let id = session.id.clone();
 
+    // Update meta with stopped_at
+    if let Some(mut meta) = load_meta(&id) {
+        meta.stopped_at = Some(chrono::Utc::now().to_rfc3339());
+        let _ = save_meta(&meta);
+    }
+
     fs::remove_file(&active)?;
     Ok(Some(id))
 }
@@ -92,6 +171,11 @@ pub fn record(event_type: &str, tool: Option<&str>, content: &str) -> Result<boo
     let active = active_path();
     if !active.exists() {
         return Ok(false);
+    }
+
+    // Skip noise events
+    if should_skip(event_type, content) {
+        return Ok(true);
     }
 
     let session_content = fs::read_to_string(&active)?;
@@ -118,6 +202,32 @@ pub fn record(event_type: &str, tool: Option<&str>, content: &str) -> Result<boo
     line.push('\n');
     file.write_all(line.as_bytes())?;
 
+    // Update session meta
+    if let Some(mut meta) = load_meta(&session.id) {
+        match event_type {
+            "user" => {
+                meta.user_turns += 1;
+                if meta.title.is_none() {
+                    let title: String = content.chars().take(80).collect();
+                    meta.title = Some(title);
+                }
+            }
+            "assistant" => {
+                meta.assistant_turns += 1;
+            }
+            "tool_call" => {
+                if let Some(tool_name) = tool {
+                    let tools: BTreeSet<String> = meta.tools_used.iter().cloned().collect();
+                    if !tools.contains(tool_name) {
+                        meta.tools_used.push(tool_name.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+        let _ = save_meta(&meta);
+    }
+
     Ok(true)
 }
 
@@ -140,6 +250,32 @@ pub struct RecordingInfo {
     pub event_count: usize,
     pub file_size: u64,
     pub modified: std::time::SystemTime,
+    pub meta: Option<SessionMeta>,
+}
+
+/// Update the title or other fields in a session's meta.
+/// Creates meta if it doesn't exist yet.
+pub fn update_meta(id: &str, title: Option<String>) -> Result<SessionMeta> {
+    let mut meta =
+        load_meta(id).ok_or_else(|| anyhow::anyhow!("No meta found for session '{}'", id))?;
+    if let Some(t) = title {
+        meta.title = Some(t);
+    }
+    save_meta(&meta)?;
+    Ok(meta)
+}
+
+/// Delete a session's recording and meta files.
+pub fn delete_recording(id: &str) -> Result<()> {
+    let jsonl = recordings_dir().join(format!("{}.jsonl", id));
+    let meta = meta_path(id);
+    if jsonl.exists() {
+        fs::remove_file(&jsonl)?;
+    }
+    if meta.exists() {
+        fs::remove_file(&meta)?;
+    }
+    Ok(())
 }
 
 /// Read and parse all events from a session recording.
@@ -212,11 +348,14 @@ pub fn list_recordings() -> Result<Vec<RecordingInfo>> {
         let content = fs::read_to_string(&path).unwrap_or_default();
         let event_count = content.lines().filter(|l| !l.trim().is_empty()).count();
 
+        let meta = load_meta(&id);
+
         recordings.push(RecordingInfo {
             id,
             event_count,
             file_size,
             modified,
+            meta,
         });
     }
 
@@ -395,17 +534,149 @@ mod tests {
                 event_count: 5,
                 file_size: 100,
                 modified: SystemTime::UNIX_EPOCH + Duration::from_secs(1000),
+                meta: None,
             },
             RecordingInfo {
                 id: "new".to_string(),
                 event_count: 10,
                 file_size: 200,
                 modified: SystemTime::UNIX_EPOCH + Duration::from_secs(2000),
+                meta: None,
             },
         ];
 
         recordings.sort_by(|a, b| b.modified.cmp(&a.modified));
         assert_eq!(recordings[0].id, "new");
         assert_eq!(recordings[1].id, "old");
+    }
+
+    // ─── should_skip tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_should_skip_empty_assistant() {
+        assert!(should_skip("assistant", ""));
+        assert!(should_skip("assistant", "   "));
+    }
+
+    #[test]
+    fn test_should_skip_stop_markers() {
+        assert!(should_skip("assistant", "[stop: turn_end]"));
+        assert!(should_skip("assistant", "[stop: end_turn]"));
+        assert!(should_skip("assistant", "[stop: something_else]"));
+    }
+
+    #[test]
+    fn test_should_not_skip_real_assistant() {
+        assert!(!should_skip("assistant", "Here is your answer"));
+        assert!(!should_skip("assistant", "I'll help with that"));
+    }
+
+    #[test]
+    fn test_should_skip_mur_session_tool_call() {
+        let content = r#"{"command": "mur session start"}"#;
+        assert!(should_skip("tool_call", content));
+
+        let content = r#"{"command": "mur session stop"}"#;
+        assert!(should_skip("tool_call", content));
+    }
+
+    #[test]
+    fn test_should_not_skip_other_tool_calls() {
+        let content = r#"{"command": "ls -la"}"#;
+        assert!(!should_skip("tool_call", content));
+
+        assert!(!should_skip("tool_call", "plain text"));
+    }
+
+    #[test]
+    fn test_should_not_skip_user_events() {
+        assert!(!should_skip("user", ""));
+        assert!(!should_skip("user", "[stop: turn_end]"));
+    }
+
+    // ─── SessionMeta tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_session_meta_serialization() {
+        let meta = SessionMeta {
+            id: "test-123".to_string(),
+            source: "claude-code".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            stopped_at: None,
+            title: Some("Hello world".to_string()),
+            tools_used: vec!["Bash".to_string(), "Read".to_string()],
+            user_turns: 3,
+            assistant_turns: 4,
+        };
+
+        let json = serde_json::to_string_pretty(&meta).unwrap();
+        let parsed: SessionMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, "test-123");
+        assert_eq!(parsed.source, "claude-code");
+        assert_eq!(parsed.title, Some("Hello world".to_string()));
+        assert_eq!(parsed.tools_used.len(), 2);
+        assert_eq!(parsed.user_turns, 3);
+        assert_eq!(parsed.assistant_turns, 4);
+        assert!(parsed.stopped_at.is_none());
+    }
+
+    #[test]
+    fn test_session_meta_file_operations() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let meta_dir = tmp.path().join("meta_test");
+        fs::create_dir_all(&meta_dir).unwrap();
+
+        let meta = SessionMeta {
+            id: "abc-456".to_string(),
+            source: "test".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            stopped_at: None,
+            title: None,
+            tools_used: vec![],
+            user_turns: 0,
+            assistant_turns: 0,
+        };
+
+        // Write and read back
+        let path = meta_dir.join("abc-456.meta.json");
+        let json = serde_json::to_string_pretty(&meta).unwrap();
+        fs::write(&path, &json).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        let parsed: SessionMeta = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.id, "abc-456");
+        assert!(parsed.title.is_none());
+        assert_eq!(parsed.user_turns, 0);
+
+        // Simulate title update
+        let mut updated = parsed;
+        updated.title = Some("My first session".to_string());
+        updated.user_turns = 2;
+        updated.tools_used = vec!["Bash".to_string()];
+
+        let json = serde_json::to_string_pretty(&updated).unwrap();
+        fs::write(&path, &json).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        let final_meta: SessionMeta = serde_json::from_str(&content).unwrap();
+        assert_eq!(final_meta.title, Some("My first session".to_string()));
+        assert_eq!(final_meta.user_turns, 2);
+        assert_eq!(final_meta.tools_used, vec!["Bash".to_string()]);
+    }
+
+    #[test]
+    fn test_title_truncation() {
+        let long_content = "a".repeat(200);
+        let title: String = long_content.chars().take(80).collect();
+        assert_eq!(title.len(), 80);
+    }
+
+    #[test]
+    fn test_tools_used_deduplication() {
+        let mut tools: BTreeSet<String> = BTreeSet::new();
+        tools.insert("Bash".to_string());
+        tools.insert("Read".to_string());
+        tools.insert("Bash".to_string()); // duplicate
+        assert_eq!(tools.len(), 2);
     }
 }

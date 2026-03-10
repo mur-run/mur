@@ -177,8 +177,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/feedback", post(context_feedback))
         // Sessions
         .route("/api/v1/sessions", get(list_sessions))
-        .route("/api/v1/sessions/{id}", get(get_session))
+        .route(
+            "/api/v1/sessions/{id}",
+            get(get_session).delete(delete_session).patch(patch_session),
+        )
         .route("/api/v1/sessions/{id}/events", get(get_session_events))
+        .route("/api/v1/sessions/bulk-delete", post(bulk_delete_sessions))
         // Extract workflow draft from session
         .route(
             "/api/v1/workflows/extract-from-session/{session_id}",
@@ -188,6 +192,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/pipelines", get(list_pipelines))
         .route("/api/v1/pipelines", post(create_pipeline))
         .route("/api/v1/pipelines/validate", post(validate_pipeline))
+        .route("/api/v1/pipelines/run", post(run_pipeline_expr))
         .route("/api/v1/pipelines/{id}", get(get_pipeline))
         .route("/api/v1/pipelines/{id}", put(update_pipeline))
         .route("/api/v1/pipelines/{id}", delete(delete_pipeline))
@@ -935,6 +940,31 @@ async fn validate_pipeline(
     }
 }
 
+#[derive(Deserialize)]
+struct RunPipelineExprRequest {
+    expression: String,
+}
+
+async fn run_pipeline_expr(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RunPipelineExprRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let expr = mur_common::pipeline::parse_pipeline_expr(&req.expression)
+        .map_err(|e| AppError::BadRequest(format!("Invalid pipeline expression: {}", e)))?;
+
+    let wf_store = state.workflow_store()?;
+    let executor = PipelineExecutor::new(wf_store);
+
+    let output = executor
+        .execute(&expr, None)
+        .await
+        .map_err(AppError::Internal)?;
+
+    let p_store = state.pattern_store()?;
+    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    Ok(wrap(output, count))
+}
+
 // ── Stats & metadata ───────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -1200,6 +1230,13 @@ struct SessionInfo {
     event_count: usize,
     file_size: u64,
     modified_at: String,
+    source: Option<String>,
+    started_at: Option<String>,
+    stopped_at: Option<String>,
+    title: Option<String>,
+    tools_used: Option<Vec<String>>,
+    user_turns: Option<usize>,
+    assistant_turns: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -1208,7 +1245,24 @@ struct SessionDetail {
     event_count: usize,
     file_size: u64,
     modified_at: String,
+    source: Option<String>,
+    started_at: Option<String>,
+    stopped_at: Option<String>,
+    title: Option<String>,
+    tools_used: Option<Vec<String>>,
+    user_turns: Option<usize>,
+    assistant_turns: Option<usize>,
     events: Vec<crate::session::SessionEvent>,
+}
+
+#[derive(Deserialize)]
+struct BulkDeleteRequest {
+    ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct SessionPatchRequest {
+    title: Option<String>,
 }
 
 async fn list_sessions(
@@ -1226,11 +1280,32 @@ async fn list_sessions(
         .into_iter()
         .map(|r| {
             let modified_at: chrono::DateTime<chrono::Utc> = r.modified.into();
+            let (source, started_at, stopped_at, title, tools_used, user_turns, assistant_turns) =
+                if let Some(ref m) = r.meta {
+                    (
+                        Some(m.source.clone()),
+                        Some(m.started_at.clone()),
+                        m.stopped_at.clone(),
+                        m.title.clone(),
+                        Some(m.tools_used.clone()),
+                        Some(m.user_turns),
+                        Some(m.assistant_turns),
+                    )
+                } else {
+                    (None, None, None, None, None, None, None)
+                };
             SessionInfo {
                 id: r.id,
                 event_count: r.event_count,
                 file_size: r.file_size,
                 modified_at: modified_at.to_rfc3339(),
+                source,
+                started_at,
+                stopped_at,
+                title,
+                tools_used,
+                user_turns,
+                assistant_turns,
             }
         })
         .collect();
@@ -1257,12 +1332,34 @@ async fn get_session(
         .map(|n| n.len())
         .unwrap_or(0);
 
+    let (source, started_at, stopped_at, title, tools_used, user_turns, assistant_turns) =
+        if let Some(ref m) = rec.meta {
+            (
+                Some(m.source.clone()),
+                Some(m.started_at.clone()),
+                m.stopped_at.clone(),
+                m.title.clone(),
+                Some(m.tools_used.clone()),
+                Some(m.user_turns),
+                Some(m.assistant_turns),
+            )
+        } else {
+            (None, None, None, None, None, None, None)
+        };
+
     Ok(wrap(
         SessionDetail {
             id: rec.id,
             event_count: rec.event_count,
             file_size: rec.file_size,
             modified_at: modified_at.to_rfc3339(),
+            source,
+            started_at,
+            stopped_at,
+            title,
+            tools_used,
+            user_turns,
+            assistant_turns,
             events,
         },
         count,
@@ -1282,6 +1379,49 @@ async fn get_session_events(
         .map(|n| n.len())
         .unwrap_or(0);
     Ok(wrap(events, count))
+}
+
+async fn delete_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    if state.config.readonly {
+        return Err(AppError::Readonly);
+    }
+    crate::session::delete_recording(&id).map_err(AppError::Internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn bulk_delete_sessions(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BulkDeleteRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    if state.config.readonly {
+        return Err(AppError::Readonly);
+    }
+    for id in &body.ids {
+        crate::session::delete_recording(id).map_err(AppError::Internal)?;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn patch_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<SessionPatchRequest>,
+) -> Result<Json<ApiResponse<crate::session::SessionMeta>>, AppError> {
+    if state.config.readonly {
+        return Err(AppError::Readonly);
+    }
+    let meta = crate::session::update_meta(&id, body.title)
+        .map_err(|_| AppError::NotFound(format!("Session '{}' meta not found", id)))?;
+    let count = state
+        .pattern_store()
+        .ok()
+        .and_then(|s| s.list_names().ok())
+        .map(|n| n.len())
+        .unwrap_or(0);
+    Ok(wrap(meta, count))
 }
 
 /// Extract a draft workflow from session events.
