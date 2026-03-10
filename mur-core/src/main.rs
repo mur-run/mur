@@ -426,6 +426,20 @@ enum SessionAction {
         #[arg(long)]
         json: bool,
     },
+    /// Export a session recording
+    Export {
+        /// Session ID or prefix
+        id: String,
+        /// Export format: json, markdown, skill
+        #[arg(long, default_value = "markdown")]
+        format: String,
+        /// Run analysis/fingerprint extraction
+        #[arg(long)]
+        analyze: bool,
+        /// Output file (defaults to stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -618,6 +632,12 @@ async fn main() -> Result<()> {
             SessionAction::Show { id, last, json } => {
                 cmd::session::cmd_session_show(&id, last, json)?
             }
+            SessionAction::Export {
+                id,
+                format,
+                analyze,
+                output,
+            } => cmd::session::cmd_session_export(&id, &format, analyze, output)?,
         },
         Commands::Dashboard => {
             dashboard::render_dashboard()?;

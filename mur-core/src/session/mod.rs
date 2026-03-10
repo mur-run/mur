@@ -20,7 +20,7 @@ pub struct ActiveSession {
 }
 
 /// A single session event appended to the JSONL recording.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEvent {
     pub timestamp: u64,
     #[serde(rename = "type")]
