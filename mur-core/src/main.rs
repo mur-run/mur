@@ -9,6 +9,7 @@ mod community;
 mod context_api;
 mod dashboard;
 mod evolve;
+mod executor;
 mod extract;
 mod gep;
 mod inject;
@@ -67,6 +68,9 @@ enum Commands {
     Run {
         /// Workflow name or search query
         query: String,
+        /// Cancel remaining parallel branches on first failure
+        #[arg(long)]
+        fail_fast: bool,
     },
     /// Report pattern feedback
     Feedback {
@@ -531,7 +535,9 @@ async fn main() -> Result<()> {
         },
         Commands::Sync { quiet, project } => cmd::sync_cmd::cmd_sync(quiet, project).await?,
         Commands::Inject { query, project: _ } => cmd::inject_cmd::cmd_inject(&query).await?,
-        Commands::Run { query } => cmd::workflow::cmd_workflow_run(&query).await?,
+        Commands::Run { query, fail_fast } => {
+            cmd::workflow::cmd_workflow_run(&query, fail_fast).await?
+        }
         Commands::Pattern { action } => match action {
             PatternAction::Show { name } => cmd::pattern::cmd_pattern_show(&name)?,
         },

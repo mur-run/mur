@@ -10,6 +10,7 @@ pub mod community;
 pub mod context_api;
 pub mod dashboard;
 pub mod evolve;
+pub mod executor;
 pub mod extract;
 pub mod gep;
 pub mod inject;

@@ -8,10 +8,28 @@ use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
 /// Run a workflow — output as executable prompt for AI consumption.
-/// Accepts exact name or semantic query.
-pub(crate) async fn cmd_workflow_run(query: &str) -> Result<()> {
+/// Accepts exact name, semantic query, or pipeline expression (w1 | w2 && w3, w4).
+pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool) -> Result<()> {
     use crate::store::embedding::{EmbeddingConfig, embed};
     use crate::store::lancedb::VectorStore;
+    use mur_common::pipeline::{has_pipeline_syntax, parse_pipeline_expr};
+
+    // Detect pipeline syntax and delegate to PipelineExecutor
+    if has_pipeline_syntax(query) {
+        let expr = parse_pipeline_expr(query)
+            .map_err(|e| anyhow::anyhow!("pipeline parse error: {}", e))?;
+        let store = WorkflowYamlStore::default_store()?;
+        let executor = crate::executor::pipeline::PipelineExecutor::new(store)
+            .with_fail_fast(fail_fast);
+        let output = executor.execute(&expr, None).await?;
+        if output.exit_code != 0 {
+            eprintln!(
+                "Pipeline finished with exit code {} ({})",
+                output.exit_code, output.workflow_id
+            );
+        }
+        return Ok(());
+    }
 
     let store = WorkflowYamlStore::default_store()?;
 

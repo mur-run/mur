@@ -3,4 +3,5 @@ pub mod event;
 pub mod knowledge;
 pub mod llm;
 pub mod pattern;
+pub mod pipeline;
 pub mod workflow;

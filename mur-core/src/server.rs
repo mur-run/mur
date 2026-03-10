@@ -39,10 +39,12 @@ use mur_common::pattern::*;
 use mur_common::workflow::{Step, Variable, Workflow};
 
 use crate::context_api;
+use crate::executor::pipeline::PipelineExecutor;
 use crate::retrieve::scoring::{ScoredPattern, score_and_rank};
 use crate::store::config::load_config;
 use crate::store::embedding::{EmbeddingConfig, embed};
 use crate::store::lancedb::VectorStore;
+use crate::store::pipeline_yaml::{PipelineDef, PipelineYamlStore};
 use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
@@ -59,6 +61,7 @@ pub struct ServerConfig {
 pub struct AppState {
     pub patterns_dir: PathBuf,
     pub workflows_dir: PathBuf,
+    pub pipelines_dir: PathBuf,
     /// Path to the LanceDB vector index (`~/.mur/index`).
     /// When present the context endpoint uses hybrid scoring.
     pub index_dir: PathBuf,
@@ -73,6 +76,10 @@ impl AppState {
 
     fn workflow_store(&self) -> Result<WorkflowYamlStore, AppError> {
         WorkflowYamlStore::new(self.workflows_dir.clone()).map_err(AppError::Internal)
+    }
+
+    fn pipeline_store(&self) -> Result<PipelineYamlStore, AppError> {
+        PipelineYamlStore::new(self.pipelines_dir.clone()).map_err(AppError::Internal)
     }
 }
 
@@ -177,6 +184,14 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/workflows/extract-from-session/{session_id}",
             post(extract_workflow_from_session),
         )
+        // Pipelines CRUD + run + validate
+        .route("/api/v1/pipelines", get(list_pipelines))
+        .route("/api/v1/pipelines", post(create_pipeline))
+        .route("/api/v1/pipelines/validate", post(validate_pipeline))
+        .route("/api/v1/pipelines/{id}", get(get_pipeline))
+        .route("/api/v1/pipelines/{id}", put(update_pipeline))
+        .route("/api/v1/pipelines/{id}", delete(delete_pipeline))
+        .route("/api/v1/pipelines/{id}/run", post(run_pipeline))
         // WebSocket for real-time events
         .route("/api/v1/ws", get(ws_handler))
         .layer(cors)
@@ -743,6 +758,183 @@ async fn delete_workflow(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ── Pipelines ───────────────────────────────────────────────────────
+
+async fn list_pipelines(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, AppError> {
+    let store = state.pipeline_store()?;
+    let pipelines = store.list_all().map_err(AppError::Internal)?;
+    let p_store = state.pattern_store()?;
+    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    Ok(wrap(pipelines, count))
+}
+
+async fn get_pipeline(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let store = state.pipeline_store()?;
+    let pipeline = store
+        .get(&id)
+        .map_err(|_| AppError::NotFound(format!("Pipeline '{}' not found", id)))?;
+    let p_store = state.pattern_store()?;
+    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    Ok(wrap(pipeline, count))
+}
+
+#[derive(Deserialize)]
+pub struct CreatePipelineRequest {
+    pub id: String,
+    pub expression: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+async fn create_pipeline(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreatePipelineRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    if state.config.readonly {
+        return Err(AppError::Readonly);
+    }
+    let store = state.pipeline_store()?;
+    if store.exists(&req.id) {
+        return Err(AppError::BadRequest(format!(
+            "Pipeline '{}' already exists",
+            req.id
+        )));
+    }
+
+    // Validate expression syntax
+    mur_common::pipeline::parse_pipeline_expr(&req.expression)
+        .map_err(|e| AppError::BadRequest(format!("Invalid pipeline expression: {}", e)))?;
+
+    let pipeline = PipelineDef {
+        id: req.id.clone(),
+        expression: req.expression,
+        description: req.description,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+
+    store.save(&pipeline).map_err(AppError::Internal)?;
+    notify(&state, "pipeline:created", &req.id);
+    let p_store = state.pattern_store()?;
+    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    Ok((StatusCode::CREATED, wrap(pipeline, count)))
+}
+
+async fn update_pipeline(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(updates): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, AppError> {
+    if state.config.readonly {
+        return Err(AppError::Readonly);
+    }
+    let store = state.pipeline_store()?;
+    let mut pipeline = store
+        .get(&id)
+        .map_err(|_| AppError::NotFound(format!("Pipeline '{}' not found", id)))?;
+
+    if let Some(expr) = updates.get("expression").and_then(|v| v.as_str()) {
+        // Validate new expression
+        mur_common::pipeline::parse_pipeline_expr(expr)
+            .map_err(|e| AppError::BadRequest(format!("Invalid pipeline expression: {}", e)))?;
+        pipeline.expression = expr.to_string();
+    }
+    if let Some(desc) = updates.get("description").and_then(|v| v.as_str()) {
+        pipeline.description = desc.to_string();
+    }
+
+    pipeline.updated_at = chrono::Utc::now();
+    store.save(&pipeline).map_err(AppError::Internal)?;
+    notify(&state, "pipeline:updated", &id);
+    let p_store = state.pattern_store()?;
+    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    Ok(wrap(pipeline, count))
+}
+
+async fn delete_pipeline(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    if state.config.readonly {
+        return Err(AppError::Readonly);
+    }
+    let store = state.pipeline_store()?;
+    let deleted = store
+        .delete(&id)
+        .map_err(|_| AppError::NotFound(format!("Pipeline '{}' not found", id)))?;
+    if !deleted {
+        return Err(AppError::NotFound(format!("Pipeline '{}' not found", id)));
+    }
+    notify(&state, "pipeline:deleted", &id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize, Default)]
+pub struct RunPipelineRequest {
+    #[serde(default)]
+    pub fail_fast: bool,
+}
+
+async fn run_pipeline(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<RunPipelineRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let pl_store = state.pipeline_store()?;
+    let pipeline = pl_store
+        .get(&id)
+        .map_err(|_| AppError::NotFound(format!("Pipeline '{}' not found", id)))?;
+
+    let expr = mur_common::pipeline::parse_pipeline_expr(&pipeline.expression)
+        .map_err(|e| AppError::BadRequest(format!("Invalid pipeline expression: {}", e)))?;
+
+    let wf_store = state.workflow_store()?;
+    let executor = PipelineExecutor::new(wf_store).with_fail_fast(req.fail_fast);
+
+    let output = executor
+        .execute(&expr, None)
+        .await
+        .map_err(AppError::Internal)?;
+
+    let p_store = state.pattern_store()?;
+    let count = p_store.list_names().map(|n| n.len()).unwrap_or(0);
+    Ok(wrap(output, count))
+}
+
+#[derive(Deserialize)]
+pub struct ValidatePipelineRequest {
+    pub expression: String,
+}
+
+#[derive(Serialize)]
+struct ValidatePipelineResponse {
+    valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ast: Option<mur_common::pipeline::PipelineExpr>,
+}
+
+async fn validate_pipeline(
+    Json(req): Json<ValidatePipelineRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    match mur_common::pipeline::parse_pipeline_expr(&req.expression) {
+        Ok(ast) => Ok(Json(ValidatePipelineResponse {
+            valid: true,
+            error: None,
+            ast: Some(ast),
+        })),
+        Err(e) => Ok(Json(ValidatePipelineResponse {
+            valid: false,
+            error: Some(e.to_string()),
+            ast: None,
+        })),
+    }
+}
+
 // ── Stats & metadata ───────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -1129,13 +1321,16 @@ mod tests {
     fn test_state(tmp: &tempfile::TempDir) -> AppState {
         let patterns_dir = tmp.path().join("patterns");
         let workflows_dir = tmp.path().join("workflows");
+        let pipelines_dir = tmp.path().join("pipelines");
         let index_dir = tmp.path().join("index"); // non-existent → keyword-only fallback
         std::fs::create_dir_all(&patterns_dir).unwrap();
         std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
         let (events_tx, _) = broadcast::channel(64);
         AppState {
             patterns_dir,
             workflows_dir,
+            pipelines_dir,
             index_dir,
             config: ServerConfig { readonly: false },
             events_tx,

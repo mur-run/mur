@@ -7,6 +7,7 @@ pub(crate) async fn cmd_serve(port: u16, open: bool, readonly: bool) -> Result<(
     let state = crate::server::AppState {
         patterns_dir: mur_dir.join("patterns"),
         workflows_dir: mur_dir.join("workflows"),
+        pipelines_dir: mur_dir.join("pipelines"),
         index_dir: mur_dir.join("index"),
         config: crate::server::ServerConfig { readonly },
         events_tx,

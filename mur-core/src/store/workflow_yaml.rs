@@ -9,6 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 
 /// The YAML workflow store.
+#[derive(Clone)]
 pub struct WorkflowYamlStore {
     /// Root workflows directory (e.g. ~/.mur/workflows/)
     workflows_dir: PathBuf,
