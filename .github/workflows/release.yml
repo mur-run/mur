@@ -33,6 +33,23 @@ jobs:
             name: mur-x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
+
+      - name: Checkout mur-web
+        uses: actions/checkout@v4
+        with:
+          repository: mur-run/mur-web
+          path: mur-web-src
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build mur-web dashboard
+        run: |
+          cd mur-web-src
+          npm ci
+          npm run build
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -57,10 +74,14 @@ jobs:
       - name: Build (native)
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          MUR_WEB_DIST: ${{ github.workspace }}/mur-web-src/dist
 
       - name: Build (cross)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: cross build --release --target ${{ matrix.target }}
+        env:
+          MUR_WEB_DIST: ${{ github.workspace }}/mur-web-src/dist
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
