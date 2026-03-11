@@ -32,7 +32,7 @@ const W_TIME_DECAY: f64 = 0.10;
 const W_LENGTH_NORM: f64 = 0.05;
 
 /// Score floor — patterns below this are dropped
-const SCORE_FLOOR: f64 = 0.35;
+const SCORE_FLOOR: f64 = 0.42;
 
 /// Max patterns to return
 const MAX_PATTERNS: usize = 5;
@@ -47,7 +47,7 @@ pub fn score_and_rank_hybrid(
     candidates: Vec<Pattern>,
     vector_scores: &std::collections::HashMap<String, f64>,
 ) -> Vec<ScoredPattern> {
-    score_and_rank_hybrid_with_scope(query, candidates, vector_scores, None)
+    score_and_rank_hybrid_with_scope(query, candidates, vector_scores, None, None)
 }
 
 /// Score patterns with hybrid search and optional scope context for accurate
@@ -57,21 +57,28 @@ pub fn score_and_rank_hybrid_with_scope(
     candidates: Vec<Pattern>,
     vector_scores: &std::collections::HashMap<String, f64>,
     scope: Option<&ScopeContext>,
+    project_language: Option<&str>,
 ) -> Vec<ScoredPattern> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
 
-    score_and_rank_inner(&query_words, candidates, scope, |words, p| {
-        let kw_relevance = keyword_relevance(words, p);
-        let vec_relevance = vector_scores.get(&p.name).copied().unwrap_or(0.0);
-        vec_relevance * 0.7 + kw_relevance * 0.3
-    })
+    score_and_rank_inner(
+        &query_words,
+        candidates,
+        scope,
+        project_language,
+        |words, p| {
+            let kw_relevance = keyword_relevance(words, p);
+            let vec_relevance = vector_scores.get(&p.name).copied().unwrap_or(0.0);
+            vec_relevance * 0.7 + kw_relevance * 0.3
+        },
+    )
 }
 
 /// Score a set of candidate patterns against a query (keyword-only fallback).
 /// Returns scored patterns sorted by score, filtered and budget-limited.
 pub fn score_and_rank(query: &str, candidates: Vec<Pattern>) -> Vec<ScoredPattern> {
-    score_and_rank_with_scope(query, candidates, None)
+    score_and_rank_with_scope(query, candidates, None, None)
 }
 
 /// Score with keyword-only relevance and optional scope context.
@@ -79,13 +86,18 @@ pub fn score_and_rank_with_scope(
     query: &str,
     candidates: Vec<Pattern>,
     scope: Option<&ScopeContext>,
+    project_language: Option<&str>,
 ) -> Vec<ScoredPattern> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
 
-    score_and_rank_inner(&query_words, candidates, scope, |words, p| {
-        keyword_relevance(words, p)
-    })
+    score_and_rank_inner(
+        &query_words,
+        candidates,
+        scope,
+        project_language,
+        keyword_relevance,
+    )
 }
 
 /// Shared scoring logic: filter, score with a relevance function, sort, and budget-limit.
@@ -93,6 +105,7 @@ fn score_and_rank_inner<F>(
     query_words: &[&str],
     candidates: Vec<Pattern>,
     scope: Option<&ScopeContext>,
+    project_language: Option<&str>,
     relevance_fn: F,
 ) -> Vec<ScoredPattern>
 where
@@ -119,6 +132,24 @@ where
                 1.0
             };
 
+            // Language mismatch penalty: if pattern specifies languages that
+            // don't match the current project, heavily penalize
+            let lang_mult = if let Some(proj_lang) = project_language {
+                if !p.applies.languages.is_empty() {
+                    let proj_lang_lower = proj_lang.to_lowercase();
+                    let matches = p
+                        .applies
+                        .languages
+                        .iter()
+                        .any(|l| l.to_lowercase() == proj_lang_lower);
+                    if matches { 1.2 } else { 0.05 }
+                } else {
+                    1.0 // pattern has no language restriction, neutral
+                }
+            } else {
+                1.0 // no project language detected, neutral
+            };
+
             let base_score = (relevance * W_RELEVANCE
                 + recency * W_RECENCY
                 + effectiveness * W_EFFECTIVENESS
@@ -129,7 +160,7 @@ where
 
             // Kind-aware boost: scope-aware preference/procedure boost
             let kind_boost = kind_score_boost(&p, query_words, scope);
-            let score = base_score + kind_boost;
+            let score = (base_score + kind_boost) * lang_mult;
 
             ScoredPattern {
                 pattern: p,

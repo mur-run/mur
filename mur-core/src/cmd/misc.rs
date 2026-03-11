@@ -100,6 +100,38 @@ pub(crate) fn cmd_stats() -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn cmd_doctor() -> Result<()> {
+    use crate::llm::is_reasoning_model;
+
+    println!("🩺 MUR Doctor\n");
+
+    // Check MUR directory
+    let mur_dir = dirs::home_dir().map(|h| h.join(".mur")).unwrap_or_default();
+    if mur_dir.exists() {
+        println!("✅ MUR directory: {}", mur_dir.display());
+    } else {
+        println!("❌ MUR directory not found. Run `mur init` first.");
+    }
+
+    // Check patterns
+    let store = YamlStore::default_store()?;
+    let count = store.list_all()?.len();
+    println!("✅ Patterns: {count}");
+
+    // Check LLM config
+    let config = crate::store::config::load_config()?;
+    let model = &config.llm.model;
+    if is_reasoning_model(model) {
+        println!("✅ LLM model: {model} (recommended for session analysis)");
+    } else {
+        println!(
+            "⚠️  LLM model: {model} (not ideal for session analysis — consider claude-opus-4-6, chatgpt-5.4, gemini-pro-3.5)"
+        );
+    }
+
+    Ok(())
+}
+
 pub(crate) fn cmd_gc(auto: bool) -> Result<()> {
     use evolve::decay::apply_decay_all;
     use evolve::lifecycle::{LifecycleAction, apply_lifecycle_action, evaluate_lifecycle};

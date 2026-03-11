@@ -34,7 +34,17 @@ pub(crate) async fn cmd_learn_extract(
         let config = crate::store::config::load_config()?;
         let store = YamlStore::default_store()?;
 
-        println!("Analyzing transcript with LLM ({})...", config.llm.model);
+        let model_name = &config.llm.model;
+        let recommended = llm::is_reasoning_model(model_name);
+
+        if !recommended {
+            eprintln!("⚠️  Session analysis works best with strong reasoning models.");
+            eprintln!("   Current: {model_name}");
+            eprintln!("   Recommended: claude-opus-4-6, chatgpt-5.4, gemini-pro-3.5, or similar");
+            eprintln!();
+        }
+
+        println!("Analyzing transcript with LLM ({})...", model_name);
 
         let system = r#"You are MUR, a pattern extraction engine. Analyze the given AI assistant session transcript and extract reusable patterns.
 
@@ -105,11 +115,19 @@ Return ONLY the JSON array, no markdown fences or other text."#;
                             println!("    🔗 Linked to {} patterns", suggestions.len());
                         }
                     }
-                    println!(
-                        "\nExtracted {} patterns, saved {} new.",
-                        parsed.len(),
-                        saved
-                    );
+                    if recommended {
+                        println!(
+                            "\n✅ Extracted {} patterns (model: {model_name}), saved {} new.",
+                            parsed.len(),
+                            saved
+                        );
+                    } else {
+                        println!(
+                            "\n⚠️  Extracted {} patterns (model: {model_name} — quality may vary), saved {} new.",
+                            parsed.len(),
+                            saved
+                        );
+                    }
                 }
             }
             Err(e) => {

@@ -46,7 +46,11 @@ pub(crate) async fn cmd_context(
                 "project" => scope.project = Some(value.to_string()),
                 "task" => scope.task = Some(value.to_string()),
                 "platform" => scope.platform = Some(value.to_string()),
-                _ => eprintln!("Warning: unknown scope key '{}'", key),
+                _ => {
+                    if !quiet {
+                        eprintln!("Warning: unknown scope key '{}'", key);
+                    }
+                }
             }
         }
     }
@@ -170,6 +174,9 @@ pub(crate) async fn cmd_context(
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
+    // Detect project language for language-mismatch scoring penalty
+    let project_language = capture::starter::detect_language(&cwd).map(|l| l.as_str().to_string());
+
     // Build scope context for accurate preference/procedure scoring boosts.
     // `source` tells us the calling tool (e.g. "claude-code"), which maps
     // to `origin.platform` for preference matching.
@@ -202,12 +209,23 @@ pub(crate) async fn cmd_context(
                     patterns,
                     &vector_scores,
                     Some(&score_scope),
+                    project_language.as_deref(),
                 )
             }
-            Err(_) => score_and_rank_with_scope(&effective_query, patterns, Some(&score_scope)),
+            Err(_) => score_and_rank_with_scope(
+                &effective_query,
+                patterns,
+                Some(&score_scope),
+                project_language.as_deref(),
+            ),
         }
     } else {
-        score_and_rank_with_scope(&effective_query, patterns, Some(&score_scope))
+        score_and_rank_with_scope(
+            &effective_query,
+            patterns,
+            Some(&score_scope),
+            project_language.as_deref(),
+        )
     };
 
     let mut injected_patterns: Vec<Pattern> = Vec::new();
@@ -294,7 +312,9 @@ pub(crate) async fn cmd_context(
                 output
             );
             std::fs::write(&context_path, file_content)?;
-            eprintln!("📝 Context written to {}", context_path.display());
+            if !quiet {
+                eprintln!("📝 Context written to {}", context_path.display());
+            }
         } else {
             print!("{}", output);
         }

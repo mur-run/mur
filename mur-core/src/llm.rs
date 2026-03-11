@@ -37,6 +37,52 @@ pub async fn llm_complete(config: &LlmConfig, system: &str, prompt: &str) -> Res
     }
 }
 
+// ─── Model Quality Check ────────────────────────────────────────────
+
+/// Check if a model name matches recommended reasoning models for session analysis.
+///
+/// Recommended: Anthropic Opus, OpenAI GPT-5/O3/O4, Gemini Pro 3+,
+/// or any model with "reasoning" or "think" in the name.
+pub fn is_reasoning_model(model: &str) -> bool {
+    let m = model.to_lowercase();
+
+    // Anthropic: any model containing "opus"
+    if m.contains("opus") {
+        return true;
+    }
+
+    // OpenAI: gpt-5, o3, o4
+    if m.contains("gpt-5") || m.contains("o3") || m.contains("o4") {
+        return true;
+    }
+
+    // Gemini: "pro" with version >= 3
+    if m.contains("gemini") && m.contains("pro") {
+        // Look for a version number after "pro"
+        if let Some(pos) = m.find("pro") {
+            let after = &m[pos + 3..];
+            // Extract first digit sequence
+            let version_str: String = after
+                .chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(v) = version_str.parse::<u32>()
+                && v >= 3
+            {
+                return true;
+            }
+        }
+    }
+
+    // Generic: "reasoning" or "think"
+    if m.contains("reasoning") || m.contains("think") {
+        return true;
+    }
+
+    false
+}
+
 // ─── Key Resolution ─────────────────────────────────────────────────
 
 fn resolve_api_key(config: &LlmConfig) -> Result<String> {
@@ -397,6 +443,35 @@ mod tests {
         assert_eq!(default_key_env("gemini"), "GEMINI_API_KEY");
         assert_eq!(default_key_env("openrouter"), "OPENROUTER_API_KEY");
         assert_eq!(default_key_env("custom"), "LLM_API_KEY");
+    }
+
+    #[test]
+    fn test_is_reasoning_model() {
+        // Anthropic opus models
+        assert!(is_reasoning_model("claude-opus-4-6"));
+        assert!(is_reasoning_model("claude-opus-4-20250514"));
+
+        // OpenAI reasoning models
+        assert!(is_reasoning_model("gpt-5"));
+        assert!(is_reasoning_model("chatgpt-5.4"));
+        assert!(is_reasoning_model("o3-mini"));
+        assert!(is_reasoning_model("o4-preview"));
+
+        // Gemini pro >= 3
+        assert!(is_reasoning_model("gemini-pro-3.5"));
+        assert!(is_reasoning_model("gemini-pro-3"));
+        assert!(!is_reasoning_model("gemini-pro-2"));
+        assert!(!is_reasoning_model("gemini-pro-1.5"));
+
+        // Generic reasoning/thinking
+        assert!(is_reasoning_model("deepseek-reasoning-v2"));
+        assert!(is_reasoning_model("qwen-thinking-32b"));
+
+        // Non-recommended
+        assert!(!is_reasoning_model("claude-sonnet-4-20250514"));
+        assert!(!is_reasoning_model("gpt-4o"));
+        assert!(!is_reasoning_model("gemini-flash-2"));
+        assert!(!is_reasoning_model("llama3"));
     }
 
     #[test]

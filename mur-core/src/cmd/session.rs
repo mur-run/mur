@@ -13,24 +13,22 @@ pub(crate) fn cmd_session_stop(analyze: bool) -> Result<()> {
     match session::stop()? {
         Some(id) => {
             eprintln!("Session stopped: {}", &id[..8]);
-            if analyze {
-                // Run fingerprint extraction on the recording
-                let recording_path = dirs::home_dir()
-                    .expect("no home dir")
-                    .join(".mur")
-                    .join("session")
-                    .join("recordings")
-                    .join(format!("{}.jsonl", id));
 
-                if recording_path.exists() {
-                    let content = std::fs::read_to_string(&recording_path)?;
-                    if !content.trim().is_empty() {
-                        use crate::capture::emergence::{extract_fingerprints, save_fingerprints};
-                        let fps = extract_fingerprints(&content, &id);
-                        if !fps.is_empty() {
-                            save_fingerprints(&fps)?;
-                            eprintln!("Extracted {} fingerprints from session.", fps.len());
-                        }
+            let recording_path = dirs::home_dir()
+                .expect("no home dir")
+                .join(".mur")
+                .join("session")
+                .join("recordings")
+                .join(format!("{}.jsonl", id));
+
+            if analyze && recording_path.exists() {
+                let content = std::fs::read_to_string(&recording_path)?;
+                if !content.trim().is_empty() {
+                    use crate::capture::emergence::{extract_fingerprints, save_fingerprints};
+                    let fps = extract_fingerprints(&content, &id);
+                    if !fps.is_empty() {
+                        save_fingerprints(&fps)?;
+                        eprintln!("Extracted {} fingerprints from session.", fps.len());
                     }
                 }
             }
@@ -43,6 +41,97 @@ pub(crate) fn cmd_session_stop(analyze: bool) -> Result<()> {
                     super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push)
             {
                 eprintln!("  ⚠ Auto-push failed: {}", e);
+            }
+
+            // Interactive post-session menu (only in terminal)
+            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                // Show session summary
+                let meta = session::load_meta_pub(&id);
+                let event_count = if recording_path.exists() {
+                    std::fs::read_to_string(&recording_path)
+                        .map(|c| c.lines().filter(|l| !l.trim().is_empty()).count())
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+
+                eprintln!();
+                eprintln!("Session summary:");
+                eprintln!("  Events: {}", event_count);
+                if let Some(ref m) = meta {
+                    eprintln!(
+                        "  Turns:  {} user, {} assistant",
+                        m.user_turns, m.assistant_turns
+                    );
+                    if let (Some(stopped), Ok(start)) = (
+                        &m.stopped_at,
+                        chrono::DateTime::parse_from_rfc3339(&m.started_at),
+                    ) && let Ok(end) = chrono::DateTime::parse_from_rfc3339(stopped)
+                    {
+                        let secs = end.signed_duration_since(start).num_seconds();
+                        if secs >= 3600 {
+                            eprintln!(
+                                "  Duration: {}h {}m {}s",
+                                secs / 3600,
+                                (secs % 3600) / 60,
+                                secs % 60
+                            );
+                        } else if secs >= 60 {
+                            eprintln!("  Duration: {}m {}s", secs / 60, secs % 60);
+                        } else {
+                            eprintln!("  Duration: {}s", secs);
+                        }
+                    }
+                }
+
+                let items = &[
+                    "🔍 Analyze — extract patterns with LLM (needs reasoning model)",
+                    "📦 Export — save as markdown",
+                    "⏭  Skip",
+                ];
+
+                if let Ok(choice) = dialoguer::Select::new()
+                    .with_prompt("What next?")
+                    .items(items)
+                    .default(2)
+                    .interact()
+                {
+                    let exe =
+                        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
+                    match choice {
+                        0 => {
+                            // Analyze: run `mur learn extract --file <path> --llm`
+                            if let Some(path_str) = recording_path.to_str() {
+                                let status = std::process::Command::new(&exe)
+                                    .args(["learn", "extract", "--file", path_str, "--llm"])
+                                    .status();
+                                if let Ok(s) = status {
+                                    if !s.success() {
+                                        eprintln!("  ⚠ learn extract exited with {}", s);
+                                    }
+                                } else if let Err(e) = status {
+                                    eprintln!("  ⚠ Failed to run learn extract: {}", e);
+                                }
+                            }
+                        }
+                        1 => {
+                            // Export: run `mur session export <id> --format markdown`
+                            let status = std::process::Command::new(&exe)
+                                .args(["session", "export", &id, "--format", "markdown"])
+                                .status();
+                            if let Ok(s) = status {
+                                if !s.success() {
+                                    eprintln!("  ⚠ session export exited with {}", s);
+                                }
+                            } else if let Err(e) = status {
+                                eprintln!("  ⚠ Failed to run session export: {}", e);
+                            }
+                        }
+                        _ => {
+                            // Skip — do nothing
+                        }
+                    }
+                }
             }
         }
         None => {

@@ -48,6 +48,8 @@ enum Commands {
     },
     /// Show statistics and effectiveness
     Stats,
+    /// Check MUR setup and configuration health
+    Doctor,
     /// Sync patterns to AI tools
     Sync {
         /// Suppress output
@@ -531,6 +533,7 @@ async fn main() -> Result<()> {
         Commands::New { diagram } => cmd::pattern::cmd_new(diagram)?,
         Commands::Search { query } => cmd::pattern::cmd_search(&query)?,
         Commands::Stats => cmd::misc::cmd_stats()?,
+        Commands::Doctor => cmd::misc::cmd_doctor()?,
         Commands::Pin { name } => cmd::pattern::cmd_set_lifecycle(&name, "pin")?,
         Commands::Mute { name } => cmd::pattern::cmd_set_lifecycle(&name, "mute")?,
         Commands::Boost { name, amount } => cmd::pattern::cmd_boost(&name, amount)?,
