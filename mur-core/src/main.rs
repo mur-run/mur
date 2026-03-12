@@ -518,8 +518,25 @@ enum PackAction {
     },
 }
 
+/// Load .env file from `~/.mur/.env` (preferred) or `./.env` (fallback).
+fn load_dotenv() {
+    let home_env = dirs::home_dir().map(|h| h.join(".mur").join(".env"));
+    if let Some(path) = home_env {
+        if path.exists() {
+            if let Err(e) = dotenvy::from_path(&path) {
+                eprintln!("warning: failed to load {:?}: {}", path, e);
+            } else {
+                return;
+            }
+        }
+    }
+    // Fallback: current directory .env
+    let _ = dotenvy::dotenv();
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    load_dotenv();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
