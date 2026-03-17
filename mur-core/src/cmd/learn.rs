@@ -7,6 +7,55 @@ use crate::evolve;
 use crate::llm;
 use crate::store::yaml::YamlStore;
 
+pub(crate) const DEFAULT_EXTRACT_PROMPT: &str = r#"You are MUR, a pattern extraction engine. Analyze the given AI assistant session transcript and extract reusable, generalizable patterns.
+
+## Noise Filtering Rules
+- Skip repeated error messages — keep only the first occurrence + its resolution
+- Skip debug output, verbose logs, progress bars, and build output
+- Skip trivial file reads that don't lead to insights
+- Skip back-and-forth that amounts to "try X, fail, try Y, fail" — only keep the final working approach
+- Skip mur internal commands (mur session, mur sync, mur inject, mur context, etc.)
+- Skip boilerplate interactions (greetings, confirmations, "yes", "ok", etc.)
+
+## Variable Extraction
+Replace hardcoded values with template variables so patterns are reusable across projects:
+- File paths → `{{project_root}}`, `{{config_path}}`, `{{source_dir}}`
+- Project names → `{{project_name}}`
+- URLs → `{{base_url}}`, `{{api_endpoint}}`
+- Version numbers → `{{version}}`
+- User-specific values (usernames, emails, tokens) → `{{user}}`, `{{email}}`, `{{token}}`
+- Database names/connection strings → `{{database_url}}`
+- Port numbers → `{{port}}`
+In the pattern "technical" field, use these variables instead of literal values.
+
+## Flow Abstraction
+- Extract the GENERAL workflow, not the specific instance
+- Steps should be described as reusable procedures, not a replay of what happened
+- Identify decision points and branch conditions ("if X then do Y, otherwise Z")
+- Include error handling patterns: what to check, common failures, recovery steps
+- Note prerequisites and assumptions
+- Capture the WHY behind decisions, not just the WHAT
+
+## Output Quality
+- Each pattern should be self-contained and reusable by someone who wasn't in the session
+- Prefer fewer high-quality patterns over many trivial ones
+- Minimum importance threshold: 0.4 — do not include patterns below this
+- Patterns should be actionable: a developer should be able to follow the pattern to reproduce the approach
+- Merge closely related insights into a single pattern rather than creating near-duplicates
+
+## Output Format
+Return a JSON array of pattern objects. Each object has:
+- "name": kebab-case identifier (e.g. "rust-error-handling-with-context")
+- "description": one-line summary of what this pattern teaches
+- "technical": detailed technical content with steps, commands, code snippets. Use template variables ({{...}}) instead of hardcoded values
+- "principle": optional higher-level principle or mental model behind this pattern
+- "tags": array of topic strings (e.g. ["rust", "error-handling", "anyhow"])
+- "tier": "session" (one-off technique) | "project" (project-specific practice) | "core" (universal best practice)
+- "importance": 0.4-1.0 float reflecting how broadly useful this pattern is
+- "variables": array of {name, description, example} objects for each template variable used in "technical". Example: {"name": "project_root", "description": "Root directory of the project", "example": "/home/user/my-app"}
+
+Return ONLY the JSON array, no markdown fences, no commentary, no other text."#;
+
 pub(crate) async fn cmd_learn_extract(
     file: Option<String>,
     fingerprint: bool,
@@ -46,19 +95,18 @@ pub(crate) async fn cmd_learn_extract(
 
         println!("Analyzing transcript with LLM ({})...", model_name);
 
-        let system = r#"You are MUR, a pattern extraction engine. Analyze the given AI assistant session transcript and extract reusable patterns.
-
-Return a JSON array of patterns. Each pattern object has:
-- "name": kebab-case identifier (e.g. "rust-error-handling")
-- "description": one-line summary
-- "technical": technical content (the actual pattern/rule/practice)
-- "principle": optional higher-level principle behind it
-- "tags": array of topic strings
-- "tier": "session" | "project" | "core"
-- "importance": 0.0-1.0 float
-
-Only extract genuinely reusable patterns — skip trivial or one-off interactions.
-Return ONLY the JSON array, no markdown fences or other text."#;
+        let system = {
+            let template_path = dirs::home_dir()
+                .map(|h| h.join(".mur/templates/extract-prompt.md"));
+            match template_path {
+                Some(p) if p.exists() => {
+                    eprintln!("📝 Using custom extraction template: {}", p.display());
+                    std::fs::read_to_string(&p)
+                        .unwrap_or_else(|_| DEFAULT_EXTRACT_PROMPT.to_string())
+                }
+                _ => DEFAULT_EXTRACT_PROMPT.to_string(),
+            }
+        };
 
         // Truncate very long transcripts to fit context window
         let max_chars = 100_000;
@@ -70,7 +118,7 @@ Return ONLY the JSON array, no markdown fences or other text."#;
 
         let prompt = format!("Extract patterns from this session transcript:\n\n{truncated}");
 
-        match llm::llm_complete(&config.llm, system, &prompt).await {
+        match llm::llm_complete(&config.llm, &system, &prompt).await {
             Ok(response) => {
                 let parsed = parse_llm_patterns(&response);
                 if parsed.is_empty() {

@@ -52,8 +52,9 @@ echo "   Size: $(du -h "$BINARY" | cut -f1)"
 
 # Step 3: Install if requested
 if $INSTALL; then
-  echo "📥 Installing to /usr/local/bin/mur..."
+#  echo "📥 Installing to /usr/local/bin/mur..."
 #  cp "$BINARY" /usr/local/bin/mur
+  echo "📥 Installing to /opt/homebrew/bin/mur..."
   cp "$BINARY" /opt/homebrew/bin/mur
   echo "✅ Installed: $(mur --version 2>/dev/null || echo 'done')"
 fi

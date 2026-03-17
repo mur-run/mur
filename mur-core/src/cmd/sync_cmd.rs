@@ -483,9 +483,28 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
         println!("  ✅ Index up to date");
     }
 
+    // ─── Ensure default templates exist ──────────────────────
+    ensure_default_templates(&home, quiet)?;
+
     if !quiet {
         println!("Sync complete.");
     }
+    Ok(())
+}
+
+/// Bootstrap default template files if they don't exist.
+fn ensure_default_templates(home: &std::path::Path, quiet: bool) -> Result<()> {
+    let templates_dir = home.join(".mur").join("templates");
+    let extract_prompt = templates_dir.join("extract-prompt.md");
+
+    if !extract_prompt.exists() {
+        std::fs::create_dir_all(&templates_dir)?;
+        std::fs::write(&extract_prompt, crate::cmd::learn::DEFAULT_EXTRACT_PROMPT)?;
+        if !quiet {
+            println!("  📝 Created default extraction template: {}", extract_prompt.display());
+        }
+    }
+
     Ok(())
 }
 

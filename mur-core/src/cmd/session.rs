@@ -113,6 +113,20 @@ pub(crate) fn cmd_session_stop(analyze: bool) -> Result<()> {
                                     eprintln!("  ⚠ Failed to run learn extract: {}", e);
                                 }
                             }
+
+                            // Show dashboard review URL
+                            eprintln!();
+                            eprintln!(
+                                "📊 Review: https://dashboard.mur.run/#/sessions/{}/review",
+                                id
+                            );
+                            // Also show local URL if server might be running
+                            if std::net::TcpStream::connect("127.0.0.1:3847").is_ok() {
+                                eprintln!(
+                                    "   Local:  http://localhost:3847/#/sessions/{}/review",
+                                    id
+                                );
+                            }
                         }
                         1 => {
                             // Export: run `mur session export <id> --format markdown`
@@ -126,6 +140,13 @@ pub(crate) fn cmd_session_stop(analyze: bool) -> Result<()> {
                             } else if let Err(e) = status {
                                 eprintln!("  ⚠ Failed to run session export: {}", e);
                             }
+
+                            // Show dashboard review URL
+                            eprintln!();
+                            eprintln!(
+                                "📊 Review: https://dashboard.mur.run/#/sessions/{}/review",
+                                id
+                            );
                         }
                         _ => {
                             // Skip — do nothing

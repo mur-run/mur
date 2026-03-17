@@ -252,6 +252,12 @@ enum Commands {
         #[command(subcommand)]
         action: ExchangeAction,
     },
+    /// Analyze source files to detect coding conventions and generate a code-style pattern
+    Analyze {
+        /// Preview detected conventions without saving
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Import rules from AI tool config files (.cursorrules, CLAUDE.md, etc.)
     Import {
         /// Files to import (auto-detects if not specified)
@@ -701,6 +707,7 @@ async fn main() -> Result<()> {
             ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,
             ExchangeAction::Export { name, dir } => cmd::misc::cmd_exchange_export(&name, dir)?,
         },
+        Commands::Analyze { dry_run } => cmd::misc::cmd_analyze(dry_run)?,
         Commands::Import { file, dry_run } => cmd::misc::cmd_import(file, dry_run)?,
     }
 

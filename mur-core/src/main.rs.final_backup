@@ -701,6 +701,7 @@ async fn main() -> Result<()> {
             ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,
             ExchangeAction::Export { name, dir } => cmd::misc::cmd_exchange_export(&name, dir)?,
         },
+        Commands::Analyze { dry_run } => cmd::misc::cmd_analyze(dry_run)?,
         Commands::Import { file, dry_run } => cmd::misc::cmd_import(file, dry_run)?,
     }
 

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mur_common::knowledge::KnowledgeBase;
+// KnowledgeBase removed: was only used by cmd_analyze (now deleted)
 use mur_common::pattern::*;
 
 use crate::evolve;
@@ -357,90 +357,7 @@ pub(crate) fn cmd_gc(auto: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn cmd_analyze(dry_run: bool) -> Result<()> {
-    use crate::capture::style::{analyze_style, format_as_pattern_content};
-
-    let cwd = std::env::current_dir()?;
-    let language = crate::capture::starter::detect_language_name(&cwd);
-
-    let language = match language {
-        Some(lang) => lang,
-        None => {
-            println!("Could not detect project language. Run from a project directory.");
-            return Ok(());
-        }
-    };
-
-    println!("🔍 Analyzing {} project...\n", language);
-
-    let analysis = analyze_style(&cwd, &language);
-
-    if analysis.files_scanned == 0 {
-        println!("  No source files found to analyze.");
-        return Ok(());
-    }
-
-    println!("  Files scanned:     {}", analysis.files_scanned);
-    println!("  Naming convention: {}", analysis.naming);
-    println!("  Indentation:       {}", analysis.indentation);
-    println!("  Max line length:   {} chars", analysis.max_line_length);
-    println!("  Import ordering:   {}", analysis.import_ordering);
-
-    let project_name = cwd
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let pattern_name = format!("{}-code-style", project_name);
-    let content = format_as_pattern_content(&analysis);
-
-    if dry_run {
-        println!("\n  Would create pattern: {}", pattern_name);
-        println!("  Content:\n    {}", content.replace('\n', "\n    "));
-        println!("\n(dry run — no changes saved)");
-    } else {
-        let store = YamlStore::default_store()?;
-
-        let pattern = Pattern {
-            base: KnowledgeBase {
-                schema: SCHEMA_VERSION,
-                name: pattern_name.clone(),
-                description: format!("Code style conventions for {} ({})", project_name, language),
-                content: Content::Plain(content),
-                tier: Tier::Project,
-                importance: 0.6,
-                confidence: 0.8,
-                tags: Tags {
-                    languages: vec![language.to_lowercase()],
-                    topics: vec!["code-style".into(), "conventions".into()],
-                    extra: Default::default(),
-                },
-                applies: Applies {
-                    projects: vec![project_name.clone()],
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            kind: Some(PatternKind::Preference),
-            origin: None,
-            attachments: vec![],
-        };
-
-        if store.exists(&pattern_name) {
-            // Update existing
-            let mut existing = store.get(&pattern_name)?;
-            existing.content = pattern.content.clone();
-            existing.updated_at = chrono::Utc::now();
-            store.save(&existing)?;
-            println!("\n  Updated pattern: {}", pattern_name);
-        } else {
-            store.save(&pattern)?;
-            println!("\n  Created pattern: {}", pattern_name);
-        }
-    }
-
-    Ok(())
-}
+// cmd_analyze removed: was dead code (capture::style module unused)
 
 pub(crate) fn cmd_import(files: Option<Vec<String>>, dry_run: bool) -> Result<()> {
     use crate::capture::import;
