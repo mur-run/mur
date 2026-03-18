@@ -79,11 +79,19 @@ pub fn push_session(
         return Ok(false);
     }
 
-    let events = super::read_events(id)?;
+    let raw_events = super::read_events(id)?;
     let recording_path = recordings_dir().join(format!("{}.jsonl", id));
     let file_size = std::fs::metadata(&recording_path)
         .map(|m| m.len())
         .unwrap_or(0);
+
+    // Scrub secrets from events before uploading to cloud.
+    // Local .jsonl files are never modified.
+    let events = super::scrub::scrub_events(&raw_events);
+    let secrets_found = super::scrub::count_secrets(&raw_events);
+    if !quiet && secrets_found > 0 {
+        eprintln!("  🔒 Redacted {} potential secret(s) before push.", secrets_found);
+    }
 
     let payload = SessionPushPayload {
         id: meta.id.clone(),

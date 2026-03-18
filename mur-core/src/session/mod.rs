@@ -5,6 +5,7 @@
 //! Recordings: `~/.mur/session/recordings/<session-id>.jsonl`
 
 pub mod cloud;
+pub mod scrub;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
