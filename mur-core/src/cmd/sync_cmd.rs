@@ -131,6 +131,13 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                     {
                         eprintln!("  ⚠ Session push failed: {}", e);
                     }
+
+                    // Also push unsynced workflows
+                    if let Err(e) = push_unsynced_workflows(server_url, &token, quiet)
+                        && !quiet
+                    {
+                        eprintln!("  ⚠ Workflow push failed: {}", e);
+                    }
                 }
                 DeviceSyncDirection::Both => {
                     device_sync(quiet, DeviceSyncDirection::Pull)?;
@@ -650,6 +657,104 @@ fn symlink_skill_dir(target: &std::path::Path, link: &std::path::Path) -> Result
             let dest = link.join(entry.file_name());
             std::fs::copy(entry.path(), dest)?;
         }
+    }
+
+    Ok(())
+}
+
+/// Push unsynced workflows to the cloud server.
+/// Uses `.synced` marker files in `~/.mur/workflows/` to track which have been pushed.
+fn push_unsynced_workflows(server_url: &str, token: &str, quiet: bool) -> Result<()> {
+    let mur_dir = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
+        .join(".mur");
+    let workflows_dir = mur_dir.join("workflows");
+    if !workflows_dir.exists() {
+        return Ok(());
+    }
+
+    let device_id = crate::auth::get_device_id();
+    let device_name = crate::auth::get_device_name();
+    let device_os = crate::auth::get_device_os();
+    let url = format!("{}/api/v1/core/workflows", server_url);
+
+    let mut pushed = 0usize;
+    for entry in std::fs::read_dir(&workflows_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            continue;
+        }
+        let name = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        // Check .synced marker — skip if content hasn't changed
+        let synced_path = workflows_dir.join(format!("{}.synced", name));
+        let content = std::fs::read_to_string(&path)?;
+        let content_hash = format!("{:x}", md5_simple(&content));
+        if synced_path.exists() {
+            if let Ok(prev_hash) = std::fs::read_to_string(&synced_path) {
+                if prev_hash.trim() == content_hash {
+                    continue;
+                }
+            }
+        }
+
+        // POST workflow YAML to server
+        let payload = serde_json::json!({
+            "name": name,
+            "yaml_content": content,
+        });
+        let body = serde_json::to_string(&payload)?;
+
+        let output = std::process::Command::new("curl")
+            .args([
+                "-sf",
+                "--max-time",
+                "15",
+                "-X",
+                "POST",
+                "-H",
+                &format!("Authorization: Bearer {}", token),
+                "-H",
+                &format!("X-Device-ID: {}", device_id),
+                "-H",
+                &format!("X-Device-Name: {}", device_name),
+                "-H",
+                &format!("X-Device-OS: {}", device_os),
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                &body,
+                &url,
+            ])
+            .output();
+
+        match output {
+            Ok(o) if o.status.success() => {
+                // Write content hash as synced marker
+                let _ = std::fs::write(&synced_path, &content_hash);
+                pushed += 1;
+            }
+            Ok(o) => {
+                if !quiet {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    eprintln!("  ⚠ Workflow push failed for {}: {}", name, stderr.trim());
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    eprintln!("  ⚠ Workflow push failed for {}: {}", name, e);
+                }
+            }
+        }
+    }
+
+    if !quiet && pushed > 0 {
+        eprintln!("  ☁ Pushed {} workflow(s) to cloud.", pushed);
     }
 
     Ok(())

@@ -519,7 +519,7 @@ mod tests {
                 command: Some("cargo test".into()),
                 tool: Some("cargo".into()),
                 needs_approval: false,
-                on_failure: FailureAction::Abort,
+                on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
             }],
             variables: vec![],
             source_sessions: vec![],

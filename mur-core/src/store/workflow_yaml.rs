@@ -143,7 +143,7 @@ mod tests {
                 command: Some("echo hello".into()),
                 tool: Some("bash".into()),
                 needs_approval: false,
-                on_failure: FailureAction::Abort,
+                on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
             }],
             variables: vec![],
             source_sessions: vec![],

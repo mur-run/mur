@@ -277,7 +277,7 @@ fn build_workflow_from_llm(
             command: None,
             tool: None,
             needs_approval: false,
-            on_failure: Default::default(),
+            on_failure: Default::default(), breakpoint: None, retry: None, timeout_secs: None,
         })
         .collect();
 

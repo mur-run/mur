@@ -306,7 +306,7 @@ mod tests {
             command: cmd.map(String::from),
             tool: None,
             needs_approval: false,
-            on_failure: FailureAction::Abort,
+            on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
         }
     }
 

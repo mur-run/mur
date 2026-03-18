@@ -648,7 +648,7 @@ async fn create_workflow(
             command: None,
             tool: None,
             needs_approval: false,
-            on_failure: Default::default(),
+            on_failure: Default::default(), breakpoint: None, retry: None, timeout_secs: None,
         })
         .collect();
 
@@ -722,7 +722,7 @@ async fn update_workflow(
                     command: None,
                     tool: None,
                     needs_approval: false,
-                    on_failure: Default::default(),
+                    on_failure: Default::default(), breakpoint: None, retry: None, timeout_secs: None,
                 })
             })
             .collect();

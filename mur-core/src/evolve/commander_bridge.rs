@@ -276,7 +276,7 @@ fn extract_steps(content: &str, pattern: &Pattern) -> Vec<Step> {
                 command: Some(command),
                 tool,
                 needs_approval: false,
-                on_failure: FailureAction::Abort,
+                on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
             });
             order += 1;
         }
@@ -290,7 +290,7 @@ fn extract_steps(content: &str, pattern: &Pattern) -> Vec<Step> {
             command: None,
             tool: pattern.applies.tools.first().cloned(),
             needs_approval: true,
-            on_failure: FailureAction::Abort,
+            on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
         });
     }
 
@@ -733,7 +733,7 @@ mod tests {
                 command: Some("cargo build".into()),
                 tool: Some("cargo".into()),
                 needs_approval: false,
-                on_failure: FailureAction::Abort,
+                on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
             },
             Step {
                 order: 2,
@@ -741,7 +741,7 @@ mod tests {
                 command: Some("npm test".into()),
                 tool: Some("npm".into()),
                 needs_approval: false,
-                on_failure: FailureAction::Abort,
+                on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
             },
         ];
 

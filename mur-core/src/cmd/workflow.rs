@@ -419,7 +419,7 @@ pub(crate) fn cmd_workflow_new() -> Result<()> {
             command: if cmd.is_empty() { None } else { Some(cmd) },
             tool: None,
             needs_approval: false,
-            on_failure: FailureAction::Abort,
+            on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
         });
         order += 1;
     }
@@ -442,6 +442,178 @@ pub(crate) fn cmd_workflow_new() -> Result<()> {
 
     store.save(&workflow)?;
     println!("Created workflow: {}", name);
+    Ok(())
+}
+
+/// Publish a workflow to a team.
+/// POST {server_url}/api/v1/core/workflows/{name}/publish with team_slug.
+pub(crate) fn cmd_workflow_publish(name: &str, team: &str) -> Result<()> {
+    let store = WorkflowYamlStore::default_store()?;
+    let workflow = store.get(name)?;
+
+    let server_url = crate::auth::server_url();
+    let token = match crate::auth::load_tokens() {
+        Some(t) => t.access_token,
+        None => {
+            eprintln!("Not logged in. Run `mur login` first.");
+            return Ok(());
+        }
+    };
+
+    // License check — warn but don't block (server enforces 403)
+    eprintln!("  ⚠ Publishing requires a Pro+ plan. If you're on Free, the server will reject this.");
+
+    let device_id = crate::auth::get_device_id();
+    let device_name = crate::auth::get_device_name();
+    let device_os = crate::auth::get_device_os();
+
+    let yaml_content = std::fs::read_to_string(
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".mur")
+            .join("workflows")
+            .join(format!("{}.yaml", name)),
+    )?;
+
+    let payload = serde_json::json!({
+        "name": workflow.name,
+        "yaml_content": yaml_content,
+        "team_slug": team,
+    });
+    let body = serde_json::to_string(&payload)?;
+    let url = format!(
+        "{}/api/v1/core/workflows/{}/publish",
+        server_url,
+        urlencoding::encode(name)
+    );
+
+    let output = std::process::Command::new("curl")
+        .args([
+            "-sf",
+            "--max-time",
+            "15",
+            "-X",
+            "POST",
+            "-H",
+            &format!("Authorization: Bearer {}", token),
+            "-H",
+            &format!("X-Device-ID: {}", device_id),
+            "-H",
+            &format!("X-Device-Name: {}", device_name),
+            "-H",
+            &format!("X-Device-OS: {}", device_os),
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body,
+            &url,
+        ])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            println!("✓ Published workflow '{}' to team '{}'.", name, team);
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            eprintln!(
+                "✗ Publish failed: {}{}",
+                stderr.trim(),
+                if !stdout.trim().is_empty() {
+                    format!(" ({})", stdout.trim())
+                } else {
+                    String::new()
+                }
+            );
+        }
+        Err(e) => {
+            eprintln!("✗ Publish failed: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+/// Install a workflow from a team.
+/// GET team workflows, download YAML to ~/.mur/workflows/.
+pub(crate) fn cmd_workflow_install(name: &str, team: &str) -> Result<()> {
+    let server_url = crate::auth::server_url();
+    let token = match crate::auth::load_tokens() {
+        Some(t) => t.access_token,
+        None => {
+            eprintln!("Not logged in. Run `mur login` first.");
+            return Ok(());
+        }
+    };
+
+    let device_id = crate::auth::get_device_id();
+    let device_name = crate::auth::get_device_name();
+    let device_os = crate::auth::get_device_os();
+
+    let url = format!(
+        "{}/api/v1/core/teams/{}/workflows/{}",
+        server_url,
+        urlencoding::encode(team),
+        urlencoding::encode(name),
+    );
+
+    let output = std::process::Command::new("curl")
+        .args([
+            "-sf",
+            "--max-time",
+            "15",
+            "-H",
+            &format!("Authorization: Bearer {}", token),
+            "-H",
+            &format!("X-Device-ID: {}", device_id),
+            "-H",
+            &format!("X-Device-Name: {}", device_name),
+            "-H",
+            &format!("X-Device-OS: {}", device_os),
+            &url,
+        ])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let body = String::from_utf8_lossy(&o.stdout);
+
+            // Response should contain the workflow YAML content
+            let resp: serde_json::Value = serde_json::from_str(&body)?;
+            let yaml_content = resp
+                .get("yaml_content")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Server response missing yaml_content field"))?;
+
+            // Write to ~/.mur/workflows/
+            let store = WorkflowYamlStore::default_store()?;
+            let workflow: mur_common::workflow::Workflow = serde_yaml::from_str(yaml_content)?;
+            store.save(&workflow)?;
+
+            println!(
+                "✓ Installed workflow '{}' from team '{}' ({} steps).",
+                workflow.name,
+                team,
+                workflow.steps.len()
+            );
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            eprintln!(
+                "✗ Install failed: {}",
+                if stderr.trim().is_empty() {
+                    "workflow not found or access denied"
+                } else {
+                    stderr.trim()
+                }
+            );
+        }
+        Err(e) => {
+            eprintln!("✗ Install failed: {}", e);
+        }
+    }
+
     Ok(())
 }
 

@@ -375,6 +375,22 @@ enum WorkflowAction {
     },
     /// Create a new workflow interactively
     New,
+    /// Publish a workflow to a team
+    Publish {
+        /// Workflow name
+        name: String,
+        /// Team slug
+        #[arg(long)]
+        team: String,
+    },
+    /// Install a workflow from a team
+    Install {
+        /// Workflow name
+        name: String,
+        /// Team slug to install from
+        #[arg(long)]
+        from: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -603,6 +619,12 @@ async fn main() -> Result<()> {
                 cmd::workflow::cmd_workflow_search(&query, limit).await?
             }
             WorkflowAction::New => cmd::workflow::cmd_workflow_new()?,
+            WorkflowAction::Publish { name, team } => {
+                cmd::workflow::cmd_workflow_publish(&name, &team)?
+            }
+            WorkflowAction::Install { name, from } => {
+                cmd::workflow::cmd_workflow_install(&name, &from)?
+            }
         },
         Commands::Reindex => cmd::reindex::cmd_reindex().await?,
         Commands::Promote { name, tier } => cmd::pattern::cmd_promote(&name, &tier)?,

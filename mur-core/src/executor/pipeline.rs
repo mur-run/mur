@@ -560,7 +560,7 @@ mod tests {
             command: Some(cmd.to_string()),
             tool: None,
             needs_approval: false,
-            on_failure: FailureAction::Abort,
+            on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
         }
     }
 
@@ -571,7 +571,7 @@ mod tests {
             command: None,
             tool: None,
             needs_approval: false,
-            on_failure: FailureAction::Abort,
+            on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
         }
     }
 

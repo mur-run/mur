@@ -113,7 +113,7 @@ pub fn extract_workflow(
                 command,
                 tool: evt.tool.clone(),
                 needs_approval: false,
-                on_failure: Default::default(),
+                on_failure: Default::default(), breakpoint: None, retry: None, timeout_secs: None,
             }
         })
         .collect();

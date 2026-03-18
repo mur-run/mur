@@ -76,6 +76,26 @@ pub struct Step {
     /// What to do if this step fails
     #[serde(default)]
     pub on_failure: FailureAction,
+
+    /// Commander extension: pause execution for manual inspection
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breakpoint: Option<bool>,
+
+    /// Commander extension: retry configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryConfig>,
+
+    /// Commander extension: step timeout in seconds
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
+/// Commander extension: retry configuration for a workflow step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryConfig {
+    pub max_retries: u32,
+    #[serde(default)]
+    pub backoff_secs: Option<u64>,
 }
 
 /// What to do when a workflow step fails.
