@@ -9,7 +9,7 @@ use chrono::Utc;
 use mur_common::knowledge::KnowledgeBase;
 use mur_common::knowledge::Maturity;
 use mur_common::pattern::{Content, Origin, OriginTrigger, Pattern, PatternKind, Tier};
-use mur_common::workflow::{FailureAction, Permission, Step, Workflow};
+use mur_common::workflow::{Permission, Step, Workflow};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -275,8 +275,7 @@ fn extract_steps(content: &str, pattern: &Pattern) -> Vec<Step> {
                 description,
                 command: Some(command),
                 tool,
-                needs_approval: false,
-                on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
+                ..Default::default()
             });
             order += 1;
         }
@@ -287,10 +286,9 @@ fn extract_steps(content: &str, pattern: &Pattern) -> Vec<Step> {
         steps.push(Step {
             order: 1,
             description: pattern.description.clone(),
-            command: None,
             tool: pattern.applies.tools.first().cloned(),
             needs_approval: true,
-            on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
+            ..Default::default()
         });
     }
 
@@ -732,16 +730,14 @@ mod tests {
                 description: "build".into(),
                 command: Some("cargo build".into()),
                 tool: Some("cargo".into()),
-                needs_approval: false,
-                on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
+                ..Default::default()
             },
             Step {
                 order: 2,
                 description: "test".into(),
                 command: Some("npm test".into()),
                 tool: Some("npm".into()),
-                needs_approval: false,
-                on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
+                ..Default::default()
             },
         ];
 

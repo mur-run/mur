@@ -363,7 +363,7 @@ pub(crate) async fn cmd_workflow_search(query: &str, limit: usize) -> Result<()>
 }
 
 pub(crate) fn cmd_workflow_new() -> Result<()> {
-    use mur_common::workflow::{FailureAction, Step};
+    use mur_common::workflow::Step;
 
     let store = WorkflowYamlStore::default_store()?;
 
@@ -417,9 +417,7 @@ pub(crate) fn cmd_workflow_new() -> Result<()> {
             order,
             description: step_desc,
             command: if cmd.is_empty() { None } else { Some(cmd) },
-            tool: None,
-            needs_approval: false,
-            on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
+            ..Default::default()
         });
         order += 1;
     }
@@ -487,41 +485,30 @@ pub(crate) fn cmd_workflow_publish(name: &str, team: &str) -> Result<()> {
         urlencoding::encode(name)
     );
 
-    let output = std::process::Command::new("curl")
-        .args([
-            "-sf",
-            "--max-time",
-            "15",
-            "-X",
-            "POST",
-            "-H",
-            &format!("Authorization: Bearer {}", token),
-            "-H",
-            &format!("X-Device-ID: {}", device_id),
-            "-H",
-            &format!("X-Device-Name: {}", device_name),
-            "-H",
-            &format!("X-Device-OS: {}", device_os),
-            "-H",
-            "Content-Type: application/json",
-            "-d",
-            &body,
-            &url,
-        ])
-        .output();
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("X-Device-ID", device_id)
+        .header("X-Device-Name", device_name)
+        .header("X-Device-OS", device_os)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send();
 
-    match output {
-        Ok(o) if o.status.success() => {
+    match resp {
+        Ok(r) if r.status().is_success() => {
             println!("✓ Published workflow '{}' to team '{}'.", name, team);
         }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            let stdout = String::from_utf8_lossy(&o.stdout);
+        Ok(r) => {
+            let status = r.status();
+            let body = r.text().unwrap_or_default();
             eprintln!(
-                "✗ Publish failed: {}{}",
-                stderr.trim(),
-                if !stdout.trim().is_empty() {
-                    format!(" ({})", stdout.trim())
+                "✗ Publish failed: HTTP {}{}",
+                status,
+                if !body.trim().is_empty() {
+                    format!(" ({})", body.trim())
                 } else {
                     String::new()
                 }
@@ -558,26 +545,19 @@ pub(crate) fn cmd_workflow_install(name: &str, team: &str) -> Result<()> {
         urlencoding::encode(name),
     );
 
-    let output = std::process::Command::new("curl")
-        .args([
-            "-sf",
-            "--max-time",
-            "15",
-            "-H",
-            &format!("Authorization: Bearer {}", token),
-            "-H",
-            &format!("X-Device-ID: {}", device_id),
-            "-H",
-            &format!("X-Device-Name: {}", device_name),
-            "-H",
-            &format!("X-Device-OS: {}", device_os),
-            &url,
-        ])
-        .output();
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("X-Device-ID", device_id)
+        .header("X-Device-Name", device_name)
+        .header("X-Device-OS", device_os)
+        .send();
 
-    match output {
-        Ok(o) if o.status.success() => {
-            let body = String::from_utf8_lossy(&o.stdout);
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body = r.text().unwrap_or_default();
 
             // Response should contain the workflow YAML content
             let resp: serde_json::Value = serde_json::from_str(&body)?;
@@ -598,14 +578,13 @@ pub(crate) fn cmd_workflow_install(name: &str, team: &str) -> Result<()> {
                 workflow.steps.len()
             );
         }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
+        Ok(r) => {
             eprintln!(
                 "✗ Install failed: {}",
-                if stderr.trim().is_empty() {
-                    "workflow not found or access denied"
+                if r.status().as_u16() == 404 {
+                    "workflow not found or access denied".to_string()
                 } else {
-                    stderr.trim()
+                    format!("HTTP {}", r.status())
                 }
             );
         }

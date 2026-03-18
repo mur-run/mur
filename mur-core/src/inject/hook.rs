@@ -478,7 +478,7 @@ mod tests {
     use super::*;
     use mur_common::knowledge::KnowledgeBase;
     use mur_common::pattern::*;
-    use mur_common::workflow::{FailureAction, Step};
+    use mur_common::workflow::Step;
 
     fn make_pattern(desc: &str, content: &str) -> Pattern {
         Pattern {
@@ -518,8 +518,7 @@ mod tests {
                 description: "Run tests".into(),
                 command: Some("cargo test".into()),
                 tool: Some("cargo".into()),
-                needs_approval: false,
-                on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
+                ..Default::default()
             }],
             variables: vec![],
             source_sessions: vec![],

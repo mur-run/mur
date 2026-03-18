@@ -104,59 +104,35 @@ pub fn push_session(
     let device_name = crate::auth::get_device_name();
     let device_os = crate::auth::get_device_os();
 
-    let output = std::process::Command::new("curl")
-        .args([
-            "-sf",
-            "--max-time",
-            "30",
-            "-X",
-            "POST",
-            "-H",
-            &format!("Authorization: Bearer {}", token),
-            "-H",
-            &format!("X-Device-ID: {}", device_id),
-            "-H",
-            &format!("X-Device-Name: {}", device_name),
-            "-H",
-            &format!("X-Device-OS: {}", device_os),
-            "-H",
-            "Content-Type: application/json",
-            "-d",
-            &body,
-            &url,
-        ])
-        .output();
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("X-Device-ID", device_id)
+        .header("X-Device-Name", device_name)
+        .header("X-Device-OS", device_os)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send();
 
-    match output {
-        Ok(o) if o.status.success() => {
+    match resp {
+        Ok(r) if r.status().is_success() => {
             mark_synced(id)?;
             if !quiet {
-                eprintln!(
-                    "  ✓ Pushed session {} ({} events)",
-                    &id[..8.min(id.len())],
-                    payload.events.len(),
-                );
+                eprintln!("  ✓ Pushed session {} ({} events)", &id[..8.min(id.len())], payload.events.len());
             }
             Ok(true)
         }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
+        Ok(r) => {
             if !quiet {
-                eprintln!(
-                    "  ⚠ Push failed for session {}: {}",
-                    &id[..8.min(id.len())],
-                    stderr.trim()
-                );
+                eprintln!("  ⚠ Push failed for session {}: HTTP {}", &id[..8.min(id.len())], r.status());
             }
             Ok(false)
         }
         Err(e) => {
             if !quiet {
-                eprintln!(
-                    "  ⚠ Push failed for session {}: {}",
-                    &id[..8.min(id.len())],
-                    e
-                );
+                eprintln!("  ⚠ Push failed for session {}: {}", &id[..8.min(id.len())], e);
             }
             Ok(false)
         }

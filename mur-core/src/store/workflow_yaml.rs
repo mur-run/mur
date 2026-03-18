@@ -126,7 +126,7 @@ mod tests {
     use super::*;
     use mur_common::knowledge::KnowledgeBase;
     use mur_common::pattern::Content;
-    use mur_common::workflow::{FailureAction, Step};
+    use mur_common::workflow::Step;
     use tempfile::TempDir;
 
     fn make_test_workflow(name: &str) -> Workflow {
@@ -142,8 +142,7 @@ mod tests {
                 description: "First step".into(),
                 command: Some("echo hello".into()),
                 tool: Some("bash".into()),
-                needs_approval: false,
-                on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
+                ..Default::default()
             }],
             variables: vec![],
             source_sessions: vec![],

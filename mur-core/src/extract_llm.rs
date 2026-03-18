@@ -67,7 +67,7 @@ pub async fn extract_workflow_llm(
 
     // Override to Haiku for cost efficiency
     if llm_config.provider == "anthropic" {
-        llm_config.model = "claude-3-haiku-20240307".to_string();
+        llm_config.model = "claude-3-5-haiku-latest".to_string();
     }
 
     // ── Build transcript ─────────────────────────────────────────────
@@ -274,10 +274,7 @@ fn build_workflow_from_llm(
         .map(|(i, desc)| Step {
             order: (i + 1) as u32,
             description: desc.clone(),
-            command: None,
-            tool: None,
-            needs_approval: false,
-            on_failure: Default::default(), breakpoint: None, retry: None, timeout_secs: None,
+            ..Default::default()
         })
         .collect();
 

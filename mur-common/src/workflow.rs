@@ -58,7 +58,7 @@ impl std::ops::DerefMut for Workflow {
 }
 
 /// A single step in a workflow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Step {
     /// Execution order (1-based)
     pub order: u32,

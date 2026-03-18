@@ -279,7 +279,7 @@ mod tests {
     use super::*;
     use mur_common::knowledge::KnowledgeBase;
     use mur_common::pattern::Content;
-    use mur_common::workflow::{FailureAction, Step};
+    use mur_common::workflow::Step;
 
     fn make_workflow_with_steps(name: &str, steps: Vec<Step>) -> Workflow {
         Workflow {
@@ -304,9 +304,7 @@ mod tests {
             order,
             description: desc.into(),
             command: cmd.map(String::from),
-            tool: None,
-            needs_approval: false,
-            on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
+            ..Default::default()
         }
     }
 

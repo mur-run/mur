@@ -645,10 +645,7 @@ async fn create_workflow(
         .map(|(i, desc)| Step {
             order: (i + 1) as u32,
             description: desc,
-            command: None,
-            tool: None,
-            needs_approval: false,
-            on_failure: Default::default(), breakpoint: None, retry: None, timeout_secs: None,
+            ..Default::default()
         })
         .collect();
 
@@ -719,10 +716,7 @@ async fn update_workflow(
                 v.as_str().map(|s| Step {
                     order: (i + 1) as u32,
                     description: s.to_string(),
-                    command: None,
-                    tool: None,
-                    needs_approval: false,
-                    on_failure: Default::default(), breakpoint: None, retry: None, timeout_secs: None,
+                    ..Default::default()
                 })
             })
             .collect();

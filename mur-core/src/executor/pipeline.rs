@@ -528,7 +528,7 @@ mod tests {
     use super::*;
     use mur_common::knowledge::KnowledgeBase;
     use mur_common::pattern::Content;
-    use mur_common::workflow::{FailureAction, Step, Workflow};
+    use mur_common::workflow::{Step, Workflow};
     use tempfile::TempDir;
 
     fn make_store(tmp: &TempDir) -> WorkflowYamlStore {
@@ -558,9 +558,7 @@ mod tests {
             order,
             description: desc.to_string(),
             command: Some(cmd.to_string()),
-            tool: None,
-            needs_approval: false,
-            on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
+            ..Default::default()
         }
     }
 
@@ -568,10 +566,7 @@ mod tests {
         Step {
             order,
             description: desc.to_string(),
-            command: None,
-            tool: None,
-            needs_approval: false,
-            on_failure: FailureAction::Abort, breakpoint: None, retry: None, timeout_secs: None,
+            ..Default::default()
         }
     }
 

@@ -36,25 +36,18 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                     let device_id = crate::auth::get_device_id();
                     let device_name = crate::auth::get_device_name();
                     let device_os = crate::auth::get_device_os();
-                    let output = std::process::Command::new("curl")
-                        .args([
-                            "-sf",
-                            "--max-time",
-                            "10",
-                            "-H",
-                            &format!("Authorization: Bearer {}", token),
-                            "-H",
-                            &format!("X-Device-ID: {}", device_id),
-                            "-H",
-                            &format!("X-Device-Name: {}", device_name),
-                            "-H",
-                            &format!("X-Device-OS: {}", device_os),
-                            &url,
-                        ])
-                        .output();
-                    match output {
-                        Ok(o) if o.status.success() => {
-                            let body = String::from_utf8_lossy(&o.stdout);
+                    let client = reqwest::blocking::Client::new();
+                    let resp = client
+                        .get(&url)
+                        .timeout(std::time::Duration::from_secs(10))
+                        .header("Authorization", format!("Bearer {}", token))
+                        .header("X-Device-ID", &device_id)
+                        .header("X-Device-Name", &device_name)
+                        .header("X-Device-OS", &device_os)
+                        .send();
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
+                            let body = r.text().unwrap_or_default();
                             if body.trim() != "{}" && !body.trim().is_empty() {
                                 apply_cloud_pull(&body, &mur_dir)?;
                                 if !quiet {
@@ -64,10 +57,9 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                                 eprintln!("  ✓ Already up to date.");
                             }
                         }
-                        Ok(o) => {
+                        Ok(r) => {
                             if !quiet {
-                                let stderr = String::from_utf8_lossy(&o.stderr);
-                                eprintln!("  ⚠ Cloud pull failed: {}", stderr.trim());
+                                eprintln!("  ⚠ Cloud pull failed: HTTP {}", r.status());
                             }
                         }
                         Err(e) => {
@@ -84,38 +76,26 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                     let device_id = crate::auth::get_device_id();
                     let device_name = crate::auth::get_device_name();
                     let device_os = crate::auth::get_device_os();
-                    let output = std::process::Command::new("curl")
-                        .args([
-                            "-sf",
-                            "--max-time",
-                            "15",
-                            "-X",
-                            "POST",
-                            "-H",
-                            &format!("Authorization: Bearer {}", token),
-                            "-H",
-                            &format!("X-Device-ID: {}", device_id),
-                            "-H",
-                            &format!("X-Device-Name: {}", device_name),
-                            "-H",
-                            &format!("X-Device-OS: {}", device_os),
-                            "-H",
-                            "Content-Type: application/json",
-                            "-d",
-                            &payload,
-                            &url,
-                        ])
-                        .output();
-                    match output {
-                        Ok(o) if o.status.success() => {
+                    let client = reqwest::blocking::Client::new();
+                    let resp = client
+                        .post(&url)
+                        .timeout(std::time::Duration::from_secs(15))
+                        .header("Authorization", format!("Bearer {}", token))
+                        .header("X-Device-ID", &device_id)
+                        .header("X-Device-Name", &device_name)
+                        .header("X-Device-OS", &device_os)
+                        .header("Content-Type", "application/json")
+                        .body(payload)
+                        .send();
+                    match resp {
+                        Ok(r) if r.status().is_success() => {
                             if !quiet {
                                 eprintln!("  ✓ Cloud push complete.");
                             }
                         }
-                        Ok(o) => {
+                        Ok(r) => {
                             if !quiet {
-                                let stderr = String::from_utf8_lossy(&o.stderr);
-                                eprintln!("  ⚠ Cloud push failed: {}", stderr.trim());
+                                eprintln!("  ⚠ Cloud push failed: HTTP {}", r.status());
                             }
                         }
                         Err(e) => {
@@ -710,39 +690,27 @@ fn push_unsynced_workflows(server_url: &str, token: &str, quiet: bool) -> Result
         });
         let body = serde_json::to_string(&payload)?;
 
-        let output = std::process::Command::new("curl")
-            .args([
-                "-sf",
-                "--max-time",
-                "15",
-                "-X",
-                "POST",
-                "-H",
-                &format!("Authorization: Bearer {}", token),
-                "-H",
-                &format!("X-Device-ID: {}", device_id),
-                "-H",
-                &format!("X-Device-Name: {}", device_name),
-                "-H",
-                &format!("X-Device-OS: {}", device_os),
-                "-H",
-                "Content-Type: application/json",
-                "-d",
-                &body,
-                &url,
-            ])
-            .output();
+        let client = reqwest::blocking::Client::new();
+        let resp = client
+            .post(&url)
+            .timeout(std::time::Duration::from_secs(15))
+            .header("Authorization", format!("Bearer {}", token))
+            .header("X-Device-ID", &device_id)
+            .header("X-Device-Name", &device_name)
+            .header("X-Device-OS", &device_os)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send();
 
-        match output {
-            Ok(o) if o.status.success() => {
+        match resp {
+            Ok(r) if r.status().is_success() => {
                 // Write content hash as synced marker
                 let _ = std::fs::write(&synced_path, &content_hash);
                 pushed += 1;
             }
-            Ok(o) => {
+            Ok(r) => {
                 if !quiet {
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    eprintln!("  ⚠ Workflow push failed for {}: {}", name, stderr.trim());
+                    eprintln!("  ⚠ Workflow push failed for {}: HTTP {}", name, r.status());
                 }
             }
             Err(e) => {
