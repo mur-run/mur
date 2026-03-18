@@ -12,6 +12,7 @@ pub mod dashboard;
 pub mod evolve;
 pub mod executor;
 pub mod extract;
+pub mod extract_llm;
 pub mod gep;
 pub mod inject;
 pub mod interactive;

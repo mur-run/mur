@@ -11,6 +11,7 @@ mod dashboard;
 mod evolve;
 mod executor;
 mod extract;
+mod extract_llm;
 mod gep;
 mod inject;
 mod interactive;
@@ -436,6 +437,14 @@ enum SessionAction {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// Push session recording(s) to the cloud server
+    Push {
+        /// Session ID or prefix (pushes most recent if omitted)
+        id: Option<String>,
+        /// Push all unsynced sessions
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -512,14 +521,21 @@ enum PackAction {
     },
 }
 
-/// Load .env file from `~/.mur/.env` (preferred) or `./.env` (fallback).
+/// Load .env file from `~/.mur/.env` (preferred), `~/.mur/commander/.env`, or `./.env` (fallback).
 fn load_dotenv() {
-    let home_env = dirs::home_dir().map(|h| h.join(".mur").join(".env"));
-    if let Some(path) = home_env {
+    let home = dirs::home_dir();
+    // Try ~/.mur/.env first
+    if let Some(path) = home.as_ref().map(|h| h.join(".mur").join(".env")) {
         if path.exists() {
-            if let Err(e) = dotenvy::from_path(&path) {
-                eprintln!("warning: failed to load {:?}: {}", path, e);
-            } else {
+            if dotenvy::from_path(&path).is_ok() {
+                return;
+            }
+        }
+    }
+    // Try ~/.mur/commander/.env (Commander shares API keys here)
+    if let Some(path) = home.as_ref().map(|h| h.join(".mur").join("commander").join(".env")) {
+        if path.exists() {
+            if dotenvy::from_path(&path).is_ok() {
                 return;
             }
         }
@@ -651,7 +667,10 @@ async fn main() -> Result<()> {
                 format,
                 analyze,
                 output,
-            } => cmd::session::cmd_session_export(&id, &format, analyze, output)?,
+            } => cmd::session::cmd_session_export(&id, &format, analyze, output).await?,
+            SessionAction::Push { id, all } => {
+                cmd::session::cmd_session_push(id.as_deref(), all)?
+            }
         },
         Commands::Dashboard => {
             dashboard::render_dashboard()?;

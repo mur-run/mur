@@ -446,7 +446,7 @@ pub(crate) fn cmd_session_list() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn cmd_session_export(
+pub(crate) async fn cmd_session_export(
     id_prefix: &str,
     format: &str,
     analyze: bool,
@@ -461,7 +461,14 @@ pub(crate) fn cmd_session_export(
     let result = match format {
         "json" => export_json(&full_id, &meta, &events)?,
         "markdown" => export_markdown(&full_id, &meta, &events)?,
-        "skill" => export_skill(&full_id, &meta, &events)?,
+        "skill" => {
+            if crate::extract::has_llm_config() {
+                eprintln!("Using LLM-enhanced extraction (Haiku)...");
+                export_skill_llm(&full_id, &events).await?
+            } else {
+                export_skill(&full_id, &meta, &events)?
+            }
+        }
         _ => anyhow::bail!("Unknown format '{}'. Use: json, markdown, skill", format),
     };
 
@@ -691,6 +698,149 @@ fn export_skill(
     out.push_str("trigger: \"\"\n");
 
     Ok(out)
+}
+
+/// LLM-enhanced skill export using extract_workflow_llm.
+async fn export_skill_llm(
+    id: &str,
+    events: &[session::SessionEvent],
+) -> Result<String> {
+    let extracted = crate::extract::extract_workflow_llm(id, events).await?;
+    let w = &extracted.workflow;
+
+    let mut out = String::new();
+    out.push_str(&format!("name: \"{}\"\n", w.base.name));
+    out.push_str(&format!(
+        "description: \"{}\"\n",
+        w.base.description.replace('\"', "\\\"")
+    ));
+    out.push_str("tier: session\n");
+    out.push_str("importance: 0.5\n");
+    out.push_str("confidence: 0.5\n");
+
+    // Tags
+    let mut tags = vec!["extracted".to_string(), "session".to_string(), "llm-enhanced".to_string()];
+    for t in &w.tools {
+        tags.push(t.to_lowercase());
+    }
+    out.push_str(&format!(
+        "tags: [{}]\n",
+        tags.iter()
+            .map(|t| format!("\"{}\"", t))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+
+    // Steps
+    if w.steps.is_empty() {
+        out.push_str("steps: []\n");
+    } else {
+        out.push_str("steps:\n");
+        for step in &w.steps {
+            out.push_str(&format!(
+                "  - order: {}\n    description: \"{}\"\n",
+                step.order,
+                step.description.replace('\"', "\\\"").replace('\n', " "),
+            ));
+            if let Some(ref tool) = step.tool {
+                out.push_str(&format!("    tool: \"{}\"\n", tool));
+            }
+        }
+    }
+
+    out.push_str(&format!(
+        "tools: [{}]\n",
+        w.tools
+            .iter()
+            .map(|t| format!("\"{}\"", t))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+
+    // Variables
+    if !w.variables.is_empty() {
+        out.push_str("variables:\n");
+        for var in &w.variables {
+            out.push_str(&format!(
+                "  - name: \"{}\"\n    description: \"{}\"\n",
+                var.name,
+                var.description.replace('\"', "\\\""),
+            ));
+            if let Some(ref dv) = var.default_value {
+                out.push_str(&format!("    default_value: \"{}\"\n", dv));
+            }
+        }
+    }
+
+    out.push_str(&format!("source_sessions: [\"{}\"]\n", id));
+    out.push_str(&format!(
+        "trigger: \"{}\"\n",
+        w.trigger.replace('\"', "\\\"")
+    ));
+
+    Ok(out)
+}
+
+pub(crate) fn cmd_session_push(id_prefix: Option<&str>, all: bool) -> Result<()> {
+    let config = crate::store::config::load_config()?;
+    let server_url = &config.server.url;
+    let token = match crate::auth::load_tokens() {
+        Some(t) => t.access_token,
+        None => {
+            eprintln!("Not authenticated. Run `mur login` first.");
+            return Ok(());
+        }
+    };
+
+    if all {
+        let pushed = session::cloud::push_unsynced(server_url, &token, false)?;
+        if pushed == 0 {
+            eprintln!("All sessions already synced.");
+        } else {
+            eprintln!();
+            eprintln!("📊 Review: https://dashboard.mur.run/#/sessions");
+        }
+    } else if let Some(prefix) = id_prefix {
+        let full_id = session::find_recording_by_prefix(prefix)?
+            .ok_or_else(|| anyhow::anyhow!("No session found matching prefix '{}'", prefix))?;
+
+        if session::cloud::push_session(server_url, &token, &full_id, false)? {
+            eprintln!();
+            eprintln!(
+                "📊 Review: https://dashboard.mur.run/#/sessions/{}/review",
+                full_id
+            );
+        }
+    } else {
+        // No ID and no --all: push the most recent stopped session
+        let recordings = session::list_recordings()?;
+        let recent = recordings
+            .iter()
+            .find(|r| {
+                r.meta
+                    .as_ref()
+                    .is_some_and(|m| m.stopped_at.is_some())
+            });
+
+        match recent {
+            Some(r) => {
+                if session::cloud::push_session(server_url, &token, &r.id, false)? {
+                    eprintln!();
+                    eprintln!(
+                        "📊 Review: https://dashboard.mur.run/#/sessions/{}/review",
+                        r.id
+                    );
+                } else {
+                    eprintln!("Session already synced or skipped.");
+                }
+            }
+            None => {
+                eprintln!("No stopped sessions to push.");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Format an RFC 3339 timestamp into a short human-readable form.

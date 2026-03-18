@@ -418,6 +418,9 @@ fn generate_description(msg: Option<&str>, tools: &[String]) -> String {
     }
 }
 
+// Re-export LLM-enhanced extraction
+pub use crate::extract_llm::{extract_workflow_llm, has_llm_config};
+
 #[cfg(test)]
 mod tests {
     use super::*;

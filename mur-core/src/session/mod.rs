@@ -4,6 +4,8 @@
 //! State file: `~/.mur/session/active.json`
 //! Recordings: `~/.mur/session/recordings/<session-id>.jsonl`
 
+pub mod cloud;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;

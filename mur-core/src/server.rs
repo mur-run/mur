@@ -142,9 +142,11 @@ pub fn build_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin([
             "http://localhost:5173".parse().unwrap(),
+            "http://localhost:3847".parse().unwrap(),
             "https://mur.run".parse().unwrap(),
             "https://www.mur.run".parse().unwrap(),
             "https://mur-run.github.io".parse().unwrap(),
+            "https://dashboard.mur.run".parse().unwrap(),
         ])
         .allow_methods(AllowMethods::any())
         .allow_headers(AllowHeaders::any());
@@ -1436,7 +1438,13 @@ async fn extract_workflow_from_session(
     let events = crate::session::read_events(&session_id)
         .map_err(|_| AppError::NotFound(format!("Session '{}' not found", session_id)))?;
 
-    let extracted = crate::extract::extract_workflow(&session_id, &events);
+    let extracted: crate::extract::ExtractedWorkflow = if crate::extract::has_llm_config() {
+        crate::extract::extract_workflow_llm(&session_id, &events)
+            .await
+            .unwrap_or_else(|_| crate::extract::extract_workflow(&session_id, &events))
+    } else {
+        crate::extract::extract_workflow(&session_id, &events)
+    };
 
     let count = state
         .pattern_store()

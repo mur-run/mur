@@ -124,6 +124,13 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                             }
                         }
                     }
+
+                    // Also push unsynced session recordings
+                    if let Err(e) = crate::session::cloud::push_unsynced(server_url, &token, quiet)
+                        && !quiet
+                    {
+                        eprintln!("  ⚠ Session push failed: {}", e);
+                    }
                 }
                 DeviceSyncDirection::Both => {
                     device_sync(quiet, DeviceSyncDirection::Pull)?;
