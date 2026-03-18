@@ -60,14 +60,23 @@ pub fn load_tokens() -> Option<AuthTokens> {
     serde_json::from_str(&content).ok()
 }
 
-/// Save auth tokens to ~/.mur/auth.json.
+/// Save auth tokens to ~/.mur/auth.json with restricted permissions (0600).
 pub fn save_tokens(tokens: &AuthTokens) -> Result<()> {
     let path = auth_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(tokens)?;
-    fs::write(&path, json)?;
+    fs::write(&path, &json)?;
+
+    // Set file permissions to owner-only (0600) to protect the JWT
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&path, perms)?;
+    }
+
     Ok(())
 }
 
