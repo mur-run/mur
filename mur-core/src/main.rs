@@ -358,6 +358,11 @@ enum EvolveAction {
 enum WorkflowAction {
     /// List all workflows
     List,
+    /// Manage workflow schedules
+    Schedule {
+        #[command(subcommand)]
+        action: ScheduleAction,
+    },
     /// Show a workflow by name
     Show {
         name: String,
@@ -390,6 +395,34 @@ enum WorkflowAction {
         /// Team slug to install from
         #[arg(long)]
         from: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScheduleAction {
+    /// List all scheduled workflows
+    List,
+    /// Set a cron schedule on a workflow
+    Set {
+        /// Workflow name
+        name: String,
+        /// Cron expression (e.g. "0 * * * *" for hourly)
+        cron: String,
+    },
+    /// Remove the schedule from a workflow
+    Remove {
+        /// Workflow name
+        name: String,
+    },
+    /// Enable a disabled schedule
+    Enable {
+        /// Workflow name
+        name: String,
+    },
+    /// Disable a schedule without removing it
+    Disable {
+        /// Workflow name
+        name: String,
     },
 }
 
@@ -614,6 +647,13 @@ async fn main() -> Result<()> {
         },
         Commands::Workflow { action } => match action {
             WorkflowAction::List => cmd::workflow::cmd_workflow_list()?,
+            WorkflowAction::Schedule { action } => match action {
+                ScheduleAction::List => cmd::workflow::cmd_schedule_list()?,
+                ScheduleAction::Set { name, cron } => cmd::workflow::cmd_schedule_set(&name, &cron)?,
+                ScheduleAction::Remove { name } => cmd::workflow::cmd_schedule_remove(&name)?,
+                ScheduleAction::Enable { name } => cmd::workflow::cmd_schedule_enable(&name, true)?,
+                ScheduleAction::Disable { name } => cmd::workflow::cmd_schedule_enable(&name, false)?,
+            },
             WorkflowAction::Show { name, md } => cmd::workflow::cmd_workflow_show(&name, md)?,
             WorkflowAction::Search { query, limit } => {
                 cmd::workflow::cmd_workflow_search(&query, limit).await?

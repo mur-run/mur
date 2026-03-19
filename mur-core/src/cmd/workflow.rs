@@ -436,6 +436,7 @@ pub(crate) fn cmd_workflow_new() -> Result<()> {
         tools: vec![],
         published_version: 0,
         permission: Default::default(),
+        schedule: None,
     };
 
     store.save(&workflow)?;
@@ -661,6 +662,7 @@ pub(crate) fn cmd_suggest(create: bool) -> Result<()> {
                         tools: vec![],
                         published_version: 0,
                         permission: Default::default(),
+        schedule: None,
                     };
                     workflow_store.save(&wf)?;
                     println!("     -> Created draft workflow: {}", s.suggested_name);
@@ -759,4 +761,104 @@ pub(crate) fn collect_tags_from_patterns(
         languages,
         extra: Default::default(),
     }
+}
+
+// ─── Schedule management ────────────────────────────────────────────
+
+pub(crate) fn cmd_schedule_list() -> Result<()> {
+    let store = WorkflowYamlStore::default_store()?;
+    let workflows = store.list_all()?;
+
+    let scheduled: Vec<_> = workflows.iter().filter(|w| w.schedule.is_some()).collect();
+
+    if scheduled.is_empty() {
+        println!("📋 No scheduled workflows.");
+        println!("  Use `mur workflow schedule set <name> \"0 * * * *\"` to add one.");
+        return Ok(());
+    }
+
+    println!("📋 Scheduled workflows:\n");
+    for wf in &scheduled {
+        let cron = wf.schedule.as_deref().unwrap_or("—");
+        let desc = if wf.description.is_empty() {
+            &wf.name
+        } else {
+            &wf.description
+        };
+        println!("  🔄 {} — `{}`", desc, cron);
+        println!("     name: {}", wf.name);
+    }
+    println!("\n  Total: {} scheduled workflow(s)", scheduled.len());
+
+    Ok(())
+}
+
+pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
+    let store = WorkflowYamlStore::default_store()?;
+
+    // Verify workflow exists
+    let mut wf = store.get(name)?;
+
+    // Basic cron validation (5 fields)
+    let parts: Vec<&str> = cron.split_whitespace().collect();
+    if parts.len() < 5 || parts.len() > 7 {
+        anyhow::bail!(
+            "Invalid cron expression '{}'. Expected 5-7 fields (e.g. '0 * * * *' for hourly).",
+            cron
+        );
+    }
+
+    wf.schedule = Some(cron.to_string());
+    store.save(&wf)?;
+
+    println!("✅ Schedule set for '{}': {}", name, cron);
+    println!("   Commander daemon will pick this up within 30 seconds.");
+
+    Ok(())
+}
+
+pub(crate) fn cmd_schedule_remove(name: &str) -> Result<()> {
+    let store = WorkflowYamlStore::default_store()?;
+    let mut wf = store.get(name)?;
+
+    if wf.schedule.is_none() {
+        println!("ℹ️  '{}' has no schedule.", name);
+        return Ok(());
+    }
+
+    wf.schedule = None;
+    store.save(&wf)?;
+
+    println!("🗑️  Schedule removed from '{}'.", name);
+
+    Ok(())
+}
+
+pub(crate) fn cmd_schedule_enable(name: &str, enable: bool) -> Result<()> {
+    let store = WorkflowYamlStore::default_store()?;
+    let mut wf = store.get(name)?;
+
+    match &wf.schedule {
+        Some(cron) if !enable => {
+            // Disable: prefix with # to comment it out (convention)
+            wf.schedule = Some(format!("#disabled: {}", cron));
+            store.save(&wf)?;
+            println!("⏸️  Schedule disabled for '{}'.", name);
+        }
+        Some(cron) if enable && cron.starts_with("#disabled: ") => {
+            // Enable: remove the #disabled prefix
+            wf.schedule = Some(cron.trim_start_matches("#disabled: ").to_string());
+            store.save(&wf)?;
+            println!("▶️  Schedule enabled for '{}'.", name);
+        }
+        Some(_) if enable => {
+            println!("ℹ️  '{}' is already enabled.", name);
+        }
+        None => {
+            println!("ℹ️  '{}' has no schedule. Use `mur workflow schedule set` first.", name);
+        }
+        _ => {}
+    }
+
+    Ok(())
 }

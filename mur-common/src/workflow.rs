@@ -42,6 +42,10 @@ pub struct Workflow {
     /// Permission level required to run this workflow
     #[serde(default)]
     pub permission: Permission,
+
+    /// Cron schedule expression (e.g. "0 * * * *" for hourly)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
 }
 
 // Allow `workflow.name`, `workflow.content`, etc. via auto-deref.

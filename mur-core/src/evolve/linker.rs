@@ -426,6 +426,7 @@ mod tests {
             tools: tools.into_iter().map(String::from).collect(),
             published_version: 0,
             permission: Permission::default(),
+            schedule: None,
         }
     }
 

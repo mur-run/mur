@@ -150,6 +150,7 @@ mod tests {
             tools: vec!["bash".into()],
             published_version: 0,
             permission: Default::default(),
+            schedule: None,
         }
     }
 

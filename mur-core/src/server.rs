@@ -665,6 +665,7 @@ async fn create_workflow(
         source_sessions: req.source_sessions.unwrap_or_default(),
         published_version: 0,
         permission: Default::default(),
+        schedule: None,
     };
 
     store.save(&workflow).map_err(AppError::Internal)?;

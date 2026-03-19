@@ -323,6 +323,7 @@ mod tests {
             tools: vec![],
             published_version: 0,
             permission: Default::default(),
+            schedule: None,
         }
     }
 

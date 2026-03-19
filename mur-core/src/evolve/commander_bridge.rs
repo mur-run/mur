@@ -226,6 +226,7 @@ impl CommanderBridge {
             tools,
             published_version: 0,
             permission: Permission::Read,
+            schedule: None,
         }
     }
 }
