@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mur_common::knowledge::KnowledgeBase;
 use mur_common::pattern::*;
 use std::io::{self, Write};
@@ -763,43 +763,109 @@ pub(crate) fn collect_tags_from_patterns(
     }
 }
 
-// ─── Schedule management ────────────────────────────────────────────
+// ─── Schedule management (uses ~/.mur/schedules.yaml) ──────────────────────
+
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ScheduleEntry {
+    id: String,
+    #[serde(default)]
+    user_id: String,
+    workflow: String,
+    cron: String,
+    #[serde(default = "default_tz")]
+    timezone: String,
+    #[serde(default = "default_enabled")]
+    enabled: bool,
+    #[serde(default)]
+    notify: ScheduleNotify,
+}
+
+fn default_tz() -> String { "UTC".into() }
+fn default_enabled() -> bool { true }
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct ScheduleNotify {
+    #[serde(default, rename = "type")]
+    notify_type: String,
+    #[serde(default)]
+    target: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct SchedulesFile {
+    #[serde(default)]
+    schedules: Vec<ScheduleEntry>,
+}
+
+fn schedules_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("~"))
+        .join(".mur")
+        .join("schedules.yaml")
+}
+
+fn load_schedules() -> Result<Vec<ScheduleEntry>> {
+    let path = schedules_path();
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let file: SchedulesFile = serde_yaml::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    Ok(file.schedules)
+}
+
+fn save_schedules(schedules: &[ScheduleEntry]) -> Result<()> {
+    let path = schedules_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = SchedulesFile { schedules: schedules.to_vec() };
+    let yaml = serde_yaml::to_string(&file)?;
+    std::fs::write(&path, yaml)?;
+    Ok(())
+}
 
 pub(crate) fn cmd_schedule_list() -> Result<()> {
-    let store = WorkflowYamlStore::default_store()?;
-    let workflows = store.list_all()?;
+    let schedules = load_schedules()?;
 
-    let scheduled: Vec<_> = workflows.iter().filter(|w| w.schedule.is_some()).collect();
-
-    if scheduled.is_empty() {
+    if schedules.is_empty() {
         println!("📋 No scheduled workflows.");
         println!("  Use `mur workflow schedule set <name> \"0 * * * *\"` to add one.");
         return Ok(());
     }
 
-    println!("📋 Scheduled workflows:\n");
-    for wf in &scheduled {
-        let cron = wf.schedule.as_deref().unwrap_or("—");
-        let desc = if wf.description.is_empty() {
-            &wf.name
-        } else {
-            &wf.description
-        };
-        println!("  🔄 {} — `{}`", desc, cron);
-        println!("     name: {}", wf.name);
-    }
-    println!("\n  Total: {} scheduled workflow(s)", scheduled.len());
+    let active: Vec<_> = schedules.iter().filter(|s| s.enabled).collect();
+    let disabled: Vec<_> = schedules.iter().filter(|s| !s.enabled).collect();
 
+    if !active.is_empty() {
+        println!("🔄 Active schedules:\n");
+        for s in &active {
+            println!("  {} — `{}` ({})", s.workflow, s.cron, s.timezone);
+            if !s.user_id.is_empty() {
+                println!("     user: {}", s.user_id);
+            }
+            if !s.notify.target.is_empty() {
+                println!("     notify: {} → {}", s.notify.notify_type, s.notify.target);
+            }
+        }
+    }
+
+    if !disabled.is_empty() {
+        println!("\n⏸️  Disabled:\n");
+        for s in &disabled {
+            println!("  {} — `{}`", s.workflow, s.cron);
+        }
+    }
+
+    println!("\n  Total: {} schedule(s)", schedules.len());
     Ok(())
 }
 
 pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
-    let store = WorkflowYamlStore::default_store()?;
-
-    // Verify workflow exists
-    let mut wf = store.get(name)?;
-
-    // Basic cron validation (5 fields)
+    // Validate cron
     let parts: Vec<&str> = cron.split_whitespace().collect();
     if parts.len() < 5 || parts.len() > 7 {
         anyhow::bail!(
@@ -808,56 +874,62 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
         );
     }
 
-    wf.schedule = Some(cron.to_string());
-    store.save(&wf)?;
+    // Verify workflow exists
+    let store = WorkflowYamlStore::default_store()?;
+    let _ = store.get(name).with_context(|| format!("Workflow '{}' not found", name))?;
 
+    let mut schedules = load_schedules()?;
+
+    // Update existing or add new
+    if let Some(existing) = schedules.iter_mut().find(|s| s.workflow == name) {
+        existing.cron = cron.to_string();
+        existing.enabled = true;
+    } else {
+        schedules.push(ScheduleEntry {
+            id: format!("{}-schedule", name),
+            user_id: String::new(),
+            workflow: name.to_string(),
+            cron: cron.to_string(),
+            timezone: "UTC".to_string(),
+            enabled: true,
+            notify: ScheduleNotify::default(),
+        });
+    }
+
+    save_schedules(&schedules)?;
     println!("✅ Schedule set for '{}': {}", name, cron);
     println!("   Commander daemon will pick this up within 30 seconds.");
-
     Ok(())
 }
 
 pub(crate) fn cmd_schedule_remove(name: &str) -> Result<()> {
-    let store = WorkflowYamlStore::default_store()?;
-    let mut wf = store.get(name)?;
+    let mut schedules = load_schedules()?;
+    let before = schedules.len();
+    schedules.retain(|s| s.workflow != name);
 
-    if wf.schedule.is_none() {
-        println!("ℹ️  '{}' has no schedule.", name);
+    if schedules.len() == before {
+        println!("ℹ️  No schedule found for '{}'.", name);
         return Ok(());
     }
 
-    wf.schedule = None;
-    store.save(&wf)?;
-
-    println!("🗑️  Schedule removed from '{}'.", name);
-
+    save_schedules(&schedules)?;
+    println!("🗑️  Schedule removed for '{}'.", name);
     Ok(())
 }
 
 pub(crate) fn cmd_schedule_enable(name: &str, enable: bool) -> Result<()> {
-    let store = WorkflowYamlStore::default_store()?;
-    let mut wf = store.get(name)?;
+    let mut schedules = load_schedules()?;
 
-    match &wf.schedule {
-        Some(cron) if !enable => {
-            // Disable: prefix with # to comment it out (convention)
-            wf.schedule = Some(format!("#disabled: {}", cron));
-            store.save(&wf)?;
+    if let Some(entry) = schedules.iter_mut().find(|s| s.workflow == name) {
+        entry.enabled = enable;
+        save_schedules(&schedules)?;
+        if enable {
+            println!("▶️  Schedule enabled for '{}'.", name);
+        } else {
             println!("⏸️  Schedule disabled for '{}'.", name);
         }
-        Some(cron) if enable && cron.starts_with("#disabled: ") => {
-            // Enable: remove the #disabled prefix
-            wf.schedule = Some(cron.trim_start_matches("#disabled: ").to_string());
-            store.save(&wf)?;
-            println!("▶️  Schedule enabled for '{}'.", name);
-        }
-        Some(_) if enable => {
-            println!("ℹ️  '{}' is already enabled.", name);
-        }
-        None => {
-            println!("ℹ️  '{}' has no schedule. Use `mur workflow schedule set` first.", name);
-        }
-        _ => {}
+    } else {
+        println!("ℹ️  No schedule found for '{}'. Use `mur workflow schedule set` first.", name);
     }
 
     Ok(())
