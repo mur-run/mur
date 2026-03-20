@@ -765,7 +765,6 @@ pub(crate) fn collect_tags_from_patterns(
 
 // ─── Schedule management (uses ~/.mur/schedules.yaml) ──────────────────────
 
-use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct ScheduleEntry {

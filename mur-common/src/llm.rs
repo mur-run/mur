@@ -1,12 +1,15 @@
-use anyhow::Result;
+use crate::error::LlmError;
 
 /// Trait for LLM providers (Anthropic, OpenAI, Ollama).
 /// Shared between mur-core and mur-commander.
-#[async_trait::async_trait]
+///
+/// Edition 2024 supports async fn in traits natively.
 pub trait LlmClient: Send + Sync {
     /// Text completion
-    async fn complete(&self, prompt: &str, system: Option<&str>) -> Result<String>;
+    fn complete(&self, prompt: &str, system: Option<&str>) -> impl Future<Output = Result<String, LlmError>> + Send;
 
     /// Generate embedding vector
-    async fn embed(&self, text: &str) -> Result<Vec<f32>>;
+    fn embed(&self, text: &str) -> impl Future<Output = Result<Vec<f32>, LlmError>> + Send;
 }
+
+use std::future::Future;

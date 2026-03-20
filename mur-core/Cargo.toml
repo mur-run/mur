@@ -19,7 +19,7 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-clap = { workspace = true }
+clap = { workspace = true, optional = true }
 reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -35,17 +35,22 @@ arrow-schema = "57"
 futures = "0.3"
 tokio-util = "0.7"
 
-# Phase 0: local API server
-axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["cors", "fs"] }
-rust-embed = { version = "8", features = ["interpolate-folder-path", "include-exclude"] }
+# Phase 0: local API server (optional, behind "server" feature)
+axum = { version = "0.8", features = ["ws"], optional = true }
+tower-http = { version = "0.6", features = ["cors", "fs"], optional = true }
+rust-embed = { version = "8", features = ["interpolate-folder-path", "include-exclude"], optional = true }
 
-# Phase 4: interactive CLI
-dialoguer = "0.11"
-console = "0.15"
+# Phase 4: interactive CLI (optional, behind "cli" feature)
+dialoguer = { version = "0.11", optional = true }
+console = { version = "0.15", optional = true }
 hostname = "0.4.2"
 dotenvy = "0.15"
 urlencoding = "2"
+
+[features]
+default = ["cli", "server"]
+cli = ["dialoguer", "console", "clap"]
+server = ["axum", "tower-http", "rust-embed"]
 
 [dev-dependencies]
 tempfile = "3"

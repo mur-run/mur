@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::knowledge::KnowledgeBase;
@@ -201,17 +202,20 @@ impl Default for Content {
 }
 
 impl Content {
-    /// Get the full content as a single string (for embedding)
-    pub fn as_text(&self) -> String {
+    /// Get the full content as a single string (for embedding).
+    ///
+    /// Returns `Cow::Borrowed` for `Plain` and `DualLayer` without principle,
+    /// avoiding allocation in the common case.
+    pub fn as_text(&self) -> Cow<'_, str> {
         match self {
             Content::DualLayer {
                 technical,
                 principle,
             } => match principle {
-                Some(p) => format!("{}\n\n{}", technical, p),
-                None => technical.clone(),
+                Some(p) => Cow::Owned(format!("{}\n\n{}", technical, p)),
+                None => Cow::Borrowed(technical),
             },
-            Content::Plain(s) => s.clone(),
+            Content::Plain(s) => Cow::Borrowed(s),
         }
     }
 

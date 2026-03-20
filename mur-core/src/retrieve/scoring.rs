@@ -121,7 +121,8 @@ where
             let effectiveness = p.evidence.effectiveness();
             let importance = p.importance;
             let time_decay = time_decay_score(&p);
-            let length_norm = length_norm_score(&p);
+            let content_len = p.content.as_text().len();
+            let length_norm = length_norm_score_from_len(content_len);
 
             let scope_mult = if p.applies.projects.is_empty()
                 && p.applies.languages.is_empty()
@@ -190,8 +191,7 @@ where
         if result.len() >= MAX_PATTERNS {
             break;
         }
-        let content_len = sp.pattern.content.as_text().len();
-        let est_tokens = content_len / 4;
+        let est_tokens = sp.pattern.content.as_text().len() / 4;
         if token_count + est_tokens > MAX_TOKENS && !result.is_empty() {
             break;
         }
@@ -202,39 +202,65 @@ where
     result
 }
 
+/// Pre-computed lowercased fields for a pattern, avoiding repeated allocations
+/// in the scoring hot loop.
+struct LowerCache {
+    name: String,
+    description: String,
+    content: String,
+    tags_text: String,
+}
+
+impl LowerCache {
+    fn from_pattern(pattern: &Pattern) -> Self {
+        let tags_text: String = pattern
+            .tags
+            .topics
+            .iter()
+            .chain(pattern.tags.languages.iter())
+            .map(|t| t.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self {
+            name: pattern.name.to_lowercase(),
+            description: pattern.description.to_lowercase(),
+            content: pattern.content.as_text().to_lowercase(),
+            tags_text,
+        }
+    }
+}
+
 /// Keyword-based relevance (Phase 1, replaced by vector search in Phase 2).
 fn keyword_relevance(query_words: &[&str], pattern: &Pattern) -> f64 {
     if query_words.is_empty() {
         return 0.0;
     }
 
-    let content = pattern.content.as_text().to_lowercase();
-    let name = pattern.name.to_lowercase();
-    let desc = pattern.description.to_lowercase();
-    let tags_text: String = pattern
-        .tags
-        .topics
-        .iter()
-        .chain(pattern.tags.languages.iter())
-        .map(|t| t.to_lowercase())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let cache = LowerCache::from_pattern(pattern);
+    keyword_relevance_cached(query_words, &cache)
+}
+
+/// Keyword relevance using pre-computed lowercased fields.
+fn keyword_relevance_cached(query_words: &[&str], cache: &LowerCache) -> f64 {
+    if query_words.is_empty() {
+        return 0.0;
+    }
 
     let mut matches = 0;
     for word in query_words {
         if word.len() < 2 {
             continue;
         }
-        if name.contains(word) {
+        if cache.name.contains(word) {
             matches += 3; // name match is strongest
         }
-        if tags_text.contains(word) {
+        if cache.tags_text.contains(word) {
             matches += 2; // tag match is strong
         }
-        if desc.contains(word) {
+        if cache.description.contains(word) {
             matches += 2;
         }
-        if content.contains(word) {
+        if cache.content.contains(word) {
             matches += 1;
         }
     }
@@ -274,8 +300,8 @@ fn time_decay_score(pattern: &Pattern) -> f64 {
 }
 
 /// Length normalization: 1 / (1 + 0.5 * log2(len / 500))
-fn length_norm_score(pattern: &Pattern) -> f64 {
-    let len = pattern.content.as_text().len().max(1) as f64;
+fn length_norm_score_from_len(content_len: usize) -> f64 {
+    let len = content_len.max(1) as f64;
     let ratio = len / 500.0;
     if ratio <= 1.0 {
         1.0
@@ -479,10 +505,11 @@ mod tests {
 
     #[test]
     fn test_length_norm() {
-        assert!((length_norm_score(&make_pattern("short", "hi")) - 1.0).abs() < 0.01);
+        let short_p = make_pattern("short", "hi");
+        assert!((length_norm_score_from_len(short_p.content.as_text().len()) - 1.0).abs() < 0.01);
         let long_content = "x".repeat(2000);
         let long_p = make_pattern("long", &long_content);
-        assert!(length_norm_score(&long_p) < 1.0);
+        assert!(length_norm_score_from_len(long_p.content.as_text().len()) < 1.0);
     }
 
     #[test]

@@ -9,7 +9,7 @@ pub(crate) fn cmd_session_start(source: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn cmd_session_stop(analyze: bool) -> Result<()> {
+pub(crate) async fn cmd_session_stop(analyze: bool) -> Result<()> {
     match session::stop()? {
         Some(id) => {
             eprintln!("Session stopped: {}", &id[..8]);
@@ -38,7 +38,7 @@ pub(crate) fn cmd_session_stop(analyze: bool) -> Result<()> {
                 && config.sync.auto
                 && config.sync.method != "local"
                 && let Err(e) =
-                    super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push)
+                    super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push).await
             {
                 eprintln!("  ⚠ Auto-push failed: {}", e);
             }
@@ -781,7 +781,7 @@ async fn export_skill_llm(
     Ok(out)
 }
 
-pub(crate) fn cmd_session_push(id_prefix: Option<&str>, all: bool) -> Result<()> {
+pub(crate) async fn cmd_session_push(id_prefix: Option<&str>, all: bool) -> Result<()> {
     let config = crate::store::config::load_config()?;
     let server_url = &config.server.url;
     let token = match crate::auth::load_tokens() {
@@ -793,7 +793,7 @@ pub(crate) fn cmd_session_push(id_prefix: Option<&str>, all: bool) -> Result<()>
     };
 
     if all {
-        let pushed = session::cloud::push_unsynced(server_url, &token, false)?;
+        let pushed = session::cloud::push_unsynced(server_url, &token, false).await?;
         if pushed == 0 {
             eprintln!("All sessions already synced.");
         } else {
@@ -804,7 +804,7 @@ pub(crate) fn cmd_session_push(id_prefix: Option<&str>, all: bool) -> Result<()>
         let full_id = session::find_recording_by_prefix(prefix)?
             .ok_or_else(|| anyhow::anyhow!("No session found matching prefix '{}'", prefix))?;
 
-        if session::cloud::push_session(server_url, &token, &full_id, false)? {
+        if session::cloud::push_session(server_url, &token, &full_id, false).await? {
             eprintln!();
             eprintln!(
                 "📊 Review: https://dashboard.mur.run/#/sessions/{}/review",
@@ -824,7 +824,7 @@ pub(crate) fn cmd_session_push(id_prefix: Option<&str>, all: bool) -> Result<()>
 
         match recent {
             Some(r) => {
-                if session::cloud::push_session(server_url, &token, &r.id, false)? {
+                if session::cloud::push_session(server_url, &token, &r.id, false).await? {
                     eprintln!();
                     eprintln!(
                         "📊 Review: https://dashboard.mur.run/#/sessions/{}/review",

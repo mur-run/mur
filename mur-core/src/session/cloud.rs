@@ -12,7 +12,7 @@ use super::SessionEvent;
 
 fn recordings_dir() -> PathBuf {
     dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".mur")
         .join("session")
         .join("recordings")
@@ -51,7 +51,7 @@ struct SessionPushPayload {
 
 /// Push a single session to the cloud server.
 /// Returns Ok(true) if pushed, Ok(false) if skipped (already synced or missing data).
-pub fn push_session(
+pub async fn push_session(
     server_url: &str,
     token: &str,
     id: &str,
@@ -112,7 +112,7 @@ pub fn push_session(
     let device_name = crate::auth::get_device_name();
     let device_os = crate::auth::get_device_os();
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client
         .post(&url)
         .timeout(std::time::Duration::from_secs(30))
@@ -122,7 +122,8 @@ pub fn push_session(
         .header("X-Device-OS", device_os)
         .header("Content-Type", "application/json")
         .body(body)
-        .send();
+        .send()
+        .await;
 
     match resp {
         Ok(r) if r.status().is_success() => {
@@ -149,7 +150,7 @@ pub fn push_session(
 
 /// Push all unsynced, stopped sessions to the cloud server.
 /// Returns the number of sessions successfully pushed.
-pub fn push_unsynced(server_url: &str, token: &str, quiet: bool) -> Result<usize> {
+pub async fn push_unsynced(server_url: &str, token: &str, quiet: bool) -> Result<usize> {
     let recordings = super::list_recordings()?;
     let mut pushed = 0usize;
 
@@ -160,7 +161,7 @@ pub fn push_unsynced(server_url: &str, token: &str, quiet: bool) -> Result<usize
         // Only push stopped sessions (has stopped_at in meta)
         if let Some(ref meta) = rec.meta
             && meta.stopped_at.is_some()
-            && push_session(server_url, token, &rec.id, quiet)?
+            && push_session(server_url, token, &rec.id, quiet).await?
         {
             pushed += 1;
         }
@@ -172,4 +173,3 @@ pub fn push_unsynced(server_url: &str, token: &str, quiet: bool) -> Result<usize
 
     Ok(pushed)
 }
-

@@ -408,7 +408,7 @@ pub fn record_injection(query: &str, project: &str, patterns: &[Pattern]) {
                     .unwrap_or(full_text.len().min(100));
                 format!("{}...", &full_text[..end])
             } else {
-                full_text
+                full_text.into_owned()
             };
             InjectedPatternRecord {
                 name: p.name.clone(),

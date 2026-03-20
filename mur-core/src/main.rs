@@ -712,7 +712,7 @@ async fn main() -> Result<()> {
         }
         Commands::Session { action } => match action {
             SessionAction::Start { source } => cmd::session::cmd_session_start(&source)?,
-            SessionAction::Stop { analyze } => cmd::session::cmd_session_stop(analyze)?,
+            SessionAction::Stop { analyze } => cmd::session::cmd_session_stop(analyze).await?,
             SessionAction::Record {
                 event_type,
                 tool,
@@ -731,7 +731,7 @@ async fn main() -> Result<()> {
                 output,
             } => cmd::session::cmd_session_export(&id, &format, analyze, output).await?,
             SessionAction::Push { id, all } => {
-                cmd::session::cmd_session_push(id.as_deref(), all)?
+                cmd::session::cmd_session_push(id.as_deref(), all).await?
             }
         },
         Commands::Dashboard => {

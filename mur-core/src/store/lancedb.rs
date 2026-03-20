@@ -132,7 +132,7 @@ impl VectorStore {
         for (w, v) in workflows {
             names.push(w.name.clone());
             descriptions.push(w.description.clone());
-            contents.push(w.content.as_text());
+            contents.push(w.content.as_text().into_owned());
             tiers.push(format!("{:?}", w.tier).to_lowercase());
             importances.push(w.importance as f32);
             item_types.push("workflow".into());
@@ -254,7 +254,7 @@ impl VectorStore {
 
 /// Build the content string for indexing, including attachment descriptions.
 fn content_with_attachment_descriptions(pattern: &Pattern) -> String {
-    let mut text = pattern.content.as_text();
+    let mut text = pattern.content.as_text().into_owned();
     for att in &pattern.attachments {
         if !att.description.is_empty() {
             text.push_str("\n\n");

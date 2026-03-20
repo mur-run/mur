@@ -149,7 +149,9 @@ pub(crate) async fn cmd_learn_extract(
                                             && !target.links.related.contains(&p.name)
                                         {
                                             target.links.related.push(p.name.clone());
-                                            let _ = store.save(&target);
+                                            if let Err(e) = store.save(&target) {
+                                                tracing::warn!("Failed to save linked target '{}': {e}", s.target_name);
+                                            }
                                         }
                                     }
                                     evolve::linker::LinkType::Supersedes => {

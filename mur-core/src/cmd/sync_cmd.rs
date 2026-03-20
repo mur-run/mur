@@ -7,7 +7,7 @@ use crate::store::yaml::YamlStore;
 
 /// Run device sync (cloud API or git pull/commit/push) based on config.
 /// Returns Ok(()) on success, warns on failure but doesn't block.
-pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result<()> {
+pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result<()> {
     let config = crate::store::config::load_config()?;
 
     match config.sync.method.as_str() {
@@ -36,7 +36,7 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                     let device_id = crate::auth::get_device_id();
                     let device_name = crate::auth::get_device_name();
                     let device_os = crate::auth::get_device_os();
-                    let client = reqwest::blocking::Client::new();
+                    let client = reqwest::Client::new();
                     let resp = client
                         .get(&url)
                         .timeout(std::time::Duration::from_secs(10))
@@ -44,10 +44,11 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                         .header("X-Device-ID", &device_id)
                         .header("X-Device-Name", &device_name)
                         .header("X-Device-OS", &device_os)
-                        .send();
+                        .send()
+                        .await;
                     match resp {
                         Ok(r) if r.status().is_success() => {
-                            let body = r.text().unwrap_or_default();
+                            let body = r.text().await.unwrap_or_default();
                             if body.trim() != "{}" && !body.trim().is_empty() {
                                 apply_cloud_pull(&body, &mur_dir)?;
                                 if !quiet {
@@ -76,7 +77,7 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                     let device_id = crate::auth::get_device_id();
                     let device_name = crate::auth::get_device_name();
                     let device_os = crate::auth::get_device_os();
-                    let client = reqwest::blocking::Client::new();
+                    let client = reqwest::Client::new();
                     let resp = client
                         .post(&url)
                         .timeout(std::time::Duration::from_secs(15))
@@ -86,7 +87,8 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                         .header("X-Device-OS", &device_os)
                         .header("Content-Type", "application/json")
                         .body(payload)
-                        .send();
+                        .send()
+                        .await;
                     match resp {
                         Ok(r) if r.status().is_success() => {
                             if !quiet {
@@ -106,22 +108,22 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                     }
 
                     // Also push unsynced session recordings
-                    if let Err(e) = crate::session::cloud::push_unsynced(server_url, &token, quiet)
+                    if let Err(e) = crate::session::cloud::push_unsynced(server_url, &token, quiet).await
                         && !quiet
                     {
                         eprintln!("  ⚠ Session push failed: {}", e);
                     }
 
                     // Also push unsynced workflows
-                    if let Err(e) = push_unsynced_workflows(server_url, &token, quiet)
+                    if let Err(e) = push_unsynced_workflows(server_url, &token, quiet).await
                         && !quiet
                     {
                         eprintln!("  ⚠ Workflow push failed: {}", e);
                     }
                 }
                 DeviceSyncDirection::Both => {
-                    device_sync(quiet, DeviceSyncDirection::Pull)?;
-                    device_sync(quiet, DeviceSyncDirection::Push)?;
+                    Box::pin(device_sync(quiet, DeviceSyncDirection::Pull)).await?;
+                    Box::pin(device_sync(quiet, DeviceSyncDirection::Push)).await?;
                 }
             }
         }
@@ -192,8 +194,8 @@ pub(crate) fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result
                     }
                 }
                 DeviceSyncDirection::Both => {
-                    device_sync(quiet, DeviceSyncDirection::Pull)?;
-                    device_sync(quiet, DeviceSyncDirection::Push)?;
+                    Box::pin(device_sync(quiet, DeviceSyncDirection::Pull)).await?;
+                    Box::pin(device_sync(quiet, DeviceSyncDirection::Push)).await?;
                 }
             }
         }
@@ -267,8 +269,22 @@ fn apply_cloud_pull(body: &str, mur_dir: &std::path::Path) -> Result<()> {
     let patterns_dir = mur_dir.join("patterns");
     std::fs::create_dir_all(&patterns_dir)?;
     for (name, yaml_content) in &patterns {
-        let safe_name = name.replace(['/', '\\', '.'], "_");
+        // Validate: reject path traversal attempts and empty names
+        if name.is_empty() || name.contains("..") || name.contains('\0') {
+            tracing::warn!("Skipping pattern with unsafe name: {:?}", name);
+            continue;
+        }
+        let safe_name = name.replace(['/', '\\', '.', '~'], "_");
+        if safe_name.is_empty() || safe_name.starts_with('-') {
+            tracing::warn!("Skipping pattern with invalid name after sanitization: {:?}", name);
+            continue;
+        }
         let path = patterns_dir.join(format!("{}.yaml", safe_name));
+        // Final safety check: ensure path stays within patterns_dir
+        if !path.starts_with(&patterns_dir) {
+            tracing::warn!("Path traversal detected for pattern: {:?}", name);
+            continue;
+        }
         std::fs::write(&path, yaml_content)?;
     }
     Ok(())
@@ -316,8 +332,10 @@ fn build_cloud_push_payload(patterns_dir: &std::path::Path) -> Result<String> {
     }
 
     // Save new hashes for next sync
-    if let Ok(json) = serde_json::to_string(&new_hashes) {
-        let _ = std::fs::write(&sync_state_path, json);
+    if let Ok(json) = serde_json::to_string(&new_hashes)
+        && let Err(e) = std::fs::write(&sync_state_path, json)
+    {
+        tracing::warn!("Failed to write sync hashes: {e}");
     }
 
     Ok(serde_json::to_string(&map)?)
@@ -342,7 +360,7 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
 
     // ─── Device sync first (cloud or git) ─────────────────────
     // Failures warn but don't block tool sync
-    if let Err(e) = device_sync(quiet, DeviceSyncDirection::Both)
+    if let Err(e) = device_sync(quiet, DeviceSyncDirection::Both).await
         && !quiet
     {
         eprintln!("  ⚠ Device sync error: {}", e);
@@ -450,7 +468,8 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
     }
 
     // ─── Ensure skills are installed ───────────────────────────
-    let home = dirs::home_dir().expect("no home dir");
+    let home = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
     let skill_installed = ensure_mur_skill(&home)?;
     if !quiet && skill_installed {
         println!("  🎓 MUR skill installed/updated for AI tools");
@@ -644,7 +663,7 @@ fn symlink_skill_dir(target: &std::path::Path, link: &std::path::Path) -> Result
 
 /// Push unsynced workflows to the cloud server.
 /// Uses `.synced` marker files in `~/.mur/workflows/` to track which have been pushed.
-fn push_unsynced_workflows(server_url: &str, token: &str, quiet: bool) -> Result<()> {
+async fn push_unsynced_workflows(server_url: &str, token: &str, quiet: bool) -> Result<()> {
     let mur_dir = dirs::home_dir()
         .ok_or_else(|| anyhow::anyhow!("no home dir"))?
         .join(".mur");
@@ -690,7 +709,7 @@ fn push_unsynced_workflows(server_url: &str, token: &str, quiet: bool) -> Result
         });
         let body = serde_json::to_string(&payload)?;
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
         let resp = client
             .post(&url)
             .timeout(std::time::Duration::from_secs(15))
@@ -700,12 +719,15 @@ fn push_unsynced_workflows(server_url: &str, token: &str, quiet: bool) -> Result
             .header("X-Device-OS", &device_os)
             .header("Content-Type", "application/json")
             .body(body)
-            .send();
+            .send()
+            .await;
 
         match resp {
             Ok(r) if r.status().is_success() => {
                 // Write content hash as synced marker
-                let _ = std::fs::write(&synced_path, &content_hash);
+                if let Err(e) = std::fs::write(&synced_path, &content_hash) {
+                    tracing::warn!("Failed to write synced marker: {e}");
+                }
                 pushed += 1;
             }
             Ok(r) => {

@@ -42,9 +42,13 @@ pub struct PipelineOutput {
 
 /// Replace `{{input}}` placeholders in a template string with the given value.
 /// If `input` is `None`, replaces with empty string.
+///
+/// The replacement is shell-escaped to prevent injection when the result
+/// is passed to `sh -c`.
 pub fn inject_input(template: &str, input: Option<&str>) -> String {
     let replacement = input.unwrap_or("");
-    template.replace("{{input}}", replacement)
+    let escaped = shell_escape::escape(replacement.into());
+    template.replace("{{input}}", &escaped)
 }
 
 /// Returns `true` if the input string contains pipeline operators.
@@ -272,14 +276,15 @@ mod tests {
 
     #[test]
     fn test_inject_input_with_value() {
+        // "hello world" contains a space, so shell-escape wraps in quotes
         let result = inject_input("Analyze this: {{input}}\nDone.", Some("hello world"));
-        assert_eq!(result, "Analyze this: hello world\nDone.");
+        assert_eq!(result, "Analyze this: 'hello world'\nDone.");
     }
 
     #[test]
     fn test_inject_input_none() {
         let result = inject_input("Prefix {{input}} suffix", None);
-        assert_eq!(result, "Prefix  suffix");
+        assert_eq!(result, "Prefix '' suffix");
     }
 
     #[test]
@@ -292,5 +297,12 @@ mod tests {
     fn test_inject_input_multiple() {
         let result = inject_input("{{input}} and {{input}}", Some("x"));
         assert_eq!(result, "x and x");
+    }
+
+    #[test]
+    fn test_inject_input_shell_injection_prevented() {
+        let result = inject_input("echo {{input}}", Some("hello; rm -rf /"));
+        // The malicious input should be escaped, not executed literally
+        assert!(result.contains("'hello; rm -rf /'"));
     }
 }

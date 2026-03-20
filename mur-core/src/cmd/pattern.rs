@@ -169,7 +169,9 @@ pub(crate) fn cmd_new(diagram_path: Option<String>) -> Result<()> {
                         && !target.links.related.contains(&name)
                     {
                         target.links.related.push(name.clone());
-                        let _ = store.save(&target);
+                        if let Err(e) = store.save(&target) {
+                            tracing::warn!("Failed to save linked target '{}': {e}", s.target_name);
+                        }
                     }
                 }
                 evolve::linker::LinkType::Supersedes => {
@@ -404,7 +406,7 @@ pub(crate) fn cmd_edit(name: &str, quick: bool) -> Result<()> {
     } else {
         // Full edit: open in $EDITOR
         let yaml_path = dirs::home_dir()
-            .expect("no home dir")
+            .ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?
             .join(".mur")
             .join("patterns")
             .join(format!("{}.yaml", name));
@@ -593,7 +595,9 @@ pub(crate) fn cmd_feedback_auto(file: Option<String>, dry_run: bool) -> Result<(
                 apply_feedback(&mut pattern, signal);
                 // Override confidence with our computed delta instead
                 pattern.confidence = (old_confidence + fb.confidence_delta).clamp(0.0, 1.0);
-                let _ = store.save(&pattern);
+                if let Err(e) = store.save(&pattern) {
+                    tracing::warn!("Failed to save pattern '{}': {e}", fb.pattern_name);
+                }
             }
         }
     }

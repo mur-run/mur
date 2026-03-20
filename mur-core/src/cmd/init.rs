@@ -171,18 +171,19 @@ exit 0
 
         let hooks_obj = settings
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| anyhow::anyhow!("Claude settings.json is not a JSON object"))?
             .entry("hooks")
             .or_insert_with(|| serde_json::json!({}));
 
         for (event_name, script_path) in &hook_defs {
             let event_arr = hooks_obj
                 .as_object_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("hooks field is not a JSON object"))?
                 .entry(*event_name)
                 .or_insert_with(|| serde_json::json!([]));
 
-            let arr = event_arr.as_array_mut().unwrap();
+            let arr = event_arr.as_array_mut()
+                .ok_or_else(|| anyhow::anyhow!("hook event '{event_name}' is not an array"))?;
 
             // Remove any existing mur-managed hooks (by checking command contains mur hooks dir)
             arr.retain(|entry| {
@@ -257,8 +258,10 @@ exit 0
             .cloned()
             .unwrap_or(serde_json::json!({}));
         let mut merged = existing_hooks.as_object().cloned().unwrap_or_default();
-        for (k, v) in mur_hooks.as_object().unwrap() {
-            merged.insert(k.clone(), v.clone());
+        if let Some(mur_obj) = mur_hooks.as_object() {
+            for (k, v) in mur_obj {
+                merged.insert(k.clone(), v.clone());
+            }
         }
         auggie_settings["hooks"] = serde_json::Value::Object(merged);
 
@@ -302,8 +305,10 @@ exit 0
             .cloned()
             .unwrap_or(serde_json::json!({}));
         let mut merged = existing_hooks.as_object().cloned().unwrap_or_default();
-        for (k, v) in mur_hooks.as_object().unwrap() {
-            merged.insert(k.clone(), v.clone());
+        if let Some(mur_obj) = mur_hooks.as_object() {
+            for (k, v) in mur_obj {
+                merged.insert(k.clone(), v.clone());
+            }
         }
         gemini_settings["hooks"] = serde_json::Value::Object(merged);
 
@@ -347,17 +352,18 @@ exit 0
 
         let hooks_obj = hooks_json
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| anyhow::anyhow!("Copilot hooks.json is not a JSON object"))?
             .entry("hooks")
             .or_insert_with(|| serde_json::json!({}));
 
         for (event_name, script_cmd) in &hook_defs {
             let event_arr = hooks_obj
                 .as_object_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("hooks field is not a JSON object"))?
                 .entry(*event_name)
                 .or_insert_with(|| serde_json::json!([]));
-            let arr = event_arr.as_array_mut().unwrap();
+            let arr = event_arr.as_array_mut()
+                .ok_or_else(|| anyhow::anyhow!("hook event '{event_name}' is not an array"))?;
             // Remove existing mur hooks
             arr.retain(|entry| {
                 entry
@@ -416,17 +422,18 @@ exit 0
 
         let hooks_obj = cursor_hooks
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| anyhow::anyhow!("Cursor hooks.json is not a JSON object"))?
             .entry("hooks")
             .or_insert_with(|| serde_json::json!({}));
 
         for (event_name, script_path) in &hook_defs {
             let event_arr = hooks_obj
                 .as_object_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("hooks field is not a JSON object"))?
                 .entry(*event_name)
                 .or_insert_with(|| serde_json::json!([]));
-            let arr = event_arr.as_array_mut().unwrap();
+            let arr = event_arr.as_array_mut()
+                .ok_or_else(|| anyhow::anyhow!("hook event '{event_name}' is not an array"))?;
             arr.retain(|entry| {
                 entry
                     .get("command")

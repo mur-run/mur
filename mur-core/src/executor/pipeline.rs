@@ -598,7 +598,7 @@ mod tests {
 
         let wf = make_workflow(
             "injector",
-            vec![shell_step(1, "Echo input", "echo '{{input}}'")],
+            vec![shell_step(1, "Echo input", "echo {{input}}")],
         );
         store.save(&wf).unwrap();
 
@@ -640,7 +640,7 @@ mod tests {
         let expr = PipelineExpr::Single("prompt-inject".into());
         let output = executor.execute(&expr, Some(piped)).await.unwrap();
 
-        assert_eq!(output.output_text.as_deref(), Some("Analyze: some data"));
+        assert_eq!(output.output_text.as_deref(), Some("Analyze: 'some data'"));
     }
 
     #[tokio::test]
@@ -735,7 +735,7 @@ mod tests {
         store
             .save(&make_workflow(
                 "no-input",
-                vec![shell_step(1, "Echo", "echo 'before-{{input}}-after'")],
+                vec![shell_step(1, "Echo", "echo before-{{input}}-after")],
             ))
             .unwrap();
 
@@ -743,6 +743,7 @@ mod tests {
         let expr = PipelineExpr::Single("no-input".into());
         let output = executor.execute(&expr, None).await.unwrap();
 
+        // shell_escape produces '' for empty input; shell evaluates '' as empty string
         assert_eq!(output.output_text.as_deref(), Some("before--after"));
     }
 

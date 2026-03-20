@@ -18,10 +18,12 @@ pub mod inject;
 pub mod interactive;
 pub mod llm;
 pub mod retrieve;
-pub mod server;
 pub mod session;
 pub mod store;
 pub mod team;
+
+#[cfg(feature = "server")]
+pub mod server;
 
 pub use mur_common::config::Config;
 pub use mur_common::event::MurEvent;

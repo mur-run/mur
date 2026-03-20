@@ -212,9 +212,12 @@ fn default_mmr_threshold() -> f64 {
     0.85
 }
 fn default_mur_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mur")
+    // Use HOME env var directly to avoid the `dirs` dependency in mur-common.
+    // Callers in mur-core that need the real home dir should use `dirs` there.
+    let home = std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"));
+    home.join(".mur")
 }
 fn default_server_url() -> String {
     "https://mur-server.fly.dev".to_string()
