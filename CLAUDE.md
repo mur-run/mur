@@ -2,35 +2,45 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Commands
+## Build & Install
 
 ```bash
-# Build (without embedded dashboard — fallback placeholder page)
-cargo build --workspace
-cargo build --release
+# ── Quick install (build + install in one step) ──
+./install.sh                    # Runs build.sh --release --install
 
-# Build with embedded web dashboard (RECOMMENDED for releases)
-# Must build mur-web first, then point MUR_WEB_DIST to its dist/
+# ── Build only ──
+./build.sh                      # Release build with embedded web dashboard
+./build.sh --install            # Build + install to /opt/homebrew/bin/mur
+
+# ── Manual build (without embedded dashboard) ──
+cargo build --workspace         # Debug build
+cargo build --release           # Release build
+
+# ── Build with embedded web dashboard (what build.sh does) ──
 cd ~/Projects/mur-web && npm run build
 MUR_WEB_DIST=$HOME/Projects/mur-web/dist cargo build --release
-# Or use the convenience script:
-./build.sh
 
-# Test (all crates)
+# ── Test ──
 cargo test --workspace
-
-# Run a single test
-cargo test --workspace <test_name>
 cargo test -p mur-core <test_name>
 
-# Lint
+# ── Lint ──
 cargo clippy --workspace -- -D warnings
 cargo fmt --check
 
-# Run locally
+# ── Run locally ──
 cargo run -- <command>          # e.g. cargo run -- search "swift testing"
-cargo run --release -- <command>
 ```
+
+### Build Scripts
+
+| Script | What it does |
+|--------|-------------|
+| `build.sh` | Builds mur-web (Next.js) → embeds into mur binary → release build |
+| `build.sh --install` | Same + copies binary to `/opt/homebrew/bin/mur` |
+| `install.sh` | Shortcut for `./build.sh --release --install` |
+
+**Requires:** `~/Projects/mur-web` (or set `MUR_WEB_DIR`). Without it, build fails.
 
 ## Architecture
 
