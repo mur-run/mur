@@ -907,7 +907,7 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
         existing.executor = executor.clone();
     } else {
         schedules.push(Schedule {
-            id: format!("{}-schedule", name),
+            id: uuid::Uuid::new_v4().to_string(),
             user_id: String::new(),
             workflow: name.to_string(),
             cron: cron.to_string(),

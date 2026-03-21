@@ -189,8 +189,8 @@ fn install_crontab(workflow_name: &str, cron_expr: &str) -> Result<()> {
     let mur = mur_binary();
     let tag = format!("{}{}", CRON_TAG_PREFIX, workflow_name);
     let entry = format!(
-        "{} {} run {} >> ~/.mur/logs/schedule-{}.log 2>&1",
-        cron_expr, mur, workflow_name, workflow_name
+        "{} {} run {} >> ~/.mur/logs/schedule-{}.log 2>&1 {}",
+        cron_expr, mur, workflow_name, workflow_name, tag
     );
 
     // Read existing crontab

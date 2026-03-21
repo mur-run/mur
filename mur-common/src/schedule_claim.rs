@@ -34,7 +34,15 @@ pub fn is_commander_running_at(pid_path: &Path) -> bool {
     };
 
     // Check if process is alive (signal 0 = existence check)
-    unsafe { libc::kill(pid, 0) == 0 }
+    #[cfg(unix)]
+    {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        // On non-Unix, assume Commander is not running (best effort)
+        false
+    }
 }
 
 /// Default schedules.yaml path.

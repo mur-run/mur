@@ -111,6 +111,18 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                                     }
 
                                     if !schedules.is_empty() {
+                                        // Merge with existing local schedules instead of overwriting
+                                        let existing_schedules = mur_common::schedule_claim::load_schedules().unwrap_or_default();
+                                        let server_workflow_names: std::collections::HashSet<String> =
+                                            schedules.iter().map(|s| s.workflow.clone()).collect();
+
+                                        // Keep local-only schedules (not on server)
+                                        for local in existing_schedules {
+                                            if !server_workflow_names.contains(&local.workflow) {
+                                                schedules.push(local);
+                                            }
+                                        }
+
                                         let file = mur_common::schedule::SchedulesFile { schedules };
                                         let yaml = serde_yaml::to_string(&file)?;
                                         let path = mur_dir.join("schedules.yaml");
@@ -254,17 +266,19 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                         let file: mur_common::schedule::SchedulesFile = serde_yaml::from_str(&content)
                             .unwrap_or(mur_common::schedule::SchedulesFile { schedules: vec![] });
 
-                        for schedule in &file.schedules {
+                        if !file.schedules.is_empty() {
                             let payload = serde_json::json!({
-                                "workflow_name": schedule.workflow,
-                                "cron_expr": schedule.cron,
-                                "timezone": schedule.timezone,
-                                "enabled": schedule.enabled,
-                                "notify_type": schedule.notify.notify_type,
-                                "notify_target": schedule.notify.target,
+                                "schedules": file.schedules.iter().map(|s| serde_json::json!({
+                                    "workflow_name": s.workflow,
+                                    "cron_expr": s.cron,
+                                    "timezone": s.timezone,
+                                    "enabled": s.enabled,
+                                    "notify_type": s.notify.notify_type,
+                                    "notify_target": s.notify.target,
+                                })).collect::<Vec<_>>(),
                             });
 
-                            let sched_url = format!("{}/api/v1/schedules", server_url);
+                            let sched_url = format!("{}/api/v1/schedules/sync", server_url);
                             let resp = client
                                 .post(&sched_url)
                                 .timeout(std::time::Duration::from_secs(10))
@@ -277,21 +291,22 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                                 .await;
 
                             match resp {
-                                Ok(r) if r.status().is_success() => {}
+                                Ok(r) if r.status().is_success() => {
+                                    if !quiet {
+                                        eprintln!("  ✓ Synced {} schedule(s).", file.schedules.len());
+                                    }
+                                }
                                 Ok(r) => {
                                     if !quiet {
-                                        eprintln!("  ⚠ Failed to sync schedule '{}': HTTP {}", schedule.workflow, r.status());
+                                        eprintln!("  ⚠ Schedule sync failed: HTTP {}", r.status());
                                     }
                                 }
                                 Err(e) => {
                                     if !quiet {
-                                        eprintln!("  ⚠ Failed to sync schedule '{}': {}", schedule.workflow, e);
+                                        eprintln!("  ⚠ Schedule sync failed: {}", e);
                                     }
                                 }
                             }
-                        }
-                        if !quiet && !file.schedules.is_empty() {
-                            eprintln!("  ✓ Pushed {} schedule(s).", file.schedules.len());
                         }
                     }
                 }
