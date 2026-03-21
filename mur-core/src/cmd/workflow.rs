@@ -855,6 +855,15 @@ pub(crate) fn cmd_schedule_list() -> Result<()> {
     }
 
     println!("\n  Total: {} schedule(s)", schedules.len());
+
+    // Show system-level schedule status
+    let system = crate::cmd::system_schedule::list_system_schedules();
+    if !system.is_empty() {
+        println!("\n🖥️  System schedules:");
+        for (name, backend) in &system {
+            println!("  {} ({})", name, backend);
+        }
+    }
     Ok(())
 }
 
@@ -895,7 +904,26 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
 
     save_schedules(&schedules)?;
     println!("✅ Schedule set for '{}': {}", name, cron);
-    println!("   Commander daemon will pick this up within 30 seconds.");
+
+    // Install system-level scheduler (launchd on macOS, crontab on Linux)
+    match crate::cmd::system_schedule::install(name, cron) {
+        Ok(()) => {
+            if cfg!(target_os = "macos") {
+                println!(
+                    "   launchd plist installed at ~/Library/LaunchAgents/com.mur.schedule.{}.plist",
+                    name
+                );
+            } else {
+                println!("   crontab entry installed");
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "   ⚠️  Failed to install system schedule: {}. Workflow will only run when Commander is active.",
+                e
+            );
+        }
+    }
     Ok(())
 }
 
@@ -911,6 +939,11 @@ pub(crate) fn cmd_schedule_remove(name: &str) -> Result<()> {
 
     save_schedules(&schedules)?;
     println!("🗑️  Schedule removed for '{}'.", name);
+
+    // Remove system-level scheduler
+    if let Err(e) = crate::cmd::system_schedule::remove(name) {
+        eprintln!("   ⚠️  Failed to remove system schedule: {}", e);
+    }
     Ok(())
 }
 
@@ -922,8 +955,12 @@ pub(crate) fn cmd_schedule_enable(name: &str, enable: bool) -> Result<()> {
         save_schedules(&schedules)?;
         if enable {
             println!("▶️  Schedule enabled for '{}'.", name);
+            if let Some(s) = schedules.iter().find(|s| s.workflow == name) {
+                let _ = crate::cmd::system_schedule::install(name, &s.cron);
+            }
         } else {
             println!("⏸️  Schedule disabled for '{}'.", name);
+            let _ = crate::cmd::system_schedule::remove(name);
         }
     } else {
         println!("ℹ️  No schedule found for '{}'. Use `mur workflow schedule set` first.", name);
