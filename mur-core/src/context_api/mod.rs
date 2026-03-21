@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::evolve::feedback;
 use crate::inject::hook;
 use crate::retrieve::gate::{GateDecision, evaluate_query};
-use crate::retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
+use crate::retrieve::scoring::{score_and_rank_hybrid_with_config, score_and_rank_with_config};
+use crate::store::config::load_config;
 use crate::store::yaml::YamlStore;
 
 /// Scope for context retrieval — filters which patterns are relevant.
@@ -151,11 +152,12 @@ pub fn retrieve(
     // Apply scope filtering
     let filtered = apply_scope_filter(all_patterns, &req.scope, &req.source);
 
-    // Score and rank
+    // Score and rank using config-driven retrieval parameters
+    let config = load_config().unwrap_or_default();
     let scored = if let Some(vs) = vector_scores {
-        score_and_rank_hybrid(&req.query, filtered, vs)
+        score_and_rank_hybrid_with_config(&req.query, filtered, vs, &config.retrieval)
     } else {
-        score_and_rank(&req.query, filtered)
+        score_and_rank_with_config(&req.query, filtered, &config.retrieval)
     };
 
     // Build response patterns and collect for formatting

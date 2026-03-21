@@ -1,6 +1,7 @@
 //! Multi-signal scoring pipeline for pattern retrieval.
 
 use chrono::Utc;
+use mur_common::config::RetrievalConfig;
 use mur_common::pattern::{Origin, Pattern, PatternKind, Tier};
 
 /// Caller-supplied scope context used to make preference/procedure boosts
@@ -31,13 +32,13 @@ const W_IMPORTANCE: f64 = 0.15;
 const W_TIME_DECAY: f64 = 0.10;
 const W_LENGTH_NORM: f64 = 0.05;
 
-/// Score floor — patterns below this are dropped
+/// Default score floor — patterns below this are dropped
 const SCORE_FLOOR: f64 = 0.42;
 
-/// Max patterns to return
+/// Default max patterns to return
 const MAX_PATTERNS: usize = 5;
 
-/// Max total tokens (rough: 1 token ≈ 4 chars)
+/// Default max total tokens (rough: 1 token ≈ 4 chars)
 const MAX_TOKENS: usize = 2000;
 
 /// Score patterns with hybrid search (vector + keyword), no scope context.
@@ -50,6 +51,23 @@ pub fn score_and_rank_hybrid(
     score_and_rank_hybrid_with_scope(query, candidates, vector_scores, None, None)
 }
 
+/// Score patterns with hybrid search, using config-driven retrieval parameters.
+pub fn score_and_rank_hybrid_with_config(
+    query: &str,
+    candidates: Vec<Pattern>,
+    vector_scores: &std::collections::HashMap<String, f64>,
+    config: &RetrievalConfig,
+) -> Vec<ScoredPattern> {
+    score_and_rank_hybrid_with_scope_and_config(
+        query,
+        candidates,
+        vector_scores,
+        None,
+        None,
+        Some(config),
+    )
+}
+
 /// Score patterns with hybrid search and optional scope context for accurate
 /// preference/procedure boosts.
 pub fn score_and_rank_hybrid_with_scope(
@@ -59,6 +77,25 @@ pub fn score_and_rank_hybrid_with_scope(
     scope: Option<&ScopeContext>,
     project_language: Option<&str>,
 ) -> Vec<ScoredPattern> {
+    score_and_rank_hybrid_with_scope_and_config(
+        query,
+        candidates,
+        vector_scores,
+        scope,
+        project_language,
+        None,
+    )
+}
+
+/// Score patterns with hybrid search, scope context, and config-driven parameters.
+pub fn score_and_rank_hybrid_with_scope_and_config(
+    query: &str,
+    candidates: Vec<Pattern>,
+    vector_scores: &std::collections::HashMap<String, f64>,
+    scope: Option<&ScopeContext>,
+    project_language: Option<&str>,
+    config: Option<&RetrievalConfig>,
+) -> Vec<ScoredPattern> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
 
@@ -67,6 +104,7 @@ pub fn score_and_rank_hybrid_with_scope(
         candidates,
         scope,
         project_language,
+        config,
         |words, p| {
             let kw_relevance = keyword_relevance(words, p);
             let vec_relevance = vector_scores.get(&p.name).copied().unwrap_or(0.0);
@@ -81,12 +119,32 @@ pub fn score_and_rank(query: &str, candidates: Vec<Pattern>) -> Vec<ScoredPatter
     score_and_rank_with_scope(query, candidates, None, None)
 }
 
+/// Score with keyword-only relevance, using config-driven retrieval parameters.
+pub fn score_and_rank_with_config(
+    query: &str,
+    candidates: Vec<Pattern>,
+    config: &RetrievalConfig,
+) -> Vec<ScoredPattern> {
+    score_and_rank_with_scope_and_config(query, candidates, None, None, Some(config))
+}
+
 /// Score with keyword-only relevance and optional scope context.
 pub fn score_and_rank_with_scope(
     query: &str,
     candidates: Vec<Pattern>,
     scope: Option<&ScopeContext>,
     project_language: Option<&str>,
+) -> Vec<ScoredPattern> {
+    score_and_rank_with_scope_and_config(query, candidates, scope, project_language, None)
+}
+
+/// Score with keyword-only relevance, scope context, and config-driven parameters.
+pub fn score_and_rank_with_scope_and_config(
+    query: &str,
+    candidates: Vec<Pattern>,
+    scope: Option<&ScopeContext>,
+    project_language: Option<&str>,
+    config: Option<&RetrievalConfig>,
 ) -> Vec<ScoredPattern> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
@@ -96,6 +154,7 @@ pub fn score_and_rank_with_scope(
         candidates,
         scope,
         project_language,
+        config,
         keyword_relevance,
     )
 }
@@ -106,11 +165,16 @@ fn score_and_rank_inner<F>(
     candidates: Vec<Pattern>,
     scope: Option<&ScopeContext>,
     project_language: Option<&str>,
+    config: Option<&RetrievalConfig>,
     relevance_fn: F,
 ) -> Vec<ScoredPattern>
 where
     F: Fn(&[&str], &Pattern) -> f64,
 {
+    let score_floor = config.map_or(SCORE_FLOOR, |c| c.min_score);
+    let max_patterns = config.map_or(MAX_PATTERNS, |c| c.max_patterns);
+    let max_tokens = config.map_or(MAX_TOKENS, |c| c.max_tokens);
+
     let mut scored: Vec<ScoredPattern> = candidates
         .into_iter()
         .filter(|p| !p.lifecycle.muted)
@@ -169,7 +233,7 @@ where
                 relevance,
             }
         })
-        .filter(|sp| sp.score >= SCORE_FLOOR)
+        .filter(|sp| sp.score >= score_floor)
         .collect();
 
     // Sort by score descending, with tier priority as tiebreaker
@@ -188,11 +252,11 @@ where
     let mut result = Vec::new();
     let mut token_count = 0;
     for sp in scored {
-        if result.len() >= MAX_PATTERNS {
+        if result.len() >= max_patterns {
             break;
         }
         let est_tokens = sp.pattern.content.as_text().len() / 4;
-        if token_count + est_tokens > MAX_TOKENS && !result.is_empty() {
+        if token_count + est_tokens > max_tokens && !result.is_empty() {
             break;
         }
         token_count += est_tokens;
