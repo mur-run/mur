@@ -721,7 +721,7 @@ Run `mur learn` to extract new patterns from recent sessions.
         |config: &mut mur_common::config::Config| -> Result<(&'static str, &'static str, &'static str, bool)> {
             println!();
             println!("Cloud LLM provider:");
-            println!("  1) OpenRouter (recommended — access to many models)");
+            println!("  1) OpenRouter (recommended — access to many models, one API key)");
             println!("  2) OpenAI");
             println!("  3) Gemini");
             println!("  4) Anthropic");
@@ -730,9 +730,43 @@ Run `mur learn` to extract new patterns from recent sessions.
             let mut choice = String::new();
             io::stdin().read_line(&mut choice)?;
 
-            let (provider, llm_model, env_var, is_openrouter) = match choice.trim() {
+            let provider_choice = choice.trim();
+
+            // Show model recommendations for the chosen provider
+            match provider_choice {
+                "2" => {
+                    println!();
+                    println!("OpenAI models:");
+                    println!("  Best quality:  gpt-4o          ($2.50/$10 per 1M tokens)");
+                    println!("  Best value:    gpt-4o-mini     ($0.15/$0.60 per 1M tokens) ← default");
+                }
+                "3" => {
+                    println!();
+                    println!("Gemini models:");
+                    println!("  Best quality:  gemini-2.5-pro  ($1.25/$10 per 1M tokens)");
+                    println!("  Best value:    gemini-2.5-flash ($0.15/$0.60 per 1M tokens) ← default");
+                }
+                "4" => {
+                    println!();
+                    println!("Anthropic models:");
+                    println!("  Best quality:  claude-opus-4    ($15/$75 per 1M tokens)");
+                    println!("  Best value:    claude-sonnet-4   ($3/$15 per 1M tokens) ← default");
+                    println!("  Budget:        claude-haiku-3.5  ($0.80/$4 per 1M tokens)");
+                }
+                _ => {
+                    println!();
+                    println!("OpenRouter — recommended models:");
+                    println!("  Best quality:  anthropic/claude-sonnet-4  ($3/$15 per 1M tokens)");
+                    println!("  Best value:    google/gemini-2.5-flash    ($0.15/$0.60 per 1M tokens) ← default");
+                    println!("  Budget:        google/gemini-2.0-flash    ($0.10/$0.40 per 1M tokens)");
+                }
+            }
+            println!();
+            println!("  Tip: You can change the model later in ~/.mur/config.yaml");
+
+            let (provider, llm_model, env_var, is_openrouter) = match provider_choice {
                 "2" => ("openai", "gpt-4o-mini", "OPENAI_API_KEY", false),
-                "3" => ("gemini", "gemini-2.0-flash", "GEMINI_API_KEY", false),
+                "3" => ("gemini", "gemini-2.5-flash", "GEMINI_API_KEY", false),
                 "4" => (
                     "anthropic",
                     "claude-sonnet-4-20250514",
