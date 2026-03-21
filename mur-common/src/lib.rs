@@ -6,4 +6,5 @@ pub mod llm;
 pub mod pattern;
 pub mod pipeline;
 pub mod schedule;
+pub mod schedule_claim;
 pub mod workflow;

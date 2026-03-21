@@ -877,9 +877,26 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
         );
     }
 
+    // Check for stale Commander PID — if PID file exists but process is dead, reclaim for system cron
+    if mur_common::schedule_claim::commander_pid_path().exists()
+        && !mur_common::schedule_claim::is_commander_running()
+    {
+        if let Ok(released) = mur_common::schedule_claim::release_all_from_commander() {
+            if !released.is_empty() {
+                eprintln!(
+                    "   ⚠️  Commander not running (stale PID). Reclaiming {} schedule(s) for system cron.",
+                    released.len()
+                );
+            }
+        }
+    }
+
     // Verify workflow exists
     let store = WorkflowYamlStore::default_store()?;
     let _ = store.get(name).with_context(|| format!("Workflow '{}' not found", name))?;
+
+    // Determine executor: Commander if running, otherwise system cron
+    let executor = mur_common::schedule_claim::auto_detect_executor();
 
     let mut schedules = load_schedules()?;
 
@@ -887,6 +904,7 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
     if let Some(existing) = schedules.iter_mut().find(|s| s.workflow == name) {
         existing.cron = cron.to_string();
         existing.enabled = true;
+        existing.executor = executor.clone();
     } else {
         schedules.push(Schedule {
             id: format!("{}-schedule", name),
@@ -898,31 +916,36 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
             notify: ScheduleNotify::default(),
             variables: Default::default(),
             on_missed: Default::default(),
-            executor: Default::default(),
+            executor: executor.clone(),
         });
     }
 
     save_schedules(&schedules)?;
     println!("✅ Schedule set for '{}': {}", name, cron);
 
-    // Install system-level scheduler (launchd on macOS, crontab on Linux)
-    match crate::cmd::system_schedule::install(name, cron) {
-        Ok(()) => {
-            if cfg!(target_os = "macos") {
-                println!(
-                    "   launchd plist installed at ~/Library/LaunchAgents/com.mur.schedule.{}.plist",
-                    name
+    // Only install system cron if Commander isn't handling it
+    if executor == mur_common::schedule::ScheduleExecutor::SystemCron {
+        // Install system-level scheduler (launchd on macOS, crontab on Linux)
+        match crate::cmd::system_schedule::install(name, cron) {
+            Ok(()) => {
+                if cfg!(target_os = "macos") {
+                    println!(
+                        "   launchd plist installed at ~/Library/LaunchAgents/com.mur.schedule.{}.plist",
+                        name
+                    );
+                } else {
+                    println!("   crontab entry installed");
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "   ⚠️  Failed to install system schedule: {}. Workflow will only run when Commander is active.",
+                    e
                 );
-            } else {
-                println!("   crontab entry installed");
             }
         }
-        Err(e) => {
-            eprintln!(
-                "   ⚠️  Failed to install system schedule: {}. Workflow will only run when Commander is active.",
-                e
-            );
-        }
+    } else {
+        println!("   Commander daemon is running — it will handle this schedule.");
     }
     Ok(())
 }
