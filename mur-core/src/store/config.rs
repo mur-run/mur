@@ -37,26 +37,28 @@ pub fn save_config(config: &Config) -> Result<()> {
 #
 # LLM Model Recommendations:
 #
-#   Anthropic:
-#     Best quality:  claude-opus-4       ($15/$75 per 1M tokens)
-#     Best value:    claude-sonnet-4     ($3/$15 per 1M tokens)
-#     Budget:        claude-haiku-3.5    ($0.80/$4 per 1M tokens)
+#   Anthropic (provider: anthropic):
+#     Best quality:  claude-opus-4-20250514        ($15/$75 per 1M tokens)
+#     Best value:    claude-sonnet-4-20250514      ($3/$15 per 1M tokens)
+#     Budget:        claude-3-5-haiku-20241022     ($0.80/$4 per 1M tokens)
 #
-#   OpenAI:
-#     Best quality:  gpt-4o             ($2.50/$10 per 1M tokens)
-#     Best value:    gpt-4o-mini        ($0.15/$0.60 per 1M tokens)
+#   OpenAI (provider: openai):
+#     Best quality:  gpt-4o                        ($2.50/$10 per 1M tokens)
+#     Best value:    gpt-4o-mini                   ($0.15/$0.60 per 1M tokens)
 #
-#   Gemini:
-#     Best quality:  gemini-2.5-pro     ($1.25/$10 per 1M tokens)
-#     Best value:    gemini-2.5-flash   ($0.15/$0.60 per 1M tokens)
+#   Gemini (provider: gemini):
+#     Best quality:  gemini-2.5-pro                ($1.25/$10 per 1M tokens)
+#     Best value:    gemini-2.5-flash              ($0.15/$0.60 per 1M tokens)
 #
-#   OpenRouter (any model via one API key):
-#     Best quality:  anthropic/claude-sonnet-4
-#     Best value:    google/gemini-2.5-flash
+#   OpenRouter (provider: openai, set openai_url to https://openrouter.ai/api/v1):
+#     Best quality:  anthropic/claude-sonnet-4     ($3/$15 per 1M tokens)
+#     Best value:    google/gemini-2.5-flash       ($0.15/$0.60 per 1M tokens)
 #
-#   Ollama (free, local):
-#     Best quality:  qwen3:32b (needs 20GB+ RAM)
-#     Best value:    llama3.2:3b
+#   Ollama (provider: ollama):
+#     Best quality:  qwen3:32b                     (free, needs 20GB+ RAM)
+#     Best value:    llama3.2:3b                    (free, needs 4GB RAM)
+#
+#   Copy the exact model name into llm.model below.
 
 "#;
     fs::write(&path, format!("{}{}", header, yaml))?;
