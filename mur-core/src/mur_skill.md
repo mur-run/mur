@@ -1,6 +1,6 @@
 ---
-name: mur
-description: "Continuous learning engine — patterns are auto-injected at session start via hooks. Not a command."
+name: mur-context
+description: "Background context: explains the auto-injected learning patterns you see at session start. Not a user command."
 ---
 # MUR — Continuous Learning for AI Assistants
 
