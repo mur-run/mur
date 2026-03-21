@@ -9,7 +9,7 @@ use crate::store::yaml::YamlStore;
 
 /// Run a workflow — output as executable prompt for AI consumption.
 /// Accepts exact name, semantic query, or pipeline expression (w1 | w2 && w3, w4).
-pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool) -> Result<()> {
+pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool, prompt: bool) -> Result<()> {
     use crate::store::embedding::{EmbeddingConfig, embed};
     use crate::store::lancedb::VectorStore;
     use mur_common::pipeline::{has_pipeline_syntax, parse_pipeline_expr};
@@ -35,7 +35,17 @@ pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool) -> Result<()>
 
     // Try exact match first
     if let Ok(w) = store.get(query) {
-        print_workflow_prompt(&w);
+        if prompt {
+            print_workflow_prompt(&w);
+        } else {
+            let executor = crate::executor::pipeline::PipelineExecutor::new(store)
+                .with_fail_fast(fail_fast);
+            let expr = mur_common::pipeline::PipelineExpr::Single(w.name.clone());
+            let output = executor.execute(&expr, None).await?;
+            if output.exit_code != 0 {
+                std::process::exit(output.exit_code);
+            }
+        }
         return Ok(());
     }
 
@@ -80,8 +90,18 @@ pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool) -> Result<()>
 
     match best_name {
         Some(name) => {
-            let w = store.get(&name)?;
-            print_workflow_prompt(&w);
+            if prompt {
+                let w = store.get(&name)?;
+                print_workflow_prompt(&w);
+            } else {
+                let executor = crate::executor::pipeline::PipelineExecutor::new(store)
+                    .with_fail_fast(fail_fast);
+                let expr = mur_common::pipeline::PipelineExpr::Single(name);
+                let output = executor.execute(&expr, None).await?;
+                if output.exit_code != 0 {
+                    std::process::exit(output.exit_code);
+                }
+            }
         }
         None => {
             eprintln!("No matching workflow found for: {}", query);

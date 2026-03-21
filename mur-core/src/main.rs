@@ -74,6 +74,9 @@ enum Commands {
         /// Cancel remaining parallel branches on first failure
         #[arg(long)]
         fail_fast: bool,
+        /// Print workflow as AI prompt instead of executing
+        #[arg(long)]
+        prompt: bool,
     },
     /// Report pattern feedback
     Feedback {
@@ -639,8 +642,8 @@ async fn main() -> Result<()> {
         },
         Commands::Sync { quiet, project } => cmd::sync_cmd::cmd_sync(quiet, project).await?,
         Commands::Inject { query, project: _ } => cmd::inject_cmd::cmd_inject(&query).await?,
-        Commands::Run { query, fail_fast } => {
-            cmd::workflow::cmd_workflow_run(&query, fail_fast).await?
+        Commands::Run { query, fail_fast, prompt } => {
+            cmd::workflow::cmd_workflow_run(&query, fail_fast, prompt).await?
         }
         Commands::Pattern { action } => match action {
             PatternAction::Show { name } => cmd::pattern::cmd_pattern_show(&name)?,
