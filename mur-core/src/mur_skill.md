@@ -1,6 +1,6 @@
 ---
 name: mur
-description: "Continuous learning — auto-injects relevant patterns from your learning history"
+description: "Continuous learning engine — patterns are auto-injected at session start via hooks. Not a command."
 ---
 # MUR — Continuous Learning for AI Assistants
 
