@@ -63,7 +63,7 @@ pub async fn extract_workflow_llm(
     // ── Load LLM config ──────────────────────────────────────────────
     let config = crate::store::config::load_config()
         .context("Failed to load config for LLM extraction")?;
-    let mut llm_config = config.llm.clone();
+    let llm_config = config.llm.clone();
 
     // Use the model from config.yaml — user's choice (sonnet, opus, haiku, etc.)
 
