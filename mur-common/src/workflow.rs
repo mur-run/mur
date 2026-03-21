@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::knowledge::KnowledgeBase;
+use crate::schedule::Capability;
 
 /// A MUR workflow — a captured, reusable sequence of steps.
 ///
@@ -46,6 +47,18 @@ pub struct Workflow {
     /// Cron schedule expression (e.g. "0 * * * *" for hourly)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
+
+    /// Unique workflow ID (assigned by Commander, optional for CLI)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// Notification preferences (Commander feature)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify: Option<NotifyConfig>,
+
+    /// Capabilities required to run this workflow
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<Capability>,
 }
 
 // Allow `workflow.name`, `workflow.content`, etc. via auto-deref.
@@ -157,6 +170,40 @@ impl std::fmt::Display for VarType {
             VarType::Number => write!(f, "number"),
             VarType::Bool => write!(f, "bool"),
             VarType::Array => write!(f, "array"),
+        }
+    }
+}
+
+/// Notification level for workflow events.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotifyLevel {
+    #[default]
+    Silent,
+    Normal,
+    Alert,
+}
+
+/// Notification configuration for workflow execution results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotifyConfig {
+    #[serde(default)]
+    pub on_success: NotifyLevel,
+    #[serde(default = "default_alert")]
+    pub on_failure: NotifyLevel,
+    #[serde(default = "default_normal")]
+    pub on_anomaly: NotifyLevel,
+}
+
+fn default_alert() -> NotifyLevel { NotifyLevel::Alert }
+fn default_normal() -> NotifyLevel { NotifyLevel::Normal }
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            on_success: NotifyLevel::Silent,
+            on_failure: NotifyLevel::Alert,
+            on_anomaly: NotifyLevel::Normal,
         }
     }
 }

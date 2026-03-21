@@ -5,4 +5,5 @@ pub mod knowledge;
 pub mod llm;
 pub mod pattern;
 pub mod pipeline;
+pub mod schedule;
 pub mod workflow;

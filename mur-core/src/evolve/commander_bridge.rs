@@ -227,6 +227,9 @@ impl CommanderBridge {
             published_version: 0,
             permission: Permission::Read,
             schedule: None,
+            id: None,
+            notify: None,
+            requires: vec![],
         }
     }
 }

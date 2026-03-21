@@ -141,7 +141,11 @@ pub fn extract_workflow(
         trigger: String::new(),
         variables,
         published_version: 0,
-        permission: Default::default(), schedule: None,
+        permission: Default::default(),
+        schedule: None,
+        id: None,
+        notify: None,
+        requires: vec![],
     };
 
     ExtractedWorkflow { workflow }

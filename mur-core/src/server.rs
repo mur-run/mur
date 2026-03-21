@@ -666,6 +666,9 @@ async fn create_workflow(
         published_version: 0,
         permission: Default::default(),
         schedule: None,
+        id: None,
+        notify: None,
+        requires: vec![],
     };
 
     store.save(&workflow).map_err(AppError::Internal)?;

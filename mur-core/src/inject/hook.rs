@@ -526,7 +526,10 @@ mod tests {
             tools: vec![],
             published_version: 0,
             permission: Default::default(),
-                    schedule: None,
+            schedule: None,
+            id: None,
+            notify: None,
+            requires: vec![],
         }
     }
 

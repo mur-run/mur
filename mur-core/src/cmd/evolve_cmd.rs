@@ -201,6 +201,9 @@ pub(crate) fn cmd_evolve_compose(create: bool) -> Result<()> {
                     published_version: 0,
                     permission: Default::default(),
                     schedule: None,
+                    id: None,
+                    notify: None,
+                    requires: vec![],
                 };
                 workflow_store.save(&wf)?;
                 println!("     -> Created draft workflow: {}", s.suggested_name);

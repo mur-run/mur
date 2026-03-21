@@ -312,7 +312,11 @@ fn build_workflow_from_llm(
         trigger: llm.trigger.clone(),
         variables,
         published_version: 0,
-        permission: Default::default(), schedule: None,
+        permission: Default::default(),
+        schedule: None,
+        id: None,
+        notify: None,
+        requires: vec![],
     };
 
     ExtractedWorkflow { workflow }

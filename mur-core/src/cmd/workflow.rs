@@ -437,6 +437,9 @@ pub(crate) fn cmd_workflow_new() -> Result<()> {
         published_version: 0,
         permission: Default::default(),
         schedule: None,
+        id: None,
+        notify: None,
+        requires: vec![],
     };
 
     store.save(&workflow)?;
@@ -662,7 +665,10 @@ pub(crate) fn cmd_suggest(create: bool) -> Result<()> {
                         tools: vec![],
                         published_version: 0,
                         permission: Default::default(),
-        schedule: None,
+                        schedule: None,
+                        id: None,
+                        notify: None,
+                        requires: vec![],
                     };
                     workflow_store.save(&wf)?;
                     println!("     -> Created draft workflow: {}", s.suggested_name);
@@ -765,38 +771,7 @@ pub(crate) fn collect_tags_from_patterns(
 
 // ─── Schedule management (uses ~/.mur/schedules.yaml) ──────────────────────
 
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct ScheduleEntry {
-    id: String,
-    #[serde(default)]
-    user_id: String,
-    workflow: String,
-    cron: String,
-    #[serde(default = "default_tz")]
-    timezone: String,
-    #[serde(default = "default_enabled")]
-    enabled: bool,
-    #[serde(default)]
-    notify: ScheduleNotify,
-}
-
-fn default_tz() -> String { "UTC".into() }
-fn default_enabled() -> bool { true }
-
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-struct ScheduleNotify {
-    #[serde(default, rename = "type")]
-    notify_type: String,
-    #[serde(default)]
-    target: String,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct SchedulesFile {
-    #[serde(default)]
-    schedules: Vec<ScheduleEntry>,
-}
+use mur_common::schedule::{Schedule, ScheduleNotify, SchedulesFile};
 
 fn schedules_path() -> std::path::PathBuf {
     dirs::home_dir()
@@ -805,7 +780,7 @@ fn schedules_path() -> std::path::PathBuf {
         .join("schedules.yaml")
 }
 
-fn load_schedules() -> Result<Vec<ScheduleEntry>> {
+fn load_schedules() -> Result<Vec<Schedule>> {
     let path = schedules_path();
     if !path.exists() {
         return Ok(Vec::new());
@@ -816,7 +791,7 @@ fn load_schedules() -> Result<Vec<ScheduleEntry>> {
     Ok(file.schedules)
 }
 
-fn save_schedules(schedules: &[ScheduleEntry]) -> Result<()> {
+fn save_schedules(schedules: &[Schedule]) -> Result<()> {
     let path = schedules_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -884,7 +859,7 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
         existing.cron = cron.to_string();
         existing.enabled = true;
     } else {
-        schedules.push(ScheduleEntry {
+        schedules.push(Schedule {
             id: format!("{}-schedule", name),
             user_id: String::new(),
             workflow: name.to_string(),
@@ -892,6 +867,9 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
             timezone: "UTC".to_string(),
             enabled: true,
             notify: ScheduleNotify::default(),
+            variables: Default::default(),
+            on_missed: Default::default(),
+            executor: Default::default(),
         });
     }
 

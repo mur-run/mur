@@ -427,6 +427,9 @@ mod tests {
             published_version: 0,
             permission: Permission::default(),
             schedule: None,
+            id: None,
+            notify: None,
+            requires: vec![],
         }
     }
 
