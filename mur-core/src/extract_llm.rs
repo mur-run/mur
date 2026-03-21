@@ -65,10 +65,7 @@ pub async fn extract_workflow_llm(
         .context("Failed to load config for LLM extraction")?;
     let mut llm_config = config.llm.clone();
 
-    // Override to Haiku for cost efficiency
-    if llm_config.provider == "anthropic" {
-        llm_config.model = "claude-3-5-haiku-latest".to_string();
-    }
+    // Use the model from config.yaml — user's choice (sonnet, opus, haiku, etc.)
 
     // ── Build transcript ─────────────────────────────────────────────
     let transcript = build_transcript(events);
