@@ -16,3 +16,4 @@ anyhow = { workspace = true }
 shell-escape = "0.1"
 dirs = "6"
 libc = "0.2"
+regex-lite = "0.1"
