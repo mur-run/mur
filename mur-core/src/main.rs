@@ -265,6 +265,10 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Stop recording without export (alias: quit)
+    Exit,
+    /// Stop recording without export (alias: exit)
+    Quit,
 }
 
 #[derive(Subcommand)]
@@ -786,6 +790,7 @@ async fn main() -> Result<()> {
             ExchangeAction::Export { name, dir } => cmd::misc::cmd_exchange_export(&name, dir)?,
         },
         Commands::Import { file, dry_run } => cmd::misc::cmd_import(file, dry_run)?,
+        Commands::Exit | Commands::Quit => cmd::session::cmd_session_exit()?,
     }
 
     Ok(())

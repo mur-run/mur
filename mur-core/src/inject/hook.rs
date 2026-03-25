@@ -195,7 +195,7 @@ fn format_grouped_injection(
     ];
     let mut index = 1;
 
-    for group in &group_order {
+    'outer: for group in &group_order {
         let group_patterns: Vec<&Pattern> = patterns
             .iter()
             .filter(|p| KindGroup::from_kind(p.effective_kind()) == *group)
@@ -205,13 +205,12 @@ fn format_grouped_injection(
             continue;
         }
 
-        let header = format!("{}\n\n", group.header());
-        let header_tokens = header.len() / 4;
-        if token_count + header_tokens > max_tokens && index > 1 {
-            break;
-        }
-        output.push_str(&header);
-        token_count += header_tokens;
+        // Buffer the entire group section so we never emit an orphaned header.
+        // Only flush to output once we know at least one pattern fits.
+        let group_header = format!("{}\n\n", group.header());
+        let mut group_buf = group_header;
+        let mut buf_tokens = group_buf.len() / 4;
+        let mut any_added = false;
 
         for pattern in group_patterns {
             let entry = match group {
@@ -221,14 +220,33 @@ fn format_grouped_injection(
             };
             let entry_tokens = entry.len() / 4;
 
-            if token_count + entry_tokens > max_tokens && index > 1 {
-                break;
+            // Always include the very first pattern ever (index == 1 and nothing
+            // added yet) so we guarantee at least one result even on tiny budgets.
+            let is_global_first = index == 1 && !any_added;
+            if !is_global_first && token_count + buf_tokens + entry_tokens > max_tokens {
+                // Budget exhausted — flush whatever was buffered and stop all groups.
+                if any_added {
+                    output.push_str(&group_buf);
+                }
+                break 'outer;
             }
 
-            output.push_str(&entry);
-            output.push('\n');
-            token_count += entry_tokens;
+            group_buf.push_str(&entry);
+            group_buf.push('\n');
+            buf_tokens += entry_tokens;
             index += 1;
+            any_added = true;
+        }
+
+        if any_added {
+            output.push_str(&group_buf);
+            token_count += buf_tokens;
+        }
+        // If any_added is false here it means group_patterns was non-empty but
+        // every single pattern was skipped — only possible when index > 1 and
+        // the budget was already exhausted before this group. Stop processing.
+        else {
+            break 'outer;
         }
     }
 
@@ -358,6 +376,13 @@ pub fn format_unified_injection_with_store(
         return String::new();
     }
 
+    // When there are no workflows, delegate to the kind-aware formatter so that
+    // Preference/Behavioral patterns render as bullets and Procedure patterns
+    // render as steps instead of generic numbered entries.
+    if workflows.is_empty() {
+        return format_for_injection_with_store(patterns, max_tokens, store);
+    }
+
     let mut output = String::from("## Relevant knowledge from your learning history\n\n");
     let mut token_count = output.len() / 4;
     let mut index = 1;
@@ -375,7 +400,7 @@ pub fn format_unified_injection_with_store(
         index += 1;
     }
 
-    // Then workflows
+    // Then workflows — guard with the same budget check
     for workflow in workflows {
         let entry = format_workflow_entry(workflow, index);
         let entry_tokens = entry.len() / 4;
@@ -835,5 +860,68 @@ mod tests {
         let result = format_for_injection(&[p, p2], 5000);
         // Preferences should be bullet points
         assert!(result.contains("- **"));
+    }
+
+    // ─── Token-budget edge cases for grouped injection ───────────
+
+    #[test]
+    fn test_grouped_injection_no_orphaned_headers() {
+        // Tight budget: fits one preference but NOT the procedures header+entry.
+        // We should NOT see an empty "## Procedures" section in the output.
+        let mut pref = make_pattern("Keep it short", "Use terse replies.");
+        pref.kind = Some(PatternKind::Preference);
+
+        // A large procedure that cannot fit after the preference.
+        let mut proc_pattern = make_pattern("Big procedure", &"step ".repeat(800));
+        proc_pattern.kind = Some(PatternKind::Procedure);
+
+        // Token budget: ~120 tokens (≈480 chars).
+        // The preference entry is small; the procedure entry is huge.
+        let result = format_for_injection(&[pref, proc_pattern], 120);
+
+        // Preference should be present
+        assert!(result.contains("Keep it short"), "preference should be included");
+        // The Procedures header must NOT appear without any content under it
+        if result.contains("Procedures") {
+            // If header appears, at least one procedure entry must follow it
+            let proc_header_pos = result.find("## Procedures").unwrap();
+            let after_header = &result[proc_header_pos..];
+            assert!(
+                after_header.contains("Big procedure"),
+                "Procedures header present but no entries — orphaned header"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unified_injection_uses_kind_formatting_without_workflows() {
+        // Without workflows, format_unified_injection_with_store should delegate
+        // to format_for_injection_with_store and produce kind-grouped output.
+        let mut pref = make_pattern("Always be concise", "One sentence max.");
+        pref.kind = Some(PatternKind::Preference);
+
+        let result = format_unified_injection(&[pref], &[], 5000);
+        // Should use grouped header (not the flat one)
+        assert!(
+            result.contains("Relevant knowledge from your learning history"),
+            "unified injection without workflows should use grouped header"
+        );
+        // Preference should be a bullet point, not a numbered entry
+        assert!(result.contains("- **"), "preference should render as bullet");
+        assert!(
+            !result.contains("### 1."),
+            "preference should NOT render as numbered entry"
+        );
+    }
+
+    #[test]
+    fn test_unified_injection_with_workflows_still_works() {
+        // With workflows, unified injection uses flat numbered format.
+        let p = make_pattern("Use testing", "Use @Test macro");
+        let wf = make_workflow("Deploy flow");
+        let result = format_unified_injection(&[p], &[wf], 5000);
+        assert!(result.contains("Use testing"));
+        assert!(result.contains("[Workflow:"));
+        assert!(result.contains("Deploy flow"));
     }
 }

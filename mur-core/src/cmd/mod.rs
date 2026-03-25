@@ -11,6 +11,7 @@ pub(crate) mod server_cmd;
 pub(crate) mod session;
 pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;
+pub(crate) mod var;
 pub(crate) mod workflow;
 
 pub(crate) fn read_multiline() -> anyhow::Result<String> {
