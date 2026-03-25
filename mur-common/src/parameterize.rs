@@ -330,8 +330,14 @@ fn detect_api_keys(
         ("token ", "auth_token", "Authentication token"),
     ];
 
-    for word in text.split_whitespace() {
-        let word = word.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';');
+    for token in text.split_whitespace() {
+        let token = token.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';');
+        // Handle KEY=value format: also check the value part after '='
+        let word = if let Some(pos) = token.find('=') {
+            &token[pos + 1..]
+        } else {
+            token
+        };
         for (prefix, name, desc) in &key_prefixes {
             if word.starts_with(prefix) && word.len() > prefix.len() + 4 {
                 add_suggestion(
@@ -383,6 +389,10 @@ fn detect_emails(
 ) {
     for word in text.split_whitespace() {
         let word = word.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';' || c == '<' || c == '>');
+        // Skip git SSH URLs (git@host:user/repo) — handled by detect_git_repos
+        if word.starts_with("git@") {
+            continue;
+        }
         if word.contains('@') && word.contains('.') && word.len() > 5 {
             // Basic email validation
             let parts: Vec<&str> = word.split('@').collect();
@@ -474,8 +484,14 @@ fn detect_database_urls(
         "mysql://", "mongodb://", "mongodb+srv://",
         "redis://", "sqlite://",
     ];
-    for word in text.split_whitespace() {
-        let word = word.trim_matches(|c: char| c == '"' || c == '\'');
+    for token in text.split_whitespace() {
+        let token = token.trim_matches(|c: char| c == '"' || c == '\'');
+        // Handle KEY=value format: extract the value part
+        let word = if let Some(pos) = token.find('=') {
+            &token[pos + 1..]
+        } else {
+            token
+        };
         for prefix in &db_prefixes {
             if word.starts_with(prefix) {
                 add_suggestion(

@@ -334,7 +334,10 @@ mod tests {
 
     #[test]
     fn test_resolve_env_var() {
-        std::env::set_var("MUR_TEST_VAR_XYZ", "from_env");
+        // SAFETY: test-only, single-threaded context
+        unsafe {
+            std::env::set_var("MUR_TEST_VAR_XYZ", "from_env");
+        }
         let result = resolve_variables(
             "{{MUR_TEST_VAR_XYZ}}",
             &BTreeMap::new(),
@@ -342,7 +345,10 @@ mod tests {
             &BTreeMap::new(),
         );
         assert_eq!(result, "from_env");
-        std::env::remove_var("MUR_TEST_VAR_XYZ");
+        // SAFETY: test-only, single-threaded context
+        unsafe {
+            std::env::remove_var("MUR_TEST_VAR_XYZ");
+        }
     }
 
     #[test]
