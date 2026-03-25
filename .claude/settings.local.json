@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(mur session:*)",
+      "WebFetch(domain:www.cathaybk.com.tw)",
+      "Bash(mur context:*)",
+      "WebFetch(domain:www.cathay-cube.com.tw)"
+    ]
+  }
+}

@@ -1,35 +1,23 @@
 # Changelog
 
-All notable changes to mur-core will be documented in this file.
+## v2.2.0 (2026-03-25)
 
-## [2.1.6] - 2026-03-21
+### 🚀 New Features
 
-### Schedule System
-- Schedule claim/release protocol (Phase 5) — daemon coordination
-- System cron/launchd integration for `mur schedule`
-- `mur workflow schedule` CLI (Phase 2-3)
-- Schedules stored in `schedules.yaml`
+- **Variable System** — `mur var set/get/list/delete` for user-defined variables with `{{var}}` template expansion in workflows
+- **Parameterize** — Auto-detect URLs, tokens, API keys, paths in workflows and suggest variable replacements
+- **mur exit / mur quit** — Stop recording without export
 
-### Workflow Execution
-- `mur run` now executes workflows (not just prints)
-- Extended `mur sync` to include schedules and workflows
-- Unified Schedule and Workflow types in `mur-common`
+### 🐛 Bug Fixes
 
-### Security
-- Shell injection fix in command execution
-- Secret scrubbing for session transcripts before cloud push
-- `auth.json` permissions set to 0600 (owner-only)
-- `.env` loaded from `~/.mur/.env` on startup
+- **Pattern Inject Scoring** — Fix detect_emails to skip git@ SSH URLs, fix detect_database_urls/detect_api_keys for KEY=value format
+- **Hook Formatting** — Orphaned header guard, kind-aware rendering (Preference→bullet, Procedure→steps, Technical→numbered)
+- **Variable.rs** — Fix unsafe set_var/remove_var in Rust 2024
 
-### Code Quality
-- Code review fixes for Phase 1-5
-- Removed dead code, async cleanup, typed errors
-- Step Default trait, model updates, curl → reqwest migration
+### 📊 Tests
 
-## [2.1.3] - 2026-03-10
+- 5 new hook formatting tests (494 total, all pass)
 
-### Workflow & Session
-- Step extensions, workflow publish/install, sync push workflows
-- Session cloud push + LLM workflow extraction
-- Dashboard review URL after Analyze/Export in post-session menu
-- Load `.env` from `~/.mur/.env` on startup
+## v2.1.6
+
+- Previous stable release
