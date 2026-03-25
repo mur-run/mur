@@ -183,6 +183,18 @@ pub(crate) fn cmd_session_record(
     Ok(())
 }
 
+pub(crate) fn cmd_session_exit() -> Result<()> {
+    match session::stop()? {
+        Some(id) => {
+            eprintln!("Session stopped: {} (recording discarded — no export)", &id[..8]);
+        }
+        None => {
+            eprintln!("No active session.");
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn cmd_session_status() -> Result<()> {
     match session::get_active()? {
         Some(session) => {
