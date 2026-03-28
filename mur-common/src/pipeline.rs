@@ -278,13 +278,17 @@ mod tests {
     fn test_inject_input_with_value() {
         // "hello world" contains a space, so shell-escape wraps in quotes
         let result = inject_input("Analyze this: {{input}}\nDone.", Some("hello world"));
-        assert_eq!(result, "Analyze this: 'hello world'\nDone.");
+        // Unix uses single quotes, Windows uses double quotes
+        assert!(
+            result == "Analyze this: 'hello world'\nDone."
+                || result == "Analyze this: \"hello world\"\nDone."
+        );
     }
 
     #[test]
     fn test_inject_input_none() {
         let result = inject_input("Prefix {{input}} suffix", None);
-        assert_eq!(result, "Prefix '' suffix");
+        assert!(result == "Prefix '' suffix" || result == "Prefix \"\" suffix");
     }
 
     #[test]
@@ -303,6 +307,7 @@ mod tests {
     fn test_inject_input_shell_injection_prevented() {
         let result = inject_input("echo {{input}}", Some("hello; rm -rf /"));
         // The malicious input should be escaped, not executed literally
-        assert!(result.contains("'hello; rm -rf /'"));
+        // Unix: 'hello; rm -rf /', Windows: "hello; rm -rf /"
+        assert!(result.contains("'hello; rm -rf /'") || result.contains("\"hello; rm -rf /\""));
     }
 }
