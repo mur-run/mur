@@ -90,31 +90,63 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                             let body = r.text().await.unwrap_or_default();
                             if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&body) {
                                 if let Some(data) = resp.get("data").and_then(|d| d.as_array()) {
-                                    let mut schedules: Vec<mur_common::schedule::Schedule> = Vec::new();
+                                    let mut schedules: Vec<mur_common::schedule::Schedule> =
+                                        Vec::new();
                                     for item in data {
                                         let sched = mur_common::schedule::Schedule {
-                                            id: item.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                                            workflow: item.get("workflow_name").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                                            cron: item.get("cron_expr").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                                            timezone: item.get("timezone").and_then(|v| v.as_str()).unwrap_or("UTC").to_string(),
-                                            enabled: item.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+                                            id: item
+                                                .get("id")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or_default()
+                                                .to_string(),
+                                            workflow: item
+                                                .get("workflow_name")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or_default()
+                                                .to_string(),
+                                            cron: item
+                                                .get("cron_expr")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or_default()
+                                                .to_string(),
+                                            timezone: item
+                                                .get("timezone")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("UTC")
+                                                .to_string(),
+                                            enabled: item
+                                                .get("enabled")
+                                                .and_then(|v| v.as_bool())
+                                                .unwrap_or(true),
                                             user_id: String::new(),
                                             variables: Default::default(),
                                             notify: mur_common::schedule::ScheduleNotify {
-                                                notify_type: item.get("notify_type").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                                                target: item.get("notify_target").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                                                notify_type: item
+                                                    .get("notify_type")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or_default()
+                                                    .to_string(),
+                                                target: item
+                                                    .get("notify_target")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or_default()
+                                                    .to_string(),
                                             },
                                             on_missed: Default::default(),
-                                            executor: mur_common::schedule::ScheduleExecutor::Server,
+                                            executor:
+                                                mur_common::schedule::ScheduleExecutor::Server,
                                         };
                                         schedules.push(sched);
                                     }
 
                                     if !schedules.is_empty() {
                                         // Merge with existing local schedules instead of overwriting
-                                        let existing_schedules = mur_common::schedule_claim::load_schedules().unwrap_or_default();
-                                        let server_workflow_names: std::collections::HashSet<String> =
-                                            schedules.iter().map(|s| s.workflow.clone()).collect();
+                                        let existing_schedules =
+                                            mur_common::schedule_claim::load_schedules()
+                                                .unwrap_or_default();
+                                        let server_workflow_names: std::collections::HashSet<
+                                            String,
+                                        > = schedules.iter().map(|s| s.workflow.clone()).collect();
 
                                         // Keep local-only schedules (not on server)
                                         for local in existing_schedules {
@@ -123,12 +155,16 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                                             }
                                         }
 
-                                        let file = mur_common::schedule::SchedulesFile { schedules };
+                                        let file =
+                                            mur_common::schedule::SchedulesFile { schedules };
                                         let yaml = serde_yaml::to_string(&file)?;
                                         let path = mur_dir.join("schedules.yaml");
                                         std::fs::write(&path, yaml)?;
                                         if !quiet {
-                                            eprintln!("  ✓ Pulled {} schedule(s) from server.", data.len());
+                                            eprintln!(
+                                                "  ✓ Pulled {} schedule(s) from server.",
+                                                data.len()
+                                            );
                                         }
                                     }
                                 }
@@ -170,17 +206,27 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                                     std::fs::create_dir_all(&workflows_dir)?;
                                     let mut pulled = 0u32;
                                     for item in data {
-                                        let name = item.get("name").and_then(|v| v.as_str()).unwrap_or_default();
-                                        let yaml_content = item.get("yaml_content").and_then(|v| v.as_str()).unwrap_or_default();
+                                        let name = item
+                                            .get("name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default();
+                                        let yaml_content = item
+                                            .get("yaml_content")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default();
                                         if name.is_empty() || yaml_content.is_empty() {
                                             continue;
                                         }
                                         // Sanitize name to prevent path traversal
                                         let safe_name = name.replace(['/', '\\', '~'], "_");
-                                        if safe_name.is_empty() || safe_name.contains("..") || safe_name.starts_with('-') {
+                                        if safe_name.is_empty()
+                                            || safe_name.contains("..")
+                                            || safe_name.starts_with('-')
+                                        {
                                             continue;
                                         }
-                                        let path = workflows_dir.join(format!("{}.yaml", safe_name));
+                                        let path =
+                                            workflows_dir.join(format!("{}.yaml", safe_name));
                                         if !path.starts_with(&workflows_dir) {
                                             continue;
                                         }
@@ -243,7 +289,8 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                     }
 
                     // Also push unsynced session recordings
-                    if let Err(e) = crate::session::cloud::push_unsynced(server_url, &token, quiet).await
+                    if let Err(e) =
+                        crate::session::cloud::push_unsynced(server_url, &token, quiet).await
                         && !quiet
                     {
                         eprintln!("  ⚠ Session push failed: {}", e);
@@ -263,8 +310,10 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                     let schedules_path = mur_dir.join("schedules.yaml");
                     if schedules_path.exists() {
                         let content = std::fs::read_to_string(&schedules_path)?;
-                        let file: mur_common::schedule::SchedulesFile = serde_yaml::from_str(&content)
-                            .unwrap_or(mur_common::schedule::SchedulesFile { schedules: vec![] });
+                        let file: mur_common::schedule::SchedulesFile = serde_yaml::from_str(
+                            &content,
+                        )
+                        .unwrap_or(mur_common::schedule::SchedulesFile { schedules: vec![] });
 
                         if !file.schedules.is_empty() {
                             let payload = serde_json::json!({
@@ -293,7 +342,10 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                             match resp {
                                 Ok(r) if r.status().is_success() => {
                                     if !quiet {
-                                        eprintln!("  ✓ Synced {} schedule(s).", file.schedules.len());
+                                        eprintln!(
+                                            "  ✓ Synced {} schedule(s).",
+                                            file.schedules.len()
+                                        );
                                     }
                                 }
                                 Ok(r) => {
@@ -465,7 +517,10 @@ fn apply_cloud_pull(body: &str, mur_dir: &std::path::Path) -> Result<()> {
         }
         let safe_name = name.replace(['/', '\\', '.', '~'], "_");
         if safe_name.is_empty() || safe_name.starts_with('-') {
-            tracing::warn!("Skipping pattern with invalid name after sanitization: {:?}", name);
+            tracing::warn!(
+                "Skipping pattern with invalid name after sanitization: {:?}",
+                name
+            );
             continue;
         }
         let path = patterns_dir.join(format!("{}.yaml", safe_name));
@@ -657,8 +712,7 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
     }
 
     // ─── Ensure skills are installed ───────────────────────────
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
     let skill_installed = ensure_mur_skill(&home)?;
     if !quiet && skill_installed {
         println!("  🎓 MUR skill installed/updated for AI tools");
@@ -703,7 +757,10 @@ fn ensure_default_templates(home: &std::path::Path, quiet: bool) -> Result<()> {
         std::fs::create_dir_all(&templates_dir)?;
         std::fs::write(&extract_prompt, crate::cmd::learn::DEFAULT_EXTRACT_PROMPT)?;
         if !quiet {
-            println!("  📝 Created default extraction template: {}", extract_prompt.display());
+            println!(
+                "  📝 Created default extraction template: {}",
+                extract_prompt.display()
+            );
         }
     }
 

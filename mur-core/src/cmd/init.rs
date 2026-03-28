@@ -182,7 +182,8 @@ exit 0
                 .entry(*event_name)
                 .or_insert_with(|| serde_json::json!([]));
 
-            let arr = event_arr.as_array_mut()
+            let arr = event_arr
+                .as_array_mut()
                 .ok_or_else(|| anyhow::anyhow!("hook event '{event_name}' is not an array"))?;
 
             // Remove any existing mur-managed hooks (by checking command contains mur hooks dir)
@@ -362,7 +363,8 @@ exit 0
                 .ok_or_else(|| anyhow::anyhow!("hooks field is not a JSON object"))?
                 .entry(*event_name)
                 .or_insert_with(|| serde_json::json!([]));
-            let arr = event_arr.as_array_mut()
+            let arr = event_arr
+                .as_array_mut()
                 .ok_or_else(|| anyhow::anyhow!("hook event '{event_name}' is not an array"))?;
             // Remove existing mur hooks
             arr.retain(|entry| {
@@ -432,7 +434,8 @@ exit 0
                 .ok_or_else(|| anyhow::anyhow!("hooks field is not a JSON object"))?
                 .entry(*event_name)
                 .or_insert_with(|| serde_json::json!([]));
-            let arr = event_arr.as_array_mut()
+            let arr = event_arr
+                .as_array_mut()
                 .ok_or_else(|| anyhow::anyhow!("hook event '{event_name}' is not an array"))?;
             arr.retain(|entry| {
                 entry

@@ -38,7 +38,8 @@ pub(crate) async fn cmd_session_stop(analyze: bool) -> Result<()> {
                 && config.sync.auto
                 && config.sync.method != "local"
                 && let Err(e) =
-                    super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push).await
+                    super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push)
+                        .await
             {
                 eprintln!("  ⚠ Auto-push failed: {}", e);
             }
@@ -186,7 +187,10 @@ pub(crate) fn cmd_session_record(
 pub(crate) fn cmd_session_exit() -> Result<()> {
     match session::stop()? {
         Some(id) => {
-            eprintln!("Session stopped: {} (recording discarded — no export)", &id[..8]);
+            eprintln!(
+                "Session stopped: {} (recording discarded — no export)",
+                &id[..8]
+            );
         }
         None => {
             eprintln!("No active session.");
@@ -713,10 +717,7 @@ fn export_skill(
 }
 
 /// LLM-enhanced skill export using extract_workflow_llm.
-async fn export_skill_llm(
-    id: &str,
-    events: &[session::SessionEvent],
-) -> Result<String> {
+async fn export_skill_llm(id: &str, events: &[session::SessionEvent]) -> Result<String> {
     let extracted = crate::extract::extract_workflow_llm(id, events).await?;
     let w = &extracted.workflow;
 
@@ -731,7 +732,11 @@ async fn export_skill_llm(
     out.push_str("confidence: 0.5\n");
 
     // Tags
-    let mut tags = vec!["extracted".to_string(), "session".to_string(), "llm-enhanced".to_string()];
+    let mut tags = vec![
+        "extracted".to_string(),
+        "session".to_string(),
+        "llm-enhanced".to_string(),
+    ];
     for t in &w.tools {
         tags.push(t.to_lowercase());
     }
@@ -828,11 +833,7 @@ pub(crate) async fn cmd_session_push(id_prefix: Option<&str>, all: bool) -> Resu
         let recordings = session::list_recordings()?;
         let recent = recordings
             .iter()
-            .find(|r| {
-                r.meta
-                    .as_ref()
-                    .is_some_and(|m| m.stopped_at.is_some())
-            });
+            .find(|r| r.meta.as_ref().is_some_and(|m| m.stopped_at.is_some()));
 
         match recent {
             Some(r) => {

@@ -195,8 +195,12 @@ pub struct NotifyConfig {
     pub on_anomaly: NotifyLevel,
 }
 
-fn default_alert() -> NotifyLevel { NotifyLevel::Alert }
-fn default_normal() -> NotifyLevel { NotifyLevel::Normal }
+fn default_alert() -> NotifyLevel {
+    NotifyLevel::Alert
+}
+fn default_normal() -> NotifyLevel {
+    NotifyLevel::Normal
+}
 
 impl Default for NotifyConfig {
     fn default() -> Self {

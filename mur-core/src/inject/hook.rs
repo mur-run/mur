@@ -880,7 +880,10 @@ mod tests {
         let result = format_for_injection(&[pref, proc_pattern], 120);
 
         // Preference should be present
-        assert!(result.contains("Keep it short"), "preference should be included");
+        assert!(
+            result.contains("Keep it short"),
+            "preference should be included"
+        );
         // The Procedures header must NOT appear without any content under it
         if result.contains("Procedures") {
             // If header appears, at least one procedure entry must follow it
@@ -907,7 +910,10 @@ mod tests {
             "unified injection without workflows should use grouped header"
         );
         // Preference should be a bullet point, not a numbered entry
-        assert!(result.contains("- **"), "preference should render as bullet");
+        assert!(
+            result.contains("- **"),
+            "preference should render as bullet"
+        );
         assert!(
             !result.contains("### 1."),
             "preference should NOT render as numbered entry"

@@ -228,7 +228,15 @@ fn detect_urls(
 
             let name = classify_url(url);
             let desc = format!("{} detected in workflow", url_category_desc(&name));
-            add_suggestion(suggestions, seen, url, &name, &desc, DetectedCategory::Url, 0.9);
+            add_suggestion(
+                suggestions,
+                seen,
+                url,
+                &name,
+                &desc,
+                DetectedCategory::Url,
+                0.9,
+            );
         } else {
             i += 1;
         }
@@ -238,15 +246,24 @@ fn detect_urls(
 /// Classify a URL into a suggested variable name.
 fn classify_url(url: &str) -> String {
     let lower = url.to_lowercase();
-    if lower.contains("/api/") || lower.contains("/v1/") || lower.contains("/v2/") || lower.contains("/graphql") {
+    if lower.contains("/api/")
+        || lower.contains("/v1/")
+        || lower.contains("/v2/")
+        || lower.contains("/graphql")
+    {
         "api_url".to_string()
     } else if lower.contains("localhost") || lower.contains("127.0.0.1") {
         "local_url".to_string()
-    } else if lower.contains(".git") || lower.contains("github.com") || lower.contains("gitlab.com") {
+    } else if lower.contains(".git") || lower.contains("github.com") || lower.contains("gitlab.com")
+    {
         "repo_url".to_string()
     } else if lower.contains("docker") || lower.contains("registry") {
         "registry_url".to_string()
-    } else if lower.contains("database") || lower.contains("postgres") || lower.contains("mysql") || lower.contains("mongo") {
+    } else if lower.contains("database")
+        || lower.contains("postgres")
+        || lower.contains("mysql")
+        || lower.contains("mongo")
+    {
         "db_url".to_string()
     } else {
         "base_url".to_string()
@@ -278,30 +295,48 @@ fn detect_file_paths(
             // User-specific absolute path
             let parts: Vec<&str> = word.split('/').collect();
             if parts.len() >= 4 {
-                let name = if word.contains("/Projects/") || word.contains("/project") || word.contains("/src/") {
+                let name = if word.contains("/Projects/")
+                    || word.contains("/project")
+                    || word.contains("/src/")
+                {
                     "project_dir"
-                } else if word.contains("/output") || word.contains("/dist/") || word.contains("/build/") {
+                } else if word.contains("/output")
+                    || word.contains("/dist/")
+                    || word.contains("/build/")
+                {
                     "output_dir"
                 } else {
                     "target_path"
                 };
                 add_suggestion(
-                    suggestions, seen, word, name,
+                    suggestions,
+                    seen,
+                    word,
+                    name,
                     "Absolute file path (user-specific, should be parameterized)",
-                    DetectedCategory::FilePath, 0.95,
+                    DetectedCategory::FilePath,
+                    0.95,
                 );
             }
         } else if word.starts_with("~/") && word.len() > 3 {
             add_suggestion(
-                suggestions, seen, word, "target_path",
+                suggestions,
+                seen,
+                word,
+                "target_path",
                 "Home-relative path (may differ across machines)",
-                DetectedCategory::FilePath, 0.7,
+                DetectedCategory::FilePath,
+                0.7,
             );
         } else if word.starts_with("/tmp/") || word.starts_with("/var/") {
             add_suggestion(
-                suggestions, seen, word, "temp_path",
+                suggestions,
+                seen,
+                word,
+                "temp_path",
                 "Temporary/system path",
-                DetectedCategory::FilePath, 0.6,
+                DetectedCategory::FilePath,
+                0.6,
             );
         }
     }
@@ -341,8 +376,13 @@ fn detect_api_keys(
         for (prefix, name, desc) in &key_prefixes {
             if word.starts_with(prefix) && word.len() > prefix.len() + 4 {
                 add_suggestion(
-                    suggestions, seen, word, name, desc,
-                    DetectedCategory::ApiKey, 1.0,
+                    suggestions,
+                    seen,
+                    word,
+                    name,
+                    desc,
+                    DetectedCategory::ApiKey,
+                    1.0,
                 );
                 break;
             }
@@ -352,14 +392,21 @@ fn detect_api_keys(
         if word.starts_with('$') && word.len() > 2 {
             let var_name = word.trim_start_matches('$');
             let lower = var_name.to_lowercase();
-            if lower.contains("key") || lower.contains("token") || lower.contains("secret")
-                || lower.contains("password") || lower.contains("api")
+            if lower.contains("key")
+                || lower.contains("token")
+                || lower.contains("secret")
+                || lower.contains("password")
+                || lower.contains("api")
             {
                 let suggested = lower.replace('-', "_");
                 add_suggestion(
-                    suggestions, seen, word, &suggested,
+                    suggestions,
+                    seen,
+                    word,
+                    &suggested,
                     &format!("Environment variable reference: {}", var_name),
-                    DetectedCategory::EnvVar, 0.8,
+                    DetectedCategory::EnvVar,
+                    0.8,
                 );
             }
         }
@@ -373,9 +420,13 @@ fn detect_api_keys(
             && !seen.contains_key(word)
         {
             add_suggestion(
-                suggestions, seen, word, "auth_token",
+                suggestions,
+                seen,
+                word,
+                "auth_token",
                 "Long hex string (likely a token or hash)",
-                DetectedCategory::ApiKey, 0.7,
+                DetectedCategory::ApiKey,
+                0.7,
             );
         }
     }
@@ -388,7 +439,9 @@ fn detect_emails(
     seen: &mut BTreeMap<String, String>,
 ) {
     for word in text.split_whitespace() {
-        let word = word.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ';' || c == '<' || c == '>');
+        let word = word.trim_matches(|c: char| {
+            c == '"' || c == '\'' || c == ',' || c == ';' || c == '<' || c == '>'
+        });
         // Skip git SSH URLs (git@host:user/repo) — handled by detect_git_repos
         if word.starts_with("git@") {
             continue;
@@ -398,9 +451,13 @@ fn detect_emails(
             let parts: Vec<&str> = word.split('@').collect();
             if parts.len() == 2 && !parts[0].is_empty() && parts[1].contains('.') {
                 add_suggestion(
-                    suggestions, seen, word, "email",
+                    suggestions,
+                    seen,
+                    word,
+                    "email",
                     "Email address",
-                    DetectedCategory::Email, 0.85,
+                    DetectedCategory::Email,
+                    0.85,
                 );
             }
         }
@@ -480,9 +537,13 @@ fn detect_ip_addresses(
                 continue;
             }
             add_suggestion(
-                suggestions, seen, word, "ip_address",
+                suggestions,
+                seen,
+                word,
+                "ip_address",
                 "IP address (environment-specific)",
-                DetectedCategory::IpAddress, 0.8,
+                DetectedCategory::IpAddress,
+                0.8,
             );
         }
     }
@@ -495,9 +556,13 @@ fn detect_database_urls(
     seen: &mut BTreeMap<String, String>,
 ) {
     let db_prefixes = [
-        "postgres://", "postgresql://",
-        "mysql://", "mongodb://", "mongodb+srv://",
-        "redis://", "sqlite://",
+        "postgres://",
+        "postgresql://",
+        "mysql://",
+        "mongodb://",
+        "mongodb+srv://",
+        "redis://",
+        "sqlite://",
     ];
     for token in text.split_whitespace() {
         let token = token.trim_matches(|c: char| c == '"' || c == '\'');
@@ -510,9 +575,13 @@ fn detect_database_urls(
         for prefix in &db_prefixes {
             if word.starts_with(prefix) {
                 add_suggestion(
-                    suggestions, seen, word, "database_url",
+                    suggestions,
+                    seen,
+                    word,
+                    "database_url",
                     "Database connection URL (contains credentials)",
-                    DetectedCategory::DatabaseUrl, 1.0,
+                    DetectedCategory::DatabaseUrl,
+                    1.0,
                 );
                 break;
             }
@@ -534,13 +603,24 @@ fn detect_docker_images(
             let image: String = rest
                 .trim_start()
                 .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '/' || *c == ':' || *c == '.' || *c == '-' || *c == '_')
+                .take_while(|c| {
+                    c.is_alphanumeric()
+                        || *c == '/'
+                        || *c == ':'
+                        || *c == '.'
+                        || *c == '-'
+                        || *c == '_'
+                })
                 .collect();
             if !image.is_empty() && image.len() > 3 {
                 add_suggestion(
-                    suggestions, seen, &image, "docker_image",
+                    suggestions,
+                    seen,
+                    &image,
+                    "docker_image",
                     "Docker image reference",
-                    DetectedCategory::DockerImage, 0.85,
+                    DetectedCategory::DockerImage,
+                    0.85,
                 );
             }
         }
@@ -558,9 +638,13 @@ fn detect_git_repos(
         let word = word.trim_matches(|c: char| c == '"' || c == '\'');
         if word.starts_with("git@") && word.contains(':') && word.contains('/') {
             add_suggestion(
-                suggestions, seen, word, "repo_url",
+                suggestions,
+                seen,
+                word,
+                "repo_url",
                 "Git SSH repository URL",
-                DetectedCategory::GitRepo, 0.9,
+                DetectedCategory::GitRepo,
+                0.9,
             );
         }
     }
@@ -577,9 +661,13 @@ fn detect_user_specific(
         let home_str = home.to_string_lossy().to_string();
         if text.contains(&home_str) && !seen.contains_key(&home_str) {
             add_suggestion(
-                suggestions, seen, &home_str, "home_dir",
+                suggestions,
+                seen,
+                &home_str,
+                "home_dir",
                 "User home directory (machine-specific)",
-                DetectedCategory::UserSpecific, 0.95,
+                DetectedCategory::UserSpecific,
+                0.95,
             );
         }
     }
@@ -674,43 +762,74 @@ mod tests {
     fn test_detect_file_paths() {
         let texts = vec!["Run build in /Users/david/Projects/myapp"];
         let suggestions = detect_parameterizable_values(&texts);
-        assert!(suggestions.iter().any(|s| s.category == DetectedCategory::FilePath));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.category == DetectedCategory::FilePath)
+        );
     }
 
     #[test]
     fn test_detect_api_keys() {
         let texts = vec!["Use key sk-1234567890abcdef to authenticate"];
         let suggestions = detect_parameterizable_values(&texts);
-        assert!(suggestions.iter().any(|s| s.category == DetectedCategory::ApiKey));
-        assert_eq!(suggestions.iter().find(|s| s.category == DetectedCategory::ApiKey).unwrap().suggested_name, "api_key");
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.category == DetectedCategory::ApiKey)
+        );
+        assert_eq!(
+            suggestions
+                .iter()
+                .find(|s| s.category == DetectedCategory::ApiKey)
+                .unwrap()
+                .suggested_name,
+            "api_key"
+        );
     }
 
     #[test]
     fn test_detect_github_token() {
         let texts = vec!["export GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345"];
         let suggestions = detect_parameterizable_values(&texts);
-        assert!(suggestions.iter().any(|s| s.suggested_name == "github_token"));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.suggested_name == "github_token")
+        );
     }
 
     #[test]
     fn test_detect_email() {
         let texts = vec!["Send notification to admin@company.com"];
         let suggestions = detect_parameterizable_values(&texts);
-        assert!(suggestions.iter().any(|s| s.category == DetectedCategory::Email));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.category == DetectedCategory::Email)
+        );
     }
 
     #[test]
     fn test_detect_database_url() {
         let texts = vec!["DATABASE_URL=postgres://user:pass@db.example.com:5432/mydb"];
         let suggestions = detect_parameterizable_values(&texts);
-        assert!(suggestions.iter().any(|s| s.category == DetectedCategory::DatabaseUrl));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.category == DetectedCategory::DatabaseUrl)
+        );
     }
 
     #[test]
     fn test_detect_git_ssh() {
         let texts = vec!["git clone git@github.com:user/repo.git"];
         let suggestions = detect_parameterizable_values(&texts);
-        assert!(suggestions.iter().any(|s| s.category == DetectedCategory::GitRepo));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.category == DetectedCategory::GitRepo)
+        );
     }
 
     #[test]
@@ -741,7 +860,10 @@ mod tests {
         ];
         let suggestions = detect_parameterizable_values(&texts);
         // The URL should appear only once
-        let url_count = suggestions.iter().filter(|s| s.category == DetectedCategory::Url).count();
+        let url_count = suggestions
+            .iter()
+            .filter(|s| s.category == DetectedCategory::Url)
+            .count();
         assert!(url_count <= 2); // might detect both, but deduped by exact value
     }
 

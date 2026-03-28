@@ -87,8 +87,12 @@ pub struct Schedule {
     pub executor: ScheduleExecutor,
 }
 
-fn default_timezone() -> String { "UTC".into() }
-fn default_enabled() -> bool { true }
+fn default_timezone() -> String {
+    "UTC".into()
+}
+fn default_enabled() -> bool {
+    true
+}
 
 /// Container for schedules.yaml file format.
 #[derive(Debug, Serialize, Deserialize)]

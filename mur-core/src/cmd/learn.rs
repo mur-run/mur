@@ -96,8 +96,8 @@ pub(crate) async fn cmd_learn_extract(
         println!("Analyzing transcript with LLM ({})...", model_name);
 
         let system = {
-            let template_path = dirs::home_dir()
-                .map(|h| h.join(".mur/templates/extract-prompt.md"));
+            let template_path =
+                dirs::home_dir().map(|h| h.join(".mur/templates/extract-prompt.md"));
             match template_path {
                 Some(p) if p.exists() => {
                     eprintln!("📝 Using custom extraction template: {}", p.display());
@@ -150,7 +150,10 @@ pub(crate) async fn cmd_learn_extract(
                                         {
                                             target.links.related.push(p.name.clone());
                                             if let Err(e) = store.save(&target) {
-                                                tracing::warn!("Failed to save linked target '{}': {e}", s.target_name);
+                                                tracing::warn!(
+                                                    "Failed to save linked target '{}': {e}",
+                                                    s.target_name
+                                                );
                                             }
                                         }
                                     }

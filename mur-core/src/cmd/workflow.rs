@@ -38,8 +38,8 @@ pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool, prompt: bool)
         if prompt {
             print_workflow_prompt(&w);
         } else {
-            let executor = crate::executor::pipeline::PipelineExecutor::new(store)
-                .with_fail_fast(fail_fast);
+            let executor =
+                crate::executor::pipeline::PipelineExecutor::new(store).with_fail_fast(fail_fast);
             let expr = mur_common::pipeline::PipelineExpr::Single(w.name.clone());
             let output = executor.execute(&expr, None).await?;
             if output.exit_code != 0 {
@@ -483,7 +483,9 @@ pub(crate) fn cmd_workflow_publish(name: &str, team: &str) -> Result<()> {
     };
 
     // License check — warn but don't block (server enforces 403)
-    eprintln!("  ⚠ Publishing requires a Pro+ plan. If you're on Free, the server will reject this.");
+    eprintln!(
+        "  ⚠ Publishing requires a Pro+ plan. If you're on Free, the server will reject this."
+    );
 
     let device_id = crate::auth::get_device_id();
     let device_name = crate::auth::get_device_name();
@@ -816,7 +818,9 @@ fn save_schedules(schedules: &[Schedule]) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let file = SchedulesFile { schedules: schedules.to_vec() };
+    let file = SchedulesFile {
+        schedules: schedules.to_vec(),
+    };
     let yaml = serde_yaml::to_string(&file)?;
     std::fs::write(&path, yaml)?;
     Ok(())
@@ -842,7 +846,10 @@ pub(crate) fn cmd_schedule_list() -> Result<()> {
                 println!("     user: {}", s.user_id);
             }
             if !s.notify.target.is_empty() {
-                println!("     notify: {} → {}", s.notify.notify_type, s.notify.target);
+                println!(
+                    "     notify: {} → {}",
+                    s.notify.notify_type, s.notify.target
+                );
             }
         }
     }
@@ -893,7 +900,9 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
 
     // Verify workflow exists
     let store = WorkflowYamlStore::default_store()?;
-    let _ = store.get(name).with_context(|| format!("Workflow '{}' not found", name))?;
+    let _ = store
+        .get(name)
+        .with_context(|| format!("Workflow '{}' not found", name))?;
 
     // Determine executor: Commander if running, otherwise system cron
     let executor = mur_common::schedule_claim::auto_detect_executor();
@@ -986,7 +995,10 @@ pub(crate) fn cmd_schedule_enable(name: &str, enable: bool) -> Result<()> {
             let _ = crate::cmd::system_schedule::remove(name);
         }
     } else {
-        println!("ℹ️  No schedule found for '{}'. Use `mur workflow schedule set` first.", name);
+        println!(
+            "ℹ️  No schedule found for '{}'. Use `mur workflow schedule set` first.",
+            name
+        );
     }
 
     Ok(())

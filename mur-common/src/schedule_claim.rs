@@ -70,7 +70,9 @@ pub fn save_schedules(schedules: &[Schedule]) -> Result<(), Box<dyn std::error::
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let file = SchedulesFile { schedules: schedules.to_vec() };
+    let file = SchedulesFile {
+        schedules: schedules.to_vec(),
+    };
     let yaml = serde_yaml::to_string(&file)?;
     std::fs::write(&path, yaml)?;
     Ok(())

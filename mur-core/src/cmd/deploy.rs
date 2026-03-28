@@ -4,7 +4,7 @@
 //! without having to remember compose flags. Config is read from a
 //! `docker-compose.yml` in the current directory or an explicit `--file`.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -23,7 +23,12 @@ pub(crate) fn resolve_compose_file(file: Option<&str>) -> Result<PathBuf> {
     }
 
     // Standard search order (same as docker compose CLI)
-    for candidate in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"] {
+    for candidate in [
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+    ] {
         let p = PathBuf::from(candidate);
         if p.exists() {
             return Ok(p);
@@ -103,7 +108,11 @@ pub(crate) fn cmd_deploy_status(file: Option<&str>) -> Result<()> {
 }
 
 /// `mur deploy logs [service] [--follow]`
-pub(crate) fn cmd_deploy_logs(file: Option<&str>, service: Option<&str>, follow: bool) -> Result<()> {
+pub(crate) fn cmd_deploy_logs(
+    file: Option<&str>,
+    service: Option<&str>,
+    follow: bool,
+) -> Result<()> {
     let compose_file = resolve_compose_file(file)?;
     let mut cmd = compose_cmd(&compose_file);
     cmd.arg("logs");
@@ -136,7 +145,11 @@ mod tests {
 
     fn make_compose_file(dir: &TempDir, name: &str) -> PathBuf {
         let path = dir.path().join(name);
-        fs::write(&path, "version: '3'\nservices:\n  mur:\n    image: mur:latest\n").unwrap();
+        fs::write(
+            &path,
+            "version: '3'\nservices:\n  mur:\n    image: mur:latest\n",
+        )
+        .unwrap();
         path
     }
 

@@ -642,7 +642,10 @@ fn load_dotenv() {
         }
     }
     // Try ~/.mur/commander/.env (Commander shares API keys here)
-    if let Some(path) = home.as_ref().map(|h| h.join(".mur").join("commander").join(".env")) {
+    if let Some(path) = home
+        .as_ref()
+        .map(|h| h.join(".mur").join("commander").join(".env"))
+    {
         if path.exists() {
             if dotenvy::from_path(&path).is_ok() {
                 return;
@@ -699,9 +702,11 @@ async fn main() -> Result<()> {
         },
         Commands::Sync { quiet, project } => cmd::sync_cmd::cmd_sync(quiet, project).await?,
         Commands::Inject { query, project: _ } => cmd::inject_cmd::cmd_inject(&query).await?,
-        Commands::Run { query, fail_fast, prompt } => {
-            cmd::workflow::cmd_workflow_run(&query, fail_fast, prompt).await?
-        }
+        Commands::Run {
+            query,
+            fail_fast,
+            prompt,
+        } => cmd::workflow::cmd_workflow_run(&query, fail_fast, prompt).await?,
         Commands::Pattern { action } => match action {
             PatternAction::Show { name } => cmd::pattern::cmd_pattern_show(&name)?,
         },
@@ -709,10 +714,14 @@ async fn main() -> Result<()> {
             WorkflowAction::List => cmd::workflow::cmd_workflow_list()?,
             WorkflowAction::Schedule { action } => match action {
                 ScheduleAction::List => cmd::workflow::cmd_schedule_list()?,
-                ScheduleAction::Set { name, cron } => cmd::workflow::cmd_schedule_set(&name, &cron)?,
+                ScheduleAction::Set { name, cron } => {
+                    cmd::workflow::cmd_schedule_set(&name, &cron)?
+                }
                 ScheduleAction::Remove { name } => cmd::workflow::cmd_schedule_remove(&name)?,
                 ScheduleAction::Enable { name } => cmd::workflow::cmd_schedule_enable(&name, true)?,
-                ScheduleAction::Disable { name } => cmd::workflow::cmd_schedule_enable(&name, false)?,
+                ScheduleAction::Disable { name } => {
+                    cmd::workflow::cmd_schedule_enable(&name, false)?
+                }
             },
             WorkflowAction::Show { name, md } => cmd::workflow::cmd_workflow_show(&name, md)?,
             WorkflowAction::Search { query, limit } => {
@@ -845,21 +854,21 @@ async fn main() -> Result<()> {
         Commands::Import { file, dry_run } => cmd::misc::cmd_import(file, dry_run)?,
         Commands::Exit | Commands::Quit => cmd::session::cmd_session_exit()?,
         Commands::Deploy { action } => match action {
-            DeployAction::Up { build, detach, file } => {
-                cmd::deploy::cmd_deploy_up(file.as_deref(), build, detach)?
-            }
+            DeployAction::Up {
+                build,
+                detach,
+                file,
+            } => cmd::deploy::cmd_deploy_up(file.as_deref(), build, detach)?,
             DeployAction::Down { volumes, file } => {
                 cmd::deploy::cmd_deploy_down(file.as_deref(), volumes)?
             }
-            DeployAction::Status { file } => {
-                cmd::deploy::cmd_deploy_status(file.as_deref())?
-            }
-            DeployAction::Logs { service, follow, file } => {
-                cmd::deploy::cmd_deploy_logs(file.as_deref(), service.as_deref(), follow)?
-            }
-            DeployAction::Build { file } => {
-                cmd::deploy::cmd_deploy_build(file.as_deref())?
-            }
+            DeployAction::Status { file } => cmd::deploy::cmd_deploy_status(file.as_deref())?,
+            DeployAction::Logs {
+                service,
+                follow,
+                file,
+            } => cmd::deploy::cmd_deploy_logs(file.as_deref(), service.as_deref(), follow)?,
+            DeployAction::Build { file } => cmd::deploy::cmd_deploy_build(file.as_deref())?,
         },
     }
 

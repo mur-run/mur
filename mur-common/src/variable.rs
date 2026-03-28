@@ -112,9 +112,7 @@ impl VariableStore {
     pub fn switch_profile(&mut self, profile: &str) {
         self.active_profile = profile.to_string();
         // Ensure the profile entry exists
-        self.profiles
-            .entry(profile.to_string())
-            .or_default();
+        self.profiles.entry(profile.to_string()).or_default();
     }
 
     /// List all profile names.
@@ -240,9 +238,7 @@ pub fn collect_workflow_variables(workflow: &crate::workflow::Workflow) -> Vec<S
 }
 
 /// Build workflow defaults map from a workflow's `variables` section.
-pub fn workflow_defaults_map(
-    workflow: &crate::workflow::Workflow,
-) -> BTreeMap<String, String> {
+pub fn workflow_defaults_map(workflow: &crate::workflow::Workflow) -> BTreeMap<String, String> {
     let mut defaults = BTreeMap::new();
     for v in &workflow.variables {
         if let Some(ref dv) = v.default_value {

@@ -165,7 +165,10 @@ mod tests {
         }"#;
         let snap: SpotRateSnapshot = serde_json::from_str(json).unwrap();
         assert_eq!(snap.base, "USD");
-        assert_eq!(snap.date, "2024-01-15".parse::<chrono::NaiveDate>().unwrap());
+        assert_eq!(
+            snap.date,
+            "2024-01-15".parse::<chrono::NaiveDate>().unwrap()
+        );
         assert!((snap.rates["EUR"] - 0.9123).abs() < 1e-6);
         assert!((snap.rates["GBP"] - 0.7891).abs() < 1e-6);
     }

@@ -6,7 +6,11 @@ use crate::error::LlmError;
 /// Edition 2024 supports async fn in traits natively.
 pub trait LlmClient: Send + Sync {
     /// Text completion
-    fn complete(&self, prompt: &str, system: Option<&str>) -> impl Future<Output = Result<String, LlmError>> + Send;
+    fn complete(
+        &self,
+        prompt: &str,
+        system: Option<&str>,
+    ) -> impl Future<Output = Result<String, LlmError>> + Send;
 
     /// Generate embedding vector
     fn embed(&self, text: &str) -> impl Future<Output = Result<Vec<f32>, LlmError>> + Send;

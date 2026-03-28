@@ -51,12 +51,7 @@ struct SessionPushPayload {
 
 /// Push a single session to the cloud server.
 /// Returns Ok(true) if pushed, Ok(false) if skipped (already synced or missing data).
-pub async fn push_session(
-    server_url: &str,
-    token: &str,
-    id: &str,
-    quiet: bool,
-) -> Result<bool> {
+pub async fn push_session(server_url: &str, token: &str, id: &str, quiet: bool) -> Result<bool> {
     if is_synced(id) {
         return Ok(false);
     }
@@ -65,7 +60,10 @@ pub async fn push_session(
         Some(m) => m,
         None => {
             if !quiet {
-                eprintln!("  ⚠ Session {} has no metadata, skipping.", &id[..8.min(id.len())]);
+                eprintln!(
+                    "  ⚠ Session {} has no metadata, skipping.",
+                    &id[..8.min(id.len())]
+                );
             }
             return Ok(false);
         }
@@ -74,7 +72,10 @@ pub async fn push_session(
     // Only push stopped sessions
     if meta.stopped_at.is_none() {
         if !quiet {
-            eprintln!("  ⚠ Session {} is still active, skipping.", &id[..8.min(id.len())]);
+            eprintln!(
+                "  ⚠ Session {} is still active, skipping.",
+                &id[..8.min(id.len())]
+            );
         }
         return Ok(false);
     }
@@ -90,7 +91,10 @@ pub async fn push_session(
     let events = super::scrub::scrub_events(&raw_events);
     let secrets_found = super::scrub::count_secrets(&raw_events);
     if !quiet && secrets_found > 0 {
-        eprintln!("  🔒 Redacted {} potential secret(s) before push.", secrets_found);
+        eprintln!(
+            "  🔒 Redacted {} potential secret(s) before push.",
+            secrets_found
+        );
     }
 
     let payload = SessionPushPayload {
@@ -129,19 +133,31 @@ pub async fn push_session(
         Ok(r) if r.status().is_success() => {
             mark_synced(id)?;
             if !quiet {
-                eprintln!("  ✓ Pushed session {} ({} events)", &id[..8.min(id.len())], payload.events.len());
+                eprintln!(
+                    "  ✓ Pushed session {} ({} events)",
+                    &id[..8.min(id.len())],
+                    payload.events.len()
+                );
             }
             Ok(true)
         }
         Ok(r) => {
             if !quiet {
-                eprintln!("  ⚠ Push failed for session {}: HTTP {}", &id[..8.min(id.len())], r.status());
+                eprintln!(
+                    "  ⚠ Push failed for session {}: HTTP {}",
+                    &id[..8.min(id.len())],
+                    r.status()
+                );
             }
             Ok(false)
         }
         Err(e) => {
             if !quiet {
-                eprintln!("  ⚠ Push failed for session {}: {}", &id[..8.min(id.len())], e);
+                eprintln!(
+                    "  ⚠ Push failed for session {}: {}",
+                    &id[..8.min(id.len())],
+                    e
+                );
             }
             Ok(false)
         }

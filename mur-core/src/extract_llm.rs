@@ -12,7 +12,7 @@ use mur_common::knowledge::KnowledgeBase;
 use mur_common::pattern::Content;
 use mur_common::workflow::{Step, VarType, Variable, Workflow};
 
-use crate::extract::{extract_workflow, ExtractedWorkflow};
+use crate::extract::{ExtractedWorkflow, extract_workflow};
 use crate::llm::llm_complete;
 use crate::session::SessionEvent;
 
@@ -61,8 +61,8 @@ pub async fn extract_workflow_llm(
     let logic_result = extract_workflow(session_id, events);
 
     // ── Load LLM config ──────────────────────────────────────────────
-    let config = crate::store::config::load_config()
-        .context("Failed to load config for LLM extraction")?;
+    let config =
+        crate::store::config::load_config().context("Failed to load config for LLM extraction")?;
     let llm_config = config.llm.clone();
 
     // Use the model from config.yaml — user's choice (sonnet, opus, haiku, etc.)
@@ -250,10 +250,7 @@ fn parse_llm_response(response: &str) -> Option<LlmExtractedJson> {
         .strip_prefix("```json")
         .or_else(|| trimmed.strip_prefix("```"))
         .unwrap_or(trimmed);
-    let stripped = stripped
-        .strip_suffix("```")
-        .unwrap_or(stripped)
-        .trim();
+    let stripped = stripped.strip_suffix("```").unwrap_or(stripped).trim();
 
     serde_json::from_str::<LlmExtractedJson>(stripped).ok()
 }
