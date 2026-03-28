@@ -12,6 +12,7 @@ pub(crate) mod server_cmd;
 pub(crate) mod session;
 pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;
+#[allow(dead_code)]
 pub(crate) mod var;
 pub(crate) mod workflow;
 

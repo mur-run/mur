@@ -88,84 +88,80 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                     match sched_resp {
                         Ok(r) if r.status().is_success() => {
                             let body = r.text().await.unwrap_or_default();
-                            if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&body) {
-                                if let Some(data) = resp.get("data").and_then(|d| d.as_array()) {
-                                    let mut schedules: Vec<mur_common::schedule::Schedule> =
-                                        Vec::new();
-                                    for item in data {
-                                        let sched = mur_common::schedule::Schedule {
-                                            id: item
-                                                .get("id")
+                            if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&body)
+                                && let Some(data) = resp.get("data").and_then(|d| d.as_array())
+                            {
+                                let mut schedules: Vec<mur_common::schedule::Schedule> = Vec::new();
+                                for item in data {
+                                    let sched = mur_common::schedule::Schedule {
+                                        id: item
+                                            .get("id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default()
+                                            .to_string(),
+                                        workflow: item
+                                            .get("workflow_name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default()
+                                            .to_string(),
+                                        cron: item
+                                            .get("cron_expr")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default()
+                                            .to_string(),
+                                        timezone: item
+                                            .get("timezone")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("UTC")
+                                            .to_string(),
+                                        enabled: item
+                                            .get("enabled")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(true),
+                                        user_id: String::new(),
+                                        variables: Default::default(),
+                                        notify: mur_common::schedule::ScheduleNotify {
+                                            notify_type: item
+                                                .get("notify_type")
                                                 .and_then(|v| v.as_str())
                                                 .unwrap_or_default()
                                                 .to_string(),
-                                            workflow: item
-                                                .get("workflow_name")
+                                            target: item
+                                                .get("notify_target")
                                                 .and_then(|v| v.as_str())
                                                 .unwrap_or_default()
                                                 .to_string(),
-                                            cron: item
-                                                .get("cron_expr")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or_default()
-                                                .to_string(),
-                                            timezone: item
-                                                .get("timezone")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("UTC")
-                                                .to_string(),
-                                            enabled: item
-                                                .get("enabled")
-                                                .and_then(|v| v.as_bool())
-                                                .unwrap_or(true),
-                                            user_id: String::new(),
-                                            variables: Default::default(),
-                                            notify: mur_common::schedule::ScheduleNotify {
-                                                notify_type: item
-                                                    .get("notify_type")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or_default()
-                                                    .to_string(),
-                                                target: item
-                                                    .get("notify_target")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or_default()
-                                                    .to_string(),
-                                            },
-                                            on_missed: Default::default(),
-                                            executor:
-                                                mur_common::schedule::ScheduleExecutor::Server,
-                                        };
-                                        schedules.push(sched);
+                                        },
+                                        on_missed: Default::default(),
+                                        executor: mur_common::schedule::ScheduleExecutor::Server,
+                                    };
+                                    schedules.push(sched);
+                                }
+
+                                if !schedules.is_empty() {
+                                    // Merge with existing local schedules instead of overwriting
+                                    let existing_schedules =
+                                        mur_common::schedule_claim::load_schedules()
+                                            .unwrap_or_default();
+                                    let server_workflow_names: std::collections::HashSet<String> =
+                                        schedules.iter().map(|s| s.workflow.clone()).collect();
+
+                                    // Keep local-only schedules (not on server)
+                                    for local in existing_schedules {
+                                        if !server_workflow_names.contains(&local.workflow) {
+                                            schedules.push(local);
+                                        }
                                     }
 
-                                    if !schedules.is_empty() {
-                                        // Merge with existing local schedules instead of overwriting
-                                        let existing_schedules =
-                                            mur_common::schedule_claim::load_schedules()
-                                                .unwrap_or_default();
-                                        let server_workflow_names: std::collections::HashSet<
-                                            String,
-                                        > = schedules.iter().map(|s| s.workflow.clone()).collect();
-
-                                        // Keep local-only schedules (not on server)
-                                        for local in existing_schedules {
-                                            if !server_workflow_names.contains(&local.workflow) {
-                                                schedules.push(local);
-                                            }
-                                        }
-
-                                        let file =
-                                            mur_common::schedule::SchedulesFile { schedules };
-                                        let yaml = serde_yaml::to_string(&file)?;
-                                        let path = mur_dir.join("schedules.yaml");
-                                        std::fs::write(&path, yaml)?;
-                                        if !quiet {
-                                            eprintln!(
-                                                "  ✓ Pulled {} schedule(s) from server.",
-                                                data.len()
-                                            );
-                                        }
+                                    let file = mur_common::schedule::SchedulesFile { schedules };
+                                    let yaml = serde_yaml::to_string(&file)?;
+                                    let path = mur_dir.join("schedules.yaml");
+                                    std::fs::write(&path, yaml)?;
+                                    if !quiet {
+                                        eprintln!(
+                                            "  ✓ Pulled {} schedule(s) from server.",
+                                            data.len()
+                                        );
                                     }
                                 }
                             }
@@ -200,42 +196,41 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                     match wf_resp {
                         Ok(r) if r.status().is_success() => {
                             let body = r.text().await.unwrap_or_default();
-                            if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&body) {
-                                if let Some(data) = resp.get("data").and_then(|d| d.as_array()) {
-                                    let workflows_dir = mur_dir.join("workflows");
-                                    std::fs::create_dir_all(&workflows_dir)?;
-                                    let mut pulled = 0u32;
-                                    for item in data {
-                                        let name = item
-                                            .get("name")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or_default();
-                                        let yaml_content = item
-                                            .get("yaml_content")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or_default();
-                                        if name.is_empty() || yaml_content.is_empty() {
-                                            continue;
-                                        }
-                                        // Sanitize name to prevent path traversal
-                                        let safe_name = name.replace(['/', '\\', '~'], "_");
-                                        if safe_name.is_empty()
-                                            || safe_name.contains("..")
-                                            || safe_name.starts_with('-')
-                                        {
-                                            continue;
-                                        }
-                                        let path =
-                                            workflows_dir.join(format!("{}.yaml", safe_name));
-                                        if !path.starts_with(&workflows_dir) {
-                                            continue;
-                                        }
-                                        std::fs::write(&path, yaml_content)?;
-                                        pulled += 1;
+                            if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&body)
+                                && let Some(data) = resp.get("data").and_then(|d| d.as_array())
+                            {
+                                let workflows_dir = mur_dir.join("workflows");
+                                std::fs::create_dir_all(&workflows_dir)?;
+                                let mut pulled = 0u32;
+                                for item in data {
+                                    let name = item
+                                        .get("name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or_default();
+                                    let yaml_content = item
+                                        .get("yaml_content")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or_default();
+                                    if name.is_empty() || yaml_content.is_empty() {
+                                        continue;
                                     }
-                                    if !quiet && pulled > 0 {
-                                        eprintln!("  ✓ Pulled {} workflow(s) from server.", pulled);
+                                    // Sanitize name to prevent path traversal
+                                    let safe_name = name.replace(['/', '\\', '~'], "_");
+                                    if safe_name.is_empty()
+                                        || safe_name.contains("..")
+                                        || safe_name.starts_with('-')
+                                    {
+                                        continue;
                                     }
+                                    let path = workflows_dir.join(format!("{}.yaml", safe_name));
+                                    if !path.starts_with(&workflows_dir) {
+                                        continue;
+                                    }
+                                    std::fs::write(&path, yaml_content)?;
+                                    pulled += 1;
+                                }
+                                if !quiet && pulled > 0 {
+                                    eprintln!("  ✓ Pulled {} workflow(s) from server.", pulled);
                                 }
                             }
                         }

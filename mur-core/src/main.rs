@@ -645,12 +645,10 @@ fn load_dotenv() {
     if let Some(path) = home
         .as_ref()
         .map(|h| h.join(".mur").join("commander").join(".env"))
+        && path.exists()
+        && dotenvy::from_path(&path).is_ok()
     {
-        if path.exists() {
-            if dotenvy::from_path(&path).is_ok() {
-                return;
-            }
-        }
+        return;
     }
     // Fallback: current directory .env
     let _ = dotenvy::dotenv();
