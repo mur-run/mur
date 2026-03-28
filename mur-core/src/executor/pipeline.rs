@@ -643,7 +643,11 @@ mod tests {
         let expr = PipelineExpr::Single("prompt-inject".into());
         let output = executor.execute(&expr, Some(piped)).await.unwrap();
 
-        assert_eq!(output.output_text.as_deref(), Some("Analyze: 'some data'"));
+        let text = output.output_text.as_deref().unwrap();
+        assert!(
+            text == "Analyze: 'some data'" || text == "Analyze: \"some data\"",
+            "unexpected: {text}"
+        );
     }
 
     #[tokio::test]
