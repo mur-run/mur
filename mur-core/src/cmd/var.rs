@@ -20,14 +20,14 @@ pub(crate) fn cmd_var_list(profile: Option<&str>) -> Result<()> {
 
     // Show profile variables
     let target_profile = profile.unwrap_or(&store.active_profile);
-    if let Some(profile_vars) = store.profiles.get(target_profile) {
-        if !profile_vars.is_empty() {
-            println!("  Profile [{}]:", target_profile);
-            for (k, v) in profile_vars {
-                println!("    {{{{{}}}}} = {}", k, v);
-            }
-            println!();
+    if let Some(profile_vars) = store.profiles.get(target_profile)
+        && !profile_vars.is_empty()
+    {
+        println!("  Profile [{}]:", target_profile);
+        for (k, v) in profile_vars {
+            println!("    {{{{{}}}}} = {}", k, v);
         }
+        println!();
     }
 
     // Show effective (merged) variables

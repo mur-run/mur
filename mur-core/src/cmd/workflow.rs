@@ -887,15 +887,13 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
     // Check for stale Commander PID — if PID file exists but process is dead, reclaim for system cron
     if mur_common::schedule_claim::commander_pid_path().exists()
         && !mur_common::schedule_claim::is_commander_running()
+        && let Ok(released) = mur_common::schedule_claim::release_all_from_commander()
+        && !released.is_empty()
     {
-        if let Ok(released) = mur_common::schedule_claim::release_all_from_commander()
-            && !released.is_empty()
-        {
-            eprintln!(
-                "   ⚠️  Commander not running (stale PID). Reclaiming {} schedule(s) for system cron.",
-                released.len()
-            );
-        }
+        eprintln!(
+            "   ⚠️  Commander not running (stale PID). Reclaiming {} schedule(s) for system cron.",
+            released.len()
+        );
     }
 
     // Verify workflow exists
