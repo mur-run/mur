@@ -14,6 +14,10 @@ use std::process::{Command, Stdio};
 /// back to `docker-compose.yml` / `compose.yml` in the current directory, then
 /// tries the default bundled path next to the mur binary.
 pub(crate) fn resolve_compose_file(file: Option<&str>) -> Result<PathBuf> {
+    resolve_compose_file_in(file, &std::env::current_dir()?)
+}
+
+fn resolve_compose_file_in(file: Option<&str>, base: &Path) -> Result<PathBuf> {
     if let Some(f) = file {
         let p = PathBuf::from(f);
         if p.exists() {
@@ -29,7 +33,7 @@ pub(crate) fn resolve_compose_file(file: Option<&str>) -> Result<PathBuf> {
         "compose.yml",
         "compose.yaml",
     ] {
-        let p = PathBuf::from(candidate);
+        let p = base.join(candidate);
         if p.exists() {
             return Ok(p);
         }
@@ -174,14 +178,8 @@ mod tests {
 
     #[test]
     fn no_file_in_cwd_returns_error() {
-        // Run from a temp dir that has no compose file.
         let dir = TempDir::new().unwrap();
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-
-        let result = resolve_compose_file(None);
-
-        std::env::set_current_dir(original).unwrap();
+        let result = resolve_compose_file_in(None, dir.path());
         assert!(result.is_err());
         let msg = format!("{}", result.unwrap_err());
         assert!(msg.contains("No docker-compose.yml found"));
@@ -191,12 +189,7 @@ mod tests {
     fn discovers_docker_compose_yml_in_cwd() {
         let dir = TempDir::new().unwrap();
         make_compose_file(&dir, "docker-compose.yml");
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-
-        let result = resolve_compose_file(None);
-
-        std::env::set_current_dir(original).unwrap();
+        let result = resolve_compose_file_in(None, dir.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap().file_name().unwrap(), "docker-compose.yml");
     }
@@ -205,12 +198,7 @@ mod tests {
     fn discovers_compose_yml_in_cwd() {
         let dir = TempDir::new().unwrap();
         make_compose_file(&dir, "compose.yml");
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-
-        let result = resolve_compose_file(None);
-
-        std::env::set_current_dir(original).unwrap();
+        let result = resolve_compose_file_in(None, dir.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap().file_name().unwrap(), "compose.yml");
     }
@@ -220,12 +208,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         make_compose_file(&dir, "docker-compose.yml");
         make_compose_file(&dir, "compose.yml");
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-
-        let result = resolve_compose_file(None);
-
-        std::env::set_current_dir(original).unwrap();
+        let result = resolve_compose_file_in(None, dir.path());
         assert!(result.is_ok());
         assert_eq!(result.unwrap().file_name().unwrap(), "docker-compose.yml");
     }
