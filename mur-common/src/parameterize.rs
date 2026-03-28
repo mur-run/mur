@@ -424,22 +424,37 @@ fn detect_ports(
                 end += 1;
             }
             let port_str: String = chars[start..end].iter().collect();
-            if let Ok(port) = port_str.parse::<u16>() {
-                if (1024..=65535).contains(&port) && !seen.contains_key(&port_str) {
-                    // Check context — is there a host before the colon?
-                    let before: String = chars[..i].iter().rev().take(20).collect::<String>().chars().rev().collect();
-                    if before.contains("localhost")
-                        || before.contains("0.0.0.0")
-                        || before.contains("127.0.0.1")
-                        || before.ends_with("://")
-                        || before.chars().last().map_or(false, |c| c.is_alphanumeric() || c == '.')
-                    {
-                        add_suggestion(
-                            suggestions, seen, &port_str, "port",
-                            &format!("Port number ({})", port),
-                            DetectedCategory::Port, 0.6,
-                        );
-                    }
+            if let Ok(port) = port_str.parse::<u16>()
+                && (1024..=65535).contains(&port)
+                && !seen.contains_key(&port_str)
+            {
+                // Check context — is there a host before the colon?
+                let before: String = chars[..i]
+                    .iter()
+                    .rev()
+                    .take(20)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                if before.contains("localhost")
+                    || before.contains("0.0.0.0")
+                    || before.contains("127.0.0.1")
+                    || before.ends_with("://")
+                    || before
+                        .chars()
+                        .last()
+                        .is_some_and(|c| c.is_alphanumeric() || c == '.')
+                {
+                    add_suggestion(
+                        suggestions,
+                        seen,
+                        &port_str,
+                        "port",
+                        &format!("Port number ({})", port),
+                        DetectedCategory::Port,
+                        0.6,
+                    );
                 }
             }
             i = end;
@@ -570,14 +585,14 @@ fn detect_user_specific(
     }
 
     // Detect current username in paths
-    if let Ok(user) = std::env::var("USER") {
-        if user.len() >= 3 {
-            let user_in_path = format!("/Users/{}", user);
-            let user_in_home = format!("/home/{}", user);
-            for pattern in [&user_in_path, &user_in_home] {
-                if text.contains(pattern.as_str()) && !seen.contains_key(pattern.as_str()) {
-                    // Already covered by home_dir detection usually, skip
-                }
+    if let Ok(user) = std::env::var("USER")
+        && user.len() >= 3
+    {
+        let user_in_path = format!("/Users/{}", user);
+        let user_in_home = format!("/home/{}", user);
+        for pattern in [&user_in_path, &user_in_home] {
+            if text.contains(pattern.as_str()) && !seen.contains_key(pattern.as_str()) {
+                // Already covered by home_dir detection usually, skip
             }
         }
     }
