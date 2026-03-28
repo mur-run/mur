@@ -269,6 +269,11 @@ enum Commands {
     Exit,
     /// Stop recording without export (alias: exit)
     Quit,
+    /// Manage Docker Compose deployment
+    Deploy {
+        #[command(subcommand)]
+        action: DeployAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -577,6 +582,54 @@ enum PackAction {
     },
 }
 
+#[derive(Subcommand)]
+enum DeployAction {
+    /// Start services (docker compose up)
+    Up {
+        /// Rebuild images before starting
+        #[arg(long)]
+        build: bool,
+        /// Run in the background (detached mode)
+        #[arg(short, long)]
+        detach: bool,
+        /// Path to a docker-compose file (default: docker-compose.yml in cwd)
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+    /// Stop and remove services (docker compose down)
+    Down {
+        /// Also remove named volumes declared in the compose file
+        #[arg(long)]
+        volumes: bool,
+        /// Path to a docker-compose file
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+    /// Show service status (docker compose ps)
+    Status {
+        /// Path to a docker-compose file
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+    /// Show service logs (docker compose logs)
+    Logs {
+        /// Service name (shows all services if omitted)
+        service: Option<String>,
+        /// Follow log output
+        #[arg(short, long)]
+        follow: bool,
+        /// Path to a docker-compose file
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+    /// Build or rebuild service images (docker compose build)
+    Build {
+        /// Path to a docker-compose file
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+}
+
 /// Load .env file from `~/.mur/.env` (preferred), `~/.mur/commander/.env`, or `./.env` (fallback).
 fn load_dotenv() {
     let home = dirs::home_dir();
@@ -791,6 +844,23 @@ async fn main() -> Result<()> {
         },
         Commands::Import { file, dry_run } => cmd::misc::cmd_import(file, dry_run)?,
         Commands::Exit | Commands::Quit => cmd::session::cmd_session_exit()?,
+        Commands::Deploy { action } => match action {
+            DeployAction::Up { build, detach, file } => {
+                cmd::deploy::cmd_deploy_up(file.as_deref(), build, detach)?
+            }
+            DeployAction::Down { volumes, file } => {
+                cmd::deploy::cmd_deploy_down(file.as_deref(), volumes)?
+            }
+            DeployAction::Status { file } => {
+                cmd::deploy::cmd_deploy_status(file.as_deref())?
+            }
+            DeployAction::Logs { service, follow, file } => {
+                cmd::deploy::cmd_deploy_logs(file.as_deref(), service.as_deref(), follow)?
+            }
+            DeployAction::Build { file } => {
+                cmd::deploy::cmd_deploy_build(file.as_deref())?
+            }
+        },
     }
 
     Ok(())

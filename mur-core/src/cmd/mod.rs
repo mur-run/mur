@@ -1,4 +1,5 @@
 pub(crate) mod community_cmd;
+pub(crate) mod deploy;
 pub(crate) mod context;
 pub(crate) mod evolve_cmd;
 pub(crate) mod init;

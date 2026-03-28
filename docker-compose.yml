@@ -1,0 +1,35 @@
+version: "3.9"
+
+# ── mur Docker Compose deployment ────────────────────────────────────────────
+# Usage:
+#   mur deploy up          # start detached
+#   mur deploy up --build  # rebuild image then start
+#   mur deploy down        # stop and remove containers
+#   mur deploy status      # show running services
+#   mur deploy logs        # follow logs
+
+services:
+  mur:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mur:latest
+    container_name: mur-server
+    ports:
+      - "${MUR_PORT:-3847}:3847"
+    volumes:
+      # Persist patterns, workflows, sessions, config
+      - mur-data:/root/.mur
+    environment:
+      RUST_LOG: ${RUST_LOG:-warn}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mur", "doctor"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mur-data:
+    driver: local

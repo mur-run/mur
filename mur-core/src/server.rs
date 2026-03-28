@@ -45,6 +45,7 @@ use crate::store::config::load_config;
 use crate::store::embedding::{EmbeddingConfig, embed};
 use crate::store::lancedb::VectorStore;
 use crate::store::pipeline_yaml::{PipelineDef, PipelineYamlStore};
+use crate::store::spot_rate::{fetch_usd_rate, fetch_usd_rates};
 use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
@@ -199,6 +200,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/pipelines/{id}", put(update_pipeline))
         .route("/api/v1/pipelines/{id}", delete(delete_pipeline))
         .route("/api/v1/pipelines/{id}/run", post(run_pipeline))
+        // Exchange rates (Frankfurter API proxy)
+        .route("/api/v1/rates", get(get_rates))
+        .route("/api/v1/rates/{currency}", get(get_rate))
         // WebSocket for real-time events
         .route("/api/v1/ws", get(ws_handler))
         .layer(cors)
@@ -301,6 +305,22 @@ async fn health() -> impl IntoResponse {
         "version": env!("CARGO_PKG_VERSION"),
         "source": "local",
     }))
+}
+
+// ── Exchange rates ─────────────────────────────────────────────────
+
+/// `GET /api/v1/rates` — all current USD spot rates.
+async fn get_rates() -> Result<impl IntoResponse, AppError> {
+    let snapshot = fetch_usd_rates().await.map_err(AppError::Internal)?;
+    Ok(Json(snapshot))
+}
+
+/// `GET /api/v1/rates/{currency}` — single USD spot rate, e.g. `/api/v1/rates/EUR`.
+async fn get_rate(Path(currency): Path<String>) -> Result<impl IntoResponse, AppError> {
+    let rate = fetch_usd_rate(&currency)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(rate))
 }
 
 // ── Patterns ───────────────────────────────────────────────────────
@@ -2104,5 +2124,75 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── Exchange rate handler tests ────────────────────────────────────────────
+
+    /// Live integration test — requires network. Run with `cargo test -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_rates_live() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = build_router(test_state(&tmp));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/rates")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["base"], "USD");
+        assert!(json["rates"].is_object());
+        assert!(json["rates"]["EUR"].as_f64().unwrap_or(0.0) > 0.0);
+    }
+
+    /// Live integration test — requires network. Run with `cargo test -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_rate_single_currency_live() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = build_router(test_state(&tmp));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/rates/EUR")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["base"], "USD");
+        assert_eq!(json["target"], "EUR");
+        assert!(json["rate"].as_f64().unwrap_or(0.0) > 0.0);
+    }
+
+    /// Live integration test — requires network. Run with `cargo test -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn test_get_rate_invalid_currency_returns_500_live() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = build_router(test_state(&tmp));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/rates/NOTREAL")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

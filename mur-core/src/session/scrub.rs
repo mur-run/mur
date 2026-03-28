@@ -288,9 +288,8 @@ fn scrub_content(content: &str, event_type: &str) -> String {
 /// the value has high entropy (likely a randomly generated secret).
 fn scrub_high_entropy_in_tool_output(content: &str) -> String {
     static KV_RE: OnceLock<Regex> = OnceLock::new();
-    let kv_re = KV_RE.get_or_init(|| {
-        Regex::new(r"(?m)^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$").unwrap()
-    });
+    let kv_re =
+        KV_RE.get_or_init(|| Regex::new(r"(?m)^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$").unwrap());
 
     kv_re
         .replace_all(content, |caps: &regex::Captures| {
@@ -311,9 +310,8 @@ fn count_contextual_secrets(content: &str, event_type: &str) -> usize {
         return 0;
     }
     static KV_RE: OnceLock<Regex> = OnceLock::new();
-    let kv_re = KV_RE.get_or_init(|| {
-        Regex::new(r"(?m)^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$").unwrap()
-    });
+    let kv_re =
+        KV_RE.get_or_init(|| Regex::new(r"(?m)^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$").unwrap());
     kv_re
         .captures_iter(content)
         .filter(|caps| {
@@ -368,7 +366,8 @@ mod tests {
 
     #[test]
     fn test_pem_key() {
-        let input = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----";
+        let input =
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----";
         let result = scrub_content(input, "tool_result");
         assert!(result.contains("[REDACTED:private_key]"));
     }
