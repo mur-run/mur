@@ -888,13 +888,13 @@ pub(crate) fn cmd_schedule_set(name: &str, cron: &str) -> Result<()> {
     if mur_common::schedule_claim::commander_pid_path().exists()
         && !mur_common::schedule_claim::is_commander_running()
     {
-        if let Ok(released) = mur_common::schedule_claim::release_all_from_commander() {
-            if !released.is_empty() {
-                eprintln!(
-                    "   ⚠️  Commander not running (stale PID). Reclaiming {} schedule(s) for system cron.",
-                    released.len()
-                );
-            }
+        if let Ok(released) = mur_common::schedule_claim::release_all_from_commander()
+            && !released.is_empty()
+        {
+            eprintln!(
+                "   ⚠️  Commander not running (stale PID). Reclaiming {} schedule(s) for system cron.",
+                released.len()
+            );
         }
     }
 

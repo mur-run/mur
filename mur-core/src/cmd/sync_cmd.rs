@@ -935,12 +935,11 @@ async fn push_unsynced_workflows(server_url: &str, token: &str, quiet: bool) -> 
         let synced_path = workflows_dir.join(format!("{}.synced", name));
         let content = std::fs::read_to_string(&path)?;
         let content_hash = format!("{:x}", md5_simple(&content));
-        if synced_path.exists() {
-            if let Ok(prev_hash) = std::fs::read_to_string(&synced_path) {
-                if prev_hash.trim() == content_hash {
-                    continue;
-                }
-            }
+        if synced_path.exists()
+            && let Ok(prev_hash) = std::fs::read_to_string(&synced_path)
+            && prev_hash.trim() == content_hash
+        {
+            continue;
         }
 
         // POST workflow YAML to server

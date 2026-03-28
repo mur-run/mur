@@ -634,12 +634,11 @@ enum DeployAction {
 fn load_dotenv() {
     let home = dirs::home_dir();
     // Try ~/.mur/.env first
-    if let Some(path) = home.as_ref().map(|h| h.join(".mur").join(".env")) {
-        if path.exists() {
-            if dotenvy::from_path(&path).is_ok() {
-                return;
-            }
-        }
+    if let Some(path) = home.as_ref().map(|h| h.join(".mur").join(".env"))
+        && path.exists()
+        && dotenvy::from_path(&path).is_ok()
+    {
+        return;
     }
     // Try ~/.mur/commander/.env (Commander shares API keys here)
     if let Some(path) = home

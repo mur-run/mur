@@ -69,13 +69,13 @@ fn cron_to_calendar_interval(cron_expr: &str) -> String {
     ];
 
     for (key, value) in &fields {
-        if *value != "*" {
-            if let Ok(num) = value.parse::<i32>() {
-                entries.push(format!(
-                    "      <key>{}</key>\n      <integer>{}</integer>",
-                    key, num
-                ));
-            }
+        if *value != "*"
+            && let Ok(num) = value.parse::<i32>()
+        {
+            entries.push(format!(
+                "      <key>{}</key>\n      <integer>{}</integer>",
+                key, num
+            ));
         }
     }
 
