@@ -32,15 +32,15 @@ jobs:
             os: windows-latest
             name: mur-x86_64-pc-windows-msvc
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Checkout mur-web
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: mur-run/mur-web
           path: mur-web-src
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
 
@@ -144,7 +144,7 @@ jobs:
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Update formula
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: mur-run/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
