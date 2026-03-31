@@ -24,25 +24,7 @@ pub(crate) fn cmd_init(hooks_flag: bool) -> Result<()> {
     // ─── Step E: Write default config.yaml if not exists ─────────
     let config_path = mur_dir.join("config.yaml");
     if !config_path.exists() {
-        let default_config = r#"# MUR Configuration
-# See: https://github.com/mur-run/mur
-
-tools:
-  claude:
-    enabled: true
-  gemini:
-    enabled: true
-
-search:
-  provider: ollama
-  model: qwen3-embedding:0.6b
-
-learning:
-  llm:
-    provider: ollama
-    model: llama3.2:3b
-"#;
-        std::fs::write(&config_path, default_config)?;
+        crate::store::config::save_config(&mur_common::config::Config::default())?;
     }
 
     // ─── Determine whether to install hooks ──────────────────────
@@ -752,9 +734,9 @@ Run `mur learn` to extract new patterns from recent sessions.
                 "4" => {
                     println!();
                     println!("Anthropic models:");
-                    println!("  Best quality:  claude-opus-4    ($15/$75 per 1M tokens)");
-                    println!("  Best value:    claude-sonnet-4   ($3/$15 per 1M tokens) ← default");
-                    println!("  Budget:        claude-haiku-3.5  ($0.80/$4 per 1M tokens)");
+                    println!("  Best quality:  claude-opus-4.6   ($15/$75 per 1M tokens) ← default");
+                    println!("  Best value:    claude-sonnet-4.6  ($3/$15 per 1M tokens)");
+                    println!("  Budget:        claude-haiku-4.5   ($0.80/$4 per 1M tokens)");
                 }
                 _ => {
                     println!();
@@ -772,7 +754,7 @@ Run `mur learn` to extract new patterns from recent sessions.
                 "3" => ("gemini", "gemini-2.5-flash", "GEMINI_API_KEY", false),
                 "4" => (
                     "anthropic",
-                    "claude-sonnet-4-20250514",
+                    "claude-opus-4-6",
                     "ANTHROPIC_API_KEY",
                     false,
                 ),

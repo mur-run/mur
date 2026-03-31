@@ -163,6 +163,254 @@ pub(crate) async fn cmd_session_stop(analyze: bool) -> Result<()> {
     Ok(())
 }
 
+/// `mur in` — start session + inject context
+pub(crate) async fn cmd_in(source: &str) -> anyhow::Result<()> {
+    // Start the session
+    let session = crate::session::start(source)?;
+    eprintln!("Session started: {} (source: {})", &session.id[..8], source);
+
+    // Inject context (equivalent to `mur context --quiet`)
+    crate::cmd::context::cmd_context(None, false, false, 2000, source.to_string(), false, vec![], true).await?;
+
+    Ok(())
+}
+
+/// `mur out` — stop session + post-session menu
+///
+/// - TTY mode: shows dialoguer interactive menu
+/// - Non-TTY mode (LLM): outputs structured text for the LLM to present
+/// - `--action <name>`: directly executes the chosen action (for LLM second call)
+pub(crate) async fn cmd_out(action: Option<&str>) -> anyhow::Result<()> {
+    // If --action is given, we're in the "execute chosen action" phase
+    if let Some(action) = action {
+        return cmd_out_execute(action).await;
+    }
+
+    // Stop the session
+    let id = match crate::session::stop()? {
+        Some(id) => id,
+        None => {
+            eprintln!("No active session.");
+            return Ok(());
+        }
+    };
+
+    eprintln!("Session stopped: {}", &id[..8]);
+
+    let recording_path = dirs::home_dir()
+        .expect("no home dir")
+        .join(".mur")
+        .join("session")
+        .join("recordings")
+        .join(format!("{}.jsonl", &id));
+
+    // Extract fingerprints
+    if recording_path.exists() {
+        let content = std::fs::read_to_string(&recording_path)?;
+        if !content.trim().is_empty() {
+            use crate::capture::emergence::{extract_fingerprints, save_fingerprints};
+            let fps = extract_fingerprints(&content, &id);
+            if !fps.is_empty() {
+                save_fingerprints(&fps)?;
+                eprintln!("Extracted {} fingerprints from session.", fps.len());
+            }
+        }
+    }
+
+    // Auto-push to device sync if configured
+    if let Ok(config) = crate::store::config::load_config()
+        && config.sync.auto
+        && config.sync.method != "local"
+        && let Err(e) =
+            super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push).await
+    {
+        eprintln!("  ⚠ Auto-push failed: {}", e);
+    }
+
+    // Session summary
+    let meta = crate::session::load_meta_pub(&id);
+    let event_count = if recording_path.exists() {
+        std::fs::read_to_string(&recording_path)
+            .map(|c| c.lines().filter(|l| !l.trim().is_empty()).count())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    eprintln!();
+    eprintln!("Session summary:");
+    eprintln!("  Events: {}", event_count);
+    if let Some(ref m) = meta {
+        eprintln!(
+            "  Turns:  {} user, {} assistant",
+            m.user_turns, m.assistant_turns
+        );
+        if let (Some(stopped), Ok(start)) = (
+            &m.stopped_at,
+            chrono::DateTime::parse_from_rfc3339(&m.started_at),
+        ) && let Ok(end) = chrono::DateTime::parse_from_rfc3339(stopped)
+        {
+            let secs = end.signed_duration_since(start).num_seconds();
+            if secs >= 3600 {
+                eprintln!(
+                    "  Duration: {}h {}m {}s",
+                    secs / 3600,
+                    (secs % 3600) / 60,
+                    secs % 60
+                );
+            } else if secs >= 60 {
+                eprintln!("  Duration: {}m {}s", secs / 60, secs % 60);
+            } else {
+                eprintln!("  Duration: {}s", secs);
+            }
+        }
+    }
+
+    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+
+    if is_tty {
+        // Interactive TTY menu
+        let items = &[
+            "🔍 Analyze — extract patterns with LLM (needs reasoning model)",
+            "📦 Export — save as markdown",
+            "🔄 Sync — sync patterns to AI tools",
+            "⏭  Skip",
+        ];
+
+        if let Ok(choice) = dialoguer::Select::new()
+            .with_prompt("What next?")
+            .items(items)
+            .default(2)
+            .interact()
+        {
+            let exe =
+                std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
+            match choice {
+                0 => {
+                    if let Some(path_str) = recording_path.to_str() {
+                        let status = std::process::Command::new(&exe)
+                            .args(["learn", "extract", "--file", path_str, "--llm"])
+                            .status();
+                        if let Ok(s) = status
+                            && !s.success()
+                        {
+                            eprintln!("  ⚠ learn extract exited with {}", s);
+                        } else if let Err(e) = status {
+                            eprintln!("  ⚠ Failed to run learn extract: {}", e);
+                        }
+                    }
+                }
+                1 => {
+                    let status = std::process::Command::new(&exe)
+                        .args(["session", "export", &id, "--format", "markdown"])
+                        .status();
+                    if let Ok(s) = status
+                        && !s.success()
+                    {
+                        eprintln!("  ⚠ session export exited with {}", s);
+                    } else if let Err(e) = status {
+                        eprintln!("  ⚠ Failed to run session export: {}", e);
+                    }
+                }
+                2 => {
+                    let status = std::process::Command::new(&exe)
+                        .args(["sync"])
+                        .status();
+                    if let Ok(s) = status
+                        && !s.success()
+                    {
+                        eprintln!("  ⚠ sync exited with {}", s);
+                    } else if let Err(e) = status {
+                        eprintln!("  ⚠ Failed to run sync: {}", e);
+                    }
+                }
+                _ => {} // Skip
+            }
+        }
+    } else {
+        // Non-TTY: structured output for LLM consumption
+        eprintln!();
+        eprintln!("Available actions:");
+        eprintln!("  1. analyze  — Extract patterns with LLM analysis");
+        eprintln!("  2. export   — Save session as markdown");
+        eprintln!("  3. sync     — Sync patterns to AI tools");
+        eprintln!("  4. skip     — Done, no further action");
+        eprintln!();
+        eprintln!("Run: mur out --action <analyze|export|sync|skip>");
+    }
+
+    Ok(())
+}
+
+/// Execute a specific post-session action (called via `mur out --action <name>`)
+async fn cmd_out_execute(action: &str) -> anyhow::Result<()> {
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
+
+    match action {
+        "analyze" => {
+            // Find the most recent stopped session
+            let recordings = crate::session::list_recordings()?;
+            let recent = recordings
+                .iter()
+                .find(|r| r.meta.as_ref().is_some_and(|m| m.stopped_at.is_some()));
+
+            match recent {
+                Some(r) => {
+                    let path = dirs::home_dir()
+                        .expect("no home dir")
+                        .join(".mur/session/recordings")
+                        .join(format!("{}.jsonl", r.id));
+
+                    if let Some(path_str) = path.to_str() {
+                        let status = std::process::Command::new(&exe)
+                            .args(["learn", "extract", "--file", path_str, "--llm"])
+                            .status()?;
+                        if !status.success() {
+                            eprintln!("  ⚠ learn extract exited with {}", status);
+                        }
+                    }
+                }
+                None => eprintln!("No stopped session found."),
+            }
+        }
+        "export" => {
+            let recordings = crate::session::list_recordings()?;
+            let recent = recordings
+                .iter()
+                .find(|r| r.meta.as_ref().is_some_and(|m| m.stopped_at.is_some()));
+
+            match recent {
+                Some(r) => {
+                    let status = std::process::Command::new(&exe)
+                        .args(["session", "export", &r.id, "--format", "markdown"])
+                        .status()?;
+                    if !status.success() {
+                        eprintln!("  ⚠ session export exited with {}", status);
+                    }
+                }
+                None => eprintln!("No stopped session found."),
+            }
+        }
+        "sync" => {
+            let status = std::process::Command::new(&exe).args(["sync"]).status()?;
+            if !status.success() {
+                eprintln!("  ⚠ sync exited with {}", status);
+            }
+        }
+        "skip" => {
+            eprintln!("Done.");
+        }
+        _ => {
+            anyhow::bail!(
+                "Unknown action '{}'. Use: analyze, export, sync, skip",
+                action
+            );
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn cmd_session_record(
     event_type: &str,
     tool: Option<&str>,

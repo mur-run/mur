@@ -197,7 +197,7 @@ fn default_llm_provider() -> String {
     "anthropic".to_string()
 }
 fn default_llm_model() -> String {
-    "claude-sonnet-4-20250514".to_string()
+    "claude-opus-4-6".to_string()
 }
 fn default_max_patterns() -> usize {
     5

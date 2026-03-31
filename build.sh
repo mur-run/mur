@@ -55,6 +55,6 @@ if $INSTALL; then
 #  echo "📥 Installing to /usr/local/bin/mur..."
 #  cp "$BINARY" /usr/local/bin/mur
   echo "📥 Installing to /opt/homebrew/bin/mur..."
-  cp "$BINARY" /opt/homebrew/bin/mur
+  sudo cp "$BINARY" /opt/homebrew/bin/mur
   echo "✅ Installed: $(mur --version 2>/dev/null || echo 'done')"
 fi

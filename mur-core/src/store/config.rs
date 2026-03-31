@@ -38,9 +38,9 @@ pub fn save_config(config: &Config) -> Result<()> {
 # LLM Model Recommendations:
 #
 #   Anthropic (provider: anthropic):
-#     Best quality:  claude-opus-4-20250514        ($15/$75 per 1M tokens)
-#     Best value:    claude-sonnet-4-20250514      ($3/$15 per 1M tokens)
-#     Budget:        claude-3-5-haiku-20241022     ($0.80/$4 per 1M tokens)
+#     Best quality:  claude-opus-4-6               ($15/$75 per 1M tokens)
+#     Best value:    claude-sonnet-4-6             ($3/$15 per 1M tokens)
+#     Budget:        claude-haiku-4-5-20251001     ($0.80/$4 per 1M tokens)
 #
 #   OpenAI (provider: openai):
 #     Best quality:  gpt-4o                        ($2.50/$10 per 1M tokens)
@@ -59,6 +59,9 @@ pub fn save_config(config: &Config) -> Result<()> {
 #     Best value:    llama3.2:3b                    (free, needs 4GB RAM)
 #
 #   Copy the exact model name into llm.model below.
+#
+#   Default is Opus for best extraction quality (used only a few times/day).
+#   To save cost, switch to Sonnet: llm.model: claude-sonnet-4-6
 
 "#;
     fs::write(&path, format!("{}{}", header, yaml))?;

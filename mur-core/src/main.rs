@@ -265,6 +265,18 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Start session recording and inject context (shorthand for session start + context)
+    In {
+        /// Source identifier (e.g. claude-code)
+        #[arg(long, default_value = "claude-code")]
+        source: String,
+    },
+    /// Stop session recording with post-session menu (shorthand for session stop + next action)
+    Out {
+        /// Action to perform: analyze, export, skip (skips menu in non-TTY mode)
+        #[arg(long)]
+        action: Option<String>,
+    },
     /// Stop recording without export (alias: quit)
     Exit,
     /// Stop recording without export (alias: exit)
@@ -849,6 +861,8 @@ async fn main() -> Result<()> {
             ExchangeAction::Export { name, dir } => cmd::misc::cmd_exchange_export(&name, dir)?,
         },
         Commands::Import { file, dry_run } => cmd::misc::cmd_import(file, dry_run)?,
+        Commands::In { source } => cmd::session::cmd_in(&source).await?,
+        Commands::Out { action } => cmd::session::cmd_out(action.as_deref()).await?,
         Commands::Exit | Commands::Quit => cmd::session::cmd_session_exit()?,
         Commands::Deploy { action } => match action {
             DeployAction::Up {
