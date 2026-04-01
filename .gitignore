@@ -4,3 +4,6 @@ Cargo.lock
 CLAUDE.md
 openspec/
 research/
+.augment/
+.claude/
+.github/
