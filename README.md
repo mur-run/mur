@@ -3,26 +3,35 @@
 [![Release](https://img.shields.io/github/v/release/mur-run/mur)](https://github.com/mur-run/mur/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Continuous learning for AI assistants.**
+**The learning layer for AI coding tools.**
 
-MUR captures patterns from your coding sessions and injects them into your AI tools. Your assistant learns your conventions, remembers your fixes, and gets smarter over time — automatically.
+MUR is the only system that captures patterns from your coding sessions, evolves them over time, and injects them into 16+ AI tools automatically. Unlike static rules files or generic memory APIs, MUR's patterns mature, decay, and adapt — so your AI assistants continuously get smarter.
 
 ## Why MUR?
 
-Every time you use an AI CLI, you start from scratch. It forgets your project conventions, coding patterns, and past discoveries.
+Every AI coding tool starts from scratch. You repeat the same instructions, lose hard-won discoveries, and maintain separate config files for each tool.
 
-MUR remembers.
+**MUR closes the loop.**
 
 ```
-Without MUR:
-  You: "Use Swift Testing instead of XCTest"
-  ... 3 days later ...
-  You: "Use Swift Testing instead of XCTest" (again)
-
-With MUR:
-  AI already knows your testing preferences.
-  Zero repetition. Continuous learning.
+Session 1:  You correct the AI → MUR captures the pattern (Draft)
+Session 5:  Pattern auto-promoted to Emerging (validated by usage)
+Session 20: Pattern reaches Stable — injected with high confidence
+Month 3:    Unused patterns decay. Active ones get promoted to Canonical.
 ```
+
+### How MUR compares
+
+| | **Rules sync tools** (ai-rulez, rulesync) | **Agent memory** (Mem0, Zep, Letta) | **MUR** |
+|---|---|---|---|
+| Multi-tool sync | Yes (static files) | No | Yes (16+ tools) |
+| Learns from sessions | No | Generic memory | Developer-specific patterns |
+| Pattern evolution | No | No | Decay, maturity lifecycle, GEP |
+| Feedback loop | No | No | Reinforcement + contradiction detection |
+| Data format | Markdown/YAML | Opaque DB / API | YAML + Git-friendly |
+| Privacy | Local | Cloud-dependent | 100% local-first |
+
+> **In short:** Rules sync tools write config files but don't learn. Memory frameworks store data but don't evolve it. MUR does both — and connects them in a closed loop.
 
 ## Quick Start
 
@@ -81,16 +90,15 @@ Patterns start as **Draft**, get promoted through **Emerging → Stable → Cano
 
 | Feature | Description |
 |---------|-------------|
-| **Continuous Learning** | Extract patterns from Claude Code, Gemini CLI, Cursor, and other AI sessions |
+| **Closed-Loop Learning** | Session recording → pattern extraction → injection → feedback → evolution. No other tool does all five. |
+| **Pattern Evolution Engine** | Time decay (exponential half-life), maturity lifecycle (Draft→Canonical), GEP-based genetic evolution, auto-promotion/demotion. **No competitor has this.** |
 | **Universal Sync** | 16+ tools: Claude Code, Gemini CLI, Auggie, Cursor, Copilot CLI, OpenClaw, OpenCode, Amp, Codex, Aider, Windsurf, Zed, Junie, Trae, Cline, Amazon Q |
-| **Semantic Search** | LanceDB vector search + BM25 hybrid ranking |
-| **Embedded Dashboard** | Built-in web UI for pattern management, workflow editing, and session review |
+| **Hybrid Semantic Search** | Vector similarity (70%) + BM25 keyword (30%) + 6-factor scoring. More precise than pure vector search. |
 | **Workflow Engine** | Multi-step workflows with variables, tools, and session extraction |
-| **Session Recording** | Record AI sessions, review events, extract reusable workflows |
-| **Pattern Maturity** | Draft → Emerging → Stable → Canonical with auto-promotion and demotion |
-| **Automatic Decay** | Exponential half-life — unused patterns fade, pinned patterns persist |
+| **Embedded Dashboard** | Built-in web UI for pattern management, workflow editing, and session review |
+| **YAML + Git Friendly** | Human-readable patterns, version-controllable, no opaque database lock-in |
+| **100% Local First** | All data on your machine. Zero telemetry. Injection scanning + content hashing for security. |
 | **Multi-language** | Dashboard UI in English, 繁體中文, 简体中文 |
-| **Local First** | All data on your machine. YAML is source of truth |
 
 ## Dashboard
 
@@ -167,6 +175,7 @@ mur
 │   ├── search <q>     Semantic search workflows
 │   └── new <name>     Create a new workflow
 ├── run <query>        Find and output workflow as executable prompt
+├── verify             Scan docs for stale claims (paths, commands, code refs)
 ├── session
 │   ├── start          Start recording a session
 │   ├── stop           Stop recording

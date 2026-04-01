@@ -86,12 +86,17 @@ LanceDB vector index is always rebuildable from YAML via `mur reindex`.
 
 ### Other Modules
 
+- **`verify.rs`** — Documentation verification engine: parses claims (file paths, CLI commands, code refs) from Markdown and checks them against the project. Known commands are auto-derived from the clap command tree at runtime.
 - **`server.rs`** — Axum-based local API server (Phase 0 feature)
 - **`community.rs`** — Community pattern browser
 - **`dashboard.rs`** — Terminal overview
 - **`interactive.rs`** — `dialoguer`-powered interactive pattern creation
 - **`migrate/`** — legacy schema migration (rarely needed)
 - **`auth.rs`** — Trust levels for community patterns
+
+### CLI Commands (New)
+
+- **`mur verify [--file path] [--all]`** — Scan docs for stale claims (paths, commands, code refs)
 
 ## Development Notes
 
