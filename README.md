@@ -175,7 +175,6 @@ mur
 │   ├── search <q>     Semantic search workflows
 │   └── new <name>     Create a new workflow
 ├── run <query>        Find and output workflow as executable prompt
-├── verify             Scan docs for stale claims (paths, commands, code refs)
 ├── session
 │   ├── start          Start recording a session
 │   ├── stop           Stop recording
