@@ -95,14 +95,18 @@ const BILLING_HEADER: &str =
     "x-anthropic-billing-header: cc_version=2.1.77; cc_entrypoint=sdk-cli;";
 
 /// Beta features required for OAuth tokens.
-const ANTHROPIC_OAUTH_BETAS: &str =
-    "claude-code-20250219,oauth-2025-04-20";
+const ANTHROPIC_OAUTH_BETAS: &str = "claude-code-20250219,oauth-2025-04-20";
 
 /// Read the fresh OAuth token from macOS Keychain (same source Claude Code uses).
 #[cfg(target_os = "macos")]
 fn read_oauth_from_keychain() -> Option<String> {
     let output = std::process::Command::new("security")
-        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
         .output()
         .ok()?;
 

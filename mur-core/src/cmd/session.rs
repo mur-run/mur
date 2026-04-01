@@ -215,7 +215,17 @@ pub(crate) async fn cmd_in(source: &str) -> anyhow::Result<()> {
     eprintln!("  Use `mur out` to stop and export, or `mur quit` to discard.");
 
     // Inject context (equivalent to `mur context --quiet`)
-    crate::cmd::context::cmd_context(None, false, false, 2000, source.to_string(), false, vec![], true).await?;
+    crate::cmd::context::cmd_context(
+        None,
+        false,
+        false,
+        2000,
+        source.to_string(),
+        false,
+        vec![],
+        true,
+    )
+    .await?;
 
     Ok(())
 }
@@ -327,8 +337,7 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
             .default(2)
             .interact()
         {
-            let exe =
-                std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
+            let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
             match choice {
                 0 => {
                     // Extract patterns via LLM
@@ -385,39 +394,57 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
 /// Check if a session has enough substance to warrant LLM analysis.
 ///
 /// Returns `(worth_it, reason)` — skips only when ALL thresholds are below minimum.
-fn session_worth_analyzing(recording_path: &std::path::Path, meta: Option<&crate::session::SessionMeta>) -> (bool, String) {
+fn session_worth_analyzing(
+    recording_path: &std::path::Path,
+    meta: Option<&crate::session::SessionMeta>,
+) -> (bool, String) {
     let content = match std::fs::read_to_string(recording_path) {
         Ok(c) => c,
         Err(_) => return (false, "recording file not found".to_string()),
     };
 
     let noise_patterns = [
-        "mur session", "mur sync", "mur context", "mur inject",
-        "/mur:in", "/mur:out", "/mur-in", "/mur-out",
-        "[stop:", "turn_end",
+        "mur session",
+        "mur sync",
+        "mur context",
+        "mur inject",
+        "/mur:in",
+        "/mur:out",
+        "/mur-in",
+        "/mur-out",
+        "[stop:",
+        "turn_end",
     ];
 
     let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
-    let non_noise_count = lines.iter().filter(|l| {
-        let lower = l.to_lowercase();
-        !noise_patterns.iter().any(|n| lower.contains(n))
-    }).count();
+    let non_noise_count = lines
+        .iter()
+        .filter(|l| {
+            let lower = l.to_lowercase();
+            !noise_patterns.iter().any(|n| lower.contains(n))
+        })
+        .count();
 
     let tool_call_count = lines.iter().filter(|l| l.contains("\"tool_call\"")).count();
 
     let user_turns = meta.map(|m| m.user_turns).unwrap_or(0);
-    let duration_secs = meta.and_then(|m| {
-        let start = chrono::DateTime::parse_from_rfc3339(&m.started_at).ok()?;
-        let end = chrono::DateTime::parse_from_rfc3339(m.stopped_at.as_ref()?).ok()?;
-        Some(end.signed_duration_since(start).num_seconds())
-    }).unwrap_or(0);
+    let duration_secs = meta
+        .and_then(|m| {
+            let start = chrono::DateTime::parse_from_rfc3339(&m.started_at).ok()?;
+            let end = chrono::DateTime::parse_from_rfc3339(m.stopped_at.as_ref()?).ok()?;
+            Some(end.signed_duration_since(start).num_seconds())
+        })
+        .unwrap_or(0);
 
     // Skip only when ALL thresholds are below minimum (conservative)
     if non_noise_count < 5 && user_turns < 2 && duration_secs < 120 && tool_call_count == 0 {
-        return (false, format!(
-            "{} events, {} turns, {}s",
-            non_noise_count, user_turns, duration_secs
-        ));
+        return (
+            false,
+            format!(
+                "{} events, {} turns, {}s",
+                non_noise_count, user_turns, duration_secs
+            ),
+        );
     }
 
     (true, String::new())
@@ -496,10 +523,7 @@ async fn cmd_out_execute(action: &str, force: bool) -> anyhow::Result<()> {
             eprintln!("Done.");
         }
         _ => {
-            anyhow::bail!(
-                "Unknown action '{}'. Use: analyze, export, skip",
-                action
-            );
+            anyhow::bail!("Unknown action '{}'. Use: analyze, export, skip", action);
         }
     }
 
@@ -526,7 +550,6 @@ pub(crate) fn cmd_session_record(
     }
     Ok(())
 }
-
 
 pub(crate) fn cmd_session_exit() -> Result<()> {
     match session::stop()? {

@@ -473,12 +473,18 @@ pub(crate) fn parse_llm_patterns(response: &str) -> Vec<Pattern> {
                         // Check if array contains non-object items (e.g. [0], [null])
                         // which means the LLM returned a "no patterns" signal
                         if let Ok(raw) = serde_json::from_str::<Vec<serde_json::Value>>(extracted)
-                            && raw.iter().all(|v| !v.is_object()) {
-                                tracing::info!("LLM returned non-pattern array (likely no patterns): {extracted}");
-                                return vec![];
+                            && raw.iter().all(|v| !v.is_object())
+                        {
+                            tracing::info!(
+                                "LLM returned non-pattern array (likely no patterns): {extracted}"
+                            );
+                            return vec![];
                         }
                         tracing::warn!("Failed to parse LLM pattern JSON: {e}");
-                        tracing::debug!("Attempted to parse: {}", &extracted[..extracted.len().min(300)]);
+                        tracing::debug!(
+                            "Attempted to parse: {}",
+                            &extracted[..extracted.len().min(300)]
+                        );
                         return vec![];
                     }
                 }

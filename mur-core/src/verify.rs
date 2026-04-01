@@ -282,7 +282,10 @@ fn subcommand_words() -> HashSet<String> {
         .iter()
         .flat_map(|cmd| {
             // "mur workflow schedule list" → ["workflow", "schedule", "list"]
-            cmd.split_whitespace().skip(1).map(|s| s.to_string()).collect::<Vec<_>>()
+            cmd.split_whitespace()
+                .skip(1)
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
         })
         .collect()
 }
@@ -425,11 +428,7 @@ pub fn set_known_commands(commands: HashSet<String>) {
 
 /// Get a clone of the known command set. Returns an empty set if never initialized.
 fn known_mur_commands() -> HashSet<String> {
-    KNOWN_COMMANDS
-        .read()
-        .unwrap()
-        .clone()
-        .unwrap_or_default()
+    KNOWN_COMMANDS.read().unwrap().clone().unwrap_or_default()
 }
 
 /// Verify a single claim against the project.
@@ -466,7 +465,10 @@ fn verify_file_path(path_str: &str, project_root: &Path) -> VerifyResult {
         .unwrap_or(expanded);
 
     // Runtime paths under ~/.mur/ are expected to exist only at runtime
-    if path_str.starts_with("~/.mur/") || path_str.starts_with("~/.claude/") || path_str.starts_with("~/.gemini/") {
+    if path_str.starts_with("~/.mur/")
+        || path_str.starts_with("~/.claude/")
+        || path_str.starts_with("~/.gemini/")
+    {
         return VerifyResult::Skipped("runtime/tool config path".into());
     }
 
@@ -476,9 +478,7 @@ fn verify_file_path(path_str: &str, project_root: &Path) -> VerifyResult {
     }
 
     // External project references (absolute paths outside project root)
-    if path_str.starts_with('/')
-        && !path_str.starts_with(project_root.to_str().unwrap_or(""))
-    {
+    if path_str.starts_with('/') && !path_str.starts_with(project_root.to_str().unwrap_or("")) {
         // Check if it actually exists
         if check_path.exists() {
             return VerifyResult::Valid;
@@ -558,7 +558,10 @@ fn verify_code_ref(code_ref: &str, project_root: &Path) -> VerifyResult {
         let method = parts.get(1).unwrap_or(&"");
         // Search for both the type and the method existing in the codebase
         // First check if the type exists
-        if !grep_source(project_root, &format!(r"(struct|enum|trait|type)\s+{type_name}\b")) {
+        if !grep_source(
+            project_root,
+            &format!(r"(struct|enum|trait|type)\s+{type_name}\b"),
+        ) {
             return VerifyResult::Invalid(format!("type `{type_name}` not found in source"));
         }
         // Then check if the method exists
@@ -715,7 +718,8 @@ mod tests {
 
     #[test]
     fn test_extract_file_paths_backtick() {
-        let paths = extract_file_paths("Check `src/main.rs` and `mur-common/src/config.rs` for details.");
+        let paths =
+            extract_file_paths("Check `src/main.rs` and `mur-common/src/config.rs` for details.");
         assert!(paths.contains(&"src/main.rs".to_string()));
         assert!(paths.contains(&"mur-common/src/config.rs".to_string()));
     }
@@ -737,7 +741,9 @@ mod tests {
         // Initialize known subcommand words so the parser can recognize them
         set_known_commands(
             ["mur learn", "mur learn extract", "mur stats", "mur verify"]
-                .iter().map(|s| s.to_string()).collect(),
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         );
         let cmds = extract_commands("Run `mur learn extract --llm` to start");
         assert!(cmds.contains(&"mur learn extract".to_string()));
@@ -772,7 +778,9 @@ mod tests {
     fn test_verify_command_known() {
         set_known_commands(
             ["mur stats", "mur verify", "mur learn", "mur learn extract"]
-                .iter().map(|s| s.to_string()).collect(),
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         );
         assert_eq!(verify_command("mur stats"), VerifyResult::Valid);
         assert_eq!(verify_command("mur verify"), VerifyResult::Valid);
@@ -791,7 +799,9 @@ mod tests {
         // "mur learn" is a valid parent of "mur learn extract"
         set_known_commands(
             ["mur learn", "mur learn extract", "mur learn cross"]
-                .iter().map(|s| s.to_string()).collect(),
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         );
         assert_eq!(verify_command("mur learn"), VerifyResult::Valid);
     }

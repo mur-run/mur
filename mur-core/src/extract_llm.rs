@@ -42,46 +42,80 @@ struct LlmVariable {
 impl LlmExtractedJson {
     /// Normalize steps from various formats into plain strings.
     fn step_strings(&self) -> Vec<String> {
-        self.steps.iter().map(|s| {
-            match s {
-                serde_json::Value::String(text) => text.clone(),
-                serde_json::Value::Object(obj) => {
-                    // Try common field names: description, name, then action
-                    // Skip generic actions like "execute_command"
-                    obj.get("description")
-                        .or(obj.get("name"))
-                        .or(obj.get("action").filter(|v| {
-                            v.as_str().is_none_or(|s| !s.contains("execute"))
-                        }))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string()
+        self.steps
+            .iter()
+            .map(|s| {
+                match s {
+                    serde_json::Value::String(text) => text.clone(),
+                    serde_json::Value::Object(obj) => {
+                        // Try common field names: description, name, then action
+                        // Skip generic actions like "execute_command"
+                        obj.get("description")
+                            .or(obj.get("name"))
+                            .or(obj
+                                .get("action")
+                                .filter(|v| v.as_str().is_none_or(|s| !s.contains("execute"))))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string()
+                    }
+                    _ => String::new(),
                 }
-                _ => String::new(),
-            }
-        }).filter(|s| !s.is_empty()).collect()
+            })
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     /// Normalize variables from object-map or array format into LlmVariable vec.
     fn variable_list(&self) -> Vec<LlmVariable> {
         match &self.variables {
-            serde_json::Value::Array(arr) => {
-                arr.iter().filter_map(|v| {
+            serde_json::Value::Array(arr) => arr
+                .iter()
+                .filter_map(|v| {
                     let name = v.get("name")?.as_str()?.to_string();
-                    let description = v.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
-                    let default_value = v.get("default_value").or(v.get("default")).or(v.get("example"))
-                        .map(|d| match d { serde_json::Value::String(s) => s.clone(), _ => d.to_string() });
-                    Some(LlmVariable { name, description, default_value })
-                }).collect()
-            }
-            serde_json::Value::Object(map) => {
-                map.iter().map(|(name, val)| {
-                    let description = val.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
-                    let default_value = val.get("default_value").or(val.get("default")).or(val.get("example"))
-                        .map(|d| match d { serde_json::Value::String(s) => s.clone(), _ => d.to_string() });
-                    LlmVariable { name: name.clone(), description, default_value }
-                }).collect()
-            }
+                    let description = v
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let default_value = v
+                        .get("default_value")
+                        .or(v.get("default"))
+                        .or(v.get("example"))
+                        .map(|d| match d {
+                            serde_json::Value::String(s) => s.clone(),
+                            _ => d.to_string(),
+                        });
+                    Some(LlmVariable {
+                        name,
+                        description,
+                        default_value,
+                    })
+                })
+                .collect(),
+            serde_json::Value::Object(map) => map
+                .iter()
+                .map(|(name, val)| {
+                    let description = val
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let default_value = val
+                        .get("default_value")
+                        .or(val.get("default"))
+                        .or(val.get("example"))
+                        .map(|d| match d {
+                            serde_json::Value::String(s) => s.clone(),
+                            _ => d.to_string(),
+                        });
+                    LlmVariable {
+                        name: name.clone(),
+                        description,
+                        default_value,
+                    }
+                })
+                .collect(),
             _ => vec![],
         }
     }
@@ -185,20 +219,21 @@ Now output the JSON workflow definition. Remember:
             tokio::time::sleep(std::time::Duration::from_secs(attempt as u64 * 2)).await;
         }
         match llm_complete(&llm_config, system_prompt, &user_prompt).await {
-            Ok(response) => {
-                match parse_llm_response(&response) {
-                    Some(parsed) => {
-                        let _ = save_cache(&cache_path, &parsed);
-                        return Ok(build_workflow_from_llm(session_id, events, &parsed));
-                    }
-                    None => {
-                        tracing::warn!("LLM returned invalid JSON, falling back to logic extraction");
-                        tracing::debug!("LLM response (first 2000 chars): {}", &response[..response.len().min(2000)]);
-                        let _ = std::fs::write("/tmp/mur-llm-response.txt", &response);
-                        return Ok(logic_result);
-                    }
+            Ok(response) => match parse_llm_response(&response) {
+                Some(parsed) => {
+                    let _ = save_cache(&cache_path, &parsed);
+                    return Ok(build_workflow_from_llm(session_id, events, &parsed));
                 }
-            }
+                None => {
+                    tracing::warn!("LLM returned invalid JSON, falling back to logic extraction");
+                    tracing::debug!(
+                        "LLM response (first 2000 chars): {}",
+                        &response[..response.len().min(2000)]
+                    );
+                    let _ = std::fs::write("/tmp/mur-llm-response.txt", &response);
+                    return Ok(logic_result);
+                }
+            },
             Err(e) => {
                 let err_str = e.to_string();
                 let is_transient = err_str.contains("529")
@@ -215,7 +250,10 @@ Now output the JSON workflow definition. Remember:
             }
         }
     }
-    tracing::warn!("LLM call failed after retries: {:?}, falling back to logic extraction", last_err);
+    tracing::warn!(
+        "LLM call failed after retries: {:?}, falling back to logic extraction",
+        last_err
+    );
     Ok(logic_result)
 }
 
