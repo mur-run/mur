@@ -1273,6 +1273,8 @@ struct SessionDetail {
     user_turns: Option<usize>,
     assistant_turns: Option<usize>,
     events: Vec<crate::session::SessionEvent>,
+    #[serde(default)]
+    fingerprints: Vec<mur_common::event::BehaviorFingerprint>,
 }
 
 #[derive(Deserialize)]
@@ -1367,6 +1369,13 @@ async fn get_session(
             (None, None, None, None, None, None, None)
         };
 
+    // Load fingerprints for this session
+    let fingerprints = crate::capture::emergence::load_fingerprints()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|fp| fp.session_id == id)
+        .collect();
+
     Ok(wrap(
         SessionDetail {
             id: rec.id,
@@ -1381,6 +1390,7 @@ async fn get_session(
             user_turns,
             assistant_turns,
             events,
+            fingerprints,
         },
         count,
     ))

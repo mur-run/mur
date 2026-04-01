@@ -82,22 +82,26 @@ if [ -f ~/.mur/session/active.json ]; then
   $MUR session record --event-type assistant --content "[stop: $STOP_REASON]" 2>/dev/null || true
 fi
 
-# Background: full learning pipeline
+# Background: sync + conditional learning pipeline
 (
-  # 1. Sync patterns to AI tool configs
+  # 1. Sync patterns to AI tool configs (always run)
   $MUR sync --quiet 2>/dev/null
 
-  # 2. Run decay + maturity evaluation
-  $MUR evolve 2>/dev/null
+  # 2-4. Only run learning pipeline if no active session
+  # (avoid analyzing partial/incomplete session data)
+  if [ ! -f ~/.mur/session/active.json ]; then
+    # 2. Run decay + maturity evaluation
+    $MUR evolve 2>/dev/null
 
-  # 3. Extract behavior fingerprints from latest session (no LLM, pure regex)
-  LATEST=$(ls -t ~/.mur/session/recordings/*.jsonl 2>/dev/null | head -1)
-  if [ -n "$LATEST" ]; then
-    $MUR learn extract --file "$LATEST" --fingerprint 2>/dev/null
+    # 3. Extract behavior fingerprints from latest session (no LLM, pure regex)
+    LATEST=$(ls -t ~/.mur/session/recordings/*.jsonl 2>/dev/null | head -1)
+    if [ -n "$LATEST" ]; then
+      $MUR learn extract --file "$LATEST" --fingerprint 2>/dev/null
+    fi
+
+    # 4. Detect emergent patterns from accumulated fingerprints (no LLM)
+    $MUR emerge 2>/dev/null
   fi
-
-  # 4. Detect emergent patterns from accumulated fingerprints (no LLM)
-  $MUR emerge 2>/dev/null
 ) &
 
 exit 0

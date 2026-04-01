@@ -54,6 +54,7 @@ Return a JSON array of pattern objects. Each object has:
 - "importance": 0.4-1.0 float reflecting how broadly useful this pattern is
 - "variables": array of {name, description, example} objects for each template variable used in "technical". Example: {"name": "project_root", "description": "Root directory of the project", "example": "/home/user/my-app"}
 
+If no patterns are worth extracting, return an empty JSON array: []
 Return ONLY the JSON array, no markdown fences, no commentary, no other text."#;
 
 pub(crate) async fn cmd_learn_extract(
@@ -411,6 +412,11 @@ pub(crate) fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
 
 /// Parse the LLM JSON response into Pattern objects.
 pub(crate) fn parse_llm_patterns(response: &str) -> Vec<Pattern> {
+    tracing::debug!(
+        "LLM response (first 500 chars): {}",
+        &response[..response.len().min(500)]
+    );
+
     // Strip markdown fences if present
     let json_str = response
         .trim()
@@ -440,11 +446,52 @@ pub(crate) fn parse_llm_patterns(response: &str) -> Vec<Pattern> {
         0.5
     }
 
+    // Handle explicit "no patterns" responses before JSON parsing
+    // LLMs sometimes return `0`, `[]`, `null`, or `"none"` instead of an empty array
+    let trimmed_lower = json_str.trim().to_lowercase();
+    if matches!(
+        trimmed_lower.as_str(),
+        "0" | "[]" | "null" | "none" | "\"none\"" | "no patterns" | "n/a"
+    ) {
+        tracing::info!("LLM explicitly indicated no patterns to extract");
+        return vec![];
+    }
+
+    // Try direct parse first, then fall back to extracting JSON array from text
     let items: Vec<LlmPattern> = match serde_json::from_str(json_str) {
         Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("Failed to parse LLM pattern JSON: {e}");
-            return vec![];
+        Err(_) => {
+            // Fallback: find the outermost [...] in the response
+            if let Some(start) = json_str.find('[')
+                && let Some(end) = json_str.rfind(']')
+                && start < end
+            {
+                let extracted = &json_str[start..=end];
+                match serde_json::from_str::<Vec<LlmPattern>>(extracted) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        // Check if array contains non-object items (e.g. [0], [null])
+                        // which means the LLM returned a "no patterns" signal
+                        if let Ok(raw) = serde_json::from_str::<Vec<serde_json::Value>>(extracted) {
+                            if raw.iter().all(|v| !v.is_object()) {
+                                tracing::info!("LLM returned non-pattern array (likely no patterns): {extracted}");
+                                return vec![];
+                            }
+                        }
+                        tracing::warn!("Failed to parse LLM pattern JSON: {e}");
+                        tracing::debug!("Attempted to parse: {}", &extracted[..extracted.len().min(300)]);
+                        return vec![];
+                    }
+                }
+            } else if json_str.is_empty() {
+                tracing::warn!("LLM returned an empty response");
+                return vec![];
+            } else {
+                // LLM returned natural language instead of JSON
+                tracing::info!("LLM returned non-JSON response (likely no patterns to extract)");
+                tracing::debug!("Response: {}", &json_str[..json_str.len().min(200)]);
+                return vec![];
+            }
         }
     };
 

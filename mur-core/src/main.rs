@@ -276,6 +276,9 @@ enum Commands {
         /// Action to perform: analyze, export, skip (skips menu in non-TTY mode)
         #[arg(long)]
         action: Option<String>,
+        /// Force LLM analysis even for short sessions
+        #[arg(long)]
+        force: bool,
     },
     /// Stop recording without export (alias: quit)
     Exit,
@@ -862,7 +865,7 @@ async fn main() -> Result<()> {
         },
         Commands::Import { file, dry_run } => cmd::misc::cmd_import(file, dry_run)?,
         Commands::In { source } => cmd::session::cmd_in(&source).await?,
-        Commands::Out { action } => cmd::session::cmd_out(action.as_deref()).await?,
+        Commands::Out { action, force } => cmd::session::cmd_out(action.as_deref(), force).await?,
         Commands::Exit | Commands::Quit => cmd::session::cmd_session_exit()?,
         Commands::Deploy { action } => match action {
             DeployAction::Up {

@@ -3,6 +3,69 @@ use std::collections::BTreeSet;
 
 use crate::session;
 
+/// Show the session review URL and auto-open in browser.
+fn open_review_url(session_id: &str) {
+    let mut local_running = std::net::TcpStream::connect("127.0.0.1:3847").is_ok();
+
+    if !local_running {
+        // Auto-start `mur serve` in the background
+        if let Ok(exe) = std::env::current_exe() {
+            match std::process::Command::new(exe)
+                .args(["serve"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(_) => {
+                    // Wait briefly for the server to start
+                    for _ in 0..10 {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        if std::net::TcpStream::connect("127.0.0.1:3847").is_ok() {
+                            local_running = true;
+                            break;
+                        }
+                    }
+                }
+                Err(e) => tracing::debug!("Failed to start mur serve: {e}"),
+            }
+        }
+    }
+
+    let url = format!("http://localhost:3847/#/sessions/{}/review", session_id);
+
+    eprintln!();
+    eprintln!("📊 Review: {}", url);
+
+    if local_running {
+        // Try open::that first, fall back to platform `open` command (macOS)
+        // open::that can fail silently in subprocess/non-TTY contexts
+        if let Err(e) = open::that(&url) {
+            tracing::debug!("open::that failed: {e}, trying platform fallback");
+            let cmd = if cfg!(target_os = "macos") {
+                "open"
+            } else if cfg!(target_os = "windows") {
+                "cmd"
+            } else {
+                "xdg-open"
+            };
+            let mut proc = std::process::Command::new(cmd);
+            if cfg!(target_os = "windows") {
+                proc.args(["/C", "start", "", &url]);
+            } else {
+                proc.arg(&url);
+            }
+            let _ = proc
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+    } else {
+        eprintln!("   (run `mur serve` first to open the dashboard)");
+    }
+}
+
 pub(crate) fn cmd_session_start(source: &str) -> Result<()> {
     let session = session::start(source)?;
     eprintln!("Session started: {} (source: {})", &session.id[..8], source);
@@ -115,19 +178,7 @@ pub(crate) async fn cmd_session_stop(analyze: bool) -> Result<()> {
                                 }
                             }
 
-                            // Show dashboard review URL
-                            eprintln!();
-                            eprintln!(
-                                "📊 Review: https://dashboard.mur.run/#/sessions/{}/review",
-                                id
-                            );
-                            // Also show local URL if server might be running
-                            if std::net::TcpStream::connect("127.0.0.1:3847").is_ok() {
-                                eprintln!(
-                                    "   Local:  http://localhost:3847/#/sessions/{}/review",
-                                    id
-                                );
-                            }
+                            open_review_url(&id);
                         }
                         1 => {
                             // Export: run `mur session export <id> --format markdown`
@@ -141,13 +192,6 @@ pub(crate) async fn cmd_session_stop(analyze: bool) -> Result<()> {
                             } else if let Err(e) = status {
                                 eprintln!("  ⚠ Failed to run session export: {}", e);
                             }
-
-                            // Show dashboard review URL
-                            eprintln!();
-                            eprintln!(
-                                "📊 Review: https://dashboard.mur.run/#/sessions/{}/review",
-                                id
-                            );
                         }
                         _ => {
                             // Skip — do nothing
@@ -168,6 +212,7 @@ pub(crate) async fn cmd_in(source: &str) -> anyhow::Result<()> {
     // Start the session
     let session = crate::session::start(source)?;
     eprintln!("Session started: {} (source: {})", &session.id[..8], source);
+    eprintln!("  Use `mur out` to stop and export, or `mur quit` to discard.");
 
     // Inject context (equivalent to `mur context --quiet`)
     crate::cmd::context::cmd_context(None, false, false, 2000, source.to_string(), false, vec![], true).await?;
@@ -180,10 +225,10 @@ pub(crate) async fn cmd_in(source: &str) -> anyhow::Result<()> {
 /// - TTY mode: shows dialoguer interactive menu
 /// - Non-TTY mode (LLM): outputs structured text for the LLM to present
 /// - `--action <name>`: directly executes the chosen action (for LLM second call)
-pub(crate) async fn cmd_out(action: Option<&str>) -> anyhow::Result<()> {
+pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result<()> {
     // If --action is given, we're in the "execute chosen action" phase
     if let Some(action) = action {
-        return cmd_out_execute(action).await;
+        return cmd_out_execute(action, force).await;
     }
 
     // Stop the session
@@ -271,9 +316,8 @@ pub(crate) async fn cmd_out(action: Option<&str>) -> anyhow::Result<()> {
     if is_tty {
         // Interactive TTY menu
         let items = &[
-            "🔍 Analyze — extract patterns with LLM (needs reasoning model)",
+            "🔍 Analyze — extract patterns with LLM",
             "📦 Export — save as markdown",
-            "🔄 Sync — sync patterns to AI tools",
             "⏭  Skip",
         ];
 
@@ -287,18 +331,27 @@ pub(crate) async fn cmd_out(action: Option<&str>) -> anyhow::Result<()> {
                 std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
             match choice {
                 0 => {
+                    // Extract patterns via LLM
+                    let recording_path = dirs::home_dir()
+                        .expect("no home dir")
+                        .join(".mur")
+                        .join("session")
+                        .join("recordings")
+                        .join(format!("{}.jsonl", &id));
                     if let Some(path_str) = recording_path.to_str() {
                         let status = std::process::Command::new(&exe)
                             .args(["learn", "extract", "--file", path_str, "--llm"])
                             .status();
-                        if let Ok(s) = status
-                            && !s.success()
-                        {
-                            eprintln!("  ⚠ learn extract exited with {}", s);
+                        if let Ok(s) = status {
+                            if !s.success() {
+                                eprintln!("  ⚠ learn extract exited with {}", s);
+                            }
                         } else if let Err(e) = status {
                             eprintln!("  ⚠ Failed to run learn extract: {}", e);
                         }
                     }
+
+                    open_review_url(&id);
                 }
                 1 => {
                     let status = std::process::Command::new(&exe)
@@ -312,18 +365,6 @@ pub(crate) async fn cmd_out(action: Option<&str>) -> anyhow::Result<()> {
                         eprintln!("  ⚠ Failed to run session export: {}", e);
                     }
                 }
-                2 => {
-                    let status = std::process::Command::new(&exe)
-                        .args(["sync"])
-                        .status();
-                    if let Ok(s) = status
-                        && !s.success()
-                    {
-                        eprintln!("  ⚠ sync exited with {}", s);
-                    } else if let Err(e) = status {
-                        eprintln!("  ⚠ Failed to run sync: {}", e);
-                    }
-                }
                 _ => {} // Skip
             }
         }
@@ -333,17 +374,57 @@ pub(crate) async fn cmd_out(action: Option<&str>) -> anyhow::Result<()> {
         eprintln!("Available actions:");
         eprintln!("  1. analyze  — Extract patterns with LLM analysis");
         eprintln!("  2. export   — Save session as markdown");
-        eprintln!("  3. sync     — Sync patterns to AI tools");
-        eprintln!("  4. skip     — Done, no further action");
+        eprintln!("  3. skip     — Done, no further action");
         eprintln!();
-        eprintln!("Run: mur out --action <analyze|export|sync|skip>");
+        eprintln!("Run: mur out --action <analyze|export|skip>");
     }
 
     Ok(())
 }
 
+/// Check if a session has enough substance to warrant LLM analysis.
+///
+/// Returns `(worth_it, reason)` — skips only when ALL thresholds are below minimum.
+fn session_worth_analyzing(recording_path: &std::path::Path, meta: Option<&crate::session::SessionMeta>) -> (bool, String) {
+    let content = match std::fs::read_to_string(recording_path) {
+        Ok(c) => c,
+        Err(_) => return (false, "recording file not found".to_string()),
+    };
+
+    let noise_patterns = [
+        "mur session", "mur sync", "mur context", "mur inject",
+        "/mur:in", "/mur:out", "/mur-in", "/mur-out",
+        "[stop:", "turn_end",
+    ];
+
+    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+    let non_noise_count = lines.iter().filter(|l| {
+        let lower = l.to_lowercase();
+        !noise_patterns.iter().any(|n| lower.contains(n))
+    }).count();
+
+    let tool_call_count = lines.iter().filter(|l| l.contains("\"tool_call\"")).count();
+
+    let user_turns = meta.map(|m| m.user_turns).unwrap_or(0);
+    let duration_secs = meta.and_then(|m| {
+        let start = chrono::DateTime::parse_from_rfc3339(&m.started_at).ok()?;
+        let end = chrono::DateTime::parse_from_rfc3339(m.stopped_at.as_ref()?).ok()?;
+        Some(end.signed_duration_since(start).num_seconds())
+    }).unwrap_or(0);
+
+    // Skip only when ALL thresholds are below minimum (conservative)
+    if non_noise_count < 5 && user_turns < 2 && duration_secs < 120 && tool_call_count == 0 {
+        return (false, format!(
+            "{} events, {} turns, {}s",
+            non_noise_count, user_turns, duration_secs
+        ));
+    }
+
+    (true, String::new())
+}
+
 /// Execute a specific post-session action (called via `mur out --action <name>`)
-async fn cmd_out_execute(action: &str) -> anyhow::Result<()> {
+async fn cmd_out_execute(action: &str, force: bool) -> anyhow::Result<()> {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
 
     match action {
@@ -356,19 +437,39 @@ async fn cmd_out_execute(action: &str) -> anyhow::Result<()> {
 
             match recent {
                 Some(r) => {
-                    let path = dirs::home_dir()
+                    let recording_path = dirs::home_dir()
                         .expect("no home dir")
-                        .join(".mur/session/recordings")
-                        .join(format!("{}.jsonl", r.id));
+                        .join(".mur")
+                        .join("session")
+                        .join("recordings")
+                        .join(format!("{}.jsonl", &r.id));
 
-                    if let Some(path_str) = path.to_str() {
-                        let status = std::process::Command::new(&exe)
-                            .args(["learn", "extract", "--file", path_str, "--llm"])
-                            .status()?;
-                        if !status.success() {
-                            eprintln!("  ⚠ learn extract exited with {}", status);
+                    // Check if session is worth analyzing
+                    if !force {
+                        let meta = r.meta.as_ref();
+                        let (worth_it, reason) = session_worth_analyzing(&recording_path, meta);
+                        if !worth_it {
+                            eprintln!("Session too short for LLM analysis ({}).", reason);
+                            eprintln!("Use --force to analyze anyway.");
+                            open_review_url(&r.id);
+                            return Ok(());
                         }
                     }
+
+                    if let Some(path_str) = recording_path.to_str() {
+                        let status = std::process::Command::new(&exe)
+                            .args(["learn", "extract", "--file", path_str, "--llm"])
+                            .status();
+                        if let Ok(s) = status {
+                            if !s.success() {
+                                eprintln!("  ⚠ learn extract exited with {}", s);
+                            }
+                        } else if let Err(e) = status {
+                            eprintln!("  ⚠ Failed to run learn extract: {}", e);
+                        }
+                    }
+
+                    open_review_url(&r.id);
                 }
                 None => eprintln!("No stopped session found."),
             }
@@ -391,18 +492,12 @@ async fn cmd_out_execute(action: &str) -> anyhow::Result<()> {
                 None => eprintln!("No stopped session found."),
             }
         }
-        "sync" => {
-            let status = std::process::Command::new(&exe).args(["sync"]).status()?;
-            if !status.success() {
-                eprintln!("  ⚠ sync exited with {}", status);
-            }
-        }
         "skip" => {
             eprintln!("Done.");
         }
         _ => {
             anyhow::bail!(
-                "Unknown action '{}'. Use: analyze, export, sync, skip",
+                "Unknown action '{}'. Use: analyze, export, skip",
                 action
             );
         }
@@ -432,13 +527,24 @@ pub(crate) fn cmd_session_record(
     Ok(())
 }
 
+
 pub(crate) fn cmd_session_exit() -> Result<()> {
     match session::stop()? {
         Some(id) => {
-            eprintln!(
-                "Session stopped: {} (recording discarded — no export)",
-                &id[..8]
-            );
+            let recordings_dir = dirs::home_dir()
+                .expect("no home dir")
+                .join(".mur")
+                .join("session")
+                .join("recordings");
+            let recording = recordings_dir.join(format!("{}.jsonl", id));
+            let meta = recordings_dir.join(format!("{}.meta.json", id));
+            if recording.exists() {
+                let _ = std::fs::remove_file(&recording);
+            }
+            if meta.exists() {
+                let _ = std::fs::remove_file(&meta);
+            }
+            eprintln!("Session stopped: {} (recording deleted)", &id[..8]);
         }
         None => {
             eprintln!("No active session.");

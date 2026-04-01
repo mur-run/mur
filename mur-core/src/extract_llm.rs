@@ -21,9 +21,11 @@ use crate::session::SessionEvent;
 struct LlmExtractedJson {
     name: String,
     description: String,
-    steps: Vec<String>,
+    steps: Vec<serde_json::Value>,
+    #[serde(default)]
     tools: Vec<String>,
-    variables: Vec<LlmVariable>,
+    #[serde(default)]
+    variables: serde_json::Value,
     #[serde(default)]
     trigger: String,
 }
@@ -35,6 +37,54 @@ struct LlmVariable {
     description: String,
     #[serde(default)]
     default_value: Option<String>,
+}
+
+impl LlmExtractedJson {
+    /// Normalize steps from various formats into plain strings.
+    fn step_strings(&self) -> Vec<String> {
+        self.steps.iter().map(|s| {
+            match s {
+                serde_json::Value::String(text) => text.clone(),
+                serde_json::Value::Object(obj) => {
+                    // Try common field names: description, name, then action
+                    // Skip generic actions like "execute_command"
+                    obj.get("description")
+                        .or(obj.get("name"))
+                        .or(obj.get("action").filter(|v| {
+                            v.as_str().map_or(true, |s| !s.contains("execute"))
+                        }))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                }
+                _ => String::new(),
+            }
+        }).filter(|s| !s.is_empty()).collect()
+    }
+
+    /// Normalize variables from object-map or array format into LlmVariable vec.
+    fn variable_list(&self) -> Vec<LlmVariable> {
+        match &self.variables {
+            serde_json::Value::Array(arr) => {
+                arr.iter().filter_map(|v| {
+                    let name = v.get("name")?.as_str()?.to_string();
+                    let description = v.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
+                    let default_value = v.get("default_value").or(v.get("default")).or(v.get("example"))
+                        .and_then(|d| match d { serde_json::Value::String(s) => Some(s.clone()), _ => Some(d.to_string()) });
+                    Some(LlmVariable { name, description, default_value })
+                }).collect()
+            }
+            serde_json::Value::Object(map) => {
+                map.iter().map(|(name, val)| {
+                    let description = val.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
+                    let default_value = val.get("default_value").or(val.get("default")).or(val.get("example"))
+                        .and_then(|d| match d { serde_json::Value::String(s) => Some(s.clone()), _ => Some(d.to_string()) });
+                    LlmVariable { name: name.clone(), description, default_value }
+                }).collect()
+            }
+            _ => vec![],
+        }
+    }
 }
 
 /// Extract a workflow using LLM enhancement with disk cache.
@@ -74,42 +124,99 @@ pub async fn extract_workflow_llm(
     let skeleton = build_skeleton_summary(&logic_result);
 
     // ── LLM call ─────────────────────────────────────────────────────
-    let system_prompt = r#"You are a workflow extraction assistant. Given a session transcript and a logic-extracted skeleton, produce a refined workflow definition.
+    let system_prompt = r#"You are a workflow extraction assistant. Your ONLY job is to convert a session transcript into a reusable workflow template.
 
-Output ONLY valid JSON with this exact structure (no markdown fences, no explanation):
+Do NOT analyze whether the session succeeded or failed. Do NOT report errors or status. Extract the INTENDED workflow pattern.
+
+## Your Task
+
+1. Read the user's original intent from the transcript
+2. Extract a generalized, reusable workflow with parameterized variables
+3. Return ONLY a JSON workflow definition
+
+## Variable Extraction
+
+Extract parameterizable values so the workflow is reusable with different inputs:
+- `target_site` — website or service name (e.g., "博客來", "PChome", "Amazon")
+- `search_term` — what to search for (e.g., "Rust", "AirPods Pro", "Python books")
+- `count` — quantity or limit (e.g., 10, 5)
+- `url` — any URL
+- `file_path` — any file or directory path
+
+Works with ANY language. Examples:
+- "去博客來找最新的Python AI的10本書" → target_site=博客來, search_term=Python AI, count=10
+- "find AirPods Pro prices on PChome 24h" → search_term=AirPods Pro, target_site=PChome 24h
+- "search Amazon for top 5 wireless keyboards" → target_site=Amazon, search_term=wireless keyboards, count=5
+
+## Output Format
+
+Return ONLY this JSON structure (no markdown fences, no explanation, no analysis):
 {
   "name": "short-kebab-case-name",
   "description": "One-sentence description of what this workflow does",
-  "steps": ["Step 1 description", "Step 2 description", ...],
-  "tools": ["tool1", "tool2", ...],
-  "variables": [{"name": "var_name", "description": "what it is", "default_value": "optional default"}],
-  "trigger": "when/how this workflow should be triggered"
+  "steps": ["Step 1 description", "Step 2 description"],
+  "tools": ["Bash", "agent-browser"],
+  "variables": [{"name": "var_name", "description": "what it is", "default_value": "the value from this session"}],
+  "trigger": "when/how to trigger this workflow"
 }"#;
 
     let user_prompt = format!(
-        "## Logic Skeleton\n{}\n\n## Session Transcript\n{}",
-        skeleton, transcript
+        r#"Convert this session into a reusable workflow template.
+
+The user's original request was the INTENT. The tool calls show the STEPS taken. Extract variables from the intent and generalize the steps.
+
+## Logic-Extracted Skeleton
+{skeleton}
+
+## Raw Session Transcript
+{transcript}
+
+Now output the JSON workflow definition. Remember:
+- Extract variables from the user's intent (target_site, search_term, count, etc.)
+- Do NOT analyze errors or execution status — just extract the workflow pattern
+- Output ONLY the JSON object, nothing else"#
     );
 
-    match llm_complete(&llm_config, system_prompt, &user_prompt).await {
-        Ok(response) => {
-            match parse_llm_response(&response) {
-                Some(parsed) => {
-                    // Cache to disk
-                    let _ = save_cache(&cache_path, &parsed);
-                    Ok(build_workflow_from_llm(session_id, events, &parsed))
-                }
-                None => {
-                    tracing::warn!("LLM returned invalid JSON, falling back to logic extraction");
-                    Ok(logic_result)
+    // Retry LLM call up to 2 times on transient errors (overload, timeout)
+    let mut last_err = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tracing::debug!("LLM retry attempt {}/2", attempt);
+            tokio::time::sleep(std::time::Duration::from_secs(attempt as u64 * 2)).await;
+        }
+        match llm_complete(&llm_config, system_prompt, &user_prompt).await {
+            Ok(response) => {
+                match parse_llm_response(&response) {
+                    Some(parsed) => {
+                        let _ = save_cache(&cache_path, &parsed);
+                        return Ok(build_workflow_from_llm(session_id, events, &parsed));
+                    }
+                    None => {
+                        tracing::warn!("LLM returned invalid JSON, falling back to logic extraction");
+                        tracing::debug!("LLM response (first 2000 chars): {}", &response[..response.len().min(2000)]);
+                        let _ = std::fs::write("/tmp/mur-llm-response.txt", &response);
+                        return Ok(logic_result);
+                    }
                 }
             }
-        }
-        Err(e) => {
-            tracing::warn!("LLM call failed: {}, falling back to logic extraction", e);
-            Ok(logic_result)
+            Err(e) => {
+                let err_str = e.to_string();
+                let is_transient = err_str.contains("529")
+                    || err_str.contains("overload")
+                    || err_str.contains("timeout")
+                    || err_str.contains("503");
+                if is_transient && attempt < 2 {
+                    tracing::debug!("LLM transient error: {err_str}, retrying...");
+                    last_err = Some(err_str);
+                    continue;
+                }
+                tracing::warn!("LLM call failed: {}, falling back to logic extraction", e);
+                return Ok(logic_result);
+            }
         }
     }
+    tracing::warn!("LLM call failed after retries: {:?}, falling back to logic extraction", last_err);
+    Ok(logic_result)
 }
 
 /// Check if an LLM config is usable (has a provider and the API key env is resolvable).
@@ -236,12 +343,19 @@ fn build_skeleton_summary(extracted: &ExtractedWorkflow) -> String {
     summary
 }
 
-/// Parse LLM response text into structured data, tolerant of markdown fences.
+/// Parse LLM response text into structured data, tolerant of markdown fences,
+/// thinking tags, prefilled JSON, and other LLM output quirks.
 fn parse_llm_response(response: &str) -> Option<LlmExtractedJson> {
     let trimmed = response.trim();
 
     // Try direct parse first
     if let Ok(parsed) = serde_json::from_str::<LlmExtractedJson>(trimmed) {
+        return Some(parsed);
+    }
+
+    // Try with prefill restoration (assistant prefill starts with `{`)
+    let with_brace = format!("{{{}", trimmed);
+    if let Ok(parsed) = serde_json::from_str::<LlmExtractedJson>(&with_brace) {
         return Some(parsed);
     }
 
@@ -252,7 +366,40 @@ fn parse_llm_response(response: &str) -> Option<LlmExtractedJson> {
         .unwrap_or(trimmed);
     let stripped = stripped.strip_suffix("```").unwrap_or(stripped).trim();
 
-    serde_json::from_str::<LlmExtractedJson>(stripped).ok()
+    if let Ok(parsed) = serde_json::from_str::<LlmExtractedJson>(stripped) {
+        return Some(parsed);
+    }
+
+    // Try prefill restoration on stripped content too
+    let with_brace_stripped = format!("{{{}", stripped);
+    if let Ok(parsed) = serde_json::from_str::<LlmExtractedJson>(&with_brace_stripped) {
+        return Some(parsed);
+    }
+
+    // Fallback: find the first {...} JSON object in the response
+    // (handles cases where LLM adds preamble, thinking tags, etc.)
+    if let Some(start) = stripped.find('{')
+        && let Some(end) = stripped.rfind('}')
+        && start < end
+    {
+        let extracted = &stripped[start..=end];
+        if let Ok(parsed) = serde_json::from_str::<LlmExtractedJson>(extracted) {
+            return Some(parsed);
+        }
+        // Try parsing as a generic JSON value and look for nested workflow
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(extracted) {
+            // Check for wrapper objects like {"workflow_template": {...}}
+            if let Some(obj) = val.as_object() {
+                for (_key, inner) in obj {
+                    if let Ok(parsed) = serde_json::from_value::<LlmExtractedJson>(inner.clone()) {
+                        return Some(parsed);
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Build a full `ExtractedWorkflow` from the LLM's parsed output.
@@ -261,8 +408,8 @@ fn build_workflow_from_llm(
     events: &[SessionEvent],
     llm: &LlmExtractedJson,
 ) -> ExtractedWorkflow {
-    let steps: Vec<Step> = llm
-        .steps
+    let step_strings = llm.step_strings();
+    let steps: Vec<Step> = step_strings
         .iter()
         .enumerate()
         .map(|(i, desc)| Step {
@@ -272,8 +419,8 @@ fn build_workflow_from_llm(
         })
         .collect();
 
-    let variables: Vec<Variable> = llm
-        .variables
+    let var_list = llm.variable_list();
+    let variables: Vec<Variable> = var_list
         .iter()
         .map(|v| Variable {
             name: v.name.clone(),

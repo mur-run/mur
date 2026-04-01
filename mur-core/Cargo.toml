@@ -43,6 +43,7 @@ rust-embed = { version = "8", features = ["interpolate-folder-path", "include-ex
 # Phase 4: interactive CLI (optional, behind "cli" feature)
 dialoguer = { version = "0.11", optional = true }
 console = { version = "0.15", optional = true }
+open = "5"
 hostname = "0.4.2"
 dotenvy = "0.15"
 urlencoding = "2"
