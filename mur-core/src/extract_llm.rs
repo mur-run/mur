@@ -51,7 +51,7 @@ impl LlmExtractedJson {
                     obj.get("description")
                         .or(obj.get("name"))
                         .or(obj.get("action").filter(|v| {
-                            v.as_str().map_or(true, |s| !s.contains("execute"))
+                            v.as_str().is_none_or(|s| !s.contains("execute"))
                         }))
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
@@ -70,7 +70,7 @@ impl LlmExtractedJson {
                     let name = v.get("name")?.as_str()?.to_string();
                     let description = v.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
                     let default_value = v.get("default_value").or(v.get("default")).or(v.get("example"))
-                        .and_then(|d| match d { serde_json::Value::String(s) => Some(s.clone()), _ => Some(d.to_string()) });
+                        .map(|d| match d { serde_json::Value::String(s) => s.clone(), _ => d.to_string() });
                     Some(LlmVariable { name, description, default_value })
                 }).collect()
             }
@@ -78,7 +78,7 @@ impl LlmExtractedJson {
                 map.iter().map(|(name, val)| {
                     let description = val.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
                     let default_value = val.get("default_value").or(val.get("default")).or(val.get("example"))
-                        .and_then(|d| match d { serde_json::Value::String(s) => Some(s.clone()), _ => Some(d.to_string()) });
+                        .map(|d| match d { serde_json::Value::String(s) => s.clone(), _ => d.to_string() });
                     LlmVariable { name: name.clone(), description, default_value }
                 }).collect()
             }

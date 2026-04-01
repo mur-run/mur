@@ -76,11 +76,13 @@ impl VerifySummary {
 
 /// A full verification report for serialization.
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 pub struct VerifyReport {
     pub summary: VerifySummary,
     pub results: Vec<VerifiedClaim>,
 }
 
+#[allow(dead_code)]
 impl VerifyReport {
     pub fn new(results: Vec<VerifiedClaim>) -> Self {
         let summary = VerifySummary::from_results(&results);
