@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod auth;
@@ -21,6 +21,7 @@ mod server;
 mod session;
 mod store;
 mod team;
+mod verify;
 
 #[derive(Parser)]
 #[command(name = "mur", version, about = "Continuous learning for AI assistants")]
@@ -255,6 +256,15 @@ enum Commands {
     Exchange {
         #[command(subcommand)]
         action: ExchangeAction,
+    },
+    /// Verify documentation claims (paths, commands, code refs) against actual codebase
+    Verify {
+        /// Specific file to verify (default: scan all docs)
+        #[arg(long)]
+        file: Option<String>,
+        /// Show all claims (including valid and skipped)
+        #[arg(long)]
+        all: bool,
     },
     /// Import rules from AI tool config files (.cursorrules, CLAUDE.md, etc.)
     Import {
@@ -863,6 +873,14 @@ async fn main() -> Result<()> {
             ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,
             ExchangeAction::Export { name, dir } => cmd::misc::cmd_exchange_export(&name, dir)?,
         },
+        Commands::Verify { file, all } => {
+            // Initialize known commands from the clap tree so verify doesn't
+            // need a hardcoded list.
+            let clap_cmd = Cli::command();
+            let known = verify::collect_commands_from_clap(&clap_cmd);
+            verify::set_known_commands(known);
+            cmd::verify::cmd_verify(file.as_deref(), all)?
+        }
         Commands::Import { file, dry_run } => cmd::misc::cmd_import(file, dry_run)?,
         Commands::In { source } => cmd::session::cmd_in(&source).await?,
         Commands::Out { action, force } => cmd::session::cmd_out(action.as_deref(), force).await?,

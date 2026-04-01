@@ -14,6 +14,7 @@ pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;
 #[allow(dead_code)]
 pub(crate) mod var;
+pub(crate) mod verify;
 pub(crate) mod workflow;
 
 pub(crate) fn read_multiline() -> anyhow::Result<String> {
