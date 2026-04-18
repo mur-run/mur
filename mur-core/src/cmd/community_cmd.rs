@@ -236,9 +236,11 @@ pub(crate) async fn cmd_community_pack_install(id: &str) -> Result<()> {
                 ..Default::default()
             },
             kind: None,
+            #[allow(deprecated)] // transitional: user/platform fields being phased out
             origin: Some(Origin {
                 source: format!("pack:{}", id),
                 trigger: OriginTrigger::Automatic,
+                actor: None,
                 user: None,
                 platform: None,
                 confidence: 0.7,
@@ -351,9 +353,11 @@ pub(crate) async fn cmd_team_sync(team_id: &str) -> Result<()> {
                 ..Default::default()
             },
             kind: None,
+            #[allow(deprecated)] // transitional: user/platform fields being phased out
             origin: Some(Origin {
                 source: format!("team:{}", team_id),
                 trigger: OriginTrigger::CommunityShared,
+                actor: None,
                 user: None,
                 platform: None,
                 confidence: 0.7,

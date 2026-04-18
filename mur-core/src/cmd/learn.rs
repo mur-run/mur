@@ -531,9 +531,11 @@ pub(crate) fn parse_llm_patterns(response: &str) -> Vec<Pattern> {
                     ..Default::default()
                 },
                 kind: None,
+                #[allow(deprecated)] // transitional: user/platform fields being phased out
                 origin: Some(Origin {
                     source: "llm-extract".to_string(),
                     trigger: OriginTrigger::Automatic,
+                    actor: None,
                     user: None,
                     platform: None,
                     confidence: 0.6,
