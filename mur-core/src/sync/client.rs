@@ -57,7 +57,7 @@ impl SyncClient {
     }
 
     pub async fn push_batch(&self, signals: &[Signal]) -> Result<BatchResponse> {
-        let url = format!("{}/v1/signals/batch", self.base_url);
+        let url = format!("{}/api/v1/signals/batch", self.base_url);
         let resp = self
             .http
             .post(&url)
@@ -76,11 +76,11 @@ impl SyncClient {
     pub async fn fetch_pending(&self, cursor: Option<&str>) -> Result<PendingResponse> {
         let url = match cursor {
             Some(c) => format!(
-                "{}/v1/signals/pending?since={}",
+                "{}/api/v1/signals/pending?since={}",
                 self.base_url,
                 urlencoding::encode(c)
             ),
-            None => format!("{}/v1/signals/pending", self.base_url),
+            None => format!("{}/api/v1/signals/pending", self.base_url),
         };
         let resp = self
             .http
@@ -100,7 +100,7 @@ impl SyncClient {
         if signal_ids.is_empty() {
             return Ok(());
         }
-        let url = format!("{}/v1/signals/ack", self.base_url);
+        let url = format!("{}/api/v1/signals/ack", self.base_url);
         self.http
             .post(&url)
             .bearer_auth(&self.token)
@@ -147,7 +147,7 @@ mod tests {
     async fn push_batch_happy_path() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/signals/batch"))
+            .and(path("/api/v1/signals/batch"))
             .and(header("authorization", "Bearer TEST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "accepted": ["sig-1"],
@@ -166,7 +166,7 @@ mod tests {
     async fn push_batch_returns_rejected() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/signals/batch"))
+            .and(path("/api/v1/signals/batch"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "accepted": ["sig-ok"],
                 "rejected": [{"id": "sig-bad", "reason": "dedupe_window"}]
@@ -185,7 +185,7 @@ mod tests {
     async fn push_batch_non_2xx_is_error() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/signals/batch"))
+            .and(path("/api/v1/signals/batch"))
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
@@ -200,7 +200,7 @@ mod tests {
     async fn fetch_pending_with_cursor_includes_since_param() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/signals/pending"))
+            .and(path("/api/v1/signals/pending"))
             .and(query_param("since", "abc"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "signals": [],
@@ -219,7 +219,7 @@ mod tests {
     async fn fetch_pending_without_cursor_has_no_query() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/signals/pending"))
+            .and(path("/api/v1/signals/pending"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "signals": [],
                 "next_cursor": "future-cursor"
@@ -238,7 +238,7 @@ mod tests {
         let sig = sample_signal();
         let sig_json = serde_json::to_value(&sig).unwrap();
         Mock::given(method("GET"))
-            .and(path("/v1/signals/pending"))
+            .and(path("/api/v1/signals/pending"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "signals": [sig_json],
                 "next_cursor": null
@@ -256,7 +256,7 @@ mod tests {
     async fn ack_sends_ids_payload() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/signals/ack"))
+            .and(path("/api/v1/signals/ack"))
             .and(header("authorization", "Bearer tok"))
             .respond_with(ResponseTemplate::new(204))
             .mount(&server)
@@ -279,7 +279,7 @@ mod tests {
     async fn cursor_with_special_chars_is_url_encoded() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/signals/pending"))
+            .and(path("/api/v1/signals/pending"))
             .and(query_param("since", "uuid with spaces/and/slashes"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "signals": [],
