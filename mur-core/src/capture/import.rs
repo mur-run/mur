@@ -104,6 +104,7 @@ pub fn candidates_to_patterns(
                 updated_at: now,
                 maturity: mur_common::knowledge::Maturity::Draft,
                 decay: Default::default(),
+                scope: Default::default(),
             },
             kind: Some(c.kind),
             #[allow(deprecated)] // transitional: user/platform fields being phased out

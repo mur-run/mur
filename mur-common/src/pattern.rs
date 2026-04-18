@@ -816,4 +816,54 @@ override_signals: 1
         assert!(e.contributions.is_empty());
         assert_eq!(e.success_signals, 3);
     }
+
+    #[test]
+    fn pattern_scope_defaults_personal() {
+        // Pre-sync YAML has no `scope:` field
+        let old_yaml = r#"
+schema: 2
+name: legacy-pattern
+description: legacy
+content: old content
+tier: session
+"#;
+        let p: Pattern = serde_yaml::from_str(old_yaml).unwrap();
+        assert_eq!(p.scope, crate::Scope::Personal);
+    }
+
+    #[test]
+    fn pattern_scope_team_roundtrip() {
+        let y = r#"
+schema: 2
+name: team-pat
+description: team pattern
+content: team content
+tier: project
+scope:
+  kind: team
+  team_id: ops
+"#;
+        let p: Pattern = serde_yaml::from_str(y).unwrap();
+        assert_eq!(p.scope, crate::Scope::Team { team_id: "ops".into() });
+        // Roundtrip verify
+        let y2 = serde_yaml::to_string(&p).unwrap();
+        let p2: Pattern = serde_yaml::from_str(&y2).unwrap();
+        assert_eq!(p2.scope, p.scope);
+    }
+
+    #[test]
+    fn pattern_scope_community_roundtrip() {
+        let y = r#"
+schema: 2
+name: comm-pat
+description: community pattern
+content: community content
+tier: core
+scope:
+  kind: community
+  pack_id: rust-best-practices
+"#;
+        let p: Pattern = serde_yaml::from_str(y).unwrap();
+        assert_eq!(p.scope, crate::Scope::Community { pack_id: Some("rust-best-practices".into()) });
+    }
 }

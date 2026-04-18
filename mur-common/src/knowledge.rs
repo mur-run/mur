@@ -10,6 +10,7 @@ use crate::pattern::{
     Applies, Content, Evidence, Lifecycle, Links, Tags, Tier, default_confidence,
     default_importance, default_schema,
 };
+use crate::Scope;
 
 /// Maturity level for knowledge items.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
@@ -94,6 +95,11 @@ pub struct KnowledgeBase {
     /// Decay metadata
     #[serde(default)]
     pub decay: DecayMeta,
+
+    /// Ownership/audience scope (Personal / Team / Community).
+    /// Orthogonal to `tier` — tier manages temporal half-life, scope manages audience.
+    #[serde(default)]
+    pub scope: Scope,
 }
 
 impl Default for KnowledgeBase {
@@ -115,6 +121,7 @@ impl Default for KnowledgeBase {
             updated_at: Utc::now(),
             maturity: Maturity::default(),
             decay: DecayMeta::default(),
+            scope: Scope::default(),
         }
     }
 }
