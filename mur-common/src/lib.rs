@@ -8,5 +8,8 @@ pub mod pattern;
 pub mod pipeline;
 pub mod schedule;
 pub mod schedule_claim;
+pub mod scope;
 pub mod variable;
 pub mod workflow;
+
+pub use scope::Scope;
