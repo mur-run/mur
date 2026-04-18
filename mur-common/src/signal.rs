@@ -207,19 +207,58 @@ scope: { kind: personal }
     }
 
     #[test]
-    fn signal_target_pattern_vs_new_draft() {
-        // SignalTarget::Pattern roundtrip
+    fn signal_target_pattern_roundtrip() {
         let p = SignalTarget::Pattern {
             name: "foo".into(),
             scope: Scope::Team { team_id: "ops".into() },
         };
         let y = serde_yaml::to_string(&p).unwrap();
+        assert!(y.contains("kind: pattern"));
         let back: SignalTarget = serde_yaml::from_str(&y).unwrap();
-        matches!(back, SignalTarget::Pattern { .. });
+        assert!(matches!(back, SignalTarget::Pattern { .. }));
+    }
 
-        // NewDraftPattern uses tag kind=new_draft_pattern
-        // Here we just verify the enum variant serializes with the tag.
-        // Full Pattern roundtrip is covered by pattern.rs tests.
+    #[test]
+    fn signal_with_new_draft_pattern_roundtrip() {
+        use crate::knowledge::KnowledgeBase;
+        use crate::pattern::{Content, Tier};
+
+        // Build a minimal Pattern to box into the target payload.
+        let kb = KnowledgeBase {
+            name: "draft-pat".into(),
+            description: "chat-extracted draft".into(),
+            content: Content::Plain("use pnpm not npm".into()),
+            tier: Tier::Session,
+            ..Default::default()
+        };
+        let pat = Pattern {
+            base: kb,
+            kind: None,
+            origin: None,
+            attachments: Vec::new(),
+        };
+
+        let sig = Signal {
+            id: Uuid::new_v4(),
+            emitted_at: Utc::now(),
+            actor: sample_actor(),
+            target: SignalTarget::NewDraftPattern { payload: Box::new(pat.clone()) },
+            kind: SignalKind::NewPatternProposal {
+                origin_context: "slack DM".into(),
+            },
+            scope: Scope::Personal,
+            confidence: 0.75,
+            schema_version: SIGNAL_SCHEMA_VERSION,
+        };
+        let y = serde_yaml::to_string(&sig).unwrap();
+        assert!(y.contains("kind: new_draft_pattern"));
+        let back: Signal = serde_yaml::from_str(&y).unwrap();
+        match back.target {
+            SignalTarget::NewDraftPattern { payload } => {
+                assert_eq!(payload.name, "draft-pat");
+            }
+            _ => panic!("expected NewDraftPattern variant"),
+        }
     }
 
     #[test]
