@@ -1,3 +1,4 @@
+pub mod actor;
 pub mod config;
 pub mod error;
 pub mod event;
@@ -12,4 +13,5 @@ pub mod scope;
 pub mod variable;
 pub mod workflow;
 
+pub use actor::{Actor, ActorSource};
 pub use scope::Scope;
