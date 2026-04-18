@@ -307,6 +307,8 @@ pub struct Evidence {
     #[serde(default)]
     pub success_signals: u64,
     #[serde(default)]
+    pub failure_signals: u64,
+    #[serde(default)]
     pub override_signals: u64,
     /// Per-actor signal counts, keyed by `Actor::key()` (e.g. `"Slack:U123ABC"`).
     /// Empty for patterns that have never been touched by the sync protocol.
