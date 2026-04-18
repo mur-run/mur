@@ -27,6 +27,7 @@ impl Outbox {
     }
 
     /// Serialize a signal to YAML and persist atomically. Returns the final path.
+    #[allow(dead_code)]
     pub fn write(&self, signal: &Signal) -> Result<PathBuf> {
         let ts = Utc::now().format("%Y-%m-%dT%H-%M-%S");
         let name = format!("{}-{}.yaml", ts, signal.id);

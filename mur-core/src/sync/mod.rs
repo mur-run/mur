@@ -11,7 +11,7 @@ pub mod cursor;
 pub mod inbox;
 pub mod outbox;
 
-pub use client::{BatchResponse, PendingResponse, RejectedSignal, SyncClient};
+pub use client::SyncClient;
 pub use cursor::{CursorStore, FetchCursor};
-pub use inbox::{ApplyReport, Inbox};
+pub use inbox::Inbox;
 pub use outbox::Outbox;
