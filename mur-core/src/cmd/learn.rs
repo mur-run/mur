@@ -249,7 +249,7 @@ pub(crate) fn cmd_learn_cross(min_projects: usize, dry_run: bool) -> Result<()> 
         return Ok(());
     }
 
-    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.1));
 
     println!(
         "  Found {} patterns used across {}+ projects:\n",

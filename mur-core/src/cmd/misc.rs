@@ -359,6 +359,7 @@ pub(crate) fn cmd_gc(auto: bool) -> Result<()> {
 
 // cmd_analyze removed: was dead code (capture::style module unused)
 
+#[allow(deprecated)] // transitional: reads o.platform for display only (Origin.actor migration)
 pub(crate) fn cmd_import(files: Option<Vec<String>>, dry_run: bool) -> Result<()> {
     use crate::capture::import;
 
