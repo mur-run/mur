@@ -742,6 +742,7 @@ confidence: 0.7
             last_validated: None,
             injection_count: 15,
             success_signals: 9,
+            failure_signals: 0,
             override_signals: 6,
             contributions: contribs,
         };
