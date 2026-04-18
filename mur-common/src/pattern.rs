@@ -50,12 +50,22 @@ pub struct Origin {
     pub source: String,
     /// How the knowledge was captured
     pub trigger: OriginTrigger,
-    /// Which user this knowledge is about/from
+
+    /// Who/what produced this origin event — preferred successor to
+    /// `user`/`platform`. Optional for backward compat with pre-sync YAML.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<crate::Actor>,
+
+    /// Legacy free-form user identifier. Prefer [`Self::actor`].
+    #[deprecated(note = "use actor instead, removed in v2.3")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
-    /// Platform where it was learned (e.g. "slack", "terminal")
+
+    /// Legacy free-form platform identifier. Prefer [`Self::actor`].
+    #[deprecated(note = "use actor.source instead, removed in v2.3")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
+
     /// Extraction confidence (0.0-1.0) — how sure the tool was about the extraction
     #[serde(default = "default_origin_confidence")]
     pub confidence: f64,
@@ -496,9 +506,11 @@ mod tests {
 
     #[test]
     fn test_origin_serde_roundtrip() {
+        #[allow(deprecated)] // intentional: testing legacy field serialization
         let origin = Origin {
             source: "commander".to_string(),
             trigger: OriginTrigger::UserExplicit,
+            actor: None,
             user: Some("david".to_string()),
             platform: Some("slack".to_string()),
             confidence: 0.95,
@@ -512,16 +524,21 @@ mod tests {
         let deserialized: Origin = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(deserialized.source, "commander");
         assert_eq!(deserialized.trigger, OriginTrigger::UserExplicit);
-        assert_eq!(deserialized.user, Some("david".to_string()));
-        assert_eq!(deserialized.platform, Some("slack".to_string()));
+        #[allow(deprecated)]
+        {
+            assert_eq!(deserialized.user, Some("david".to_string()));
+            assert_eq!(deserialized.platform, Some("slack".to_string()));
+        }
         assert!((deserialized.confidence - 0.95).abs() < 0.001);
     }
 
     #[test]
     fn test_origin_optional_fields_omitted() {
+        #[allow(deprecated)] // intentional: testing legacy field omission
         let origin = Origin {
             source: "cli".to_string(),
             trigger: OriginTrigger::AgentInferred,
+            actor: None,
             user: None,
             platform: None,
             confidence: 1.0,
@@ -542,9 +559,11 @@ mod tests {
                 ..Default::default()
             },
             kind: Some(PatternKind::Preference),
+            #[allow(deprecated)] // intentional: testing legacy field in pattern roundtrip
             origin: Some(Origin {
                 source: "commander".into(),
                 trigger: OriginTrigger::UserExplicit,
+                actor: None,
                 user: Some("david".into()),
                 platform: None,
                 confidence: 0.9,
@@ -561,6 +580,64 @@ mod tests {
         assert_eq!(deserialized.effective_kind(), PatternKind::Preference);
         assert!(deserialized.origin.is_some());
         assert_eq!(deserialized.origin.unwrap().source, "commander");
+    }
+
+    #[test]
+    fn origin_with_actor_roundtrip() {
+        use crate::{Actor, ActorSource};
+        #[allow(deprecated)]
+        let o = Origin {
+            source: "commander".into(),
+            trigger: OriginTrigger::AgentInferred,
+            actor: Some(Actor {
+                source: ActorSource::Slack,
+                native_id: "U999".into(),
+                display_name: Some("bob".into()),
+                resolved_user_id: None,
+            }),
+            user: None,
+            platform: None,
+            confidence: 0.8,
+        };
+        let y = serde_yaml::to_string(&o).unwrap();
+        let back: Origin = serde_yaml::from_str(&y).unwrap();
+        assert_eq!(back.actor.as_ref().unwrap().native_id, "U999");
+    }
+
+    #[test]
+    fn origin_backward_compat_no_actor_field() {
+        // 舊 YAML (pre-sync feature) lacks `actor`, `user`, `platform` fields
+        let old_yaml = r#"
+source: starter
+trigger: automatic
+confidence: 0.5
+"#;
+        let o: Origin = serde_yaml::from_str(old_yaml).unwrap();
+        assert!(o.actor.is_none());
+        #[allow(deprecated)]
+        {
+            assert!(o.user.is_none());
+            assert!(o.platform.is_none());
+        }
+    }
+
+    #[test]
+    fn origin_reads_legacy_user_platform_yaml() {
+        // YAML written by pre-sync code that populated user/platform (not actor)
+        let legacy_yaml = r#"
+source: import
+trigger: automatic
+user: alice
+platform: "CLAUDE.md"
+confidence: 0.7
+"#;
+        let o: Origin = serde_yaml::from_str(legacy_yaml).unwrap();
+        #[allow(deprecated)]
+        {
+            assert_eq!(o.user.as_deref(), Some("alice"));
+            assert_eq!(o.platform.as_deref(), Some("CLAUDE.md"));
+        }
+        assert!(o.actor.is_none());
     }
 
     #[test]
