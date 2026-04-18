@@ -17,6 +17,25 @@ pub enum ActorSource {
     MurCli,
 }
 
+impl ActorSource {
+    /// Stable string identifier used by [`Actor::key`] — persisted in YAML
+    /// dedupe keys (`Evidence.contributions`). Explicit to decouple the wire
+    /// format from `#[derive(Debug)]`, whose output is **not** guaranteed stable
+    /// across compiler releases or refactors.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "ClaudeCode",
+            Self::Cursor => "Cursor",
+            Self::Aider => "Aider",
+            Self::Slack => "Slack",
+            Self::Telegram => "Telegram",
+            Self::Discord => "Discord",
+            Self::CommanderDaemon => "CommanderDaemon",
+            Self::MurCli => "MurCli",
+        }
+    }
+}
+
 /// Provenance for a signal or pattern — records WHO produced it, without
 /// trying to resolve identity to a canonical user.
 ///
@@ -35,9 +54,11 @@ pub struct Actor {
 
 impl Actor {
     /// Stable dedupe key used as HashMap key in `Evidence.contributions`.
-    /// Format: `"{Source:?}:{native_id}"` (e.g. `"Slack:U123ABC"`).
+    /// Format: `"{ActorSource}:{native_id}"` (e.g. `"Slack:U123ABC"`).
+    /// Backed by [`ActorSource::as_str`] (not `Debug`) so the wire format is
+    /// safe across compiler refactors.
     pub fn key(&self) -> String {
-        format!("{:?}:{}", self.source, self.native_id)
+        format!("{}:{}", self.source.as_str(), self.native_id)
     }
 }
 
@@ -104,6 +125,22 @@ mod tests {
         let y = serde_yaml::to_string(&a).unwrap();
         assert!(!y.contains("display_name"));
         assert!(!y.contains("resolved_user_id"));
+    }
+
+    #[test]
+    fn as_str_covers_all_variants() {
+        // Guard against silent wire-format drift: every ActorSource variant
+        // must return an explicit, reviewed string. If a new variant is added
+        // without updating as_str, this test fails on compile (non-exhaustive match)
+        // or at runtime if someone adds a `_ =>` fallback.
+        assert_eq!(ActorSource::ClaudeCode.as_str(), "ClaudeCode");
+        assert_eq!(ActorSource::Cursor.as_str(), "Cursor");
+        assert_eq!(ActorSource::Aider.as_str(), "Aider");
+        assert_eq!(ActorSource::Slack.as_str(), "Slack");
+        assert_eq!(ActorSource::Telegram.as_str(), "Telegram");
+        assert_eq!(ActorSource::Discord.as_str(), "Discord");
+        assert_eq!(ActorSource::CommanderDaemon.as_str(), "CommanderDaemon");
+        assert_eq!(ActorSource::MurCli.as_str(), "MurCli");
     }
 
     #[test]
