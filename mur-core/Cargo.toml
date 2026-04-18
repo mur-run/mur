@@ -57,3 +57,4 @@ server = ["axum", "tower-http", "rust-embed"]
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+wiremock = "0.6"

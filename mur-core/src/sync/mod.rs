@@ -6,10 +6,12 @@
 //!
 //! See also: Task 10 SyncClient (HTTP layer).
 
+pub mod client;
 pub mod cursor;
 pub mod inbox;
 pub mod outbox;
 
+pub use client::{BatchResponse, PendingResponse, RejectedSignal, SyncClient};
 pub use cursor::{CursorStore, FetchCursor};
 pub use inbox::{ApplyReport, Inbox};
 pub use outbox::Outbox;
