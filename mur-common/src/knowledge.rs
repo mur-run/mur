@@ -6,11 +6,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::Scope;
 use crate::pattern::{
     Applies, Content, Evidence, Lifecycle, Links, Tags, Tier, default_confidence,
     default_importance, default_schema,
 };
-use crate::Scope;
 
 /// Maturity level for knowledge items.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]

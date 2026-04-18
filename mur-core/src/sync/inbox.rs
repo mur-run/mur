@@ -173,10 +173,10 @@ fn is_inbox_yaml(p: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::yaml::YamlStore;
     use mur_common::knowledge::KnowledgeBase;
     use mur_common::pattern::{Content, Pattern, Tier};
-    use mur_common::{Actor, ActorSource, Scope, SIGNAL_SCHEMA_VERSION};
-    use crate::store::yaml::YamlStore;
+    use mur_common::{Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope};
     use tempfile::tempdir;
     use uuid::Uuid;
 
@@ -281,9 +281,7 @@ mod tests {
 
         let sig = signal(
             "p1",
-            SignalKind::AutoFixApplied {
-                step: "s".into(),
-            },
+            SignalKind::AutoFixApplied { step: "s".into() },
             "alice",
         );
         inbox.receive(&sig).unwrap();
@@ -387,9 +385,7 @@ mod tests {
         assert_eq!(report.errors.len(), 1);
         assert!(report.errors[0].contains("parse error"));
         // File should NOT have been removed
-        assert!(inbox_dir
-            .join("2026-04-18T10-00-00-bad.yaml")
-            .exists());
+        assert!(inbox_dir.join("2026-04-18T10-00-00-bad.yaml").exists());
     }
 
     #[test]

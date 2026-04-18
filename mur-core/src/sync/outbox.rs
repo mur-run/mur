@@ -73,7 +73,7 @@ impl Outbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mur_common::{Actor, ActorSource, Scope, SignalKind, SignalTarget, SIGNAL_SCHEMA_VERSION};
+    use mur_common::{Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope, SignalKind, SignalTarget};
     use tempfile::tempdir;
     use uuid::Uuid;
 
@@ -137,7 +137,11 @@ mod tests {
         let flushed_dir = dir.path().join(".flushed");
         assert!(flushed_dir.exists());
         assert_eq!(flushed_dir.read_dir().unwrap().count(), 1);
-        assert_eq!(ob.list_pending().unwrap().len(), 0, ".flushed items not counted as pending");
+        assert_eq!(
+            ob.list_pending().unwrap().len(),
+            0,
+            ".flushed items not counted as pending"
+        );
     }
 
     #[test]

@@ -37,23 +37,22 @@ pub struct Signal {
     pub schema_version: u32,
 }
 
-fn default_confidence() -> f64 { 1.0 }
-fn current_schema_version() -> u32 { SIGNAL_SCHEMA_VERSION }
+fn default_confidence() -> f64 {
+    1.0
+}
+fn current_schema_version() -> u32 {
+    SIGNAL_SCHEMA_VERSION
+}
 
 /// What the signal refers to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SignalTarget {
     /// Refers to an existing pattern by name within a scope.
-    Pattern {
-        name: String,
-        scope: Scope,
-    },
+    Pattern { name: String, scope: Scope },
     /// Carries a fully-formed Pattern as a draft proposal (Channel 2/3).
     /// Boxed to keep the enum variant sizes comparable.
-    NewDraftPattern {
-        payload: Box<Pattern>,
-    },
+    NewDraftPattern { payload: Box<Pattern> },
 }
 
 /// What happened to the target.
@@ -130,7 +129,9 @@ scope: { kind: personal }
     #[test]
     fn signal_kind_execution_failure_carries_error() {
         let s = Signal {
-            kind: SignalKind::ExecutionFailure { error: "db timeout".into() },
+            kind: SignalKind::ExecutionFailure {
+                error: "db timeout".into(),
+            },
             ..sample_signal()
         };
         let y = serde_yaml::to_string(&s).unwrap();
@@ -171,13 +172,18 @@ kind: { type: user_override_at_breakpoint }
 scope: { kind: personal }
 "#;
         let s: Signal = serde_yaml::from_str(y).unwrap();
-        assert!(matches!(s.kind, SignalKind::UserOverrideAtBreakpoint { reason: None }));
+        assert!(matches!(
+            s.kind,
+            SignalKind::UserOverrideAtBreakpoint { reason: None }
+        ));
     }
 
     #[test]
     fn signal_kind_autofix() {
         let s = Signal {
-            kind: SignalKind::AutoFixApplied { step: "run-tests".into() },
+            kind: SignalKind::AutoFixApplied {
+                step: "run-tests".into(),
+            },
             ..sample_signal()
         };
         let y = serde_yaml::to_string(&s).unwrap();
@@ -210,7 +216,9 @@ scope: { kind: personal }
     fn signal_target_pattern_roundtrip() {
         let p = SignalTarget::Pattern {
             name: "foo".into(),
-            scope: Scope::Team { team_id: "ops".into() },
+            scope: Scope::Team {
+                team_id: "ops".into(),
+            },
         };
         let y = serde_yaml::to_string(&p).unwrap();
         assert!(y.contains("kind: pattern"));
@@ -242,7 +250,9 @@ scope: { kind: personal }
             id: Uuid::new_v4(),
             emitted_at: Utc::now(),
             actor: sample_actor(),
-            target: SignalTarget::NewDraftPattern { payload: Box::new(pat.clone()) },
+            target: SignalTarget::NewDraftPattern {
+                payload: Box::new(pat.clone()),
+            },
             kind: SignalKind::NewPatternProposal {
                 origin_context: "slack DM".into(),
             },

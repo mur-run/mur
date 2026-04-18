@@ -345,7 +345,8 @@ mod tests {
 
     #[test]
     fn device_token_response_parse_without_user_id_backward_compat() {
-        let j = r#"{"access_token":"a","refresh_token":"r","token_type":"Bearer","expires_in":3600}"#;
+        let j =
+            r#"{"access_token":"a","refresh_token":"r","token_type":"Bearer","expires_in":3600}"#;
         let t: DeviceTokenResponse = serde_json::from_str(j).unwrap();
         assert_eq!(t.access_token, "a");
         assert_eq!(t.refresh_token, "r");

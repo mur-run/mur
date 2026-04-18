@@ -50,8 +50,7 @@ impl CursorStore {
         }
         let s = std::fs::read_to_string(&self.path)
             .with_context(|| format!("read cursor {}", self.path.display()))?;
-        serde_json::from_str(&s)
-            .with_context(|| format!("parse cursor {}", self.path.display()))
+        serde_json::from_str(&s).with_context(|| format!("parse cursor {}", self.path.display()))
     }
 
     /// Save the cursor atomically (temp-then-rename).
@@ -60,8 +59,7 @@ impl CursorStore {
             std::fs::create_dir_all(parent)?;
         }
         let tmp = self.path.with_extension("tmp");
-        let payload = serde_json::to_string_pretty(c)
-            .with_context(|| "serialize FetchCursor")?;
+        let payload = serde_json::to_string_pretty(c).with_context(|| "serialize FetchCursor")?;
         std::fs::write(&tmp, payload)
             .with_context(|| format!("write tmp cursor {}", tmp.display()))?;
         std::fs::rename(&tmp, &self.path)
@@ -125,7 +123,10 @@ mod tests {
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("tmp"))
             .collect();
-        assert!(leftovers.is_empty(), "expected no .tmp files after successful save");
+        assert!(
+            leftovers.is_empty(),
+            "expected no .tmp files after successful save"
+        );
     }
 
     #[test]
