@@ -1,15 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Scope {
+    #[default]
     Personal,
     Team { team_id: String },
     Community { pack_id: Option<String> },
-}
-
-impl Default for Scope {
-    fn default() -> Self { Self::Personal }
 }
 
 #[cfg(test)]
