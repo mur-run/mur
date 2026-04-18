@@ -1032,10 +1032,7 @@ pub(crate) async fn run_push(server_url: &str, dry_run: bool) -> anyhow::Result<
     let client = crate::sync::SyncClient::new(server_url, &tokens.access_token)?;
 
     let signals: Vec<mur_common::Signal> = to_send.iter().map(|(_, s)| s.clone()).collect();
-    let resp = client
-        .push_batch(&signals)
-        .await
-        .context("push_batch")?;
+    let resp = client.push_batch(&signals).await.context("push_batch")?;
 
     // Move accepted signal files to .flushed/.
     for (path, sig) in &to_send {

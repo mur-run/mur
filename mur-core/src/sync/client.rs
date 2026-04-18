@@ -117,7 +117,7 @@ impl SyncClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mur_common::{Actor, ActorSource, Scope, SignalKind, SignalTarget, SIGNAL_SCHEMA_VERSION};
+    use mur_common::{Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope, SignalKind, SignalTarget};
     use uuid::Uuid;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -193,7 +193,10 @@ mod tests {
         let c = SyncClient::new(server.uri(), "tok").unwrap();
         let err = c.push_batch(&[sample_signal()]).await.unwrap_err();
         let msg = format!("{:#}", err);
-        assert!(msg.contains("non-2xx"), "expected non-2xx context, got: {msg}");
+        assert!(
+            msg.contains("non-2xx"),
+            "expected non-2xx context, got: {msg}"
+        );
     }
 
     #[tokio::test]

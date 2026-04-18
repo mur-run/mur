@@ -11,8 +11,12 @@ use serde::{Deserialize, Serialize};
 pub enum Scope {
     #[default]
     Personal,
-    Team { team_id: String },
-    Community { pack_id: Option<String> },
+    Team {
+        team_id: String,
+    },
+    Community {
+        pack_id: Option<String>,
+    },
 }
 
 #[cfg(test)]
@@ -35,7 +39,9 @@ mod tests {
 
     #[test]
     fn yaml_roundtrip_team() {
-        let s = Scope::Team { team_id: "ops".into() };
+        let s = Scope::Team {
+            team_id: "ops".into(),
+        };
         let y = serde_yaml::to_string(&s).unwrap();
         let back: Scope = serde_yaml::from_str(&y).unwrap();
         assert_eq!(back, s);
@@ -43,7 +49,9 @@ mod tests {
 
     #[test]
     fn yaml_roundtrip_community_with_pack() {
-        let s = Scope::Community { pack_id: Some("security-best-practices".into()) };
+        let s = Scope::Community {
+            pack_id: Some("security-best-practices".into()),
+        };
         let y = serde_yaml::to_string(&s).unwrap();
         let back: Scope = serde_yaml::from_str(&y).unwrap();
         assert_eq!(back, s);

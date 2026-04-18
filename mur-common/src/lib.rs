@@ -17,4 +17,4 @@ pub mod workflow;
 pub use actor::{Actor, ActorSource};
 pub use pattern::Pattern;
 pub use scope::Scope;
-pub use signal::{Signal, SignalKind, SignalTarget, SIGNAL_SCHEMA_VERSION};
+pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};

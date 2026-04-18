@@ -847,7 +847,12 @@ scope:
   team_id: ops
 "#;
         let p: Pattern = serde_yaml::from_str(y).unwrap();
-        assert_eq!(p.scope, crate::Scope::Team { team_id: "ops".into() });
+        assert_eq!(
+            p.scope,
+            crate::Scope::Team {
+                team_id: "ops".into()
+            }
+        );
         // Roundtrip verify
         let y2 = serde_yaml::to_string(&p).unwrap();
         let p2: Pattern = serde_yaml::from_str(&y2).unwrap();
@@ -867,6 +872,11 @@ scope:
   pack_id: rust-best-practices
 "#;
         let p: Pattern = serde_yaml::from_str(y).unwrap();
-        assert_eq!(p.scope, crate::Scope::Community { pack_id: Some("rust-best-practices".into()) });
+        assert_eq!(
+            p.scope,
+            crate::Scope::Community {
+                pack_id: Some("rust-best-practices".into())
+            }
+        );
     }
 }
