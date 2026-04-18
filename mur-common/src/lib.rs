@@ -10,8 +10,11 @@ pub mod pipeline;
 pub mod schedule;
 pub mod schedule_claim;
 pub mod scope;
+pub mod signal;
 pub mod variable;
 pub mod workflow;
 
 pub use actor::{Actor, ActorSource};
+pub use pattern::Pattern;
 pub use scope::Scope;
+pub use signal::{Signal, SignalKind, SignalTarget, SIGNAL_SCHEMA_VERSION};
