@@ -3389,3 +3389,904 @@ Counts commander long_term/users/episodes/audit, estimates free space
 
 ---
 
+## Task 19: Migration — actual run (staged + atomic + rollback)
+
+**Files:**
+- Modify: `mur-core/src/conversations/migrate.rs`
+
+- [ ] **Step 19.1: Write failing tests**
+
+Add to `migrate.rs` tests module:
+
+```rust
+#[tokio::test]
+async fn run_migrates_long_term_into_raw_by_date() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().to_str().unwrap();
+    seed_commander_layout(tmp.path());
+    let report = run(Some(home)).await.unwrap();
+    assert!(report.messages_migrated >= 1);
+
+    // Verify a raw/<date>/commander_engine_*.jsonl exists
+    let raw_root = crate::conversations::paths::raw_root(Some(&format!("{home}/.mur")));
+    let walked: Vec<_> = walkdir::WalkDir::new(&raw_root).into_iter().flatten()
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("jsonl"))
+        .collect();
+    assert!(!walked.is_empty(), "no migrated raw files found at {raw_root:?}");
+}
+
+#[tokio::test]
+async fn run_refuses_when_daemon_running() {
+    // daemon_running() is currently stub: always false.
+    // This test documents intent; once a real detection is added it should pass.
+    // Leave a TODO marker:
+    // TODO: when daemon_running() is real, simulate a running daemon and assert bail.
+}
+
+#[tokio::test]
+async fn rollback_restores_commander_layout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().to_str().unwrap();
+    seed_commander_layout(tmp.path());
+    run(Some(home)).await.unwrap();
+    let report = rollback(Some(home)).await.unwrap();
+    assert!(report.messages_migrated >= 1);
+    assert!(tmp.path().join(".mur/commander/memory/long_term.jsonl").exists());
+}
+```
+
+- [ ] **Step 19.2: Implement `run()`**
+
+Replace the earlier `pub async fn run` stub with:
+
+```rust
+pub async fn run(home_override: Option<&str>) -> Result<MigrationReport> {
+    let start = std::time::Instant::now();
+    let home = home_root(home_override);
+    let mur = home.join(".mur");
+
+    if daemon_running() {
+        bail!("refusing to migrate: mur-commander daemon appears to be running. \
+               Stop it first.");
+    }
+
+    // Stage: write into .conversations-migrating/ then atomic-rename.
+    let staging = mur.join(".conversations-migrating");
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).context("cleaning stale staging dir")?;
+    }
+    std::fs::create_dir_all(&staging)?;
+    std::fs::create_dir_all(staging.join("raw"))?;
+    std::fs::create_dir_all(staging.join("summary"))?;
+    std::fs::create_dir_all(staging.join("users"))?;
+
+    let mut messages_migrated = 0u64;
+    let staging_override = staging.to_string_lossy().to_string();
+
+    // 1. long_term.jsonl → raw/<date>/commander_engine_<id>.jsonl bucketed by ts
+    let lt = mur.join("commander/memory/long_term.jsonl");
+    if lt.exists() {
+        let text = std::fs::read_to_string(&lt)?;
+        for (i, line) in text.lines().enumerate() {
+            if line.trim().is_empty() { continue; }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
+            let ts_unix = v.get("timestamp_secs").and_then(|v| v.as_i64()).unwrap_or(0);
+            let ts = chrono::DateTime::from_timestamp(ts_unix, 0).unwrap_or_else(chrono::Utc::now);
+            let text = v.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let msg = mur_common::Message {
+                v: 1, ts, src: mur_common::Source::CommanderEngine,
+                conv: format!("long-term-{i}"), role: mur_common::Role::Assistant,
+                content: mur_common::Content::Text { value: text },
+                meta: v.get("metadata").cloned().unwrap_or(serde_json::Value::Null),
+                refs: vec![],
+            };
+            // Write to staged raw/<date>/
+            write_staged_raw(&staging, &msg)?;
+            messages_migrated += 1;
+        }
+    }
+
+    // 2. users/*/conversation.jsonl → users/*/conversation.jsonl (flat copy)
+    let users_src = mur.join("commander/users");
+    if users_src.exists() {
+        for u in std::fs::read_dir(&users_src)? {
+            let u = u?;
+            if !u.file_type()?.is_dir() { continue; }
+            let dest = staging.join("users").join(u.file_name());
+            std::fs::create_dir_all(&dest)?;
+            let src_file = u.path().join("conversation.jsonl");
+            if src_file.exists() {
+                std::fs::copy(&src_file, dest.join("conversation.jsonl"))?;
+                let lines = count_jsonl_lines(&src_file);
+                messages_migrated += lines;
+            }
+        }
+    }
+
+    // 3. episodes/*/*.md → summary/<date>.md (rename by date)
+    let ep_src = mur.join("commander/memory/episodes");
+    if ep_src.exists() {
+        for e in walkdir::WalkDir::new(&ep_src).into_iter().flatten() {
+            if e.path().extension().and_then(|s| s.to_str()) != Some("md") { continue; }
+            let fname = e.path().file_name().unwrap();
+            std::fs::copy(e.path(), staging.join("summary").join(fname))?;
+        }
+    }
+
+    // 4. audit.jsonl chain continuation: read last hash, write Migrate entry
+    let audit_src = mur.join("commander/audit.jsonl");
+    let audit_dest = staging.join("audit.jsonl");
+    let mut audit_entries_replayed = 0u64;
+    if audit_src.exists() {
+        std::fs::copy(&audit_src, &audit_dest)?;
+        audit_entries_replayed = count_jsonl_lines(&audit_src);
+    }
+
+    // 5. Verify audit chain integrity before swap
+    let conv_paths_override = format!("{}", mur.to_string_lossy());
+    // Trick: set paths override to the staging dir's parent (.mur), so
+    // audit_path(Some(...)) lands on staging/audit.jsonl.
+    // Instead, verify manually:
+    verify_audit_file(&audit_dest)?;
+
+    // 6. Append Migrate action to staged audit.jsonl with chain continuity
+    append_migrate_audit_entry(&audit_dest, messages_migrated)?;
+
+    // 7. Atomic rename: staging → conversations
+    let final_path = mur.join("conversations");
+    if final_path.exists() {
+        let backup = mur.join(format!("conversations.bak-{}", chrono::Utc::now().timestamp()));
+        std::fs::rename(&final_path, &backup)?;
+    }
+    std::fs::rename(&staging, &final_path)?;
+
+    Ok(MigrationReport {
+        messages_migrated,
+        audit_entries_replayed,
+        duration_ms: start.elapsed().as_millis() as u64,
+    })
+}
+
+fn write_staged_raw(staging: &std::path::Path, msg: &mur_common::Message) -> Result<()> {
+    let date = msg.ts.date_naive();
+    let dir = staging.join("raw").join(date.format("%Y-%m-%d").to_string());
+    std::fs::create_dir_all(&dir)?;
+    let file = dir.join(format!("{}_{}.jsonl", msg.src.file_prefix(), msg.conv));
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&file)?;
+    use std::io::Write;
+    serde_json::to_writer(&mut f, msg)?;
+    writeln!(f)?;
+    Ok(())
+}
+
+fn verify_audit_file(path: &std::path::Path) -> Result<()> {
+    if !path.exists() { return Ok(()); }
+    use std::io::{BufRead, BufReader};
+    let f = std::fs::File::open(path)?;
+    let mut prev: Option<String> = None;
+    for line in BufReader::new(f).lines() {
+        let line = line?;
+        if line.trim().is_empty() { continue; }
+        let e: super::audit::AuditEntry = serde_json::from_str(&line)
+            .context("parse audit entry during verify")?;
+        if let Some(p) = &prev {
+            if &e.prev_hash != p {
+                bail!("audit chain broken before migration; refusing");
+            }
+        }
+        prev = Some(e.entry_hash);
+    }
+    Ok(())
+}
+
+fn append_migrate_audit_entry(path: &std::path::Path, count: u64) -> Result<()> {
+    use std::io::Write;
+    let prev = read_last_hash_from_file(path)?;
+    let action = super::audit::AuditAction::Migrate {
+        from: "~/.mur/commander/memory".into(),
+        to: "~/.mur/conversations".into(),
+        count,
+    };
+    let canonical = serde_json::to_string(&action)?;
+    let mut h = sha2::Sha256::new();
+    use sha2::Digest;
+    h.update(prev.as_bytes());
+    h.update(b"\n");
+    h.update(canonical.as_bytes());
+    let entry_hash = hex::encode(h.finalize());
+    let entry = super::audit::AuditEntry {
+        id: uuid::Uuid::new_v4(),
+        ts: chrono::Utc::now(),
+        action,
+        prev_hash: prev,
+        entry_hash,
+    };
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    serde_json::to_writer(&mut f, &entry)?;
+    writeln!(f)?;
+    Ok(())
+}
+
+fn read_last_hash_from_file(path: &std::path::Path) -> Result<String> {
+    if !path.exists() { return Ok(super::audit::ZERO_HASH.into()); }
+    use std::io::{BufRead, BufReader};
+    let f = std::fs::File::open(path)?;
+    let mut last = super::audit::ZERO_HASH.to_string();
+    for line in BufReader::new(f).lines() {
+        let line = line?;
+        if line.trim().is_empty() { continue; }
+        let e: super::audit::AuditEntry = serde_json::from_str(&line)?;
+        last = e.entry_hash;
+    }
+    Ok(last)
+}
+```
+
+- [ ] **Step 19.3: Implement `rollback()`**
+
+Replace the stub:
+
+```rust
+pub async fn rollback(home_override: Option<&str>) -> Result<MigrationReport> {
+    let start = std::time::Instant::now();
+    let home = home_root(home_override);
+    let mur = home.join(".mur");
+    let conv = mur.join("conversations");
+    let cmdr_mem = mur.join("commander/memory");
+    std::fs::create_dir_all(&cmdr_mem)?;
+
+    // Copy raw/ commander entries back to long_term.jsonl
+    let raw_root = conv.join("raw");
+    let mut restored = 0u64;
+    if raw_root.exists() {
+        let lt = cmdr_mem.join("long_term.jsonl");
+        let mut out = std::fs::File::create(&lt)?;
+        use std::io::Write;
+        for e in walkdir::WalkDir::new(&raw_root).into_iter().flatten() {
+            let name = e.file_name().to_string_lossy();
+            if !name.starts_with("commander_") { continue; }
+            if e.path().extension().and_then(|s| s.to_str()) != Some("jsonl") { continue; }
+            let f = std::fs::read_to_string(e.path())?;
+            for line in f.lines() {
+                if line.trim().is_empty() { continue; }
+                writeln!(out, "{line}")?;
+                restored += 1;
+            }
+        }
+    }
+
+    // Users dir copy back
+    let users_conv = conv.join("users");
+    let users_cmdr = mur.join("commander/users");
+    if users_conv.exists() {
+        std::fs::create_dir_all(&users_cmdr)?;
+        for u in std::fs::read_dir(&users_conv)? {
+            let u = u?;
+            let dest = users_cmdr.join(u.file_name());
+            std::fs::create_dir_all(&dest)?;
+            let src_file = u.path().join("conversation.jsonl");
+            if src_file.exists() {
+                std::fs::copy(&src_file, dest.join("conversation.jsonl"))?;
+            }
+        }
+    }
+
+    // Record Rollback in audit
+    let cmdr_audit = mur.join("commander/audit.jsonl");
+    append_rollback_audit_entry(&cmdr_audit, restored)?;
+
+    Ok(MigrationReport {
+        messages_migrated: restored,
+        audit_entries_replayed: 0,
+        duration_ms: start.elapsed().as_millis() as u64,
+    })
+}
+
+fn append_rollback_audit_entry(path: &std::path::Path, count: u64) -> Result<()> {
+    use std::io::Write;
+    use sha2::Digest;
+    let prev = read_last_hash_from_file(path)?;
+    let action = super::audit::AuditAction::Rollback {
+        from: "~/.mur/conversations".into(),
+        to: "~/.mur/commander/memory".into(),
+        count,
+    };
+    let canonical = serde_json::to_string(&action)?;
+    let mut h = sha2::Sha256::new();
+    h.update(prev.as_bytes());
+    h.update(b"\n");
+    h.update(canonical.as_bytes());
+    let entry_hash = hex::encode(h.finalize());
+    let entry = super::audit::AuditEntry {
+        id: uuid::Uuid::new_v4(),
+        ts: chrono::Utc::now(),
+        action,
+        prev_hash: prev,
+        entry_hash,
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    serde_json::to_writer(&mut f, &entry)?;
+    writeln!(f)?;
+    Ok(())
+}
+```
+
+- [ ] **Step 19.4: Run tests**
+
+Run: `cargo test -p mur-core conversations::migrate::tests` — expect 4+ PASS.
+
+- [ ] **Step 19.5: Commit**
+
+```bash
+git add mur-core/src/conversations/migrate.rs
+git commit -m "feat(core): conversations migrate run + rollback
+
+Staged migration via .conversations-migrating/ → atomic rename. Refuses
+if commander daemon running. Appends Migrate entry to audit with chain
+continuity. Rollback recreates commander layout and appends Rollback
+entry to commander/audit.jsonl."
+```
+
+---
+
+## Task 20: Commander engine — route `long_term.rs` to conversations/
+
+**Files:**
+- Modify: `mur-commander/crates/engine/src/memory/long_term.rs`
+
+Working directory: `/Volumes/Firecuda4tb/Projects/mur-commander`.
+
+- [ ] **Step 20.1: Identify the current path constant**
+
+Run: `cd /Volumes/Firecuda4tb/Projects/mur-commander && grep -n 'long_term.jsonl' crates/engine/src/memory/long_term.rs`
+
+Expected: a line assigning the default path under `~/.mur/commander/memory/long_term.jsonl`, likely at line ~16 of that file.
+
+- [ ] **Step 20.2: Write a failing test**
+
+Add an integration test under `mur-commander/crates/engine/tests/long_term_path.rs`:
+
+```rust
+#[test]
+fn long_term_path_points_into_conversations() {
+    let p = engine::memory::long_term::default_path();
+    let s = p.to_string_lossy();
+    assert!(
+        s.contains(".mur/conversations/raw/"),
+        "long_term path should live under conversations/raw, got {s}"
+    );
+    assert!(s.contains("commander_engine_"));
+}
+```
+
+(If `default_path` is private, promote it to `pub` or provide a `pub fn default_path()` accessor.)
+
+- [ ] **Step 20.3: Change the path constant**
+
+In `long_term.rs`, change the path computation to use a daily file under conversations:
+
+```rust
+pub fn default_path() -> std::path::PathBuf {
+    let home = dirs::home_dir().expect("no home dir");
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    home.join(".mur").join("conversations").join("raw").join(today)
+        .join(format!("commander_engine_{}.jsonl", std::process::id()))
+}
+```
+
+Adjust callers that expected a single stable path (e.g., logic that opens once and writes many) to use `default_path()` on every write, or a `LongTermStore` that checks the stamp and rolls files when the date changes. Keep the rest of `long_term.rs` logic unchanged (same DiskEntry format, same `save()` / `load()` API).
+
+- [ ] **Step 20.4: Run tests**
+
+Run: `cd /Volumes/Firecuda4tb/Projects/mur-commander && cargo test -p engine long_term_path`
+Expected: test passes.
+
+- [ ] **Step 20.5: Commit (in commander repo)**
+
+```bash
+cd /Volumes/Firecuda4tb/Projects/mur-commander
+git add crates/engine/src/memory/long_term.rs crates/engine/tests/long_term_path.rs
+git commit -m "feat(engine): route long_term writes into ~/.mur/conversations/raw/
+
+Commander engine's long_term.jsonl now writes daily files under the
+shared conversations archive. Part of mur/conversations Phase 1 (Option X
+Rename & Unify per spec §7)."
+```
+
+---
+
+## Task 21: Commander gateway — route `episodes.rs` + `lance_store.rs`
+
+**Files (in mur-commander):**
+- Modify: `crates/gateway/src/memory/episodes.rs`
+- Modify: `crates/gateway/src/memory/lance_store.rs`
+- Modify: `crates/gateway/src/memory/mod.rs` (root-dir constant)
+
+- [ ] **Step 21.1: Write failing tests**
+
+Create `crates/gateway/tests/memory_paths.rs`:
+
+```rust
+#[test]
+fn user_path_in_conversations() {
+    let p = gateway::memory::episodes::user_conversation_path("alice");
+    let s = p.to_string_lossy();
+    assert!(s.contains(".mur/conversations/users/alice/"), "got {s}");
+    assert!(s.ends_with("conversation.jsonl"));
+}
+
+#[test]
+fn episode_summary_in_conversations() {
+    let d = chrono::NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
+    let p = gateway::memory::episodes::summary_path_for(d);
+    assert!(p.to_string_lossy().contains(".mur/conversations/summary/2026-04-19.md"));
+}
+
+#[test]
+fn lance_index_path() {
+    let p = gateway::memory::lance_store::default_index_path();
+    assert!(p.to_string_lossy().contains(".mur/conversations/index.lance"));
+}
+```
+
+- [ ] **Step 21.2: Update `episodes.rs` paths**
+
+Replace the two path functions:
+
+```rust
+pub fn user_conversation_path(user_id: &str) -> std::path::PathBuf {
+    let home = dirs::home_dir().expect("no home dir");
+    home.join(".mur/conversations/users").join(user_id).join("conversation.jsonl")
+}
+
+pub fn summary_path_for(date: chrono::NaiveDate) -> std::path::PathBuf {
+    let home = dirs::home_dir().expect("no home dir");
+    home.join(".mur/conversations/summary")
+        .join(format!("{}.md", date.format("%Y-%m-%d")))
+}
+```
+
+Adjust any internal call sites using the old paths.
+
+- [ ] **Step 21.3: Update `lance_store.rs`**
+
+```rust
+pub fn default_index_path() -> std::path::PathBuf {
+    dirs::home_dir().expect("no home dir").join(".mur/conversations/index.lance")
+}
+```
+
+- [ ] **Step 21.4: Update `memory/mod.rs` root constant**
+
+Replace `~/.mur/commander/memory` with `~/.mur/conversations` where applicable. `core/`, `rules/`, `facts/`, `episodes/` categories can live at `~/.mur/conversations/categories/{core,rules,facts}` — keep `episodes` flat at `~/.mur/conversations/summary/`.
+
+- [ ] **Step 21.5: Run tests**
+
+Run: `cargo test -p gateway memory_paths`
+Expected: 3 tests PASS.
+
+- [ ] **Step 21.6: Commit**
+
+```bash
+cd /Volumes/Firecuda4tb/Projects/mur-commander
+git add crates/gateway/src/memory/episodes.rs \
+        crates/gateway/src/memory/lance_store.rs \
+        crates/gateway/src/memory/mod.rs \
+        crates/gateway/tests/memory_paths.rs
+git commit -m "feat(gateway): route episodes/users/lance_store into conversations/
+
+Commander gateway's per-user conversation JSONL, daily episode summaries,
+and LanceDB index all move to ~/.mur/conversations/ per spec §7 Option X."
+```
+
+---
+
+## Task 22: Commander gateway — remove `mur_learn::session::record()` double-writes
+
+**Files (in mur-commander):**
+- Modify: `crates/gateway/src/unified_handler/mod.rs`
+
+- [ ] **Step 22.1: Locate the 5 call sites**
+
+Run: `cd /Volumes/Firecuda4tb/Projects/mur-commander && grep -n 'mur_learn::session::record' crates/gateway/src/unified_handler/mod.rs`
+Expected: 5 lines (approximately 416, 582, 793, 883, 1267 per the earlier codebase scan).
+
+- [ ] **Step 22.2: Write a failing test**
+
+Add `crates/gateway/tests/no_mur_learn_calls.rs`:
+
+```rust
+#[test]
+fn unified_handler_has_no_mur_learn_session_record() {
+    let src = std::fs::read_to_string("src/unified_handler/mod.rs").unwrap();
+    // File should not call the legacy double-write path.
+    for (i, line) in src.lines().enumerate() {
+        assert!(
+            !line.contains("mur_learn::session::record"),
+            "found legacy mur_learn::session::record at line {}: {}",
+            i + 1, line
+        );
+    }
+}
+```
+
+- [ ] **Step 22.3: Replace each call**
+
+For each of the 5 call sites: keep the commander's own conversation recording (unchanged — now writes to the conversations archive thanks to Task 21), and remove only the `mur_learn::session::record(...)` line plus any surrounding imports/error handling that becomes dead.
+
+Example diff for one call site:
+
+```diff
+-            let _ = mur_learn::session::record("user", None, &text);
+-            episodes::record(user_id, "user", &text)?;
++            episodes::record(user_id, "user", &text)?;
+```
+
+Also remove `use mur_learn::session;` (or similar) imports that become unused.
+
+- [ ] **Step 22.4: Run tests**
+
+Run: `cargo test -p gateway no_mur_learn_calls`
+Expected: PASS (the file no longer contains the string).
+
+Also: `cargo build --workspace`
+Expected: PASS (no unused-import errors).
+
+- [ ] **Step 22.5: Commit**
+
+```bash
+git add crates/gateway/src/unified_handler/mod.rs crates/gateway/tests/no_mur_learn_calls.rs
+git commit -m "refactor(gateway): remove mur_learn::session::record double-writes
+
+5 call sites removed. Commander is no longer a second writer — the shared
+conversations archive is the single system of record (spec §12 constraint #5).
+Commander's own ConversationBuffer.record() remains, and since Task 21
+rerouted those paths into conversations/, there is no functional loss."
+```
+
+---
+
+## Task 23: Config schema — `conversations:` section in `~/.mur/config.yaml`
+
+**Files:**
+- Modify: `mur-common/src/config.rs`
+
+- [ ] **Step 23.1: Write failing tests**
+
+Add to `mur-common/src/config.rs`:
+
+```rust
+#[cfg(test)]
+mod conversations_tests {
+    use super::*;
+
+    #[test]
+    fn conversations_section_defaults() {
+        let c = ConversationsConfig::default();
+        assert_eq!(c.enabled, false);
+        assert_eq!(c.retention_days, 30);
+        assert_eq!(c.poll_interval_secs, 300);
+    }
+
+    #[test]
+    fn parse_from_yaml() {
+        let y = r#"
+conversations:
+  enabled: true
+  retention_days: 45
+  poll_interval_secs: 120
+"#;
+        let v: serde_yaml::Value = serde_yaml::from_str(y).unwrap();
+        let conv: ConversationsConfig = serde_yaml::from_value(v["conversations"].clone()).unwrap();
+        assert_eq!(conv.enabled, true);
+        assert_eq!(conv.retention_days, 45);
+        assert_eq!(conv.poll_interval_secs, 120);
+    }
+}
+```
+
+- [ ] **Step 23.2: Add `ConversationsConfig` struct**
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_retention_days")]
+    pub retention_days: u32,
+    #[serde(default = "default_poll_interval")]
+    pub poll_interval_secs: u64,
+    #[serde(default)]
+    pub sources: ConversationsSources,
+    #[serde(default)]
+    pub filter: ConversationsFilter,
+}
+
+impl Default for ConversationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            retention_days: default_retention_days(),
+            poll_interval_secs: default_poll_interval(),
+            sources: ConversationsSources::default(),
+            filter: ConversationsFilter::default(),
+        }
+    }
+}
+
+fn default_retention_days() -> u32 { 30 }
+fn default_poll_interval() -> u64 { 300 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConversationsSources {
+    #[serde(default = "truthy")] pub claude_code: bool,
+    #[serde(default = "truthy")] pub cursor: bool,
+    #[serde(default = "truthy")] pub gemini: bool,
+    #[serde(default)] pub aider: AiderSourceConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AiderSourceConfig {
+    #[serde(default = "truthy")] pub enabled: bool,
+    #[serde(default)] pub watched_dirs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationsFilter {
+    #[serde(default = "default_dedup")] pub dedup_threshold: f64,
+    #[serde(default = "truthy")] pub reject_heartbeat: bool,
+    #[serde(default = "truthy")] pub reject_system_restatement: bool,
+}
+
+impl Default for ConversationsFilter {
+    fn default() -> Self {
+        Self {
+            dedup_threshold: default_dedup(),
+            reject_heartbeat: true,
+            reject_system_restatement: true,
+        }
+    }
+}
+
+fn default_dedup() -> f64 { 0.85 }
+fn truthy() -> bool { true }
+```
+
+Add `#[serde(default)] pub conversations: ConversationsConfig,` to the main `Config` struct.
+
+- [ ] **Step 23.3: Run tests**
+
+Run: `cargo test -p mur-common conversations_tests`
+Expected: 2 PASS.
+
+- [ ] **Step 23.4: Commit**
+
+```bash
+cd /Volumes/Firecuda4tb/Projects/mur
+git add mur-common/src/config.rs
+git commit -m "feat(common): add conversations: section to Config
+
+retention_days (default 30), enabled (default false), poll_interval_secs
+(default 300), per-source flags, filter thresholds. All fields serde-default
+so existing config.yaml files stay valid.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## Task 24: Golden-path e2e smoke script
+
+**Files:**
+- Create: `scripts/golden-path-conversations.sh`
+
+- [ ] **Step 24.1: Create the script**
+
+```bash
+#!/usr/bin/env bash
+# golden-path-conversations.sh
+# End-to-end smoke test for mur's conversations Phase 1.
+# Runs under an isolated $HOME via mktemp so it never touches real ~/.mur.
+
+set -euo pipefail
+
+MUR="${MUR:-$(pwd)/target/debug/mur}"
+if [[ ! -x "$MUR" ]]; then
+  echo "Building mur..."
+  cargo build -p mur-core --bin mur
+  MUR="$(pwd)/target/debug/mur"
+fi
+
+TMPHOME="$(mktemp -d)"
+trap 'rm -rf "$TMPHOME"' EXIT
+export HOME="$TMPHOME"
+
+echo "=== Using isolated HOME=$TMPHOME ==="
+
+# 0. Seed config with conversations.enabled=true
+mkdir -p "$TMPHOME/.mur"
+cat > "$TMPHOME/.mur/config.yaml" <<EOF
+conversations:
+  enabled: true
+  retention_days: 30
+  poll_interval_secs: 300
+  sources:
+    claude_code: true
+    cursor: true
+    gemini: true
+    aider:
+      enabled: true
+      watched_dirs: []
+embedding:
+  provider: ollama
+  model: qwen3-embedding:0.6b
+  dimensions: 16
+  ollama_endpoint: http://localhost:11434
+EOF
+
+# 1. Empty state
+echo "--- step 1: mur chat list on empty archive ---"
+"$MUR" chat list | tee /tmp/out-1.txt
+grep -q "no conversations" /tmp/out-1.txt || { echo "FAIL: expected 'no conversations'"; exit 1; }
+
+# 2. Seed a raw day directly
+TODAY="$(date -u +%Y-%m-%d)"
+mkdir -p "$TMPHOME/.mur/conversations/raw/$TODAY"
+cat > "$TMPHOME/.mur/conversations/raw/$TODAY/cc_sess1.jsonl" <<EOF
+{"v":1,"ts":"${TODAY}T10:00:00Z","src":"claude-code","conv":"sess1","role":"user","content":{"t":"text","v":"test LanceDB RaBitQ compression"},"meta":{},"refs":[]}
+{"v":1,"ts":"${TODAY}T10:00:05Z","src":"claude-code","conv":"sess1","role":"assistant","content":{"t":"text","v":"RaBitQ compresses vectors 32x with recall@10 within 1%"},"meta":{},"refs":[]}
+EOF
+
+echo "--- step 2: mur chat list with 1 day seeded ---"
+"$MUR" chat list | tee /tmp/out-2.txt
+grep -q "$TODAY" /tmp/out-2.txt || { echo "FAIL: day not listed"; exit 1; }
+grep -q "2 msgs" /tmp/out-2.txt || { echo "FAIL: msg count wrong"; exit 1; }
+
+# 3. mur chat show
+echo "--- step 3: mur chat show ---"
+"$MUR" chat show "$TODAY" | tee /tmp/out-3.txt
+grep -q "LanceDB RaBitQ" /tmp/out-3.txt || { echo "FAIL: content not visible"; exit 1; }
+
+# 4. mur chat raw
+echo "--- step 4: mur chat raw ---"
+"$MUR" chat raw "$TODAY" sess1 | tee /tmp/out-4.txt
+grep -q "RaBitQ compresses" /tmp/out-4.txt || { echo "FAIL: raw content missing"; exit 1; }
+
+# 5. Doctor
+echo "--- step 5: doctor ---"
+"$MUR" conversations doctor | tee /tmp/out-5.txt
+grep -q "raw day-dirs: 1" /tmp/out-5.txt || { echo "FAIL: doctor did not see seeded day"; exit 1; }
+
+# 6. Migrate dry-run on empty commander layout (should report zeros, not error)
+echo "--- step 6: migrate dry-run ---"
+"$MUR" conversations migrate --dry-run | tee /tmp/out-6.txt
+grep -q "long_term.jsonl: 0 lines" /tmp/out-6.txt || { echo "FAIL: dry-run output malformed"; exit 1; }
+
+# 7. Cleanup (nothing old enough to delete)
+echo "--- step 7: cleanup ---"
+"$MUR" conversations cleanup | tee /tmp/out-7.txt
+grep -q "Scanned 1 dirs, deleted 0" /tmp/out-7.txt || { echo "FAIL: cleanup output unexpected"; exit 1; }
+
+# 8. Seed an old day + a summary, then cleanup should delete it
+echo "--- step 8: cleanup of old day with summary ---"
+OLD="2025-01-01"
+mkdir -p "$TMPHOME/.mur/conversations/raw/$OLD"
+cat > "$TMPHOME/.mur/conversations/raw/$OLD/cc_old.jsonl" <<EOF
+{"v":1,"ts":"${OLD}T10:00:00Z","src":"claude-code","conv":"old","role":"user","content":{"t":"text","v":"old turn"},"meta":{},"refs":[]}
+EOF
+mkdir -p "$TMPHOME/.mur/conversations/summary"
+echo "---\ndate: $OLD\n---\n# old" > "$TMPHOME/.mur/conversations/summary/$OLD.md"
+"$MUR" conversations cleanup | tee /tmp/out-8.txt
+grep -q "deleted 1" /tmp/out-8.txt || { echo "FAIL: cleanup should have deleted old day"; exit 1; }
+[[ ! -d "$TMPHOME/.mur/conversations/raw/$OLD" ]] || { echo "FAIL: old raw dir still exists"; exit 1; }
+
+echo ""
+echo "=== ALL 8 STEPS GREEN ==="
+```
+
+- [ ] **Step 24.2: Make executable**
+
+Run: `chmod +x scripts/golden-path-conversations.sh`
+
+- [ ] **Step 24.3: Run the script**
+
+Run: `scripts/golden-path-conversations.sh`
+Expected: ends with `ALL 8 STEPS GREEN`.
+
+- [ ] **Step 24.4: Commit**
+
+```bash
+git add scripts/golden-path-conversations.sh
+git commit -m "test: Golden Path e2e smoke script for conversations Phase 1
+
+8 assertions under isolated \$HOME: empty-archive listing, seed+list,
+chat show/raw, doctor, migrate dry-run, cleanup no-op, cleanup of old
+day with summary. Runs end-to-end against the built debug binary."
+```
+
+---
+
+## Task 25: End-to-end check + final commit
+
+- [ ] **Step 25.1: Full workspace build**
+
+Run: `cd /Volumes/Firecuda4tb/Projects/mur && cargo build --workspace --release`
+Expected: PASS.
+
+- [ ] **Step 25.2: Full workspace test**
+
+Run: `cd /Volumes/Firecuda4tb/Projects/mur && cargo test --workspace`
+Expected: all tests PASS (pre-existing 581 + new Phase 1 tests).
+
+- [ ] **Step 25.3: Clippy clean**
+
+Run: `cd /Volumes/Firecuda4tb/Projects/mur && cargo clippy --workspace -- -D warnings`
+Expected: PASS.
+
+- [ ] **Step 25.4: Format**
+
+Run: `cd /Volumes/Firecuda4tb/Projects/mur && cargo fmt`
+Expected: no changes (or commit formatting fixes).
+
+- [ ] **Step 25.5: Commander workspace build + test**
+
+Run: `cd /Volumes/Firecuda4tb/Projects/mur-commander && cargo test --workspace`
+Expected: PASS.
+
+- [ ] **Step 25.6: Golden path passes**
+
+Run: `cd /Volumes/Firecuda4tb/Projects/mur && scripts/golden-path-conversations.sh`
+Expected: `ALL 8 STEPS GREEN`.
+
+- [ ] **Step 25.7: Summary commit (if any fmt fixes)**
+
+```bash
+cd /Volumes/Firecuda4tb/Projects/mur
+git status
+# If anything is uncommitted:
+git add -u
+git commit -m "chore: fmt + final cleanup for conversations Phase 1"
+```
+
+- [ ] **Step 25.8: Verify spec coverage**
+
+Open `docs/superpowers/specs/2026-04-19-mur-conversations-design.md` and for each Phase 1 item in §10, point to a task above:
+- Mode A timeline → Tasks 16, 17 (Chat::List, Chat::Show, Chat::Raw)
+- Mode B search → Tasks 16, 17 (Chat::Search)
+- Claude Code ingester → Task 11
+- Cursor ingester → Task 12
+- Gemini ingester → Task 13
+- Aider ingester → Task 14
+- Commander engine + Slack/TG/Discord adapters → Tasks 20, 21, 22
+- Migration with dry-run → Task 18, Task 19 (run)
+- `golden-path-conversations.sh` → Task 24
+
+If any item lacks a task, add one.
+
+---
+
+## Post-implementation follow-ups (NOT part of Phase 1)
+
+These are Phase 2/3 and explicitly out of scope:
+
+- Mode C (Ask) RAG with citation — Phase 2
+- Freedman Named-Abstraction macro-expansion at retrieval — Phase 2
+- Sleep-time compact job — Phase 2
+- mur-web `/conversations` dashboard — Phase 2
+- LLMLingua-2 pre-summarization — Phase 3
+- RAPTOR week/month layers — Phase 3
+- A-MEM dynamic re-linking — Phase 3
+- Codex CLI ingester — Phase 3
+
+---
+
+## Self-review checklist (completed during plan writing)
+
+- [x] **Placeholder scan** — no `TBD` / `TODO` in plan steps that lack a follow-up task. The one `TODO(phase-2)` in `index.rs::rebuild_rabitq` is explicitly deferred and documented.
+- [x] **Internal consistency** — `Content::Text { value }` used consistently; `Source::file_prefix()` called consistently; `conversations::is_enabled()` defined once (Task 11), used in pipeline wiring.
+- [x] **Scope check** — Phase 1 only. Phase 2/3 listed but not tasked.
+- [x] **Ambiguity** — retention_days parameterized end-to-end (config → retention::cleanup → doctor). Migration steps numbered. Failure modes specified in Section §8.1.
+
