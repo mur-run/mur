@@ -2404,3 +2404,988 @@ git commit -m "feat(core): Aider ingester — scan watched_dirs for .aider.chat.
 
 ---
 
+## Task 15: Retention (three-guard cleanup)
+
+**Files:**
+- Create: `mur-core/src/conversations/retention.rs`
+- Modify: `mur-core/src/conversations/mod.rs`
+
+- [ ] **Step 15.1: Write failing tests**
+
+Add to `retention.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use mur_common::{Content, Message, Role, Source};
+
+    fn seed_raw(root: &str, ymd: (i32, u32, u32)) {
+        let ts = chrono::Utc.with_ymd_and_hms(ymd.0, ymd.1, ymd.2, 12, 0, 0).unwrap();
+        let msg = Message {
+            v: 1, ts, src: Source::ClaudeCode, conv: "c".into(), role: Role::User,
+            content: Content::Text { value: "x".into() },
+            meta: serde_json::Value::Null, refs: vec![],
+        };
+        crate::conversations::store::append(&msg, Some(root)).unwrap();
+    }
+
+    fn write_summary(root: &str, ymd: (i32, u32, u32), body: &str) {
+        let d = chrono::NaiveDate::from_ymd_opt(ymd.0, ymd.1, ymd.2).unwrap();
+        let (md, _yml) = crate::conversations::paths::summary_paths_for(d, Some(root));
+        std::fs::create_dir_all(md.parent().unwrap()).unwrap();
+        std::fs::write(&md, body).unwrap();
+    }
+
+    #[test]
+    fn old_raw_with_summary_is_deleted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        seed_raw(root, (2026, 1, 1));
+        write_summary(root, (2026, 1, 1), "---\ndate: 2026-01-01\n---\n");
+        let now = chrono::Utc.with_ymd_and_hms(2026, 4, 19, 0, 0, 0).unwrap();
+        let r = cleanup(now, 30, Some(root)).unwrap();
+        assert_eq!(r.dirs_deleted, 1);
+        let raw = crate::conversations::paths::raw_root(Some(root)).join("2026-01-01");
+        assert!(!raw.exists());
+    }
+
+    #[test]
+    fn old_raw_without_summary_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        seed_raw(root, (2026, 1, 1));
+        // No summary written!
+        let now = chrono::Utc.with_ymd_and_hms(2026, 4, 19, 0, 0, 0).unwrap();
+        let r = cleanup(now, 30, Some(root)).unwrap();
+        assert_eq!(r.dirs_deleted, 0);
+        assert_eq!(r.dirs_skipped_no_summary, 1);
+    }
+
+    #[test]
+    fn recent_raw_kept_even_with_summary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        seed_raw(root, (2026, 4, 18));
+        write_summary(root, (2026, 4, 18), "---\n---\n");
+        let now = chrono::Utc.with_ymd_and_hms(2026, 4, 19, 0, 0, 0).unwrap();
+        let r = cleanup(now, 30, Some(root)).unwrap();
+        assert_eq!(r.dirs_deleted, 0);
+    }
+}
+```
+
+- [ ] **Step 15.2: Implement `retention.rs`**
+
+```rust
+//! Three-guard retention cleanup (spec §4.6).
+//!
+//! Guards (all three must pass or delete is skipped):
+//! 1. Age > retention_days
+//! 2. summary/<date>.md exists
+//! 3. Audit successfully records Delete entry (records before rm)
+
+use anyhow::Result;
+use chrono::{DateTime, NaiveDate, Utc};
+use std::fs;
+use tracing::warn;
+
+use super::audit::{Audit, AuditAction};
+use super::paths::{raw_root, summary_paths_for};
+use super::store::list_raw_dirs;
+
+#[derive(Debug, Default)]
+pub struct CleanupReport {
+    pub dirs_scanned: u64,
+    pub dirs_deleted: u64,
+    pub dirs_skipped_not_old_enough: u64,
+    pub dirs_skipped_no_summary: u64,
+    pub dirs_errored: u64,
+    pub bytes_freed: u64,
+}
+
+pub fn cleanup(
+    now: DateTime<Utc>,
+    retention_days: u32,
+    root_override: Option<&str>,
+) -> Result<CleanupReport> {
+    let mut report = CleanupReport::default();
+    let audit = Audit::open(root_override)?;
+
+    for (date, dir) in list_raw_dirs(root_override)? {
+        report.dirs_scanned += 1;
+
+        // Guard 1: age
+        let age_days = (now.date_naive() - date).num_days();
+        if age_days < retention_days as i64 {
+            report.dirs_skipped_not_old_enough += 1;
+            continue;
+        }
+
+        // Guard 2: summary exists
+        let (md, _yml) = summary_paths_for(date, root_override);
+        if !md.exists() {
+            warn!("retention: skipping {dir:?} — no summary at {md:?}");
+            report.dirs_skipped_no_summary += 1;
+            continue;
+        }
+
+        // Guard 3: compute bytes, record audit, then remove
+        let bytes = dir_size_bytes(&dir).unwrap_or(0);
+        if let Err(e) = audit.append(AuditAction::Delete {
+            target: dir.to_string_lossy().into_owned(),
+            reason: format!("retention {retention_days}d"),
+        }) {
+            warn!("retention: audit append failed, skipping {dir:?}: {e:#}");
+            report.dirs_errored += 1;
+            continue;
+        }
+        if let Err(e) = fs::remove_dir_all(&dir) {
+            warn!("retention: rm_rf failed for {dir:?}: {e:#}");
+            report.dirs_errored += 1;
+            continue;
+        }
+        report.dirs_deleted += 1;
+        report.bytes_freed += bytes;
+    }
+
+    let _ = raw_root(root_override); // silence unused import on empty runs
+    Ok(report)
+}
+
+fn dir_size_bytes(dir: &std::path::Path) -> std::io::Result<u64> {
+    let mut total = 0u64;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            total += dir_size_bytes(&entry.path())?;
+        } else {
+            total += entry.metadata()?.len();
+        }
+    }
+    Ok(total)
+}
+
+/// Read retention_days from ~/.mur/config.yaml (`conversations.retention_days`).
+/// Defaults to 30 if absent.
+pub fn retention_days_from_config() -> u32 {
+    let Some(home) = dirs::home_dir() else { return 30; };
+    let cfg = home.join(".mur").join("config.yaml");
+    let Ok(text) = fs::read_to_string(&cfg) else { return 30; };
+    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&text) else { return 30; };
+    doc.get("conversations")
+        .and_then(|c| c.get("retention_days"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(30)
+}
+```
+
+- [ ] **Step 15.3: Uncomment `pub mod retention;` in `conversations/mod.rs`**
+- [ ] **Step 15.4: Run tests**
+
+Run: `cargo test -p mur-core conversations::retention::tests` — expect 3 PASS.
+
+- [ ] **Step 15.5: Commit**
+
+```bash
+git add mur-core/src/conversations/retention.rs mur-core/src/conversations/mod.rs
+git commit -m "feat(core): conversations retention — three-guard cleanup
+
+Deletes raw/<date>/ only when age > retention_days AND summary exists AND
+audit Delete entry records successfully. Conservative by design: any
+failure skips the delete (never data loss from a broken guard)."
+```
+
+---
+
+## Task 16: Retrieval — Mode A (timeline) + Mode B (search)
+
+**Files:**
+- Create: `mur-core/src/conversations/retrieve.rs`
+- Modify: `mur-core/src/conversations/mod.rs`
+
+- [ ] **Step 16.1: Write failing tests**
+
+Add to `retrieve.rs`:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use mur_common::{Content, Message, Role, Source};
+
+    fn append(root: &str, ts: (i32, u32, u32, u32), src: Source, text: &str) {
+        let t = chrono::Utc.with_ymd_and_hms(ts.0, ts.1, ts.2, ts.3, 0, 0).unwrap();
+        let m = Message {
+            v: 1, ts: t, src, conv: "c".into(), role: Role::User,
+            content: Content::Text { value: text.into() },
+            meta: serde_json::Value::Null, refs: vec![],
+        };
+        crate::conversations::store::append(&m, Some(root)).unwrap();
+    }
+
+    #[test]
+    fn mode_a_timeline_lists_days() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        append(root, (2026, 4, 18, 10), Source::ClaudeCode, "yesterday");
+        append(root, (2026, 4, 19, 10), Source::Cursor, "today");
+        let days = list_days(None, None, &[], Some(root)).unwrap();
+        assert_eq!(days.len(), 2);
+        // Most recent first
+        assert_eq!(days[0].date, chrono::NaiveDate::from_ymd_opt(2026, 4, 19).unwrap());
+    }
+
+    #[test]
+    fn mode_a_show_day_returns_all_messages_for_date() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        append(root, (2026, 4, 19, 9), Source::ClaudeCode, "hello");
+        append(root, (2026, 4, 19, 10), Source::Slack, "world");
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
+        let msgs = show_day(d, Some(root)).unwrap();
+        assert_eq!(msgs.len(), 2);
+    }
+}
+```
+
+- [ ] **Step 16.2: Implement `retrieve.rs`**
+
+```rust
+//! Retrieval — Mode A (timeline) and Mode B (search).
+//! Mode C (NL Q&A) is Phase 2.
+
+use anyhow::Result;
+use chrono::NaiveDate;
+use mur_common::{Message, Source};
+
+use super::paths::{summary_paths_for, raw_root};
+use super::store::{read_day, list_raw_dirs};
+
+#[derive(Debug, Clone)]
+pub struct DaySummary {
+    pub date: NaiveDate,
+    pub msg_count: usize,
+    pub sources: Vec<Source>,
+    pub summary_exists: bool,
+}
+
+/// Mode A — list days (Layer 1 progressive disclosure).
+pub fn list_days(
+    since: Option<NaiveDate>,
+    until: Option<NaiveDate>,
+    sources_filter: &[Source],
+    root_override: Option<&str>,
+) -> Result<Vec<DaySummary>> {
+    let mut out = Vec::new();
+    for (date, _dir) in list_raw_dirs(root_override)? {
+        if let Some(s) = since { if date < s { continue; } }
+        if let Some(u) = until { if date > u { continue; } }
+        let msgs = read_day(date, root_override)?;
+        if msgs.is_empty() { continue; }
+        let sources: Vec<Source> = {
+            let mut set: std::collections::BTreeSet<Source> = msgs.iter().map(|m| m.src).collect();
+            if !sources_filter.is_empty() {
+                set.retain(|s| sources_filter.contains(s));
+                if set.is_empty() { continue; }
+            }
+            set.into_iter().collect()
+        };
+        let (md, _) = summary_paths_for(date, root_override);
+        out.push(DaySummary {
+            date,
+            msg_count: msgs.len(),
+            sources,
+            summary_exists: md.exists(),
+        });
+    }
+    out.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(out)
+}
+
+/// Mode A — show all messages for a day (Layer 2 without summary, Layer 3 raw).
+pub fn show_day(date: NaiveDate, root_override: Option<&str>) -> Result<Vec<Message>> {
+    read_day(date, root_override)
+}
+
+/// Mode A — show the rendered summary file for a day.
+pub fn show_summary(date: NaiveDate, root_override: Option<&str>) -> Result<Option<String>> {
+    let (md, _) = summary_paths_for(date, root_override);
+    if !md.exists() { return Ok(None); }
+    Ok(Some(std::fs::read_to_string(md)?))
+}
+
+/// Mode B — semantic search via LanceDB + keyword rerank.
+///
+/// Requires the index to exist. Returns ordered hits (score desc).
+pub async fn search(
+    query: &str,
+    embedding: Vec<f32>,
+    limit: usize,
+    source_filter: Option<Source>,
+    root_override: Option<&str>,
+) -> Result<Vec<SearchResult>> {
+    let idx = super::index::ConversationIndex::open(
+        embedding.len() as i32, root_override,
+    ).await?;
+    let vec_hits = idx.search(&embedding, limit * 3, source_filter).await?;
+
+    // Keyword rerank: 0.7 vector + 0.3 keyword, mirroring mur's scoring
+    let q_lower = query.to_lowercase();
+    let q_words: Vec<&str> = q_lower.split_whitespace().collect();
+
+    let mut out: Vec<SearchResult> = vec_hits.into_iter().map(|h| {
+        let vec_score = 1.0 / (1.0 + h.distance as f64);
+        let kw_hits = q_words.iter()
+            .filter(|w| h.content.to_lowercase().contains(*w))
+            .count() as f64;
+        let kw_score = if q_words.is_empty() { 0.0 } else { kw_hits / q_words.len() as f64 };
+        let combined = 0.7 * vec_score + 0.3 * kw_score;
+        SearchResult {
+            id: h.id,
+            ts: h.ts,
+            source: h.source,
+            conv_id: h.conv_id,
+            snippet: h.content,
+            score: combined,
+        }
+    }).collect();
+    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(limit);
+    Ok(out)
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub id: String,
+    pub ts: i64,
+    pub source: Source,
+    pub conv_id: String,
+    pub snippet: String,
+    pub score: f64,
+}
+```
+
+- [ ] **Step 16.3: Uncomment `pub mod retrieve;` in `conversations/mod.rs`**
+- [ ] **Step 16.4: Run tests**
+
+Run: `cargo test -p mur-core conversations::retrieve::tests` — expect 2 PASS. (Search tests happen in the CLI integration task since they need embeddings.)
+
+- [ ] **Step 16.5: Commit**
+
+```bash
+git add mur-core/src/conversations/retrieve.rs mur-core/src/conversations/mod.rs
+git commit -m "feat(core): conversations retrieve — Mode A (timeline) + Mode B (search)
+
+Mode A is pure file walk (list_days, show_day, show_summary). Mode B
+delegates embedding to mur's existing store/embedding.rs and uses the
+same 0.7-vector + 0.3-keyword rerank as mur's pattern scoring."
+```
+
+---
+
+## Task 17: CLI subcommand definitions and dispatch
+
+**Files:**
+- Create: `mur-core/src/cmd/conversations_cmd.rs`
+- Modify: `mur-core/src/cmd/mod.rs` (add `pub(crate) mod conversations_cmd;`)
+- Modify: `mur-core/src/main.rs` (add `Commands::Chat` and `Commands::Conversations` variants + dispatch)
+
+- [ ] **Step 17.1: Write failing integration test**
+
+Create `mur-core/tests/cli_conversations.rs`:
+
+```rust
+use std::process::Command;
+
+#[test]
+fn mur_chat_list_runs_without_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["chat", "list"])
+        .env("HOME", tmp.path())
+        .output()
+        .expect("run mur");
+    // May print empty (no conversations), but must not crash.
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn mur_conversations_doctor_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "doctor"])
+        .env("HOME", tmp.path())
+        .output()
+        .expect("run mur");
+    assert!(out.status.success());
+}
+```
+
+- [ ] **Step 17.2: Create `cmd/conversations_cmd.rs` with handler stubs**
+
+```rust
+//! CLI handlers for conversations archive commands.
+//! See spec §6.
+
+use anyhow::Result;
+use chrono::NaiveDate;
+use mur_common::Source;
+use tracing::info;
+
+use crate::conversations;
+
+pub fn cmd_chat_list(since: Option<String>, src: Option<String>) -> Result<()> {
+    let since_date = since.as_deref().map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d")).transpose()?;
+    let sources: Vec<Source> = src.as_deref().map(parse_sources).unwrap_or_default();
+    let days = conversations::retrieve::list_days(since_date, None, &sources, None)?;
+    if days.is_empty() {
+        println!("(no conversations)");
+        return Ok(());
+    }
+    for d in days {
+        let src_tags: Vec<String> = d.sources.iter().map(|s| s.file_prefix().into()).collect();
+        let summary = if d.summary_exists { "✓" } else { "·" };
+        println!("{}  {}  {:>4} msgs  [{}]",
+            d.date, summary, d.msg_count, src_tags.join(","));
+    }
+    Ok(())
+}
+
+pub fn cmd_chat_show(date: String) -> Result<()> {
+    let d = NaiveDate::parse_from_str(&date, "%Y-%m-%d")?;
+    if let Some(summary) = conversations::retrieve::show_summary(d, None)? {
+        println!("{summary}");
+        return Ok(());
+    }
+    // Fall back to raw render
+    println!("# {d} (no summary; showing raw)\n");
+    for m in conversations::retrieve::show_day(d, None)? {
+        let text = match &m.content {
+            mur_common::Content::Text { value } => value.clone(),
+            mur_common::Content::ToolRef { desc, bytes, .. } => format!("[tool_ref: {desc} ({bytes}B)]"),
+            mur_common::Content::ImageRef { desc, .. } => format!("[image_ref: {desc}]"),
+        };
+        println!("[{}] {}/{}: {}", m.ts.format("%H:%M:%S"), m.src.file_prefix(), m.conv, text);
+    }
+    Ok(())
+}
+
+pub fn cmd_chat_raw(date: String, conv: String) -> Result<()> {
+    let d = NaiveDate::parse_from_str(&date, "%Y-%m-%d")?;
+    let ts = d.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let dir = conversations::paths::raw_dir_for(ts, None);
+    if !dir.exists() {
+        println!("(no raw for {d})");
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if !name.to_string_lossy().contains(&conv) { continue; }
+        let content = std::fs::read_to_string(entry.path())?;
+        print!("{content}");
+    }
+    Ok(())
+}
+
+pub async fn cmd_chat_search(query: String, limit: usize, src: Option<String>) -> Result<()> {
+    let source_filter = src.as_deref().and_then(|s| parse_sources(s).into_iter().next());
+    let cfg = mur_common::config::Config::load().unwrap_or_default();
+    let embed = crate::store::embedding::embed(&query, &cfg.embedding).await?;
+    let hits = conversations::retrieve::search(&query, embed, limit, source_filter, None).await?;
+    if hits.is_empty() { println!("(no matches)"); return Ok(()); }
+    for h in hits {
+        let when = chrono::DateTime::<chrono::Utc>::from_timestamp(h.ts, 0)
+            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_default();
+        println!("[{:.2}] {} {}/{}: {}", h.score, when, h.source.file_prefix(), h.conv_id,
+                 truncate(&h.snippet, 120));
+    }
+    Ok(())
+}
+
+pub async fn cmd_conversations_pull() -> Result<()> {
+    info!("conversations pull: scanning all poll-based ingesters");
+    let mut pipeline = conversations::ingest::pipeline::Pipeline::new(None)?;
+
+    // Cursor
+    for ws in conversations::ingest::cursor::list_cursor_workspaces() {
+        if let Ok(msgs) = conversations::ingest::cursor::scan_workspace(&ws) {
+            if !msgs.is_empty() {
+                let r = pipeline.run(msgs)?;
+                println!("cursor {}: {} accepted, {} rejected, {} deduped",
+                    ws.file_name().unwrap().to_string_lossy(), r.accepted, r.rejected, r.deduped);
+            }
+        }
+    }
+
+    // Gemini
+    for path in conversations::ingest::gemini::list_gemini_chats() {
+        let Ok(text) = std::fs::read_to_string(&path) else { continue; };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue; };
+        let id = path.file_stem().unwrap().to_string_lossy().to_string();
+        if let Ok(msgs) = conversations::ingest::gemini::parse_gemini_chat(&v, &id) {
+            if !msgs.is_empty() {
+                let r = pipeline.run(msgs)?;
+                println!("gemini {}: {} accepted", id, r.accepted);
+            }
+        }
+    }
+
+    // Aider — read watched_dirs from config
+    let watched = read_aider_watched();
+    for hist in conversations::ingest::aider::find_aider_histories(&watched) {
+        let Ok(md) = std::fs::read_to_string(&hist) else { continue; };
+        let id = hist.parent().and_then(|p| p.file_name())
+            .map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "aider".into());
+        if let Ok(msgs) = conversations::ingest::aider::parse_aider_md(&md, &id) {
+            if !msgs.is_empty() {
+                let r = pipeline.run(msgs)?;
+                println!("aider {}: {} accepted", id, r.accepted);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn cmd_conversations_cleanup() -> Result<()> {
+    let days = conversations::retention::retention_days_from_config();
+    let r = conversations::retention::cleanup(chrono::Utc::now(), days, None)?;
+    println!("Scanned {} dirs, deleted {}, {} KB freed, {} kept (no summary), {} errored",
+        r.dirs_scanned, r.dirs_deleted, r.bytes_freed / 1024,
+        r.dirs_skipped_no_summary, r.dirs_errored);
+    Ok(())
+}
+
+pub async fn cmd_conversations_reindex() -> Result<()> {
+    // Re-embed every message in raw/ and rebuild the LanceDB table.
+    // For Phase 1: implement the minimal round-trip (read → embed → upsert).
+    let cfg = mur_common::config::Config::load().unwrap_or_default();
+    let dims = cfg.embedding.dimensions as i32;
+    let mut idx = conversations::index::ConversationIndex::open(dims, None).await?;
+    let mut count = 0u64;
+    for (date, _dir) in conversations::store::list_raw_dirs(None)? {
+        let msgs = conversations::store::read_day(date, None)?;
+        let mut entries = Vec::with_capacity(msgs.len());
+        for m in msgs {
+            let txt = match &m.content {
+                mur_common::Content::Text { value } => value.clone(),
+                mur_common::Content::ToolRef { desc, .. } => desc.clone(),
+                mur_common::Content::ImageRef { desc, .. } => desc.clone(),
+            };
+            let vec = crate::store::embedding::embed(&txt, &cfg.embedding).await?;
+            entries.push((m, vec));
+        }
+        let len = entries.len() as u64;
+        idx.upsert(&entries).await?;
+        count += len;
+    }
+    println!("Reindexed {count} messages");
+    Ok(())
+}
+
+pub fn cmd_conversations_doctor() -> Result<()> {
+    println!("conversations doctor");
+    let dirs = conversations::store::list_raw_dirs(None).unwrap_or_default();
+    println!("  ✓ raw day-dirs: {}", dirs.len());
+
+    let audit_ok = conversations::audit::verify(None).unwrap_or(false);
+    println!("  {} audit hash chain", if audit_ok { "✓" } else { "✗" });
+
+    let cfg_days = conversations::retention::retention_days_from_config();
+    println!("  ✓ retention_days = {cfg_days}");
+
+    let enabled = conversations::is_enabled().unwrap_or(false);
+    println!("  {} conversations.enabled", if enabled { "✓" } else { "·" });
+
+    Ok(())
+}
+
+fn parse_sources(s: &str) -> Vec<Source> {
+    s.split(',').filter_map(|p| match p.trim() {
+        "cc" | "claude-code" => Some(Source::ClaudeCode),
+        "cursor" => Some(Source::Cursor),
+        "gemini" => Some(Source::Gemini),
+        "aider" => Some(Source::Aider),
+        "slack" => Some(Source::Slack),
+        "telegram" | "tg" => Some(Source::Telegram),
+        "discord" => Some(Source::Discord),
+        "commander" => Some(Source::CommanderEngine),
+        _ => None,
+    }).collect()
+}
+
+fn read_aider_watched() -> Vec<std::path::PathBuf> {
+    let Some(home) = dirs::home_dir() else { return Vec::new(); };
+    let cfg = home.join(".mur").join("config.yaml");
+    let Ok(text) = std::fs::read_to_string(&cfg) else { return Vec::new(); };
+    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&text) else { return Vec::new(); };
+    doc.get("conversations")
+        .and_then(|c| c.get("sources"))
+        .and_then(|s| s.get("aider"))
+        .and_then(|a| a.get("watched_dirs"))
+        .and_then(|v| v.as_sequence())
+        .map(|seq| seq.iter()
+            .filter_map(|v| v.as_str().map(|s| std::path::PathBuf::from(shellexpand::tilde(s).to_string())))
+            .collect())
+        .unwrap_or_default()
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    let c: Vec<char> = s.chars().collect();
+    if c.len() <= max { s.to_string() } else {
+        format!("{}…", c.iter().take(max).collect::<String>())
+    }
+}
+```
+
+Add `shellexpand = "3"` to `mur-core/Cargo.toml`.
+
+- [ ] **Step 17.3: Add subcommand variants to `mur-core/src/main.rs`**
+
+Find the `enum Commands { ... }` block and insert new variants. Also add dispatch match arms in the main `match` block (the one starting ~line 715). Structure:
+
+```rust
+// New variants:
+/// Conversations archive (Layer 1 index, Layer 2 summary, Layer 3 raw)
+Chat {
+    #[command(subcommand)]
+    action: ChatAction,
+},
+/// Conversations archive management (pull / compact / reindex / doctor / migrate)
+Conversations {
+    #[command(subcommand)]
+    action: ConversationsAction,
+},
+```
+
+And new enums in the same file:
+
+```rust
+#[derive(Subcommand)]
+enum ChatAction {
+    /// List days in the archive (Layer 1)
+    List {
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        src: Option<String>,
+    },
+    /// Show a single day's summary (or raw if no summary) (Layer 2)
+    Show { date: String },
+    /// Dump raw JSONL for a conversation (Layer 3)
+    Raw { date: String, conv: String },
+    /// Semantic + keyword search
+    Search {
+        query: String,
+        #[arg(long, default_value = "10")]
+        limit: usize,
+        #[arg(long)]
+        src: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConversationsAction {
+    /// Run polling ingesters (Cursor/Gemini/Aider)
+    Pull,
+    /// Apply retention cleanup
+    Cleanup,
+    /// Rebuild LanceDB from raw/
+    Reindex,
+    /// Run health checks
+    Doctor,
+    /// Scan commander paths and report migration plan
+    Migrate {
+        #[arg(long, conflicts_with = "run")]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        run: bool,
+    },
+    /// Roll back to commander's old paths
+    Rollback,
+}
+```
+
+Dispatch arms:
+
+```rust
+Commands::Chat { action } => match action {
+    ChatAction::List { since, src } => cmd::conversations_cmd::cmd_chat_list(since, src)?,
+    ChatAction::Show { date } => cmd::conversations_cmd::cmd_chat_show(date)?,
+    ChatAction::Raw { date, conv } => cmd::conversations_cmd::cmd_chat_raw(date, conv)?,
+    ChatAction::Search { query, limit, src } =>
+        cmd::conversations_cmd::cmd_chat_search(query, limit, src).await?,
+},
+Commands::Conversations { action } => match action {
+    ConversationsAction::Pull => cmd::conversations_cmd::cmd_conversations_pull().await?,
+    ConversationsAction::Cleanup => cmd::conversations_cmd::cmd_conversations_cleanup().await?,
+    ConversationsAction::Reindex => cmd::conversations_cmd::cmd_conversations_reindex().await?,
+    ConversationsAction::Doctor => cmd::conversations_cmd::cmd_conversations_doctor()?,
+    ConversationsAction::Migrate { dry_run, run } =>
+        cmd::conversations_cmd::cmd_conversations_migrate(dry_run, run).await?,
+    ConversationsAction::Rollback => cmd::conversations_cmd::cmd_conversations_rollback().await?,
+},
+```
+
+(The `migrate` and `rollback` handlers land in Task 18/19; leave stubs that `bail!("migrate not yet implemented")` for now so the build succeeds.)
+
+- [ ] **Step 17.4: Register module in `cmd/mod.rs`**
+
+Add line: `pub(crate) mod conversations_cmd;`
+
+- [ ] **Step 17.5: Run tests**
+
+Run: `cargo test -p mur-core --test cli_conversations` — expect 2 PASS.
+
+- [ ] **Step 17.6: Commit**
+
+```bash
+git add mur-core/src/cmd/conversations_cmd.rs mur-core/src/cmd/mod.rs \
+        mur-core/src/main.rs mur-core/Cargo.toml mur-core/tests/cli_conversations.rs
+git commit -m "feat(core): add mur chat + mur conversations CLI subcommands
+
+chat {list|show|raw|search} implements Mode A+B three-tier disclosure.
+conversations {pull|cleanup|reindex|doctor|migrate|rollback} handles
+maintenance. Integration tests verify the binary runs with an empty HOME."
+```
+
+---
+
+## Task 18: Migration — dry-run (scan commander paths)
+
+**Files:**
+- Create: `mur-core/src/conversations/migrate.rs`
+- Modify: `mur-core/src/conversations/mod.rs`
+- Modify: `mur-core/src/cmd/conversations_cmd.rs` (wire `cmd_conversations_migrate`)
+
+- [ ] **Step 18.1: Write failing tests**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seed_commander_layout(home: &std::path::Path) {
+        let mem = home.join(".mur/commander/memory");
+        std::fs::create_dir_all(&mem).unwrap();
+        std::fs::write(
+            mem.join("long_term.jsonl"),
+            r#"{"id":"1","text":"hi","metadata":{},"timestamp_secs":1776571759,"vector":[]}
+"#,
+        ).unwrap();
+        let u = home.join(".mur/commander/users/alice");
+        std::fs::create_dir_all(&u).unwrap();
+        std::fs::write(u.join("conversation.jsonl"),
+            r#"{"timestamp":1776571759,"role":"user","text":"hello"}
+"#).unwrap();
+    }
+
+    #[test]
+    fn dry_run_counts_everything() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_commander_layout(tmp.path());
+        let home = tmp.path().to_str().unwrap();
+        let plan = dry_run(Some(home)).unwrap();
+        assert_eq!(plan.long_term_lines, 1);
+        assert_eq!(plan.user_turns, 1);
+        assert!(plan.free_space_needed_bytes > 0);
+    }
+
+    #[test]
+    fn dry_run_on_clean_install_has_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".mur")).unwrap();
+        let plan = dry_run(Some(tmp.path().to_str().unwrap())).unwrap();
+        assert_eq!(plan.long_term_lines, 0);
+        assert_eq!(plan.user_turns, 0);
+    }
+}
+```
+
+- [ ] **Step 18.2: Implement `migrate.rs` dry-run**
+
+```rust
+//! Commander → conversations migration (spec §7).
+//!
+//! Phase 1 includes:
+//! - `dry_run(home)` — scan commander paths, count data, estimate space.
+//! - `run(home)` — staged atomic migration (Task 19).
+//! - `rollback(home)` — restore commander layout (Task 19).
+
+use anyhow::{bail, Context, Result};
+use std::path::PathBuf;
+
+pub struct MigrationPlan {
+    pub long_term_lines: u64,
+    pub user_turns: u64,
+    pub user_count: u64,
+    pub episode_count: u64,
+    pub audit_entries: u64,
+    pub current_usage_bytes: u64,
+    pub free_space_needed_bytes: u64,
+    pub commander_daemon_running: bool,
+}
+
+fn home_root(home_override: Option<&str>) -> PathBuf {
+    home_override.map(PathBuf::from).unwrap_or_else(|| dirs::home_dir().unwrap())
+}
+
+fn count_jsonl_lines(p: &std::path::Path) -> u64 {
+    if !p.exists() { return 0; }
+    let Ok(content) = std::fs::read_to_string(p) else { return 0; };
+    content.lines().filter(|l| !l.trim().is_empty()).count() as u64
+}
+
+pub fn dry_run(home_override: Option<&str>) -> Result<MigrationPlan> {
+    let home = home_root(home_override);
+    let mur = home.join(".mur");
+
+    let lt = mur.join("commander/memory/long_term.jsonl");
+    let long_term_lines = count_jsonl_lines(&lt);
+
+    let users_dir = mur.join("commander/users");
+    let mut user_turns = 0u64;
+    let mut user_count = 0u64;
+    if users_dir.exists() {
+        for u in std::fs::read_dir(&users_dir)? {
+            let u = u?;
+            if !u.file_type()?.is_dir() { continue; }
+            user_count += 1;
+            user_turns += count_jsonl_lines(&u.path().join("conversation.jsonl"));
+        }
+    }
+
+    let episodes_dir = mur.join("commander/memory/episodes");
+    let mut episode_count = 0u64;
+    if episodes_dir.exists() {
+        for e in walkdir::WalkDir::new(&episodes_dir).into_iter().flatten() {
+            if e.path().extension().and_then(|s| s.to_str()) == Some("md") {
+                episode_count += 1;
+            }
+        }
+    }
+
+    let audit_entries = count_jsonl_lines(&mur.join("commander/audit.jsonl"));
+    let current = dir_size_bytes(&mur.join("commander/memory")).unwrap_or(0);
+
+    // 1.5x safety factor for staging
+    let free_space_needed_bytes = current + current / 2;
+
+    let commander_daemon_running = daemon_running();
+
+    Ok(MigrationPlan {
+        long_term_lines, user_turns, user_count, episode_count, audit_entries,
+        current_usage_bytes: current,
+        free_space_needed_bytes,
+        commander_daemon_running,
+    })
+}
+
+fn dir_size_bytes(p: &std::path::Path) -> Result<u64> {
+    if !p.exists() { return Ok(0); }
+    let mut t = 0u64;
+    for e in std::fs::read_dir(p)? {
+        let e = e?;
+        if e.file_type()?.is_dir() { t += dir_size_bytes(&e.path())?; }
+        else { t += e.metadata()?.len(); }
+    }
+    Ok(t)
+}
+
+fn daemon_running() -> bool {
+    // Best-effort: look for mur-commander pid file or listening socket.
+    // For Phase 1 we only return false to avoid blocking tests; later tasks
+    // may tighten this check.
+    false
+}
+
+pub fn render_plan(p: &MigrationPlan) -> String {
+    format!(
+        "Migration plan (commander → conversations):\n  \
+         long_term.jsonl: {} lines\n  \
+         users: {} with {} turns total\n  \
+         episodes: {} md files\n  \
+         audit: {} entries\n  \
+         current usage: {:.1} MB\n  \
+         free space needed: {:.1} MB (1.5× safety)\n  \
+         commander daemon running: {}\n",
+        p.long_term_lines, p.user_count, p.user_turns,
+        p.episode_count, p.audit_entries,
+        p.current_usage_bytes as f64 / 1_048_576.0,
+        p.free_space_needed_bytes as f64 / 1_048_576.0,
+        p.commander_daemon_running,
+    )
+}
+
+pub async fn run(home_override: Option<&str>) -> Result<MigrationReport> {
+    // Implemented in Task 19.
+    bail!("migrate run not yet implemented in Task 18; see Task 19")
+}
+
+pub async fn rollback(home_override: Option<&str>) -> Result<MigrationReport> {
+    bail!("rollback not yet implemented in Task 19")
+}
+
+pub struct MigrationReport {
+    pub messages_migrated: u64,
+    pub audit_entries_replayed: u64,
+    pub duration_ms: u64,
+}
+```
+
+- [ ] **Step 18.3: Add `walkdir = "2"` to `mur-core/Cargo.toml`**
+
+- [ ] **Step 18.4: Wire into `conversations_cmd.rs`**
+
+```rust
+pub async fn cmd_conversations_migrate(dry_run_flag: bool, run_flag: bool) -> Result<()> {
+    use crate::conversations::migrate;
+    if !dry_run_flag && !run_flag {
+        // Default to dry-run when neither flag is set.
+        let plan = migrate::dry_run(None)?;
+        println!("{}", migrate::render_plan(&plan));
+        return Ok(());
+    }
+    if dry_run_flag {
+        let plan = migrate::dry_run(None)?;
+        println!("{}", migrate::render_plan(&plan));
+        return Ok(());
+    }
+    let report = migrate::run(None).await?;
+    println!("Migrated {} messages, replayed {} audit entries in {}ms",
+        report.messages_migrated, report.audit_entries_replayed, report.duration_ms);
+    Ok(())
+}
+
+pub async fn cmd_conversations_rollback() -> Result<()> {
+    let report = crate::conversations::migrate::rollback(None).await?;
+    println!("Rolled back {} messages in {}ms",
+        report.messages_migrated, report.duration_ms);
+    Ok(())
+}
+```
+
+- [ ] **Step 18.5: Uncomment `pub mod migrate;` in `conversations/mod.rs`**
+- [ ] **Step 18.6: Run tests**
+
+Run: `cargo test -p mur-core conversations::migrate::tests` — expect 2 PASS.
+
+- [ ] **Step 18.7: Commit**
+
+```bash
+git add mur-core/src/conversations/migrate.rs mur-core/src/conversations/mod.rs \
+        mur-core/src/cmd/conversations_cmd.rs mur-core/Cargo.toml
+git commit -m "feat(core): conversations migrate — dry-run plan scanner
+
+Counts commander long_term/users/episodes/audit, estimates free space
+(1.5x safety factor), reports plan. Actual run is Task 19."
+```
+
+---
+
