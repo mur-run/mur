@@ -26,6 +26,7 @@ tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
+async-trait = "0.1"
 thiserror = { workspace = true }
 dirs = "6"
 sha2 = "0.10"
