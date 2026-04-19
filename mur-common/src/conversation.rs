@@ -56,7 +56,7 @@ pub struct Message {
     pub refs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum Source {
     ClaudeCode,
@@ -233,6 +233,19 @@ mod tests {
         let m: Message = serde_json::from_str(minimal).unwrap();
         assert!(m.meta.is_null());
         assert!(m.refs.is_empty());
+    }
+
+    #[test]
+    fn source_has_ord_and_hash_for_use_in_collections() {
+        use std::collections::{BTreeSet, HashSet};
+        let set_b: BTreeSet<Source> = [Source::ClaudeCode, Source::Cursor, Source::ClaudeCode]
+            .into_iter()
+            .collect();
+        assert_eq!(set_b.len(), 2);
+        let set_h: HashSet<Source> = [Source::Slack, Source::Slack, Source::Telegram]
+            .into_iter()
+            .collect();
+        assert_eq!(set_h.len(), 2);
     }
 
     #[test]
