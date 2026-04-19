@@ -50,12 +50,22 @@ pub struct Origin {
     pub source: String,
     /// How the knowledge was captured
     pub trigger: OriginTrigger,
-    /// Which user this knowledge is about/from
+
+    /// Who/what produced this origin event — preferred successor to
+    /// `user`/`platform`. Optional for backward compat with pre-sync YAML.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<crate::Actor>,
+
+    /// Legacy free-form user identifier. Prefer [`Self::actor`].
+    #[deprecated(note = "use actor instead, removed in v2.3")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
-    /// Platform where it was learned (e.g. "slack", "terminal")
+
+    /// Legacy free-form platform identifier. Prefer [`Self::actor`].
+    #[deprecated(note = "use actor.source instead, removed in v2.3")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
+
     /// Extraction confidence (0.0-1.0) — how sure the tool was about the extraction
     #[serde(default = "default_origin_confidence")]
     pub confidence: f64,
@@ -272,6 +282,20 @@ pub struct Applies {
     pub auto_scope: bool,
 }
 
+/// Per-actor contribution to a pattern's Evidence.
+///
+/// Stored in `Evidence.contributions` keyed by [`crate::Actor::key`].
+/// Allows effectiveness to be computed per-actor for Team pattern leaderboards
+/// or personalized retrieval in future Phase 2 work.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Contribution {
+    #[serde(default)]
+    pub success_signals: u64,
+    #[serde(default)]
+    pub override_signals: u64,
+    pub last_seen: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Evidence {
     #[serde(default)]
@@ -283,7 +307,13 @@ pub struct Evidence {
     #[serde(default)]
     pub success_signals: u64,
     #[serde(default)]
+    pub failure_signals: u64,
+    #[serde(default)]
     pub override_signals: u64,
+    /// Per-actor signal counts, keyed by `Actor::key()` (e.g. `"Slack:U123ABC"`).
+    /// Empty for patterns that have never been touched by the sync protocol.
+    #[serde(default)]
+    pub contributions: HashMap<String, Contribution>,
 }
 
 impl Evidence {
@@ -294,6 +324,25 @@ impl Evidence {
             0.5 // neutral prior
         } else {
             self.success_signals as f64 / total as f64
+        }
+    }
+
+    /// Per-actor effectiveness ratio computed from `contributions`.
+    ///
+    /// If actor has contributed to this pattern, returns their local
+    /// `success / (success + override)` ratio. If unknown, returns
+    /// neutral prior of 0.5.
+    pub fn effectiveness_by_actor(&self, actor: &crate::Actor) -> f64 {
+        match self.contributions.get(&actor.key()) {
+            Some(c) => {
+                let total = c.success_signals + c.override_signals;
+                if total == 0 {
+                    0.5 // neutral prior if actor present but no signals yet
+                } else {
+                    c.success_signals as f64 / total as f64
+                }
+            }
+            None => 0.5, // neutral prior
         }
     }
 }
@@ -496,9 +545,11 @@ mod tests {
 
     #[test]
     fn test_origin_serde_roundtrip() {
+        #[allow(deprecated)] // intentional: testing legacy field serialization
         let origin = Origin {
             source: "commander".to_string(),
             trigger: OriginTrigger::UserExplicit,
+            actor: None,
             user: Some("david".to_string()),
             platform: Some("slack".to_string()),
             confidence: 0.95,
@@ -512,16 +563,21 @@ mod tests {
         let deserialized: Origin = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(deserialized.source, "commander");
         assert_eq!(deserialized.trigger, OriginTrigger::UserExplicit);
-        assert_eq!(deserialized.user, Some("david".to_string()));
-        assert_eq!(deserialized.platform, Some("slack".to_string()));
+        #[allow(deprecated)]
+        {
+            assert_eq!(deserialized.user, Some("david".to_string()));
+            assert_eq!(deserialized.platform, Some("slack".to_string()));
+        }
         assert!((deserialized.confidence - 0.95).abs() < 0.001);
     }
 
     #[test]
     fn test_origin_optional_fields_omitted() {
+        #[allow(deprecated)] // intentional: testing legacy field omission
         let origin = Origin {
             source: "cli".to_string(),
             trigger: OriginTrigger::AgentInferred,
+            actor: None,
             user: None,
             platform: None,
             confidence: 1.0,
@@ -542,9 +598,11 @@ mod tests {
                 ..Default::default()
             },
             kind: Some(PatternKind::Preference),
+            #[allow(deprecated)] // intentional: testing legacy field in pattern roundtrip
             origin: Some(Origin {
                 source: "commander".into(),
                 trigger: OriginTrigger::UserExplicit,
+                actor: None,
                 user: Some("david".into()),
                 platform: None,
                 confidence: 0.9,
@@ -564,6 +622,64 @@ mod tests {
     }
 
     #[test]
+    fn origin_with_actor_roundtrip() {
+        use crate::{Actor, ActorSource};
+        #[allow(deprecated)]
+        let o = Origin {
+            source: "commander".into(),
+            trigger: OriginTrigger::AgentInferred,
+            actor: Some(Actor {
+                source: ActorSource::Slack,
+                native_id: "U999".into(),
+                display_name: Some("bob".into()),
+                resolved_user_id: None,
+            }),
+            user: None,
+            platform: None,
+            confidence: 0.8,
+        };
+        let y = serde_yaml::to_string(&o).unwrap();
+        let back: Origin = serde_yaml::from_str(&y).unwrap();
+        assert_eq!(back.actor.as_ref().unwrap().native_id, "U999");
+    }
+
+    #[test]
+    fn origin_backward_compat_no_actor_field() {
+        // 舊 YAML (pre-sync feature) lacks `actor`, `user`, `platform` fields
+        let old_yaml = r#"
+source: starter
+trigger: automatic
+confidence: 0.5
+"#;
+        let o: Origin = serde_yaml::from_str(old_yaml).unwrap();
+        assert!(o.actor.is_none());
+        #[allow(deprecated)]
+        {
+            assert!(o.user.is_none());
+            assert!(o.platform.is_none());
+        }
+    }
+
+    #[test]
+    fn origin_reads_legacy_user_platform_yaml() {
+        // YAML written by pre-sync code that populated user/platform (not actor)
+        let legacy_yaml = r#"
+source: import
+trigger: automatic
+user: alice
+platform: "CLAUDE.md"
+confidence: 0.7
+"#;
+        let o: Origin = serde_yaml::from_str(legacy_yaml).unwrap();
+        #[allow(deprecated)]
+        {
+            assert_eq!(o.user.as_deref(), Some("alice"));
+            assert_eq!(o.platform.as_deref(), Some("CLAUDE.md"));
+        }
+        assert!(o.actor.is_none());
+    }
+
+    #[test]
     fn test_pattern_backward_compat_no_kind_no_origin() {
         // Existing YAML without kind/origin fields should deserialize fine
         let yaml = "name: old-pattern\ndescription: Old\ncontent: Some content\n";
@@ -577,5 +693,190 @@ mod tests {
     #[test]
     fn test_pattern_kind_default() {
         assert_eq!(PatternKind::default(), PatternKind::Technical);
+    }
+
+    #[test]
+    fn evidence_contributions_default_empty() {
+        let e = Evidence::default();
+        assert!(e.contributions.is_empty());
+    }
+
+    #[test]
+    fn evidence_effectiveness_by_actor_splits_signals() {
+        use crate::{Actor, ActorSource};
+
+        let alice = Actor {
+            source: ActorSource::Slack,
+            native_id: "alice".into(),
+            display_name: None,
+            resolved_user_id: None,
+        };
+        let bob = Actor {
+            source: ActorSource::Slack,
+            native_id: "bob".into(),
+            display_name: None,
+            resolved_user_id: None,
+        };
+
+        let mut contribs = HashMap::new();
+        contribs.insert(
+            alice.key(),
+            Contribution {
+                success_signals: 8,
+                override_signals: 2,
+                last_seen: Utc::now(),
+            },
+        );
+        contribs.insert(
+            bob.key(),
+            Contribution {
+                success_signals: 1,
+                override_signals: 4,
+                last_seen: Utc::now(),
+            },
+        );
+
+        let e = Evidence {
+            source_sessions: vec![],
+            first_seen: None,
+            last_validated: None,
+            injection_count: 15,
+            success_signals: 9,
+            failure_signals: 0,
+            override_signals: 6,
+            contributions: contribs,
+        };
+
+        assert!((e.effectiveness_by_actor(&alice) - 0.8).abs() < 0.001);
+        assert!((e.effectiveness_by_actor(&bob) - 0.2).abs() < 0.001);
+        // Global effectiveness is unchanged by per-actor accessor:
+        // effectiveness() = success/(success+override) = 9/15 = 0.6
+        assert!((e.effectiveness() - 0.6).abs() < 0.001);
+    }
+
+    #[test]
+    fn evidence_effectiveness_by_unknown_actor_returns_neutral_prior() {
+        use crate::{Actor, ActorSource};
+
+        let unknown = Actor {
+            source: ActorSource::MurCli,
+            native_id: "never-seen".into(),
+            display_name: None,
+            resolved_user_id: None,
+        };
+        let e = Evidence::default();
+        // No contribution exists for this actor → neutral 0.5 prior
+        assert!((e.effectiveness_by_actor(&unknown) - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn evidence_yaml_roundtrip_with_contributions() {
+        use crate::{Actor, ActorSource};
+
+        let actor = Actor {
+            source: ActorSource::CommanderDaemon,
+            native_id: "svc-1".into(),
+            display_name: None,
+            resolved_user_id: None,
+        };
+        let mut contribs = HashMap::new();
+        contribs.insert(
+            actor.key(),
+            Contribution {
+                success_signals: 3,
+                override_signals: 1,
+                last_seen: DateTime::parse_from_rfc3339("2026-04-18T10:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            },
+        );
+        let mut e = Evidence::default();
+        e.contributions = contribs;
+        let y = serde_yaml::to_string(&e).unwrap();
+        let back: Evidence = serde_yaml::from_str(&y).unwrap();
+        assert_eq!(back.contributions.len(), 1);
+        assert_eq!(
+            back.contributions
+                .get("CommanderDaemon:svc-1")
+                .unwrap()
+                .success_signals,
+            3
+        );
+    }
+
+    #[test]
+    fn evidence_yaml_backward_compat_no_contributions_field() {
+        // Old YAML lacks the new field
+        let old_yaml = r#"
+source_sessions: []
+first_seen: null
+last_validated: null
+injection_count: 5
+success_signals: 3
+override_signals: 1
+"#;
+        let e: Evidence = serde_yaml::from_str(old_yaml).unwrap();
+        assert!(e.contributions.is_empty());
+        assert_eq!(e.success_signals, 3);
+    }
+
+    #[test]
+    fn pattern_scope_defaults_personal() {
+        // Pre-sync YAML has no `scope:` field
+        let old_yaml = r#"
+schema: 2
+name: legacy-pattern
+description: legacy
+content: old content
+tier: session
+"#;
+        let p: Pattern = serde_yaml::from_str(old_yaml).unwrap();
+        assert_eq!(p.scope, crate::Scope::Personal);
+    }
+
+    #[test]
+    fn pattern_scope_team_roundtrip() {
+        let y = r#"
+schema: 2
+name: team-pat
+description: team pattern
+content: team content
+tier: project
+scope:
+  kind: team
+  team_id: ops
+"#;
+        let p: Pattern = serde_yaml::from_str(y).unwrap();
+        assert_eq!(
+            p.scope,
+            crate::Scope::Team {
+                team_id: "ops".into()
+            }
+        );
+        // Roundtrip verify
+        let y2 = serde_yaml::to_string(&p).unwrap();
+        let p2: Pattern = serde_yaml::from_str(&y2).unwrap();
+        assert_eq!(p2.scope, p.scope);
+    }
+
+    #[test]
+    fn pattern_scope_community_roundtrip() {
+        let y = r#"
+schema: 2
+name: comm-pat
+description: community pattern
+content: community content
+tier: core
+scope:
+  kind: community
+  pack_id: rust-best-practices
+"#;
+        let p: Pattern = serde_yaml::from_str(y).unwrap();
+        assert_eq!(
+            p.scope,
+            crate::Scope::Community {
+                pack_id: Some("rust-best-practices".into())
+            }
+        );
     }
 }

@@ -722,9 +722,11 @@ pub fn generate_starter_patterns(
                 ..Default::default()
             },
             kind: Some(t.kind),
+            #[allow(deprecated)] // transitional: user/platform fields being phased out
             origin: Some(Origin {
                 source: "starter".to_string(),
                 trigger: OriginTrigger::Automatic,
+                actor: None,
                 user: None,
                 platform: None,
                 confidence: 0.5,
@@ -876,9 +878,11 @@ fn parse_llm_starter_patterns(response: &str, lang: Language) -> Vec<Pattern> {
                     ..Default::default()
                 },
                 kind: Some(PatternKind::Technical),
+                #[allow(deprecated)] // transitional: user/platform fields being phased out
                 origin: Some(Origin {
                     source: "llm-starter".to_string(),
                     trigger: OriginTrigger::Automatic,
+                    actor: None,
                     user: None,
                     platform: None,
                     confidence: 0.5,

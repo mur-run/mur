@@ -208,6 +208,7 @@ pub fn retrieve(
 /// universal — they are never filtered out.
 ///
 /// `scope.task` is used only for scoring (see `ScopeContext`), not filtering.
+#[allow(deprecated)] // transitional: reads legacy origin.user / origin.platform fields
 fn apply_scope_filter(patterns: Vec<Pattern>, scope: &ContextScope, source: &str) -> Vec<Pattern> {
     patterns
         .into_iter()
@@ -341,9 +342,11 @@ pub fn ingest(req: &IngestRequest, store: &YamlStore) -> Result<IngestResponse> 
             ..Default::default()
         },
         kind: Some(kind),
+        #[allow(deprecated)] // transitional: user/platform fields being phased out
         origin: Some(Origin {
             source: req.source.clone(),
             trigger: OriginTrigger::UserExplicit,
+            actor: None,
             user: req.user.clone(),
             platform: None,
             confidence: 1.0,
@@ -446,9 +449,11 @@ mod tests {
                 ..Default::default()
             },
             kind: Some(PatternKind::Preference),
+            #[allow(deprecated)] // transitional: user/platform fields being phased out
             origin: Some(Origin {
                 source: "commander".into(),
                 trigger: OriginTrigger::UserExplicit,
+                actor: None,
                 user: Some("david".into()),
                 platform: None,
                 confidence: 1.0,
@@ -632,9 +637,11 @@ mod tests {
                 ..Default::default()
             },
             kind: Some(PatternKind::Preference),
+            #[allow(deprecated)] // transitional: user/platform fields being phased out
             origin: Some(Origin {
                 source: "commander".into(),
                 trigger: OriginTrigger::UserExplicit,
+                actor: None,
                 user: Some("alice".into()),
                 platform: None,
                 confidence: 1.0,
@@ -688,9 +695,11 @@ mod tests {
                 ..Default::default()
             },
             kind: Some(PatternKind::Preference),
+            #[allow(deprecated)] // transitional: user/platform fields being phased out
             origin: Some(Origin {
                 source: "cli".into(),
                 trigger: OriginTrigger::UserExplicit,
+                actor: None,
                 user: None,
                 platform: Some("macos".into()),
                 confidence: 0.9,

@@ -13,6 +13,8 @@ pub struct AuthTokens {
     pub refresh_token: String,
     pub token_type: String,
     pub expires_in: u64,
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 /// Response from POST /api/v1/core/auth/device/code
@@ -32,6 +34,8 @@ pub struct DeviceTokenResponse {
     pub refresh_token: String,
     pub token_type: String,
     pub expires_in: u64,
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 /// Error response from the server.
@@ -185,6 +189,7 @@ pub async fn device_code_flow(client: &reqwest::Client) -> Result<AuthTokens> {
                 refresh_token: token_resp.refresh_token,
                 token_type: token_resp.token_type,
                 expires_in: token_resp.expires_in,
+                user_id: token_resp.user_id,
             });
         }
 
@@ -321,4 +326,98 @@ fn open_url(url: &str) -> Result<()> {
             .spawn()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_token_response_parse_with_user_id() {
+        let j = r#"{"access_token":"a","refresh_token":"r","token_type":"Bearer","expires_in":3600,"user_id":"alice-uuid"}"#;
+        let t: DeviceTokenResponse = serde_json::from_str(j).unwrap();
+        assert_eq!(t.access_token, "a");
+        assert_eq!(t.refresh_token, "r");
+        assert_eq!(t.token_type, "Bearer");
+        assert_eq!(t.expires_in, 3600);
+        assert_eq!(t.user_id.as_deref(), Some("alice-uuid"));
+    }
+
+    #[test]
+    fn device_token_response_parse_without_user_id_backward_compat() {
+        let j =
+            r#"{"access_token":"a","refresh_token":"r","token_type":"Bearer","expires_in":3600}"#;
+        let t: DeviceTokenResponse = serde_json::from_str(j).unwrap();
+        assert_eq!(t.access_token, "a");
+        assert_eq!(t.refresh_token, "r");
+        assert_eq!(t.token_type, "Bearer");
+        assert_eq!(t.expires_in, 3600);
+        assert_eq!(t.user_id, None);
+    }
+
+    #[test]
+    fn auth_tokens_conversion_includes_user_id() {
+        let token_resp = DeviceTokenResponse {
+            access_token: "access-token-value".to_string(),
+            refresh_token: "refresh-token-value".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: 3600,
+            user_id: Some("user-uuid-123".to_string()),
+        };
+        let tokens = AuthTokens {
+            access_token: token_resp.access_token.clone(),
+            refresh_token: token_resp.refresh_token.clone(),
+            token_type: token_resp.token_type.clone(),
+            expires_in: token_resp.expires_in,
+            user_id: token_resp.user_id.clone(),
+        };
+        assert_eq!(tokens.user_id.as_deref(), Some("user-uuid-123"));
+    }
+
+    #[test]
+    fn auth_tokens_conversion_backward_compat() {
+        let token_resp = DeviceTokenResponse {
+            access_token: "access-token-value".to_string(),
+            refresh_token: "refresh-token-value".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: 3600,
+            user_id: None,
+        };
+        let tokens = AuthTokens {
+            access_token: token_resp.access_token.clone(),
+            refresh_token: token_resp.refresh_token.clone(),
+            token_type: token_resp.token_type.clone(),
+            expires_in: token_resp.expires_in,
+            user_id: token_resp.user_id.clone(),
+        };
+        assert_eq!(tokens.user_id, None);
+    }
+
+    #[test]
+    fn auth_tokens_serde_with_user_id() {
+        let tokens = AuthTokens {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: 3600,
+            user_id: Some("user-123".to_string()),
+        };
+        let json = serde_json::to_string(&tokens).unwrap();
+        let parsed: AuthTokens = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.user_id.as_deref(), Some("user-123"));
+    }
+
+    #[test]
+    fn auth_tokens_serde_without_user_id() {
+        let tokens = AuthTokens {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: 3600,
+            user_id: None,
+        };
+        let json = serde_json::to_string(&tokens).unwrap();
+        let parsed: AuthTokens = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.user_id, None);
+    }
 }

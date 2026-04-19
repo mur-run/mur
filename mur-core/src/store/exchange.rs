@@ -90,9 +90,11 @@ pub fn mkef_to_pattern(entry: &MkefEntry) -> Pattern {
         _ => None,
     };
 
+    #[allow(deprecated)] // transitional: user/platform fields being phased out
     let origin = entry.origin.as_ref().map(|o| Origin {
         source: o.source.clone().unwrap_or_else(|| "mkef-import".into()),
         trigger: OriginTrigger::UserExplicit,
+        actor: None,
         user: o.user.clone(),
         platform: o.platform.clone(),
         confidence: 0.8,
@@ -142,6 +144,7 @@ pub fn mkef_to_pattern(entry: &MkefEntry) -> Pattern {
 /// Privacy: patterns bound to a specific user (via `origin.user`) are marked
 /// `Private` so they are not accidentally published when sharing MKEF files.
 /// All other patterns are `Public` by default.
+#[allow(deprecated)] // transitional: reads legacy origin.user / origin.platform fields
 pub fn pattern_to_mkef(pattern: &Pattern) -> MkefEntry {
     let kind = match pattern.effective_kind() {
         PatternKind::Preference => "preference",
@@ -396,9 +399,11 @@ another_unknown: 42
                 ..Default::default()
             },
             kind: Some(PatternKind::Preference),
+            #[allow(deprecated)] // transitional: user/platform fields being phased out
             origin: Some(Origin {
                 source: "commander".into(),
                 trigger: OriginTrigger::UserExplicit,
+                actor: None,
                 user: Some("alice".into()),
                 platform: None,
                 confidence: 1.0,
@@ -428,9 +433,11 @@ another_unknown: 42
                 ..Default::default()
             },
             kind: Some(PatternKind::Preference),
+            #[allow(deprecated)] // transitional: user/platform fields being phased out
             origin: Some(Origin {
                 source: "commander".into(),
                 trigger: OriginTrigger::UserExplicit,
+                actor: None,
                 user: Some("david".into()),
                 platform: None,
                 confidence: 1.0,

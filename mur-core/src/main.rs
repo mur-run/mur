@@ -20,6 +20,7 @@ mod retrieve;
 mod server;
 mod session;
 mod store;
+mod sync;
 mod team;
 mod verify;
 
@@ -52,7 +53,7 @@ enum Commands {
     Stats,
     /// Check MUR setup and configuration health
     Doctor,
-    /// Sync patterns to AI tools
+    /// Sync patterns to AI tools (or run a sync subcommand)
     Sync {
         /// Suppress output
         #[arg(long)]
@@ -60,6 +61,8 @@ enum Commands {
         /// Force project-aware sync (prioritize patterns matching project tags/language)
         #[arg(long)]
         project: bool,
+        #[command(subcommand)]
+        action: Option<SyncAction>,
     },
     /// Inject patterns for a query (hook integration)
     Inject {
@@ -289,6 +292,18 @@ enum Commands {
         /// Force LLM analysis even for short sessions
         #[arg(long)]
         force: bool,
+    },
+    /// Push pending signals from the outbox to the server
+    Push {
+        /// Preview what would be pushed without sending
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Fetch pending signals from the server into the inbox
+    Fetch {
+        /// Preview what would be fetched without downloading
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Stop recording without export (alias: quit)
     Exit,
@@ -608,6 +623,12 @@ enum PackAction {
 }
 
 #[derive(Subcommand)]
+enum SyncAction {
+    /// Show sync status (outbox/inbox queue depths, last fetch time)
+    Status,
+}
+
+#[derive(Subcommand)]
 enum DeployAction {
     /// Start services (docker compose up)
     Up {
@@ -722,7 +743,19 @@ async fn main() -> Result<()> {
                 cmd::learn::cmd_learn_cross(min_projects, dry_run)?;
             }
         },
-        Commands::Sync { quiet, project } => cmd::sync_cmd::cmd_sync(quiet, project).await?,
+        Commands::Sync {
+            quiet,
+            project,
+            action,
+        } => {
+            if let Some(action) = action {
+                match action {
+                    SyncAction::Status => cmd::sync_cmd::run_status()?,
+                }
+            } else {
+                cmd::sync_cmd::cmd_sync(quiet, project).await?;
+            }
+        }
         Commands::Inject { query, project: _ } => cmd::inject_cmd::cmd_inject(&query).await?,
         Commands::Run {
             query,
@@ -884,6 +917,14 @@ async fn main() -> Result<()> {
         Commands::Import { file, dry_run } => cmd::misc::cmd_import(file, dry_run)?,
         Commands::In { source } => cmd::session::cmd_in(&source).await?,
         Commands::Out { action, force } => cmd::session::cmd_out(action.as_deref(), force).await?,
+        Commands::Push { dry_run } => {
+            let config = crate::store::config::load_config()?;
+            cmd::sync_cmd::run_push(&config.server.url, dry_run).await?;
+        }
+        Commands::Fetch { dry_run } => {
+            let config = crate::store::config::load_config()?;
+            cmd::sync_cmd::run_fetch(&config.server.url, dry_run).await?;
+        }
         Commands::Exit | Commands::Quit => cmd::session::cmd_session_exit()?,
         Commands::Deploy { action } => match action {
             DeployAction::Up {

@@ -6,6 +6,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::Scope;
 use crate::pattern::{
     Applies, Content, Evidence, Lifecycle, Links, Tags, Tier, default_confidence,
     default_importance, default_schema,
@@ -94,6 +95,11 @@ pub struct KnowledgeBase {
     /// Decay metadata
     #[serde(default)]
     pub decay: DecayMeta,
+
+    /// Ownership/audience scope (Personal / Team / Community).
+    /// Orthogonal to `tier` — tier manages temporal half-life, scope manages audience.
+    #[serde(default)]
+    pub scope: Scope,
 }
 
 impl Default for KnowledgeBase {
@@ -115,6 +121,7 @@ impl Default for KnowledgeBase {
             updated_at: Utc::now(),
             maturity: Maturity::default(),
             decay: DecayMeta::default(),
+            scope: Scope::default(),
         }
     }
 }

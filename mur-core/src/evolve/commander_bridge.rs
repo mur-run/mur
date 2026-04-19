@@ -405,9 +405,11 @@ pub fn fact_to_pattern(fact_text: &str, source_file: Option<&str>) -> Pattern {
             ..Default::default()
         },
         kind: Some(kind),
+        #[allow(deprecated)] // transitional: user/platform fields being phased out
         origin: Some(Origin {
             source: "commander".to_string(),
             trigger: OriginTrigger::UserExplicit,
+            actor: None,
             user: None,
             platform: source_file.map(|s| s.to_string()),
             confidence: 0.8,

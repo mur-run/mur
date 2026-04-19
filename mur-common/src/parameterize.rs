@@ -139,7 +139,7 @@ pub fn apply_parameterization(text: &str, suggestions: &[ParameterSuggestion]) -
     let mut result = text.to_string();
     // Sort by length descending to avoid partial replacements
     let mut sorted: Vec<_> = suggestions.iter().collect();
-    sorted.sort_by(|a, b| b.original_value.len().cmp(&a.original_value.len()));
+    sorted.sort_by_key(|s| std::cmp::Reverse(s.original_value.len()));
 
     for s in sorted {
         result = result.replace(&s.original_value, &format!("{{{{{}}}}}", s.suggested_name));
