@@ -23,6 +23,9 @@ pub struct Config {
     pub community: CommunityConfig,
 
     #[serde(default)]
+    pub conversations: ConversationsConfig,
+
+    #[serde(default)]
     pub sync: SyncConfig,
 }
 
@@ -221,4 +224,175 @@ fn default_mur_dir() -> PathBuf {
 }
 fn default_server_url() -> String {
     "https://mur-server.fly.dev".to_string()
+}
+
+// ── Conversations archive config (Task 23) ────────────────────────────────────
+
+/// Phase 1 conversations archive config (Task 23).
+///
+/// Hard defaults: off-by-default (`enabled: false`), 30-day retention,
+/// 5-minute poll interval, all sources enabled, Mem0-style REJECT filters on,
+/// dedup threshold 0.85. Every sub-field is serde-default so a config.yaml
+/// without a `conversations:` section still parses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "conv_default_retention_days")]
+    pub retention_days: u32,
+    #[serde(default = "conv_default_poll_interval")]
+    pub poll_interval_secs: u64,
+    #[serde(default)]
+    pub sources: ConversationsSources,
+    #[serde(default)]
+    pub filter: ConversationsFilter,
+}
+
+impl Default for ConversationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            retention_days: conv_default_retention_days(),
+            poll_interval_secs: conv_default_poll_interval(),
+            sources: ConversationsSources::default(),
+            filter: ConversationsFilter::default(),
+        }
+    }
+}
+
+fn conv_default_retention_days() -> u32 {
+    30
+}
+fn conv_default_poll_interval() -> u64 {
+    300
+}
+fn conv_truthy() -> bool {
+    true
+}
+fn conv_default_dedup() -> f64 {
+    0.85
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationsSources {
+    #[serde(default = "conv_truthy")]
+    pub claude_code: bool,
+    #[serde(default = "conv_truthy")]
+    pub cursor: bool,
+    #[serde(default = "conv_truthy")]
+    pub gemini: bool,
+    #[serde(default)]
+    pub aider: AiderSourceConfig,
+}
+
+impl Default for ConversationsSources {
+    fn default() -> Self {
+        Self {
+            claude_code: true,
+            cursor: true,
+            gemini: true,
+            aider: AiderSourceConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiderSourceConfig {
+    #[serde(default = "conv_truthy")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub watched_dirs: Vec<String>,
+}
+
+impl Default for AiderSourceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            watched_dirs: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationsFilter {
+    #[serde(default = "conv_default_dedup")]
+    pub dedup_threshold: f64,
+    #[serde(default = "conv_truthy")]
+    pub reject_heartbeat: bool,
+    #[serde(default = "conv_truthy")]
+    pub reject_system_restatement: bool,
+}
+
+impl Default for ConversationsFilter {
+    fn default() -> Self {
+        Self {
+            dedup_threshold: conv_default_dedup(),
+            reject_heartbeat: true,
+            reject_system_restatement: true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod conversations_tests {
+    use super::*;
+
+    #[test]
+    fn conversations_section_defaults() {
+        let c = ConversationsConfig::default();
+        assert!(!c.enabled);
+        assert_eq!(c.retention_days, 30);
+        assert_eq!(c.poll_interval_secs, 300);
+        assert!(c.sources.claude_code);
+        assert!(c.sources.cursor);
+        assert!(c.sources.gemini);
+        assert!(c.sources.aider.enabled);
+        assert!(c.sources.aider.watched_dirs.is_empty());
+        assert_eq!(c.filter.dedup_threshold, 0.85);
+        assert!(c.filter.reject_heartbeat);
+        assert!(c.filter.reject_system_restatement);
+    }
+
+    #[test]
+    fn parse_from_yaml_with_overrides() {
+        let y = r#"
+conversations:
+  enabled: true
+  retention_days: 45
+  poll_interval_secs: 120
+  sources:
+    cursor: false
+    aider:
+      watched_dirs: ["~/Projects/a", "~/Projects/b"]
+  filter:
+    dedup_threshold: 0.9
+"#;
+        let v: serde_yaml::Value = serde_yaml::from_str(y).unwrap();
+        let conv: ConversationsConfig = serde_yaml::from_value(v["conversations"].clone()).unwrap();
+        assert!(conv.enabled);
+        assert_eq!(conv.retention_days, 45);
+        assert_eq!(conv.poll_interval_secs, 120);
+        assert!(conv.sources.claude_code); // defaulted true
+        assert!(!conv.sources.cursor); // override
+        assert!(conv.sources.gemini); // defaulted true
+        assert_eq!(conv.sources.aider.watched_dirs.len(), 2);
+        assert_eq!(conv.filter.dedup_threshold, 0.9);
+        assert!(conv.filter.reject_heartbeat); // defaulted true
+    }
+
+    #[test]
+    fn missing_conversations_section_is_fine() {
+        let y = r#"
+# No conversations section at all
+foo: bar
+"#;
+        let v: serde_yaml::Value = serde_yaml::from_str(y).unwrap();
+        // Default when absent
+        let conv: ConversationsConfig = v
+            .get("conversations")
+            .cloned()
+            .map(|x| serde_yaml::from_value(x).unwrap_or_default())
+            .unwrap_or_default();
+        assert_eq!(conv.retention_days, 30);
+    }
 }
