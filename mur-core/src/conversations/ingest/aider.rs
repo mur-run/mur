@@ -38,50 +38,60 @@ fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
 
 pub fn parse_aider_md(md: &str, chat_id: &str) -> Result<Vec<Message>> {
     let mut out = Vec::new();
-    let mut current_role: Option<Role> = None;
+    let mut pending_role: Option<Role> = None;
     let mut buf = String::new();
     for raw in md.lines() {
         let line = raw.trim_start();
         if let Some(user_text) = line.strip_prefix("#### > ") {
-            flush(&mut out, &mut current_role, &mut buf, chat_id);
-            current_role = Some(Role::User);
-            buf.push_str(user_text);
-            buf.push('\n');
+            // Flush anything accumulated (typically the prior assistant response)
+            flush(&mut out, &mut pending_role, &mut buf, chat_id);
+            // Emit user turn immediately — it's a single-line prompt
+            let trimmed = user_text.trim();
+            if !trimmed.is_empty() {
+                out.push(Message {
+                    v: 1,
+                    ts: Utc::now(),
+                    src: Source::Aider,
+                    conv: chat_id.into(),
+                    role: Role::User,
+                    content: Content::Text {
+                        value: trimmed.into(),
+                    },
+                    meta: serde_json::Value::Null,
+                    refs: vec![],
+                });
+            }
+            // Next non-`####` content belongs to the assistant
+            pending_role = Some(Role::Assistant);
         } else if line.starts_with("####") {
-            flush(&mut out, &mut current_role, &mut buf, chat_id);
-        } else if current_role.is_none() && !line.is_empty() {
-            current_role = Some(Role::Assistant);
-            buf.push_str(raw);
-            buf.push('\n');
-        } else if current_role.is_some() {
+            flush(&mut out, &mut pending_role, &mut buf, chat_id);
+        } else if pending_role.is_some() {
             buf.push_str(raw);
             buf.push('\n');
         }
     }
-    flush(&mut out, &mut current_role, &mut buf, chat_id);
+    flush(&mut out, &mut pending_role, &mut buf, chat_id);
     Ok(out)
 }
 
 fn flush(out: &mut Vec<Message>, role: &mut Option<Role>, buf: &mut String, chat_id: &str) {
-    if let Some(r) = role.take() {
-        if !buf.trim().is_empty() {
-            out.push(Message {
-                v: 1,
-                ts: Utc::now(),
-                src: Source::Aider,
-                conv: chat_id.into(),
-                role: r,
-                content: Content::Text {
-                    value: buf.trim().into(),
-                },
-                meta: serde_json::Value::Null,
-                refs: vec![],
-            });
-        }
-        buf.clear();
-    } else {
-        buf.clear();
+    if let Some(r) = role.take()
+        && !buf.trim().is_empty()
+    {
+        out.push(Message {
+            v: 1,
+            ts: Utc::now(),
+            src: Source::Aider,
+            conv: chat_id.into(),
+            role: r,
+            content: Content::Text {
+                value: buf.trim().into(),
+            },
+            meta: serde_json::Value::Null,
+            refs: vec![],
+        });
     }
+    buf.clear();
 }
 
 #[cfg(test)]
@@ -89,7 +99,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_typical_history() {
+    fn parses_typical_history_with_role_separation() {
         let md = r"# aider chat started at 2026-04-19
 
 #### test 1
@@ -103,11 +113,55 @@ hi back
 bye
 ";
         let msgs = parse_aider_md(md, "chat-1").unwrap();
-        assert!(msgs.len() >= 2);
+        assert_eq!(msgs.len(), 4, "expected user/asst/user/asst, got {msgs:?}");
+        assert!(matches!(msgs[0].role, Role::User));
+        assert!(matches!(msgs[1].role, Role::Assistant));
+        assert!(matches!(msgs[2].role, Role::User));
+        assert!(matches!(msgs[3].role, Role::Assistant));
+        if let Content::Text { value } = &msgs[0].content {
+            assert_eq!(value, "hello aider");
+        } else {
+            panic!("expected text");
+        }
+        if let Content::Text { value } = &msgs[1].content {
+            assert_eq!(value, "hi back");
+        } else {
+            panic!("expected text");
+        }
+        if let Content::Text { value } = &msgs[2].content {
+            assert_eq!(value, "bye");
+        } else {
+            panic!("expected text");
+        }
+        if let Content::Text { value } = &msgs[3].content {
+            assert_eq!(value, "bye");
+        } else {
+            panic!("expected text");
+        }
     }
 
     #[test]
     fn empty_input_gives_empty_output() {
         assert!(parse_aider_md("", "c").unwrap().is_empty());
+    }
+
+    #[test]
+    fn user_prompt_without_assistant_reply_emits_only_user() {
+        let md = "#### > solo question\n";
+        let msgs = parse_aider_md(md, "c").unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert!(matches!(msgs[0].role, Role::User));
+    }
+
+    #[test]
+    fn multi_line_assistant_response_preserved() {
+        let md = "#### > prompt\n\nline one\nline two\nline three\n";
+        let msgs = parse_aider_md(md, "c").unwrap();
+        assert_eq!(msgs.len(), 2);
+        if let Content::Text { value } = &msgs[1].content {
+            assert_eq!(value, "line one\nline two\nline three");
+        } else {
+            panic!("expected text");
+        }
     }
 }
