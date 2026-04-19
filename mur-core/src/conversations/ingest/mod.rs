@@ -4,7 +4,7 @@
 pub mod dedup;
 pub mod filter;
 pub mod normalize;
-// Later tasks add: pub mod pipeline;
+pub mod pipeline;
 // Later tasks add: pub mod aider; pub mod claude_code; pub mod cursor; pub mod gemini;
 
 use anyhow::Result;
