@@ -368,7 +368,7 @@ pub fn list_recordings() -> Result<Vec<RecordingInfo>> {
     }
 
     // Sort by modified time, newest first
-    recordings.sort_by(|a, b| b.modified.cmp(&a.modified));
+    recordings.sort_by_key(|r| std::cmp::Reverse(r.modified));
 
     Ok(recordings)
 }
@@ -553,7 +553,7 @@ mod tests {
             },
         ];
 
-        recordings.sort_by(|a, b| b.modified.cmp(&a.modified));
+        recordings.sort_by_key(|r| std::cmp::Reverse(r.modified));
         assert_eq!(recordings[0].id, "new");
         assert_eq!(recordings[1].id, "old");
     }

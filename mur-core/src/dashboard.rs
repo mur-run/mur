@@ -145,7 +145,7 @@ fn render_top_injected(patterns: &[Pattern]) {
         .iter()
         .filter(|p| p.evidence.injection_count > 0)
         .collect();
-    by_injections.sort_by(|a, b| b.evidence.injection_count.cmp(&a.evidence.injection_count));
+    by_injections.sort_by_key(|p| std::cmp::Reverse(p.evidence.injection_count));
     by_injections.truncate(10);
 
     if by_injections.is_empty() {

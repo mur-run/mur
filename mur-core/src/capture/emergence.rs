@@ -359,7 +359,7 @@ pub fn detect_emergent(
     }
 
     // Sort by session count descending
-    candidates.sort_by(|a, b| b.session_count.cmp(&a.session_count));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.session_count));
     candidates
 }
 

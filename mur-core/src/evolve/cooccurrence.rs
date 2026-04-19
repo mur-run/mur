@@ -165,7 +165,7 @@ impl CooccurrenceMatrix {
         }
 
         // Sort clusters by total co-occurrences (highest first)
-        clusters.sort_by(|a, b| b.total_cooccurrences.cmp(&a.total_cooccurrences));
+        clusters.sort_by_key(|c| std::cmp::Reverse(c.total_cooccurrences));
         clusters
     }
 
