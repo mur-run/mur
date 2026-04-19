@@ -38,7 +38,7 @@ mur needs a local-only, queryable archive of conversations from every AI coding 
 | Retention | Raw JSONL kept `retention_days` (default 30); daily summaries kept forever |
 | Integration strategy | **Option X — Rename & Unify** — migrate commander's existing stores into the new shared directory |
 | Query modes | Timeline browse · Semantic+keyword search · NL Q&A with citation |
-| CLI verbs | `mur chat list` · `mur chat show` · `mur chat raw` · `mur chat search` · `mur ask` |
+| CLI verbs (design, phased) | Phase 1: `mur chat list` · `mur chat show` · `mur chat raw` · `mur chat search` · `mur conversations {pull,compact,reindex,doctor,migrate,rollback}` · Phase 2: `mur ask` |
 
 ### Out of scope (MVP)
 
