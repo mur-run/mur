@@ -4,5 +4,6 @@
 //! See `docs/superpowers/specs/2026-04-19-mur-conversations-design.md`.
 
 pub mod audit;
+pub mod blob;
 pub mod paths;
 pub mod store;
