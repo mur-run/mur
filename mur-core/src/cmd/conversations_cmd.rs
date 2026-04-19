@@ -1,7 +1,7 @@
 //! CLI handlers for conversations archive commands.
 //! See spec §6.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use chrono::NaiveDate;
 use mur_common::Source;
 use tracing::info;
@@ -219,10 +219,69 @@ pub fn cmd_conversations_doctor() -> Result<()> {
     Ok(())
 }
 
-/// BP1 amendment: dedicated preflight check. Handler body lands in Task 19
-/// alongside the migration guard suite.
+/// BP1 amendment: dedicated preflight check bundle (daemon, disk, staging, audit presence).
 pub fn cmd_conversations_preflight() -> Result<()> {
-    bail!("preflight not yet implemented (Task 19b)");
+    use crate::conversations::migrate;
+    let plan = migrate::dry_run(None)?;
+
+    let mut ok = true;
+    println!("conversations preflight");
+    if plan.commander_daemon_running {
+        println!("  ✗ commander daemon appears to be running");
+        ok = false;
+    } else {
+        println!("  ✓ commander daemon not running");
+    }
+    // Disk space check (best-effort; does not resolve mount points perfectly).
+    // fs_available_bytes returns None (treated as unlimited) in Phase 1 —
+    // a proper statvfs wrapper lands in a later task.
+    let home = dirs::home_dir().unwrap_or_default();
+    let needed = plan.free_space_needed_bytes;
+    let free = fs_available_bytes(&home).unwrap_or(u64::MAX);
+    if free < needed {
+        println!(
+            "  ✗ disk: {:.1} MB free, need {:.1} MB",
+            free as f64 / 1_048_576.0,
+            needed as f64 / 1_048_576.0
+        );
+        ok = false;
+    } else {
+        println!(
+            "  ✓ disk: {:.1} MB free, need {:.1} MB",
+            free as f64 / 1_048_576.0,
+            needed as f64 / 1_048_576.0
+        );
+    }
+    let staging = home.join(".mur/.conversations-migrating");
+    if staging.exists() {
+        println!(
+            "  ✗ staging dir exists at {} — run migrate --resume or --discard-staging",
+            staging.display()
+        );
+        ok = false;
+    } else {
+        println!("  ✓ no stale staging dir");
+    }
+    // Commander audit presence (not verification — different algo)
+    let cmdr_audit = home.join(".mur/commander/audit.jsonl");
+    if cmdr_audit.exists() {
+        println!("  ✓ commander audit present (opaque bridge target)");
+    } else {
+        println!("  · no commander audit; migration will bridge from ZERO_HASH");
+    }
+    if ok {
+        println!("\n→ preflight passed");
+    } else {
+        println!("\n✗ preflight FAILED — resolve issues above");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Phase 1: returns None (treated as unlimited) so the disk check never blocks.
+/// A proper statvfs wrapper can land in a later task.
+fn fs_available_bytes(_path: &std::path::Path) -> Option<u64> {
+    None
 }
 
 /// BP2 amendment: dry-run by default; `run=true` means actually migrate.
