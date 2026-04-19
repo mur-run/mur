@@ -8,6 +8,7 @@ pub mod blob;
 pub mod index;
 pub mod ingest;
 pub mod paths;
+pub mod retention;
 pub mod store;
 
 /// Read mur's config.yaml `conversations.enabled` flag. Defaults to `false`
