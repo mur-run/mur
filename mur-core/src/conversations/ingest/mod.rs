@@ -1,11 +1,12 @@
 //! Ingestion pipeline. Stages run normalize → dedup → filter → store.append,
 //! with audit entries per successful write.
 
+pub mod claude_code;
 pub mod dedup;
 pub mod filter;
 pub mod normalize;
 pub mod pipeline;
-// Later tasks add: pub mod aider; pub mod claude_code; pub mod cursor; pub mod gemini;
+// Later tasks add: pub mod aider; pub mod cursor; pub mod gemini;
 
 use anyhow::Result;
 use mur_common::Message;

@@ -7,6 +7,7 @@ mod capture;
 mod cmd;
 mod community;
 mod context_api;
+mod conversations;
 mod dashboard;
 mod evolve;
 mod executor;
