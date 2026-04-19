@@ -2,6 +2,7 @@
 //! with audit entries per successful write.
 #![allow(dead_code)] // Phase 1: stubs wired in by later tasks (migrate, retrieve).
 
+pub mod aider;
 pub mod claude_code;
 pub mod cursor;
 pub mod dedup;
@@ -9,7 +10,6 @@ pub mod filter;
 pub mod gemini;
 pub mod normalize;
 pub mod pipeline;
-// Later tasks add: pub mod aider;
 
 use anyhow::Result;
 use mur_common::Message;
