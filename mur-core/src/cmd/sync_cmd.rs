@@ -1148,18 +1148,6 @@ pub(crate) fn run_status() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod sync_status_tests {
-    use super::*;
-
-    #[test]
-    fn run_status_works_on_fresh_system() {
-        // run_status uses default_location() which creates dirs under $HOME/.mur/.
-        // We just verify it doesn't panic and returns Ok.
-        run_status().unwrap();
-    }
-}
-
 /// Build a richer query for project-aware sync by detecting language and git context.
 pub(crate) fn build_project_sync_query(cwd: &std::path::Path, project_name: &str) -> String {
     let mut parts = vec![project_name.to_string()];
@@ -1186,4 +1174,16 @@ pub(crate) fn build_project_sync_query(cwd: &std::path::Path, project_name: &str
     }
 
     parts.join(" ")
+}
+
+#[cfg(test)]
+mod sync_status_tests {
+    use super::*;
+
+    #[test]
+    fn run_status_works_on_fresh_system() {
+        // run_status uses default_location() which creates dirs under $HOME/.mur/.
+        // We just verify it doesn't panic and returns Ok.
+        run_status().unwrap();
+    }
 }

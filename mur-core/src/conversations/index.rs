@@ -272,7 +272,7 @@ mod tests {
             (msg("b", "yaml parsing worked"), vec![0.0; 16]),
         ];
         idx.upsert(&entries).await.unwrap();
-        let hits = idx.search(&vec![1.0; 16], 2, None).await.unwrap();
+        let hits = idx.search(&[1.0; 16], 2, None).await.unwrap();
         assert!(!hits.is_empty());
         assert_eq!(hits[0].conv_id, "a");
     }
@@ -289,7 +289,7 @@ mod tests {
             .await
             .unwrap();
         let hits = idx
-            .search(&vec![1.0; 16], 10, Some(Source::Slack))
+            .search(&[1.0; 16], 10, Some(Source::Slack))
             .await
             .unwrap();
         assert!(hits.iter().all(|h| h.source == Source::Slack));
