@@ -232,12 +232,42 @@ pub async fn cmd_conversations_migrate(
     resume: bool,
     discard_staging: bool,
 ) -> Result<()> {
-    let _ = (run, resume, discard_staging);
-    bail!("migrate not yet implemented (Task 18/19)");
+    use crate::conversations::migrate;
+    if discard_staging {
+        migrate::discard_staging(None).await?;
+        println!("staging discarded");
+        return Ok(());
+    }
+    if resume {
+        let report = migrate::resume(None).await?;
+        println!(
+            "resumed: {} messages, {} audit entries, {}ms",
+            report.messages_migrated, report.audit_entries_replayed, report.duration_ms
+        );
+        return Ok(());
+    }
+    if !run {
+        // BP2: dry-run by default
+        let plan = migrate::dry_run(None)?;
+        println!("{}", migrate::render_plan(&plan));
+        return Ok(());
+    }
+    // run=true: actually migrate (Task 19 fills in run())
+    let report = migrate::run(None).await?;
+    println!(
+        "Migrated {} messages, replayed {} audit entries in {}ms",
+        report.messages_migrated, report.audit_entries_replayed, report.duration_ms
+    );
+    Ok(())
 }
 
 pub async fn cmd_conversations_rollback() -> Result<()> {
-    bail!("rollback not yet implemented (Task 19)");
+    let report = crate::conversations::migrate::rollback(None).await?;
+    println!(
+        "Rolled back {} messages in {}ms",
+        report.messages_migrated, report.duration_ms
+    );
+    Ok(())
 }
 
 fn parse_sources(s: &str) -> Vec<Source> {

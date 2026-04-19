@@ -7,6 +7,7 @@ pub mod audit;
 pub mod blob;
 pub mod index;
 pub mod ingest;
+pub mod migrate;
 pub mod paths;
 pub mod retention;
 pub mod retrieve;
