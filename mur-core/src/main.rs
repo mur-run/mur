@@ -761,8 +761,27 @@ fn load_dotenv() {
     let _ = dotenvy::dotenv();
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Windows has a 1 MB default main-thread stack, vs 8 MB on Unix. Our `async fn
+/// async_main` Future is large (many subcommand handler states combined via
+/// `match cli.command`), and blew the stack on Windows CI. Move the runtime
+/// onto a worker thread with an explicit 8 MB stack to match Unix behavior.
+fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("mur-main".into())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(async_main())
+        })
+        .expect("spawn main worker thread")
+        .join()
+        .expect("mur-main thread panicked")
+}
+
+async fn async_main() -> Result<()> {
     load_dotenv();
     tracing_subscriber::fmt()
         .with_env_filter(
