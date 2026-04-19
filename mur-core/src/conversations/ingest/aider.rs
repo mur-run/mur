@@ -110,7 +110,7 @@ hi back
 
 #### > bye
 
-bye
+see you later
 ";
         let msgs = parse_aider_md(md, "chat-1").unwrap();
         assert_eq!(msgs.len(), 4, "expected user/asst/user/asst, got {msgs:?}");
@@ -134,7 +134,7 @@ bye
             panic!("expected text");
         }
         if let Content::Text { value } = &msgs[3].content {
-            assert_eq!(value, "bye");
+            assert_eq!(value, "see you later");
         } else {
             panic!("expected text");
         }
