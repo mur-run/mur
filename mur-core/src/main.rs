@@ -315,6 +315,16 @@ enum Commands {
         #[command(subcommand)]
         action: DeployAction,
     },
+    /// Conversations archive (Layer 1 index, Layer 2 summary, Layer 3 raw)
+    Chat {
+        #[command(subcommand)]
+        action: ChatAction,
+    },
+    /// Conversations archive management (pull / cleanup / reindex / doctor / preflight / migrate / rollback)
+    Conversations {
+        #[command(subcommand)]
+        action: ConversationsAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -630,6 +640,57 @@ enum SyncAction {
 }
 
 #[derive(Subcommand)]
+enum ChatAction {
+    /// List days in the archive (Layer 1)
+    List {
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        src: Option<String>,
+    },
+    /// Show a single day's summary (or raw if no summary) (Layer 2)
+    Show { date: String },
+    /// Dump raw JSONL for a conversation (Layer 3)
+    Raw { date: String, conv: String },
+    /// Semantic + keyword search
+    Search {
+        query: String,
+        #[arg(long, default_value = "10")]
+        limit: usize,
+        #[arg(long)]
+        src: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConversationsAction {
+    /// Run polling ingesters (Cursor/Gemini/Aider)
+    Pull,
+    /// Apply retention cleanup
+    Cleanup,
+    /// Rebuild LanceDB from raw/
+    Reindex,
+    /// Run health checks
+    Doctor,
+    /// Check migration preconditions (BP1)
+    Preflight,
+    /// Migrate from commander paths (BP2: dry-run by default; BP3: recovery flags)
+    Migrate {
+        /// Actually perform the migration (default: dry-run only, no changes)
+        #[arg(long)]
+        run: bool,
+        /// Resume from a previously interrupted migration
+        #[arg(long, conflicts_with_all = &["run", "discard_staging"])]
+        resume: bool,
+        /// Discard any staging dir from a previously interrupted migration
+        #[arg(long, conflicts_with_all = &["run", "resume"])]
+        discard_staging: bool,
+    },
+    /// Roll back to commander's old paths
+    Rollback,
+}
+
+#[derive(Subcommand)]
 enum DeployAction {
     /// Start services (docker compose up)
     Up {
@@ -927,6 +988,38 @@ async fn main() -> Result<()> {
             cmd::sync_cmd::run_fetch(&config.server.url, dry_run).await?;
         }
         Commands::Exit | Commands::Quit => cmd::session::cmd_session_exit()?,
+        Commands::Chat { action } => match action {
+            ChatAction::List { since, src } => cmd::conversations_cmd::cmd_chat_list(since, src)?,
+            ChatAction::Show { date } => cmd::conversations_cmd::cmd_chat_show(date)?,
+            ChatAction::Raw { date, conv } => cmd::conversations_cmd::cmd_chat_raw(date, conv)?,
+            ChatAction::Search { query, limit, src } => {
+                cmd::conversations_cmd::cmd_chat_search(query, limit, src).await?
+            }
+        },
+        Commands::Conversations { action } => match action {
+            ConversationsAction::Pull => cmd::conversations_cmd::cmd_conversations_pull().await?,
+            ConversationsAction::Cleanup => {
+                cmd::conversations_cmd::cmd_conversations_cleanup().await?
+            }
+            ConversationsAction::Reindex => {
+                cmd::conversations_cmd::cmd_conversations_reindex().await?
+            }
+            ConversationsAction::Doctor => cmd::conversations_cmd::cmd_conversations_doctor()?,
+            ConversationsAction::Preflight => {
+                cmd::conversations_cmd::cmd_conversations_preflight()?
+            }
+            ConversationsAction::Migrate {
+                run,
+                resume,
+                discard_staging,
+            } => {
+                cmd::conversations_cmd::cmd_conversations_migrate(run, resume, discard_staging)
+                    .await?
+            }
+            ConversationsAction::Rollback => {
+                cmd::conversations_cmd::cmd_conversations_rollback().await?
+            }
+        },
         Commands::Deploy { action } => match action {
             DeployAction::Up {
                 build,
