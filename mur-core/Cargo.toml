@@ -28,6 +28,8 @@ uuid = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 dirs = "6"
+sha2 = "0.10"
+hex = "0.4"
 regex = "1"
 lancedb = "0.26"
 arrow-array = "57"
