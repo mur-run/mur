@@ -125,7 +125,11 @@ impl Content {
         Content::Text { value: s.into() }
     }
 
-    /// Plain-text projection for indexing/search. For pointer variants returns `desc`.
+    /// Plain-text projection for indexing/search. For pointer variants
+    /// (`ToolRef`/`ImageRef`) returns the `desc` field, which may be an
+    /// empty string if the producer didn't supply one — callers doing
+    /// keyword search should treat empty results as "no indexable text"
+    /// rather than treating them as matches.
     pub fn as_text(&self) -> &str {
         match self {
             Content::Text { value } => value,
@@ -183,6 +187,52 @@ mod tests {
         let line = serde_json::to_string(&m).unwrap();
         let back: Message = serde_json::from_str(&line).unwrap();
         assert!(matches!(back.content, Content::ToolRef { ref sha256, .. } if sha256 == "abc"));
+    }
+
+    #[test]
+    fn message_image_ref_roundtrip() {
+        let m = Message {
+            v: 1,
+            ts: chrono::Utc
+                .with_ymd_and_hms(2026, 4, 19, 11, 30, 45)
+                .unwrap(),
+            src: Source::Cursor,
+            conv: "x".into(),
+            role: Role::Tool,
+            content: Content::ImageRef {
+                sha256: "def".into(),
+                path: "attachments/diagram.png".into(),
+                desc: "architecture diagram".into(),
+            },
+            meta: serde_json::Value::Null,
+            refs: vec![],
+        };
+        let line = serde_json::to_string(&m).unwrap();
+        assert!(line.contains("\"t\":\"image_ref\""));
+        let back: Message = serde_json::from_str(&line).unwrap();
+        assert!(matches!(back.content, Content::ImageRef { ref sha256, .. } if sha256 == "def"));
+    }
+
+    #[test]
+    fn source_file_prefix_is_stable() {
+        assert_eq!(Source::ClaudeCode.file_prefix(), "cc");
+        assert_eq!(Source::Cursor.file_prefix(), "cursor");
+        assert_eq!(Source::Gemini.file_prefix(), "gemini");
+        assert_eq!(Source::Aider.file_prefix(), "aider");
+        assert_eq!(Source::Slack.file_prefix(), "slack");
+        assert_eq!(Source::Telegram.file_prefix(), "telegram");
+        assert_eq!(Source::Discord.file_prefix(), "discord");
+        assert_eq!(Source::CommanderEngine.file_prefix(), "commander");
+    }
+
+    #[test]
+    fn message_deserializes_with_meta_and_refs_absent() {
+        // Spec §12 forward-compat guarantee: older rows lacking meta/refs must
+        // still deserialize. Both keys are completely absent from the input.
+        let minimal = r#"{"v":1,"ts":"2026-04-19T11:30:45Z","src":"aider","conv":"c","role":"user","content":{"t":"text","v":"hi"}}"#;
+        let m: Message = serde_json::from_str(minimal).unwrap();
+        assert!(m.meta.is_null());
+        assert!(m.refs.is_empty());
     }
 
     #[test]
