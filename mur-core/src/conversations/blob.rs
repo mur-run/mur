@@ -4,6 +4,7 @@
 //! bodies whose original isn't persisted elsewhere. `put()` is idempotent: the
 //! same bytes always hash to the same filename and we skip the write if it already
 //! exists.
+#![allow(dead_code)] // Phase 1: stubs wired in by later tasks (migrate, retrieve).
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};

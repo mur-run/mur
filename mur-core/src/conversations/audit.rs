@@ -12,6 +12,7 @@
 //! entry is written whose `bridged_from_hash` field carries commander's last
 //! `entry_hash` as an opaque cryptographic pointer. Both chains verify
 //! independently, without algorithm coupling.
+#![allow(dead_code)] // Phase 1: stubs wired in by later tasks (migrate, retrieve).
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};

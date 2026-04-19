@@ -3,6 +3,7 @@
 //! - Each line is a serialized `mur_common::Message`.
 //! - Writes open with `O_APPEND`; no file rewrites (spec §12 constraint #2).
 //! - Reads walk every JSONL file for a date, sort by `ts`.
+#![allow(dead_code)] // Phase 1: stubs wired in by later tasks (migrate, retrieve).
 
 use anyhow::{Context, Result};
 use chrono::NaiveDate;

@@ -1,5 +1,6 @@
 //! Ingestion pipeline. Stages run normalize → dedup → filter → store.append,
 //! with audit entries per successful write.
+#![allow(dead_code)] // Phase 1: stubs wired in by later tasks (migrate, retrieve).
 
 pub mod claude_code;
 pub mod dedup;

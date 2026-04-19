@@ -2,6 +2,7 @@
 //!
 //! All paths live under `$MUR_DIR/conversations/` where `$MUR_DIR`
 //! defaults to `~/.mur`. Accepting an override string is only for tests.
+#![allow(dead_code)] // Phase 1: stubs wired in by later tasks (migrate, retrieve).
 
 use chrono::{DateTime, NaiveDate, Utc};
 use mur_common::Source;

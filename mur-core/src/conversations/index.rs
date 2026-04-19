@@ -4,6 +4,7 @@
 //! Observability (BP6): `upsert` and `search` are each wrapped in a
 //! `tracing::info_span!` so `RUST_LOG=mur_core::conversations=info` yields
 //! per-call timing breakdowns.
+#![allow(dead_code)] // Phase 1: stubs wired in by later tasks (migrate, retrieve).
 
 use anyhow::{Context, Result};
 use arrow_array::{
