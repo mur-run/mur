@@ -385,6 +385,7 @@ fn tier_priority(tier: &Tier) -> u8 {
 /// Returns true if `scope` matches the pattern's origin user/platform.
 /// A match requires that the scope field is present AND the pattern's origin
 /// contains the same value.  Missing scope = no scope match (no boost).
+#[allow(deprecated)] // transitional: reads legacy origin.user / origin.platform fields
 fn scope_matches_origin(scope: Option<&ScopeContext>, origin: Option<&Origin>) -> bool {
     let Some(sc) = scope else { return false };
     let Some(orig) = origin else { return false };
@@ -717,6 +718,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // transitional: user/platform fields being phased out
     fn test_kind_boost_preference_with_matching_scope() {
         use mur_common::pattern::{Origin, OriginTrigger};
         let mut p = make_pattern("user-pref", "user prefers dark mode");
@@ -724,6 +726,7 @@ mod tests {
         p.origin = Some(Origin {
             source: "commander".into(),
             trigger: OriginTrigger::UserExplicit,
+            actor: None,
             user: Some("david".into()),
             platform: None,
             confidence: 1.0,
@@ -738,6 +741,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // transitional: user/platform fields being phased out
     fn test_kind_boost_preference_no_scope_no_boost() {
         use mur_common::pattern::{Origin, OriginTrigger};
         let mut p = make_pattern("user-pref", "user prefers dark mode");
@@ -745,6 +749,7 @@ mod tests {
         p.origin = Some(Origin {
             source: "commander".into(),
             trigger: OriginTrigger::UserExplicit,
+            actor: None,
             user: Some("david".into()),
             platform: None,
             confidence: 1.0,
@@ -755,6 +760,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // transitional: user/platform fields being phased out
     fn test_kind_boost_preference_wrong_user_no_boost() {
         use mur_common::pattern::{Origin, OriginTrigger};
         let mut p = make_pattern("user-pref", "user prefers dark mode");
@@ -762,6 +768,7 @@ mod tests {
         p.origin = Some(Origin {
             source: "commander".into(),
             trigger: OriginTrigger::UserExplicit,
+            actor: None,
             user: Some("alice".into()),
             platform: None,
             confidence: 1.0,

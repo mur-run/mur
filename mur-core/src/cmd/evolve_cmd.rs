@@ -225,7 +225,7 @@ pub(crate) fn cmd_evolve_cooccurrence(min_count: u32) -> Result<()> {
     println!("  Total tracked pairs: {}", matrix.pair_count());
 
     let mut pairs = matrix.all_pairs();
-    pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    pairs.sort_by_key(|p| std::cmp::Reverse(p.1));
 
     let filtered: Vec<_> = pairs
         .iter()

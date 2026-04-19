@@ -1,3 +1,4 @@
+pub mod actor;
 pub mod config;
 pub mod error;
 pub mod event;
@@ -8,5 +9,12 @@ pub mod pattern;
 pub mod pipeline;
 pub mod schedule;
 pub mod schedule_claim;
+pub mod scope;
+pub mod signal;
 pub mod variable;
 pub mod workflow;
+
+pub use actor::{Actor, ActorSource};
+pub use pattern::Pattern;
+pub use scope::Scope;
+pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};

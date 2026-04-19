@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mur_common::pattern::*;
 
 use crate::capture;
@@ -988,6 +988,176 @@ async fn push_unsynced_workflows(server_url: &str, token: &str, quiet: bool) -> 
     }
 
     Ok(())
+}
+
+// ─── Phase-1 memory-sync CLI helpers ─────────────────────────────────────────
+
+/// Execute `mur push [--dry-run]`.
+pub(crate) async fn run_push(server_url: &str, dry_run: bool) -> anyhow::Result<()> {
+    let outbox = crate::sync::Outbox::default_location()?;
+    let pending_paths = outbox.list_pending()?;
+
+    if pending_paths.is_empty() {
+        println!("outbox empty, nothing to push");
+        return Ok(());
+    }
+
+    // Parse all pending signals; collect (path, signal) pairs, drop bad YAML with warning.
+    let mut to_send: Vec<(std::path::PathBuf, mur_common::Signal)> =
+        Vec::with_capacity(pending_paths.len());
+    for p in pending_paths {
+        let yaml = match std::fs::read_to_string(&p) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("  skip unreadable {}: {e}", p.display());
+                continue;
+            }
+        };
+        match serde_yaml::from_str::<mur_common::Signal>(&yaml) {
+            Ok(sig) => to_send.push((p, sig)),
+            Err(e) => eprintln!("  skip bad YAML {}: {e}", p.display()),
+        }
+    }
+
+    if dry_run {
+        println!("[dry-run] would push {} signal(s)", to_send.len());
+        for (p, s) in &to_send {
+            println!("  - {} ({})", s.id, p.display());
+        }
+        return Ok(());
+    }
+
+    let tokens = crate::auth::load_tokens()
+        .ok_or_else(|| anyhow::anyhow!("not logged in (run `mur login`)"))?;
+    let client = crate::sync::SyncClient::new(server_url, &tokens.access_token)?;
+
+    let signals: Vec<mur_common::Signal> = to_send.iter().map(|(_, s)| s.clone()).collect();
+    let resp = client.push_batch(&signals).await.context("push_batch")?;
+
+    // Move accepted signal files to .flushed/.
+    for (path, sig) in &to_send {
+        if resp.accepted.iter().any(|a| *a == sig.id.to_string()) {
+            outbox.mark_flushed(path)?;
+        }
+    }
+
+    println!(
+        "pushed: {} accepted, {} rejected",
+        resp.accepted.len(),
+        resp.rejected.len()
+    );
+    for r in &resp.rejected {
+        println!("  rejected {}: {}", r.id, r.reason);
+    }
+    Ok(())
+}
+
+/// Execute `mur fetch [--dry-run]`.
+pub(crate) async fn run_fetch(server_url: &str, dry_run: bool) -> anyhow::Result<()> {
+    let cursor_store = crate::sync::CursorStore::default_location()?;
+    let cursor = cursor_store.load()?;
+
+    if dry_run {
+        println!(
+            "[dry-run] would fetch since={:?}",
+            cursor.last_signal_id.as_deref()
+        );
+        return Ok(());
+    }
+
+    let tokens = crate::auth::load_tokens()
+        .ok_or_else(|| anyhow::anyhow!("not logged in (run `mur login`)"))?;
+    let client = crate::sync::SyncClient::new(server_url, &tokens.access_token)?;
+
+    let resp = client
+        .fetch_pending(cursor.last_signal_id.as_deref())
+        .await
+        .context("fetch_pending")?;
+
+    let inbox = crate::sync::Inbox::default_location()?;
+    let mut ids_to_ack: Vec<String> = Vec::with_capacity(resp.signals.len());
+    for s in &resp.signals {
+        inbox.receive(s)?;
+        ids_to_ack.push(s.id.to_string());
+    }
+
+    let store = YamlStore::default_store()?;
+    let report = inbox.apply_all(&store)?;
+
+    println!(
+        "fetched: {} signal(s) — applied {}, skipped {}, errors {}",
+        resp.signals.len(),
+        report.applied,
+        report.skipped,
+        report.errors.len()
+    );
+    for e in &report.errors {
+        eprintln!("  error: {e}");
+    }
+
+    if !ids_to_ack.is_empty() {
+        client.ack(&ids_to_ack).await.context("ack")?;
+    }
+
+    cursor_store.save(&crate::sync::FetchCursor {
+        last_signal_id: resp.next_cursor,
+        last_fetched_at: Some(chrono::Utc::now()),
+    })?;
+    Ok(())
+}
+
+/// Execute `mur sync status`.
+pub(crate) fn run_status() -> anyhow::Result<()> {
+    let outbox = crate::sync::Outbox::default_location()?;
+    let cursor_store = crate::sync::CursorStore::default_location()?;
+
+    let outbox_pending = outbox.list_pending()?.len();
+
+    // Count inbox pending files directly — Inbox doesn't expose a list API.
+    let inbox_dir = dirs::home_dir()
+        .map(|h| h.join(".mur/inbox"))
+        .unwrap_or_default();
+    let inbox_pending = if inbox_dir.exists() {
+        std::fs::read_dir(&inbox_dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.path().extension().and_then(|s| s.to_str()) == Some("yaml")
+                            && !e
+                                .path()
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .is_some_and(|n| n.starts_with('.'))
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let cursor = cursor_store.load()?;
+
+    println!("sync status");
+    println!("  outbox pending: {outbox_pending}");
+    println!("  inbox pending:  {inbox_pending}");
+    match cursor.last_fetched_at {
+        Some(t) => println!("  last fetch:     {t}"),
+        None => println!("  last fetch:     never"),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod sync_status_tests {
+    use super::*;
+
+    #[test]
+    fn run_status_works_on_fresh_system() {
+        // run_status uses default_location() which creates dirs under $HOME/.mur/.
+        // We just verify it doesn't panic and returns Ok.
+        run_status().unwrap();
+    }
 }
 
 /// Build a richer query for project-aware sync by detecting language and git context.
