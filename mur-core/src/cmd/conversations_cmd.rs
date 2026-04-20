@@ -380,3 +380,65 @@ fn truncate(s: &str, max: usize) -> String {
         format!("{}…", c.iter().take(max).collect::<String>())
     }
 }
+
+pub struct CompactArgs {
+    pub date: Option<String>,
+    pub since: Option<String>,
+    pub force: bool,
+    pub if_stale: bool,
+    pub max_days: Option<u32>,
+    pub extractive_only: bool,
+    pub debug_prompt: bool,
+}
+
+pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
+    use crate::conversations::summarize;
+    use chrono::NaiveDate;
+
+    let config = crate::store::config::load_config().unwrap_or_default();
+    let mut cfg = config.conversations.compact.clone();
+
+    if args.extractive_only {
+        // Crude guard rail: no abstractive model.
+        cfg.abstractive_model = String::new();
+    }
+    if args.debug_prompt {
+        eprintln!("(debug_prompt not yet wired to individual stages; enabling in Phase 2C)");
+    }
+
+    if let Some(d) = args.date {
+        let date = NaiveDate::parse_from_str(&d, "%Y-%m-%d")?;
+        let force = args.force || args.if_stale;
+        let r = summarize::compact_day(date, force, &cfg, None).await?;
+        println!(
+            "{date}: {:?} ({} spans, {}ms)",
+            r.outcome, r.extractive_spans, r.duration_ms
+        );
+        return Ok(());
+    }
+
+    let since = args
+        .since
+        .as_deref()
+        .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+        .transpose()?;
+
+    let report =
+        summarize::compact_missing(&cfg, since, args.if_stale, args.max_days, None).await?;
+
+    if report.day_reports.is_empty() {
+        println!("(nothing to compact)");
+        return Ok(());
+    }
+    for r in &report.day_reports {
+        println!(
+            "  {} {:?} ({} spans, {}ms)",
+            r.date, r.outcome, r.extractive_spans, r.duration_ms
+        );
+    }
+    println!(
+        "done: {} ok, {} failed, {} skipped",
+        report.ok, report.err, report.skipped
+    );
+    Ok(())
+}
