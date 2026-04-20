@@ -29,6 +29,7 @@ anyhow = { workspace = true }
 async-trait = "0.1"
 fs2 = "0.4"
 walkdir = "2"
+aho-corasick = "1"
 thiserror = { workspace = true }
 dirs = "6"
 sha2 = "0.10"

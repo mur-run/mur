@@ -688,6 +688,36 @@ enum ConversationsAction {
     },
     /// Roll back to commander's old paths
     Rollback,
+    /// Generate hybrid summaries for completed days (sleep-time compact).
+    Compact {
+        /// One specific date (otherwise process all missing completed days).
+        #[arg(long)]
+        date: Option<String>,
+
+        /// Lower bound for the sweep (ignored with --date).
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Overwrite existing summaries. Archives old version to .history/.
+        #[arg(long)]
+        force: bool,
+
+        /// Only regenerate when raw content hash changed (implies force).
+        #[arg(long)]
+        if_stale: bool,
+
+        /// Override throttle (default: config.compact.max_days_per_run).
+        #[arg(long)]
+        max_days: Option<u32>,
+
+        /// Don't call Ollama — emit extractive-only skeleton (for testing).
+        #[arg(long)]
+        extractive_only: bool,
+
+        /// Emit the LLM prompts to stderr without sending them.
+        #[arg(long)]
+        debug_prompt: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1023,7 +1053,9 @@ async fn async_main() -> Result<()> {
             ConversationsAction::Reindex => {
                 cmd::conversations_cmd::cmd_conversations_reindex().await?
             }
-            ConversationsAction::Doctor => cmd::conversations_cmd::cmd_conversations_doctor()?,
+            ConversationsAction::Doctor => {
+                cmd::conversations_cmd::cmd_conversations_doctor().await?
+            }
             ConversationsAction::Preflight => {
                 cmd::conversations_cmd::cmd_conversations_preflight()?
             }
@@ -1037,6 +1069,28 @@ async fn async_main() -> Result<()> {
             }
             ConversationsAction::Rollback => {
                 cmd::conversations_cmd::cmd_conversations_rollback().await?
+            }
+            ConversationsAction::Compact {
+                date,
+                since,
+                force,
+                if_stale,
+                max_days,
+                extractive_only,
+                debug_prompt,
+            } => {
+                cmd::conversations_cmd::cmd_conversations_compact(
+                    cmd::conversations_cmd::CompactArgs {
+                        date,
+                        since,
+                        force,
+                        if_stale,
+                        max_days,
+                        extractive_only,
+                        debug_prompt,
+                    },
+                )
+                .await?
             }
         },
         Commands::Deploy { action } => match action {
