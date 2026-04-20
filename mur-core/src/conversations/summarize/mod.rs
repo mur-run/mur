@@ -6,4 +6,5 @@
 #![allow(dead_code)] // public API wired progressively across Tasks 4-10.
 
 pub mod chunker;
-// Later tasks add: pub mod extractive; pub mod abstractive; pub mod macro_refs; pub mod writer;
+pub mod extractive;
+// Later tasks add: pub mod abstractive; pub mod macro_refs; pub mod writer;
