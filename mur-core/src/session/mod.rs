@@ -48,6 +48,20 @@ fn active_path() -> PathBuf {
     session_dir().join("active.json")
 }
 
+/// Read the active session id, if any. Returns `None` when no session is active.
+///
+/// Used by the conversations archive ingest path to label messages with the
+/// current session — without requiring callers to parse `active.json` themselves.
+pub fn active_session_id() -> anyhow::Result<Option<String>> {
+    let path = active_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)?;
+    let session: ActiveSession = serde_json::from_str(&content)?;
+    Ok(Some(session.id))
+}
+
 /// Metadata about a session, persisted alongside the recording as `.meta.json`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SessionMeta {

@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod config;
+pub mod conversation;
 pub mod error;
 pub mod event;
 pub mod knowledge;
@@ -15,6 +16,7 @@ pub mod variable;
 pub mod workflow;
 
 pub use actor::{Actor, ActorSource};
+pub use conversation::{CONVERSATION_SCHEMA_VERSION, Content, Message, Role, Source};
 pub use pattern::Pattern;
 pub use scope::Scope;
 pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};
