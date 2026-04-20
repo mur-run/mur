@@ -280,6 +280,38 @@ pub async fn cmd_conversations_doctor() -> Result<()> {
         println!("  · Ollama not reachable at {endpoint} (compact + ask will degrade)");
     }
 
+    // Phase 2C: .history/ coverage — how many archived summary revisions + total bytes.
+    let history_dir = conversations::paths::summary_history_dir(None);
+    let (hist_count, hist_bytes) = if history_dir.exists() {
+        std::fs::read_dir(&history_dir)
+            .ok()
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s == "md")
+                            .unwrap_or(false)
+                    })
+                    .fold((0u64, 0u64), |(n, bytes), e| {
+                        let sz = std::fs::metadata(e.path()).map(|m| m.len()).unwrap_or(0);
+                        (n + 1, bytes + sz)
+                    })
+            })
+            .unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
+    if hist_count == 0 {
+        println!("  · .history/: empty (no summary rewrites yet)");
+    } else {
+        println!(
+            "  ✓ .history/: {hist_count} archived revisions, {:.1} KB",
+            hist_bytes as f64 / 1024.0
+        );
+    }
+
     Ok(())
 }
 

@@ -39,6 +39,7 @@ fn mur_conversations_doctor_runs() {
     assert!(stdout.contains("raw day-dirs"));
     assert!(stdout.contains("summaries:")); // NEW Phase 2A
     assert!(stdout.contains("Ollama")); // NEW Phase 2A
+    assert!(stdout.contains(".history/")); // NEW Phase 2C
 }
 
 #[test]
