@@ -325,6 +325,28 @@ enum Commands {
         #[command(subcommand)]
         action: ConversationsAction,
     },
+    /// Ask a natural-language question about your conversation archive (Mode C).
+    Ask {
+        question: String,
+        #[arg(long)]
+        src: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        #[arg(long, default_value = "5")]
+        k: usize,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        min_score: Option<f64>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        no_escalate: bool,
+        #[arg(long)]
+        debug_prompt: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1110,6 +1132,32 @@ async fn async_main() -> Result<()> {
             } => cmd::deploy::cmd_deploy_logs(file.as_deref(), service.as_deref(), follow)?,
             DeployAction::Build { file } => cmd::deploy::cmd_deploy_build(file.as_deref())?,
         },
+        Commands::Ask {
+            question,
+            src,
+            since,
+            until,
+            k,
+            model,
+            min_score,
+            json,
+            no_escalate,
+            debug_prompt,
+        } => {
+            cmd::conversations_cmd::cmd_ask(cmd::conversations_cmd::AskArgs {
+                question,
+                src,
+                since,
+                until,
+                k,
+                model,
+                min_score,
+                json,
+                no_escalate,
+                debug_prompt,
+            })
+            .await?
+        }
     }
 
     Ok(())
