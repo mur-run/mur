@@ -11,7 +11,7 @@ pub(crate) async fn cmd_inject(query: &str) -> Result<()> {
     use crate::retrieve::gate::{GateDecision, evaluate_query};
     use crate::retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
     use crate::store::embedding::{EmbeddingConfig, embed};
-    use crate::store::lancedb::VectorStore;
+    use crate::store::vector::LanceDbStore as VectorStore;
     use inject::hook::{HookTrigger, detect_trigger};
     use std::collections::HashMap;
 

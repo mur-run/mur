@@ -1,4 +1,4 @@
-//! LanceDB vector store for semantic search over patterns and workflows.
+//! LanceDB-backed implementation of the `VectorStore` trait.
 //!
 //! YAML remains the source of truth. LanceDB is a rebuildable index.
 
@@ -17,12 +17,12 @@ use std::sync::Arc;
 const TABLE_NAME: &str = "patterns";
 
 /// LanceDB-backed vector index for patterns and workflows.
-pub struct VectorStore {
+pub struct LanceDbStore {
     db: lancedb::Connection,
     dimensions: i32,
 }
 
-impl VectorStore {
+impl LanceDbStore {
     /// Open or create the LanceDB database at the given path.
     pub async fn open(db_path: &Path, dimensions: i32) -> Result<Self> {
         let db = lancedb::connect(db_path.to_str().unwrap())
@@ -275,6 +275,55 @@ pub struct SearchResult {
     pub item_type: String,
 }
 
+use async_trait::async_trait;
+use super::{EmbeddedChunk, Hit, SearchFilter, VectorStore};
+
+#[async_trait]
+impl VectorStore for LanceDbStore {
+    async fn upsert(&self, _chunks: &[EmbeddedChunk]) -> Result<()> {
+        anyhow::bail!("LanceDbStore::upsert is a stub until P1.2 wires adapters")
+    }
+
+    async fn search(
+        &self,
+        _query_vec: &[f32],
+        _k: usize,
+        _filter: &SearchFilter,
+    ) -> Result<Vec<Hit>> {
+        anyhow::bail!("LanceDbStore::search (trait) is a stub until P1.3 wires unified retrieve")
+    }
+
+    async fn delete_by_external_ids(
+        &self,
+        _source_id: &str,
+        _external_ids: &[String],
+    ) -> Result<()> {
+        anyhow::bail!("LanceDbStore::delete_by_external_ids is a stub until P1.2")
+    }
+
+    async fn delete_by_source(&self, _source_id: &str) -> Result<()> {
+        anyhow::bail!("LanceDbStore::delete_by_source is a stub until P1.2")
+    }
+
+    async fn list_external_ids(&self, _source_id: &str) -> Result<Vec<String>> {
+        anyhow::bail!("LanceDbStore::list_external_ids is a stub until P1.2")
+    }
+
+    async fn count(&self, _source_id: Option<&str>) -> Result<usize> {
+        anyhow::bail!("LanceDbStore::count is a stub until P1.2")
+    }
+
+    async fn rebuild_index(&self) -> Result<()> {
+        anyhow::bail!("LanceDbStore::rebuild_index (trait) is a stub until P1.3 orchestrates")
+    }
+}
+
+// Compile-time assertion that LanceDbStore implements VectorStore.
+const _: () = {
+    fn _assert_impl<T: VectorStore>() {}
+    fn _check() { _assert_impl::<LanceDbStore>(); }
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,7 +388,7 @@ mod tests {
     #[tokio::test]
     async fn test_build_and_search() {
         let tmp = TempDir::new().unwrap();
-        let store = VectorStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
 
         let patterns = vec![
             (make_pattern("pattern-a"), random_embedding()),
@@ -361,7 +410,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_index() {
         let tmp = TempDir::new().unwrap();
-        let store = VectorStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
         let results = store.search(&random_embedding(), 5, None).await.unwrap();
         assert!(results.is_empty());
     }
@@ -369,7 +418,7 @@ mod tests {
     #[tokio::test]
     async fn test_rebuild_index() {
         let tmp = TempDir::new().unwrap();
-        let store = VectorStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
 
         let patterns = vec![(make_pattern("first"), random_embedding())];
         store.build_index(&patterns).await.unwrap();
@@ -437,7 +486,7 @@ mod tests {
     #[tokio::test]
     async fn test_unified_index() {
         let tmp = TempDir::new().unwrap();
-        let store = VectorStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
 
         let patterns = vec![(make_pattern("pat-a"), random_embedding())];
         let workflows = vec![(make_workflow("wf-a"), {
