@@ -568,7 +568,12 @@ pub fn sync_commander_config_toml(
         let before = &existing[..b];
         let after_marker = e + CONV_MARKER_CLOSE.len();
         let after = &existing[after_marker..];
-        format!("{}{}{}", before.trim_end_matches('\n'), new_block, after)
+        format!(
+            "{}{}{}",
+            before.trim_end_matches('\n'),
+            new_block,
+            after.trim_start_matches('\n'),
+        )
     } else {
         format!("{}{}", existing.trim_end_matches('\n'), new_block)
     };
@@ -805,5 +810,37 @@ mod tests {
         assert!(toml.contains("enabled_in_daemon = true"));
         assert!(toml.contains("daemon_cron = \"0 4 * * *\""));
         assert!(toml.contains("[engine]"));
+    }
+
+    #[test]
+    fn sync_is_idempotent_on_repeat_calls() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmdr_dir = tmp.path().join(".mur/commander");
+        std::fs::create_dir_all(&cmdr_dir).unwrap();
+        std::fs::write(cmdr_dir.join("config.toml"), "[engine]\nfoo = 1\n").unwrap();
+        let cfg = mur_common::config::ConversationsConfig {
+            enabled: true,
+            retention_days: 30,
+            compact: mur_common::config::CompactConfig {
+                enabled_in_daemon: true,
+                daemon_cron: "0 4 * * *".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // First sync
+        sync_commander_config_toml(&tmp.path().join(".mur"), &cfg).unwrap();
+        let after_first = std::fs::read_to_string(cmdr_dir.join("config.toml")).unwrap();
+        // Second sync with identical config
+        sync_commander_config_toml(&tmp.path().join(".mur"), &cfg).unwrap();
+        let after_second = std::fs::read_to_string(cmdr_dir.join("config.toml")).unwrap();
+        assert_eq!(
+            after_first, after_second,
+            "sync must be idempotent — second call must produce identical bytes:\nfirst:\n{after_first}\nsecond:\n{after_second}"
+        );
+        // Third sync (belt-and-braces)
+        sync_commander_config_toml(&tmp.path().join(".mur"), &cfg).unwrap();
+        let after_third = std::fs::read_to_string(cmdr_dir.join("config.toml")).unwrap();
+        assert_eq!(after_second, after_third);
     }
 }
