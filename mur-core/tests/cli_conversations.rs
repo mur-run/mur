@@ -1,11 +1,18 @@
+use std::path::Path;
 use std::process::Command;
+
+/// Route `dirs::home_dir()` to `tmp` on every platform:
+/// * Unix: `HOME`
+/// * Windows: `USERPROFILE` (the `dirs` crate ignores `HOME` on Windows)
+fn with_home<'a>(cmd: &'a mut Command, tmp: &Path) -> &'a mut Command {
+    cmd.env("HOME", tmp).env("USERPROFILE", tmp)
+}
 
 #[test]
 fn mur_chat_list_runs_without_error() {
     let tmp = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
-        .args(["chat", "list"])
-        .env("HOME", tmp.path())
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mur"));
+    let out = with_home(cmd.args(["chat", "list"]), tmp.path())
         .output()
         .expect("run mur");
     assert!(
@@ -18,9 +25,8 @@ fn mur_chat_list_runs_without_error() {
 #[test]
 fn mur_conversations_doctor_runs() {
     let tmp = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
-        .args(["conversations", "doctor"])
-        .env("HOME", tmp.path())
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mur"));
+    let out = with_home(cmd.args(["conversations", "doctor"]), tmp.path())
         .env("MUR_OLLAMA_MOCK", "1")
         .output()
         .expect("run mur");
@@ -34,9 +40,8 @@ fn mur_conversations_doctor_runs() {
 #[test]
 fn mur_conversations_compact_on_empty_archive_is_noop() {
     let tmp = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
-        .args(["conversations", "compact"])
-        .env("HOME", tmp.path())
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mur"));
+    let out = with_home(cmd.args(["conversations", "compact"]), tmp.path())
         .env("MUR_OLLAMA_MOCK", "1")
         .output()
         .expect("run mur");
@@ -80,9 +85,8 @@ fn mur_conversations_compact_on_seeded_day_produces_summary() {
         serde_json::to_string(&line).unwrap() + "\n",
     )
     .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
-        .args(["conversations", "compact"])
-        .env("HOME", home)
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mur"));
+    let out = with_home(cmd.args(["conversations", "compact"]), home)
         .env("MUR_OLLAMA_MOCK", "1")
         .output()
         .expect("run mur");
