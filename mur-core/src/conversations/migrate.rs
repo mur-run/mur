@@ -796,7 +796,7 @@ mod tests {
             retention_days: 30,
             compact: mur_common::config::CompactConfig {
                 enabled_in_daemon: true,
-                daemon_cron: "0 4 * * *".into(),
+                daemon_cron: "0 0 4 * * * *".into(),
                 ..Default::default()
             },
             ..Default::default()
@@ -808,7 +808,7 @@ mod tests {
         assert!(toml.contains("retention_days = 30"));
         assert!(toml.contains("[conversations.compact]"));
         assert!(toml.contains("enabled_in_daemon = true"));
-        assert!(toml.contains("daemon_cron = \"0 4 * * *\""));
+        assert!(toml.contains("daemon_cron = \"0 0 4 * * * *\""));
         assert!(toml.contains("[engine]"));
     }
 
@@ -823,7 +823,7 @@ mod tests {
             retention_days: 30,
             compact: mur_common::config::CompactConfig {
                 enabled_in_daemon: true,
-                daemon_cron: "0 4 * * *".into(),
+                daemon_cron: "0 0 4 * * * *".into(),
                 ..Default::default()
             },
             ..Default::default()

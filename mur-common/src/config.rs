@@ -339,7 +339,7 @@ fn compact_default_history_retain() -> u32 {
     5
 }
 fn compact_default_cron() -> String {
-    "0 3 * * *".into()
+    "0 0 3 * * * *".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -477,7 +477,7 @@ foo: bar
         assert_eq!(c.max_abstractive_words, 400);
         assert_eq!(c.chunk_tokens, 6000);
         assert_eq!(c.history_retain, 5);
-        assert_eq!(c.daemon_cron, "0 3 * * *");
+        assert_eq!(c.daemon_cron, "0 0 3 * * * *");
     }
 
     #[test]
