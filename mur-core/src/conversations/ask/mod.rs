@@ -40,6 +40,7 @@ pub struct AskRequest {
     pub timeout: Duration,
     pub no_escalate: bool,
     pub debug_prompt: bool,
+    pub strict_citations: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -173,7 +174,11 @@ pub async fn ask_stream(
     // 4. Generate (streaming) with grounding filter
     let endpoint = req.endpoint.clone();
     let model = req.model.clone();
-    let filter = cite::GroundingFilter::new(prompt.valid_citations.clone());
+    let filter = if req.strict_citations {
+        cite::GroundingFilter::new_strict(prompt.valid_citations.clone())
+    } else {
+        cite::GroundingFilter::new(prompt.valid_citations.clone())
+    };
     let tokens_in = prompt.tokens_est;
 
     let stream = match generate::stream_answer(
@@ -232,6 +237,9 @@ pub async fn ask_stream(
                 }
             }
             yield AskEvent::Token(drained.forwarded);
+        }
+        if let Err(e) = filter.coverage_check() {
+            yield AskEvent::Error(e);
         }
         yield AskEvent::Done {
             tokens_in,
@@ -382,6 +390,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             no_escalate: false,
             debug_prompt: false,
+            strict_citations: false,
         };
         // Empty index → should yield the "don't cover that" fallback.
         let resp = ask(req, Some(root)).await.unwrap();

@@ -71,6 +71,12 @@ pub async fn write_summary(
             });
         }
         archived = Some(archive_prior(&md_path, root_override)?);
+        // Phase 2C: keep at most `history_retain` versions per day. Config load
+        // failure is non-fatal; fall back to a sane default (5).
+        let retain = crate::store::config::load_config()
+            .map(|c| c.conversations.compact.history_retain)
+            .unwrap_or(5);
+        let _ = prune_history(root_override, doc.date, retain);
         noop = false;
     } else {
         archived = None;
@@ -152,6 +158,52 @@ fn archive_prior(md_path: &Path, root_override: Option<&str>) -> Result<PathBuf>
     let dest = hist.join(format!("{stem}.{now}.md"));
     std::fs::rename(md_path, &dest).with_context(|| format!("archive {md_path:?} → {dest:?}"))?;
     Ok(dest)
+}
+
+/// Drop oldest `.history/<date>.*` entries beyond `retain`. Returns bytes freed.
+/// Filename format (from archive_prior): `<date>.<ISO>.md` — ISO-8601 seconds
+/// sort chronologically when ordered lexically, so .sort() + drop-first N gives
+/// the oldest.
+fn prune_history(root_override: Option<&str>, date: NaiveDate, retain: u32) -> Result<u64> {
+    let hist = summary_history_dir(root_override);
+    if !hist.exists() {
+        return Ok(0);
+    }
+    let stem = date.format("%Y-%m-%d").to_string();
+    let mut matches: Vec<std::path::PathBuf> = std::fs::read_dir(&hist)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with(&stem))
+                .unwrap_or(false)
+        })
+        .collect();
+    if matches.len() <= retain as usize {
+        return Ok(0);
+    }
+    matches.sort();
+    let drop_count = matches.len() - retain as usize;
+    let mut freed = 0u64;
+    for p in matches.into_iter().take(drop_count) {
+        if let Ok(meta) = std::fs::metadata(&p) {
+            freed += meta.len();
+        }
+        std::fs::remove_file(&p)?;
+    }
+    if freed > 0 {
+        let audit_log = audit::Audit::open(root_override)?;
+        let _ = audit_log.append(
+            AuditAction::Delete {
+                target: hist.to_string_lossy().into_owned(),
+                reason: "history.rotate".into(),
+                bytes_freed: freed,
+            },
+            String::new(),
+        );
+    }
+    Ok(freed)
 }
 
 fn render(doc: &SummaryDoc) -> String {
@@ -359,5 +411,49 @@ mod tests {
             .filter(|l| !l.trim().is_empty())
             .any(|l| l.contains("\"kind\":\"summarize\""));
         assert!(has_summarize, "audit file must record a Summarize entry");
+    }
+
+    #[tokio::test]
+    async fn history_retention_prunes_to_retain_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
+
+        // Seed 7 pre-existing .history/ entries directly (bypassing write_summary
+        // to avoid waiting 7 seconds between ISO-second timestamps).
+        let hist = summary_history_dir(Some(root));
+        std::fs::create_dir_all(&hist).unwrap();
+        for i in 0..7 {
+            let iso = format!("2026-04-19T00-00-0{i}Z");
+            std::fs::write(
+                hist.join(format!("2026-04-19.{iso}.md")),
+                format!("version {i}"),
+            )
+            .unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&hist).unwrap().count(), 7);
+
+        let freed = prune_history(Some(root), date, 3).unwrap();
+        assert!(freed > 0, "prune should have freed bytes");
+        let remaining: Vec<_> = std::fs::read_dir(&hist)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(remaining.len(), 3, "expected 3 retained, got {remaining:?}");
+        // Remaining should be the 3 newest (highest ISO suffix).
+        assert!(remaining.iter().any(|n| n.contains("T00-00-06Z")));
+        assert!(remaining.iter().any(|n| n.contains("T00-00-05Z")));
+        assert!(remaining.iter().any(|n| n.contains("T00-00-04Z")));
+    }
+
+    #[test]
+    fn history_retention_empty_dir_is_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
+        // prune_history on non-existent .history dir must not error
+        let freed = prune_history(Some(root), date, 5).unwrap();
+        assert_eq!(freed, 0);
     }
 }

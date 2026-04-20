@@ -56,11 +56,13 @@ dotenvy = "0.15"
 shellexpand = "3"
 urlencoding = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
+sysinfo = "0.30"
 
 [features]
 default = ["cli", "server"]
 cli = ["dialoguer", "console", "clap"]
 server = ["axum", "tower-http", "rust-embed"]
+ollama-live-smoke = []
 
 [dev-dependencies]
 tempfile = "3"
