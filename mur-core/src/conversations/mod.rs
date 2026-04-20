@@ -3,6 +3,7 @@
 //!
 //! See `docs/superpowers/specs/2026-04-19-mur-conversations-design.md`.
 
+pub mod ask;
 pub mod audit;
 pub mod blob;
 pub mod index;
