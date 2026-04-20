@@ -201,13 +201,8 @@ fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ENV_LOCK;
     use super::*;
-    use std::sync::Mutex;
-
-    // Serialize env-var mutation across the three tests below. Rust 2024 made
-    // set_var/remove_var unsafe precisely because the process env is shared
-    // across threads, and cargo test runs cases concurrently by default.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]

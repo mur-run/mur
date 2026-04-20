@@ -15,6 +15,13 @@ pub mod retrieve;
 pub mod store;
 pub mod summarize;
 
+/// Shared test-only mutex serializing mutation of the process environment
+/// (MUR_OLLAMA_MOCK). Both `ollama::tests` and `summarize::extractive::tests`
+/// modify the same var; `cargo test` runs tests in parallel threads and
+/// without a single crate-wide guard the tests clobber each other.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Read mur's config.yaml `conversations.enabled` flag. Defaults to `false`
 /// when the file is missing or the key is absent — keeping legacy behavior
 /// untouched for users who haven't opted in yet.

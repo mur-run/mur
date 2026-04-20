@@ -251,13 +251,8 @@ fn jaro_winkler(a: &str, b: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversations::ENV_LOCK;
     use chrono::TimeZone;
-    use std::sync::Mutex;
-
-    // Serialize env-var mutation inside this test module. Cross-module races
-    // (e.g. against conversations::ollama::tests) are a known limitation —
-    // resolve via a shared test-utility in Phase 2C if flakiness appears in CI.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn mk(ts_min: u32, conv: &str, text: &str, role: Role) -> Message {
         Message {
