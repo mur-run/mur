@@ -4,8 +4,9 @@
 use mur_common::Source;
 use std::time::Duration;
 
+pub mod prompt;
 pub mod retrieve;
-// Later tasks add: pub mod prompt; pub mod generate; pub mod cite; pub mod format;
+// Later tasks add: pub mod generate; pub mod cite; pub mod format;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Format {
