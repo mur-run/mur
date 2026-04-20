@@ -346,6 +346,8 @@ enum Commands {
         no_escalate: bool,
         #[arg(long)]
         debug_prompt: bool,
+        #[arg(long)]
+        strict_citations: bool,
     },
 }
 
@@ -1143,6 +1145,7 @@ async fn async_main() -> Result<()> {
             json,
             no_escalate,
             debug_prompt,
+            strict_citations,
         } => {
             cmd::conversations_cmd::cmd_ask(cmd::conversations_cmd::AskArgs {
                 question,
@@ -1155,6 +1158,7 @@ async fn async_main() -> Result<()> {
                 json,
                 no_escalate,
                 debug_prompt,
+                strict_citations,
             })
             .await?
         }

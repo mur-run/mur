@@ -466,6 +466,7 @@ pub struct AskArgs {
     pub json: bool,
     pub no_escalate: bool,
     pub debug_prompt: bool,
+    pub strict_citations: bool,
 }
 
 pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
@@ -566,6 +567,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         timeout: std::time::Duration::from_secs(ask_cfg.timeout_secs as u64),
         no_escalate: args.no_escalate,
         debug_prompt: args.debug_prompt,
+        strict_citations: args.strict_citations,
     };
 
     if args.json {
