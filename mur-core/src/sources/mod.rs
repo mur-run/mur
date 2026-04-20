@@ -2,3 +2,4 @@
 pub mod types;
 pub mod kind;
 pub mod credentials;
+pub mod instance;
