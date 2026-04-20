@@ -87,7 +87,9 @@ pub async fn search(
     root_override: Option<&str>,
 ) -> Result<Vec<SearchResult>> {
     let idx = super::index::ConversationIndex::open(embedding.len() as i32, root_override).await?;
-    let vec_hits = idx.search(&embedding, limit * 3, source_filter).await?;
+    let vec_hits = idx
+        .search(&embedding, limit * 3, source_filter, None)
+        .await?;
 
     let q_lower = query.to_lowercase();
     let q_words: Vec<&str> = q_lower.split_whitespace().collect();

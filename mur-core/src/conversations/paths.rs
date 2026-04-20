@@ -9,8 +9,23 @@ use mur_common::Source;
 use std::path::PathBuf;
 
 /// Default mur root (`~/.mur`) or the override path for tests.
+///
+/// Resolution order:
+/// 1. Explicit `override_path` argument (used by internal tests that thread
+///    the root through function args).
+/// 2. `MUR_HOME` env var, if set and non-empty. Cross-platform escape hatch
+///    for CLI integration tests and power-user setups — on Windows the `dirs`
+///    crate uses the Win32 `SHGetKnownFolderPath` API, which **ignores**
+///    `HOME`/`USERPROFILE` overrides, so a dedicated env is needed to keep
+///    tests isolated from the host profile.
+/// 3. `dirs::home_dir()` joined with `.mur`.
 pub fn mur_root(override_path: Option<&str>) -> PathBuf {
     if let Some(p) = override_path {
+        return PathBuf::from(p);
+    }
+    if let Ok(p) = std::env::var("MUR_HOME")
+        && !p.is_empty()
+    {
         return PathBuf::from(p);
     }
     dirs::home_dir().expect("no home dir").join(".mur")
@@ -46,6 +61,14 @@ pub fn summary_paths_for(date: NaiveDate, override_path: Option<&str>) -> (PathB
     let root = summary_root(override_path);
     let d = date.format("%Y-%m-%d").to_string();
     (root.join(format!("{d}.md")), root.join(format!("{d}.yaml")))
+}
+
+/// Directory that holds previous versions of overwritten summaries.
+/// One file per rewrite: `<date>.<ISO-8601>.md`.
+pub fn summary_history_dir(root_override: Option<&str>) -> PathBuf {
+    conversations_root(root_override)
+        .join("summary")
+        .join(".history")
 }
 
 pub fn index_path(override_path: Option<&str>) -> PathBuf {
@@ -110,6 +133,15 @@ mod tests {
         assert_eq!(
             yml,
             std::path::PathBuf::from("/tmp/m/conversations/summary/2026-04-19.yaml")
+        );
+    }
+
+    #[test]
+    fn summary_history_dir_under_conversations() {
+        let p = summary_history_dir(Some("/tmp/mur-test"));
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/tmp/mur-test/conversations/summary/.history")
         );
     }
 }
