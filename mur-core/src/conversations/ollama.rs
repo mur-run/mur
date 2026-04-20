@@ -161,9 +161,17 @@ fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Serialize env-var mutation across the three tests below. Rust 2024 made
+    // set_var/remove_var unsafe precisely because the process env is shared
+    // across threads, and cargo test runs cases concurrently by default.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn mock_mode_extractive_returns_valid_json() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
         // Given: MUR_OLLAMA_MOCK=1, extractive prompt
         unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
         let client = OllamaClient::new("http://unused", Duration::from_secs(1));
@@ -181,7 +189,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn mock_mode_abstractive_returns_prose() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
         let client = OllamaClient::new("http://unused", Duration::from_secs(1));
         let req = GenerateRequest {
@@ -197,7 +207,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn real_call_errors_on_unreachable_endpoint() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
         // Use a deliberately-unroutable port so we get a fast failure
         let client = OllamaClient::new("http://127.0.0.1:1", Duration::from_millis(500));
