@@ -48,6 +48,14 @@ pub fn summary_paths_for(date: NaiveDate, override_path: Option<&str>) -> (PathB
     (root.join(format!("{d}.md")), root.join(format!("{d}.yaml")))
 }
 
+/// Directory that holds previous versions of overwritten summaries.
+/// One file per rewrite: `<date>.<ISO-8601>.md`.
+pub fn summary_history_dir(root_override: Option<&str>) -> PathBuf {
+    conversations_root(root_override)
+        .join("summary")
+        .join(".history")
+}
+
 pub fn index_path(override_path: Option<&str>) -> PathBuf {
     conversations_root(override_path).join("index.lance")
 }
@@ -110,6 +118,15 @@ mod tests {
         assert_eq!(
             yml,
             std::path::PathBuf::from("/tmp/m/conversations/summary/2026-04-19.yaml")
+        );
+    }
+
+    #[test]
+    fn summary_history_dir_under_conversations() {
+        let p = summary_history_dir(Some("/tmp/mur-test"));
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/tmp/mur-test/conversations/summary/.history")
         );
     }
 }
