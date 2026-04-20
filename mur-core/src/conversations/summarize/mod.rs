@@ -5,6 +5,7 @@
 //! `docs/superpowers/specs/2026-04-20-mur-conversations-phase-2-design.md`.
 #![allow(dead_code)] // public API wired progressively across Tasks 4-10.
 
+pub mod abstractive;
 pub mod chunker;
 pub mod extractive;
-// Later tasks add: pub mod abstractive; pub mod macro_refs; pub mod writer;
+// Later tasks add: pub mod macro_refs; pub mod writer;
