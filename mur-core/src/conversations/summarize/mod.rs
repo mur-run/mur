@@ -322,6 +322,113 @@ fn top_keywords(spans: &[extractive::ExtractiveSpan], n: usize) -> Vec<String> {
     ranked.into_iter().take(n).map(|(k, _)| k).collect()
 }
 
+pub struct ParsedSummary {
+    pub date: NaiveDate,
+    pub frontmatter: serde_yaml::Value,
+    pub extractive: Vec<ParsedSpan>,
+    pub narrative: String,
+    pub pattern_refs: Vec<String>, // names only, full meta in frontmatter
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedSpan {
+    pub span_index: u32,
+    pub src: String, // file_prefix
+    pub conv_id: String,
+    pub line_hint: u32,
+    pub text: String,
+}
+
+pub fn parse_summary(md: &str) -> Result<ParsedSummary> {
+    let (frontmatter, body) = split_frontmatter(md)?;
+    let fm: serde_yaml::Value = serde_yaml::from_str(frontmatter)?;
+    let date_str = fm
+        .get("date")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing date"))?;
+    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")?;
+
+    let extractive = parse_extractive_section(body);
+    let narrative = parse_narrative_section(body);
+    let pattern_refs = fm
+        .get("pattern_refs")
+        .and_then(|v| v.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|e| e.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(ParsedSummary {
+        date,
+        frontmatter: fm,
+        extractive,
+        narrative,
+        pattern_refs,
+    })
+}
+
+fn split_frontmatter(md: &str) -> Result<(&str, &str)> {
+    let body = md
+        .strip_prefix("---\n")
+        .ok_or_else(|| anyhow::anyhow!("no frontmatter"))?;
+    let end = body
+        .find("\n---\n")
+        .ok_or_else(|| anyhow::anyhow!("unterminated frontmatter"))?;
+    let fm = &body[..end];
+    let rest = &body[end + 5..];
+    Ok((fm, rest))
+}
+
+fn parse_extractive_section(body: &str) -> Vec<ParsedSpan> {
+    let mut out = Vec::new();
+    let span_re =
+        regex::Regex::new(r"(?ms)^\[(\d+)\] _\{([^/]+)/([^ ]+) @L(\d+)\}_:\n((?:> [^\n]*\n?)+)")
+            .unwrap();
+    let ext_start = body.find("## Extractive spans").unwrap_or(0);
+    let ext_end = body[ext_start..]
+        .find("\n## ")
+        .map(|i| ext_start + i)
+        .unwrap_or(body.len());
+    let section = &body[ext_start..ext_end];
+    for cap in span_re.captures_iter(section) {
+        let idx: u32 = cap[1].parse().unwrap_or(0);
+        let src = cap[2].to_string();
+        let conv = cap[3].to_string();
+        let line: u32 = cap[4].parse().unwrap_or(0);
+        let quoted = &cap[5];
+        #[allow(clippy::useless_vec)]
+        let text: String = quoted
+            .lines()
+            .map(|l| l.trim_start_matches("> ").trim_start_matches('>'))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string();
+        out.push(ParsedSpan {
+            span_index: idx,
+            src,
+            conv_id: conv,
+            line_hint: line,
+            text,
+        });
+    }
+    out
+}
+
+fn parse_narrative_section(body: &str) -> String {
+    let narr_start = body
+        .find("## Abstractive narrative")
+        .map(|i| i + "## Abstractive narrative".len())
+        .unwrap_or(0);
+    let narr_end = body[narr_start..]
+        .find("\n## ")
+        .map(|i| narr_start + i)
+        .unwrap_or(body.len());
+    body[narr_start..narr_end].trim().to_string()
+}
+
 #[cfg(test)]
 mod orch_tests {
     use super::*;
@@ -478,5 +585,46 @@ mod orch_tests {
             narrative_slice.lines().next().unwrap_or("")
         );
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[test]
+    fn parse_roundtrip_reads_frontmatter_and_body() {
+        let markdown = r#"---
+schema: 1
+date: 2026-04-19
+generated_at: 2026-04-19T03:00:00Z
+generated_by:
+  extractive_model: qwen3:14b
+  abstractive_model: qwen3:14b
+  mur_version: 2.4.0
+duration_ms: 100
+conv_count: 1
+msg_count: 2
+sources: [cc]
+pattern_refs: []
+keywords: [test]
+links:
+  prev: null
+  next: null
+warnings: []
+input_content_sha: abc123
+---
+
+## Extractive spans
+
+[1] _{cc/c1 @L1}_:
+> hello
+
+## Abstractive narrative
+
+Today was a test.
+"#;
+        let parsed = parse_summary(markdown).unwrap();
+        assert_eq!(parsed.date, NaiveDate::from_ymd_opt(2026, 4, 19).unwrap());
+        assert_eq!(parsed.extractive.len(), 1);
+        assert_eq!(parsed.extractive[0].conv_id, "c1");
+        assert_eq!(parsed.extractive[0].line_hint, 1);
+        assert_eq!(parsed.extractive[0].text, "hello");
+        assert!(parsed.narrative.contains("Today was a test"));
     }
 }
