@@ -203,7 +203,7 @@ pub async fn cmd_conversations_reindex() -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_conversations_doctor() -> Result<()> {
+pub async fn cmd_conversations_doctor() -> Result<()> {
     println!("conversations doctor");
     let dirs = conversations::store::list_raw_dirs(None).unwrap_or_default();
     println!("  ✓ raw day-dirs: {}", dirs.len());
@@ -216,6 +216,70 @@ pub fn cmd_conversations_doctor() -> Result<()> {
         "  {} conversations.enabled",
         if enabled { "✓" } else { "·" }
     );
+
+    // Phase 2A additions
+    let raw_dir = conversations::paths::raw_root(None);
+    let summary_dir = conversations::paths::conversations_root(None).join("summary");
+    let raw_days: Vec<_> = std::fs::read_dir(&raw_dir)
+        .ok()
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let summary_count = std::fs::read_dir(&summary_dir)
+        .ok()
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s == "md")
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0);
+
+    let today = chrono::Utc::now().date_naive();
+    let completed_days: Vec<&String> = raw_days
+        .iter()
+        .filter(|d| {
+            chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                .map(|pd| pd < today)
+                .unwrap_or(false)
+        })
+        .collect();
+    let missing = completed_days.len().saturating_sub(summary_count);
+    if missing == 0 {
+        println!("  ✓ summaries: all {summary_count} completed days covered");
+    } else {
+        println!(
+            "  ⚠ summaries: {summary_count} of {} completed days covered — run 'mur conversations compact'",
+            completed_days.len()
+        );
+    }
+
+    // Ollama reachability (non-blocking 1s probe)
+    let cfg = crate::store::config::load_config().unwrap_or_default();
+    let endpoint = cfg.conversations.compact.ollama_endpoint.clone();
+    let reachable = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        reqwest::get(format!("{}/api/tags", endpoint.trim_end_matches('/'))),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .map(|r| r.status().is_success())
+    .unwrap_or(false);
+    if reachable {
+        println!("  ✓ Ollama reachable at {endpoint}");
+    } else {
+        println!("  · Ollama not reachable at {endpoint} (compact + ask will degrade)");
+    }
+
     Ok(())
 }
 
@@ -379,4 +443,66 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         format!("{}…", c.iter().take(max).collect::<String>())
     }
+}
+
+pub struct CompactArgs {
+    pub date: Option<String>,
+    pub since: Option<String>,
+    pub force: bool,
+    pub if_stale: bool,
+    pub max_days: Option<u32>,
+    pub extractive_only: bool,
+    pub debug_prompt: bool,
+}
+
+pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
+    use crate::conversations::summarize;
+    use chrono::NaiveDate;
+
+    let config = crate::store::config::load_config().unwrap_or_default();
+    let mut cfg = config.conversations.compact.clone();
+
+    if args.extractive_only {
+        // Crude guard rail: no abstractive model.
+        cfg.abstractive_model = String::new();
+    }
+    if args.debug_prompt {
+        eprintln!("(debug_prompt not yet wired to individual stages; enabling in Phase 2C)");
+    }
+
+    if let Some(d) = args.date {
+        let date = NaiveDate::parse_from_str(&d, "%Y-%m-%d")?;
+        let force = args.force || args.if_stale;
+        let r = summarize::compact_day(date, force, &cfg, None).await?;
+        println!(
+            "{date}: {:?} ({} spans, {}ms)",
+            r.outcome, r.extractive_spans, r.duration_ms
+        );
+        return Ok(());
+    }
+
+    let since = args
+        .since
+        .as_deref()
+        .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+        .transpose()?;
+
+    let report =
+        summarize::compact_missing(&cfg, since, args.if_stale, args.max_days, None).await?;
+
+    if report.day_reports.is_empty() {
+        println!("(nothing to compact)");
+        return Ok(());
+    }
+    for r in &report.day_reports {
+        println!(
+            "  {} {:?} ({} spans, {}ms)",
+            r.date, r.outcome, r.extractive_spans, r.duration_ms
+        );
+    }
+    println!(
+        "done: {} ok, {} failed, {} skipped",
+        report.ok, report.err, report.skipped
+    );
+    Ok(())
 }

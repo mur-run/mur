@@ -68,7 +68,22 @@ impl ConversationIndex {
         ])
     }
 
-    pub async fn upsert(&mut self, entries: &[(Message, Vec<f32>)]) -> Result<()> {
+    /// Upsert with an explicit `layer` value per entry. Phase 2A uses this for
+    /// summary rows (layer=1); existing raw writes continue via `upsert()`
+    /// which keeps layer=0 for backward compatibility.
+    pub async fn upsert_with_layer(&mut self, entries: &[(Message, Vec<f32>, i8)]) -> Result<()> {
+        self.upsert_internal(entries).await
+    }
+
+    pub async fn upsert(&mut self, batch: &[(Message, Vec<f32>)]) -> Result<()> {
+        let with_layer: Vec<(Message, Vec<f32>, i8)> = batch
+            .iter()
+            .map(|(m, v)| (m.clone(), v.clone(), 0))
+            .collect();
+        self.upsert_internal(&with_layer).await
+    }
+
+    async fn upsert_internal(&mut self, entries: &[(Message, Vec<f32>, i8)]) -> Result<()> {
         let _span = info_span!("conversations.index.upsert", count = entries.len()).entered();
         if entries.is_empty() {
             return Ok(());
@@ -79,30 +94,33 @@ impl ConversationIndex {
         let ids: Vec<String> = entries
             .iter()
             .enumerate()
-            .map(|(i, (m, _))| format!("{}_{}_{}", m.src.file_prefix(), m.conv, i))
+            .map(|(i, (m, _, _))| format!("{}_{}_{}", m.src.file_prefix(), m.conv, i))
             .collect();
-        let tss: Vec<i64> = entries.iter().map(|(m, _)| m.ts.timestamp()).collect();
-        let srcs: Vec<&str> = entries.iter().map(|(m, _)| m.src.file_prefix()).collect();
-        let convs: Vec<&str> = entries.iter().map(|(m, _)| m.conv.as_str()).collect();
+        let tss: Vec<i64> = entries.iter().map(|(m, _, _)| m.ts.timestamp()).collect();
+        let srcs: Vec<&str> = entries
+            .iter()
+            .map(|(m, _, _)| m.src.file_prefix())
+            .collect();
+        let convs: Vec<&str> = entries.iter().map(|(m, _, _)| m.conv.as_str()).collect();
         let roles: Vec<&'static str> = entries
             .iter()
-            .map(|(m, _)| match m.role {
+            .map(|(m, _, _)| match m.role {
                 mur_common::Role::User => "user",
                 mur_common::Role::Assistant => "assistant",
                 mur_common::Role::System => "system",
                 mur_common::Role::Tool => "tool",
             })
             .collect();
-        let layers: Vec<i8> = entries.iter().map(|_| 0_i8).collect();
+        let layers: Vec<i8> = entries.iter().map(|(_, _, l)| *l).collect();
         let contents: Vec<String> = entries
             .iter()
-            .map(|(m, _)| m.content.as_text().to_owned())
+            .map(|(m, _, _)| m.content.as_text().to_owned())
             .collect();
         let content_refs: Vec<&str> = contents.iter().map(|s| s.as_str()).collect();
 
         let flat: Vec<f32> = entries
             .iter()
-            .flat_map(|(_, v)| v.iter().copied())
+            .flat_map(|(_, v, _)| v.iter().copied())
             .collect();
         let vec_arr = FixedSizeListArray::try_new(
             Arc::new(Field::new("item", DataType::Float32, true)),
@@ -149,11 +167,13 @@ impl ConversationIndex {
         query_vec: &[f32],
         limit: usize,
         source_filter: Option<Source>,
+        layer: Option<i8>,
     ) -> Result<Vec<SearchHit>> {
         let _span = info_span!(
             "conversations.index.search",
             k = limit,
-            source = ?source_filter
+            source = ?source_filter,
+            layer = ?layer
         )
         .entered();
         let tables = self.db.table_names().execute().await?;
@@ -162,9 +182,15 @@ impl ConversationIndex {
         }
         let table = self.db.open_table(TABLE).execute().await?;
         let mut q = table.query().nearest_to(query_vec)?.limit(limit);
-        if let Some(s) = source_filter {
-            q = q.only_if(format!("source = '{}'", s.file_prefix()));
+
+        let predicates: Vec<String> = std::iter::empty::<String>()
+            .chain(source_filter.map(|s| format!("source = '{}'", s.file_prefix())))
+            .chain(layer.map(|l| format!("layer = {l}")))
+            .collect();
+        if !predicates.is_empty() {
+            q = q.only_if(predicates.join(" AND "));
         }
+
         let stream = q.execute().await?;
         let batches: Vec<RecordBatch> = stream.try_collect().await?;
         let mut out = Vec::new();
@@ -272,7 +298,7 @@ mod tests {
             (msg("b", "yaml parsing worked"), vec![0.0; 16]),
         ];
         idx.upsert(&entries).await.unwrap();
-        let hits = idx.search(&[1.0; 16], 2, None).await.unwrap();
+        let hits = idx.search(&[1.0; 16], 2, None, None).await.unwrap();
         assert!(!hits.is_empty());
         assert_eq!(hits[0].conv_id, "a");
     }
@@ -289,9 +315,36 @@ mod tests {
             .await
             .unwrap();
         let hits = idx
-            .search(&[1.0; 16], 10, Some(Source::Slack))
+            .search(&[1.0; 16], 10, Some(Source::Slack), None)
             .await
             .unwrap();
         assert!(hits.iter().all(|h| h.source == Source::Slack));
+    }
+
+    #[tokio::test]
+    async fn search_filters_by_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = ConversationIndex::open(16, Some(root)).await.unwrap();
+
+        let a = msg("a", "layer zero item"); // raw → layer 0
+        let b = msg("b", "layer one item"); // summary → layer 1
+        idx.upsert_with_layer(&[(a, vec![1.0; 16], 0)])
+            .await
+            .unwrap();
+        idx.upsert_with_layer(&[(b, vec![1.0; 16], 1)])
+            .await
+            .unwrap();
+
+        let hits_all = idx.search(&[1.0; 16], 10, None, None).await.unwrap();
+        assert_eq!(hits_all.len(), 2);
+
+        let hits_l1 = idx.search(&[1.0; 16], 10, None, Some(1)).await.unwrap();
+        assert_eq!(hits_l1.len(), 1);
+        assert_eq!(hits_l1[0].conv_id, "b");
+
+        let hits_l0 = idx.search(&[1.0; 16], 10, None, Some(0)).await.unwrap();
+        assert_eq!(hits_l0.len(), 1);
+        assert_eq!(hits_l0[0].conv_id, "a");
     }
 }
