@@ -246,6 +246,8 @@ pub struct ConversationsConfig {
     pub sources: ConversationsSources,
     #[serde(default)]
     pub filter: ConversationsFilter,
+    #[serde(default)]
+    pub compact: CompactConfig,
 }
 
 impl Default for ConversationsConfig {
@@ -256,6 +258,7 @@ impl Default for ConversationsConfig {
             poll_interval_secs: conv_default_poll_interval(),
             sources: ConversationsSources::default(),
             filter: ConversationsFilter::default(),
+            compact: CompactConfig::default(),
         }
     }
 }
@@ -271,6 +274,72 @@ fn conv_truthy() -> bool {
 }
 fn conv_default_dedup() -> f64 {
     0.85
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactConfig {
+    #[serde(default = "conv_truthy")]
+    pub enabled_in_daemon: bool,
+    #[serde(default = "compact_default_max_days")]
+    pub max_days_per_run: u32,
+    #[serde(default = "compact_default_model")]
+    pub extractive_model: String,
+    #[serde(default = "compact_default_model")]
+    pub abstractive_model: String,
+    #[serde(default = "compact_default_ollama_endpoint")]
+    pub ollama_endpoint: String,
+    #[serde(default = "compact_default_max_spans")]
+    pub max_extractive_spans: u32,
+    #[serde(default = "compact_default_max_words")]
+    pub max_abstractive_words: u32,
+    #[serde(default = "compact_default_chunk_tokens")]
+    pub chunk_tokens: u32,
+    #[serde(default = "compact_default_history_retain")]
+    pub history_retain: u32,
+    #[serde(default = "compact_default_cron")]
+    pub daemon_cron: String,
+}
+
+impl Default for CompactConfig {
+    fn default() -> Self {
+        Self {
+            enabled_in_daemon: true,
+            max_days_per_run: compact_default_max_days(),
+            extractive_model: compact_default_model(),
+            abstractive_model: compact_default_model(),
+            ollama_endpoint: compact_default_ollama_endpoint(),
+            max_extractive_spans: compact_default_max_spans(),
+            max_abstractive_words: compact_default_max_words(),
+            chunk_tokens: compact_default_chunk_tokens(),
+            history_retain: compact_default_history_retain(),
+            daemon_cron: compact_default_cron(),
+        }
+    }
+}
+
+fn compact_default_max_days() -> u32 {
+    7
+}
+fn compact_default_model() -> String {
+    "qwen3:14b".into()
+}
+fn compact_default_ollama_endpoint() -> String {
+    "http://localhost:11434".into()
+}
+fn compact_default_max_spans() -> u32 {
+    20
+}
+fn compact_default_max_words() -> u32 {
+    400
+}
+fn compact_default_chunk_tokens() -> u32 {
+    6000
+}
+fn compact_default_history_retain() -> u32 {
+    5
+}
+fn compact_default_cron() -> String {
+    "0 3 * * *".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -394,5 +463,36 @@ foo: bar
             .map(|x| serde_yaml::from_value(x).unwrap_or_default())
             .unwrap_or_default();
         assert_eq!(conv.retention_days, 30);
+    }
+
+    #[test]
+    fn compact_config_defaults() {
+        let c = CompactConfig::default();
+        assert!(c.enabled_in_daemon);
+        assert_eq!(c.max_days_per_run, 7);
+        assert_eq!(c.extractive_model, "qwen3:14b");
+        assert_eq!(c.abstractive_model, "qwen3:14b");
+        assert_eq!(c.ollama_endpoint, "http://localhost:11434");
+        assert_eq!(c.max_extractive_spans, 20);
+        assert_eq!(c.max_abstractive_words, 400);
+        assert_eq!(c.chunk_tokens, 6000);
+        assert_eq!(c.history_retain, 5);
+        assert_eq!(c.daemon_cron, "0 3 * * *");
+    }
+
+    #[test]
+    fn compact_parses_partial_overrides() {
+        let y = r#"
+conversations:
+  compact:
+    max_days_per_run: 3
+    extractive_model: qwen3:4b
+"#;
+        let v: serde_yaml::Value = serde_yaml::from_str(y).unwrap();
+        let conv: ConversationsConfig = serde_yaml::from_value(v["conversations"].clone()).unwrap();
+        assert_eq!(conv.compact.max_days_per_run, 3);
+        assert_eq!(conv.compact.extractive_model, "qwen3:4b");
+        assert!(conv.compact.enabled_in_daemon); // default preserved
+        assert_eq!(conv.compact.abstractive_model, "qwen3:14b"); // default preserved
     }
 }
