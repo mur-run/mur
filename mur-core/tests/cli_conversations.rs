@@ -122,3 +122,18 @@ fn mur_ask_on_empty_archive_returns_fallback() {
         "expected fallback text, got: {stdout}"
     );
 }
+
+#[test]
+fn mur_conversations_preflight_runs_without_ollama() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mur"));
+    let (cmd, _mur_home) = with_mur_home(cmd.args(["conversations", "preflight"]), tmp.path());
+    let out = cmd.output().expect("run mur");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Preflight may exit non-zero when Ollama is unreachable (CI has no Ollama).
+    // What we assert: the new probes ran and reported lines for them.
+    assert!(
+        stdout.contains("Ollama") && stdout.contains("free mem"),
+        "expected Phase 2C probes in output. stdout: {stdout}"
+    );
+}

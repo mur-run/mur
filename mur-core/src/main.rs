@@ -1081,7 +1081,7 @@ async fn async_main() -> Result<()> {
                 cmd::conversations_cmd::cmd_conversations_doctor().await?
             }
             ConversationsAction::Preflight => {
-                cmd::conversations_cmd::cmd_conversations_preflight()?
+                cmd::conversations_cmd::cmd_conversations_preflight().await?
             }
             ConversationsAction::Migrate {
                 run,
