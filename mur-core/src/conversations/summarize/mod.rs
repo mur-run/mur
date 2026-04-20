@@ -183,32 +183,63 @@ pub async fn compact_day(
 
     // Summary embedding: use a deterministic zero vector when MUR_OLLAMA_MOCK=1;
     // otherwise call the configured embedding provider via existing pipeline.
+    // Also batch-embed all extractive spans for layer=2 upsert.
     let embed_dims = 1024_usize; // default; Phase 3 can read from cfg
-    let summary_embedding = if OllamaClient::mock_from_env() {
-        vec![0.1; embed_dims]
-    } else {
-        let text = doc
-            .abstractive
-            .narrative
-            .as_deref()
-            .unwrap_or("")
-            .to_string();
-        // Load global config to pick up embedding provider/model/dims.
-        // If loading fails (no ~/.mur/config.yaml yet), fall back to a zero vector;
-        // LanceDB row still writes, retrieve reranking just won't benefit from
-        // semantic similarity until a user config exists or `mur reindex` is run.
-        match crate::store::config::load_config() {
-            Ok(cfg) => {
-                let embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg);
-                crate::store::embedding::embed(&text, &embed_cfg)
+    let (summary_embedding, span_embeddings) = match super::ollama::mock_mode() {
+        Some(mode) => {
+            let s = super::ollama::mock_embed_vector(
+                doc.abstractive.narrative.as_deref().unwrap_or(""),
+                mode,
+                embed_dims,
+            );
+            let spans: Vec<Vec<f32>> = doc
+                .extractive
+                .iter()
+                .map(|sp| super::ollama::mock_embed_vector(&sp.text, mode, embed_dims))
+                .collect();
+            (s, spans)
+        }
+        None => {
+            let text = doc
+                .abstractive
+                .narrative
+                .as_deref()
+                .unwrap_or("")
+                .to_string();
+            let cfg_loaded = crate::store::config::load_config().ok();
+            let embed_cfg = cfg_loaded
+                .as_ref()
+                .map(crate::store::embedding::EmbeddingConfig::from_config);
+            let s = match &embed_cfg {
+                Some(ec) => crate::store::embedding::embed(&text, ec)
                     .await
-                    .unwrap_or_else(|_| vec![0.0; embed_dims])
-            }
-            Err(_) => vec![0.0; embed_dims],
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("narrative embedding failed: {e:#}");
+                        vec![0.0; embed_dims]
+                    }),
+                None => vec![0.0; embed_dims],
+            };
+            let spans: Vec<Vec<f32>> = if doc.extractive.is_empty() {
+                Vec::new()
+            } else if let Some(ec) = &embed_cfg {
+                let texts: Vec<String> = doc.extractive.iter().map(|sp| sp.text.clone()).collect();
+                crate::store::embedding::embed_batch(&texts, ec)
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("span embedding failed: {e:#}");
+                        texts.iter().map(|_| vec![0.0; embed_dims]).collect()
+                    })
+            } else {
+                doc.extractive
+                    .iter()
+                    .map(|_| vec![0.0; embed_dims])
+                    .collect()
+            };
+            (s, spans)
         }
     };
 
-    match writer::write_summary(&doc, summary_embedding, Vec::new(), root_override).await {
+    match writer::write_summary(&doc, summary_embedding, span_embeddings, root_override).await {
         Ok(w) => Ok(DayReport {
             date,
             outcome: if w.noop {
@@ -626,5 +657,42 @@ Today was a test.
         assert_eq!(parsed.extractive[0].line_hint, 1);
         assert_eq!(parsed.extractive[0].text, "hello");
         assert!(parsed.narrative.contains("Today was a test"));
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn compact_day_writes_both_narrative_and_span_rows() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let date = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
+        // Note: mock extractive returns conv_id="mock", so we seed with that conv.
+        let ts = chrono::Utc
+            .with_ymd_and_hms(date.year(), date.month(), date.day(), 10, 0, 0)
+            .unwrap();
+        let m = Message {
+            v: 1,
+            ts,
+            src: Source::ClaudeCode,
+            conv: "mock".into(), // Must match mock extractive response
+            role: Role::User,
+            content: Content::Text {
+                value: "mock extractive span".into(),
+            },
+            meta: serde_json::Value::Null,
+            refs: vec![],
+        };
+        store::append(&m, Some(root)).unwrap();
+        let r = compact_day(date, false, &cfg(), Some(root)).await.unwrap();
+        assert!(matches!(r.outcome, Outcome::Written { .. }));
+        let idx = crate::conversations::index::ConversationIndex::open(1024, Some(root))
+            .await
+            .unwrap();
+        let layer1_count = idx.count_rows_at_layer(1).await.unwrap();
+        let layer2_count = idx.count_rows_at_layer(2).await.unwrap();
+        assert_eq!(layer1_count, 1, "one narrative row");
+        assert!(layer2_count >= 1, "at least one span row");
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }
