@@ -96,5 +96,37 @@ printf -- '---\ndate: %s\n---\n# old\n' "$OLD" > "$TMPHOME/.mur/conversations/su
 grep -q "deleted 1" /tmp/gp-out-8.txt || { echo "FAIL: cleanup should have deleted old day"; exit 1; }
 [[ ! -d "$TMPHOME/.mur/conversations/raw/$OLD" ]] || { echo "FAIL: old raw dir still exists"; exit 1; }
 
+# ── Step 9: compact ───────────────────────────────────────────────────────
+# Seed yesterday's raw so compact has something to process
+# (compact_missing only scans days < today per design).
+YDAY="$(date -u -v-1d +%Y-%m-%d 2>/dev/null || date -u -d 'yesterday' +%Y-%m-%d)"
+mkdir -p "$TMPHOME/.mur/conversations/raw/$YDAY"
+cat > "$TMPHOME/.mur/conversations/raw/$YDAY/cc_yd.jsonl" <<JSONL
+{"v":1,"ts":"${YDAY}T10:00:00Z","src":"claude-code","conv":"yd","role":"user","content":{"t":"text","v":"mock extractive span seeded for compact golden-path"},"meta":{},"refs":[]}
+JSONL
+
+echo "--- step 9: mur conversations compact ---"
+MUR_OLLAMA_MOCK=1 "$MUR" conversations compact | tee /tmp/gp-out-9.txt
+test -f "$TMPHOME/.mur/conversations/summary/${YDAY}.md" \
+  || { echo "FAIL step 9: no summary/${YDAY}.md"; exit 1; }
+grep -q "## Extractive spans" "$TMPHOME/.mur/conversations/summary/${YDAY}.md" \
+  || { echo "FAIL step 9: summary missing Extractive section"; exit 1; }
+grep -q "## Abstractive narrative" "$TMPHOME/.mur/conversations/summary/${YDAY}.md" \
+  || { echo "FAIL step 9: summary missing Narrative section"; exit 1; }
+
+# ── Step 10: ask ──────────────────────────────────────────────────────────
+echo "--- step 10: mur ask --json ---"
+MUR_OLLAMA_MOCK=1 "$MUR" ask "what compression techniques did I discuss" --json > /tmp/gp-step-10.json
+cat /tmp/gp-step-10.json
+# The mock ollama answer contains a [cit: 2026-04-19 claude-code/mock:L1] anchor
+# that the grounding filter will strip (it's not one of the real valid anchors
+# from prompt::render). So we verify:
+#   - the command succeeded and wrote JSON
+#   - the response has at least one HitInfo (real retrieval happened)
+jq -e '.hits_used | length >= 1' /tmp/gp-step-10.json \
+  || { echo "FAIL step 10: no hits_used — retrieval did not fire"; exit 1; }
+jq -e '.answer | type == "string"' /tmp/gp-step-10.json \
+  || { echo "FAIL step 10: missing or non-string .answer"; exit 1; }
+
 echo ""
-echo "=== ALL 8 STEPS GREEN ==="
+echo "=== ALL 10 STEPS GREEN ==="

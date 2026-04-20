@@ -101,3 +101,24 @@ fn mur_conversations_compact_on_seeded_day_produces_summary() {
     assert!(body.contains("## Extractive spans"));
     assert!(body.contains("## Abstractive narrative"));
 }
+
+#[test]
+fn mur_ask_on_empty_archive_returns_fallback() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mur"));
+    let (cmd, _mur_home) = with_mur_home(
+        cmd.args(["ask", "What did we build yesterday?"]),
+        tmp.path(),
+    );
+    let out = cmd.env("MUR_OLLAMA_MOCK", "1").output().expect("run mur");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("don't cover that"),
+        "expected fallback text, got: {stdout}"
+    );
+}

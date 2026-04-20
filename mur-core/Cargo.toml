@@ -39,6 +39,7 @@ lancedb = "0.26"
 arrow-array = "57"
 arrow-schema = "57"
 futures = "0.3"
+async-stream = "0.3"
 tokio-util = "0.7"
 
 # Phase 0: local API server (optional, behind "server" feature)

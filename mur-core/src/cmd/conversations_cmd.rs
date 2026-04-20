@@ -455,6 +455,19 @@ pub struct CompactArgs {
     pub debug_prompt: bool,
 }
 
+pub struct AskArgs {
+    pub question: String,
+    pub src: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub k: usize,
+    pub model: Option<String>,
+    pub min_score: Option<f64>,
+    pub json: bool,
+    pub no_escalate: bool,
+    pub debug_prompt: bool,
+}
+
 pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
     use crate::conversations::summarize;
     use chrono::NaiveDate;
@@ -504,5 +517,106 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
         "done: {} ok, {} failed, {} skipped",
         report.ok, report.err, report.skipped
     );
+    Ok(())
+}
+
+pub async fn cmd_ask(args: AskArgs) -> Result<()> {
+    use crate::conversations::ask;
+    use chrono::NaiveDate;
+    use futures::StreamExt;
+    use std::io::Write;
+
+    let cfg = crate::store::config::load_config().unwrap_or_default();
+    let ask_cfg = cfg.conversations.ask.clone();
+    let model = args.model.unwrap_or_else(|| ask_cfg.model.clone());
+
+    let sources = args.src.as_deref().map(parse_sources).unwrap_or_default();
+
+    let filters = ask::Filters {
+        source: sources,
+        since: args
+            .since
+            .as_deref()
+            .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+            .transpose()?,
+        until: args
+            .until
+            .as_deref()
+            .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+            .transpose()?,
+        min_score: args.min_score.unwrap_or(ask_cfg.min_score),
+    };
+
+    let req = ask::AskRequest {
+        question: args.question.clone(),
+        filters,
+        k_summary: args.k,
+        k_raw: args.k * 2,
+        escalation_threshold: ask_cfg.escalation_threshold,
+        mmr_threshold: ask_cfg.mmr_threshold,
+        model,
+        endpoint: ask_cfg.ollama_endpoint.clone(),
+        format: if args.json {
+            ask::Format::Json
+        } else {
+            ask::Format::Plain
+        },
+        max_context_tokens: ask_cfg.max_context_tokens as usize,
+        response_tokens: ask_cfg.response_tokens as usize,
+        timeout: std::time::Duration::from_secs(ask_cfg.timeout_secs as u64),
+        no_escalate: args.no_escalate,
+        debug_prompt: args.debug_prompt,
+    };
+
+    if args.json {
+        let resp = ask::ask(req, None).await?;
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        let mut stream = ask::ask_stream(req, None).await?;
+        let mut citations = Vec::new();
+        let mut degraded = false;
+        let mut tokens_in = 0;
+        let mut tokens_out = 0;
+        let mut duration = 0;
+        while let Some(evt) = stream.next().await {
+            match evt? {
+                ask::AskEvent::Token(t) => {
+                    print!("{t}");
+                    std::io::stdout().flush()?;
+                }
+                ask::AskEvent::Citation(c) => citations.push(c),
+                ask::AskEvent::HitInfo(_) => {}
+                ask::AskEvent::Done {
+                    tokens_in: ti,
+                    tokens_out: to,
+                    degraded: d,
+                    duration_ms,
+                } => {
+                    tokens_in = ti;
+                    tokens_out = to;
+                    degraded = d;
+                    duration = duration_ms;
+                }
+                ask::AskEvent::Error(e) => {
+                    eprintln!("\nerror: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        println!();
+        print!(
+            "{}{}",
+            crate::conversations::ask::format::render_citations_block(&citations),
+            crate::conversations::ask::format::render_footer(&ask::AskResponse {
+                answer: String::new(),
+                citations: citations.clone(),
+                hits_used: vec![],
+                degraded_to_mode_b: degraded,
+                tokens_in,
+                tokens_out,
+                duration_ms: duration,
+            }),
+        );
+    }
     Ok(())
 }

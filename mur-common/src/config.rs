@@ -226,6 +226,77 @@ fn default_server_url() -> String {
     "https://mur-server.fly.dev".to_string()
 }
 
+// ── Ask config (Phase 2B, Task 18) ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AskConfig {
+    #[serde(default = "ask_default_model")]
+    pub model: String,
+    #[serde(default = "compact_default_ollama_endpoint")]
+    pub ollama_endpoint: String,
+    #[serde(default = "ask_default_k_summary")]
+    pub k_summary: u32,
+    #[serde(default = "ask_default_k_raw")]
+    pub k_raw: u32,
+    #[serde(default = "ask_default_esc")]
+    pub escalation_threshold: f64,
+    #[serde(default = "ask_default_mmr")]
+    pub mmr_threshold: f64,
+    #[serde(default = "ask_default_max_ctx")]
+    pub max_context_tokens: u32,
+    #[serde(default = "ask_default_resp_tok")]
+    pub response_tokens: u32,
+    #[serde(default = "ask_default_timeout")]
+    pub timeout_secs: u32,
+    #[serde(default = "ask_default_min_score")]
+    pub min_score: f64,
+}
+
+impl Default for AskConfig {
+    fn default() -> Self {
+        Self {
+            model: ask_default_model(),
+            ollama_endpoint: compact_default_ollama_endpoint(),
+            k_summary: ask_default_k_summary(),
+            k_raw: ask_default_k_raw(),
+            escalation_threshold: ask_default_esc(),
+            mmr_threshold: ask_default_mmr(),
+            max_context_tokens: ask_default_max_ctx(),
+            response_tokens: ask_default_resp_tok(),
+            timeout_secs: ask_default_timeout(),
+            min_score: ask_default_min_score(),
+        }
+    }
+}
+
+fn ask_default_model() -> String {
+    "qwen3:14b".into()
+}
+fn ask_default_k_summary() -> u32 {
+    5
+}
+fn ask_default_k_raw() -> u32 {
+    10
+}
+fn ask_default_esc() -> f64 {
+    0.5
+}
+fn ask_default_mmr() -> f64 {
+    0.85
+}
+fn ask_default_max_ctx() -> u32 {
+    6000
+}
+fn ask_default_resp_tok() -> u32 {
+    1024
+}
+fn ask_default_timeout() -> u32 {
+    120
+}
+fn ask_default_min_score() -> f64 {
+    0.35
+}
+
 // ── Conversations archive config (Task 23) ────────────────────────────────────
 
 /// Phase 1 conversations archive config (Task 23).
@@ -248,6 +319,8 @@ pub struct ConversationsConfig {
     pub filter: ConversationsFilter,
     #[serde(default)]
     pub compact: CompactConfig,
+    #[serde(default)]
+    pub ask: AskConfig,
 }
 
 impl Default for ConversationsConfig {
@@ -259,6 +332,7 @@ impl Default for ConversationsConfig {
             sources: ConversationsSources::default(),
             filter: ConversationsFilter::default(),
             compact: CompactConfig::default(),
+            ask: AskConfig::default(),
         }
     }
 }
@@ -494,5 +568,20 @@ conversations:
         assert_eq!(conv.compact.extractive_model, "qwen3:4b");
         assert!(conv.compact.enabled_in_daemon); // default preserved
         assert_eq!(conv.compact.abstractive_model, "qwen3:14b"); // default preserved
+    }
+
+    #[test]
+    fn ask_config_defaults() {
+        let c = AskConfig::default();
+        assert_eq!(c.model, "qwen3:14b");
+        assert_eq!(c.ollama_endpoint, "http://localhost:11434");
+        assert_eq!(c.k_summary, 5);
+        assert_eq!(c.k_raw, 10);
+        assert_eq!(c.escalation_threshold, 0.5);
+        assert_eq!(c.mmr_threshold, 0.85);
+        assert_eq!(c.max_context_tokens, 6000);
+        assert_eq!(c.response_tokens, 1024);
+        assert_eq!(c.timeout_secs, 120);
+        assert_eq!(c.min_score, 0.35);
     }
 }
