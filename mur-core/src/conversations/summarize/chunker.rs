@@ -23,7 +23,8 @@ pub fn chunk_day(msgs: &[Message], token_budget: usize) -> Vec<Chunk> {
 
     // Precompute token cost per message and its day-wide line index (1-based,
     // matches the extractive prompt's L<N> convention).
-    let msg_costs: Vec<usize> = msgs.iter().map(message_token_cost).collect();
+    #[allow(clippy::redundant_closure)]
+    let msg_costs: Vec<usize> = msgs.iter().map(|m| message_token_cost(m)).collect();
 
     let mut out = Vec::new();
     let mut current: Vec<usize> = Vec::new(); // indices into msgs
@@ -49,6 +50,10 @@ pub fn chunk_day(msgs: &[Message], token_budget: usize) -> Vec<Chunk> {
             out.push(make_chunk(msgs, &current, current_tokens));
             current.clear();
             current_tokens = 0;
+            #[allow(unused_assignments)]
+            {
+                current_conv = None;
+            }
         }
 
         current.push(i);
