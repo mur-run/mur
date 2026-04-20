@@ -8,6 +8,7 @@ pub mod auth;
 pub mod capture;
 pub mod community;
 pub mod context_api;
+pub mod conversations;
 pub mod dashboard;
 pub mod evolve;
 pub mod executor;

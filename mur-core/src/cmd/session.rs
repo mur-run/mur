@@ -548,6 +548,21 @@ pub(crate) fn cmd_session_record(
         // No active session — silently succeed (hooks shouldn't fail)
         return Ok(());
     }
+
+    // Route to conversations pipeline if enabled. Best-effort: never fail the
+    // hook on conversations errors — the legacy recording already succeeded.
+    if crate::conversations::is_enabled().unwrap_or(false)
+        && let Ok(Some(session_id)) = crate::session::active_session_id()
+        && let Ok(msg) = crate::conversations::ingest::claude_code::event_to_message(
+            event_type,
+            tool,
+            content,
+            &session_id,
+        )
+        && let Ok(mut pipeline) = crate::conversations::ingest::pipeline::Pipeline::new(None)
+    {
+        let _ = pipeline.run(vec![msg]);
+    }
     Ok(())
 }
 
