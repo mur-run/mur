@@ -83,6 +83,22 @@ impl Source {
             Source::CommanderEngine => "commander",
         }
     }
+
+    /// Inverse of `file_prefix()`. Returns None on unknown prefix.
+    /// Case-sensitive by design — prefixes are a closed set.
+    pub fn from_prefix(s: &str) -> Option<Self> {
+        match s {
+            "cc" => Some(Source::ClaudeCode),
+            "cursor" => Some(Source::Cursor),
+            "gemini" => Some(Source::Gemini),
+            "aider" => Some(Source::Aider),
+            "slack" => Some(Source::Slack),
+            "telegram" => Some(Source::Telegram),
+            "discord" => Some(Source::Discord),
+            "commander" => Some(Source::CommanderEngine),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,5 +270,29 @@ mod tests {
         // MUST deserialize when reshaped into the new Message format.
         let commander_json = r#"{"v":1,"ts":"2026-04-19T11:30:45Z","src":"slack","conv":"c","role":"user","content":{"t":"text","v":"hi"},"meta":{},"refs":[]}"#;
         let _m: Message = serde_json::from_str(commander_json).unwrap();
+    }
+
+    #[test]
+    fn source_from_prefix_roundtrips_all_known() {
+        for src in [
+            Source::ClaudeCode,
+            Source::Cursor,
+            Source::Gemini,
+            Source::Aider,
+            Source::Slack,
+            Source::Telegram,
+            Source::Discord,
+            Source::CommanderEngine,
+        ] {
+            let p = src.file_prefix();
+            assert_eq!(Source::from_prefix(p), Some(src));
+        }
+    }
+
+    #[test]
+    fn source_from_prefix_unknown_is_none() {
+        assert_eq!(Source::from_prefix("bogus"), None);
+        assert_eq!(Source::from_prefix(""), None);
+        assert_eq!(Source::from_prefix("CC"), None); // case-sensitive
     }
 }
