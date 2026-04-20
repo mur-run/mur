@@ -9,4 +9,4 @@ pub mod abstractive;
 pub mod chunker;
 pub mod extractive;
 pub mod macro_refs;
-// Later tasks add: pub mod writer;
+pub mod writer;
