@@ -13,6 +13,7 @@ pub mod paths;
 pub mod retention;
 pub mod retrieve;
 pub mod store;
+pub mod summarize;
 
 /// Read mur's config.yaml `conversations.enabled` flag. Defaults to `false`
 /// when the file is missing or the key is absent — keeping legacy behavior
