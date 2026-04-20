@@ -8,4 +8,5 @@
 pub mod abstractive;
 pub mod chunker;
 pub mod extractive;
-// Later tasks add: pub mod macro_refs; pub mod writer;
+pub mod macro_refs;
+// Later tasks add: pub mod writer;
