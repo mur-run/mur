@@ -9,8 +9,23 @@ use mur_common::Source;
 use std::path::PathBuf;
 
 /// Default mur root (`~/.mur`) or the override path for tests.
+///
+/// Resolution order:
+/// 1. Explicit `override_path` argument (used by internal tests that thread
+///    the root through function args).
+/// 2. `MUR_HOME` env var, if set and non-empty. Cross-platform escape hatch
+///    for CLI integration tests and power-user setups — on Windows the `dirs`
+///    crate uses the Win32 `SHGetKnownFolderPath` API, which **ignores**
+///    `HOME`/`USERPROFILE` overrides, so a dedicated env is needed to keep
+///    tests isolated from the host profile.
+/// 3. `dirs::home_dir()` joined with `.mur`.
 pub fn mur_root(override_path: Option<&str>) -> PathBuf {
     if let Some(p) = override_path {
+        return PathBuf::from(p);
+    }
+    if let Ok(p) = std::env::var("MUR_HOME")
+        && !p.is_empty()
+    {
         return PathBuf::from(p);
     }
     dirs::home_dir().expect("no home dir").join(".mur")
