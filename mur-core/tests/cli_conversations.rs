@@ -21,9 +21,14 @@ fn mur_conversations_doctor_runs() {
     let out = Command::new(env!("CARGO_BIN_EXE_mur"))
         .args(["conversations", "doctor"])
         .env("HOME", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
         .output()
         .expect("run mur");
     assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("raw day-dirs"));
+    assert!(stdout.contains("summaries:")); // NEW Phase 2A
+    assert!(stdout.contains("Ollama")); // NEW Phase 2A
 }
 
 #[test]

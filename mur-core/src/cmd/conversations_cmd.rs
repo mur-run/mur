@@ -203,7 +203,7 @@ pub async fn cmd_conversations_reindex() -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_conversations_doctor() -> Result<()> {
+pub async fn cmd_conversations_doctor() -> Result<()> {
     println!("conversations doctor");
     let dirs = conversations::store::list_raw_dirs(None).unwrap_or_default();
     println!("  ✓ raw day-dirs: {}", dirs.len());
@@ -216,6 +216,70 @@ pub fn cmd_conversations_doctor() -> Result<()> {
         "  {} conversations.enabled",
         if enabled { "✓" } else { "·" }
     );
+
+    // Phase 2A additions
+    let raw_dir = conversations::paths::raw_root(None);
+    let summary_dir = conversations::paths::conversations_root(None).join("summary");
+    let raw_days: Vec<_> = std::fs::read_dir(&raw_dir)
+        .ok()
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let summary_count = std::fs::read_dir(&summary_dir)
+        .ok()
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s == "md")
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0);
+
+    let today = chrono::Utc::now().date_naive();
+    let completed_days: Vec<&String> = raw_days
+        .iter()
+        .filter(|d| {
+            chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                .map(|pd| pd < today)
+                .unwrap_or(false)
+        })
+        .collect();
+    let missing = completed_days.len().saturating_sub(summary_count);
+    if missing == 0 {
+        println!("  ✓ summaries: all {summary_count} completed days covered");
+    } else {
+        println!(
+            "  ⚠ summaries: {summary_count} of {} completed days covered — run 'mur conversations compact'",
+            completed_days.len()
+        );
+    }
+
+    // Ollama reachability (non-blocking 1s probe)
+    let cfg = crate::store::config::load_config().unwrap_or_default();
+    let endpoint = cfg.conversations.compact.ollama_endpoint.clone();
+    let reachable = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        reqwest::get(format!("{}/api/tags", endpoint.trim_end_matches('/'))),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .map(|r| r.status().is_success())
+    .unwrap_or(false);
+    if reachable {
+        println!("  ✓ Ollama reachable at {endpoint}");
+    } else {
+        println!("  · Ollama not reachable at {endpoint} (compact + ask will degrade)");
+    }
+
     Ok(())
 }
 

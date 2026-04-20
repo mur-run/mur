@@ -1053,7 +1053,9 @@ async fn async_main() -> Result<()> {
             ConversationsAction::Reindex => {
                 cmd::conversations_cmd::cmd_conversations_reindex().await?
             }
-            ConversationsAction::Doctor => cmd::conversations_cmd::cmd_conversations_doctor()?,
+            ConversationsAction::Doctor => {
+                cmd::conversations_cmd::cmd_conversations_doctor().await?
+            }
             ConversationsAction::Preflight => {
                 cmd::conversations_cmd::cmd_conversations_preflight()?
             }
