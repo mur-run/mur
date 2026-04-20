@@ -21,7 +21,7 @@ pub async fn summarize(
     if spans.is_empty() {
         return AbstractiveResult {
             narrative: Some("No significant activity on this day.".to_string()),
-            word_count: 5,
+            word_count: 6,
         };
     }
     let prompt = render_prompt(spans, date, max_words);
@@ -161,5 +161,31 @@ mod tests {
     fn clean_output_strips_trailing_commentary() {
         let raw = "This is the narrative.\n\nLet me know if you'd like more detail!";
         assert_eq!(clean_output(raw), "This is the narrative.");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn placeholder_word_count_matches_string() {
+        // Guard: the empty-day placeholder word_count must match its actual
+        // whitespace split. Prior version hardcoded 5 vs the 6-word string
+        // "No significant activity on this day."
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let client = OllamaClient::new("http://unused", std::time::Duration::from_secs(1));
+        let r = summarize(
+            &client,
+            "qwen3:14b",
+            &[],
+            chrono::NaiveDate::from_ymd_opt(2026, 4, 19).unwrap(),
+            400,
+        )
+        .await;
+        let actual = r.narrative.as_deref().unwrap().split_whitespace().count();
+        assert_eq!(
+            r.word_count, actual,
+            "word_count ({}) should equal split_whitespace count ({})",
+            r.word_count, actual
+        );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }
