@@ -27,6 +27,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
 async-trait = "0.1"
+keyring = "3"
 fs2 = "0.4"
 walkdir = "2"
 aho-corasick = "1"
@@ -59,9 +60,10 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sysinfo = "0.30"
 
 [features]
-default = ["cli", "server"]
+default = ["cli", "server", "sources"]
 cli = ["dialoguer", "console", "clap"]
 server = ["axum", "tower-http", "rust-embed"]
+sources = []
 ollama-live-smoke = []
 
 [dev-dependencies]
