@@ -349,6 +349,12 @@ enum Commands {
         #[arg(long)]
         strict_citations: bool,
     },
+    #[cfg(feature = "sources")]
+    /// Manage external knowledge sources (Notion, Obsidian, Joplin, ...).
+    Source {
+        #[command(subcommand)]
+        cmd: cmd::source_cmd::SourceCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1178,6 +1184,8 @@ async fn async_main() -> Result<()> {
             })
             .await?
         }
+        #[cfg(feature = "sources")]
+        Commands::Source { cmd } => cmd::source_cmd::handle(cmd).await?,
     }
 
     Ok(())
