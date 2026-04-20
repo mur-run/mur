@@ -11,10 +11,8 @@ use std::sync::Arc;
 use super::VectorStore;
 use super::lancedb::LanceDbStore;
 
-pub async fn get_vector_store(
-    cfg: &Config,
-    index_dir: &Path,
-) -> Result<Arc<dyn VectorStore>> {
+#[allow(dead_code)] // called by sources module in P1.2+; factory tests exercise it directly
+pub async fn get_vector_store(cfg: &Config, index_dir: &Path) -> Result<Arc<dyn VectorStore>> {
     match cfg.storage.vector_backend.as_str() {
         "lancedb" => {
             let store = LanceDbStore::open(index_dir, cfg.embedding.dimensions as i32)

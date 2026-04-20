@@ -98,7 +98,8 @@ mod tests {
     #[test]
     fn in_memory_roundtrip() {
         let c = InMemoryCreds::default();
-        c.set("mur", "notion:work:access_token", "secret-123").unwrap();
+        c.set("mur", "notion:work:access_token", "secret-123")
+            .unwrap();
         assert_eq!(
             c.get("mur", "notion:work:access_token").unwrap().as_deref(),
             Some("secret-123")
@@ -115,6 +116,9 @@ mod tests {
 
     #[test]
     fn account_helper_formats_canonically() {
-        assert_eq!(account("notion:work", "access_token"), "notion:work:access_token");
+        assert_eq!(
+            account("notion:work", "access_token"),
+            "notion:work:access_token"
+        );
     }
 }

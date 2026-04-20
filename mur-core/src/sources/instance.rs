@@ -40,8 +40,12 @@ pub struct SourceInstance {
     pub keyring_entry: Option<String>,
 }
 
-fn default_enabled() -> bool { true }
-fn default_weight() -> f32 { 1.0 }
+fn default_enabled() -> bool {
+    true
+}
+fn default_weight() -> f32 {
+    1.0
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SyncState {
@@ -114,8 +118,7 @@ impl SourceInstanceStore {
         let yaml = serde_yaml::to_string(instance)?;
         let target = self.path_for(&instance.id);
         let tmp = target.with_extension("yaml.tmp");
-        fs::write(&tmp, yaml)
-            .with_context(|| format!("write {}", tmp.display()))?;
+        fs::write(&tmp, yaml).with_context(|| format!("write {}", tmp.display()))?;
         fs::rename(&tmp, &target)
             .with_context(|| format!("rename {} -> {}", tmp.display(), target.display()))?;
         Ok(())
@@ -123,12 +126,16 @@ impl SourceInstanceStore {
 
     pub fn load(&self, id: &str) -> Result<SourceInstance> {
         let p = self.path_for(id);
-        let content = fs::read_to_string(&p)
-            .with_context(|| format!("read {}", p.display()))?;
-        let inst: SourceInstance = serde_yaml::from_str(&content)
-            .with_context(|| format!("parse {}", p.display()))?;
+        let content = fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
+        let inst: SourceInstance =
+            serde_yaml::from_str(&content).with_context(|| format!("parse {}", p.display()))?;
         if inst.id != id {
-            bail!("file {} has id {} but we asked for {}", p.display(), inst.id, id);
+            bail!(
+                "file {} has id {} but we asked for {}",
+                p.display(),
+                inst.id,
+                id
+            );
         }
         Ok(inst)
     }

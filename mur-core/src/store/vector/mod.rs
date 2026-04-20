@@ -21,6 +21,7 @@ pub use self::lancedb::LanceDbStore;
 /// This shape is re-used by the `sources` pipeline (external notes) and the
 /// pattern index. For P1.1 we only use it for sources — the pattern path
 /// keeps its existing `build_unified_index` code path untouched.
+#[allow(dead_code)] // used by P1.2+ adapter impls
 #[derive(Debug, Clone)]
 pub struct EmbeddedChunk {
     pub chunk_id: String,
@@ -35,6 +36,7 @@ pub struct EmbeddedChunk {
 }
 
 /// Filter applied at search time.
+#[allow(dead_code)] // used by P1.2+ adapter impls
 #[derive(Debug, Clone, Default)]
 pub struct SearchFilter {
     /// Restrict to these source_ids. `None` = all sources.
@@ -44,6 +46,7 @@ pub struct SearchFilter {
 }
 
 /// A single search hit from the new trait-based API.
+#[allow(dead_code)] // used by P1.2+ adapter impls
 #[derive(Debug, Clone)]
 pub struct Hit {
     pub chunk_id: String,
@@ -57,25 +60,17 @@ pub struct Hit {
 }
 
 /// Abstract vector store. Implementations MUST be `Send + Sync` and idempotent for `upsert`.
+#[allow(dead_code)] // consumed by P1.2+ adapters; factory tests exercise it via Arc<dyn VectorStore>
 #[async_trait]
 pub trait VectorStore: Send + Sync {
     /// Insert or replace chunks by `chunk_id`.
     async fn upsert(&self, chunks: &[EmbeddedChunk]) -> Result<()>;
 
     /// Search by embedding.
-    async fn search(
-        &self,
-        query_vec: &[f32],
-        k: usize,
-        filter: &SearchFilter,
-    ) -> Result<Vec<Hit>>;
+    async fn search(&self, query_vec: &[f32], k: usize, filter: &SearchFilter) -> Result<Vec<Hit>>;
 
     /// Delete chunks whose (source_id, external_id) matches.
-    async fn delete_by_external_ids(
-        &self,
-        source_id: &str,
-        external_ids: &[String],
-    ) -> Result<()>;
+    async fn delete_by_external_ids(&self, source_id: &str, external_ids: &[String]) -> Result<()>;
 
     /// Delete all chunks for a given source.
     async fn delete_by_source(&self, source_id: &str) -> Result<()>;

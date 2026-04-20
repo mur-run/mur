@@ -275,8 +275,8 @@ pub struct SearchResult {
     pub item_type: String,
 }
 
-use async_trait::async_trait;
 use super::{EmbeddedChunk, Hit, SearchFilter, VectorStore};
+use async_trait::async_trait;
 
 #[async_trait]
 impl VectorStore for LanceDbStore {
@@ -321,7 +321,9 @@ impl VectorStore for LanceDbStore {
 // Compile-time assertion that LanceDbStore implements VectorStore.
 const _: () = {
     fn _assert_impl<T: VectorStore>() {}
-    fn _check() { _assert_impl::<LanceDbStore>(); }
+    fn _check() {
+        _assert_impl::<LanceDbStore>();
+    }
 };
 
 #[cfg(test)]

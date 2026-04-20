@@ -255,11 +255,21 @@ impl Default for SourcesGlobalConfig {
     }
 }
 
-fn default_poll_interval_secs() -> u64 { 600 }
-fn default_max_chunks_per_sync() -> usize { 10_000 }
-fn default_max_parallel_sources() -> usize { 3 }
-fn default_source_weight() -> f32 { 1.0 }
-fn default_embedding_batch_size() -> usize { 32 }
+fn default_poll_interval_secs() -> u64 {
+    600
+}
+fn default_max_chunks_per_sync() -> usize {
+    10_000
+}
+fn default_max_parallel_sources() -> usize {
+    3
+}
+fn default_source_weight() -> f32 {
+    1.0
+}
+fn default_embedding_batch_size() -> usize {
+    32
+}
 
 fn default_embedding_provider() -> String {
     "ollama".to_string()

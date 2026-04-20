@@ -35,11 +35,18 @@ pub enum SourceCommand {
         watch: bool,
     },
     /// Show sync health for a source.
-    Status { id: Option<String> },
+    Status {
+        id: Option<String>,
+    },
     /// Set the retrieve weight.
-    Weight { id: String, value: f32 },
+    Weight {
+        id: String,
+        value: f32,
+    },
     /// Dry-run a single document through the adapter.
-    Test { id: String },
+    Test {
+        id: String,
+    },
     /// Rebuild the vector index for a source.
     Reindex {
         id: String,
@@ -48,8 +55,12 @@ pub enum SourceCommand {
     },
     /// Generate launchd / systemd unit files for scheduled sync.
     InstallSchedule,
-    Disable { id: String },
-    Enable { id: String },
+    Disable {
+        id: String,
+    },
+    Enable {
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -84,7 +95,9 @@ pub enum AddKind {
 
 pub async fn handle(cmd: SourceCommand) -> Result<()> {
     match cmd {
-        SourceCommand::Add { .. } => bail!("`mur source add` arrives in P1.2 (obsidian) / P1.4 (notion, joplin)"),
+        SourceCommand::Add { .. } => {
+            bail!("`mur source add` arrives in P1.2 (obsidian) / P1.4 (notion, joplin)")
+        }
         SourceCommand::List { .. } => bail!("`mur source list` arrives in P1.2"),
         SourceCommand::Remove { .. } => bail!("`mur source remove` arrives in P1.2"),
         SourceCommand::Sync { .. } => bail!("`mur source sync` arrives in P1.2"),

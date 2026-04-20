@@ -43,9 +43,9 @@ use crate::executor::pipeline::PipelineExecutor;
 use crate::retrieve::scoring::{ScoredPattern, score_and_rank};
 use crate::store::config::load_config;
 use crate::store::embedding::{EmbeddingConfig, embed};
-use crate::store::vector::LanceDbStore as VectorStore;
 use crate::store::pipeline_yaml::{PipelineDef, PipelineYamlStore};
 use crate::store::spot_rate::{fetch_usd_rate, fetch_usd_rates};
+use crate::store::vector::LanceDbStore as VectorStore;
 use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
