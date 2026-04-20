@@ -101,33 +101,74 @@ impl OllamaClient {
         let url = format!("{}/api/generate", self.endpoint.trim_end_matches('/'));
         let mut req = req;
         req.stream = true;
-        let resp = self.http.post(&url).json(&req).send().await?;
+        let resp = self
+            .http
+            .post(&url)
+            .json(&req)
+            .send()
+            .await
+            .with_context(|| format!("POST {url}"))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow!("ollama {status}: {body}"));
         }
         let byte_stream = resp.bytes_stream();
-        let token_stream = byte_stream
-            .map(|chunk| -> Result<Vec<String>> {
-                let bytes = chunk?;
-                let text = std::str::from_utf8(&bytes)?;
-                let mut out = Vec::new();
-                for line in text.lines() {
-                    if line.trim().is_empty() {
-                        continue;
+        let token_stream = futures::stream::unfold(
+            (byte_stream, String::new(), false),
+            |(mut inner, mut buf, done)| async move {
+                if done {
+                    return None;
+                }
+                loop {
+                    // Emit any complete line already in the buffer.
+                    if let Some(nl) = buf.find('\n') {
+                        let line: String = buf.drain(..=nl).collect();
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        match serde_json::from_str::<GenerateResponse>(trimmed) {
+                            Ok(v) => {
+                                if !v.response.is_empty() {
+                                    return Some((Ok(v.response), (inner, buf, false)));
+                                }
+                                // Empty response — keep draining.
+                                continue;
+                            }
+                            Err(e) => {
+                                return Some((Err(e.into()), (inner, buf, true)));
+                            }
+                        }
                     }
-                    let v: GenerateResponse = serde_json::from_str(line)?;
-                    if !v.response.is_empty() {
-                        out.push(v.response);
+                    // Need more bytes.
+                    match inner.next().await {
+                        Some(Ok(bytes)) => match std::str::from_utf8(&bytes) {
+                            Ok(s) => buf.push_str(s),
+                            Err(e) => {
+                                return Some((Err(e.into()), (inner, buf, true)));
+                            }
+                        },
+                        Some(Err(e)) => {
+                            return Some((Err(e.into()), (inner, buf, true)));
+                        }
+                        None => {
+                            // EOF: if anything remains, flush it as a final record.
+                            let trimmed = buf.trim();
+                            if trimmed.is_empty() {
+                                return None;
+                            }
+                            let result = match serde_json::from_str::<GenerateResponse>(trimmed) {
+                                Ok(v) if !v.response.is_empty() => Ok(v.response),
+                                Ok(_) => return None,
+                                Err(e) => Err(e.into()),
+                            };
+                            return Some((result, (inner, String::new(), true)));
+                        }
                     }
                 }
-                Ok(out)
-            })
-            .flat_map(|res| match res {
-                Ok(tokens) => futures::stream::iter(tokens.into_iter().map(Ok).collect::<Vec<_>>()),
-                Err(e) => futures::stream::iter(vec![Err(e)]),
-            });
+            },
+        );
         Ok(Box::pin(token_stream))
     }
 }
@@ -222,5 +263,87 @@ mod tests {
         };
         let r = client.generate(req).await;
         assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn stream_parser_joins_split_lines() {
+        // Simulate bytes_stream yielding chunks that split a JSON record mid-line.
+        // Chunk A ends with {"response":"hello, chunk B starts with ","done":false...}\n
+        // The key point: a single JSON record {"response":"hello","done":false,"model":"m"}
+        // is split across two chunks. Without buffering, the parser would fail or drop tokens.
+        let chunks: Vec<Result<Vec<u8>, anyhow::Error>> = vec![
+            Ok(br#"{"response":"hel"#.to_vec()),
+            Ok(br#"lo","done":false,"model":"m"}"#.to_vec()),
+            Ok(b"\n".to_vec()),
+            Ok(br#"{"response":"world","done":true,"model":"m"}"#.to_vec()),
+            Ok(b"\n".to_vec()),
+        ];
+        let byte_stream = futures::stream::iter(chunks);
+        // Replicate the unfold logic from generate_stream.
+        let token_stream: Pin<Box<dyn Stream<Item = Result<String>> + Send>> =
+            Box::pin(futures::stream::unfold(
+                (byte_stream, String::new(), false),
+                |(mut inner, mut buf, done)| async move {
+                    if done {
+                        return None;
+                    }
+                    loop {
+                        if let Some(nl) = buf.find('\n') {
+                            let line: String = buf.drain(..=nl).collect();
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            match serde_json::from_str::<GenerateResponse>(trimmed) {
+                                Ok(v) => {
+                                    if !v.response.is_empty() {
+                                        return Some((Ok(v.response), (inner, buf, false)));
+                                    }
+                                    continue;
+                                }
+                                Err(e) => {
+                                    return Some((Err(anyhow::anyhow!(e)), (inner, buf, true)));
+                                }
+                            }
+                        }
+                        match inner.next().await {
+                            Some(Ok(bytes)) => match std::str::from_utf8(&bytes) {
+                                Ok(s) => buf.push_str(s),
+                                Err(e) => {
+                                    return Some((Err(anyhow::anyhow!(e)), (inner, buf, true)));
+                                }
+                            },
+                            Some(Err(e)) => {
+                                return Some((Err(e), (inner, buf, true)));
+                            }
+                            None => {
+                                let trimmed = buf.trim();
+                                if trimmed.is_empty() {
+                                    return None;
+                                }
+                                let result: Result<String> =
+                                    match serde_json::from_str::<GenerateResponse>(trimmed) {
+                                        Ok(v) if !v.response.is_empty() => Ok(v.response),
+                                        Ok(_) => return None,
+                                        Err(e) => Err(anyhow::anyhow!(e)),
+                                    };
+                                return Some((result, (inner, String::new(), true)));
+                            }
+                        }
+                    }
+                },
+            ));
+        // Collect the tokens and verify they match expected order.
+        // The test demonstrates that even though the first JSON record is split
+        // across chunks A and B, both tokens ("hello" and "world") are correctly extracted.
+        let mut tokens = Vec::new();
+        futures::pin_mut!(token_stream);
+        while let Some(result) = token_stream.next().await {
+            match result {
+                Ok(token) => tokens.push(token),
+                Err(e) => panic!("unexpected error: {}", e),
+            }
+        }
+        assert_eq!(tokens, vec!["hello", "world"]);
     }
 }
