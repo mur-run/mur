@@ -332,6 +332,16 @@ mod tests {
 
     const TEST_DIM: i32 = 64;
 
+    // Conformance suite — see store/vector/tests.rs
+    crate::vector_store_conformance!(LanceDbStore, make_store_for_conformance);
+
+    async fn make_store_for_conformance() -> LanceDbStore {
+        // TempDir drops at end of test, but that's fine for the smoke test.
+        // Ignored roundtrip tests (enabled in P1.2) will own their own TempDir.
+        let tmp = tempfile::TempDir::new().unwrap();
+        LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap()
+    }
+
     fn make_pattern(name: &str) -> Pattern {
         Pattern {
             base: mur_common::knowledge::KnowledgeBase {
