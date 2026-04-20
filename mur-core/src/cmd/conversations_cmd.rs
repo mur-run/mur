@@ -280,11 +280,44 @@ pub async fn cmd_conversations_doctor() -> Result<()> {
         println!("  · Ollama not reachable at {endpoint} (compact + ask will degrade)");
     }
 
+    // Phase 2C: .history/ coverage — how many archived summary revisions + total bytes.
+    let history_dir = conversations::paths::summary_history_dir(None);
+    let (hist_count, hist_bytes) = if history_dir.exists() {
+        std::fs::read_dir(&history_dir)
+            .ok()
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s == "md")
+                            .unwrap_or(false)
+                    })
+                    .fold((0u64, 0u64), |(n, bytes), e| {
+                        let sz = std::fs::metadata(e.path()).map(|m| m.len()).unwrap_or(0);
+                        (n + 1, bytes + sz)
+                    })
+            })
+            .unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
+    if hist_count == 0 {
+        println!("  · .history/: empty (no summary rewrites yet)");
+    } else {
+        println!(
+            "  ✓ .history/: {hist_count} archived revisions, {:.1} KB",
+            hist_bytes as f64 / 1024.0
+        );
+    }
+
     Ok(())
 }
 
 /// BP1 amendment: dedicated preflight check bundle (daemon, disk, staging, audit presence).
-pub fn cmd_conversations_preflight() -> Result<()> {
+/// Phase 2C: extends with Ollama reachability, model-pull checks, pattern dir, free memory.
+pub async fn cmd_conversations_preflight() -> Result<()> {
     use crate::conversations::migrate;
     let plan = migrate::dry_run(None)?;
 
@@ -333,6 +366,109 @@ pub fn cmd_conversations_preflight() -> Result<()> {
     } else {
         println!("  · no commander audit; migration will bridge from ZERO_HASH");
     }
+
+    // ── Phase 2C probes ───────────────────────────────────────────────────
+
+    // Load config once for Ollama endpoint + model names.
+    let cfg = crate::store::config::load_config().unwrap_or_default();
+    let endpoint = cfg.conversations.compact.ollama_endpoint.clone();
+    let models_needed: Vec<String> = {
+        let mut v = vec![
+            cfg.conversations.compact.extractive_model.clone(),
+            cfg.conversations.compact.abstractive_model.clone(),
+            cfg.conversations.ask.model.clone(),
+        ];
+        v.sort();
+        v.dedup();
+        v.retain(|m| !m.is_empty());
+        v
+    };
+
+    // Ollama reachability + /api/tags probe (2s timeout; non-fatal).
+    let url = format!("{}/api/tags", endpoint.trim_end_matches('/'));
+    let tags_body: Option<String> =
+        match tokio::time::timeout(std::time::Duration::from_secs(2), reqwest::get(&url)).await {
+            Ok(Ok(resp)) if resp.status().is_success() => {
+                println!("  ✓ Ollama reachable at {endpoint}");
+                resp.text().await.ok()
+            }
+            Ok(Ok(resp)) => {
+                println!("  ✗ Ollama at {endpoint} returned {}", resp.status());
+                ok = false;
+                None
+            }
+            Ok(Err(e)) => {
+                println!("  ✗ Ollama at {endpoint} unreachable: {e}");
+                ok = false;
+                None
+            }
+            Err(_) => {
+                println!("  ✗ Ollama at {endpoint} timed out (2s)");
+                ok = false;
+                None
+            }
+        };
+
+    // Model-pull check — only if we got a tags response.
+    if let Some(body) = &tags_body {
+        let installed: Vec<String> = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v.get("models").cloned())
+            .and_then(|m| m.as_array().cloned())
+            .map(|arr| {
+                arr.into_iter()
+                    .filter_map(|e| e.get("name").and_then(|n| n.as_str()).map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for m in &models_needed {
+            if installed.iter().any(|n| n == m) {
+                println!("  ✓ model {m} pulled");
+            } else {
+                println!("  ✗ model {m} missing — run: ollama pull {m}");
+                ok = false;
+            }
+        }
+    } else if !models_needed.is_empty() {
+        println!(
+            "  · skipped model check ({} models wanted; Ollama unreachable)",
+            models_needed.len()
+        );
+    }
+
+    // Pattern dir readable.
+    let patterns_dir = home.join(".mur/patterns");
+    if patterns_dir.exists() {
+        match std::fs::read_dir(&patterns_dir) {
+            Ok(_) => println!("  ✓ patterns dir readable at {}", patterns_dir.display()),
+            Err(e) => {
+                println!(
+                    "  ✗ patterns dir at {} unreadable: {e}",
+                    patterns_dir.display()
+                );
+                ok = false;
+            }
+        }
+    } else {
+        println!(
+            "  · patterns dir {} missing (pattern refs will be a no-op)",
+            patterns_dir.display()
+        );
+    }
+
+    // Free memory check (informational).
+    match system_free_memory_mb() {
+        Some(mb) if mb < 4096 => {
+            println!("  · free mem: {mb} MB (< 4 GB — LLM calls may swap)");
+        }
+        Some(mb) => {
+            println!("  ✓ free mem: {mb} MB");
+        }
+        None => {
+            println!("  · free mem: unknown (sysinfo probe skipped)");
+        }
+    }
+
     if ok {
         println!("\n→ preflight passed");
     } else {
@@ -466,6 +602,7 @@ pub struct AskArgs {
     pub json: bool,
     pub no_escalate: bool,
     pub debug_prompt: bool,
+    pub strict_citations: bool,
 }
 
 pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
@@ -566,6 +703,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         timeout: std::time::Duration::from_secs(ask_cfg.timeout_secs as u64),
         no_escalate: args.no_escalate,
         debug_prompt: args.debug_prompt,
+        strict_citations: args.strict_citations,
     };
 
     if args.json {
@@ -619,4 +757,16 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn system_free_memory_mb() -> Option<u64> {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    // sysinfo reports in KiB; convert to MiB.
+    let avail_kib = sys.available_memory();
+    if avail_kib == 0 {
+        None
+    } else {
+        Some(avail_kib / 1024)
+    }
 }
