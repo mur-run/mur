@@ -208,7 +208,7 @@ pub async fn compact_day(
         }
     };
 
-    match writer::write_summary(&doc, summary_embedding, root_override).await {
+    match writer::write_summary(&doc, summary_embedding, Vec::new(), root_override).await {
         Ok(w) => Ok(DayReport {
             date,
             outcome: if w.noop {

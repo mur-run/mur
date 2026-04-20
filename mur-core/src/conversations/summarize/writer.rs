@@ -49,6 +49,7 @@ pub struct WriteResult {
 pub async fn write_summary(
     doc: &SummaryDoc,
     summary_embedding: Vec<f32>,
+    span_embeddings: Vec<Vec<f32>>,
     root_override: Option<&str>,
 ) -> Result<WriteResult> {
     let (md_path, _yaml_path) = summary_paths_for(doc.date, root_override);
@@ -110,6 +111,30 @@ pub async fn write_summary(
     let summary_msg = summary_row_as_message(doc);
     idx.upsert_with_layer(&[(summary_msg, summary_embedding, 1)])
         .await?;
+
+    // Phase 3.1: one row per extractive span at layer=2.
+    if !doc.extractive.is_empty() && doc.extractive.len() == span_embeddings.len() {
+        use chrono::TimeZone;
+        let span_ts = chrono::Utc.from_utc_datetime(&doc.date.and_hms_opt(0, 0, 0).unwrap());
+        let mut batch: Vec<(mur_common::Message, Vec<f32>, i8)> =
+            Vec::with_capacity(doc.extractive.len());
+        for (span, vec) in doc.extractive.iter().zip(span_embeddings) {
+            let msg = mur_common::Message {
+                v: 1,
+                ts: span_ts,
+                src: span.src,
+                conv: span.conv_id.clone(),
+                role: mur_common::Role::User,
+                content: mur_common::Content::Text {
+                    value: span.text.clone(),
+                },
+                meta: serde_json::json!({ "id_suffix": span.line_hint }),
+                refs: vec![],
+            };
+            batch.push((msg, vec, 2i8));
+        }
+        idx.upsert_with_layer(&batch).await?;
+    }
 
     Ok(WriteResult {
         path: md_path,
@@ -301,6 +326,7 @@ fn render(doc: &SummaryDoc) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversations::index;
     use mur_common::{Role, Source};
 
     fn dummy_doc(date: NaiveDate) -> SummaryDoc {
@@ -340,7 +366,7 @@ mod tests {
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
         let doc = dummy_doc(date);
-        let r = write_summary(&doc, vec![0.0; 16], Some(root))
+        let r = write_summary(&doc, vec![0.0; 16], vec![], Some(root))
             .await
             .unwrap();
         assert!(!r.noop);
@@ -360,10 +386,12 @@ mod tests {
         let doc = dummy_doc(date);
         let mut d2 = dummy_doc(date);
         d2.generated_at = doc.generated_at; // force bit-identical
-        let _ = write_summary(&doc, vec![0.0; 16], Some(root))
+        let _ = write_summary(&doc, vec![0.0; 16], vec![], Some(root))
             .await
             .unwrap();
-        let r2 = write_summary(&d2, vec![0.0; 16], Some(root)).await.unwrap();
+        let r2 = write_summary(&d2, vec![0.0; 16], vec![], Some(root))
+            .await
+            .unwrap();
         assert!(r2.noop);
         assert!(r2.archived.is_none());
     }
@@ -375,12 +403,12 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
         let mut doc1 = dummy_doc(date);
         doc1.abstractive.narrative = Some("version 1".into());
-        let _ = write_summary(&doc1, vec![0.0; 16], Some(root))
+        let _ = write_summary(&doc1, vec![0.0; 16], vec![], Some(root))
             .await
             .unwrap();
         let mut doc2 = dummy_doc(date);
         doc2.abstractive.narrative = Some("version 2".into());
-        let r2 = write_summary(&doc2, vec![0.0; 16], Some(root))
+        let r2 = write_summary(&doc2, vec![0.0; 16], vec![], Some(root))
             .await
             .unwrap();
         assert!(r2.archived.is_some());
@@ -395,7 +423,7 @@ mod tests {
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
         let doc = dummy_doc(date);
-        let _ = write_summary(&doc, vec![0.0; 16], Some(root))
+        let _ = write_summary(&doc, vec![0.0; 16], vec![], Some(root))
             .await
             .unwrap();
 
@@ -455,5 +483,64 @@ mod tests {
         // prune_history on non-existent .history dir must not error
         let freed = prune_history(Some(root), date, 5).unwrap();
         assert_eq!(freed, 0);
+    }
+
+    #[tokio::test]
+    async fn write_summary_upserts_span_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+        let mut doc = dummy_doc(date);
+        // dummy_doc seeds 1 extractive span; add two more so we can assert N rows.
+        doc.extractive.push(ExtractiveSpan {
+            role: Role::User,
+            conv_id: "c1".into(),
+            line_hint: 2,
+            text: "second quote".into(),
+            src: Source::ClaudeCode,
+        });
+        doc.extractive.push(ExtractiveSpan {
+            role: Role::User,
+            conv_id: "c1".into(),
+            line_hint: 3,
+            text: "third quote".into(),
+            src: Source::ClaudeCode,
+        });
+        let summary_vec = vec![0.1; 16];
+        let span_vecs = vec![vec![0.2; 16], vec![0.3; 16], vec![0.4; 16]];
+        write_summary(&doc, summary_vec, span_vecs, Some(root))
+            .await
+            .unwrap();
+
+        let idx = index::ConversationIndex::open(16, Some(root))
+            .await
+            .unwrap();
+        assert_eq!(
+            idx.count_rows_at_layer(1).await.unwrap(),
+            1,
+            "one narrative row"
+        );
+        assert_eq!(
+            idx.count_rows_at_layer(2).await.unwrap(),
+            3,
+            "three span rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_summary_with_empty_spans_writes_no_layer_2() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+        let mut doc = dummy_doc(date);
+        doc.extractive.clear();
+        write_summary(&doc, vec![0.1; 16], vec![], Some(root))
+            .await
+            .unwrap();
+        let idx = index::ConversationIndex::open(16, Some(root))
+            .await
+            .unwrap();
+        assert_eq!(idx.count_rows_at_layer(1).await.unwrap(), 1);
+        assert_eq!(idx.count_rows_at_layer(2).await.unwrap(), 0);
     }
 }
