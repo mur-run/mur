@@ -5,10 +5,10 @@ use mur_common::Source;
 use std::time::Duration;
 
 pub mod cite;
+pub mod format;
 pub mod generate;
 pub mod prompt;
 pub mod retrieve;
-// Later tasks add: pub mod format;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Format {
