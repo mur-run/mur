@@ -36,7 +36,7 @@ conversations:
 embedding:
   provider: ollama
   model: qwen3-embedding:0.6b
-  dimensions: 16
+  dimensions: 1024
   ollama_endpoint: http://localhost:11434
 YAML
 
@@ -101,8 +101,8 @@ grep -q "deleted 1" /tmp/gp-out-8.txt || { echo "FAIL: cleanup should have delet
 # (compact_missing only scans days < today per design).
 YDAY="$(date -u -v-1d +%Y-%m-%d 2>/dev/null || date -u -d 'yesterday' +%Y-%m-%d)"
 mkdir -p "$TMPHOME/.mur/conversations/raw/$YDAY"
-cat > "$TMPHOME/.mur/conversations/raw/$YDAY/cc_yd.jsonl" <<JSONL
-{"v":1,"ts":"${YDAY}T10:00:00Z","src":"claude-code","conv":"yd","role":"user","content":{"t":"text","v":"mock extractive span seeded for compact golden-path"},"meta":{},"refs":[]}
+cat > "$TMPHOME/.mur/conversations/raw/$YDAY/cc_mock.jsonl" <<JSONL
+{"v":1,"ts":"${YDAY}T10:00:00Z","src":"claude-code","conv":"mock","role":"user","content":{"t":"text","v":"mock extractive span"},"meta":{},"refs":[]}
 JSONL
 
 echo "--- step 9: mur conversations compact ---"
@@ -114,9 +114,17 @@ grep -q "## Extractive spans" "$TMPHOME/.mur/conversations/summary/${YDAY}.md" \
 grep -q "## Abstractive narrative" "$TMPHOME/.mur/conversations/summary/${YDAY}.md" \
   || { echo "FAIL step 9: summary missing Narrative section"; exit 1; }
 
+# ── Step 9.5: reindex --spans-only + hash-mock span selection ─────────────
+# Rebuild layer=2 span rows for the yesterday summary using the hash mock,
+# so Step 10's ask can pick the most query-relevant span deterministically.
+echo "--- step 9.5: mur conversations reindex --spans-only (hash mock) ---"
+MUR_OLLAMA_MOCK=hash "$MUR" conversations reindex --spans-only | tee /tmp/gp-step-9.5.txt
+grep -q "reindexed spans:" /tmp/gp-step-9.5.txt \
+  || { echo "FAIL step 9.5: reindex did not report span rebuild"; exit 1; }
+
 # ── Step 10: ask ──────────────────────────────────────────────────────────
 echo "--- step 10: mur ask --json ---"
-MUR_OLLAMA_MOCK=1 "$MUR" ask "what compression techniques did I discuss" --json > /tmp/gp-step-10.json
+MUR_OLLAMA_MOCK=hash "$MUR" ask "mock extractive span" --json > /tmp/gp-step-10.json
 cat /tmp/gp-step-10.json
 # The mock ollama answer contains a [cit: 2026-04-19 claude-code/mock:L1] anchor
 # that the grounding filter will strip (it's not one of the real valid anchors
@@ -127,6 +135,8 @@ jq -e '.hits_used | length >= 1' /tmp/gp-step-10.json \
   || { echo "FAIL step 10: no hits_used — retrieval did not fire"; exit 1; }
 jq -e '.answer | type == "string"' /tmp/gp-step-10.json \
   || { echo "FAIL step 10: missing or non-string .answer"; exit 1; }
+jq -e '.hits_used[0].layer == 2' /tmp/gp-step-10.json \
+  || { echo "FAIL step 10: first hit should be layer=2 after reindex"; exit 1; }
 
 echo ""
-echo "=== ALL 10 STEPS GREEN ==="
+echo "=== ALL 11 STEPS GREEN ==="
