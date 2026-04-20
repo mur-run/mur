@@ -8,6 +8,7 @@ pub mod blob;
 pub mod index;
 pub mod ingest;
 pub mod migrate;
+pub mod ollama;
 pub mod paths;
 pub mod retention;
 pub mod retrieve;
