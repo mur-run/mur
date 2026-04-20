@@ -790,8 +790,10 @@ confidence: 0.7
                     .with_timezone(&Utc),
             },
         );
-        let mut e = Evidence::default();
-        e.contributions = contribs;
+        let e = Evidence {
+            contributions: contribs,
+            ..Evidence::default()
+        };
         let y = serde_yaml::to_string(&e).unwrap();
         let back: Evidence = serde_yaml::from_str(&y).unwrap();
         assert_eq!(back.contributions.len(), 1);
