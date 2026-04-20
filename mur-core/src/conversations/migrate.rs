@@ -281,7 +281,15 @@ pub async fn run(home_override: Option<&str>) -> Result<MigrationReport> {
     std::fs::rename(&staging, &final_path)?;
 
     // 7. P4 amendment — sync commander's config.toml from mur's config.yaml
-    sync_commander_config_toml(&mur)?;
+    let mur_cfg_path = mur.join("config.yaml");
+    let cfg = if let Ok(text) = std::fs::read_to_string(&mur_cfg_path) {
+        serde_yaml::from_str::<mur_common::config::Config>(&text)
+            .unwrap_or_default()
+            .conversations
+    } else {
+        mur_common::config::ConversationsConfig::default()
+    };
+    sync_commander_config_toml(&mur, &cfg)?;
 
     let audit_entries_replayed = 1; // Only the bridge entry; commander chain stays untouched
     Ok(MigrationReport {
@@ -522,54 +530,49 @@ fn append_rollback_entry(path: &std::path::Path, count: u64) -> Result<()> {
     Ok(())
 }
 
-/// P4 amendment: write `[conversations]` block to commander's config.toml
-/// mirroring mur's config.yaml conversations.{enabled,retention_days}. Idempotent
+/// P4 amendment: write `[conversations]` and `[conversations.compact]` blocks
+/// to commander's config.toml, mirroring mur's config.yaml. Idempotent
 /// via marker-delimited block.
-///
-/// `fs_available_bytes` returns None (treated as unlimited) in Phase 1 — a
-/// proper statvfs wrapper lands in a later task.
-fn sync_commander_config_toml(mur: &std::path::Path) -> Result<()> {
-    let mur_cfg = mur.join("config.yaml");
-    let (enabled, retention_days) = if let Ok(text) = std::fs::read_to_string(&mur_cfg) {
-        if let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&text) {
-            let c = doc.get("conversations");
-            let e = c
-                .and_then(|c| c.get("enabled"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let r = c
-                .and_then(|c| c.get("retention_days"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(30) as u32;
-            (e, r)
-        } else {
-            (false, 30)
-        }
-    } else {
-        (false, 30)
-    };
-    let cmdr_cfg = mur.join("commander/config.toml");
-    std::fs::create_dir_all(cmdr_cfg.parent().unwrap())?;
+pub fn sync_commander_config_toml(
+    mur_dir: &std::path::Path,
+    cfg: &mur_common::config::ConversationsConfig,
+) -> Result<()> {
+    let cmdr_cfg = mur_dir.join("commander/config.toml");
+    if let Some(parent) = cmdr_cfg.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let existing = std::fs::read_to_string(&cmdr_cfg).unwrap_or_default();
-    let merged = if existing.contains(CONV_MARKER_OPEN) && existing.contains(CONV_MARKER_CLOSE) {
-        // Replace the block between markers (idempotent).
-        let start = existing.find(CONV_MARKER_OPEN).unwrap();
-        let end_idx = existing.find(CONV_MARKER_CLOSE).unwrap() + CONV_MARKER_CLOSE.len();
-        let mut out = String::with_capacity(existing.len());
-        out.push_str(&existing[..start]);
-        out.push_str(CONV_MARKER_OPEN);
-        out.push('\n');
-        out.push_str("[conversations]\n");
-        out.push_str(&format!("enabled = {enabled}\n"));
-        out.push_str(&format!("retention_days = {retention_days}\n"));
-        out.push_str(CONV_MARKER_CLOSE);
-        out.push_str(&existing[end_idx..]);
-        out
+
+    let new_block = format!(
+        "\n{}\n\
+         [conversations]\n\
+         enabled = {}\n\
+         retention_days = {}\n\
+         \n\
+         [conversations.compact]\n\
+         enabled_in_daemon = {}\n\
+         daemon_cron = \"{}\"\n\
+         {}\n",
+        CONV_MARKER_OPEN,
+        cfg.enabled,
+        cfg.retention_days,
+        cfg.compact.enabled_in_daemon,
+        cfg.compact.daemon_cron,
+        CONV_MARKER_CLOSE,
+    );
+
+    let merged = if let (Some(b), Some(e)) = (
+        existing.find(CONV_MARKER_OPEN),
+        existing.find(CONV_MARKER_CLOSE),
+    ) {
+        let before = &existing[..b];
+        let after_marker = e + CONV_MARKER_CLOSE.len();
+        let after = &existing[after_marker..];
+        format!("{}{}{}", before.trim_end_matches('\n'), new_block, after)
     } else {
-        format!(
-            "{existing}\n{CONV_MARKER_OPEN}\n[conversations]\nenabled = {enabled}\nretention_days = {retention_days}\n{CONV_MARKER_CLOSE}\n"
-        )
+        format!("{}{}", existing.trim_end_matches('\n'), new_block)
     };
+
     std::fs::write(&cmdr_cfg, merged)?;
     Ok(())
 }
@@ -775,5 +778,32 @@ mod tests {
             "missing retention_days=45: {toml}"
         );
         assert!(toml.contains("[engine]"), "must preserve other sections");
+    }
+
+    #[test]
+    fn sync_writes_conversations_compact_subsection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmdr_dir = tmp.path().join(".mur/commander");
+        std::fs::create_dir_all(&cmdr_dir).unwrap();
+        std::fs::write(cmdr_dir.join("config.toml"), "[engine]\nfoo = 1\n").unwrap();
+        let cfg = mur_common::config::ConversationsConfig {
+            enabled: true,
+            retention_days: 30,
+            compact: mur_common::config::CompactConfig {
+                enabled_in_daemon: true,
+                daemon_cron: "0 4 * * *".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        sync_commander_config_toml(&tmp.path().join(".mur"), &cfg).unwrap();
+        let toml = std::fs::read_to_string(cmdr_dir.join("config.toml")).unwrap();
+        assert!(toml.contains("[conversations]"));
+        assert!(toml.contains("enabled = true"));
+        assert!(toml.contains("retention_days = 30"));
+        assert!(toml.contains("[conversations.compact]"));
+        assert!(toml.contains("enabled_in_daemon = true"));
+        assert!(toml.contains("daemon_cron = \"0 4 * * *\""));
+        assert!(toml.contains("[engine]"));
     }
 }
