@@ -484,14 +484,39 @@ impl VectorStore for LanceDbStore {
 
     async fn delete_by_external_ids(
         &self,
-        _source_id: &str,
-        _external_ids: &[String],
+        source_id: &str,
+        external_ids: &[String],
     ) -> Result<()> {
-        anyhow::bail!("LanceDbStore::delete_by_external_ids is a stub until P1.2")
+        if external_ids.is_empty() {
+            return Ok(());
+        }
+        let tables = self.db.table_names().execute().await?;
+        if !tables.contains(&SOURCES_TABLE.to_string()) {
+            return Ok(());
+        }
+        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+        let escaped: Vec<String> = external_ids
+            .iter()
+            .map(|e| format!("'{}'", e.replace('\'', "''")))
+            .collect();
+        let predicate = format!(
+            "source_id = '{}' AND external_id IN ({})",
+            source_id.replace('\'', "''"),
+            escaped.join(",")
+        );
+        table.delete(&predicate).await?;
+        Ok(())
     }
 
-    async fn delete_by_source(&self, _source_id: &str) -> Result<()> {
-        anyhow::bail!("LanceDbStore::delete_by_source is a stub until P1.2")
+    async fn delete_by_source(&self, source_id: &str) -> Result<()> {
+        let tables = self.db.table_names().execute().await?;
+        if !tables.contains(&SOURCES_TABLE.to_string()) {
+            return Ok(());
+        }
+        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+        let predicate = format!("source_id = '{}'", source_id.replace('\'', "''"));
+        table.delete(&predicate).await?;
+        Ok(())
     }
 
     async fn list_external_ids(&self, source_id: &str) -> Result<Vec<String>> {
@@ -836,6 +861,53 @@ mod tests {
         let other =
             <LanceDbStore as super::VectorStore>::count(&store, Some("nope")).await.unwrap();
         assert_eq!(other, 0);
+    }
+
+    #[tokio::test]
+    async fn sources_delete_operations_work() {
+        let tmp = TempDir::new().unwrap();
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        let now = chrono::Utc::now();
+        let zeros = vec![0.0_f32; TEST_DIM as usize];
+
+        let chunks: Vec<super::EmbeddedChunk> = (0..4)
+            .map(|i| super::EmbeddedChunk {
+                chunk_id: format!("cid-{i}"),
+                source_id: if i < 2 { "src:a".into() } else { "src:b".into() },
+                external_id: format!("doc-{i}"),
+                ordinal: 0,
+                text: "x".into(),
+                heading_path: vec![],
+                char_range: (0, 1),
+                updated_at: now,
+                embedding: zeros.clone(),
+            })
+            .collect();
+
+        <LanceDbStore as super::VectorStore>::upsert(&store, &chunks).await.unwrap();
+
+        <LanceDbStore as super::VectorStore>::delete_by_external_ids(
+            &store,
+            "src:a",
+            &["doc-0".to_string()],
+        )
+        .await
+        .unwrap();
+        let remaining_a = <LanceDbStore as super::VectorStore>::list_external_ids(&store, "src:a")
+            .await
+            .unwrap();
+        assert_eq!(remaining_a, vec!["doc-1"]);
+
+        <LanceDbStore as super::VectorStore>::delete_by_source(&store, "src:b").await.unwrap();
+        let remaining_b = <LanceDbStore as super::VectorStore>::list_external_ids(&store, "src:b")
+            .await
+            .unwrap();
+        assert!(remaining_b.is_empty());
+
+        let still_a = <LanceDbStore as super::VectorStore>::list_external_ids(&store, "src:a")
+            .await
+            .unwrap();
+        assert_eq!(still_a, vec!["doc-1"]);
     }
 
     #[tokio::test]
