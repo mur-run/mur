@@ -9,6 +9,7 @@ pub mod abstractive;
 pub mod chunker;
 pub mod extractive;
 pub mod macro_refs;
+pub mod windows;
 pub mod writer;
 
 use anyhow::Result;
