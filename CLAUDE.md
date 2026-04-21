@@ -57,7 +57,7 @@ capture/ → store/ → retrieve/ → inject/
             evolve/
 ```
 
-**Sources pipeline (P1.1 foundation in place; adapters arrive P1.2+):** An alternate input to `store/` lives in `mur-core/src/sources/` — `KnowledgeSource` adapters pull documents from external note apps (Obsidian, Notion, Joplin) into the same retrieve pipeline as patterns. The vector store is abstracted behind `store::vector::VectorStore` (impls: `LanceDbStore` now; `QdrantStore` P1.3). See `docs/superpowers/specs/2026-04-20-mur-sources-integration-design.md`.
+**Sources pipeline (P1.2 — Obsidian adapter shipped; Notion/Joplin arrive P1.4):** An alternate input to `store/` lives in `mur-core/src/sources/` — `KnowledgeSource` adapters pull documents from external note apps (Obsidian, Notion, Joplin) into the same retrieve pipeline as patterns. The vector store is abstracted behind `store::vector::VectorStore` (impls: `LanceDbStore` now; `QdrantStore` P1.3). See `docs/superpowers/specs/2026-04-20-mur-sources-integration-design.md`.
 
 - **`capture/`** — Noise filter, significance scoring, emergence detection, feedback extraction from session transcripts
 - **`store/`** — `YamlStore` (source of truth, atomic writes), `LanceDbStore` (vector index, always rebuildable), `WorkflowYamlStore`
