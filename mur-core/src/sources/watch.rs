@@ -80,8 +80,7 @@ pub async fn run_watch(
         .filter(|i| {
             i.enabled
                 && (i.type_name == "notion"
-                    || (i.type_name == "joplin"
-                        && i.scope.contains_key("server_url")))
+                    || (i.type_name == "joplin" && i.scope.contains_key("server_url")))
         })
         .map(|i| i.id.clone())
         .collect();

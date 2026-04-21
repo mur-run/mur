@@ -333,7 +333,9 @@ async fn add_joplin(
             serde_yaml::Value::String(abs.to_string_lossy().to_string()),
         );
     } else {
-        bail!("specify --db <path> for local SQLite or --server <url> --token <pat> for Joplin Server");
+        bail!(
+            "specify --db <path> for local SQLite or --server <url> --token <pat> for Joplin Server"
+        );
     }
 
     let inst = SourceInstance {
@@ -845,11 +847,7 @@ async fn install_schedule() -> Result<()> {
         );
         std::fs::write(&svc_file, svc)?;
         std::fs::write(&timer_file, timer)?;
-        println!(
-            "wrote {} and {}",
-            svc_file.display(),
-            timer_file.display()
-        );
+        println!("wrote {} and {}", svc_file.display(), timer_file.display());
         println!("Enable with: systemctl --user enable --now mur-source-sync.timer");
         println!("Disable with: systemctl --user disable --now mur-source-sync.timer");
         return Ok(());

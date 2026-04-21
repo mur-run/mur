@@ -60,7 +60,10 @@ fn render_block(block: &Value, depth: usize, out: &mut String) {
             out.push('\n');
         }
         "to_do" => {
-            let checked = detail.and_then(|d| d.get("checked")).and_then(|v| v.as_bool()).unwrap_or(false);
+            let checked = detail
+                .and_then(|d| d.get("checked"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             out.push_str(&indent);
             out.push_str(if checked { "- [x] " } else { "- [ ] " });
             push_rich_text(detail, out);

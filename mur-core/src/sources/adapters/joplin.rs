@@ -111,8 +111,8 @@ impl JoplinAdapter {
                 if updated_ms > max_ms {
                     max_ms = updated_ms;
                 }
-                let updated_at = DateTime::<Utc>::from_timestamp_millis(updated_ms)
-                    .unwrap_or_else(Utc::now);
+                let updated_at =
+                    DateTime::<Utc>::from_timestamp_millis(updated_ms).unwrap_or_else(Utc::now);
                 docs.push(DocRef {
                     external_id: id,
                     title,
@@ -200,18 +200,15 @@ impl JoplinAdapter {
                 if updated_ms > max_ms {
                     max_ms = updated_ms;
                 }
-                let updated_at = DateTime::<Utc>::from_timestamp_millis(updated_ms)
-                    .unwrap_or_else(Utc::now);
+                let updated_at =
+                    DateTime::<Utc>::from_timestamp_millis(updated_ms).unwrap_or_else(Utc::now);
                 docs.push(DocRef {
                     external_id: id,
                     title,
                     updated_at,
                 });
             }
-            let has_more = v
-                .get("has_more")
-                .and_then(|x| x.as_bool())
-                .unwrap_or(false);
+            let has_more = v.get("has_more").and_then(|x| x.as_bool()).unwrap_or(false);
             if !has_more {
                 break;
             }
@@ -271,9 +268,7 @@ impl KnowledgeSource for JoplinAdapter {
     ) -> Result<(Vec<DocRef>, SyncCursor)> {
         match &self.mode {
             JoplinMode::LocalDb { .. } => self.list_local(cursor).await,
-            JoplinMode::Server { url, token } => {
-                self.list_server(url, token, cursor).await
-            }
+            JoplinMode::Server { url, token } => self.list_server(url, token, cursor).await,
         }
     }
 

@@ -32,7 +32,13 @@ pub struct NotionAdapter {
     #[allow(dead_code)] // reserved for workspace-scoped API calls (P1.5)
     workspace_id: Option<String>,
     weight: f32,
-    limiter: Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    limiter: Arc<
+        RateLimiter<
+            governor::state::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
 }
 
 impl NotionAdapter {
@@ -111,7 +117,9 @@ impl KnowledgeSource for NotionAdapter {
             if c.is_empty() {
                 None
             } else {
-                DateTime::parse_from_rfc3339(&c.0).ok().map(|dt| dt.with_timezone(&Utc))
+                DateTime::parse_from_rfc3339(&c.0)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
             }
         });
 
@@ -220,8 +228,14 @@ impl KnowledgeSource for NotionAdapter {
             }
         }
 
-        let title = doc_ref.title.clone().unwrap_or_else(|| doc_ref.external_id.clone());
-        let url = format!("https://www.notion.so/{}", doc_ref.external_id.replace('-', ""));
+        let title = doc_ref
+            .title
+            .clone()
+            .unwrap_or_else(|| doc_ref.external_id.clone());
+        let url = format!(
+            "https://www.notion.so/{}",
+            doc_ref.external_id.replace('-', "")
+        );
 
         Ok(Document {
             source_id: self.id.clone(),
@@ -241,7 +255,8 @@ impl KnowledgeSource for NotionAdapter {
             _ => bail!("notion adapter expects NotionBlocks(Array) body"),
         };
         let md = notion_blocks::blocks_to_markdown(blocks);
-        let raw = crate::sources::chunker::markdown::chunk_markdown(&doc.title, &md, CHUNK_MAX_CHARS);
+        let raw =
+            crate::sources::chunker::markdown::chunk_markdown(&doc.title, &md, CHUNK_MAX_CHARS);
         let mut out = Vec::with_capacity(raw.len());
         for (i, c) in raw.into_iter().enumerate() {
             out.push(Chunk::new(
@@ -440,7 +455,9 @@ pub async fn run_oauth_flow() -> Result<OAuthResult> {
 
 #[cfg(not(feature = "server"))]
 pub async fn run_oauth_flow() -> Result<OAuthResult> {
-    bail!("OAuth flow requires the 'server' feature (axum). Rebuild with default features or use --token <PAT>.");
+    bail!(
+        "OAuth flow requires the 'server' feature (axum). Rebuild with default features or use --token <PAT>."
+    );
 }
 
 #[cfg(test)]

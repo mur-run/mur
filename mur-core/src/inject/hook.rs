@@ -543,10 +543,7 @@ pub fn format_notes_section(hits: &[crate::store::vector::Hit]) -> String {
 ///   (b) resolve the hits in the async CLI handler and pass them in as a slice.
 #[cfg(feature = "sources")]
 #[allow(dead_code)] // wiring deferred: called from inject entry point in P1.5
-pub async fn fetch_source_hits_for_query(
-    query: &str,
-    k: usize,
-) -> Vec<crate::store::vector::Hit> {
+pub async fn fetch_source_hits_for_query(query: &str, k: usize) -> Vec<crate::store::vector::Hit> {
     use crate::store::embedding::{EmbeddingConfig, embed};
     use crate::store::vector::{SearchFilter, factory::get_vector_store};
 
@@ -561,8 +558,7 @@ pub async fn fetch_source_hits_for_query(
     let Ok(vs) = get_vector_store(&cfg, &index_path).await else {
         return vec![];
     };
-    let Ok(tantivy) =
-        crate::sources::tantivy::TantivyIndex::open_or_create(&home.join(".mur"))
+    let Ok(tantivy) = crate::sources::tantivy::TantivyIndex::open_or_create(&home.join(".mur"))
     else {
         return vec![];
     };
