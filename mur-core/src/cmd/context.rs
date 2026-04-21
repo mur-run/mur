@@ -23,7 +23,7 @@ pub(crate) async fn cmd_context(
         ScopeContext, score_and_rank_hybrid_with_scope, score_and_rank_with_scope,
     };
     use crate::store::embedding::{EmbeddingConfig, embed};
-    use crate::store::lancedb::VectorStore;
+    use crate::store::vector::LanceDbStore as VectorStore;
     use std::collections::HashMap;
 
     // Auto-pull from device sync if configured

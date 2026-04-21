@@ -20,6 +20,7 @@ pub mod interactive;
 pub mod llm;
 pub mod retrieve;
 pub mod session;
+pub mod sources;
 pub mod store;
 pub mod sync;
 pub mod team;
