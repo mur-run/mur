@@ -194,5 +194,34 @@ jq -e '.hits_used | length >= 1' /tmp/gp-step-14.json \
 jq -e '[.hits_used[] | .layer] | any(. == 3 or . == 4)' /tmp/gp-step-14.json \
   || { echo "FAIL step 14: no rollup hit (layer=3 or layer=4) in hits_used"; exit 1; }
 
+# ── Step 16: mur ask --continue appends follow-up turn ─────────────────
+echo "--- step 16: mur ask --continue (multi-turn) ---"
+MUR_OLLAMA_MOCK=1 "$MUR" ask "what did I ship this week?" > /tmp/gp-step-16a.txt 2>&1
+MUR_OLLAMA_MOCK=1 "$MUR" ask --continue "what about the prior week?" > /tmp/gp-step-16b.txt 2>&1
+test -f "$TMPHOME/.mur/conversations/ask-session.jsonl" \
+  || { echo "FAIL step 16: ask-session.jsonl missing"; exit 1; }
+lines=$(wc -l < "$TMPHOME/.mur/conversations/ask-session.jsonl")
+[ "$lines" -eq 2 ] \
+  || { echo "FAIL step 16: expected 2 turns in session, got $lines"; exit 1; }
+# Second turn must have non-null rewritten_question
+jq -e '.rewritten_question != null' \
+  <(tail -1 "$TMPHOME/.mur/conversations/ask-session.jsonl") > /dev/null \
+  || { echo "FAIL step 16: second turn missing rewritten_question"; exit 1; }
+# Second turn must have non-skipped rewriter_status
+status=$(jq -r '.rewriter_status' \
+  <(tail -1 "$TMPHOME/.mur/conversations/ask-session.jsonl"))
+[ "$status" != "skipped" ] \
+  || { echo "FAIL step 16: second turn rewriter_status is 'skipped', expected rewrote/no_rewrite_needed/failed"; exit 1; }
+
+# ── Step 17: mur ask --show-session prints summary ─────────────────────
+echo "--- step 17: mur ask --show-session ---"
+"$MUR" ask --show-session 2>&1 | tee /tmp/gp-step-17.txt
+grep -q "turns: 2" /tmp/gp-step-17.txt \
+  || { echo "FAIL step 17: show-session did not report turn count"; exit 1; }
+grep -q "what did I ship this week" /tmp/gp-step-17.txt \
+  || { echo "FAIL step 17: show-session did not echo first question"; exit 1; }
+grep -q "session:" /tmp/gp-step-17.txt \
+  || { echo "FAIL step 17: show-session did not print session path"; exit 1; }
+
 echo ""
-echo "=== ALL 15 STEPS GREEN ==="
+echo "=== ALL 17 STEPS GREEN ==="

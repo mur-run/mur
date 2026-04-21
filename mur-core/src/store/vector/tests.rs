@@ -40,7 +40,7 @@ pub async fn upsert_and_search<S: VectorStore>(store: &S, dims: usize) -> anyhow
         updated_at: chrono::Utc::now(),
         embedding: vec![0.1_f32; dims],
     };
-    store.upsert(&[chunk.clone()]).await?;
+    store.upsert(std::slice::from_ref(&chunk)).await?;
     let hits = store
         .search(&vec![0.1_f32; dims], 5, &SearchFilter::default())
         .await?;

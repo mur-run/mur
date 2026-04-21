@@ -67,6 +67,8 @@ mod tests {
             tokens_in: 100,
             tokens_out: 20,
             duration_ms: 500,
+            rewritten_question: None,
+            rewriter_status: crate::conversations::ask::session::RewriterStatus::Skipped,
         }
     }
 

@@ -230,6 +230,19 @@ impl OllamaClient {
     }
 }
 
+/// Given a CONDENSE-style prompt with "Latest question: <q>\n\nStandalone question:"
+/// extract the raw `<q>` for the identity-echo mock path. Returns the literal
+/// raw question on any parse failure (matches "return it as is" fallback).
+fn extract_latest_question_from_condense_prompt(prompt: &str) -> String {
+    let start_tag = "Latest question: ";
+    let Some(start) = prompt.find(start_tag) else {
+        return prompt.to_string();
+    };
+    let rest = &prompt[start + start_tag.len()..];
+    let end = rest.find("\n\n").unwrap_or(rest.len());
+    rest[..end].trim().to_string()
+}
+
 /// Deterministic fake response for tests. Echoes model+prompt hints so each
 /// test can assert which call site fired without a real Ollama.
 fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
@@ -249,6 +262,10 @@ fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
         } else {
             "Mock narrative: today the developer explored mock compression.".to_string()
         }
+    } else if req.prompt.contains("Standalone question:") {
+        // Phase 3.3 rewriter: identity (echo the raw latest question).
+        // Matches LangChain prompt's "return it as is" fallback.
+        extract_latest_question_from_condense_prompt(req.prompt)
     } else if req.prompt.contains("[cit:") {
         "Mock answer about the archive [cit: 2026-04-19 claude-code/mock:L1].".to_string()
     } else {
@@ -480,6 +497,36 @@ mod tests {
             resp.response.to_lowercase().contains("this month"),
             "expected month-specific mock narrative; got: {}",
             resp.response
+        );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn mock_returns_identity_for_standalone_question_prompt() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let prompt = "Given a chat history and the latest user question \
+                     which might reference context in the chat history, \
+                     formulate a standalone question which can be understood \
+                     without the chat history. Do NOT answer the question, \
+                     just reformulate it if needed and otherwise return it as is.\n\n\
+                     Chat history:\nUser: q1\nAssistant: a1\n\n\
+                     Latest question: what did I ship yesterday?\n\n\
+                     Standalone question:";
+        let req = GenerateRequest {
+            model: "qwen3:14b",
+            prompt,
+            system: None,
+            stream: false,
+            options: GenerateOptions::default(),
+        };
+        let resp = client.generate(req).await.unwrap();
+        assert_eq!(
+            resp.response.trim(),
+            "what did I ship yesterday?",
+            "mock should echo the raw 'Latest question:' as the standalone form"
         );
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }

@@ -347,7 +347,8 @@ enum Commands {
     },
     /// Ask a natural-language question about your conversation archive (Mode C).
     Ask {
-        question: String,
+        /// Question to ask. Required unless --show-session is passed.
+        question: Option<String>,
         /// Filter results to a specific source (e.g. "cc", "cursor").
         /// Phase 3.2 note: source filtering does NOT apply to weekly/monthly
         /// rollup hits (layer=3/4) — rollup rows use synthetic source strings
@@ -372,6 +373,16 @@ enum Commands {
         debug_prompt: bool,
         #[arg(long)]
         strict_citations: bool,
+        /// Append to the current session (multi-turn mode; Phase 3.3).
+        #[arg(long = "continue", conflicts_with = "new_flag")]
+        continue_flag: bool,
+        /// Archive current session and start fresh (default; flag is explicit for scripts).
+        #[arg(long = "new", conflicts_with = "continue_flag")]
+        new_flag: bool,
+        /// Print current session path, turn count, last turn time.
+        /// Ignores question if given; no LLM calls.
+        #[arg(long)]
+        show_session: bool,
     },
     #[cfg(feature = "sources")]
     /// Manage external knowledge sources (Notion, Obsidian, Joplin, ...).
@@ -1268,6 +1279,9 @@ async fn async_main() -> Result<()> {
             no_escalate,
             debug_prompt,
             strict_citations,
+            continue_flag,
+            new_flag,
+            show_session,
         } => {
             cmd::conversations_cmd::cmd_ask(cmd::conversations_cmd::AskArgs {
                 question,
@@ -1281,6 +1295,9 @@ async fn async_main() -> Result<()> {
                 no_escalate,
                 debug_prompt,
                 strict_citations,
+                continue_flag,
+                new_flag,
+                show_session,
             })
             .await?
         }

@@ -107,6 +107,19 @@ pub fn monthly_history_dir(root_override: Option<&str>) -> PathBuf {
     monthly_summary_root(root_override).join(".history")
 }
 
+/// Path to the active multi-turn Ask session file (`ask-session.jsonl`).
+/// Phase 3.3: single global session; `--new` archives prior to `.history/`.
+pub fn ask_session_path(root_override: Option<&str>) -> PathBuf {
+    conversations_root(root_override).join("ask-session.jsonl")
+}
+
+/// Directory that holds archived Ask session files (one per `--new` call).
+pub fn ask_session_history_dir(root_override: Option<&str>) -> PathBuf {
+    conversations_root(root_override)
+        .join("ask-sessions")
+        .join(".history")
+}
+
 pub fn index_path(override_path: Option<&str>) -> PathBuf {
     conversations_root(override_path).join("index.lance")
 }
@@ -214,6 +227,24 @@ mod tests {
         assert_eq!(
             p,
             std::path::PathBuf::from("/tmp/mur-test/conversations/summary/monthly/.history")
+        );
+    }
+
+    #[test]
+    fn ask_session_path_shape() {
+        let p = ask_session_path(Some("/tmp/mur-test"));
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/tmp/mur-test/conversations/ask-session.jsonl")
+        );
+    }
+
+    #[test]
+    fn ask_session_history_dir_shape() {
+        let p = ask_session_history_dir(Some("/tmp/mur-test"));
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/tmp/mur-test/conversations/ask-sessions/.history")
         );
     }
 }
