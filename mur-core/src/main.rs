@@ -20,6 +20,8 @@ mod llm;
 mod retrieve;
 mod server;
 mod session;
+#[cfg(feature = "sources")]
+mod sources;
 mod store;
 mod sync;
 mod team;
@@ -348,6 +350,12 @@ enum Commands {
         debug_prompt: bool,
         #[arg(long)]
         strict_citations: bool,
+    },
+    #[cfg(feature = "sources")]
+    /// Manage external knowledge sources (Notion, Obsidian, Joplin, ...).
+    Source {
+        #[command(subcommand)]
+        cmd: cmd::source_cmd::SourceCommand,
     },
 }
 
@@ -1178,6 +1186,8 @@ async fn async_main() -> Result<()> {
             })
             .await?
         }
+        #[cfg(feature = "sources")]
+        Commands::Source { cmd } => cmd::source_cmd::handle(cmd).await?,
     }
 
     Ok(())

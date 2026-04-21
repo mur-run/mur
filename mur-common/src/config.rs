@@ -27,6 +27,13 @@ pub struct Config {
 
     #[serde(default)]
     pub sync: SyncConfig,
+
+    // --- P1.1 additions ---
+    #[serde(default)]
+    pub storage: StorageConfig,
+
+    #[serde(default)]
+    pub sources_global: SourcesGlobalConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -182,6 +189,86 @@ impl Default for PathConfig {
             mur_dir: default_mur_dir(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageConfig {
+    /// Vector backend identifier: "lancedb" (default) or "qdrant".
+    #[serde(default = "default_vector_backend")]
+    pub vector_backend: String,
+
+    /// Qdrant connection URL (only used when vector_backend = "qdrant").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qdrant_url: Option<String>,
+
+    /// Keyring account name holding the Qdrant API key, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qdrant_api_key_ref: Option<String>,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            vector_backend: default_vector_backend(),
+            qdrant_url: None,
+            qdrant_api_key_ref: None,
+        }
+    }
+}
+
+fn default_vector_backend() -> String {
+    "lancedb".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourcesGlobalConfig {
+    /// Polling interval for cloud sources (seconds).
+    #[serde(default = "default_poll_interval_secs")]
+    pub poll_interval_secs: u64,
+
+    /// Safety cap: do not sync more than this many chunks per run.
+    #[serde(default = "default_max_chunks_per_sync")]
+    pub max_chunks_per_sync: usize,
+
+    /// Upper bound on parallel source sync tasks.
+    #[serde(default = "default_max_parallel_sources")]
+    pub max_parallel_sources: usize,
+
+    /// Weight applied to new sources unless overridden.
+    #[serde(default = "default_source_weight")]
+    pub default_weight: f32,
+
+    /// Embedding request batch size.
+    #[serde(default = "default_embedding_batch_size")]
+    pub embedding_batch_size: usize,
+}
+
+impl Default for SourcesGlobalConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval_secs: default_poll_interval_secs(),
+            max_chunks_per_sync: default_max_chunks_per_sync(),
+            max_parallel_sources: default_max_parallel_sources(),
+            default_weight: default_source_weight(),
+            embedding_batch_size: default_embedding_batch_size(),
+        }
+    }
+}
+
+fn default_poll_interval_secs() -> u64 {
+    600
+}
+fn default_max_chunks_per_sync() -> usize {
+    10_000
+}
+fn default_max_parallel_sources() -> usize {
+    3
+}
+fn default_source_weight() -> f32 {
+    1.0
+}
+fn default_embedding_batch_size() -> usize {
+    32
 }
 
 fn default_embedding_provider() -> String {
@@ -594,5 +681,51 @@ conversations:
             "expected 0.88, got {}",
             c.mmr_threshold
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_config_default_is_lancedb() {
+        let c = StorageConfig::default();
+        assert_eq!(c.vector_backend, "lancedb");
+        assert_eq!(c.qdrant_url, None);
+        assert_eq!(c.qdrant_api_key_ref, None);
+    }
+
+    #[test]
+    fn sources_global_config_has_sensible_defaults() {
+        let c = SourcesGlobalConfig::default();
+        assert_eq!(c.poll_interval_secs, 600);
+        assert_eq!(c.max_chunks_per_sync, 10_000);
+        assert_eq!(c.max_parallel_sources, 3);
+        assert_eq!(c.default_weight, 1.0);
+        assert_eq!(c.embedding_batch_size, 32);
+    }
+
+    #[test]
+    fn config_default_has_storage_and_sources_global() {
+        let c = Config::default();
+        assert_eq!(c.storage.vector_backend, "lancedb");
+        assert_eq!(c.sources_global.default_weight, 1.0);
+    }
+
+    #[test]
+    fn config_loads_yaml_without_new_fields() {
+        // Existing users' config.yaml won't mention storage or sources_global.
+        // It must still parse.
+        let yaml = r#"
+embedding:
+  provider: ollama
+  model: test-model
+  dimensions: 512
+  ollama_endpoint: http://localhost:11434
+"#;
+        let c: Config = serde_yaml::from_str(yaml).expect("parses");
+        assert_eq!(c.storage.vector_backend, "lancedb");
+        assert_eq!(c.sources_global.max_parallel_sources, 3);
     }
 }

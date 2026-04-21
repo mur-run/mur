@@ -11,7 +11,7 @@ use crate::store::yaml::YamlStore;
 /// Accepts exact name, semantic query, or pipeline expression (w1 | w2 && w3, w4).
 pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool, prompt: bool) -> Result<()> {
     use crate::store::embedding::{EmbeddingConfig, embed};
-    use crate::store::lancedb::VectorStore;
+    use crate::store::vector::LanceDbStore as VectorStore;
     use mur_common::pipeline::{has_pipeline_syntax, parse_pipeline_expr};
 
     // Detect pipeline syntax and delegate to PipelineExecutor
@@ -273,7 +273,7 @@ pub(crate) fn cmd_workflow_show(name: &str, markdown: bool) -> Result<()> {
 /// Semantic search for workflows using LanceDB embeddings.
 pub(crate) async fn cmd_workflow_search(query: &str, limit: usize) -> Result<()> {
     use crate::store::embedding::{EmbeddingConfig, embed};
-    use crate::store::lancedb::VectorStore;
+    use crate::store::vector::LanceDbStore as VectorStore;
 
     let store = WorkflowYamlStore::default_store()?;
     let all_workflows = store.list_all()?;

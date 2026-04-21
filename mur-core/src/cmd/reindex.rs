@@ -5,7 +5,7 @@ use crate::store::yaml::YamlStore;
 
 pub(crate) async fn cmd_reindex() -> Result<()> {
     use crate::store::embedding::{EmbeddingConfig, embed};
-    use crate::store::lancedb::VectorStore;
+    use crate::store::vector::LanceDbStore as VectorStore;
 
     let pattern_store = YamlStore::default_store()?;
     let patterns = pattern_store.list_all()?;
