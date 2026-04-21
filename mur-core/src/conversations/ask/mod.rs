@@ -9,6 +9,7 @@ pub mod format;
 pub mod generate;
 pub mod prompt;
 pub mod retrieve;
+pub mod session;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Format {
@@ -43,7 +44,7 @@ pub struct AskRequest {
     pub strict_citations: bool,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Citation {
     pub id: u32,
     pub date: chrono::NaiveDate,
@@ -55,7 +56,7 @@ pub struct Citation {
     pub score: f64,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HitInfo {
     pub layer: i8,
     pub source: String,
