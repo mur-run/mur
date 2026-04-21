@@ -41,54 +41,62 @@ pub async fn gather_hits(args: RetrieveArgs<'_>) -> Result<Vec<ResolvedHit>> {
     let idx = ConversationIndex::open(dims, args.root_override).await?;
     let primary_src = args.filters.source.first().copied();
 
-    // Phase 3.1: layer=2 (spans) is the preferred retrieval unit.
+    // Phase 3.2: collapsed tree — one k-NN per layer {2,1,3,4}, merged.
+    let k_each = (args.k_summary as u32).div_ceil(4).max(1) as usize;
     let l2 = idx
-        .search(&args.query_embedding, args.k_summary, primary_src, Some(2))
+        .search(&args.query_embedding, k_each, primary_src, Some(2))
         .await?;
-    // Fallback to layer=1 (narratives) for unmigrated archives.
-    let l1 = if l2.is_empty() {
-        idx.search(&args.query_embedding, args.k_summary, primary_src, Some(1))
-            .await?
-    } else {
-        Vec::new()
-    };
+    let l1 = idx
+        .search(&args.query_embedding, k_each, primary_src, Some(1))
+        .await?;
+    let l3 = idx
+        .search(&args.query_embedding, k_each, primary_src, Some(3))
+        .await?;
+    let l4 = idx
+        .search(&args.query_embedding, k_each, primary_src, Some(4))
+        .await?;
 
-    let effective_top = l2
-        .first()
+    let upper_empty = l2.is_empty() && l1.is_empty() && l3.is_empty() && l4.is_empty();
+    let effective_top = [&l2, &l1, &l3, &l4]
+        .iter()
+        .filter_map(|v| v.first())
         .map(similarity_of)
-        .or_else(|| l1.first().map(similarity_of))
-        .unwrap_or(0.0);
-    let l0 = if !args.no_escalate
-        && (effective_top < args.escalation_threshold || (l2.is_empty() && l1.is_empty()))
-    {
+        .fold(0.0_f64, f64::max);
+    let l0 = if !args.no_escalate && (upper_empty || effective_top < args.escalation_threshold) {
         idx.search(&args.query_embedding, args.k_raw, primary_src, Some(0))
             .await?
     } else {
         Vec::new()
     };
 
-    let filtered_l2: Vec<_> = l2.into_iter().filter(|h| passes(h, args.filters)).collect();
-    let filtered_l1: Vec<_> = l1.into_iter().filter(|h| passes(h, args.filters)).collect();
-    let filtered_l0: Vec<_> = l0.into_iter().filter(|h| passes(h, args.filters)).collect();
-
-    let mut resolved = Vec::new();
-    for h in filtered_l2 {
+    let mut resolved: Vec<ResolvedHit> = Vec::new();
+    for h in l2.into_iter().filter(|h| passes(h, args.filters)) {
         resolved.push(resolve_span_hit(h)?);
     }
-    for h in filtered_l1 {
+    for h in l1.into_iter().filter(|h| passes(h, args.filters)) {
         resolved.push(resolve_summary_hit(h, args.root_override)?);
     }
-    for h in filtered_l0 {
+    for h in l3.into_iter().filter(|h| passes(h, args.filters)) {
+        resolved.push(resolve_week_hit(h, args.root_override)?);
+    }
+    for h in l4.into_iter().filter(|h| passes(h, args.filters)) {
+        resolved.push(resolve_month_hit(h, args.root_override)?);
+    }
+    for h in l0.into_iter().filter(|h| passes(h, args.filters)) {
         resolved.push(resolve_raw_hit(h));
     }
 
-    // Phase 3.1: cosine MMR on retrieved vectors; falls back to word-Jaccard
-    // for mixed vector/no-vector pairs.
-    let deduped = mmr_dedupe_cosine(resolved, args.mmr_threshold);
+    // Global score sort so mixed-layer MMR picks the highest-scoring hit first.
+    resolved.sort_by(|a, b| {
+        b.info
+            .score
+            .partial_cmp(&a.info.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
+    let deduped = mmr_dedupe_cosine(resolved, args.mmr_threshold);
     let budget = (args.max_context_tokens * 9 / 10).max(400);
-    let capped = cap_by_budget(deduped, budget);
-    Ok(capped)
+    Ok(cap_by_budget(deduped, budget))
 }
 
 fn passes(h: &SearchHit, f: &Filters) -> bool {
@@ -187,6 +195,60 @@ fn resolve_span_hit(h: SearchHit) -> Result<ResolvedHit> {
         snippet: h.content.clone(),
         line_hint,
         span_index_in_summary: line_hint,
+        vector: h.vector,
+    })
+}
+
+fn resolve_week_hit(h: SearchHit, _root_override: Option<&str>) -> Result<ResolvedHit> {
+    let window_label = h
+        .conv_id
+        .strip_prefix("week:")
+        .unwrap_or(&h.conv_id)
+        .to_string();
+    let monday = crate::conversations::summarize::windows::iso_week_monday(&window_label)
+        .ok()
+        .or_else(|| chrono::DateTime::from_timestamp(h.ts, 0).map(|d| d.date_naive()))
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let score = similarity_of(&h);
+    Ok(ResolvedHit {
+        layer: 3,
+        info: HitInfo {
+            layer: 3,
+            source: "week".to_string(),
+            conv_id: window_label,
+            date: monday,
+            score,
+        },
+        snippet: h.content.clone(),
+        line_hint: None,
+        span_index_in_summary: None,
+        vector: h.vector,
+    })
+}
+
+fn resolve_month_hit(h: SearchHit, _root_override: Option<&str>) -> Result<ResolvedHit> {
+    let window_label = h
+        .conv_id
+        .strip_prefix("month:")
+        .unwrap_or(&h.conv_id)
+        .to_string();
+    let first = crate::conversations::summarize::windows::month_first_day(&window_label)
+        .ok()
+        .or_else(|| chrono::DateTime::from_timestamp(h.ts, 0).map(|d| d.date_naive()))
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let score = similarity_of(&h);
+    Ok(ResolvedHit {
+        layer: 4,
+        info: HitInfo {
+            layer: 4,
+            source: "month".to_string(),
+            conv_id: window_label,
+            date: first,
+            score,
+        },
+        snippet: h.content.clone(),
+        line_hint: None,
+        span_index_in_summary: None,
         vector: h.vector,
     })
 }
@@ -436,5 +498,252 @@ mod tests {
         };
         let out = cap_by_budget(vec![giant], 100);
         assert_eq!(out.len(), 1, "must keep at least one hit even over budget");
+    }
+
+    fn make_msg(conv: &str, text: &str) -> mur_common::Message {
+        mur_common::Message {
+            v: 1,
+            ts: chrono::Utc::now(),
+            src: mur_common::Source::ClaudeCode,
+            conv: conv.into(),
+            role: mur_common::Role::User,
+            content: mur_common::Content::Text { value: text.into() },
+            meta: serde_json::Value::Null,
+            refs: vec![],
+        }
+    }
+
+    #[test]
+    fn resolve_week_hit_strips_conv_prefix_and_derives_monday() {
+        use chrono::TimeZone;
+        let h = SearchHit {
+            id: "wk_2026-W16_L3_0".into(),
+            ts: chrono::Utc
+                .with_ymd_and_hms(2026, 4, 13, 0, 0, 0)
+                .unwrap()
+                .timestamp(),
+            source: Source::ClaudeCode,
+            conv_id: "week:2026-W16".into(),
+            content: "this week...".into(),
+            distance: 0.1,
+            layer: 3,
+            vector: Some(vec![0.1; 16]),
+        };
+        let r = resolve_week_hit(h, None).unwrap();
+        assert_eq!(r.layer, 3);
+        assert_eq!(r.info.conv_id, "2026-W16");
+        assert_eq!(r.info.source, "week");
+        assert_eq!(
+            r.info.date,
+            chrono::NaiveDate::from_ymd_opt(2026, 4, 13).unwrap()
+        );
+        assert_eq!(r.snippet, "this week...");
+    }
+
+    #[test]
+    fn resolve_month_hit_strips_conv_prefix_and_derives_1st() {
+        use chrono::TimeZone;
+        let h = SearchHit {
+            id: "mo_2026-04_L4_0".into(),
+            ts: chrono::Utc
+                .with_ymd_and_hms(2026, 4, 1, 0, 0, 0)
+                .unwrap()
+                .timestamp(),
+            source: Source::ClaudeCode,
+            conv_id: "month:2026-04".into(),
+            content: "this month...".into(),
+            distance: 0.1,
+            layer: 4,
+            vector: Some(vec![0.1; 16]),
+        };
+        let r = resolve_month_hit(h, None).unwrap();
+        assert_eq!(r.layer, 4);
+        assert_eq!(r.info.conv_id, "2026-04");
+        assert_eq!(r.info.source, "month");
+        assert_eq!(
+            r.info.date,
+            chrono::NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn gather_hits_prefers_layer_2() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = super::super::super::index::ConversationIndex::open(16, Some(root))
+            .await
+            .unwrap();
+        let s = make_msg("c_span", "span text");
+        idx.upsert_with_layer(&[(s, vec![0.7; 16], 2)])
+            .await
+            .unwrap();
+        let args = RetrieveArgs {
+            query_embedding: vec![0.7; 16],
+            filters: &Filters {
+                source: vec![],
+                since: None,
+                until: None,
+                min_score: 0.0,
+            },
+            k_summary: 4,
+            k_raw: 4,
+            escalation_threshold: 0.3,
+            mmr_threshold: 0.95,
+            no_escalate: false,
+            max_context_tokens: 6000,
+            root_override: Some(root),
+        };
+        let hits = gather_hits(args).await.unwrap();
+        // Phase 3.2: collapsed tree surfaces hits from all populated layers.
+        // Layer=2 is no longer "preferred" — it's one of the four parallel
+        // searches. Assert layer=2 is AMONG the returned layers.
+        assert!(
+            hits.iter().any(|h| h.layer == 2),
+            "layer=2 should appear in results"
+        );
+    }
+
+    #[tokio::test]
+    async fn gather_hits_falls_back_to_layer_1_when_no_spans() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = super::super::super::index::ConversationIndex::open(16, Some(root))
+            .await
+            .unwrap();
+        let s = make_msg("c_summary", "narrative text");
+        idx.upsert_with_layer(&[(s, vec![0.7; 16], 1)])
+            .await
+            .unwrap();
+        let args = RetrieveArgs {
+            query_embedding: vec![0.7; 16],
+            filters: &Filters {
+                source: vec![],
+                since: None,
+                until: None,
+                min_score: 0.0,
+            },
+            k_summary: 4,
+            k_raw: 4,
+            escalation_threshold: 0.3,
+            mmr_threshold: 0.95,
+            no_escalate: false,
+            max_context_tokens: 6000,
+            root_override: Some(root),
+        };
+        let hits = gather_hits(args).await.unwrap();
+        assert!(
+            hits.iter().any(|h| h.layer == 1),
+            "layer=1 should appear in results"
+        );
+    }
+
+    #[tokio::test]
+    async fn gather_hits_collapsed_tree_returns_hits_from_multiple_layers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = super::super::super::index::ConversationIndex::open(16, Some(root))
+            .await
+            .unwrap();
+        // Use distinct vectors per layer so MMR (cosine) doesn't dedupe them.
+        // vec_l2: mostly dim-0, vec_l3: mostly dim-1, vec_l4: mostly dim-2
+        let mut vec_l2 = vec![0.0f32; 16];
+        vec_l2[0] = 1.0;
+        let mut vec_l3 = vec![0.0f32; 16];
+        vec_l3[1] = 1.0;
+        let mut vec_l4 = vec![0.0f32; 16];
+        vec_l4[2] = 1.0;
+        // Query vector is mix of all three so all are found via k-NN
+        let mut query = vec![0.0f32; 16];
+        query[0] = 1.0;
+        query[1] = 1.0;
+        query[2] = 1.0;
+
+        // Seed layer=2 span
+        let s = make_msg("c_span", "span text");
+        idx.upsert_with_layer(&[(s, vec_l2.clone(), 2)])
+            .await
+            .unwrap();
+        // Seed layer=3 week
+        idx.upsert_rollup_row(super::super::super::index::RollupRow {
+            id: "wk_2026-W16_L3_0",
+            ts: 0,
+            source: "week",
+            conv_id: "week:2026-W16",
+            layer: 3,
+            content: "week narrative",
+            vector: &vec_l3,
+        })
+        .await
+        .unwrap();
+        // Seed layer=4 month
+        idx.upsert_rollup_row(super::super::super::index::RollupRow {
+            id: "mo_2026-04_L4_0",
+            ts: 0,
+            source: "month",
+            conv_id: "month:2026-04",
+            layer: 4,
+            content: "month narrative",
+            vector: &vec_l4,
+        })
+        .await
+        .unwrap();
+
+        let args = RetrieveArgs {
+            query_embedding: query,
+            filters: &Filters {
+                source: vec![],
+                since: None,
+                until: None,
+                min_score: 0.0,
+            },
+            k_summary: 8,
+            k_raw: 4,
+            escalation_threshold: 0.3,
+            // threshold=0.95: orthogonal vectors have cosine=0.0 < 0.95 so all 3 survive MMR
+            mmr_threshold: 0.95,
+            no_escalate: false,
+            max_context_tokens: 6000,
+            root_override: Some(root),
+        };
+        let hits = gather_hits(args).await.unwrap();
+        let layers: Vec<i8> = hits.iter().map(|h| h.layer).collect();
+        assert!(layers.contains(&2), "layers: {layers:?}");
+        assert!(layers.contains(&3), "layers: {layers:?}");
+        assert!(layers.contains(&4), "layers: {layers:?}");
+    }
+
+    #[tokio::test]
+    async fn gather_hits_escalates_to_layer_0_when_all_upper_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = super::super::super::index::ConversationIndex::open(16, Some(root))
+            .await
+            .unwrap();
+        let m = make_msg("raw", "raw message");
+        idx.upsert_with_layer(&[(m, vec![0.5; 16], 0)])
+            .await
+            .unwrap();
+        let args = RetrieveArgs {
+            query_embedding: vec![0.5; 16],
+            filters: &Filters {
+                source: vec![],
+                since: None,
+                until: None,
+                min_score: 0.0,
+            },
+            k_summary: 4,
+            k_raw: 4,
+            escalation_threshold: 0.5,
+            mmr_threshold: 0.95,
+            no_escalate: false,
+            max_context_tokens: 6000,
+            root_override: Some(root),
+        };
+        let hits = gather_hits(args).await.unwrap();
+        assert!(
+            hits.iter().any(|h| h.layer == 0),
+            "expected layer=0 via escalation; got: {:?}",
+            hits.iter().map(|h| h.layer).collect::<Vec<_>>()
+        );
     }
 }

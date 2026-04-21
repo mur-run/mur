@@ -70,19 +70,23 @@ pub fn render(
 }
 
 pub fn cite_anchor(h: &ResolvedHit) -> String {
-    match (h.layer, h.line_hint, h.span_index_in_summary) {
-        (1, _, Some(idx)) => format!(
-            "[cit: {} {}/{} @summary-span-{}]",
-            h.info.date, h.info.source, h.info.conv_id, idx
-        ),
-        (_, Some(line), _) => format!(
-            "[cit: {} {}/{}:L{}]",
-            h.info.date, h.info.source, h.info.conv_id, line
-        ),
-        _ => format!(
-            "[cit: {} {}/{}]",
-            h.info.date, h.info.source, h.info.conv_id
-        ),
+    match h.layer {
+        4 => format!("[cit: {} month/{}]", h.info.date, h.info.conv_id),
+        3 => format!("[cit: {} week/{}]", h.info.date, h.info.conv_id),
+        _ => match (h.line_hint, h.span_index_in_summary) {
+            (_, Some(idx)) if h.layer == 1 => format!(
+                "[cit: {} {}/{} @summary-span-{}]",
+                h.info.date, h.info.source, h.info.conv_id, idx
+            ),
+            (Some(line), _) => format!(
+                "[cit: {} {}/{}:L{}]",
+                h.info.date, h.info.source, h.info.conv_id, line
+            ),
+            _ => format!(
+                "[cit: {} {}/{}]",
+                h.info.date, h.info.source, h.info.conv_id
+            ),
+        },
     }
 }
 
@@ -148,5 +152,43 @@ mod tests {
         assert_eq!(r.valid_citations.len(), 2);
         assert!(r.user.contains("one"));
         assert!(r.user.contains("two"));
+    }
+
+    #[test]
+    fn cite_anchor_layer_3_week_format() {
+        let h = ResolvedHit {
+            layer: 3,
+            info: HitInfo {
+                layer: 3,
+                source: "week".into(),
+                conv_id: "2026-W16".into(),
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 13).unwrap(),
+                score: 0.9,
+            },
+            snippet: "this week...".into(),
+            line_hint: None,
+            span_index_in_summary: None,
+            vector: Some(vec![0.1; 16]),
+        };
+        assert_eq!(cite_anchor(&h), "[cit: 2026-04-13 week/2026-W16]");
+    }
+
+    #[test]
+    fn cite_anchor_layer_4_month_format() {
+        let h = ResolvedHit {
+            layer: 4,
+            info: HitInfo {
+                layer: 4,
+                source: "month".into(),
+                conv_id: "2026-04".into(),
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+                score: 0.9,
+            },
+            snippet: "this month...".into(),
+            line_hint: None,
+            span_index_in_summary: None,
+            vector: None,
+        };
+        assert_eq!(cite_anchor(&h), "[cit: 2026-04-01 month/2026-04]");
     }
 }
