@@ -111,10 +111,8 @@ impl TantivyIndex {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            if let Some(allow) = source_ids {
-                if !allow.iter().any(|s| s == &source_id) {
-                    continue;
-                }
+            if source_ids.is_some_and(|allow| !allow.iter().any(|s| s == &source_id)) {
+                continue;
             }
             hits.push(Bm25Hit {
                 chunk_id,
@@ -129,6 +127,7 @@ impl TantivyIndex {
         Ok(hits)
     }
 
+    #[allow(dead_code)] // called by sync remove path wired in P1.4
     pub fn delete_by_chunk_ids(&self, chunk_ids: &[String]) -> Result<()> {
         if chunk_ids.is_empty() {
             return Ok(());

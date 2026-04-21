@@ -9,12 +9,14 @@ use crate::store::embedding::{EmbeddingConfig, embed};
 use crate::store::vector::{Hit, SearchFilter, VectorStore};
 
 /// Unified hit. Tagged with kind so the caller / formatter can split sections.
+#[allow(dead_code)] // kind used by P1.4 CLI formatter; Pattern variant wired then
 #[derive(Debug, Clone)]
 pub struct UnifiedHit {
     pub kind: HitKind,
     pub hit: Hit,
 }
 
+#[allow(dead_code)] // Pattern variant consumed by P1.4 CLI formatter
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HitKind {
     Pattern,
@@ -28,6 +30,7 @@ pub enum HitKind {
 /// The pattern side is NOT included here in P1.3 — callers invoke the
 /// existing pattern retrieve pipeline separately and concatenate. See
 /// design spec §8.1.
+#[allow(clippy::too_many_arguments)] // P1.4 will wrap args into a config struct
 pub async fn retrieve_unified(
     query: &str,
     vector_store: Arc<dyn VectorStore>,

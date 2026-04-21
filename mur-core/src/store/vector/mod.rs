@@ -17,6 +17,7 @@ pub mod tests;
 
 pub use self::lancedb::LanceDbStore;
 #[cfg(feature = "sources")]
+#[allow(unused_imports)] // QdrantStore selected at runtime via factory; wired to CLI in P1.4
 pub use self::qdrant::QdrantStore;
 
 /// An embedded chunk ready to be stored.

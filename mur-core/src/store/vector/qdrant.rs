@@ -142,17 +142,17 @@ impl VectorStore for QdrantStore {
             let source_id = payload
                 .get("source_id")
                 .and_then(|v| v.as_str())
-                .map(|s| s.clone())
+                .map(|s| s.to_owned())
                 .unwrap_or_default();
             let external_id = payload
                 .get("external_id")
                 .and_then(|v| v.as_str())
-                .map(|s| s.clone())
+                .map(|s| s.to_owned())
                 .unwrap_or_default();
             let text = payload
                 .get("text")
                 .and_then(|v| v.as_str())
-                .map(|s| s.clone())
+                .map(|s| s.to_owned())
                 .unwrap_or_default();
             let heading_path: Vec<String> = payload
                 .get("heading_path")

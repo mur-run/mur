@@ -501,6 +501,7 @@ fn format_content(content: &Content) -> String {
 // ---------- P1.3: format external-source notes ----------
 
 #[cfg(feature = "sources")]
+#[allow(dead_code)] // called by CLI inject path wired in P1.4
 pub fn format_notes_section(hits: &[crate::store::vector::Hit]) -> String {
     if hits.is_empty() {
         return String::new();
