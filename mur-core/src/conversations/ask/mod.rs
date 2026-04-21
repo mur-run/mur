@@ -9,6 +9,7 @@ pub mod format;
 pub mod generate;
 pub mod prompt;
 pub mod retrieve;
+pub mod rewriter;
 pub mod session;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
