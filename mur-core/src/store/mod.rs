@@ -5,8 +5,8 @@
 pub mod config;
 pub mod embedding;
 pub mod exchange;
-pub mod lancedb;
 pub mod pipeline_yaml;
 pub mod spot_rate;
+pub mod vector;
 pub mod workflow_yaml;
 pub mod yaml;

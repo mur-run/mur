@@ -18,6 +18,9 @@ pub(crate) mod var;
 pub(crate) mod verify;
 pub(crate) mod workflow;
 
+#[cfg(feature = "sources")]
+pub(crate) mod source_cmd;
+
 pub(crate) fn read_multiline() -> anyhow::Result<String> {
     let mut lines = Vec::new();
     loop {
