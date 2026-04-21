@@ -20,7 +20,17 @@ pub async fn get_vector_store(cfg: &Config, index_dir: &Path) -> Result<Arc<dyn 
                 .context("opening LanceDB vector store")?;
             Ok(Arc::new(store))
         }
-        "qdrant" => bail!("Qdrant backend is not available until P1.3"),
+        "qdrant" => {
+            let url = cfg
+                .storage
+                .qdrant_url
+                .clone()
+                .context("storage.qdrant_url required when vector_backend = qdrant")?;
+            let store = super::qdrant::QdrantStore::open(&url, cfg.embedding.dimensions as i32)
+                .await
+                .context("opening Qdrant vector store")?;
+            Ok(Arc::new(store))
+        }
         other => bail!("unknown storage.vector_backend: {other}"),
     }
 }
@@ -46,12 +56,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn factory_rejects_qdrant_in_p1_1() {
+    async fn factory_qdrant_requires_url() {
         let tmp = TempDir::new().unwrap();
         let mut cfg = dims_128_cfg();
         cfg.storage.vector_backend = "qdrant".into();
+        // No qdrant_url set → factory returns an error about missing URL.
         let err = get_vector_store(&cfg, tmp.path()).await.err().unwrap();
-        assert!(err.to_string().contains("not available until P1.3"));
+        assert!(
+            err.to_string().contains("qdrant_url"),
+            "expected qdrant_url error, got: {err}"
+        );
     }
 
     #[tokio::test]

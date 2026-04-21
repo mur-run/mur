@@ -14,6 +14,7 @@ pub mod credentials;
 pub mod instance;
 pub mod kind;
 pub mod sync;
+pub mod tantivy;
 pub mod types;
 
 pub use kind::SourceKind;

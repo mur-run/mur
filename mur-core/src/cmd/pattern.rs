@@ -188,6 +188,7 @@ pub(crate) fn cmd_new(diagram_path: Option<String>) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)] // called via unified search path in P1.4; currently superseded by cmd/search.rs
 pub(crate) fn cmd_search(query: &str) -> Result<()> {
     use crate::retrieve::gate::{GateDecision, evaluate_query};
     use crate::retrieve::scoring::score_and_rank;
