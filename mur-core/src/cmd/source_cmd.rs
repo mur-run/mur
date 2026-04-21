@@ -271,18 +271,142 @@ async fn status(id: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-// ---------- stubs until Task 13/14 ----------
+// ---------- Task 13 handlers ----------
 
-async fn sync(_id: Option<&str>, _full: bool) -> Result<()> {
-    bail!("`mur source sync` arrives in Task 13")
+async fn sync(id: Option<&str>, full: bool) -> Result<()> {
+    use crate::sources::adapters::obsidian::ObsidianAdapter;
+    use crate::sources::instance::SourceInstanceStore;
+    use crate::sources::sync::sync_source;
+    use crate::store::embedding::EmbeddingConfig;
+    use crate::store::vector::factory::get_vector_store;
+    use anyhow::Context;
+
+    let cfg = crate::store::config::load_config()?;
+    let emb_cfg = EmbeddingConfig::from_config(&cfg);
+    let index_path = dirs::home_dir()
+        .context("no home dir")?
+        .join(".mur")
+        .join("index");
+    let vector_store = get_vector_store(&cfg, &index_path).await?;
+
+    let store = SourceInstanceStore::default_store()?;
+    let targets: Vec<crate::sources::instance::SourceInstance> = match id {
+        Some(i) => vec![store.load(i)?],
+        None => store.list()?.into_iter().filter(|inst| inst.enabled).collect(),
+    };
+    if targets.is_empty() {
+        println!("(no enabled sources to sync)");
+        return Ok(());
+    }
+
+    for mut inst in targets {
+        if inst.type_name != "obsidian" {
+            println!(
+                "⏭  {}: adapter `{}` arrives in a later sub-milestone",
+                inst.id, inst.type_name
+            );
+            continue;
+        }
+        let adapter = ObsidianAdapter::from_instance(&inst)?;
+        println!("↻ syncing {}{}", inst.id, if full { " (full)" } else { "" });
+        let report = sync_source(
+            &adapter,
+            &mut inst,
+            &store,
+            vector_store.clone(),
+            &emb_cfg,
+            full,
+        )
+        .await?;
+        println!(
+            "  synced {} docs ({} chunks), deleted {}, {} errors",
+            report.docs_synced,
+            report.chunks_emitted,
+            report.docs_deleted,
+            report.errors.len()
+        );
+        for e in report.errors.iter().take(3) {
+            println!("  ! {e}");
+        }
+    }
+    Ok(())
 }
 
-async fn remove(_id: &str, _keep_index: bool) -> Result<()> {
-    bail!("`mur source remove` arrives in Task 13")
+async fn remove(id: &str, keep_index: bool) -> Result<()> {
+    use crate::sources::instance::SourceInstanceStore;
+    use crate::store::vector::factory::get_vector_store;
+    use anyhow::Context;
+
+    let store = SourceInstanceStore::default_store()?;
+    let _ = store
+        .load(id)
+        .with_context(|| format!("source `{id}` not found"))?;
+
+    if !keep_index {
+        let cfg = crate::store::config::load_config()?;
+        let index_path = dirs::home_dir()
+            .context("no home dir")?
+            .join(".mur")
+            .join("index");
+        let vs = get_vector_store(&cfg, &index_path).await?;
+        vs.delete_by_source(id)
+            .await
+            .context("delete source chunks")?;
+        println!("🗑  removed indexed chunks for {id}");
+    }
+    store.delete(id)?;
+    println!("🗑  removed yaml for {id}");
+    Ok(())
 }
 
-async fn test_source(_id: &str) -> Result<()> {
-    bail!("`mur source test` arrives in Task 13")
+async fn test_source(id: &str) -> Result<()> {
+    use crate::sources::adapters::obsidian::ObsidianAdapter;
+    use crate::sources::instance::SourceInstanceStore;
+    use crate::sources::types::DocumentBody;
+    use crate::sources::KnowledgeSource;
+    use crate::store::embedding::{embed, EmbeddingConfig};
+    use std::time::Instant;
+
+    let store = SourceInstanceStore::default_store()?;
+    let inst = store.load(id)?;
+    if inst.type_name != "obsidian" {
+        bail!(
+            "test only supports obsidian in P1.2; got `{}`",
+            inst.type_name
+        );
+    }
+    let adapter = ObsidianAdapter::from_instance(&inst)?;
+
+    let t0 = Instant::now();
+    let (docs, _cursor) = adapter.list_documents(None).await?;
+    println!("→ list_documents: {} docs in {:?}", docs.len(), t0.elapsed());
+    if docs.is_empty() {
+        println!("   (no documents — nothing to test)");
+        return Ok(());
+    }
+    let doc_ref = &docs[0];
+    println!("→ sampling first doc: {}", doc_ref.external_id);
+    let t0 = Instant::now();
+    let doc = adapter.fetch(doc_ref).await?;
+    let body_len = match &doc.body {
+        DocumentBody::Markdown(s) | DocumentBody::PlainText(s) => s.len(),
+        DocumentBody::NotionBlocks(_) => 0,
+    };
+    println!("  fetch: {} chars in {:?}", body_len, t0.elapsed());
+
+    let t0 = Instant::now();
+    let chunks = adapter.chunk(&doc)?;
+    println!("  chunk: {} chunks in {:?}", chunks.len(), t0.elapsed());
+
+    let cfg = crate::store::config::load_config()?;
+    let emb_cfg = EmbeddingConfig::from_config(&cfg);
+    let sample = chunks.first().map(|c| c.text.clone()).unwrap_or_default();
+    let t0 = Instant::now();
+    let v = embed(&sample, &emb_cfg).await?;
+    println!("  embed: {} dims in {:?}", v.len(), t0.elapsed());
+
+    println!("✅ adapter working");
+    Ok(())
 }
 
 async fn set_weight(_id: &str, _value: f32) -> Result<()> {
