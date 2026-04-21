@@ -304,6 +304,9 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
         .join(".mur")
         .join("index");
     let vector_store = get_vector_store(&cfg, &index_path).await?;
+    let tantivy = crate::sources::tantivy::TantivyIndex::open_or_create(
+        &dirs::home_dir().context("no home dir")?.join(".mur"),
+    )?;
 
     let store = SourceInstanceStore::default_store()?;
     let targets: Vec<crate::sources::instance::SourceInstance> = match id {
@@ -334,6 +337,7 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
             &mut inst,
             &store,
             vector_store.clone(),
+            &tantivy,
             &emb_cfg,
             full,
         )
@@ -372,6 +376,10 @@ async fn remove(id: &str, keep_index: bool) -> Result<()> {
         vs.delete_by_source(id)
             .await
             .context("delete source chunks")?;
+        let tantivy = crate::sources::tantivy::TantivyIndex::open_or_create(
+            &dirs::home_dir().context("no home dir")?.join(".mur"),
+        )?;
+        tantivy.delete_by_source(id).context("tantivy.delete_by_source")?;
         println!("🗑  removed indexed chunks for {id}");
     }
     store.delete(id)?;

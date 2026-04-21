@@ -30,6 +30,7 @@ pub async fn sync_source(
     instance: &mut SourceInstance,
     instance_store: &SourceInstanceStore,
     vector_store: Arc<dyn VectorStore>,
+    tantivy: &crate::sources::tantivy::TantivyIndex,
     embedding_cfg: &EmbeddingConfig,
     full: bool,
 ) -> Result<SyncReport> {
@@ -45,6 +46,12 @@ pub async fn sync_source(
             .filter(|c| !c.is_empty())
     };
 
+    if full {
+        tantivy
+            .delete_by_source(&source_id)
+            .context("tantivy.delete_by_source pre-full")?;
+    }
+
     tracing::info!(source_id = %source_id, full = full, "sync: start");
 
     let (doc_refs, new_cursor) = adapter
@@ -55,7 +62,7 @@ pub async fn sync_source(
     let mut report = SyncReport::default();
 
     for doc_ref in &doc_refs {
-        match fetch_chunk_embed_upsert(adapter, doc_ref, &*vector_store, embedding_cfg).await {
+        match fetch_chunk_embed_upsert(adapter, doc_ref, &*vector_store, tantivy, embedding_cfg).await {
             Ok(n_chunks) => {
                 report.docs_synced += 1;
                 report.chunks_emitted += n_chunks;
@@ -129,6 +136,7 @@ async fn fetch_chunk_embed_upsert(
     adapter: &dyn KnowledgeSource,
     doc_ref: &crate::sources::types::DocRef,
     vector_store: &dyn VectorStore,
+    tantivy: &crate::sources::tantivy::TantivyIndex,
     embedding_cfg: &EmbeddingConfig,
 ) -> Result<usize> {
     let doc = adapter.fetch(doc_ref).await.context("adapter.fetch")?;
@@ -164,5 +172,17 @@ async fn fetch_chunk_embed_upsert(
         .upsert(&embedded)
         .await
         .context("vector_store.upsert")?;
+    let rows: Vec<(String, String, String, String)> = embedded
+        .iter()
+        .map(|c| {
+            (
+                c.chunk_id.clone(),
+                c.source_id.clone(),
+                c.external_id.clone(),
+                c.text.clone(),
+            )
+        })
+        .collect();
+    tantivy.upsert(&rows).context("tantivy.upsert")?;
     Ok(n)
 }
