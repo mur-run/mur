@@ -433,6 +433,41 @@ fn is_task_query(query_words: &[&str], scope: Option<&ScopeContext>) -> bool {
     false
 }
 
+/// Score external-source hits. Simpler formula than patterns (no lifecycle,
+/// no usage-based decay) — see design spec §8.2.
+///
+/// Factors:
+/// - base = hit.score (combination of vec + BM25 already merged by caller)
+/// - source_weight: from user config (default 1.0)
+/// - freshness: exp(-age_days / 365)
+/// - length_norm: 1.0 − tanh((text_len / 4000) − 1) clamped to [0.5, 1.0]
+pub fn score_sources(
+    hits: Vec<crate::store::vector::Hit>,
+    weights: &std::collections::HashMap<String, f32>,
+) -> Vec<crate::store::vector::Hit> {
+    let now = chrono::Utc::now();
+    let mut scored: Vec<crate::store::vector::Hit> = hits
+        .into_iter()
+        .map(|mut h| {
+            let w = weights.get(&h.source_id).copied().unwrap_or(1.0);
+            let age_days = (now - h.updated_at).num_days().max(0) as f32;
+            let freshness = (-age_days / 365.0).exp();
+            let len_norm = {
+                let n = h.text.chars().count() as f32 / 4000.0;
+                (1.0 - (n - 1.0).tanh()).clamp(0.5, 1.0)
+            };
+            h.score *= w * freshness * len_norm;
+            h
+        })
+        .collect();
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    scored
+}
+
 /// Kind-aware scoring boost.
 ///
 /// - **Preference / Behavioral**: +0.1 when scope user/platform matches the
@@ -814,5 +849,73 @@ mod tests {
         // kind is None (default Technical)
         let boost = kind_score_boost(&p, &["error", "handling"], None);
         assert!((boost - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn score_sources_applies_source_weight() {
+        use super::score_sources;
+        use crate::store::vector::Hit;
+        let now = chrono::Utc::now();
+        let hits = vec![
+            Hit {
+                chunk_id: "a".into(),
+                source_id: "s:low".into(),
+                external_id: "d1".into(),
+                score: 0.8,
+                text: "some text".into(),
+                heading_path: vec![],
+                updated_at: now,
+            },
+            Hit {
+                chunk_id: "b".into(),
+                source_id: "s:high".into(),
+                external_id: "d2".into(),
+                score: 0.8,
+                text: "some text".into(),
+                heading_path: vec![],
+                updated_at: now,
+            },
+        ];
+        let weights = [
+            ("s:low".to_string(), 0.3_f32),
+            ("s:high".to_string(), 2.0_f32),
+        ]
+        .into_iter()
+        .collect();
+        let out = score_sources(hits, &weights);
+        assert_eq!(out[0].source_id, "s:high");
+        assert_eq!(out[1].source_id, "s:low");
+        assert!(out[0].score > out[1].score);
+    }
+
+    #[test]
+    fn score_sources_freshness_penalises_old() {
+        use super::score_sources;
+        use crate::store::vector::Hit;
+        let recent = chrono::Utc::now();
+        let old = recent - chrono::Duration::days(365 * 3);
+        let hits = vec![
+            Hit {
+                chunk_id: "a".into(),
+                source_id: "s".into(),
+                external_id: "new".into(),
+                score: 0.5,
+                text: "x".into(),
+                heading_path: vec![],
+                updated_at: recent,
+            },
+            Hit {
+                chunk_id: "b".into(),
+                source_id: "s".into(),
+                external_id: "old".into(),
+                score: 0.5,
+                text: "x".into(),
+                heading_path: vec![],
+                updated_at: old,
+            },
+        ];
+        let weights = std::collections::HashMap::new();
+        let out = score_sources(hits, &weights);
+        assert_eq!(out[0].external_id, "new");
     }
 }
