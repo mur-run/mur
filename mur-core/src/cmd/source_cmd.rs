@@ -111,16 +111,26 @@ pub async fn handle(cmd: SourceCommand) -> Result<()> {
                 vault,
                 exclude_folder,
             } => add_obsidian(instance, vault, exclude_folder).await,
-            AddKind::Notion { .. } => bail!("`mur source add notion` arrives in P1.4"),
-            AddKind::Joplin { .. } => bail!("`mur source add joplin` arrives in P1.4"),
+            AddKind::Notion {
+                instance,
+                workspace,
+                token,
+            } => add_notion(instance, workspace, token).await,
+            AddKind::Joplin {
+                instance,
+                db,
+                server,
+                token,
+            } => add_joplin(instance, db, server, token).await,
         },
         SourceCommand::List { json, verbose } => list(json, verbose).await,
         SourceCommand::Remove { id, keep_index } => remove(&id, keep_index).await,
         SourceCommand::Sync { id, full, watch } => {
             if watch {
-                bail!("`mur source sync --watch` arrives in P1.4");
+                sync_watch().await
+            } else {
+                sync(id.as_deref(), full).await
             }
-            sync(id.as_deref(), full).await
         }
         SourceCommand::Status { id } => status(id.as_deref()).await,
         SourceCommand::Weight { id, value } => set_weight(&id, value).await,
@@ -134,7 +144,7 @@ pub async fn handle(cmd: SourceCommand) -> Result<()> {
         SourceCommand::Reindex { id, vector_backend } => {
             reindex(&id, vector_backend.as_deref()).await
         }
-        SourceCommand::InstallSchedule => bail!("`mur source install-schedule` arrives in P1.4"),
+        SourceCommand::InstallSchedule => install_schedule().await,
         SourceCommand::Disable { id } => set_enabled(&id, false).await,
         SourceCommand::Enable { id } => set_enabled(&id, true).await,
     }
@@ -208,6 +218,139 @@ async fn add_obsidian(
     };
     store.save(&inst)?;
     println!("✅ Connected vault {} as `{}`", abs_vault.display(), id);
+    println!("Run `mur source sync {id}` to index.");
+    Ok(())
+}
+
+async fn add_notion(
+    instance: Option<String>,
+    workspace: Option<String>,
+    token: Option<String>,
+) -> Result<()> {
+    use crate::sources::adapters::notion::{OAuthResult, run_oauth_flow};
+    use crate::sources::credentials::{CredentialStore, OsKeyring, SERVICE, account};
+    use crate::sources::instance::{SourceInstance, SourceInstanceStore, SourceStats, SyncState};
+    use crate::sources::kind::SourceKind;
+    use anyhow::Context;
+    use std::collections::BTreeMap;
+
+    let store = SourceInstanceStore::default_store()?;
+    let id = match instance {
+        Some(tag) if !tag.is_empty() => format!("notion:{tag}"),
+        _ => {
+            let existing: Vec<String> = store.list()?.into_iter().map(|i| i.id).collect();
+            if !existing.iter().any(|s| s == "notion") {
+                "notion".to_string()
+            } else {
+                let mut rng: u16 = rand::random();
+                loop {
+                    let candidate = format!("notion:{rng:04x}");
+                    if !existing.contains(&candidate) {
+                        break candidate;
+                    }
+                    rng = rng.wrapping_add(1);
+                }
+            }
+        }
+    };
+
+    let (access_token, workspace_id, workspace_name) = if let Some(pat) = token {
+        (pat, workspace, None::<String>)
+    } else {
+        println!("-> launching Notion OAuth (PKCE) flow...");
+        let OAuthResult {
+            access_token,
+            workspace_id,
+            workspace_name,
+        } = run_oauth_flow().await?;
+        (access_token, workspace_id, workspace_name)
+    };
+
+    // Persist credentials to keyring
+    let keyring = OsKeyring;
+    let kr_account = account(&id, "access_token");
+    keyring
+        .set(SERVICE, &kr_account, &access_token)
+        .context("store notion access_token in keyring")?;
+
+    let mut scope: BTreeMap<String, serde_yaml::Value> = BTreeMap::new();
+    if let Some(w) = workspace_id {
+        scope.insert("workspace_id".into(), serde_yaml::Value::String(w));
+    }
+    if let Some(n) = workspace_name {
+        scope.insert("workspace_name".into(), serde_yaml::Value::String(n));
+    }
+
+    let inst = SourceInstance {
+        id: id.clone(),
+        type_name: "notion".into(),
+        kind: SourceKind::PullIndex,
+        enabled: true,
+        weight: 1.0,
+        scope,
+        sync: SyncState::default(),
+        stats: SourceStats::default(),
+        keyring_entry: Some(kr_account.clone()),
+    };
+    store.save(&inst)?;
+    println!("Connected Notion as `{id}`");
+    println!("Run `mur source sync {id}` to index.");
+    Ok(())
+}
+
+async fn add_joplin(
+    instance: Option<String>,
+    db: Option<std::path::PathBuf>,
+    server: Option<String>,
+    token: Option<String>,
+) -> Result<()> {
+    use crate::sources::credentials::{CredentialStore, OsKeyring, SERVICE, account};
+    use crate::sources::instance::{SourceInstance, SourceInstanceStore, SourceStats, SyncState};
+    use crate::sources::kind::SourceKind;
+    use anyhow::Context;
+    use std::collections::BTreeMap;
+
+    let store = SourceInstanceStore::default_store()?;
+    let id = match instance {
+        Some(tag) if !tag.is_empty() => format!("joplin:{tag}"),
+        _ => "joplin".to_string(),
+    };
+
+    let mut scope: BTreeMap<String, serde_yaml::Value> = BTreeMap::new();
+    let mut keyring_entry: Option<String> = None;
+    if let Some(srv) = server {
+        let tok = token.context("joplin --server requires --token")?;
+        scope.insert("server_url".into(), serde_yaml::Value::String(srv));
+        let kr = OsKeyring;
+        let kr_account = account(&id, "api_token");
+        kr.set(SERVICE, &kr_account, &tok)?;
+        keyring_entry = Some(kr_account);
+    } else if let Some(db_path) = db {
+        let abs = std::fs::canonicalize(&db_path)
+            .with_context(|| format!("resolve {}", db_path.display()))?;
+        scope.insert(
+            "db_path".into(),
+            serde_yaml::Value::String(abs.to_string_lossy().to_string()),
+        );
+    } else {
+        bail!(
+            "specify --db <path> for local SQLite or --server <url> --token <pat> for Joplin Server"
+        );
+    }
+
+    let inst = SourceInstance {
+        id: id.clone(),
+        type_name: "joplin".into(),
+        kind: SourceKind::PullIndex,
+        enabled: true,
+        weight: 1.0,
+        scope,
+        sync: SyncState::default(),
+        stats: SourceStats::default(),
+        keyring_entry,
+    };
+    store.save(&inst)?;
+    println!("Connected Joplin as `{id}`");
     println!("Run `mur source sync {id}` to index.");
     Ok(())
 }
@@ -325,6 +468,81 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
     }
 
     for mut inst in targets {
+        if inst.type_name == "notion" {
+            use crate::sources::adapters::notion::NotionAdapter;
+            use crate::sources::credentials::{CredentialStore, OsKeyring, SERVICE};
+            let kr = OsKeyring;
+            let kr_account = inst
+                .keyring_entry
+                .clone()
+                .unwrap_or_else(|| format!("{}:access_token", inst.id));
+            let token = kr
+                .get(SERVICE, &kr_account)?
+                .ok_or_else(|| anyhow::anyhow!("no notion token in keyring for `{}`", inst.id))?;
+            let adapter = NotionAdapter::from_instance(&inst, token)?;
+            println!("↻ syncing {}{}", inst.id, if full { " (full)" } else { "" });
+            let report = sync_source(
+                &adapter,
+                &mut inst,
+                &store,
+                vector_store.clone(),
+                &tantivy,
+                &emb_cfg,
+                full,
+            )
+            .await?;
+            println!(
+                "  synced {} docs ({} chunks), deleted {}, {} errors",
+                report.docs_synced,
+                report.chunks_emitted,
+                report.docs_deleted,
+                report.errors.len()
+            );
+            for e in report.errors.iter().take(3) {
+                println!("  ! {e}");
+            }
+            continue;
+        }
+        if inst.type_name == "joplin" {
+            use crate::sources::adapters::joplin::JoplinAdapter;
+            use crate::sources::credentials::{CredentialStore, OsKeyring, SERVICE};
+            let token = if inst.scope.contains_key("server_url") {
+                let kr = OsKeyring;
+                let kr_account = inst
+                    .keyring_entry
+                    .clone()
+                    .unwrap_or_else(|| format!("{}:api_token", inst.id));
+                Some(
+                    kr.get(SERVICE, &kr_account)?
+                        .ok_or_else(|| anyhow::anyhow!("no joplin token for `{}`", inst.id))?,
+                )
+            } else {
+                None
+            };
+            let adapter = JoplinAdapter::from_instance(&inst, token)?;
+            println!("↻ syncing {}{}", inst.id, if full { " (full)" } else { "" });
+            let report = sync_source(
+                &adapter,
+                &mut inst,
+                &store,
+                vector_store.clone(),
+                &tantivy,
+                &emb_cfg,
+                full,
+            )
+            .await?;
+            println!(
+                "  synced {} docs ({} chunks), deleted {}, {} errors",
+                report.docs_synced,
+                report.chunks_emitted,
+                report.docs_deleted,
+                report.errors.len()
+            );
+            for e in report.errors.iter().take(3) {
+                println!("  ! {e}");
+            }
+            continue;
+        }
         if inst.type_name != "obsidian" {
             println!(
                 "⏭  {}: adapter `{}` arrives in a later sub-milestone",
@@ -531,6 +749,115 @@ async fn reindex(id: &str, vector_backend: Option<&str>) -> Result<()> {
         report.errors.len()
     );
     Ok(())
+}
+
+// ---------- Task 7 handlers ----------
+
+async fn sync_watch() -> Result<()> {
+    use crate::sources::instance::SourceInstanceStore;
+    use crate::sources::tantivy::TantivyIndex;
+    use crate::sources::watch::{WatchOptions, run_watch};
+    use crate::store::embedding::EmbeddingConfig;
+    use crate::store::vector::factory::get_vector_store;
+    use anyhow::Context;
+
+    let cfg = crate::store::config::load_config()?;
+    let emb_cfg = EmbeddingConfig::from_config(&cfg);
+    let index_path = dirs::home_dir()
+        .context("no home dir")?
+        .join(".mur")
+        .join("index");
+    let vector_store = get_vector_store(&cfg, &index_path).await?;
+    let tantivy = TantivyIndex::open_or_create(&dirs::home_dir().unwrap().join(".mur"))?;
+    let instance_store = SourceInstanceStore::default_store()?;
+    run_watch(
+        instance_store,
+        vector_store,
+        tantivy,
+        emb_cfg,
+        WatchOptions {
+            poll_interval_secs: cfg.sources_global.poll_interval_secs,
+        },
+    )
+    .await
+}
+
+// ---------- Task 8 handlers ----------
+
+async fn install_schedule() -> Result<()> {
+    use anyhow::Context;
+    #[cfg(target_os = "macos")]
+    use std::io::Write;
+
+    let cfg = crate::store::config::load_config()?;
+    let interval_secs = cfg.sources_global.poll_interval_secs;
+
+    let mur_path = std::env::current_exe().context("locate mur binary")?;
+    let mur_path_str = mur_path.to_string_lossy().to_string();
+
+    #[cfg(target_os = "macos")]
+    {
+        let plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>run.mur.source-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{mur_path_str}</string>
+    <string>source</string>
+    <string>sync</string>
+  </array>
+  <key>StartInterval</key><integer>{interval_secs}</integer>
+  <key>StandardOutPath</key><string>/tmp/mur-source-sync.log</string>
+  <key>StandardErrorPath</key><string>/tmp/mur-source-sync.err</string>
+</dict>
+</plist>
+"#
+        );
+        let path = dirs::home_dir()
+            .context("no home dir")?
+            .join("Library/LaunchAgents/run.mur.source-sync.plist");
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let mut f = std::fs::File::create(&path)?;
+        f.write_all(plist.as_bytes())?;
+        println!("wrote {}", path.display());
+        println!("Enable with: launchctl load -w {}", path.display());
+        println!("Disable with: launchctl unload {}", path.display());
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let svc_dir = dirs::config_dir()
+            .context("no config dir")?
+            .join("systemd/user");
+        std::fs::create_dir_all(&svc_dir)?;
+        let svc_file = svc_dir.join("mur-source-sync.service");
+        let timer_file = svc_dir.join("mur-source-sync.timer");
+
+        let svc = format!(
+            "[Unit]\nDescription=mur source sync\n\n[Service]\nType=oneshot\nExecStart={mur_path_str} source sync\n"
+        );
+        let timer = format!(
+            "[Unit]\nDescription=Run mur source sync periodically\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec={}s\nUnit=mur-source-sync.service\n\n[Install]\nWantedBy=timers.target\n",
+            interval_secs
+        );
+        std::fs::write(&svc_file, svc)?;
+        std::fs::write(&timer_file, timer)?;
+        println!("wrote {} and {}", svc_file.display(), timer_file.display());
+        println!("Enable with: systemctl --user enable --now mur-source-sync.timer");
+        println!("Disable with: systemctl --user disable --now mur-source-sync.timer");
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        anyhow::bail!("install-schedule supported on macOS/Linux only");
+    }
 }
 
 // ---------- Task 15 handlers ----------
