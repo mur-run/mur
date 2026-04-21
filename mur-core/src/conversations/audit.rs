@@ -68,6 +68,12 @@ pub enum AuditAction {
         layer: String,
         reason: String,
     },
+    Rollup {
+        rollup_kind: String, // "week" | "month"
+        window: String,      // "2026-W16" or "2026-04"
+        model: String,
+        duration_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,5 +307,25 @@ mod tests {
         } else {
             panic!("expected Migrate variant");
         }
+    }
+
+    #[test]
+    fn rollup_action_serializes_with_renamed_kind_field() {
+        use serde_json::json;
+        let a = AuditAction::Rollup {
+            rollup_kind: "week".into(),
+            window: "2026-W16".into(),
+            model: "qwen3:14b".into(),
+            duration_ms: 1234,
+        };
+        let v = serde_json::to_value(&a).unwrap();
+        // The serde tag is "kind"; our variant's kind field was renamed to
+        // "rollup_kind" to avoid collision with the tag.
+        assert_eq!(v["kind"], json!("rollup"));
+        assert_eq!(v["rollup_kind"], json!("week"));
+        assert_eq!(v["window"], json!("2026-W16"));
+        // Round-trip
+        let round: AuditAction = serde_json::from_value(v).unwrap();
+        matches!(round, AuditAction::Rollup { .. });
     }
 }

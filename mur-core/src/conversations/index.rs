@@ -22,6 +22,20 @@ use super::paths::index_path;
 
 const TABLE: &str = "conversations";
 
+fn parse_source_or_placeholder(s: &str) -> Source {
+    match s {
+        "cc" => Source::ClaudeCode,
+        "cursor" => Source::Cursor,
+        "gemini" => Source::Gemini,
+        "aider" => Source::Aider,
+        "slack" => Source::Slack,
+        "telegram" => Source::Telegram,
+        "discord" => Source::Discord,
+        "commander" => Source::CommanderEngine,
+        _ => Source::ClaudeCode,
+    }
+}
+
 pub struct ConversationIndex {
     db: lancedb::Connection,
     dims: i32,
@@ -261,17 +275,7 @@ impl ConversationIndex {
                 .column_by_name("vector")
                 .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>());
             for i in 0..b.num_rows() {
-                let source = match srcs.value(i) {
-                    "cc" => Source::ClaudeCode,
-                    "cursor" => Source::Cursor,
-                    "gemini" => Source::Gemini,
-                    "aider" => Source::Aider,
-                    "slack" => Source::Slack,
-                    "telegram" => Source::Telegram,
-                    "discord" => Source::Discord,
-                    "commander" => Source::CommanderEngine,
-                    other => anyhow::bail!("unknown source tag {other}"),
-                };
+                let source = parse_source_or_placeholder(srcs.value(i));
                 let layer = layers.map(|a| a.value(i)).unwrap_or(0);
                 let vector = vectors.and_then(|arr| {
                     let fsl = arr.value(i);
@@ -460,5 +464,25 @@ mod tests {
         assert_eq!(idx.count_rows_at_layer(0).await.unwrap(), 3);
         assert_eq!(idx.count_rows_at_layer(2).await.unwrap(), 2);
         assert_eq!(idx.count_rows_at_layer(1).await.unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_source_maps_rollup_sources_to_placeholder() {
+        assert!(matches!(
+            parse_source_or_placeholder("cc"),
+            Source::ClaudeCode
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("week"),
+            Source::ClaudeCode
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("month"),
+            Source::ClaudeCode
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("unknown-future"),
+            Source::ClaudeCode
+        ));
     }
 }
