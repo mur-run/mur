@@ -5,3 +5,4 @@
 //! module in P1.4 (`notion_blocks.rs`).
 
 pub mod markdown;
+pub mod notion_blocks;
