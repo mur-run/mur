@@ -692,8 +692,15 @@ enum ConversationsAction {
     Pull,
     /// Apply retention cleanup
     Cleanup,
-    /// Rebuild LanceDB from raw/
-    Reindex,
+    /// Rebuild LanceDB from raw + summaries.
+    Reindex {
+        /// Skip span (layer=2) rebuild; only re-ingest raw → layer=0.
+        #[arg(long, conflicts_with = "spans_only")]
+        raw_only: bool,
+        /// Skip raw rebuild; only re-process summary/*.md → layer=2.
+        #[arg(long, conflicts_with = "raw_only")]
+        spans_only: bool,
+    },
     /// Run health checks
     Doctor,
     /// Check migration preconditions (BP1)
@@ -1074,8 +1081,17 @@ async fn async_main() -> Result<()> {
             ConversationsAction::Cleanup => {
                 cmd::conversations_cmd::cmd_conversations_cleanup().await?
             }
-            ConversationsAction::Reindex => {
-                cmd::conversations_cmd::cmd_conversations_reindex().await?
+            ConversationsAction::Reindex {
+                raw_only,
+                spans_only,
+            } => {
+                cmd::conversations_cmd::cmd_conversations_reindex(
+                    cmd::conversations_cmd::ReindexArgs {
+                        raw_only,
+                        spans_only,
+                    },
+                )
+                .await?
             }
             ConversationsAction::Doctor => {
                 cmd::conversations_cmd::cmd_conversations_doctor().await?

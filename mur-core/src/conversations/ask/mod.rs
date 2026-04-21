@@ -291,8 +291,8 @@ pub async fn ask(req: AskRequest, root_override: Option<&str>) -> Result<AskResp
 }
 
 async fn embed_query(q: &str) -> Result<Vec<f32>> {
-    if super::ollama::OllamaClient::mock_from_env() {
-        return Ok(vec![0.1; 1024]);
+    if let Some(mode) = super::ollama::mock_mode() {
+        return Ok(super::ollama::mock_embed_vector(q, mode, 1024));
     }
     let cfg = crate::store::config::load_config().unwrap_or_default();
     let embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg);
