@@ -16,6 +16,32 @@ use std::sync::Arc;
 
 const TABLE_NAME: &str = "patterns";
 
+/// Name of the LanceDB table that stores source chunks (separate from `patterns`).
+pub const SOURCES_TABLE: &str = "sources";
+
+/// Arrow schema for the sources table.
+pub fn sources_schema(dimensions: i32) -> Schema {
+    Schema::new(vec![
+        Field::new("chunk_id", DataType::Utf8, false),
+        Field::new("source_id", DataType::Utf8, false),
+        Field::new("external_id", DataType::Utf8, false),
+        Field::new("ordinal", DataType::UInt64, false),
+        Field::new("text", DataType::Utf8, false),
+        Field::new("heading_path", DataType::Utf8, false), // JSON-encoded array
+        Field::new("char_start", DataType::UInt64, false),
+        Field::new("char_end", DataType::UInt64, false),
+        Field::new("updated_at_ms", DataType::Int64, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                dimensions,
+            ),
+            false,
+        ),
+    ])
+}
+
 /// LanceDB-backed vector index for patterns and workflows.
 pub struct LanceDbStore {
     db: lancedb::Connection,
@@ -250,6 +276,23 @@ impl LanceDbStore {
             ),
         ])
     }
+
+    /// Create the `sources` table if it doesn't exist. Idempotent.
+    pub async fn ensure_sources_table(&self) -> Result<()> {
+        let tables = self.db.table_names().execute().await?;
+        if tables.contains(&SOURCES_TABLE.to_string()) {
+            return Ok(());
+        }
+        let schema = sources_schema(self.dimensions);
+        let empty: Vec<std::result::Result<RecordBatch, arrow_schema::ArrowError>> = Vec::new();
+        let reader = RecordBatchIterator::new(empty, Arc::new(schema));
+        self.db
+            .create_table(SOURCES_TABLE, Box::new(reader) as Box<dyn arrow_array::RecordBatchReader + Send>)
+            .execute()
+            .await
+            .context("creating sources table")?;
+        Ok(())
+    }
 }
 
 /// Build the content string for indexing, including attachment descriptions.
@@ -309,8 +352,24 @@ impl VectorStore for LanceDbStore {
         anyhow::bail!("LanceDbStore::list_external_ids is a stub until P1.2")
     }
 
-    async fn count(&self, _source_id: Option<&str>) -> Result<usize> {
-        anyhow::bail!("LanceDbStore::count is a stub until P1.2")
+    async fn count(&self, source_id: Option<&str>) -> Result<usize> {
+        let tables = self.db.table_names().execute().await?;
+        if !tables.contains(&SOURCES_TABLE.to_string()) {
+            return Ok(0);
+        }
+        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+        let total = match source_id {
+            None => table.count_rows(None).await?,
+            Some(sid) => {
+                table
+                    .count_rows(Some(format!(
+                        "source_id = '{}'",
+                        sid.replace('\'', "''")
+                    )))
+                    .await?
+            }
+        };
+        Ok(total)
     }
 
     async fn rebuild_index(&self) -> Result<()> {
@@ -493,6 +552,19 @@ mod tests {
         let text = super::content_with_attachment_descriptions(&p);
         // Should not add extra newlines for empty descriptions
         assert_eq!(text, "test content");
+    }
+
+    #[tokio::test]
+    async fn open_or_create_sources_table_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        // First call creates
+        store.ensure_sources_table().await.unwrap();
+        // Second call is a no-op
+        store.ensure_sources_table().await.unwrap();
+        // Row count zero
+        let c = <LanceDbStore as VectorStore>::count(&store, None).await.unwrap();
+        assert_eq!(c, 0);
     }
 
     #[tokio::test]
