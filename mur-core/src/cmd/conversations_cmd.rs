@@ -996,6 +996,10 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
         eprintln!("(debug_prompt not yet wired to individual stages; enabling in Phase 2C)");
     }
 
+    // Note: single-day compact via --date does NOT cascade into the rollup
+    // sweep (one day can't close a week). To trigger rollups after a targeted
+    // backfill, re-run `mur conversations compact` with no --date, or run
+    // `mur conversations rollup --all-missing` explicitly.
     if let Some(d) = args.date {
         let date = NaiveDate::parse_from_str(&d, "%Y-%m-%d")?;
         let force = args.force || args.if_stale;

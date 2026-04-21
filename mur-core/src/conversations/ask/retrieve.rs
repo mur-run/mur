@@ -39,6 +39,11 @@ pub(crate) fn similarity_of(h: &SearchHit) -> f64 {
 pub async fn gather_hits(args: RetrieveArgs<'_>) -> Result<Vec<ResolvedHit>> {
     let dims = args.query_embedding.len() as i32;
     let idx = ConversationIndex::open(dims, args.root_override).await?;
+    // Note: --src filtering via `primary_src` uses the `Source` enum's file_prefix
+    // strings (e.g., "cc"). Layer=3/4 rollup rows store synthetic source strings
+    // ("week"/"month") that don't match any real prefix, so --src silently drops
+    // them. Deferred to Phase 3.3: add a `sources_mask` column on rollup rows to
+    // support partial-match filtering. See spec §9 open questions.
     let primary_src = args.filters.source.first().copied();
 
     // Phase 3.2: collapsed tree — one k-NN per layer {2,1,3,4}, merged.

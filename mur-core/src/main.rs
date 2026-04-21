@@ -328,6 +328,10 @@ enum Commands {
     /// Ask a natural-language question about your conversation archive (Mode C).
     Ask {
         question: String,
+        /// Filter results to a specific source (e.g. "cc", "cursor").
+        /// Phase 3.2 note: source filtering does NOT apply to weekly/monthly
+        /// rollup hits (layer=3/4) — rollup rows use synthetic source strings
+        /// ("week"/"month") and are always excluded when --src is passed.
         #[arg(long)]
         src: Option<String>,
         #[arg(long)]
