@@ -494,8 +494,38 @@ impl VectorStore for LanceDbStore {
         anyhow::bail!("LanceDbStore::delete_by_source is a stub until P1.2")
     }
 
-    async fn list_external_ids(&self, _source_id: &str) -> Result<Vec<String>> {
-        anyhow::bail!("LanceDbStore::list_external_ids is a stub until P1.2")
+    async fn list_external_ids(&self, source_id: &str) -> Result<Vec<String>> {
+        use futures::TryStreamExt;
+        use lancedb::query::{ExecutableQuery, QueryBase};
+
+        let tables = self.db.table_names().execute().await?;
+        if !tables.contains(&SOURCES_TABLE.to_string()) {
+            return Ok(vec![]);
+        }
+        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+        let batches = table
+            .query()
+            .only_if(format!(
+                "source_id = '{}'",
+                source_id.replace('\'', "''")
+            ))
+            .select(lancedb::query::Select::Columns(vec!["external_id".to_string()]))
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let mut set: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for batch in &batches {
+            let col = batch
+                .column_by_name("external_id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .context("column external_id missing")?;
+            for i in 0..batch.num_rows() {
+                set.insert(col.value(i).to_string());
+            }
+        }
+        Ok(set.into_iter().collect())
     }
 
     async fn count(&self, source_id: Option<&str>) -> Result<usize> {
@@ -763,6 +793,49 @@ mod tests {
         assert_eq!(hits[0].source_id, "obsidian:test");
         assert_eq!(hits[0].external_id, "doc-a");
         assert_eq!(hits[0].heading_path, vec!["Section".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn sources_list_external_ids_and_count_work() {
+        let tmp = TempDir::new().unwrap();
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        let now = chrono::Utc::now();
+        let zeros = vec![0.0_f32; TEST_DIM as usize];
+
+        let chunks: Vec<super::EmbeddedChunk> = (0..3)
+            .map(|i| super::EmbeddedChunk {
+                chunk_id: format!("cid-{i}"),
+                source_id: "obsidian:test".into(),
+                external_id: format!("doc-{i}"),
+                ordinal: 0,
+                text: "x".into(),
+                heading_path: vec![],
+                char_range: (0, 1),
+                updated_at: now,
+                embedding: zeros.clone(),
+            })
+            .collect();
+
+        <LanceDbStore as super::VectorStore>::upsert(&store, &chunks).await.unwrap();
+
+        let ids = <LanceDbStore as super::VectorStore>::list_external_ids(&store, "obsidian:test")
+            .await
+            .unwrap();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["doc-0", "doc-1", "doc-2"]);
+
+        let all = <LanceDbStore as super::VectorStore>::count(&store, None).await.unwrap();
+        assert_eq!(all, 3);
+
+        let scoped = <LanceDbStore as super::VectorStore>::count(&store, Some("obsidian:test"))
+            .await
+            .unwrap();
+        assert_eq!(scoped, 3);
+
+        let other =
+            <LanceDbStore as super::VectorStore>::count(&store, Some("nope")).await.unwrap();
+        assert_eq!(other, 0);
     }
 
     #[tokio::test]
