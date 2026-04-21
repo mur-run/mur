@@ -296,6 +296,151 @@ async fn retry_or_error(resp: reqwest::Response) -> Result<reqwest::Response> {
     bail!("notion api error {status}: {text}")
 }
 
+// ---------- OAuth (PKCE) ----------
+
+const NOTION_OAUTH_AUTHORIZE: &str = "https://api.notion.com/v1/oauth/authorize";
+const NOTION_OAUTH_TOKEN: &str = "https://api.notion.com/v1/oauth/token";
+const NOTION_CLIENT_ID: &str = match option_env!("MUR_NOTION_CLIENT_ID") {
+    Some(v) => v,
+    None => "FILL_ME_IN",
+};
+
+/// Outcome of the OAuth flow.
+pub struct OAuthResult {
+    pub access_token: String,
+    pub workspace_id: Option<String>,
+    pub workspace_name: Option<String>,
+}
+
+/// Run the OAuth dance. Spawns an axum server on a random port, opens a browser,
+/// waits for the callback, exchanges the code, returns the token.
+///
+/// Notion's OAuth uses confidential-client mode by default — but this works
+/// for self-hosted PKCE too with `client_secret = ""`. If you control the
+/// integration (recommended for personal mur builds), use a "public" type.
+#[cfg(feature = "server")]
+pub async fn run_oauth_flow() -> Result<OAuthResult> {
+    use axum::{Router, extract::Query, response::Html, routing::get};
+    use oauth2::{
+        AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, RedirectUrl,
+        TokenResponse, TokenUrl, basic::BasicClient,
+    };
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tokio::sync::oneshot;
+
+    if NOTION_CLIENT_ID == "FILL_ME_IN" {
+        bail!(
+            "MUR_NOTION_CLIENT_ID was not set at build time. Use --token <PAT> or rebuild mur with MUR_NOTION_CLIENT_ID=<your_client_id>."
+        );
+    }
+
+    // Bind 127.0.0.1:0 to get an OS-assigned random port.
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .context("bind oauth callback")?;
+    let port = listener.local_addr()?.port();
+    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+
+    let client = BasicClient::new(
+        ClientId::new(NOTION_CLIENT_ID.to_string()),
+        None,
+        AuthUrl::new(NOTION_OAUTH_AUTHORIZE.into())?,
+        Some(TokenUrl::new(NOTION_OAUTH_TOKEN.into())?),
+    )
+    .set_redirect_uri(RedirectUrl::new(redirect_uri.clone())?);
+
+    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    let (auth_url, csrf) = client
+        .authorize_url(CsrfToken::new_random)
+        .set_pkce_challenge(pkce_challenge)
+        .url();
+
+    let (tx, rx) = oneshot::channel::<(String, String)>();
+    let tx = Arc::new(tokio::sync::Mutex::new(Some(tx)));
+
+    #[derive(serde::Deserialize)]
+    struct CallbackParams {
+        code: Option<String>,
+        state: Option<String>,
+    }
+
+    let tx_clone = tx.clone();
+    let app = Router::new().route(
+        "/callback",
+        get(move |Query(p): Query<CallbackParams>| {
+            let tx = tx_clone.clone();
+            async move {
+                if let (Some(c), Some(s)) = (p.code, p.state) {
+                    if let Some(send) = tx.lock().await.take() {
+                        let _ = send.send((c, s));
+                    }
+                }
+                Html("<html><body><h2>Notion connected. You can close this tab.</h2></body></html>")
+            }
+        }),
+    );
+
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+
+    println!("-> opening browser: {auth_url}");
+    let _ = open::that(auth_url.as_str());
+
+    let (code, returned_csrf) = tokio::time::timeout(Duration::from_secs(300), rx)
+        .await
+        .context("oauth callback timeout")?
+        .context("callback channel closed")?;
+
+    if returned_csrf != csrf.secret().as_str() {
+        bail!("CSRF mismatch in OAuth callback");
+    }
+
+    let token_resp = client
+        .exchange_code(AuthorizationCode::new(code))
+        .set_pkce_verifier(pkce_verifier)
+        .request_async(oauth2::reqwest::async_http_client)
+        .await
+        .context("notion token exchange")?;
+
+    server.abort();
+
+    let access = token_resp.access_token().secret().clone();
+
+    // Notion's response includes workspace_id + workspace_name beyond the standard token fields.
+    // The oauth2 crate ignores extras, so refetch via /v1/users/me to get workspace info.
+    let client_http = Client::new();
+    let me = client_http
+        .get(format!("{NOTION_API_BASE}/users/me"))
+        .bearer_auth(&access)
+        .header("Notion-Version", NOTION_VERSION)
+        .send()
+        .await?;
+    let me_json: serde_json::Value = me.json().await.unwrap_or_default();
+    let workspace_name = me_json
+        .get("bot")
+        .and_then(|b| b.get("workspace_name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let workspace_id = me_json
+        .get("bot")
+        .and_then(|b| b.get("workspace_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Ok(OAuthResult {
+        access_token: access,
+        workspace_id,
+        workspace_name,
+    })
+}
+
+#[cfg(not(feature = "server"))]
+pub async fn run_oauth_flow() -> Result<OAuthResult> {
+    bail!("OAuth flow requires the 'server' feature (axum). Rebuild with default features or use --token <PAT>.");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
