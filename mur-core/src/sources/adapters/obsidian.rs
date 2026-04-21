@@ -154,10 +154,12 @@ impl KnowledgeSource for ObsidianAdapter {
             if max_ts.is_none_or(|m| updated_at > m) {
                 max_ts = Some(updated_at);
             }
+            // Normalize to forward slashes so external_id is a stable, cross-platform key
+            // (Windows returns `folder\\note.md`; we store `folder/note.md` everywhere).
             let external_id = rel
                 .to_str()
                 .context("vault path is not valid UTF-8")?
-                .to_string();
+                .replace(std::path::MAIN_SEPARATOR, "/");
             let title = rel
                 .file_stem()
                 .and_then(|s| s.to_str())
