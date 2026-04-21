@@ -244,9 +244,7 @@ mod tests {
         let p = ask_session_history_dir(Some("/tmp/mur-test"));
         assert_eq!(
             p,
-            std::path::PathBuf::from(
-                "/tmp/mur-test/conversations/ask-sessions/.history"
-            )
+            std::path::PathBuf::from("/tmp/mur-test/conversations/ask-sessions/.history")
         );
     }
 }
