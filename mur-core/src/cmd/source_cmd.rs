@@ -53,6 +53,16 @@ pub enum SourceCommand {
         #[arg(long)]
         vector_backend: Option<String>,
     },
+    /// Search indexed source chunks (minimal, sources-only — for P1.3 see `mur search`).
+    Search {
+        query: String,
+        #[arg(long, short = 'k', default_value_t = 5)]
+        limit: usize,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Generate launchd / systemd unit files for scheduled sync.
     InstallSchedule,
     Disable {
@@ -115,6 +125,12 @@ pub async fn handle(cmd: SourceCommand) -> Result<()> {
         SourceCommand::Status { id } => status(id.as_deref()).await,
         SourceCommand::Weight { id, value } => set_weight(&id, value).await,
         SourceCommand::Test { id } => test_source(&id).await,
+        SourceCommand::Search {
+            query,
+            limit,
+            source,
+            json,
+        } => search(&query, limit, source.as_deref(), json).await,
         SourceCommand::Reindex { .. } => bail!("`mur source reindex` arrives in P1.3"),
         SourceCommand::InstallSchedule => bail!("`mur source install-schedule` arrives in P1.4"),
         SourceCommand::Disable { id } => set_enabled(&id, false).await,
@@ -431,5 +447,68 @@ async fn set_enabled(id: &str, enabled: bool) -> Result<()> {
     inst.enabled = enabled;
     store.save(&inst)?;
     println!("✏️  {id} {}", if enabled { "enabled" } else { "disabled" });
+    Ok(())
+}
+
+// ---------- Task 15 handlers ----------
+
+async fn search(query: &str, limit: usize, source: Option<&str>, json: bool) -> Result<()> {
+    use crate::store::embedding::{EmbeddingConfig, embed};
+    use crate::store::vector::{SearchFilter, factory::get_vector_store};
+    use anyhow::Context;
+
+    let cfg = crate::store::config::load_config()?;
+    let emb_cfg = EmbeddingConfig::from_config(&cfg);
+    let index_path = dirs::home_dir()
+        .context("no home dir")?
+        .join(".mur")
+        .join("index");
+    let vs = get_vector_store(&cfg, &index_path).await?;
+
+    let qvec = embed(query, &emb_cfg).await.context("embed query")?;
+
+    let filter = SearchFilter {
+        source_ids: source.map(|s| vec![s.to_string()]),
+        since: None,
+    };
+    let hits = vs.search(&qvec, limit, &filter).await?;
+
+    if json {
+        let j = serde_json::to_string_pretty(
+            &hits
+                .iter()
+                .map(|h| {
+                    serde_json::json!({
+                        "chunk_id": h.chunk_id,
+                        "source_id": h.source_id,
+                        "external_id": h.external_id,
+                        "score": h.score,
+                        "text": h.text,
+                        "heading_path": h.heading_path,
+                        "updated_at": h.updated_at.to_rfc3339(),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        println!("{j}");
+        return Ok(());
+    }
+    if hits.is_empty() {
+        println!("(no hits)");
+        return Ok(());
+    }
+    for h in &hits {
+        let hp = if h.heading_path.is_empty() {
+            String::new()
+        } else {
+            format!(" § {}", h.heading_path.join(" / "))
+        };
+        println!(
+            "[{:.3}] {} / {}{}",
+            h.score, h.source_id, h.external_id, hp
+        );
+        let preview: String = h.text.chars().take(180).collect();
+        println!("       {}", preview);
+    }
     Ok(())
 }
