@@ -116,7 +116,12 @@ pub async fn handle(cmd: SourceCommand) -> Result<()> {
                 workspace,
                 token,
             } => add_notion(instance, workspace, token).await,
-            AddKind::Joplin { .. } => bail!("`mur source add joplin` arrives in P1.4"),
+            AddKind::Joplin {
+                instance,
+                db,
+                server,
+                token,
+            } => add_joplin(instance, db, server, token).await,
         },
         SourceCommand::List { json, verbose } => list(json, verbose).await,
         SourceCommand::Remove { id, keep_index } => remove(&id, keep_index).await,
@@ -292,6 +297,61 @@ async fn add_notion(
     Ok(())
 }
 
+async fn add_joplin(
+    instance: Option<String>,
+    db: Option<std::path::PathBuf>,
+    server: Option<String>,
+    token: Option<String>,
+) -> Result<()> {
+    use crate::sources::credentials::{CredentialStore, OsKeyring, SERVICE, account};
+    use crate::sources::instance::{SourceInstance, SourceInstanceStore, SourceStats, SyncState};
+    use crate::sources::kind::SourceKind;
+    use anyhow::Context;
+    use std::collections::BTreeMap;
+
+    let store = SourceInstanceStore::default_store()?;
+    let id = match instance {
+        Some(tag) if !tag.is_empty() => format!("joplin:{tag}"),
+        _ => "joplin".to_string(),
+    };
+
+    let mut scope: BTreeMap<String, serde_yaml::Value> = BTreeMap::new();
+    let mut keyring_entry: Option<String> = None;
+    if let Some(srv) = server {
+        let tok = token.context("joplin --server requires --token")?;
+        scope.insert("server_url".into(), serde_yaml::Value::String(srv));
+        let kr = OsKeyring;
+        let kr_account = account(&id, "api_token");
+        kr.set(SERVICE, &kr_account, &tok)?;
+        keyring_entry = Some(kr_account);
+    } else if let Some(db_path) = db {
+        let abs = std::fs::canonicalize(&db_path)
+            .with_context(|| format!("resolve {}", db_path.display()))?;
+        scope.insert(
+            "db_path".into(),
+            serde_yaml::Value::String(abs.to_string_lossy().to_string()),
+        );
+    } else {
+        bail!("specify --db <path> for local SQLite or --server <url> --token <pat> for Joplin Server");
+    }
+
+    let inst = SourceInstance {
+        id: id.clone(),
+        type_name: "joplin".into(),
+        kind: SourceKind::PullIndex,
+        enabled: true,
+        weight: 1.0,
+        scope,
+        sync: SyncState::default(),
+        stats: SourceStats::default(),
+        keyring_entry,
+    };
+    store.save(&inst)?;
+    println!("Connected Joplin as `{id}`");
+    println!("Run `mur source sync {id}` to index.");
+    Ok(())
+}
+
 async fn list(json: bool, _verbose: bool) -> Result<()> {
     use crate::sources::instance::SourceInstanceStore;
     let store = SourceInstanceStore::default_store()?;
@@ -417,6 +477,46 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
                 .get(SERVICE, &kr_account)?
                 .ok_or_else(|| anyhow::anyhow!("no notion token in keyring for `{}`", inst.id))?;
             let adapter = NotionAdapter::from_instance(&inst, token)?;
+            println!("↻ syncing {}{}", inst.id, if full { " (full)" } else { "" });
+            let report = sync_source(
+                &adapter,
+                &mut inst,
+                &store,
+                vector_store.clone(),
+                &tantivy,
+                &emb_cfg,
+                full,
+            )
+            .await?;
+            println!(
+                "  synced {} docs ({} chunks), deleted {}, {} errors",
+                report.docs_synced,
+                report.chunks_emitted,
+                report.docs_deleted,
+                report.errors.len()
+            );
+            for e in report.errors.iter().take(3) {
+                println!("  ! {e}");
+            }
+            continue;
+        }
+        if inst.type_name == "joplin" {
+            use crate::sources::adapters::joplin::JoplinAdapter;
+            use crate::sources::credentials::{CredentialStore, OsKeyring, SERVICE};
+            let token = if inst.scope.get("server_url").is_some() {
+                let kr = OsKeyring;
+                let kr_account = inst
+                    .keyring_entry
+                    .clone()
+                    .unwrap_or_else(|| format!("{}:api_token", inst.id));
+                Some(
+                    kr.get(SERVICE, &kr_account)?
+                        .ok_or_else(|| anyhow::anyhow!("no joplin token for `{}`", inst.id))?,
+                )
+            } else {
+                None
+            };
+            let adapter = JoplinAdapter::from_instance(&inst, token)?;
             println!("↻ syncing {}{}", inst.id, if full { " (full)" } else { "" });
             let report = sync_source(
                 &adapter,

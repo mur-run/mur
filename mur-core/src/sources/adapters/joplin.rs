@@ -4,7 +4,7 @@
 //!  - Local SQLite: reads `database.sqlite` directly, opened read-only with
 //!    `?mode=ro&immutable=1` URI flags so a running Joplin app does not
 //!    cause lock contention.
-//!  - Joplin Server: REST API with bearer token from keyring (Task 8).
+//!  - Joplin Server: REST API with bearer token from keyring.
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -22,7 +22,7 @@ const CHUNK_MAX_CHARS: usize = 6000;
 
 pub enum JoplinMode {
     LocalDb { db_path: PathBuf },
-    // Server mode added in Task 8.
+    Server { url: String, token: String },
 }
 
 pub struct JoplinAdapter {
@@ -32,28 +32,31 @@ pub struct JoplinAdapter {
 }
 
 impl JoplinAdapter {
-    pub fn from_instance(instance: &SourceInstance) -> Result<Self> {
+    pub fn from_instance(instance: &SourceInstance, server_token: Option<String>) -> Result<Self> {
         if instance.type_name != "joplin" {
             bail!("expected type_name 'joplin', got '{}'", instance.type_name);
         }
-        let db = instance
-            .scope
-            .get("db_path")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from);
-        let server = instance.scope.get("server_url");
-        if let Some(db_path) = db {
-            if !db_path.exists() {
-                bail!("joplin db not found: {}", db_path.display());
-            }
+        if let Some(server_url) = instance.scope.get("server_url").and_then(|v| v.as_str()) {
+            let token = server_token.context("joplin server mode needs a token")?;
             return Ok(Self {
                 id: instance.id.clone(),
-                mode: JoplinMode::LocalDb { db_path },
+                mode: JoplinMode::Server {
+                    url: server_url.to_string(),
+                    token,
+                },
                 weight: instance.weight,
             });
         }
-        if server.is_some() {
-            bail!("joplin server mode arrives in Task 8");
+        if let Some(db_path) = instance.scope.get("db_path").and_then(|v| v.as_str()) {
+            let p = PathBuf::from(db_path);
+            if !p.exists() {
+                bail!("joplin db not found: {}", p.display());
+            }
+            return Ok(Self {
+                id: instance.id.clone(),
+                mode: JoplinMode::LocalDb { db_path: p },
+                weight: instance.weight,
+            });
         }
         bail!("joplin source needs scope.db_path or scope.server_url");
     }
@@ -66,26 +69,12 @@ impl JoplinAdapter {
         )
         .with_context(|| format!("open joplin sqlite at {}", db_path.display()))
     }
-}
 
-#[async_trait]
-impl KnowledgeSource for JoplinAdapter {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn kind(&self) -> SourceKind {
-        SourceKind::PullIndex
-    }
-    fn weight(&self) -> f32 {
-        self.weight
-    }
-
-    async fn list_documents(
-        &self,
-        cursor: Option<SyncCursor>,
-    ) -> Result<(Vec<DocRef>, SyncCursor)> {
-        let JoplinMode::LocalDb { db_path } = &self.mode;
-        let db_path = db_path.clone();
+    async fn list_local(&self, cursor: Option<SyncCursor>) -> Result<(Vec<DocRef>, SyncCursor)> {
+        let db_path = match &self.mode {
+            JoplinMode::LocalDb { db_path } => db_path.clone(),
+            _ => bail!("list_local called on non-local mode"),
+        };
         let cursor_in = cursor.clone();
         let (docs, max_ms) = tokio::task::spawn_blocking(move || {
             let conn = Self::open_ro(&db_path)?;
@@ -146,20 +135,170 @@ impl KnowledgeSource for JoplinAdapter {
         Ok((docs, cursor_out))
     }
 
-    async fn fetch(&self, doc_ref: &DocRef) -> Result<Document> {
-        let JoplinMode::LocalDb { db_path } = &self.mode;
-        let db_path = db_path.clone();
-        let id = doc_ref.external_id.clone();
-        let body_text = tokio::task::spawn_blocking(move || -> Result<String> {
-            let conn = Self::open_ro(&db_path)?;
-            let mut stmt = conn.prepare("SELECT body FROM notes WHERE id = ?1")?;
-            let body: String = stmt.query_row([&id], |row| row.get::<_, String>(0))?;
-            Ok(body)
-        })
-        .await
-        .context("spawn_blocking joplin fetch")??;
+    async fn list_server(
+        &self,
+        url: &str,
+        token: &str,
+        cursor: Option<SyncCursor>,
+    ) -> Result<(Vec<DocRef>, SyncCursor)> {
+        let threshold_ms: Option<i64> = cursor.and_then(|c| {
+            DateTime::parse_from_rfc3339(&c.0)
+                .ok()
+                .map(|dt| dt.timestamp_millis())
+        });
+        let client = reqwest::Client::new();
+        let mut docs: Vec<DocRef> = Vec::new();
+        let mut max_ms: i64 = threshold_ms.unwrap_or(0);
+        let mut page = 1;
+        loop {
+            let req_url = format!(
+                "{}/api/items?type=note&token={}&fields=id,title,updated_time&page={}",
+                url.trim_end_matches('/'),
+                token,
+                page
+            );
+            let resp = client
+                .get(&req_url)
+                .send()
+                .await
+                .context("joplin server list")?;
+            if !resp.status().is_success() {
+                bail!(
+                    "joplin server returned {}: {}",
+                    resp.status(),
+                    resp.text().await.unwrap_or_default()
+                );
+            }
+            let v: serde_json::Value = resp.json().await?;
+            let items = v
+                .get("items")
+                .and_then(|i| i.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if items.is_empty() {
+                break;
+            }
+            for item in items {
+                let id = item
+                    .get("id")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let title = item
+                    .get("title")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string());
+                let updated_ms = item
+                    .get("updated_time")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(0);
+                if let Some(t) = threshold_ms {
+                    if updated_ms <= t {
+                        continue;
+                    }
+                }
+                if updated_ms > max_ms {
+                    max_ms = updated_ms;
+                }
+                let updated_at = DateTime::<Utc>::from_timestamp_millis(updated_ms)
+                    .unwrap_or_else(Utc::now);
+                docs.push(DocRef {
+                    external_id: id,
+                    title,
+                    updated_at,
+                });
+            }
+            let has_more = v
+                .get("has_more")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
+            if !has_more {
+                break;
+            }
+            page += 1;
+        }
+        let cursor_out = if max_ms > 0 {
+            SyncCursor(
+                DateTime::<Utc>::from_timestamp_millis(max_ms)
+                    .unwrap_or_else(Utc::now)
+                    .to_rfc3339(),
+            )
+        } else {
+            SyncCursor(String::new())
+        };
+        Ok((docs, cursor_out))
+    }
 
-        let title = doc_ref.title.clone().unwrap_or_else(|| doc_ref.external_id.clone());
+    async fn fetch_server(&self, url: &str, token: &str, doc_id: &str) -> Result<String> {
+        let req_url = format!(
+            "{}/api/items/{}?token={}&fields=body",
+            url.trim_end_matches('/'),
+            doc_id,
+            token
+        );
+        let client = reqwest::Client::new();
+        let resp = client.get(&req_url).send().await?;
+        if !resp.status().is_success() {
+            bail!(
+                "joplin fetch failed {}: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            );
+        }
+        let v: serde_json::Value = resp.json().await?;
+        Ok(v.get("body")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string())
+    }
+}
+
+#[async_trait]
+impl KnowledgeSource for JoplinAdapter {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn kind(&self) -> SourceKind {
+        SourceKind::PullIndex
+    }
+    fn weight(&self) -> f32 {
+        self.weight
+    }
+
+    async fn list_documents(
+        &self,
+        cursor: Option<SyncCursor>,
+    ) -> Result<(Vec<DocRef>, SyncCursor)> {
+        match &self.mode {
+            JoplinMode::LocalDb { .. } => self.list_local(cursor).await,
+            JoplinMode::Server { url, token } => {
+                self.list_server(url, token, cursor).await
+            }
+        }
+    }
+
+    async fn fetch(&self, doc_ref: &DocRef) -> Result<Document> {
+        let body_text = match &self.mode {
+            JoplinMode::LocalDb { db_path } => {
+                let db_path = db_path.clone();
+                let id = doc_ref.external_id.clone();
+                tokio::task::spawn_blocking(move || -> Result<String> {
+                    let conn = Self::open_ro(&db_path)?;
+                    let mut stmt = conn.prepare("SELECT body FROM notes WHERE id = ?1")?;
+                    let body: String = stmt.query_row([&id], |row| row.get::<_, String>(0))?;
+                    Ok(body)
+                })
+                .await
+                .context("spawn_blocking joplin fetch")??
+            }
+            JoplinMode::Server { url, token } => {
+                self.fetch_server(url, token, &doc_ref.external_id).await?
+            }
+        };
+        let title = doc_ref
+            .title
+            .clone()
+            .unwrap_or_else(|| doc_ref.external_id.clone());
         Ok(Document {
             source_id: self.id.clone(),
             external_id: doc_ref.external_id.clone(),
@@ -250,7 +389,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let db = make_test_db(tmp.path());
         let inst = make_instance(&db);
-        let adapter = JoplinAdapter::from_instance(&inst).unwrap();
+        let adapter = JoplinAdapter::from_instance(&inst, None).unwrap();
         let (docs, _cursor) = adapter.list_documents(None).await.unwrap();
         assert_eq!(docs.len(), 2);
         assert!(docs.iter().any(|d| d.external_id == "n1"));
@@ -263,7 +402,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let db = make_test_db(tmp.path());
         let inst = make_instance(&db);
-        let adapter = JoplinAdapter::from_instance(&inst).unwrap();
+        let adapter = JoplinAdapter::from_instance(&inst, None).unwrap();
         let (docs, _) = adapter.list_documents(None).await.unwrap();
         let n1 = docs.iter().find(|d| d.external_id == "n1").unwrap();
         let doc = adapter.fetch(n1).await.unwrap();
