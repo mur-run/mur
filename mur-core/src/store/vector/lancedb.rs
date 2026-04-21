@@ -323,8 +323,67 @@ use async_trait::async_trait;
 
 #[async_trait]
 impl VectorStore for LanceDbStore {
-    async fn upsert(&self, _chunks: &[EmbeddedChunk]) -> Result<()> {
-        anyhow::bail!("LanceDbStore::upsert is a stub until P1.2 wires adapters")
+    async fn upsert(&self, chunks: &[EmbeddedChunk]) -> Result<()> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+        self.ensure_sources_table().await?;
+
+        // Delete any existing rows with these chunk_ids (idempotent upsert).
+        let ids: Vec<String> = chunks
+            .iter()
+            .map(|c| format!("'{}'", c.chunk_id.replace('\'', "''")))
+            .collect();
+        let predicate = format!("chunk_id IN ({})", ids.join(","));
+        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+        let _ = table.delete(&predicate).await;
+
+        // Build column arrays.
+        let chunk_ids: Vec<&str> = chunks.iter().map(|c| c.chunk_id.as_str()).collect();
+        let source_ids: Vec<&str> = chunks.iter().map(|c| c.source_id.as_str()).collect();
+        let external_ids: Vec<&str> = chunks.iter().map(|c| c.external_id.as_str()).collect();
+        let ordinals: Vec<u64> = chunks.iter().map(|c| c.ordinal as u64).collect();
+        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+        let heading_paths: Vec<String> = chunks
+            .iter()
+            .map(|c| serde_json::to_string(&c.heading_path).unwrap_or_else(|_| "[]".into()))
+            .collect();
+        let heading_path_refs: Vec<&str> = heading_paths.iter().map(|s| s.as_str()).collect();
+        let char_starts: Vec<u64> = chunks.iter().map(|c| c.char_range.0 as u64).collect();
+        let char_ends: Vec<u64> = chunks.iter().map(|c| c.char_range.1 as u64).collect();
+        let updated_at_ms: Vec<i64> = chunks
+            .iter()
+            .map(|c| c.updated_at.timestamp_millis())
+            .collect();
+
+        let all_vectors: Vec<f32> = chunks.iter().flat_map(|c| c.embedding.clone()).collect();
+        let values = Float32Array::from(all_vectors);
+        let item_field = Arc::new(Field::new("item", DataType::Float32, true));
+        let vector_array =
+            FixedSizeListArray::new(item_field, self.dimensions, Arc::new(values), None);
+
+        let schema = sources_schema(self.dimensions);
+        use arrow_array::{Int64Array, UInt64Array};
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(StringArray::from(chunk_ids)),
+                Arc::new(StringArray::from(source_ids)),
+                Arc::new(StringArray::from(external_ids)),
+                Arc::new(UInt64Array::from(ordinals)),
+                Arc::new(StringArray::from(texts)),
+                Arc::new(StringArray::from(heading_path_refs)),
+                Arc::new(UInt64Array::from(char_starts)),
+                Arc::new(UInt64Array::from(char_ends)),
+                Arc::new(Int64Array::from(updated_at_ms)),
+                Arc::new(vector_array),
+            ],
+        )?;
+
+        let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
+        let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
+        table.add(reader).execute().await?;
+        Ok(())
     }
 
     async fn search(
@@ -565,6 +624,58 @@ mod tests {
         // Row count zero
         let c = <LanceDbStore as VectorStore>::count(&store, None).await.unwrap();
         assert_eq!(c, 0);
+    }
+
+    #[tokio::test]
+    async fn sources_upsert_and_search_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        store.ensure_sources_table().await.unwrap();
+
+        let now = chrono::Utc::now();
+        let mk_chunk = |id: &str, ext: &str, text: &str, embed: Vec<f32>| -> super::EmbeddedChunk {
+            super::EmbeddedChunk {
+                chunk_id: id.into(),
+                source_id: "obsidian:test".into(),
+                external_id: ext.into(),
+                ordinal: 0,
+                text: text.into(),
+                heading_path: vec!["Section".into()],
+                char_range: (0, text.len()),
+                updated_at: now,
+                embedding: embed,
+            }
+        };
+
+        let v_a: Vec<f32> = (0..TEST_DIM as usize).map(|i| (i as f32 * 0.01).sin()).collect();
+        let v_b: Vec<f32> = (0..TEST_DIM as usize).map(|i| (i as f32 * 0.01).cos()).collect();
+
+        <LanceDbStore as super::VectorStore>::upsert(
+            &store,
+            &[mk_chunk("c1", "doc-a", "alpha text", v_a.clone())],
+        )
+        .await
+        .unwrap();
+        <LanceDbStore as super::VectorStore>::upsert(
+            &store,
+            &[mk_chunk("c2", "doc-b", "bravo text", v_b.clone())],
+        )
+        .await
+        .unwrap();
+
+        let hits = <LanceDbStore as super::VectorStore>::search(
+            &store,
+            &v_a,
+            5,
+            &super::SearchFilter::default(),
+        )
+        .await
+        .unwrap();
+        assert!(!hits.is_empty(), "expected hits");
+        assert_eq!(hits[0].chunk_id, "c1");
+        assert_eq!(hits[0].source_id, "obsidian:test");
+        assert_eq!(hits[0].external_id, "doc-a");
+        assert_eq!(hits[0].heading_path, vec!["Section".to_string()]);
     }
 
     #[tokio::test]
