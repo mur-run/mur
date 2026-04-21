@@ -337,6 +337,8 @@ pub struct AskConfig {
     pub timeout_secs: u32,
     #[serde(default = "ask_default_min_score")]
     pub min_score: f64,
+    #[serde(default = "ask_default_continue_history_turns")]
+    pub continue_history_turns: u32,
 }
 
 impl Default for AskConfig {
@@ -352,6 +354,7 @@ impl Default for AskConfig {
             response_tokens: ask_default_resp_tok(),
             timeout_secs: ask_default_timeout(),
             min_score: ask_default_min_score(),
+            continue_history_turns: ask_default_continue_history_turns(),
         }
     }
 }
@@ -382,6 +385,9 @@ fn ask_default_timeout() -> u32 {
 }
 fn ask_default_min_score() -> f64 {
     0.35
+}
+fn ask_default_continue_history_turns() -> u32 {
+    3
 }
 
 // ── Conversations archive config (Task 23) ────────────────────────────────────
@@ -784,6 +790,12 @@ conversations:
     fn rollup_config_plumbed_into_conversations_config() {
         let c = ConversationsConfig::default();
         assert!(c.rollup.enabled);
+    }
+
+    #[test]
+    fn ask_config_default_continue_history_turns_is_3() {
+        let c = AskConfig::default();
+        assert_eq!(c.continue_history_turns, 3);
     }
 }
 

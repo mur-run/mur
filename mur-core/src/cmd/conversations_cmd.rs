@@ -968,7 +968,7 @@ pub struct CompactArgs {
 }
 
 pub struct AskArgs {
-    pub question: String,
+    pub question: Option<String>, // was String; now Option because --show-session has no question
     pub src: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
@@ -979,6 +979,12 @@ pub struct AskArgs {
     pub no_escalate: bool,
     pub debug_prompt: bool,
     pub strict_citations: bool,
+    pub continue_flag: bool,
+    /// Explicit new-session flag. Default is to archive + start fresh, so this
+    /// is only meaningful as a clap `conflicts_with = "continue_flag"` signal.
+    #[allow(dead_code)]
+    pub new_flag: bool,
+    pub show_session: bool,
 }
 
 pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
@@ -1073,16 +1079,57 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
 
 pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     use crate::conversations::ask;
-    use chrono::NaiveDate;
+    use crate::conversations::ollama::OllamaClient;
+    use chrono::{NaiveDate, Utc};
     use futures::StreamExt;
     use std::io::Write;
 
     let cfg = crate::store::config::load_config().unwrap_or_default();
     let ask_cfg = cfg.conversations.ask.clone();
-    let model = args.model.unwrap_or_else(|| ask_cfg.model.clone());
+    let history_retain = cfg.conversations.compact.history_retain;
+    let history_turns = ask_cfg.continue_history_turns;
 
+    // --show-session path: no LLM calls, early return
+    if args.show_session {
+        return cmd_ask_show_session(None);
+    }
+
+    let question = match args.question.clone() {
+        Some(q) => q,
+        None => {
+            anyhow::bail!("question is required (or use --show-session to inspect current session)")
+        }
+    };
+
+    // Session management
+    let mut session = if args.continue_flag {
+        let s = ask::session::SessionStore::load_latest(None)?;
+        if s.turns.is_empty() {
+            anyhow::bail!("no prior session; run without --continue to start a new one");
+        }
+        s
+    } else {
+        ask::session::SessionStore::archive_and_new(None, history_retain)?
+    };
+
+    // Rewriter call (only if continuing + we have prior turns)
+    let prior_slice = session.last_n(history_turns);
+    let model = args.model.clone().unwrap_or_else(|| ask_cfg.model.clone());
+    let client = OllamaClient::new(&ask_cfg.ollama_endpoint, std::time::Duration::from_secs(30));
+    let rewrite = ask::rewriter::rewrite(
+        &client,
+        &model,
+        ask::rewriter::RewriteInput {
+            prior_turns: prior_slice,
+            raw_question: &question,
+        },
+    )
+    .await;
+    let retrieval_query = rewrite.rewritten.clone();
+    let rewriter_status = rewrite.status;
+
+    // Build AskRequest
     let sources = args.src.as_deref().map(parse_sources).unwrap_or_default();
-
     let filters = ask::Filters {
         source: sources,
         since: args
@@ -1097,9 +1144,8 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
             .transpose()?,
         min_score: args.min_score.unwrap_or(ask_cfg.min_score),
     };
-
     let req = ask::AskRequest {
-        question: args.question.clone(),
+        question: question.clone(),
         filters,
         k_summary: args.k,
         k_raw: args.k * 2,
@@ -1118,14 +1164,21 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         no_escalate: args.no_escalate,
         debug_prompt: args.debug_prompt,
         strict_citations: args.strict_citations,
+        prior_turns: prior_slice.to_vec(),
+        retrieval_query,
+        rewriter_status,
     };
 
-    if args.json {
-        let resp = ask::ask(req, None).await?;
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+    // Generate + collect response
+    let resp = if args.json {
+        let r = ask::ask(req, None).await?;
+        println!("{}", serde_json::to_string_pretty(&r)?);
+        r
     } else {
         let mut stream = ask::ask_stream(req, None).await?;
+        let mut answer = String::new();
         let mut citations = Vec::new();
+        let mut hits_used = Vec::new();
         let mut degraded = false;
         let mut tokens_in = 0;
         let mut tokens_out = 0;
@@ -1135,9 +1188,10 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
                 ask::AskEvent::Token(t) => {
                     print!("{t}");
                     std::io::stdout().flush()?;
+                    answer.push_str(&t);
                 }
                 ask::AskEvent::Citation(c) => citations.push(c),
-                ask::AskEvent::HitInfo(_) => {}
+                ask::AskEvent::HitInfo(h) => hits_used.push(h),
                 ask::AskEvent::Done {
                     tokens_in: ti,
                     tokens_out: to,
@@ -1160,17 +1214,109 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
             "{}{}",
             crate::conversations::ask::format::render_citations_block(&citations),
             crate::conversations::ask::format::render_footer(&ask::AskResponse {
-                answer: String::new(),
+                answer: answer.clone(),
                 citations: citations.clone(),
-                hits_used: vec![],
+                hits_used: hits_used.clone(),
                 degraded_to_mode_b: degraded,
                 tokens_in,
                 tokens_out,
                 duration_ms: duration,
+                rewritten_question: match rewriter_status {
+                    ask::session::RewriterStatus::Skipped => None,
+                    _ => Some(rewrite.rewritten.clone()),
+                },
+                rewriter_status,
             }),
         );
-    }
+        ask::AskResponse {
+            answer,
+            citations,
+            hits_used,
+            degraded_to_mode_b: degraded,
+            tokens_in,
+            tokens_out,
+            duration_ms: duration,
+            rewritten_question: match rewriter_status {
+                ask::session::RewriterStatus::Skipped => None,
+                _ => Some(rewrite.rewritten.clone()),
+            },
+            rewriter_status,
+        }
+    };
+
+    // Persist the turn
+    let turn = ask::session::TurnRecord {
+        v: 1,
+        turn_id: session.next_turn_id(),
+        ts: Utc::now(),
+        question,
+        rewritten_question: resp.rewritten_question.clone(),
+        hits_used: resp.hits_used.clone(),
+        answer: resp.answer.clone(),
+        citations: resp.citations.clone(),
+        degraded_to_mode_b: resp.degraded_to_mode_b,
+        rewriter_status: resp.rewriter_status,
+        tokens_in: resp.tokens_in,
+        tokens_out: resp.tokens_out,
+        duration_ms: resp.duration_ms,
+    };
+    ask::session::SessionStore::append_turn(&mut session, turn)?;
+
     Ok(())
+}
+
+/// `mur ask --show-session` handler. No LLM calls.
+fn cmd_ask_show_session(root_override: Option<&str>) -> Result<()> {
+    let session = crate::conversations::ask::session::SessionStore::load_latest(root_override)?;
+    let path = crate::conversations::paths::ask_session_path(root_override);
+    if session.turns.is_empty() {
+        println!("session: {}", path.display());
+        println!("no active session. run 'mur ask \"question\"' to start one.");
+        return Ok(());
+    }
+    println!("session: {}", path.display());
+    println!("turns: {}", session.turns.len());
+    let last = session.turns.last().unwrap();
+    let now = chrono::Utc::now();
+    let delta = now.signed_duration_since(last.ts);
+    let delta_str = humanize_duration(delta);
+    println!("last turn: {} ({delta_str})", last.ts.to_rfc3339());
+    let first = &session.turns[0];
+    let first_q = truncate_chars_simple(&first.question, 80);
+    println!("first question: \"{first_q}\"");
+    let degraded = session
+        .turns
+        .iter()
+        .filter(|t| {
+            t.degraded_to_mode_b
+                || t.rewriter_status
+                    == crate::conversations::ask::session::RewriterStatus::FailedFellBackToRaw
+        })
+        .count();
+    println!("degraded turns: {degraded}");
+    Ok(())
+}
+
+fn humanize_duration(d: chrono::Duration) -> String {
+    let secs = d.num_seconds();
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{} minutes ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{} hours ago", secs / 3600)
+    } else {
+        format!("{} days ago", secs / 86400)
+    }
+}
+
+fn truncate_chars_simple(s: &str, max: usize) -> String {
+    let count = s.chars().count();
+    if count <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max).collect::<String>() + "…"
+    }
 }
 
 fn system_free_memory_mb() -> Option<u64> {
