@@ -13,6 +13,7 @@ pub mod chunker;
 pub mod credentials;
 pub mod instance;
 pub mod kind;
+pub mod sync;
 pub mod types;
 
 pub use kind::SourceKind;
