@@ -20,6 +20,8 @@ mod llm;
 mod retrieve;
 mod server;
 mod session;
+#[cfg(feature = "sources")]
+mod sources;
 mod store;
 mod sync;
 mod team;
