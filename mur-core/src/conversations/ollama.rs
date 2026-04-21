@@ -241,7 +241,14 @@ fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
         r#"[{"role":"user","conv_id":"mock","line_hint":1,"text":"mock extractive span"}]"#
             .to_string()
     } else if req.prompt.contains("narrative paragraph") {
-        "Mock narrative: today the developer explored mock compression.".to_string()
+        if req.prompt.contains("one week") || req.prompt.contains("one-week") {
+            "Mock narrative: this week the developer shipped several fixes and refactors."
+                .to_string()
+        } else if req.prompt.contains("one month") || req.prompt.contains("one-month") {
+            "Mock narrative: this month saw major work on the conversations archive.".to_string()
+        } else {
+            "Mock narrative: today the developer explored mock compression.".to_string()
+        }
     } else if req.prompt.contains("[cit:") {
         "Mock answer about the archive [cit: 2026-04-19 claude-code/mock:L1].".to_string()
     } else {
@@ -431,5 +438,49 @@ mod tests {
             (norm_a - 1.0).abs() < 1e-5,
             "not L2-normalized: norm={norm_a}"
         );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn mock_returns_week_narrative_for_week_prompt() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let req = GenerateRequest {
+            model: "qwen3:14b",
+            prompt: "You are summarizing one week (2026-W16) into a narrative paragraph.",
+            system: None,
+            stream: false,
+            options: GenerateOptions::default(),
+        };
+        let resp = client.generate(req).await.unwrap();
+        assert!(
+            resp.response.to_lowercase().contains("this week"),
+            "expected week-specific mock narrative; got: {}",
+            resp.response
+        );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn mock_returns_month_narrative_for_month_prompt() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let req = GenerateRequest {
+            model: "qwen3:14b",
+            prompt: "You are summarizing one month (2026-04) into a narrative paragraph.",
+            system: None,
+            stream: false,
+            options: GenerateOptions::default(),
+        };
+        let resp = client.generate(req).await.unwrap();
+        assert!(
+            resp.response.to_lowercase().contains("this month"),
+            "expected month-specific mock narrative; got: {}",
+            resp.response
+        );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }
