@@ -32,6 +32,10 @@ fn parse_source_or_placeholder(s: &str) -> Source {
         "telegram" => Source::Telegram,
         "discord" => Source::Discord,
         "commander" => Source::CommanderEngine,
+        // Phase 3.2: rollup rows use synthetic "week" / "month". These don't
+        // round-trip through Source, but retrieval filters by layer, not source,
+        // for rollup rows. Placeholder ClaudeCode lets decode succeed; rollup
+        // resolvers consume h.conv_id, not h.source.
         _ => Source::ClaudeCode,
     }
 }
@@ -483,6 +487,34 @@ mod tests {
         assert!(matches!(
             parse_source_or_placeholder("unknown-future"),
             Source::ClaudeCode
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("cursor"),
+            Source::Cursor
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("gemini"),
+            Source::Gemini
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("aider"),
+            Source::Aider
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("slack"),
+            Source::Slack
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("telegram"),
+            Source::Telegram
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("discord"),
+            Source::Discord
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("commander"),
+            Source::CommanderEngine
         ));
     }
 }

@@ -210,7 +210,19 @@ Expected: 2 passed.
         assert_eq!(v["window"], json!("2026-W16"));
         // Round-trip
         let round: AuditAction = serde_json::from_value(v).unwrap();
-        matches!(round, AuditAction::Rollup { .. });
+        let AuditAction::Rollup {
+            rollup_kind,
+            window,
+            model,
+            duration_ms,
+        } = round
+        else {
+            panic!("expected Rollup variant after round-trip");
+        };
+        assert_eq!(rollup_kind, "week");
+        assert_eq!(window, "2026-W16");
+        assert_eq!(model, "qwen3:14b");
+        assert_eq!(duration_ms, 1234);
     }
 ```
 
