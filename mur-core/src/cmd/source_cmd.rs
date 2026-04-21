@@ -786,6 +786,7 @@ async fn sync_watch() -> Result<()> {
 
 async fn install_schedule() -> Result<()> {
     use anyhow::Context;
+    #[cfg(target_os = "macos")]
     use std::io::Write;
 
     let cfg = crate::store::config::load_config()?;
@@ -850,7 +851,7 @@ async fn install_schedule() -> Result<()> {
         println!("wrote {} and {}", svc_file.display(), timer_file.display());
         println!("Enable with: systemctl --user enable --now mur-source-sync.timer");
         println!("Disable with: systemctl --user disable --now mur-source-sync.timer");
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
