@@ -695,11 +695,14 @@ enum ConversationsAction {
     /// Rebuild LanceDB from raw + summaries.
     Reindex {
         /// Skip span (layer=2) rebuild; only re-ingest raw → layer=0.
-        #[arg(long, conflicts_with = "spans_only")]
+        #[arg(long, conflicts_with_all = ["spans_only", "rollups_only"])]
         raw_only: bool,
         /// Skip raw rebuild; only re-process summary/*.md → layer=2.
-        #[arg(long, conflicts_with = "raw_only")]
+        #[arg(long, conflicts_with_all = ["raw_only", "rollups_only"])]
         spans_only: bool,
+        /// Only re-process summary/weekly/*.md + summary/monthly/*.md → layer=3/4.
+        #[arg(long, conflicts_with_all = ["raw_only", "spans_only"])]
+        rollups_only: bool,
     },
     /// Run health checks
     Doctor,
@@ -748,6 +751,34 @@ enum ConversationsAction {
         /// Emit the LLM prompts to stderr without sending them.
         #[arg(long)]
         debug_prompt: bool,
+
+        /// Skip the rollup cascade after day compact (Phase 3.2).
+        #[arg(long)]
+        skip_rollups: bool,
+    },
+    /// Generate weekly + monthly rollup summaries (Phase 3.2).
+    Rollup {
+        /// Specific ISO week to rollup (e.g. "2026-W16").
+        #[arg(long)]
+        week: Option<String>,
+        /// Specific month to rollup (e.g. "2026-04").
+        #[arg(long, conflicts_with = "week")]
+        month: Option<String>,
+        /// Sweep mode: rollup all missing weeks AND months.
+        #[arg(long, conflicts_with_all = ["week", "month"])]
+        all_missing: bool,
+        /// Overwrite existing rollup; archive prior to .history/.
+        #[arg(long)]
+        force: bool,
+        /// Only regenerate when source content hash changed.
+        #[arg(long)]
+        if_stale: bool,
+        /// Override throttle for --all-missing.
+        #[arg(long)]
+        max_weeks: Option<u32>,
+        /// Override throttle for --all-missing.
+        #[arg(long)]
+        max_months: Option<u32>,
     },
 }
 
@@ -1084,11 +1115,13 @@ async fn async_main() -> Result<()> {
             ConversationsAction::Reindex {
                 raw_only,
                 spans_only,
+                rollups_only,
             } => {
                 cmd::conversations_cmd::cmd_conversations_reindex(
                     cmd::conversations_cmd::ReindexArgs {
                         raw_only,
                         spans_only,
+                        rollups_only,
                     },
                 )
                 .await?
@@ -1118,6 +1151,7 @@ async fn async_main() -> Result<()> {
                 max_days,
                 extractive_only,
                 debug_prompt,
+                skip_rollups,
             } => {
                 cmd::conversations_cmd::cmd_conversations_compact(
                     cmd::conversations_cmd::CompactArgs {
@@ -1128,6 +1162,29 @@ async fn async_main() -> Result<()> {
                         max_days,
                         extractive_only,
                         debug_prompt,
+                        skip_rollups,
+                    },
+                )
+                .await?
+            }
+            ConversationsAction::Rollup {
+                week,
+                month,
+                all_missing,
+                force,
+                if_stale,
+                max_weeks,
+                max_months,
+            } => {
+                cmd::conversations_cmd::cmd_conversations_rollup(
+                    cmd::conversations_cmd::RollupArgs {
+                        week,
+                        month,
+                        all_missing,
+                        force,
+                        if_stale,
+                        max_weeks,
+                        max_months,
                     },
                 )
                 .await?
