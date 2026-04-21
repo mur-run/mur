@@ -112,6 +112,7 @@ mod tests {
             snippet: text.into(),
             line_hint: Some(42),
             span_index_in_summary: None,
+            vector: None,
         }
     }
 

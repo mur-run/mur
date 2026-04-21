@@ -282,7 +282,7 @@ fn ask_default_esc() -> f64 {
     0.5
 }
 fn ask_default_mmr() -> f64 {
-    0.85
+    0.88
 }
 fn ask_default_max_ctx() -> u32 {
     6000
@@ -578,10 +578,21 @@ conversations:
         assert_eq!(c.k_summary, 5);
         assert_eq!(c.k_raw, 10);
         assert_eq!(c.escalation_threshold, 0.5);
-        assert_eq!(c.mmr_threshold, 0.85);
+        assert_eq!(c.mmr_threshold, 0.88);
         assert_eq!(c.max_context_tokens, 6000);
         assert_eq!(c.response_tokens, 1024);
         assert_eq!(c.timeout_secs, 120);
         assert_eq!(c.min_score, 0.35);
+    }
+
+    #[test]
+    fn ask_config_mmr_threshold_default_is_cosine_scaled() {
+        // Phase 3.1: default shifts from 0.85 (word-Jaccard) to 0.88 (cosine).
+        let c = AskConfig::default();
+        assert!(
+            (c.mmr_threshold - 0.88).abs() < 1e-9,
+            "expected 0.88, got {}",
+            c.mmr_threshold
+        );
     }
 }
