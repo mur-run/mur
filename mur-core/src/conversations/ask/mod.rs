@@ -43,6 +43,11 @@ pub struct AskRequest {
     pub no_escalate: bool,
     pub debug_prompt: bool,
     pub strict_citations: bool,
+    pub prior_turns: Vec<session::TurnRecord>,
+    /// The query actually used for retrieval. If `--continue` + rewriter ran,
+    /// this differs from `question`. If `Skipped`, equals `question`.
+    pub retrieval_query: String,
+    pub rewriter_status: session::RewriterStatus,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -75,6 +80,8 @@ pub struct AskResponse {
     pub tokens_in: usize,
     pub tokens_out: usize,
     pub duration_ms: u64,
+    pub rewritten_question: Option<String>,
+    pub rewriter_status: session::RewriterStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +112,7 @@ pub async fn ask_stream(
     let start = Instant::now();
 
     // 1. Embed
-    let query_embedding = match embed_query(&req.question).await {
+    let query_embedding = match embed_query(&req.retrieval_query).await {
         Ok(v) => v,
         Err(e) => {
             return Ok(Box::pin(try_stream! {
@@ -163,7 +170,7 @@ pub async fn ask_stream(
     // 3. Build prompt
     let prompt = prompt::render(
         &req.question,
-        &[],
+        &req.prior_turns,
         &hits,
         req.max_context_tokens,
         req.response_tokens,
@@ -255,6 +262,8 @@ pub async fn ask_stream(
 }
 
 pub async fn ask(req: AskRequest, root_override: Option<&str>) -> Result<AskResponse> {
+    let retrieval_query = req.retrieval_query.clone();
+    let rewriter_status = req.rewriter_status;
     let mut stream = ask_stream(req, root_override).await?;
     let mut answer = String::new();
     let mut citations = Vec::new();
@@ -290,6 +299,11 @@ pub async fn ask(req: AskRequest, root_override: Option<&str>) -> Result<AskResp
         tokens_in,
         tokens_out,
         duration_ms,
+        rewritten_question: match rewriter_status {
+            session::RewriterStatus::Skipped => None,
+            _ => Some(retrieval_query),
+        },
+        rewriter_status,
     })
 }
 
@@ -394,12 +408,17 @@ mod tests {
             no_escalate: false,
             debug_prompt: false,
             strict_citations: false,
+            prior_turns: vec![],
+            retrieval_query: "What did we do yesterday?".into(),
+            rewriter_status: session::RewriterStatus::Skipped,
         };
         // Empty index → should yield the "don't cover that" fallback.
         let resp = ask(req, Some(root)).await.unwrap();
         assert!(resp.answer.contains("don't cover that"));
         assert!(resp.citations.is_empty());
         assert!(!resp.degraded_to_mode_b);
+        assert!(resp.rewritten_question.is_none());
+        assert_eq!(resp.rewriter_status, session::RewriterStatus::Skipped);
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }
