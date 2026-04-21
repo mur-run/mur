@@ -408,6 +408,8 @@ pub struct ConversationsConfig {
     pub compact: CompactConfig,
     #[serde(default)]
     pub ask: AskConfig,
+    #[serde(default)]
+    pub rollup: RollupConfig,
 }
 
 impl Default for ConversationsConfig {
@@ -420,6 +422,7 @@ impl Default for ConversationsConfig {
             filter: ConversationsFilter::default(),
             compact: CompactConfig::default(),
             ask: AskConfig::default(),
+            rollup: RollupConfig::default(),
         }
     }
 }
@@ -501,6 +504,83 @@ fn compact_default_history_retain() -> u32 {
 }
 fn compact_default_cron() -> String {
     "0 0 3 * * * *".into()
+}
+
+// ── Rollup config (Phase 3.2, Task 1) ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RollupConfig {
+    #[serde(default = "rollup_default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "rollup_default_max_weeks")]
+    pub max_weeks_per_run: u32,
+    #[serde(default = "rollup_default_max_months")]
+    pub max_months_per_run: u32,
+    #[serde(default = "rollup_default_max_spans_week")]
+    pub max_extractive_spans_per_week: u32,
+    #[serde(default = "rollup_default_max_words_week")]
+    pub max_abstractive_words_per_week: u32,
+    #[serde(default = "rollup_default_max_spans_month")]
+    pub max_extractive_spans_per_month: u32,
+    #[serde(default = "rollup_default_max_words_month")]
+    pub max_abstractive_words_per_month: u32,
+    #[serde(default = "rollup_default_week_mmr")]
+    pub week_mmr_threshold: f64,
+    #[serde(default = "rollup_default_month_mmr")]
+    pub month_mmr_threshold: f64,
+    #[serde(default = "compact_default_model")]
+    pub extractive_model: String,
+    #[serde(default = "compact_default_model")]
+    pub abstractive_model: String,
+    #[serde(default = "compact_default_ollama_endpoint")]
+    pub ollama_endpoint: String,
+}
+
+impl Default for RollupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: rollup_default_enabled(),
+            max_weeks_per_run: rollup_default_max_weeks(),
+            max_months_per_run: rollup_default_max_months(),
+            max_extractive_spans_per_week: rollup_default_max_spans_week(),
+            max_abstractive_words_per_week: rollup_default_max_words_week(),
+            max_extractive_spans_per_month: rollup_default_max_spans_month(),
+            max_abstractive_words_per_month: rollup_default_max_words_month(),
+            week_mmr_threshold: rollup_default_week_mmr(),
+            month_mmr_threshold: rollup_default_month_mmr(),
+            extractive_model: compact_default_model(),
+            abstractive_model: compact_default_model(),
+            ollama_endpoint: compact_default_ollama_endpoint(),
+        }
+    }
+}
+
+fn rollup_default_enabled() -> bool {
+    true
+}
+fn rollup_default_max_weeks() -> u32 {
+    4
+}
+fn rollup_default_max_months() -> u32 {
+    2
+}
+fn rollup_default_max_spans_week() -> u32 {
+    20
+}
+fn rollup_default_max_words_week() -> u32 {
+    500
+}
+fn rollup_default_max_spans_month() -> u32 {
+    20
+}
+fn rollup_default_max_words_month() -> u32 {
+    700
+}
+fn rollup_default_week_mmr() -> f64 {
+    0.85
+}
+fn rollup_default_month_mmr() -> f64 {
+    0.82
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -681,6 +761,29 @@ conversations:
             "expected 0.88, got {}",
             c.mmr_threshold
         );
+    }
+
+    #[test]
+    fn rollup_config_defaults() {
+        let c = RollupConfig::default();
+        assert!(c.enabled);
+        assert_eq!(c.max_weeks_per_run, 4);
+        assert_eq!(c.max_months_per_run, 2);
+        assert_eq!(c.max_extractive_spans_per_week, 20);
+        assert_eq!(c.max_abstractive_words_per_week, 500);
+        assert_eq!(c.max_extractive_spans_per_month, 20);
+        assert_eq!(c.max_abstractive_words_per_month, 700);
+        assert!((c.week_mmr_threshold - 0.85).abs() < 1e-9);
+        assert!((c.month_mmr_threshold - 0.82).abs() < 1e-9);
+        assert_eq!(c.extractive_model, "qwen3:14b");
+        assert_eq!(c.abstractive_model, "qwen3:14b");
+        assert_eq!(c.ollama_endpoint, "http://localhost:11434");
+    }
+
+    #[test]
+    fn rollup_config_plumbed_into_conversations_config() {
+        let c = ConversationsConfig::default();
+        assert!(c.rollup.enabled);
     }
 }
 

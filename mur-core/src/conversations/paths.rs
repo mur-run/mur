@@ -71,6 +71,42 @@ pub fn summary_history_dir(root_override: Option<&str>) -> PathBuf {
         .join(".history")
 }
 
+/// Root directory for weekly rollup summaries (`summary/weekly/`).
+pub fn weekly_summary_root(root_override: Option<&str>) -> PathBuf {
+    conversations_root(root_override)
+        .join("summary")
+        .join("weekly")
+}
+
+/// Root directory for monthly rollup summaries (`summary/monthly/`).
+pub fn monthly_summary_root(root_override: Option<&str>) -> PathBuf {
+    conversations_root(root_override)
+        .join("summary")
+        .join("monthly")
+}
+
+/// Path for a specific week's summary file. `window` is the ISO week label,
+/// e.g. `"2026-W16"`.
+pub fn weekly_summary_path_for(window: &str, root_override: Option<&str>) -> PathBuf {
+    weekly_summary_root(root_override).join(format!("{window}.md"))
+}
+
+/// Path for a specific month's summary file. `window` is the month label,
+/// e.g. `"2026-04"`.
+pub fn monthly_summary_path_for(window: &str, root_override: Option<&str>) -> PathBuf {
+    monthly_summary_root(root_override).join(format!("{window}.md"))
+}
+
+/// Directory that holds overwritten weekly rollup summaries.
+pub fn weekly_history_dir(root_override: Option<&str>) -> PathBuf {
+    weekly_summary_root(root_override).join(".history")
+}
+
+/// Directory that holds overwritten monthly rollup summaries.
+pub fn monthly_history_dir(root_override: Option<&str>) -> PathBuf {
+    monthly_summary_root(root_override).join(".history")
+}
+
 pub fn index_path(override_path: Option<&str>) -> PathBuf {
     conversations_root(override_path).join("index.lance")
 }
@@ -142,6 +178,42 @@ mod tests {
         assert_eq!(
             p,
             std::path::PathBuf::from("/tmp/mur-test/conversations/summary/.history")
+        );
+    }
+
+    #[test]
+    fn weekly_summary_path_shape() {
+        let p = weekly_summary_path_for("2026-W16", Some("/tmp/mur-test"));
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/tmp/mur-test/conversations/summary/weekly/2026-W16.md")
+        );
+    }
+
+    #[test]
+    fn monthly_summary_path_shape() {
+        let p = monthly_summary_path_for("2026-04", Some("/tmp/mur-test"));
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/tmp/mur-test/conversations/summary/monthly/2026-04.md")
+        );
+    }
+
+    #[test]
+    fn weekly_history_dir_under_weekly() {
+        let p = weekly_history_dir(Some("/tmp/mur-test"));
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/tmp/mur-test/conversations/summary/weekly/.history")
+        );
+    }
+
+    #[test]
+    fn monthly_history_dir_under_monthly() {
+        let p = monthly_history_dir(Some("/tmp/mur-test"));
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/tmp/mur-test/conversations/summary/monthly/.history")
         );
     }
 }

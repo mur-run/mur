@@ -135,8 +135,64 @@ jq -e '.hits_used | length >= 1' /tmp/gp-step-10.json \
   || { echo "FAIL step 10: no hits_used — retrieval did not fire"; exit 1; }
 jq -e '.answer | type == "string"' /tmp/gp-step-10.json \
   || { echo "FAIL step 10: missing or non-string .answer"; exit 1; }
-jq -e '.hits_used[0].layer == 2' /tmp/gp-step-10.json \
-  || { echo "FAIL step 10: first hit should be layer=2 after reindex"; exit 1; }
+jq -e '[.hits_used[] | .layer] | any(. == 2)' /tmp/gp-step-10.json \
+  || { echo "FAIL step 10: no layer=2 hit in hits_used (collapsed tree mixes layers)"; exit 1; }
+
+# ── Step 11.5: compact cascades into rollup for 7 consecutive days ────────
+echo "--- step 11.5: compact cascades into rollup (7 seeded days) ---"
+# Seed 7 consecutive days in 2026-W16 (Apr 13-19), which hasn't been touched yet
+# by earlier steps. Seed raw data, compact each day, then run cascade.
+TESTWEEK="2026-W16"
+for d in $(seq 13 19); do
+  DATE=$(printf "2026-04-%02d" "$d")
+  RAW_DIR="$TMPHOME/.mur/conversations/raw/$DATE"
+  mkdir -p "$RAW_DIR"
+  # Seed fresh raw data with meaningful content
+  cat > "$RAW_DIR/cc_w16.jsonl" <<JSONL
+{"v":1,"ts":"${DATE}T10:00:00Z","src":"claude-code","conv":"w16","role":"user","content":{"t":"text","v":"shipped several fixes and refactors for day $d"},"meta":{},"refs":[]}
+JSONL
+done
+# Compact each day individually (targeted --date — no cascade)
+for d in $(seq 13 19); do
+  DATE=$(printf "2026-04-%02d" "$d")
+  MUR_OLLAMA_MOCK=hash "$MUR" conversations compact --date "$DATE" > /dev/null
+done
+# Now run compact with no --date so the cascade fires and rollup sweeps
+MUR_OLLAMA_MOCK=hash "$MUR" conversations compact 2>&1 | tee /tmp/gp-step-11.5b.txt
+grep -q "rollup sweep" /tmp/gp-step-11.5b.txt \
+  || { echo "FAIL step 11.5: compact did not cascade into rollup"; exit 1; }
+
+# ── Step 12: explicit rollup --all-missing ───────────────────────────────
+echo "--- step 12: mur conversations rollup --all-missing (hash mock) ---"
+MUR_OLLAMA_MOCK=hash "$MUR" conversations rollup --all-missing --max-weeks 4 --max-months 2 2>&1 | tee /tmp/gp-step-12.txt
+grep -q "rolled up" /tmp/gp-step-12.txt \
+  || { echo "FAIL step 12: rollup --all-missing did not emit sweep report"; exit 1; }
+test -f "$TMPHOME/.mur/conversations/summary/weekly/2026-W16.md" \
+  || { echo "FAIL step 12: weekly md 2026-W16.md missing"; exit 1; }
+
+# ── Step 13: reindex --rollups-only + doctor ─────────────────────────────
+echo "--- step 13: mur conversations reindex --rollups-only ---"
+MUR_OLLAMA_MOCK=hash "$MUR" conversations reindex --rollups-only 2>&1 | tee /tmp/gp-step-13a.txt
+grep -q "reindexed rollups:" /tmp/gp-step-13a.txt \
+  || { echo "FAIL step 13: reindex --rollups-only missing report"; exit 1; }
+MUR_OLLAMA_MOCK=hash "$MUR" conversations doctor 2>&1 | tee /tmp/gp-step-13b.txt
+grep -q "weekly rollups:" /tmp/gp-step-13b.txt \
+  || { echo "FAIL step 13: doctor missing weekly rollups line"; exit 1; }
+grep "weekly rollups:" /tmp/gp-step-13b.txt | grep -q "2026-W16" \
+  || { echo "FAIL step 13: doctor weekly rollups should include 2026-W16"; exit 1; }
+grep -q "monthly rollups:" /tmp/gp-step-13b.txt \
+  || { echo "FAIL step 13: doctor missing monthly rollups line"; exit 1; }
+
+# ── Step 14: ask surfaces rollup hit via collapsed tree ──────────────────
+echo "--- step 14: mur ask --json (expect layer=3 or layer=4 rollup hit) ---"
+# Use the exact narrative from the week-level mock to match hash embedding
+MUR_OLLAMA_MOCK=hash "$MUR" ask "Mock narrative: this week the developer shipped several fixes and refactors." --json > /tmp/gp-step-14.json
+cat /tmp/gp-step-14.json
+jq -e '.hits_used | length >= 1' /tmp/gp-step-14.json \
+  || { echo "FAIL step 14: no hits_used"; exit 1; }
+# At least one hit must be layer=3 or layer=4 — proves collapsed tree surfaced a rollup.
+jq -e '[.hits_used[] | .layer] | any(. == 3 or . == 4)' /tmp/gp-step-14.json \
+  || { echo "FAIL step 14: no rollup hit (layer=3 or layer=4) in hits_used"; exit 1; }
 
 echo ""
-echo "=== ALL 11 STEPS GREEN ==="
+echo "=== ALL 15 STEPS GREEN ==="

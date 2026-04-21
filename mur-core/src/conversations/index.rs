@@ -22,6 +22,24 @@ use super::paths::index_path;
 
 const TABLE: &str = "conversations";
 
+fn parse_source_or_placeholder(s: &str) -> Source {
+    match s {
+        "cc" => Source::ClaudeCode,
+        "cursor" => Source::Cursor,
+        "gemini" => Source::Gemini,
+        "aider" => Source::Aider,
+        "slack" => Source::Slack,
+        "telegram" => Source::Telegram,
+        "discord" => Source::Discord,
+        "commander" => Source::CommanderEngine,
+        // Phase 3.2: rollup rows use synthetic "week" / "month". These don't
+        // round-trip through Source, but retrieval filters by layer, not source,
+        // for rollup rows. Placeholder ClaudeCode lets decode succeed; rollup
+        // resolvers consume h.conv_id, not h.source.
+        _ => Source::ClaudeCode,
+    }
+}
+
 pub struct ConversationIndex {
     db: lancedb::Connection,
     dims: i32,
@@ -37,6 +55,19 @@ pub struct SearchHit {
     pub distance: f32,
     pub layer: i8,
     pub vector: Option<Vec<f32>>,
+}
+
+/// Direct-write payload for Phase 3.2 rollup rows. Bypasses the Message →
+/// Source enum path so synthetic source strings ("week", "month") can be
+/// stored without extending the Source enum.
+pub struct RollupRow<'a> {
+    pub id: &'a str,
+    pub ts: i64,
+    pub source: &'a str,
+    pub conv_id: &'a str,
+    pub layer: i8,
+    pub content: &'a str,
+    pub vector: &'a [f32],
 }
 
 impl ConversationIndex {
@@ -261,17 +292,7 @@ impl ConversationIndex {
                 .column_by_name("vector")
                 .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>());
             for i in 0..b.num_rows() {
-                let source = match srcs.value(i) {
-                    "cc" => Source::ClaudeCode,
-                    "cursor" => Source::Cursor,
-                    "gemini" => Source::Gemini,
-                    "aider" => Source::Aider,
-                    "slack" => Source::Slack,
-                    "telegram" => Source::Telegram,
-                    "discord" => Source::Discord,
-                    "commander" => Source::CommanderEngine,
-                    other => anyhow::bail!("unknown source tag {other}"),
-                };
+                let source = parse_source_or_placeholder(srcs.value(i));
                 let layer = layers.map(|a| a.value(i)).unwrap_or(0);
                 let vector = vectors.and_then(|arr| {
                     let fsl = arr.value(i);
@@ -290,6 +311,99 @@ impl ConversationIndex {
                     content: contents.value(i).to_string(),
                     distance: dists.map(|d| d.value(i)).unwrap_or(0.0),
                     layer,
+                    vector,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Phase 3.2: filter-only scan — no k-NN. Returns all rows at the given
+    /// layer whose `ts` falls in [ts_lo_inclusive, ts_hi_exclusive). Used by
+    /// rollup to gather a window's layer=2 spans with their vectors.
+    pub async fn scan_rows_at_layer(
+        &self,
+        layer: i8,
+        ts_lo_inclusive: i64,
+        ts_hi_exclusive: i64,
+    ) -> Result<Vec<SearchHit>> {
+        let tables = self.db.table_names().execute().await?;
+        if !tables.contains(&TABLE.to_string()) {
+            return Ok(Vec::new());
+        }
+        let table = self.db.open_table(TABLE).execute().await?;
+        let filter =
+            format!("layer = {layer} AND ts >= {ts_lo_inclusive} AND ts < {ts_hi_exclusive}");
+        let mut q = table.query().only_if(filter);
+        q = q.select(Select::Columns(vec![
+            "id".into(),
+            "ts".into(),
+            "source".into(),
+            "conv_id".into(),
+            "role".into(),
+            "layer".into(),
+            "content".into(),
+            "vector".into(),
+        ]));
+        let stream = q.execute().await?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        let mut out = Vec::new();
+        for b in batches {
+            let ids = b
+                .column_by_name("id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let tss = b
+                .column_by_name("ts")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            let srcs = b
+                .column_by_name("source")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let convs = b
+                .column_by_name("conv_id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let contents = b
+                .column_by_name("content")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let layers = b
+                .column_by_name("layer")
+                .and_then(|c| c.as_any().downcast_ref::<Int8Array>());
+            let vectors = b
+                .column_by_name("vector")
+                .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>());
+            for i in 0..b.num_rows() {
+                let layer_val = layers.map(|a| a.value(i)).unwrap_or(0);
+                let vector = vectors.and_then(|arr| {
+                    let fsl = arr.value(i);
+                    let floats = fsl.as_any().downcast_ref::<Float32Array>()?;
+                    Some(
+                        (0..floats.len())
+                            .map(|j| floats.value(j))
+                            .collect::<Vec<f32>>(),
+                    )
+                });
+                out.push(SearchHit {
+                    id: ids.value(i).to_string(),
+                    ts: tss.value(i),
+                    source: parse_source_or_placeholder(srcs.value(i)),
+                    conv_id: convs.value(i).to_string(),
+                    content: contents.value(i).to_string(),
+                    distance: 0.0, // no k-NN score for filter-only scan
+                    layer: layer_val,
                     vector,
                 });
             }
@@ -322,6 +436,61 @@ impl ConversationIndex {
         let table = self.db.open_table(TABLE).execute().await?;
         let n = table.count_rows(Some(format!("layer = {layer}"))).await?;
         Ok(n as u64)
+    }
+
+    pub async fn upsert_rollup_row(&mut self, row: RollupRow<'_>) -> Result<()> {
+        let _span = info_span!(
+            "conversations.index.upsert_rollup",
+            layer = row.layer,
+            conv = row.conv_id
+        )
+        .entered();
+        let schema = Arc::new(self.schema());
+        let tables = self.db.table_names().execute().await?;
+
+        let id_arr = StringArray::from(vec![row.id]);
+        let ts_arr = Int64Array::from(vec![row.ts]);
+        let src_arr = StringArray::from(vec![row.source]);
+        let conv_arr = StringArray::from(vec![row.conv_id]);
+        let role_arr = StringArray::from(vec!["user"]); // placeholder
+        let layer_arr = Int8Array::from(vec![row.layer]);
+        let content_arr = StringArray::from(vec![row.content]);
+        let vec_arr = FixedSizeListArray::try_new(
+            Arc::new(Field::new("item", DataType::Float32, true)),
+            self.dims,
+            Arc::new(Float32Array::from(row.vector.to_vec())),
+            None,
+        )?;
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(id_arr),
+                Arc::new(ts_arr),
+                Arc::new(src_arr),
+                Arc::new(conv_arr),
+                Arc::new(role_arr),
+                Arc::new(layer_arr),
+                Arc::new(content_arr),
+                Arc::new(vec_arr),
+            ],
+        )?;
+
+        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
+        let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
+
+        if tables.contains(&TABLE.to_string()) {
+            self.db
+                .open_table(TABLE)
+                .execute()
+                .await?
+                .add(reader)
+                .execute()
+                .await?;
+        } else {
+            self.db.create_table(TABLE, reader).execute().await?;
+        }
+        Ok(())
     }
 }
 
@@ -460,5 +629,117 @@ mod tests {
         assert_eq!(idx.count_rows_at_layer(0).await.unwrap(), 3);
         assert_eq!(idx.count_rows_at_layer(2).await.unwrap(), 2);
         assert_eq!(idx.count_rows_at_layer(1).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn scan_rows_at_layer_filters_by_ts_range_and_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = ConversationIndex::open(16, Some(root)).await.unwrap();
+        // Seed three layer=2 rows at ts 100, 200, 300; one layer=1 row at ts 200.
+        use chrono::TimeZone;
+        for (ts, conv) in [(100, "a"), (200, "b"), (300, "c")] {
+            let mut m = msg(conv, "span");
+            m.ts = chrono::Utc.timestamp_opt(ts, 0).unwrap();
+            idx.upsert_with_layer(&[(m, vec![0.1 * ts as f32; 16], 2)])
+                .await
+                .unwrap();
+        }
+        let mut n = msg("narrative", "narr");
+        n.ts = chrono::Utc.timestamp_opt(200, 0).unwrap();
+        idx.upsert_with_layer(&[(n, vec![0.5; 16], 1)])
+            .await
+            .unwrap();
+
+        // Query layer=2, window [150, 250): should get only the ts=200 span
+        let hits = idx.scan_rows_at_layer(2, 150, 250).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].conv_id, "b");
+        assert_eq!(hits[0].layer, 2);
+        assert!(hits[0].vector.is_some());
+
+        // Query layer=2, window [100, 300]: all three
+        let hits = idx.scan_rows_at_layer(2, 100, 301).await.unwrap();
+        assert_eq!(hits.len(), 3);
+
+        // Query layer=1: only the narrative
+        let hits = idx.scan_rows_at_layer(1, 0, i64::MAX).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].conv_id, "narrative");
+    }
+
+    #[tokio::test]
+    async fn upsert_rollup_row_writes_and_retrieves_layer_3() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = ConversationIndex::open(16, Some(root)).await.unwrap();
+        let vec = vec![0.1_f32; 16];
+        idx.upsert_rollup_row(RollupRow {
+            id: "wk_2026-W16_L3_0",
+            ts: 1_000_000,
+            source: "week",
+            conv_id: "week:2026-W16",
+            layer: 3,
+            content: "this week we shipped X",
+            vector: &vec,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(idx.count_rows_at_layer(3).await.unwrap(), 1);
+        let hits = idx.search(&[0.1; 16], 1, None, Some(3)).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "wk_2026-W16_L3_0");
+        assert_eq!(hits[0].conv_id, "week:2026-W16");
+        assert_eq!(hits[0].content, "this week we shipped X");
+        assert_eq!(hits[0].layer, 3);
+    }
+
+    #[test]
+    fn parse_source_maps_rollup_sources_to_placeholder() {
+        assert!(matches!(
+            parse_source_or_placeholder("cc"),
+            Source::ClaudeCode
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("week"),
+            Source::ClaudeCode
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("month"),
+            Source::ClaudeCode
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("unknown-future"),
+            Source::ClaudeCode
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("cursor"),
+            Source::Cursor
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("gemini"),
+            Source::Gemini
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("aider"),
+            Source::Aider
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("slack"),
+            Source::Slack
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("telegram"),
+            Source::Telegram
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("discord"),
+            Source::Discord
+        ));
+        assert!(matches!(
+            parse_source_or_placeholder("commander"),
+            Source::CommanderEngine
+        ));
     }
 }

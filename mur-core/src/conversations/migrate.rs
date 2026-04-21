@@ -552,12 +552,20 @@ pub fn sync_commander_config_toml(
          [conversations.compact]\n\
          enabled_in_daemon = {}\n\
          daemon_cron = \"{}\"\n\
+         \n\
+         [conversations.rollup]\n\
+         enabled = {}\n\
+         max_weeks_per_run = {}\n\
+         max_months_per_run = {}\n\
          {}\n",
         CONV_MARKER_OPEN,
         cfg.enabled,
         cfg.retention_days,
         cfg.compact.enabled_in_daemon,
         cfg.compact.daemon_cron,
+        cfg.rollup.enabled,
+        cfg.rollup.max_weeks_per_run,
+        cfg.rollup.max_months_per_run,
         CONV_MARKER_CLOSE,
     );
 
@@ -809,6 +817,32 @@ mod tests {
         assert!(toml.contains("[conversations.compact]"));
         assert!(toml.contains("enabled_in_daemon = true"));
         assert!(toml.contains("daemon_cron = \"0 0 4 * * * *\""));
+        assert!(toml.contains("[engine]"));
+    }
+
+    #[test]
+    fn sync_writes_conversations_rollup_subsection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cmdr_dir = tmp.path().join(".mur/commander");
+        std::fs::create_dir_all(&cmdr_dir).unwrap();
+        std::fs::write(cmdr_dir.join("config.toml"), "[engine]\nfoo = 1\n").unwrap();
+        let cfg = mur_common::config::ConversationsConfig {
+            enabled: true,
+            retention_days: 30,
+            rollup: mur_common::config::RollupConfig {
+                enabled: true,
+                max_weeks_per_run: 6,
+                max_months_per_run: 3,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        sync_commander_config_toml(&tmp.path().join(".mur"), &cfg).unwrap();
+        let toml = std::fs::read_to_string(cmdr_dir.join("config.toml")).unwrap();
+        assert!(toml.contains("[conversations.rollup]"));
+        assert!(toml.contains("enabled = true"));
+        assert!(toml.contains("max_weeks_per_run = 6"));
+        assert!(toml.contains("max_months_per_run = 3"));
         assert!(toml.contains("[engine]"));
     }
 
