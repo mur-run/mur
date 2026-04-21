@@ -388,11 +388,98 @@ impl VectorStore for LanceDbStore {
 
     async fn search(
         &self,
-        _query_vec: &[f32],
-        _k: usize,
-        _filter: &SearchFilter,
+        query_vec: &[f32],
+        k: usize,
+        filter: &SearchFilter,
     ) -> Result<Vec<Hit>> {
-        anyhow::bail!("LanceDbStore::search (trait) is a stub until P1.3 wires unified retrieve")
+        use futures::TryStreamExt;
+        use lancedb::query::{ExecutableQuery, QueryBase};
+
+        let tables = self.db.table_names().execute().await?;
+        if !tables.contains(&SOURCES_TABLE.to_string()) {
+            return Ok(vec![]);
+        }
+        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+
+        let mut query = table.vector_search(query_vec.to_vec()).context("vector_search")?;
+
+        // Build WHERE predicate from filter.
+        let mut predicates: Vec<String> = Vec::new();
+        if let Some(ids) = &filter.source_ids
+            && !ids.is_empty()
+        {
+            let escaped: Vec<String> = ids
+                .iter()
+                .map(|s| format!("'{}'", s.replace('\'', "''")))
+                .collect();
+            predicates.push(format!("source_id IN ({})", escaped.join(",")));
+        }
+        if let Some(since) = filter.since {
+            predicates.push(format!("updated_at_ms >= {}", since.timestamp_millis()));
+        }
+        if !predicates.is_empty() {
+            query = query.only_if(predicates.join(" AND "));
+        }
+
+        let results = query
+            .limit(k)
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let mut hits: Vec<Hit> = Vec::new();
+        for batch in &results {
+            use arrow_array::{Int64Array, StringArray};
+            let chunk_ids = batch
+                .column_by_name("chunk_id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .context("column chunk_id missing or wrong type")?;
+            let source_ids = batch
+                .column_by_name("source_id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .context("column source_id missing")?;
+            let external_ids = batch
+                .column_by_name("external_id")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .context("column external_id missing")?;
+            let texts = batch
+                .column_by_name("text")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .context("column text missing")?;
+            let heading_paths = batch
+                .column_by_name("heading_path")
+                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                .context("column heading_path missing")?;
+            let updated_at_ms = batch
+                .column_by_name("updated_at_ms")
+                .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+                .context("column updated_at_ms missing")?;
+            let distances = batch
+                .column_by_name("_distance")
+                .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
+                .context("column _distance missing")?;
+
+            for i in 0..batch.num_rows() {
+                let d = distances.value(i);
+                let score = 1.0 / (1.0 + d);
+                let hp: Vec<String> =
+                    serde_json::from_str(heading_paths.value(i)).unwrap_or_default();
+                let ms = updated_at_ms.value(i);
+                let ts = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
+                    .unwrap_or_else(|| chrono::Utc::now());
+                hits.push(Hit {
+                    chunk_id: chunk_ids.value(i).to_string(),
+                    source_id: source_ids.value(i).to_string(),
+                    external_id: external_ids.value(i).to_string(),
+                    score,
+                    text: texts.value(i).to_string(),
+                    heading_path: hp,
+                    updated_at: ts,
+                });
+            }
+        }
+        Ok(hits)
     }
 
     async fn delete_by_external_ids(
