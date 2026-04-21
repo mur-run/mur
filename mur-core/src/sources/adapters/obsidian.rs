@@ -10,14 +10,12 @@ use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 
 use crate::sources::KnowledgeSource;
-#[allow(unused_imports)]
 use crate::sources::chunker::markdown as md;
 use crate::sources::instance::SourceInstance;
 use crate::sources::kind::SourceKind;
 use crate::sources::types::{Chunk, DocRef, Document, DocumentBody, SyncCursor};
 
 const EXCLUDED_SEGMENTS: &[&str] = &[".obsidian", ".trash"];
-#[allow(dead_code)]
 const CHUNK_MAX_CHARS: usize = 6000;
 
 /// Obsidian vault adapter.
@@ -217,8 +215,25 @@ impl KnowledgeSource for ObsidianAdapter {
         })
     }
 
-    fn chunk(&self, _doc: &Document) -> Result<Vec<Chunk>> {
-        anyhow::bail!("ObsidianAdapter::chunk arrives in Task 10")
+    fn chunk(&self, doc: &Document) -> Result<Vec<Chunk>> {
+        let body = match &doc.body {
+            DocumentBody::Markdown(s) | DocumentBody::PlainText(s) => s.clone(),
+            DocumentBody::NotionBlocks(_) => bail!("obsidian adapter does not handle notion blocks"),
+        };
+        let raw_chunks = md::chunk_markdown(&doc.title, &body, CHUNK_MAX_CHARS);
+        let mut out = Vec::with_capacity(raw_chunks.len());
+        for (i, c) in raw_chunks.into_iter().enumerate() {
+            out.push(Chunk::new(
+                doc.source_id.clone(),
+                doc.external_id.clone(),
+                i,
+                c.text,
+                c.heading_path,
+                c.char_range,
+                doc.updated_at,
+            ));
+        }
+        Ok(out)
     }
 }
 
@@ -421,5 +436,29 @@ mod tests {
             _ => panic!("expected markdown body"),
         }
         assert_eq!(doc.metadata.get("status").and_then(|v| v.as_str()), Some("draft"));
+    }
+
+    #[tokio::test]
+    async fn chunk_emits_multiple_chunks_with_heading_path() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join(".obsidian")).unwrap();
+        let body = "# H1\n\npara under h1.\n\n## H2\n\npara under h2.\n\n## H2-b\n\npara under h2-b.\n";
+        fs::write(tmp.path().join("multi.md"), body).unwrap();
+
+        let inst = make_instance("obsidian-main", tmp.path());
+        let adapter = ObsidianAdapter::from_instance(&inst).unwrap();
+        let (docs, _) = adapter.list_documents(None).await.unwrap();
+        let doc_ref = docs.iter().find(|d| d.external_id == "multi.md").unwrap();
+        let doc = adapter.fetch(doc_ref).await.unwrap();
+        let chunks = adapter.chunk(&doc).unwrap();
+        assert!(chunks.len() >= 3, "expected >=3 chunks, got {}", chunks.len());
+        for c in &chunks {
+            assert_eq!(c.source_id, "obsidian-main");
+            assert_eq!(c.external_id, "multi.md");
+            assert!(!c.chunk_id.is_empty());
+            assert!(!c.text.is_empty());
+        }
+        let ords: Vec<usize> = chunks.iter().map(|c| c.ordinal).collect();
+        assert_eq!(ords, (0..chunks.len()).collect::<Vec<_>>());
     }
 }
