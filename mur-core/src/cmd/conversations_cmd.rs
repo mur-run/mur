@@ -180,6 +180,7 @@ pub async fn cmd_conversations_cleanup() -> Result<()> {
 pub struct ReindexArgs {
     pub raw_only: bool,
     pub spans_only: bool,
+    pub rollups_only: bool,
 }
 
 pub async fn cmd_conversations_reindex(args: ReindexArgs) -> Result<()> {
@@ -189,7 +190,7 @@ pub async fn cmd_conversations_reindex(args: ReindexArgs) -> Result<()> {
     let mut span_rows = 0u64;
 
     // Raw rebuild (layer=0) — Phase 1 behavior.
-    if !args.spans_only {
+    if !args.spans_only && !args.rollups_only {
         let days = store::list_raw_dirs(None).unwrap_or_default();
         let dims: i32 = {
             let cfg = crate::store::config::load_config().unwrap_or_default();
@@ -229,7 +230,7 @@ pub async fn cmd_conversations_reindex(args: ReindexArgs) -> Result<()> {
     }
 
     // Span rebuild (layer=2) — Phase 3.1.
-    if !args.raw_only {
+    if !args.raw_only && !args.rollups_only {
         let dims: i32 = {
             let cfg = crate::store::config::load_config().unwrap_or_default();
             crate::store::embedding::EmbeddingConfig::from_config(&cfg).dimensions as i32
@@ -312,6 +313,119 @@ pub async fn cmd_conversations_reindex(args: ReindexArgs) -> Result<()> {
             }
         }
         println!("reindexed spans: {span_rows} spans");
+    }
+
+    // Phase 3.2: rollup rebuild (layer=3 + layer=4).
+    if !args.raw_only && !args.spans_only {
+        use chrono::TimeZone;
+        let dims: i32 = {
+            let c = crate::store::config::load_config().unwrap_or_default();
+            crate::store::embedding::EmbeddingConfig::from_config(&c).dimensions as i32
+        };
+        let mut idx = crate::conversations::index::ConversationIndex::open(dims, None).await?;
+        let mut weekly_count = 0u64;
+        let mut monthly_count = 0u64;
+
+        // Weeklies
+        let weekly_root = crate::conversations::paths::weekly_summary_root(None);
+        if weekly_root.exists() {
+            for entry in std::fs::read_dir(&weekly_root)? {
+                let path = entry?.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                    continue;
+                }
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let stem = stem.to_string();
+                let body = std::fs::read_to_string(&path).unwrap_or_default();
+                let Ok(parsed) = crate::conversations::summarize::parse_summary(&body) else {
+                    continue;
+                };
+                let monday = crate::conversations::summarize::windows::iso_week_monday(&stem)
+                    .unwrap_or(parsed.date);
+                let ts = chrono::Utc
+                    .from_utc_datetime(&monday.and_hms_opt(0, 0, 0).unwrap())
+                    .timestamp();
+                let vec: Vec<f32> = if let Some(mode) = crate::conversations::ollama::mock_mode() {
+                    crate::conversations::ollama::mock_embed_vector(
+                        &parsed.narrative,
+                        mode,
+                        dims as usize,
+                    )
+                } else {
+                    let c = crate::store::config::load_config().unwrap_or_default();
+                    let ec = crate::store::embedding::EmbeddingConfig::from_config(&c);
+                    crate::store::embedding::embed(&parsed.narrative, &ec)
+                        .await
+                        .unwrap_or_else(|_| vec![0.0; dims as usize])
+                };
+                let id = format!("wk_{stem}_L3_0");
+                let conv_id = format!("week:{stem}");
+                idx.upsert_rollup_row(crate::conversations::index::RollupRow {
+                    id: &id,
+                    ts,
+                    source: "week",
+                    conv_id: &conv_id,
+                    layer: 3,
+                    content: &parsed.narrative,
+                    vector: &vec,
+                })
+                .await?;
+                weekly_count += 1;
+            }
+        }
+
+        // Monthlies
+        let monthly_root = crate::conversations::paths::monthly_summary_root(None);
+        if monthly_root.exists() {
+            for entry in std::fs::read_dir(&monthly_root)? {
+                let path = entry?.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                    continue;
+                }
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let stem = stem.to_string();
+                let body = std::fs::read_to_string(&path).unwrap_or_default();
+                let Ok(parsed) = crate::conversations::summarize::parse_summary(&body) else {
+                    continue;
+                };
+                let first = crate::conversations::summarize::windows::month_first_day(&stem)
+                    .unwrap_or(parsed.date);
+                let ts = chrono::Utc
+                    .from_utc_datetime(&first.and_hms_opt(0, 0, 0).unwrap())
+                    .timestamp();
+                let vec: Vec<f32> = if let Some(mode) = crate::conversations::ollama::mock_mode() {
+                    crate::conversations::ollama::mock_embed_vector(
+                        &parsed.narrative,
+                        mode,
+                        dims as usize,
+                    )
+                } else {
+                    let c = crate::store::config::load_config().unwrap_or_default();
+                    let ec = crate::store::embedding::EmbeddingConfig::from_config(&c);
+                    crate::store::embedding::embed(&parsed.narrative, &ec)
+                        .await
+                        .unwrap_or_else(|_| vec![0.0; dims as usize])
+                };
+                let id = format!("mo_{stem}_L4_0");
+                let conv_id = format!("month:{stem}");
+                idx.upsert_rollup_row(crate::conversations::index::RollupRow {
+                    id: &id,
+                    ts,
+                    source: "month",
+                    conv_id: &conv_id,
+                    layer: 4,
+                    content: &parsed.narrative,
+                    vector: &vec,
+                })
+                .await?;
+                monthly_count += 1;
+            }
+        }
+        println!("reindexed rollups: {weekly_count} weekly + {monthly_count} monthly");
     }
 
     Ok(())
@@ -447,6 +561,69 @@ pub async fn cmd_conversations_doctor() -> Result<()> {
         }
         Err(e) => {
             println!("  · spans: could not open index: {e}");
+        }
+    }
+
+    // Phase 3.2: rollup coverage
+    let dims: i32 = {
+        let c = crate::store::config::load_config().unwrap_or_default();
+        crate::store::embedding::EmbeddingConfig::from_config(&c).dimensions as i32
+    };
+    match crate::conversations::index::ConversationIndex::open(dims, None).await {
+        Ok(idx) => {
+            let weekly_count = idx.count_rows_at_layer(3).await.unwrap_or(0);
+            let monthly_count = idx.count_rows_at_layer(4).await.unwrap_or(0);
+            let weekly_md_root = crate::conversations::paths::weekly_summary_root(None);
+            let last_weekly = if weekly_md_root.exists() {
+                std::fs::read_dir(&weekly_md_root).ok().and_then(|rd| {
+                    rd.flatten()
+                        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+                        .filter_map(|e| e.file_name().into_string().ok())
+                        .filter_map(|n| n.strip_suffix(".md").map(String::from))
+                        .max()
+                })
+            } else {
+                None
+            };
+            let monthly_md_root = crate::conversations::paths::monthly_summary_root(None);
+            let last_monthly = if monthly_md_root.exists() {
+                std::fs::read_dir(&monthly_md_root).ok().and_then(|rd| {
+                    rd.flatten()
+                        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
+                        .filter_map(|e| e.file_name().into_string().ok())
+                        .filter_map(|n| n.strip_suffix(".md").map(String::from))
+                        .max()
+                })
+            } else {
+                None
+            };
+
+            if weekly_count > 0 {
+                println!(
+                    "  ✓ weekly rollups: {weekly_count} rows at layer=3{}",
+                    last_weekly
+                        .map(|l| format!(" (last: {l})"))
+                        .unwrap_or_default()
+                );
+            } else {
+                println!(
+                    "  · weekly rollups: 0 indexed — run 'mur conversations rollup --all-missing'"
+                );
+            }
+            if monthly_count > 0 {
+                println!(
+                    "  ✓ monthly rollups: {monthly_count} rows at layer=4{}",
+                    last_monthly
+                        .map(|l| format!(" (last: {l})"))
+                        .unwrap_or_default()
+                );
+            } else {
+                println!("  · monthly rollups: no weeks yet");
+            }
+        }
+        Err(e) => {
+            println!("  · weekly rollups: could not open index: {e}");
+            println!("  · monthly rollups: could not open index: {e}");
         }
     }
 
@@ -667,6 +844,66 @@ pub async fn cmd_conversations_rollback() -> Result<()> {
     Ok(())
 }
 
+pub struct RollupArgs {
+    pub week: Option<String>,
+    pub month: Option<String>,
+    pub all_missing: bool,
+    pub force: bool,
+    pub if_stale: bool,
+    pub max_weeks: Option<u32>,
+    pub max_months: Option<u32>,
+}
+
+pub async fn cmd_conversations_rollup(args: RollupArgs) -> Result<()> {
+    use crate::conversations::summarize::rollup::{
+        RollupKinds, rollup_missing, rollup_month, rollup_week,
+    };
+
+    let rollup_cfg = crate::store::config::load_config()
+        .ok()
+        .unwrap_or_default()
+        .conversations
+        .rollup
+        .clone();
+
+    if let Some(w) = args.week {
+        let force = args.force || args.if_stale;
+        let r = rollup_week(&w, force, &rollup_cfg, None).await?;
+        println!("{}: {:?} ({}ms)", r.window, r.outcome, r.duration_ms);
+        return Ok(());
+    }
+    if let Some(m) = args.month {
+        let force = args.force || args.if_stale;
+        let r = rollup_month(&m, force, &rollup_cfg, None).await?;
+        println!("{}: {:?} ({}ms)", r.window, r.outcome, r.duration_ms);
+        return Ok(());
+    }
+    if args.all_missing {
+        let sweep = rollup_missing(
+            &rollup_cfg,
+            RollupKinds::All,
+            args.max_weeks,
+            args.max_months,
+            None,
+        )
+        .await?;
+        for r in &sweep.reports {
+            println!("  {} {:?} ({}ms)", r.window, r.outcome, r.duration_ms);
+        }
+        println!(
+            "rolled up: {} week ok / {} week err / {} week skipped; {} month ok / {} month err / {} month skipped",
+            sweep.week_ok,
+            sweep.week_err,
+            sweep.week_skipped,
+            sweep.month_ok,
+            sweep.month_err,
+            sweep.month_skipped,
+        );
+        return Ok(());
+    }
+    anyhow::bail!("supply --week, --month, or --all-missing");
+}
+
 fn parse_sources(s: &str) -> Vec<Source> {
     s.split(',')
         .filter_map(|p| match p.trim() {
@@ -727,6 +964,7 @@ pub struct CompactArgs {
     pub max_days: Option<u32>,
     pub extractive_only: bool,
     pub debug_prompt: bool,
+    pub skip_rollups: bool,
 }
 
 pub struct AskArgs {
@@ -758,6 +996,10 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
         eprintln!("(debug_prompt not yet wired to individual stages; enabling in Phase 2C)");
     }
 
+    // Note: single-day compact via --date does NOT cascade into the rollup
+    // sweep (one day can't close a week). To trigger rollups after a targeted
+    // backfill, re-run `mur conversations compact` with no --date, or run
+    // `mur conversations rollup --all-missing` explicitly.
     if let Some(d) = args.date {
         let date = NaiveDate::parse_from_str(&d, "%Y-%m-%d")?;
         let force = args.force || args.if_stale;
@@ -792,6 +1034,40 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
         "done: {} ok, {} failed, {} skipped",
         report.ok, report.err, report.skipped
     );
+
+    // Phase 3.2: cascade into rollups unless explicitly suppressed.
+    if !args.skip_rollups {
+        let rollup_cfg = crate::store::config::load_config()
+            .ok()
+            .unwrap_or_default()
+            .conversations
+            .rollup
+            .clone();
+        if rollup_cfg.enabled {
+            println!("\nrollup sweep:");
+            let sweep = crate::conversations::summarize::rollup::rollup_missing(
+                &rollup_cfg,
+                crate::conversations::summarize::rollup::RollupKinds::All,
+                None,
+                None,
+                None,
+            )
+            .await?;
+            for r in &sweep.reports {
+                println!("  {} {:?} ({}ms)", r.window, r.outcome, r.duration_ms);
+            }
+            println!(
+                "done: {} week ok / {} week err / {} week skipped; {} month ok / {} month err / {} month skipped",
+                sweep.week_ok,
+                sweep.week_err,
+                sweep.week_skipped,
+                sweep.month_ok,
+                sweep.month_err,
+                sweep.month_skipped,
+            );
+        }
+    }
+
     Ok(())
 }
 

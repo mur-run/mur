@@ -84,6 +84,108 @@ fn render_prompt(spans: &[ExtractiveSpan], date: chrono::NaiveDate, max_words: u
     body
 }
 
+/// Rollup granularity for Phase 3.2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RollupKind {
+    Week,
+    Month,
+}
+
+impl RollupKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RollupKind::Week => "week",
+            RollupKind::Month => "month",
+        }
+    }
+}
+
+/// Input for a rollup abstractive LLM call. `selected_spans` are the
+/// cross-window MMR-deduped extractive spans (ground truth for citation).
+/// `prior_narratives` are the source day (week rollup) or week (month
+/// rollup) narratives — framing context only, do not quote verbatim.
+pub struct RollupAbstractiveInput<'a> {
+    pub kind: RollupKind,
+    pub window_label: &'a str,
+    pub selected_spans: &'a [crate::conversations::ask::retrieve::ResolvedHit],
+    pub prior_narratives: &'a [(String, String)],
+}
+
+pub async fn rollup_narrative(
+    client: &crate::conversations::ollama::OllamaClient,
+    model: &str,
+    input: &RollupAbstractiveInput<'_>,
+    max_words: u32,
+) -> AbstractiveResult {
+    let prompt = render_rollup_prompt(input, max_words);
+    let resp = client
+        .generate(crate::conversations::ollama::GenerateRequest {
+            model,
+            prompt: &prompt,
+            system: None,
+            stream: false,
+            options: crate::conversations::ollama::GenerateOptions {
+                temperature: Some(0.2),
+                top_p: Some(0.9),
+                num_predict: Some(max_words * 2),
+                stop: vec![],
+            },
+        })
+        .await;
+    match resp {
+        Ok(r) => {
+            let narrative = clean_output(&r.response);
+            let word_count = narrative.split_whitespace().count();
+            AbstractiveResult {
+                narrative: Some(narrative),
+                word_count,
+            }
+        }
+        Err(e) => {
+            tracing::warn!("rollup abstractive call failed: {e:#}");
+            AbstractiveResult {
+                narrative: None,
+                word_count: 0,
+            }
+        }
+    }
+}
+
+fn render_rollup_prompt(input: &RollupAbstractiveInput<'_>, max_words: u32) -> String {
+    let min_words = 150.min(max_words / 2);
+    let kind_str = match input.kind {
+        RollupKind::Week => "one week",
+        RollupKind::Month => "one month",
+    };
+    let mut body = format!(
+        "You are summarizing {kind_str} ({window}) of a developer's AI-assistant \
+         conversations into a narrative paragraph. Use ONLY information present \
+         in the spans below. The prior narratives are context for framing — \
+         do NOT quote them verbatim. Reference each key fact by its span index [N].\n\n\
+         Output: {min_words}-{max_words} words, first-person or neutral, no bullet \
+         lists. Do NOT invent details.\n\n\
+         Spans (cross-day, deduplicated):\n",
+        window = input.window_label,
+    );
+    for (i, h) in input.selected_spans.iter().enumerate() {
+        body.push_str(&format!(
+            "  [{}] {{{} {}/{} L{}}}: \"{}\"\n",
+            i + 1,
+            h.info.date,
+            h.info.source,
+            h.info.conv_id,
+            h.line_hint.unwrap_or(0),
+            h.snippet.replace('\n', " "),
+        ));
+    }
+    body.push_str("\nPrior narratives (context only, do not quote):\n");
+    for (label, narrative) in input.prior_narratives {
+        body.push_str(&format!("  {label}: {narrative}\n"));
+    }
+    body.push_str("\nWrite the narrative.\n");
+    body
+}
+
 fn clean_output(raw: &str) -> String {
     let trimmed = raw.trim();
     // Strip trailing commentary like "Let me know if you'd like..." that some
@@ -186,6 +288,49 @@ mod tests {
             "word_count ({}) should equal split_whitespace count ({})",
             r.word_count, actual
         );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn rollup_narrative_week_returns_week_mock() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let client = crate::conversations::ollama::OllamaClient::new(
+            "http://unused",
+            std::time::Duration::from_secs(1),
+        );
+        let input = RollupAbstractiveInput {
+            kind: RollupKind::Week,
+            window_label: "2026-W16",
+            selected_spans: &[],
+            prior_narratives: &[],
+        };
+        let r = rollup_narrative(&client, "qwen3:14b", &input, 500).await;
+        let n = r.narrative.expect("should have narrative");
+        assert!(n.to_lowercase().contains("this week"), "got: {n}");
+        assert!(r.word_count > 0);
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn rollup_narrative_month_returns_month_mock() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let client = crate::conversations::ollama::OllamaClient::new(
+            "http://unused",
+            std::time::Duration::from_secs(1),
+        );
+        let input = RollupAbstractiveInput {
+            kind: RollupKind::Month,
+            window_label: "2026-04",
+            selected_spans: &[],
+            prior_narratives: &[],
+        };
+        let r = rollup_narrative(&client, "qwen3:14b", &input, 700).await;
+        let n = r.narrative.expect("should have narrative");
+        assert!(n.to_lowercase().contains("this month"), "got: {n}");
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }

@@ -188,3 +188,79 @@ fn mur_conversations_reindex_spans_only_populates_layer_2() {
         "expected 'spans' in output; got: {stdout}"
     );
 }
+
+#[test]
+fn mur_conversations_rollup_week_produces_md_and_layer_3_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    // Seed 7 day summaries + layer=2 rows for 2026-W16 (Apr 13..19).
+    let summary_dir = mur_home.join("conversations").join("summary");
+    std::fs::create_dir_all(&summary_dir).unwrap();
+    for d in 13..=19 {
+        std::fs::write(
+            summary_dir.join(format!("2026-04-{d:02}.md")),
+            format!(
+                "---\n\
+                 schema: 1\n\
+                 date: 2026-04-{d:02}\n\
+                 generated_at: 2026-04-{d:02}T03:00:00Z\n\
+                 generated_by:\n  extractive_model: qwen3:14b\n  abstractive_model: qwen3:14b\n  mur_version: 3.0.0\n\
+                 duration_ms: 50\n\
+                 conv_count: 1\n\
+                 msg_count: 1\n\
+                 sources: [cc]\n\
+                 pattern_refs: []\n\
+                 keywords: []\n\
+                 links:\n  prev: null\n  next: null\n\
+                 warnings: []\n\
+                 input_content_sha: {d}sha\n\
+                 ---\n\n\
+                 ## Extractive spans\n\n\
+                 [1] _{{cc/c1 @L1}}_:\n> day {d} span\n\n\
+                 ## Abstractive narrative\n\n\
+                 Narrative for day {d}.\n"
+            ),
+        )
+        .unwrap();
+    }
+    // Need layer=2 spans in the index for rollup to gather. Reindex first
+    // with --spans-only.
+    let _ = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "reindex", "--spans-only"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("reindex");
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mur"));
+    let (cmd, _h) = with_mur_home(
+        cmd.args(["conversations", "rollup", "--week", "2026-W16"]),
+        tmp.path(),
+    );
+    let out = cmd.env("MUR_OLLAMA_MOCK", "1").output().expect("run mur");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let weekly_md = mur_home
+        .join("conversations")
+        .join("summary")
+        .join("weekly")
+        .join("2026-W16.md");
+    assert!(weekly_md.exists(), "weekly md at {weekly_md:?}");
+}
+
+#[test]
+fn mur_conversations_doctor_reports_rollup_coverage() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mur"));
+    let (cmd, _h) = with_mur_home(cmd.args(["conversations", "doctor"]), tmp.path());
+    let out = cmd.env("MUR_OLLAMA_MOCK", "1").output().expect("run mur");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("weekly rollups"), "got: {stdout}");
+    assert!(stdout.contains("monthly rollups"), "got: {stdout}");
+}
