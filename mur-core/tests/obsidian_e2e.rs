@@ -89,7 +89,9 @@ async fn obsidian_end_to_end_sync_then_search() {
     }
     store.upsert(&all_chunks).await.unwrap();
 
-    let hits = <LanceDbStore as VectorStore>::search(&store, &ones(), 5, &SearchFilter::default()).await.unwrap();
+    let hits = <LanceDbStore as VectorStore>::search(&store, &ones(), 5, &SearchFilter::default())
+        .await
+        .unwrap();
     assert!(!hits.is_empty());
     assert_eq!(hits[0].external_id, "design.md");
 
@@ -105,7 +107,10 @@ async fn obsidian_end_to_end_sync_then_search() {
     let current: std::collections::HashSet<String> =
         refs_after.iter().map(|r| r.external_id.clone()).collect();
     let indexed = store.list_external_ids("obsidian:e2e").await.unwrap();
-    let deleted: Vec<String> = indexed.into_iter().filter(|id| !current.contains(id)).collect();
+    let deleted: Vec<String> = indexed
+        .into_iter()
+        .filter(|id| !current.contains(id))
+        .collect();
     assert_eq!(deleted, vec!["scratch.md".to_string()]);
     store
         .delete_by_external_ids("obsidian:e2e", &deleted)

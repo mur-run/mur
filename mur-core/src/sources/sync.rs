@@ -86,7 +86,10 @@ pub async fn sync_source(
             .context("list_external_ids")?;
         let current: std::collections::HashSet<String> =
             doc_refs.iter().map(|d| d.external_id.clone()).collect();
-        let deleted: Vec<String> = indexed.into_iter().filter(|id| !current.contains(id)).collect();
+        let deleted: Vec<String> = indexed
+            .into_iter()
+            .filter(|id| !current.contains(id))
+            .collect();
         if !deleted.is_empty() {
             vector_store
                 .delete_by_external_ids(&source_id, &deleted)

@@ -113,7 +113,9 @@ impl KnowledgeSource for ObsidianAdapter {
             if c.is_empty() {
                 None
             } else {
-                DateTime::parse_from_rfc3339(&c.0).ok().map(|dt| dt.with_timezone(&Utc))
+                DateTime::parse_from_rfc3339(&c.0)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
             }
         });
 
@@ -220,7 +222,9 @@ impl KnowledgeSource for ObsidianAdapter {
     fn chunk(&self, doc: &Document) -> Result<Vec<Chunk>> {
         let body = match &doc.body {
             DocumentBody::Markdown(s) | DocumentBody::PlainText(s) => s.clone(),
-            DocumentBody::NotionBlocks(_) => bail!("obsidian adapter does not handle notion blocks"),
+            DocumentBody::NotionBlocks(_) => {
+                bail!("obsidian adapter does not handle notion blocks")
+            }
         };
         let raw_chunks = md::chunk_markdown(&doc.title, &body, CHUNK_MAX_CHARS);
         let mut out = Vec::with_capacity(raw_chunks.len());
@@ -332,7 +336,11 @@ mod tests {
         fs::create_dir_all(tmp.path().join(".obsidian")).unwrap();
         fs::write(tmp.path().join("note-a.md"), "# A\n\ncontent a").unwrap();
         fs::create_dir_all(tmp.path().join("folder")).unwrap();
-        fs::write(tmp.path().join("folder").join("note-b.md"), "# B\n\ncontent b").unwrap();
+        fs::write(
+            tmp.path().join("folder").join("note-b.md"),
+            "# B\n\ncontent b",
+        )
+        .unwrap();
         fs::create_dir_all(tmp.path().join(".trash")).unwrap();
         fs::write(tmp.path().join(".trash").join("deleted.md"), "# D").unwrap();
         tmp
@@ -437,14 +445,18 @@ mod tests {
             }
             _ => panic!("expected markdown body"),
         }
-        assert_eq!(doc.metadata.get("status").and_then(|v| v.as_str()), Some("draft"));
+        assert_eq!(
+            doc.metadata.get("status").and_then(|v| v.as_str()),
+            Some("draft")
+        );
     }
 
     #[tokio::test]
     async fn chunk_emits_multiple_chunks_with_heading_path() {
         let tmp = TempDir::new().unwrap();
         fs::create_dir_all(tmp.path().join(".obsidian")).unwrap();
-        let body = "# H1\n\npara under h1.\n\n## H2\n\npara under h2.\n\n## H2-b\n\npara under h2-b.\n";
+        let body =
+            "# H1\n\npara under h1.\n\n## H2\n\npara under h2.\n\n## H2-b\n\npara under h2-b.\n";
         fs::write(tmp.path().join("multi.md"), body).unwrap();
 
         let inst = make_instance("obsidian-main", tmp.path());
@@ -453,7 +465,11 @@ mod tests {
         let doc_ref = docs.iter().find(|d| d.external_id == "multi.md").unwrap();
         let doc = adapter.fetch(doc_ref).await.unwrap();
         let chunks = adapter.chunk(&doc).unwrap();
-        assert!(chunks.len() >= 3, "expected >=3 chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() >= 3,
+            "expected >=3 chunks, got {}",
+            chunks.len()
+        );
         for c in &chunks {
             assert_eq!(c.source_id, "obsidian-main");
             assert_eq!(c.external_id, "multi.md");

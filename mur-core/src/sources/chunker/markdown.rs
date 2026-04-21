@@ -59,7 +59,13 @@ pub fn chunk_markdown(title: &str, body: &str, max_chars: usize) -> Vec<Markdown
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
                 let next_start = range.start;
-                flush(&heading_stack, &mut cur_buf, &mut cur_start, next_start, &mut out);
+                flush(
+                    &heading_stack,
+                    &mut cur_buf,
+                    &mut cur_start,
+                    next_start,
+                    &mut out,
+                );
                 in_heading = Some(level);
                 heading_text_buf.clear();
             }
@@ -159,7 +165,10 @@ mod tests {
         let body = "# Design\n\nintro para\n\n## Error handling\n\nsecond para\n";
         let chunks = chunk_markdown("Doc", body, 1000);
         assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0].heading_path, vec!["Doc".to_string(), "Design".to_string()]);
+        assert_eq!(
+            chunks[0].heading_path,
+            vec!["Doc".to_string(), "Design".to_string()]
+        );
         assert!(chunks[0].text.contains("intro para"));
         assert_eq!(
             chunks[1].heading_path,

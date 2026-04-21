@@ -308,7 +308,11 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
     let store = SourceInstanceStore::default_store()?;
     let targets: Vec<crate::sources::instance::SourceInstance> = match id {
         Some(i) => vec![store.load(i)?],
-        None => store.list()?.into_iter().filter(|inst| inst.enabled).collect(),
+        None => store
+            .list()?
+            .into_iter()
+            .filter(|inst| inst.enabled)
+            .collect(),
     };
     if targets.is_empty() {
         println!("(no enabled sources to sync)");
@@ -376,11 +380,11 @@ async fn remove(id: &str, keep_index: bool) -> Result<()> {
 }
 
 async fn test_source(id: &str) -> Result<()> {
+    use crate::sources::KnowledgeSource;
     use crate::sources::adapters::obsidian::ObsidianAdapter;
     use crate::sources::instance::SourceInstanceStore;
     use crate::sources::types::DocumentBody;
-    use crate::sources::KnowledgeSource;
-    use crate::store::embedding::{embed, EmbeddingConfig};
+    use crate::store::embedding::{EmbeddingConfig, embed};
     use std::time::Instant;
 
     let store = SourceInstanceStore::default_store()?;
@@ -395,7 +399,11 @@ async fn test_source(id: &str) -> Result<()> {
 
     let t0 = Instant::now();
     let (docs, _cursor) = adapter.list_documents(None).await?;
-    println!("→ list_documents: {} docs in {:?}", docs.len(), t0.elapsed());
+    println!(
+        "→ list_documents: {} docs in {:?}",
+        docs.len(),
+        t0.elapsed()
+    );
     if docs.is_empty() {
         println!("   (no documents — nothing to test)");
         return Ok(());
@@ -503,10 +511,7 @@ async fn search(query: &str, limit: usize, source: Option<&str>, json: bool) -> 
         } else {
             format!(" § {}", h.heading_path.join(" / "))
         };
-        println!(
-            "[{:.3}] {} / {}{}",
-            h.score, h.source_id, h.external_id, hp
-        );
+        println!("[{:.3}] {} / {}{}", h.score, h.source_id, h.external_id, hp);
         let preview: String = h.text.chars().take(180).collect();
         println!("       {}", preview);
     }

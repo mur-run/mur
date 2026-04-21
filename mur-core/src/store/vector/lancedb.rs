@@ -287,7 +287,10 @@ impl LanceDbStore {
         let empty: Vec<std::result::Result<RecordBatch, arrow_schema::ArrowError>> = Vec::new();
         let reader = RecordBatchIterator::new(empty, Arc::new(schema));
         self.db
-            .create_table(SOURCES_TABLE, Box::new(reader) as Box<dyn arrow_array::RecordBatchReader + Send>)
+            .create_table(
+                SOURCES_TABLE,
+                Box::new(reader) as Box<dyn arrow_array::RecordBatchReader + Send>,
+            )
             .execute()
             .await
             .context("creating sources table")?;
@@ -386,12 +389,7 @@ impl VectorStore for LanceDbStore {
         Ok(())
     }
 
-    async fn search(
-        &self,
-        query_vec: &[f32],
-        k: usize,
-        filter: &SearchFilter,
-    ) -> Result<Vec<Hit>> {
+    async fn search(&self, query_vec: &[f32], k: usize, filter: &SearchFilter) -> Result<Vec<Hit>> {
         use futures::TryStreamExt;
         use lancedb::query::{ExecutableQuery, QueryBase};
 
@@ -401,7 +399,9 @@ impl VectorStore for LanceDbStore {
         }
         let table = self.db.open_table(SOURCES_TABLE).execute().await?;
 
-        let mut query = table.vector_search(query_vec.to_vec()).context("vector_search")?;
+        let mut query = table
+            .vector_search(query_vec.to_vec())
+            .context("vector_search")?;
 
         // Build WHERE predicate from filter.
         let mut predicates: Vec<String> = Vec::new();
@@ -482,11 +482,7 @@ impl VectorStore for LanceDbStore {
         Ok(hits)
     }
 
-    async fn delete_by_external_ids(
-        &self,
-        source_id: &str,
-        external_ids: &[String],
-    ) -> Result<()> {
+    async fn delete_by_external_ids(&self, source_id: &str, external_ids: &[String]) -> Result<()> {
         if external_ids.is_empty() {
             return Ok(());
         }
@@ -530,11 +526,10 @@ impl VectorStore for LanceDbStore {
         let table = self.db.open_table(SOURCES_TABLE).execute().await?;
         let batches = table
             .query()
-            .only_if(format!(
-                "source_id = '{}'",
-                source_id.replace('\'', "''")
-            ))
-            .select(lancedb::query::Select::Columns(vec!["external_id".to_string()]))
+            .only_if(format!("source_id = '{}'", source_id.replace('\'', "''")))
+            .select(lancedb::query::Select::Columns(vec![
+                "external_id".to_string(),
+            ]))
             .execute()
             .await?
             .try_collect::<Vec<_>>()
@@ -563,10 +558,7 @@ impl VectorStore for LanceDbStore {
             None => table.count_rows(None).await?,
             Some(sid) => {
                 table
-                    .count_rows(Some(format!(
-                        "source_id = '{}'",
-                        sid.replace('\'', "''")
-                    )))
+                    .count_rows(Some(format!("source_id = '{}'", sid.replace('\'', "''"))))
                     .await?
             }
         };
@@ -769,7 +761,9 @@ mod tests {
         // Second call is a no-op
         store.ensure_sources_table().await.unwrap();
         // Row count zero
-        let c = <LanceDbStore as VectorStore>::count(&store, None).await.unwrap();
+        let c = <LanceDbStore as VectorStore>::count(&store, None)
+            .await
+            .unwrap();
         assert_eq!(c, 0);
     }
 
@@ -794,8 +788,12 @@ mod tests {
             }
         };
 
-        let v_a: Vec<f32> = (0..TEST_DIM as usize).map(|i| (i as f32 * 0.01).sin()).collect();
-        let v_b: Vec<f32> = (0..TEST_DIM as usize).map(|i| (i as f32 * 0.01).cos()).collect();
+        let v_a: Vec<f32> = (0..TEST_DIM as usize)
+            .map(|i| (i as f32 * 0.01).sin())
+            .collect();
+        let v_b: Vec<f32> = (0..TEST_DIM as usize)
+            .map(|i| (i as f32 * 0.01).cos())
+            .collect();
 
         <LanceDbStore as super::VectorStore>::upsert(
             &store,
@@ -846,7 +844,9 @@ mod tests {
             })
             .collect();
 
-        <LanceDbStore as super::VectorStore>::upsert(&store, &chunks).await.unwrap();
+        <LanceDbStore as super::VectorStore>::upsert(&store, &chunks)
+            .await
+            .unwrap();
 
         let ids = <LanceDbStore as super::VectorStore>::list_external_ids(&store, "obsidian:test")
             .await
@@ -855,7 +855,9 @@ mod tests {
         sorted.sort();
         assert_eq!(sorted, vec!["doc-0", "doc-1", "doc-2"]);
 
-        let all = <LanceDbStore as super::VectorStore>::count(&store, None).await.unwrap();
+        let all = <LanceDbStore as super::VectorStore>::count(&store, None)
+            .await
+            .unwrap();
         assert_eq!(all, 3);
 
         let scoped = <LanceDbStore as super::VectorStore>::count(&store, Some("obsidian:test"))
@@ -863,8 +865,9 @@ mod tests {
             .unwrap();
         assert_eq!(scoped, 3);
 
-        let other =
-            <LanceDbStore as super::VectorStore>::count(&store, Some("nope")).await.unwrap();
+        let other = <LanceDbStore as super::VectorStore>::count(&store, Some("nope"))
+            .await
+            .unwrap();
         assert_eq!(other, 0);
     }
 
@@ -878,7 +881,11 @@ mod tests {
         let chunks: Vec<super::EmbeddedChunk> = (0..4)
             .map(|i| super::EmbeddedChunk {
                 chunk_id: format!("cid-{i}"),
-                source_id: if i < 2 { "src:a".into() } else { "src:b".into() },
+                source_id: if i < 2 {
+                    "src:a".into()
+                } else {
+                    "src:b".into()
+                },
                 external_id: format!("doc-{i}"),
                 ordinal: 0,
                 text: "x".into(),
@@ -889,7 +896,9 @@ mod tests {
             })
             .collect();
 
-        <LanceDbStore as super::VectorStore>::upsert(&store, &chunks).await.unwrap();
+        <LanceDbStore as super::VectorStore>::upsert(&store, &chunks)
+            .await
+            .unwrap();
 
         <LanceDbStore as super::VectorStore>::delete_by_external_ids(
             &store,
@@ -903,7 +912,9 @@ mod tests {
             .unwrap();
         assert_eq!(remaining_a, vec!["doc-1"]);
 
-        <LanceDbStore as super::VectorStore>::delete_by_source(&store, "src:b").await.unwrap();
+        <LanceDbStore as super::VectorStore>::delete_by_source(&store, "src:b")
+            .await
+            .unwrap();
         let remaining_b = <LanceDbStore as super::VectorStore>::list_external_ids(&store, "src:b")
             .await
             .unwrap();
