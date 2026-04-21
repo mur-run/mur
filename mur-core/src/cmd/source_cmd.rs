@@ -131,7 +131,9 @@ pub async fn handle(cmd: SourceCommand) -> Result<()> {
             source,
             json,
         } => search(&query, limit, source.as_deref(), json).await,
-        SourceCommand::Reindex { .. } => bail!("`mur source reindex` arrives in P1.3"),
+        SourceCommand::Reindex { id, vector_backend } => {
+            reindex(&id, vector_backend.as_deref()).await
+        }
         SourceCommand::InstallSchedule => bail!("`mur source install-schedule` arrives in P1.4"),
         SourceCommand::Disable { id } => set_enabled(&id, false).await,
         SourceCommand::Enable { id } => set_enabled(&id, true).await,
@@ -304,6 +306,9 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
         .join(".mur")
         .join("index");
     let vector_store = get_vector_store(&cfg, &index_path).await?;
+    let tantivy = crate::sources::tantivy::TantivyIndex::open_or_create(
+        &dirs::home_dir().context("no home dir")?.join(".mur"),
+    )?;
 
     let store = SourceInstanceStore::default_store()?;
     let targets: Vec<crate::sources::instance::SourceInstance> = match id {
@@ -334,6 +339,7 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
             &mut inst,
             &store,
             vector_store.clone(),
+            &tantivy,
             &emb_cfg,
             full,
         )
@@ -372,6 +378,12 @@ async fn remove(id: &str, keep_index: bool) -> Result<()> {
         vs.delete_by_source(id)
             .await
             .context("delete source chunks")?;
+        let tantivy = crate::sources::tantivy::TantivyIndex::open_or_create(
+            &dirs::home_dir().context("no home dir")?.join(".mur"),
+        )?;
+        tantivy
+            .delete_by_source(id)
+            .context("tantivy.delete_by_source")?;
         println!("🗑  removed indexed chunks for {id}");
     }
     store.delete(id)?;
@@ -455,6 +467,69 @@ async fn set_enabled(id: &str, enabled: bool) -> Result<()> {
     inst.enabled = enabled;
     store.save(&inst)?;
     println!("✏️  {id} {}", if enabled { "enabled" } else { "disabled" });
+    Ok(())
+}
+
+// ---------- Task 8 handlers ----------
+
+async fn reindex(id: &str, vector_backend: Option<&str>) -> Result<()> {
+    use crate::sources::adapters::obsidian::ObsidianAdapter;
+    use crate::sources::instance::SourceInstanceStore;
+    use crate::sources::sync::sync_source;
+    use crate::sources::tantivy::TantivyIndex;
+    use crate::store::embedding::EmbeddingConfig;
+    use crate::store::vector::factory::get_vector_store;
+    use anyhow::Context;
+
+    let mut cfg = crate::store::config::load_config()?;
+    if let Some(backend) = vector_backend {
+        cfg.storage.vector_backend = backend.to_string();
+        crate::store::config::save_config(&cfg)?;
+        println!("🔧 vector_backend set to {backend}");
+    }
+    let emb_cfg = EmbeddingConfig::from_config(&cfg);
+    let index_path = dirs::home_dir()
+        .context("no home dir")?
+        .join(".mur")
+        .join("index");
+    let vector_store = get_vector_store(&cfg, &index_path).await?;
+    let tantivy =
+        TantivyIndex::open_or_create(&dirs::home_dir().context("no home dir")?.join(".mur"))?;
+
+    let store = SourceInstanceStore::default_store()?;
+    let mut inst = store.load(id)?;
+
+    vector_store.delete_by_source(id).await?;
+    tantivy.delete_by_source(id)?;
+    inst.sync.last_cursor = None;
+
+    if inst.type_name != "obsidian" {
+        bail!(
+            "reindex for adapter `{}` arrives in a later sub-milestone",
+            inst.type_name
+        );
+    }
+    let adapter = ObsidianAdapter::from_instance(&inst)?;
+    println!(
+        "↻ reindexing {} on backend `{}`",
+        inst.id, cfg.storage.vector_backend
+    );
+    let report = sync_source(
+        &adapter,
+        &mut inst,
+        &store,
+        vector_store,
+        &tantivy,
+        &emb_cfg,
+        true,
+    )
+    .await?;
+    println!(
+        "  reindexed {} docs ({} chunks), {} errors",
+        report.docs_synced,
+        report.chunks_emitted,
+        report.errors.len()
+    );
     Ok(())
 }
 
