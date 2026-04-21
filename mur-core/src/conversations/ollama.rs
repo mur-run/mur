@@ -12,6 +12,63 @@ use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::time::Duration;
 
+/// Embedding-side mock mode. `generate()`/`generate_stream()` still branch
+/// on `mock_from_env()` for their canned responses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MockMode {
+    /// MUR_OLLAMA_MOCK=1 — legacy uniform 0.1 vector. Fine for tests that
+    /// only care about code paths.
+    All01,
+    /// MUR_OLLAMA_MOCK=hash — content-hash-based vector; same text → same
+    /// vector, different text → different vector. Required for tests that
+    /// assert span-selection picked the right span.
+    Hash,
+}
+
+pub fn mock_mode() -> Option<MockMode> {
+    match std::env::var("MUR_OLLAMA_MOCK").as_deref() {
+        Ok("1") => Some(MockMode::All01),
+        Ok("hash") => Some(MockMode::Hash),
+        _ => None,
+    }
+}
+
+/// Deterministic fake embedding for tests. Seeded from sha256(text);
+/// L2-normalized so cosine similarity is meaningful.
+pub fn mock_embed_vector(text: &str, mode: MockMode, dims: usize) -> Vec<f32> {
+    match mode {
+        MockMode::All01 => vec![0.1; dims],
+        MockMode::Hash => {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(text.as_bytes());
+            let seed = hasher.finalize(); // 32 bytes
+            let mut out = Vec::with_capacity(dims);
+            for i in 0..dims {
+                let byte_idx = (i * 4) % 32;
+                let u = u32::from_le_bytes([
+                    seed[byte_idx],
+                    seed[(byte_idx + 1) % 32],
+                    seed[(byte_idx + 2) % 32],
+                    seed[(byte_idx + 3) % 32],
+                ]);
+                // Mix with position to break the 8-way periodicity from the
+                // 32-byte seed being shorter than 4 * dims for dims > 8.
+                let mixed = u.wrapping_add((i as u32).wrapping_mul(2_654_435_761));
+                let f = (mixed as f32 / u32::MAX as f32) * 2.0 - 1.0;
+                out.push(f);
+            }
+            let norm: f32 = out.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for x in out.iter_mut() {
+                    *x /= norm;
+                }
+            }
+            out
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct GenerateRequest<'a> {
     pub model: &'a str,
@@ -65,7 +122,7 @@ impl OllamaClient {
     }
 
     pub fn mock_from_env() -> bool {
-        std::env::var("MUR_OLLAMA_MOCK").as_deref() == Ok("1")
+        mock_mode().is_some()
     }
 
     pub async fn generate(&self, req: GenerateRequest<'_>) -> Result<GenerateResponse> {
@@ -340,5 +397,39 @@ mod tests {
             }
         }
         assert_eq!(tokens, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn mock_mode_from_env_parses_both_variants() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        assert!(matches!(mock_mode(), Some(MockMode::All01)));
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "hash") };
+        assert!(matches!(mock_mode(), Some(MockMode::Hash)));
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "bogus") };
+        assert!(mock_mode().is_none());
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        assert!(mock_mode().is_none());
+    }
+
+    #[test]
+    fn mock_embed_vector_all01_is_uniform() {
+        let v = mock_embed_vector("anything", MockMode::All01, 16);
+        assert_eq!(v.len(), 16);
+        assert!(v.iter().all(|x| (*x - 0.1).abs() < 1e-9));
+    }
+
+    #[test]
+    fn mock_embed_vector_hash_is_deterministic_and_distinct() {
+        let a1 = mock_embed_vector("cargo build failed", MockMode::Hash, 128);
+        let a2 = mock_embed_vector("cargo build failed", MockMode::Hash, 128);
+        let b = mock_embed_vector("kubernetes pod crash", MockMode::Hash, 128);
+        assert_eq!(a1, a2, "same text → same vector");
+        assert_ne!(a1, b, "different text → different vector");
+        let norm_a: f32 = a1.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (norm_a - 1.0).abs() < 1e-5,
+            "not L2-normalized: norm={norm_a}"
+        );
     }
 }

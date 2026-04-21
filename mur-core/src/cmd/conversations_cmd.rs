@@ -177,29 +177,143 @@ pub async fn cmd_conversations_cleanup() -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_conversations_reindex() -> Result<()> {
-    let cfg = crate::store::config::load_config().unwrap_or_default();
-    let embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg);
-    let dims = embed_cfg.dimensions as i32;
-    let mut idx = conversations::index::ConversationIndex::open(dims, None).await?;
-    let mut count = 0u64;
-    for (date, _dir) in conversations::store::list_raw_dirs(None)? {
-        let msgs = conversations::store::read_day(date, None)?;
-        let mut entries = Vec::with_capacity(msgs.len());
-        for m in msgs {
-            let txt = match &m.content {
-                mur_common::Content::Text { value } => value.clone(),
-                mur_common::Content::ToolRef { desc, .. } => desc.clone(),
-                mur_common::Content::ImageRef { desc, .. } => desc.clone(),
+pub struct ReindexArgs {
+    pub raw_only: bool,
+    pub spans_only: bool,
+}
+
+pub async fn cmd_conversations_reindex(args: ReindexArgs) -> Result<()> {
+    use crate::conversations::{paths, store, summarize};
+
+    let mut raw_msgs = 0u64;
+    let mut span_rows = 0u64;
+
+    // Raw rebuild (layer=0) — Phase 1 behavior.
+    if !args.spans_only {
+        let days = store::list_raw_dirs(None).unwrap_or_default();
+        let dims: i32 = {
+            let cfg = crate::store::config::load_config().unwrap_or_default();
+            crate::store::embedding::EmbeddingConfig::from_config(&cfg).dimensions as i32
+        };
+        let mut idx = crate::conversations::index::ConversationIndex::open(dims, None).await?;
+        for (date, _) in days {
+            let msgs = store::read_day(date, None)?;
+            if msgs.is_empty() {
+                continue;
+            }
+            let embed_cfg = {
+                let cfg = crate::store::config::load_config().unwrap_or_default();
+                crate::store::embedding::EmbeddingConfig::from_config(&cfg)
             };
-            let vec = crate::store::embedding::embed(&txt, &embed_cfg).await?;
-            entries.push((m, vec));
+            let texts: Vec<String> = msgs
+                .iter()
+                .map(|m| m.content.as_text().to_owned())
+                .collect();
+            let vecs = if let Some(mode) = crate::conversations::ollama::mock_mode() {
+                texts
+                    .iter()
+                    .map(|t| {
+                        crate::conversations::ollama::mock_embed_vector(t, mode, dims as usize)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                crate::store::embedding::embed_batch(&texts, &embed_cfg)
+                    .await
+                    .unwrap_or_else(|_| texts.iter().map(|_| vec![0.0; dims as usize]).collect())
+            };
+            let entries: Vec<_> = msgs.into_iter().zip(vecs).collect();
+            idx.upsert(&entries).await?;
+            raw_msgs += entries.len() as u64;
         }
-        let len = entries.len() as u64;
-        idx.upsert(&entries).await?;
-        count += len;
+        println!("reindexed raw: {raw_msgs} messages");
     }
-    println!("Reindexed {count} messages");
+
+    // Span rebuild (layer=2) — Phase 3.1.
+    if !args.raw_only {
+        let dims: i32 = {
+            let cfg = crate::store::config::load_config().unwrap_or_default();
+            crate::store::embedding::EmbeddingConfig::from_config(&cfg).dimensions as i32
+        };
+        let mut idx = crate::conversations::index::ConversationIndex::open(dims, None).await?;
+        let summary_dir = paths::conversations_root(None).join("summary");
+        if summary_dir.exists() {
+            for entry in std::fs::read_dir(&summary_dir)? {
+                let path = entry?.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                    continue;
+                }
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let Ok(date) = chrono::NaiveDate::parse_from_str(stem, "%Y-%m-%d") else {
+                    continue;
+                };
+                let body = std::fs::read_to_string(&path).unwrap_or_default();
+                let Ok(parsed) = summarize::parse_summary(&body) else {
+                    continue;
+                };
+                if parsed.extractive.is_empty() {
+                    continue;
+                }
+                let texts: Vec<String> = parsed.extractive.iter().map(|s| s.text.clone()).collect();
+                let vecs: Vec<Vec<f32>> = if let Some(mode) =
+                    crate::conversations::ollama::mock_mode()
+                {
+                    texts
+                        .iter()
+                        .map(|t| {
+                            crate::conversations::ollama::mock_embed_vector(t, mode, dims as usize)
+                        })
+                        .collect()
+                } else {
+                    let embed_cfg = {
+                        let cfg = crate::store::config::load_config().unwrap_or_default();
+                        crate::store::embedding::EmbeddingConfig::from_config(&cfg)
+                    };
+                    crate::store::embedding::embed_batch(&texts, &embed_cfg)
+                        .await
+                        .unwrap_or_else(|_| {
+                            texts.iter().map(|_| vec![0.0; dims as usize]).collect()
+                        })
+                };
+
+                use chrono::TimeZone;
+                let span_ts = chrono::Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap());
+                let mut batch: Vec<(mur_common::Message, Vec<f32>, i8)> =
+                    Vec::with_capacity(parsed.extractive.len());
+                for (span, vec) in parsed.extractive.iter().zip(vecs) {
+                    let Some(src_enum) = mur_common::Source::from_prefix(&span.src) else {
+                        tracing::warn!(
+                            "unknown source prefix '{}' in {}; skipping span",
+                            span.src,
+                            path.display()
+                        );
+                        continue;
+                    };
+                    let msg = mur_common::Message {
+                        v: 1,
+                        ts: span_ts,
+                        src: src_enum,
+                        conv: span.conv_id.clone(),
+                        role: mur_common::Role::User,
+                        content: mur_common::Content::Text {
+                            value: span.text.clone(),
+                        },
+                        meta: serde_json::json!({ "id_suffix": span.line_hint }),
+                        refs: vec![],
+                    };
+                    batch.push((msg, vec, 2i8));
+                }
+                if !batch.is_empty() {
+                    let n = batch.len() as u64;
+                    idx.upsert_with_layer(&batch).await?;
+                    span_rows += n;
+                }
+            }
+        }
+        println!("reindexed spans: {span_rows} spans");
+    }
+
     Ok(())
 }
 
@@ -310,6 +424,30 @@ pub async fn cmd_conversations_doctor() -> Result<()> {
             "  ✓ .history/: {hist_count} archived revisions, {:.1} KB",
             hist_bytes as f64 / 1024.0
         );
+    }
+
+    // Phase 3.1: span (layer=2) coverage.
+    let dims: i32 = {
+        let c = crate::store::config::load_config().unwrap_or_default();
+        crate::store::embedding::EmbeddingConfig::from_config(&c).dimensions as i32
+    };
+    let idx_for_count = crate::conversations::index::ConversationIndex::open(dims, None).await;
+    match idx_for_count {
+        Ok(idx) => {
+            let n = idx.count_rows_at_layer(2).await.unwrap_or(0);
+            if n > 0 {
+                println!("  ✓ spans: {n} rows at layer=2");
+            } else if summary_count > 0 {
+                println!(
+                    "  · spans: 0 indexed — run 'mur conversations reindex --spans-only' for span-level Ask retrieval"
+                );
+            } else {
+                println!("  · spans: no summaries yet");
+            }
+        }
+        Err(e) => {
+            println!("  · spans: could not open index: {e}");
+        }
     }
 
     Ok(())

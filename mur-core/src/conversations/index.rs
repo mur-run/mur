@@ -13,7 +13,7 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
-use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use mur_common::{Message, Source};
 use std::sync::Arc;
 use tracing::info_span;
@@ -35,6 +35,8 @@ pub struct SearchHit {
     pub conv_id: String,
     pub content: String,
     pub distance: f32,
+    pub layer: i8,
+    pub vector: Option<Vec<f32>>,
 }
 
 impl ConversationIndex {
@@ -94,7 +96,21 @@ impl ConversationIndex {
         let ids: Vec<String> = entries
             .iter()
             .enumerate()
-            .map(|(i, (m, _, _))| format!("{}_{}_{}", m.src.file_prefix(), m.conv, i))
+            .map(|(i, (m, _, layer))| {
+                // Meta can override the batch-index suffix for layer-aware
+                // semantic ids (e.g. layer=2 span rows use line_hint).
+                let suffix: String = m
+                    .meta
+                    .get("id_suffix")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| i.to_string());
+                if *layer == 0 {
+                    format!("{}_{}_{}", m.src.file_prefix(), m.conv, suffix)
+                } else {
+                    format!("{}_{}_L{}_{}", m.src.file_prefix(), m.conv, layer, suffix)
+                }
+            })
             .collect();
         let tss: Vec<i64> = entries.iter().map(|(m, _, _)| m.ts.timestamp()).collect();
         let srcs: Vec<&str> = entries
@@ -182,6 +198,16 @@ impl ConversationIndex {
         }
         let table = self.db.open_table(TABLE).execute().await?;
         let mut q = table.query().nearest_to(query_vec)?.limit(limit);
+        q = q.select(Select::Columns(vec![
+            "id".into(),
+            "ts".into(),
+            "source".into(),
+            "conv_id".into(),
+            "role".into(),
+            "layer".into(),
+            "content".into(),
+            "vector".into(),
+        ]));
 
         let predicates: Vec<String> = std::iter::empty::<String>()
             .chain(source_filter.map(|s| format!("source = '{}'", s.file_prefix())))
@@ -228,6 +254,12 @@ impl ConversationIndex {
             let dists = b
                 .column_by_name("_distance")
                 .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
+            let layers = b
+                .column_by_name("layer")
+                .and_then(|c| c.as_any().downcast_ref::<Int8Array>());
+            let vectors = b
+                .column_by_name("vector")
+                .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>());
             for i in 0..b.num_rows() {
                 let source = match srcs.value(i) {
                     "cc" => Source::ClaudeCode,
@@ -240,6 +272,16 @@ impl ConversationIndex {
                     "commander" => Source::CommanderEngine,
                     other => anyhow::bail!("unknown source tag {other}"),
                 };
+                let layer = layers.map(|a| a.value(i)).unwrap_or(0);
+                let vector = vectors.and_then(|arr| {
+                    let fsl = arr.value(i);
+                    let floats = fsl.as_any().downcast_ref::<Float32Array>()?;
+                    Some(
+                        (0..floats.len())
+                            .map(|j| floats.value(j))
+                            .collect::<Vec<f32>>(),
+                    )
+                });
                 out.push(SearchHit {
                     id: ids.value(i).to_string(),
                     ts: tss.value(i),
@@ -247,6 +289,8 @@ impl ConversationIndex {
                     conv_id: convs.value(i).to_string(),
                     content: contents.value(i).to_string(),
                     distance: dists.map(|d| d.value(i)).unwrap_or(0.0),
+                    layer,
+                    vector,
                 });
             }
         }
@@ -267,6 +311,17 @@ impl ConversationIndex {
         // via IndexType::RaBitQ when the feature is present; fall back to IVF_PQ.
         // TODO(phase-2): pin the exact call once LanceDB API stabilizes.
         Ok(())
+    }
+
+    /// Count rows at a specific layer. Used by doctor to report coverage.
+    pub async fn count_rows_at_layer(&self, layer: i8) -> Result<u64> {
+        let tables = self.db.table_names().execute().await?;
+        if !tables.contains(&TABLE.to_string()) {
+            return Ok(0);
+        }
+        let table = self.db.open_table(TABLE).execute().await?;
+        let n = table.count_rows(Some(format!("layer = {layer}"))).await?;
+        Ok(n as u64)
     }
 }
 
@@ -346,5 +401,64 @@ mod tests {
         let hits_l0 = idx.search(&[1.0; 16], 10, None, Some(0)).await.unwrap();
         assert_eq!(hits_l0.len(), 1);
         assert_eq!(hits_l0[0].conv_id, "a");
+    }
+
+    #[tokio::test]
+    async fn search_hit_carries_layer_and_vector() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = ConversationIndex::open(16, Some(root)).await.unwrap();
+        let m = msg("a", "hello world");
+        idx.upsert_with_layer(&[(m, vec![1.0; 16], 2)])
+            .await
+            .unwrap();
+        let hits = idx.search(&[1.0; 16], 1, None, Some(2)).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].layer, 2);
+        let v = hits[0].vector.as_ref().expect("vector should be populated");
+        assert_eq!(v.len(), 16);
+        assert!(v.iter().any(|x| *x > 0.0));
+    }
+
+    #[tokio::test]
+    async fn upsert_ids_are_layer_aware() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = ConversationIndex::open(16, Some(root)).await.unwrap();
+        let m0 = msg("xy", "raw message");
+        let m2 = msg("xy", "span text");
+        idx.upsert_with_layer(&[(m0, vec![0.5; 16], 0)])
+            .await
+            .unwrap();
+        idx.upsert_with_layer(&[(m2, vec![0.6; 16], 2)])
+            .await
+            .unwrap();
+        let hits_all = idx.search(&[0.55; 16], 10, None, None).await.unwrap();
+        assert_eq!(hits_all.len(), 2, "both rows should coexist");
+        let ids: Vec<_> = hits_all.iter().map(|h| h.id.as_str()).collect();
+        assert!(ids.iter().any(|id| id.contains("_L2_")));
+        assert!(ids.iter().any(|id| !id.contains("_L"))); // layer=0 has no L<N> marker
+    }
+
+    #[tokio::test]
+    async fn count_rows_at_layer_reports_correct_counts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = ConversationIndex::open(16, Some(root)).await.unwrap();
+        for i in 0..3 {
+            let m = msg(&format!("c{i}"), "raw");
+            idx.upsert_with_layer(&[(m, vec![0.1 * i as f32; 16], 0)])
+                .await
+                .unwrap();
+        }
+        for i in 0..2 {
+            let m = msg(&format!("c{i}"), "span");
+            idx.upsert_with_layer(&[(m, vec![0.7 * i as f32 + 0.1; 16], 2)])
+                .await
+                .unwrap();
+        }
+        assert_eq!(idx.count_rows_at_layer(0).await.unwrap(), 3);
+        assert_eq!(idx.count_rows_at_layer(2).await.unwrap(), 2);
+        assert_eq!(idx.count_rows_at_layer(1).await.unwrap(), 0);
     }
 }
