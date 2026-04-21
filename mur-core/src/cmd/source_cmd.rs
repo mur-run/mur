@@ -409,10 +409,27 @@ async fn test_source(id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn set_weight(_id: &str, _value: f32) -> Result<()> {
-    bail!("`mur source weight` arrives in Task 14")
+// ---------- Task 14 handlers ----------
+
+async fn set_weight(id: &str, value: f32) -> Result<()> {
+    use crate::sources::instance::SourceInstanceStore;
+    if !(0.0..=2.0).contains(&value) {
+        bail!("weight must be in [0.0, 2.0], got {value}");
+    }
+    let store = SourceInstanceStore::default_store()?;
+    let mut inst = store.load(id)?;
+    inst.weight = value;
+    store.save(&inst)?;
+    println!("✏️  {id} weight set to {value:.2}");
+    Ok(())
 }
 
-async fn set_enabled(_id: &str, _enabled: bool) -> Result<()> {
-    bail!("`mur source enable/disable` arrives in Task 14")
+async fn set_enabled(id: &str, enabled: bool) -> Result<()> {
+    use crate::sources::instance::SourceInstanceStore;
+    let store = SourceInstanceStore::default_store()?;
+    let mut inst = store.load(id)?;
+    inst.enabled = enabled;
+    store.save(&inst)?;
+    println!("✏️  {id} {}", if enabled { "enabled" } else { "disabled" });
+    Ok(())
 }
