@@ -121,10 +121,9 @@ pub async fn rollup_week(
         .from_utc_datetime(&(sunday + Duration::days(1)).and_hms_opt(0, 0, 0).unwrap())
         .timestamp();
 
-    let embed_dims = {
-        let cfg_loaded = crate::store::config::load_config().ok().unwrap_or_default();
-        crate::store::embedding::EmbeddingConfig::from_config(&cfg_loaded).dimensions as i32
-    };
+    let cfg_loaded = crate::store::config::load_config().ok().unwrap_or_default();
+    let embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg_loaded);
+    let embed_dims = embed_cfg.dimensions as i32;
     let idx =
         crate::conversations::index::ConversationIndex::open(embed_dims, root_override).await?;
     let span_rows = idx
@@ -216,15 +215,13 @@ pub async fn rollup_week(
     };
     let source_labels: Vec<String> = dates.iter().map(|d| d.to_string()).collect();
 
-    // Resolve narrative embedding
+    // Resolve narrative embedding (reuse embed_cfg loaded above)
     let narrative_text = abstractive.narrative.as_deref().unwrap_or("");
     let narrative_embedding: Vec<f32> = if let Some(mode) =
         crate::conversations::ollama::mock_mode()
     {
         crate::conversations::ollama::mock_embed_vector(narrative_text, mode, embed_dims as usize)
     } else {
-        let cfg_loaded = crate::store::config::load_config().ok().unwrap_or_default();
-        let embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg_loaded);
         crate::store::embedding::embed(narrative_text, &embed_cfg)
             .await
             .unwrap_or_else(|_| vec![0.0; embed_dims as usize])
@@ -366,10 +363,9 @@ pub async fn rollup_month(
         .from_utc_datetime(&(last_day + Duration::days(1)).and_hms_opt(0, 0, 0).unwrap())
         .timestamp();
 
-    let embed_dims = {
-        let cfg_loaded = crate::store::config::load_config().ok().unwrap_or_default();
-        crate::store::embedding::EmbeddingConfig::from_config(&cfg_loaded).dimensions as i32
-    };
+    let cfg_loaded = crate::store::config::load_config().ok().unwrap_or_default();
+    let embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg_loaded);
+    let embed_dims = embed_cfg.dimensions as i32;
     let idx =
         crate::conversations::index::ConversationIndex::open(embed_dims, root_override).await?;
     let span_rows = idx
@@ -457,14 +453,13 @@ pub async fn rollup_month(
         s
     };
 
+    // Resolve narrative embedding (reuse embed_cfg loaded above)
     let narrative_text = abstractive.narrative.as_deref().unwrap_or("");
     let narrative_embedding: Vec<f32> = if let Some(mode) =
         crate::conversations::ollama::mock_mode()
     {
         crate::conversations::ollama::mock_embed_vector(narrative_text, mode, embed_dims as usize)
     } else {
-        let cfg_loaded = crate::store::config::load_config().ok().unwrap_or_default();
-        let embed_cfg = crate::store::embedding::EmbeddingConfig::from_config(&cfg_loaded);
         crate::store::embedding::embed(narrative_text, &embed_cfg)
             .await
             .unwrap_or_else(|_| vec![0.0; embed_dims as usize])
@@ -782,14 +777,19 @@ mod tests {
         let r2 = rollup_week("2026-W16", false, &cfg(), Some(root))
             .await
             .unwrap();
+        // Hot path: the sha-based idempotency check in rollup_week fires
+        // before reaching write_rollup, so only Skipped{already fresh} is
+        // reachable here. Noop (from byte-equal write_rollup comparison) is
+        // dead code in this flow — keep the assertion tight so a regression
+        // that bypasses the sha check would be caught.
         assert!(
             matches!(
                 r2.outcome,
                 RollupOutcome::Skipped {
                     reason: "already fresh"
                 }
-            ) || matches!(r2.outcome, RollupOutcome::Noop),
-            "expected skipped/noop, got {:?}",
+            ),
+            "expected Skipped {{ already fresh }}, got {:?}",
             r2.outcome
         );
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
