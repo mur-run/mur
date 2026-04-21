@@ -70,7 +70,6 @@ macro_rules! vector_store_conformance {
         }
 
         #[tokio::test]
-        #[ignore = "enabled from P1.2 when upsert is real"]
         async fn conformance_upsert_and_search() {
             let s = $factory().await;
             $crate::store::vector::tests::upsert_and_search::<$ty>(&s, 64)
@@ -79,7 +78,6 @@ macro_rules! vector_store_conformance {
         }
 
         #[tokio::test]
-        #[ignore = "enabled from P1.2 when delete_by_source is real"]
         async fn conformance_delete_by_source_clears() {
             let s = $factory().await;
             $crate::store::vector::tests::delete_by_source_clears::<$ty>(&s)

@@ -598,10 +598,15 @@ mod tests {
     crate::vector_store_conformance!(LanceDbStore, make_store_for_conformance);
 
     async fn make_store_for_conformance() -> LanceDbStore {
-        // TempDir drops at end of test, but that's fine for the smoke test.
-        // Ignored roundtrip tests (enabled in P1.2) will own their own TempDir.
         let tmp = tempfile::TempDir::new().unwrap();
-        LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap()
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        store.ensure_sources_table().await.unwrap();
+        // Intentionally leak the TempDir: the LanceDB connection holds an open
+        // handle and expects the directory to persist for the lifetime of the
+        // `store` (which outlives this function). Conformance tests are few;
+        // leaked temp dirs get cleaned by the OS on reboot.
+        std::mem::forget(tmp);
+        store
     }
 
     fn make_pattern(name: &str) -> Pattern {
