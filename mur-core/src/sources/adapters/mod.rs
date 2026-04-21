@@ -2,3 +2,4 @@
 
 pub mod obsidian;
 pub mod notion;
+pub mod joplin;
