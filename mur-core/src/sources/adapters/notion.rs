@@ -29,6 +29,7 @@ pub struct NotionAdapter {
     id: String,
     client: Client,
     token: String,
+    #[allow(dead_code)] // reserved for workspace-scoped API calls (P1.5)
     workspace_id: Option<String>,
     weight: f32,
     limiter: Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
@@ -79,6 +80,7 @@ struct SearchResult {
     last_edited_time: Option<String>,
     archived: Option<bool>,
     properties: Option<serde_json::Value>,
+    #[allow(dead_code)] // reserved for source-link metadata (P1.5)
     url: Option<String>,
 }
 
@@ -371,10 +373,10 @@ pub async fn run_oauth_flow() -> Result<OAuthResult> {
         get(move |Query(p): Query<CallbackParams>| {
             let tx = tx_clone.clone();
             async move {
-                if let (Some(c), Some(s)) = (p.code, p.state) {
-                    if let Some(send) = tx.lock().await.take() {
-                        let _ = send.send((c, s));
-                    }
+                if let (Some(c), Some(s)) = (p.code, p.state)
+                    && let Some(send) = tx.lock().await.take()
+                {
+                    let _ = send.send((c, s));
                 }
                 Html("<html><body><h2>Notion connected. You can close this tab.</h2></body></html>")
             }

@@ -504,7 +504,7 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
         if inst.type_name == "joplin" {
             use crate::sources::adapters::joplin::JoplinAdapter;
             use crate::sources::credentials::{CredentialStore, OsKeyring, SERVICE};
-            let token = if inst.scope.get("server_url").is_some() {
+            let token = if inst.scope.contains_key("server_url") {
                 let kr = OsKeyring;
                 let kr_account = inst
                     .keyring_entry
@@ -824,7 +824,7 @@ async fn install_schedule() -> Result<()> {
         println!("wrote {}", path.display());
         println!("Enable with: launchctl load -w {}", path.display());
         println!("Disable with: launchctl unload {}", path.display());
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]

@@ -45,28 +45,29 @@ pub async fn run_watch(
     // Spawn a debouncer for each Obsidian vault.
     let mut watcher_handles: Vec<notify::RecommendedWatcher> = Vec::new();
     for inst in &instances {
-        if inst.type_name == "obsidian" && inst.enabled {
-            if let Some(vault) = inst.scope.get("vault").and_then(|v| v.as_str()) {
-                let vp = PathBuf::from(vault);
-                let id = inst.id.clone();
-                let tx_clone = tx.clone();
-                use notify::{Event, RecursiveMode, Watcher};
-                let mut w = notify::recommended_watcher(move |res: notify::Result<Event>| {
-                    if let Ok(ev) = res {
-                        let touches_md = ev
-                            .paths
-                            .iter()
-                            .any(|p| p.extension().is_some_and(|e| e == "md"));
-                        if touches_md {
-                            let _ = tx_clone.send(id.clone());
-                        }
+        if inst.type_name == "obsidian"
+            && inst.enabled
+            && let Some(vault) = inst.scope.get("vault").and_then(|v| v.as_str())
+        {
+            let vp = PathBuf::from(vault);
+            let id = inst.id.clone();
+            let tx_clone = tx.clone();
+            use notify::{Event, RecursiveMode, Watcher};
+            let mut w = notify::recommended_watcher(move |res: notify::Result<Event>| {
+                if let Ok(ev) = res {
+                    let touches_md = ev
+                        .paths
+                        .iter()
+                        .any(|p| p.extension().is_some_and(|e| e == "md"));
+                    if touches_md {
+                        let _ = tx_clone.send(id.clone());
                     }
-                })
-                .context("create file watcher")?;
-                w.watch(&vp, RecursiveMode::Recursive)
-                    .with_context(|| format!("watch {}", vp.display()))?;
-                watcher_handles.push(w);
-            }
+                }
+            })
+            .context("create file watcher")?;
+            w.watch(&vp, RecursiveMode::Recursive)
+                .with_context(|| format!("watch {}", vp.display()))?;
+            watcher_handles.push(w);
         }
     }
 
@@ -80,7 +81,7 @@ pub async fn run_watch(
             i.enabled
                 && (i.type_name == "notion"
                     || (i.type_name == "joplin"
-                        && i.scope.get("server_url").is_some()))
+                        && i.scope.contains_key("server_url")))
         })
         .map(|i| i.id.clone())
         .collect();
@@ -103,10 +104,10 @@ pub async fn run_watch(
             }
             Some(src_id) = rx.recv() => {
                 let now = std::time::Instant::now();
-                if let Some(prev) = last_sent.get(&src_id) {
-                    if now.duration_since(*prev) < Duration::from_millis(500) {
-                        continue;
-                    }
+                if let Some(prev) = last_sent.get(&src_id)
+                    && now.duration_since(*prev) < Duration::from_millis(500)
+                {
+                    continue;
                 }
                 last_sent.insert(src_id.clone(), now);
                 tracing::info!(source = %src_id, "watch: triggering sync");
@@ -180,7 +181,7 @@ async fn sync_one(
         "joplin" => {
             use crate::sources::adapters::joplin::JoplinAdapter;
             use crate::sources::credentials::{CredentialStore, OsKeyring, SERVICE};
-            let token = if inst.scope.get("server_url").is_some() {
+            let token = if inst.scope.contains_key("server_url") {
                 let kr = OsKeyring;
                 let kr_account = inst
                     .keyring_entry

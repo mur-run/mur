@@ -192,10 +192,10 @@ impl JoplinAdapter {
                     .get("updated_time")
                     .and_then(|x| x.as_i64())
                     .unwrap_or(0);
-                if let Some(t) = threshold_ms {
-                    if updated_ms <= t {
-                        continue;
-                    }
+                if let Some(t) = threshold_ms
+                    && updated_ms <= t
+                {
+                    continue;
                 }
                 if updated_ms > max_ms {
                     max_ms = updated_ms;

@@ -542,6 +542,7 @@ pub fn format_notes_section(hits: &[crate::store::vector::Hit]) -> String {
 ///   (a) make the inject entry async and call this directly, or
 ///   (b) resolve the hits in the async CLI handler and pass them in as a slice.
 #[cfg(feature = "sources")]
+#[allow(dead_code)] // wiring deferred: called from inject entry point in P1.5
 pub async fn fetch_source_hits_for_query(
     query: &str,
     k: usize,

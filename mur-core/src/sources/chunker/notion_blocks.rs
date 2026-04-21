@@ -118,11 +118,11 @@ fn render_block(block: &Value, depth: usize, out: &mut String) {
     // Most blocks support nested children; fetch+inject when caller hydrates.
     // For toggles and table we already handled above. For other types, render
     // children if present (e.g., bulleted lists contain sub-items).
-    if !matches!(kind, "toggle" | "table") {
-        if let Some(children) = block.get("children").and_then(|v| v.as_array()) {
-            for child in children {
-                render_block(child, depth + 1, out);
-            }
+    if !matches!(kind, "toggle" | "table")
+        && let Some(children) = block.get("children").and_then(|v| v.as_array())
+    {
+        for child in children {
+            render_block(child, depth + 1, out);
         }
     }
 }
