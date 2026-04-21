@@ -19,8 +19,29 @@ pub struct RenderedPrompt {
     pub valid_citations: Vec<String>, // normalized citation anchors for grounding
 }
 
+/// Chars of each prior answer to include in the `## Chat History` section.
+/// Matches `rewriter::PRIOR_ANSWER_TRUNCATE_CHARS` to keep behavior consistent.
+const HISTORY_ANSWER_TRUNCATE_CHARS: usize = 500;
+
+/// Format the prior-turns block for the generation prompt. Empty string
+/// if `turns` is empty (caller decides whether to prepend the `## Chat History`
+/// header).
+fn render_history_block(turns: &[super::session::TurnRecord]) -> String {
+    let mut s = String::new();
+    for t in turns {
+        s.push_str("User: ");
+        s.push_str(&t.question);
+        s.push('\n');
+        s.push_str("Assistant: ");
+        s.push_str(&truncate_chars(&t.answer, HISTORY_ANSWER_TRUNCATE_CHARS));
+        s.push('\n');
+    }
+    s
+}
+
 pub fn render(
     question: &str,
+    prior_turns: &[super::session::TurnRecord],
     hits: &[ResolvedHit],
     max_context_tokens: usize,
     response_tokens: usize,
@@ -40,12 +61,48 @@ pub fn render(
     }
 
     let truncated_question = truncate_chars(question, 2000);
-    let mut user = format!("Context:\n{ctx}\nQuestion: {truncated_question}");
+
+    let history_block = if prior_turns.is_empty() {
+        String::new()
+    } else {
+        format!("## Chat History\n\n{}\n", render_history_block(prior_turns))
+    };
+
+    let mut user =
+        format!("{history_block}## Context\n\n{ctx}\n## Question\n\n{truncated_question}");
     let tokens_est = (system.len() + user.len()) / 4 + response_tokens + 120;
 
-    // If we overflow, drop hits from the tail until we fit.
+    // Overflow handling: drop oldest history turns first, then shrink hits.
+    // Rationale: Chroma "Context Rot" research (2025) — hits matter more than
+    // distant history for RAG answer quality.
+    let mut history_cursor = 0usize; // # of oldest turns dropped so far
     let mut trimmed_hits = hits.len();
-    while tokens_est > max_context_tokens && trimmed_hits > 1 {
+
+    let mut cur_tokens = tokens_est;
+    while cur_tokens > max_context_tokens && history_cursor < prior_turns.len() {
+        history_cursor += 1;
+        let history_block2 = if history_cursor >= prior_turns.len() {
+            String::new()
+        } else {
+            format!(
+                "## Chat History\n\n{}\n",
+                render_history_block(&prior_turns[history_cursor..])
+            )
+        };
+        user = format!("{history_block2}## Context\n\n{ctx}\n## Question\n\n{truncated_question}");
+        cur_tokens = (system.len() + user.len()) / 4 + response_tokens + 120;
+    }
+
+    // If still over budget, shrink hits from the tail.
+    let remaining_history_block = if history_cursor >= prior_turns.len() {
+        String::new()
+    } else {
+        format!(
+            "## Chat History\n\n{}\n",
+            render_history_block(&prior_turns[history_cursor..])
+        )
+    };
+    while cur_tokens > max_context_tokens && trimmed_hits > 1 {
         trimmed_hits -= 1;
         let mut ctx2 = String::new();
         valid_citations.clear();
@@ -58,13 +115,16 @@ pub fn render(
             ctx2.push_str(&h.snippet.replace('\n', "\n> "));
             ctx2.push_str("\n\n");
         }
-        user = format!("Context:\n{ctx2}\nQuestion: {truncated_question}");
+        user = format!(
+            "{remaining_history_block}## Context\n\n{ctx2}\n## Question\n\n{truncated_question}"
+        );
+        cur_tokens = (system.len() + user.len()) / 4 + response_tokens + 120;
     }
 
     RenderedPrompt {
         system,
         user,
-        tokens_est,
+        tokens_est: cur_tokens,
         valid_citations,
     }
 }
@@ -140,7 +200,7 @@ mod tests {
         let hits = (0..20)
             .map(|i| hit_raw(&format!("c{i}"), &"x".repeat(3000)))
             .collect::<Vec<_>>();
-        let r = render("question?", &hits, 6000, 1024);
+        let r = render("question?", &[], &hits, 6000, 1024);
         assert!(r.valid_citations.len() < hits.len());
         assert!(!r.valid_citations.is_empty());
     }
@@ -148,7 +208,7 @@ mod tests {
     #[test]
     fn render_lists_valid_citations_in_order() {
         let hits = vec![hit_raw("a", "one"), hit_raw("b", "two")];
-        let r = render("q?", &hits, 6000, 1024);
+        let r = render("q?", &[], &hits, 6000, 1024);
         assert_eq!(r.valid_citations.len(), 2);
         assert!(r.user.contains("one"));
         assert!(r.user.contains("two"));
@@ -190,5 +250,103 @@ mod tests {
             vector: None,
         };
         assert_eq!(cite_anchor(&h), "[cit: 2026-04-01 month/2026-04]");
+    }
+
+    fn turn_rec(q: &str, a: &str) -> super::super::session::TurnRecord {
+        super::super::session::TurnRecord {
+            v: 1,
+            turn_id: 1,
+            ts: chrono::DateTime::parse_from_rfc3339("2026-04-21T15:30:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            question: q.into(),
+            rewritten_question: None,
+            hits_used: vec![],
+            answer: a.into(),
+            citations: vec![],
+            degraded_to_mode_b: false,
+            rewriter_status: super::super::session::RewriterStatus::Skipped,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+        }
+    }
+
+    #[test]
+    fn render_includes_chat_history_section_when_prior_turns_non_empty() {
+        let hits = vec![hit_raw("a", "one")];
+        let prior = vec![turn_rec("prev q", "prev a")];
+        let r = render("new q?", &prior, &hits, 6000, 1024);
+        assert!(
+            r.user.contains("## Chat History"),
+            "expected '## Chat History' header, got:\n{}",
+            r.user
+        );
+        assert!(r.user.contains("User: prev q"));
+        assert!(r.user.contains("Assistant: prev a"));
+        // Current question is still in the user section
+        assert!(r.user.contains("new q?"));
+    }
+
+    #[test]
+    fn render_omits_chat_history_section_when_prior_turns_empty() {
+        let hits = vec![hit_raw("a", "one")];
+        let r = render("q?", &[], &hits, 6000, 1024);
+        assert!(!r.user.contains("## Chat History"));
+    }
+
+    #[test]
+    fn render_drops_oldest_history_first_on_budget_overflow() {
+        let hits = vec![hit_raw("a", "unique-hit-content")];
+        // Three prior turns, each with a recognizable answer. Budget tight
+        // enough that history must drop.
+        let prior = vec![
+            turn_rec("q1-oldest", "aaaa-oldest-ANSWER"),
+            turn_rec("q2-middle", "bbbb-middle-ANSWER"),
+            turn_rec("q3-newest", "cccc-newest-ANSWER"),
+        ];
+        // Budget chosen so history doesn't fit but hit does.
+        let r = render("new q?", &prior, &hits, 500, 100);
+        // The hit must survive.
+        assert!(r.user.contains("unique-hit-content"));
+        // Oldest history turn must be dropped before middle/newest.
+        let has_oldest = r.user.contains("aaaa-oldest-ANSWER");
+        let has_newest = r.user.contains("cccc-newest-ANSWER");
+        assert!(
+            !has_oldest || has_newest,
+            "if oldest survives, newest should too (invalid ordering)"
+        );
+        // Under a very tight budget the oldest should be dropped.
+        if has_newest {
+            // Expected path: newest survived, oldest dropped
+            assert!(!has_oldest, "oldest should be dropped first");
+        }
+    }
+
+    #[test]
+    fn render_falls_through_to_hit_shrinking_when_history_exhausted() {
+        // 5 hits + 2 prior turns + tight budget. Expect: history fully dropped,
+        // then hits start shrinking.
+        let hits: Vec<_> = (0..5)
+            .map(|i| hit_raw(&format!("c{i}"), &"x".repeat(800)))
+            .collect();
+        let prior = vec![
+            turn_rec("q1", &"yyyyy".repeat(100)),
+            turn_rec("q2", &"zzzzz".repeat(100)),
+        ];
+        let r = render("q?", &prior, &hits, 1500, 300);
+        // History should be entirely gone.
+        assert!(
+            !r.user.contains("## Chat History"),
+            "history should be dropped"
+        );
+        // Hits should be shrunk (fewer than 5).
+        assert!(
+            r.valid_citations.len() < hits.len(),
+            "expected hit count < {}, got {}",
+            hits.len(),
+            r.valid_citations.len()
+        );
+        assert!(!r.valid_citations.is_empty());
     }
 }
