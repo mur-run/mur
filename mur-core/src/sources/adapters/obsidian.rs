@@ -14,7 +14,6 @@ use crate::sources::KnowledgeSource;
 use crate::sources::chunker::markdown as md;
 use crate::sources::instance::SourceInstance;
 use crate::sources::kind::SourceKind;
-#[allow(unused_imports)]
 use crate::sources::types::{Chunk, DocRef, Document, DocumentBody, SyncCursor};
 
 const EXCLUDED_SEGMENTS: &[&str] = &[".obsidian", ".trash"];
@@ -176,12 +175,131 @@ impl KnowledgeSource for ObsidianAdapter {
         Ok((docs, cursor_out))
     }
 
-    async fn fetch(&self, _doc_ref: &DocRef) -> Result<Document> {
-        anyhow::bail!("ObsidianAdapter::fetch arrives in Task 9")
+    async fn fetch(&self, doc_ref: &DocRef) -> Result<Document> {
+        let full_path = self.vault_path.join(&doc_ref.external_id);
+        let raw = tokio::fs::read_to_string(&full_path)
+            .await
+            .with_context(|| format!("read vault file {}", full_path.display()))?;
+        let (frontmatter, body_without_fm) = strip_frontmatter(&raw);
+
+        let (tags, metadata) = frontmatter
+            .as_ref()
+            .map(parse_frontmatter)
+            .unwrap_or_else(|| (Vec::new(), serde_json::Value::Object(Default::default())));
+
+        let title = doc_ref
+            .title
+            .clone()
+            .unwrap_or_else(|| doc_ref.external_id.clone());
+
+        let url = {
+            let vault_name = self
+                .vault_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("vault");
+            Some(format!(
+                "obsidian://open?vault={}&file={}",
+                urlencoding::encode(vault_name),
+                urlencoding::encode(&doc_ref.external_id)
+            ))
+        };
+
+        Ok(Document {
+            source_id: self.id.clone(),
+            external_id: doc_ref.external_id.clone(),
+            title,
+            body: DocumentBody::Markdown(body_without_fm.to_string()),
+            url,
+            updated_at: doc_ref.updated_at,
+            tags,
+            metadata,
+        })
     }
 
     fn chunk(&self, _doc: &Document) -> Result<Vec<Chunk>> {
         anyhow::bail!("ObsidianAdapter::chunk arrives in Task 10")
+    }
+}
+
+/// Strip the YAML frontmatter block if present.
+fn strip_frontmatter(raw: &str) -> (Option<&str>, &str) {
+    let mut lines = raw.split_inclusive('\n');
+    let first = match lines.next() {
+        Some(l) => l.trim_end_matches(['\r', '\n']),
+        None => return (None, raw),
+    };
+    if first != "---" {
+        return (None, raw);
+    }
+    let mut acc_len = first.len() + 1;
+    let mut end_at: Option<usize> = None;
+    for line in lines {
+        acc_len += line.len();
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            end_at = Some(acc_len);
+            break;
+        }
+    }
+    match end_at {
+        Some(idx) => {
+            let fm = &raw[..idx];
+            let body = raw[idx..].trim_start_matches('\n').trim_start_matches('\r');
+            let fm_inner = fm
+                .trim_start_matches("---")
+                .trim_start_matches(['\r', '\n'])
+                .trim_end_matches("---\n")
+                .trim_end_matches("---\r\n")
+                .trim_end_matches("---");
+            (Some(fm_inner), body)
+        }
+        None => (None, raw),
+    }
+}
+
+fn parse_frontmatter(fm: &&str) -> (Vec<String>, serde_json::Value) {
+    let parsed: serde_yaml::Value = serde_yaml::from_str(fm).unwrap_or(serde_yaml::Value::Null);
+    let tags = parsed
+        .get("tags")
+        .and_then(|v| v.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let metadata = yaml_to_json(&parsed);
+    (tags, metadata)
+}
+
+fn yaml_to_json(v: &serde_yaml::Value) -> serde_json::Value {
+    use serde_yaml::Value as Y;
+    match v {
+        Y::Null => serde_json::Value::Null,
+        Y::Bool(b) => serde_json::Value::Bool(*b),
+        Y::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                serde_json::Value::Number(i.into())
+            } else if let Some(f) = n.as_f64() {
+                serde_json::Number::from_f64(f)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null)
+            } else {
+                serde_json::Value::Null
+            }
+        }
+        Y::String(s) => serde_json::Value::String(s.clone()),
+        Y::Sequence(s) => serde_json::Value::Array(s.iter().map(yaml_to_json).collect()),
+        Y::Mapping(m) => {
+            let mut obj = serde_json::Map::new();
+            for (k, val) in m {
+                if let Some(ks) = k.as_str() {
+                    obj.insert(ks.to_string(), yaml_to_json(val));
+                }
+            }
+            serde_json::Value::Object(obj)
+        }
+        Y::Tagged(t) => yaml_to_json(&t.value),
     }
 }
 
@@ -274,5 +392,34 @@ mod tests {
             .await
             .unwrap();
         assert!(docs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_reads_file_and_parses_frontmatter() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join(".obsidian")).unwrap();
+        fs::write(
+            tmp.path().join("spec.md"),
+            "---\ntags: [design, oauth]\nstatus: draft\n---\n\n# Auth spec\n\nbody.",
+        )
+        .unwrap();
+
+        let inst = make_instance("obsidian-main", tmp.path());
+        let adapter = ObsidianAdapter::from_instance(&inst).unwrap();
+        let (docs, _) = adapter.list_documents(None).await.unwrap();
+        let doc_ref = docs.iter().find(|d| d.external_id == "spec.md").unwrap();
+        let doc = adapter.fetch(doc_ref).await.unwrap();
+        assert_eq!(doc.source_id, "obsidian-main");
+        assert_eq!(doc.external_id, "spec.md");
+        assert!(doc.tags.contains(&"design".to_string()));
+        assert!(doc.tags.contains(&"oauth".to_string()));
+        match &doc.body {
+            DocumentBody::Markdown(s) => {
+                assert!(s.starts_with("# Auth spec"));
+                assert!(!s.contains("---"));
+            }
+            _ => panic!("expected markdown body"),
+        }
+        assert_eq!(doc.metadata.get("status").and_then(|v| v.as_str()), Some("draft"));
     }
 }
