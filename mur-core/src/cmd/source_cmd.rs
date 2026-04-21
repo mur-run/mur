@@ -144,7 +144,7 @@ pub async fn handle(cmd: SourceCommand) -> Result<()> {
         SourceCommand::Reindex { id, vector_backend } => {
             reindex(&id, vector_backend.as_deref()).await
         }
-        SourceCommand::InstallSchedule => bail!("`mur source install-schedule` arrives in P1.4"),
+        SourceCommand::InstallSchedule => install_schedule().await,
         SourceCommand::Disable { id } => set_enabled(&id, false).await,
         SourceCommand::Enable { id } => set_enabled(&id, true).await,
     }
@@ -778,6 +778,87 @@ async fn sync_watch() -> Result<()> {
         },
     )
     .await
+}
+
+// ---------- Task 8 handlers ----------
+
+async fn install_schedule() -> Result<()> {
+    use anyhow::Context;
+    use std::io::Write;
+
+    let cfg = crate::store::config::load_config()?;
+    let interval_secs = cfg.sources_global.poll_interval_secs;
+
+    let mur_path = std::env::current_exe().context("locate mur binary")?;
+    let mur_path_str = mur_path.to_string_lossy().to_string();
+
+    #[cfg(target_os = "macos")]
+    {
+        let plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>run.mur.source-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{mur_path_str}</string>
+    <string>source</string>
+    <string>sync</string>
+  </array>
+  <key>StartInterval</key><integer>{interval_secs}</integer>
+  <key>StandardOutPath</key><string>/tmp/mur-source-sync.log</string>
+  <key>StandardErrorPath</key><string>/tmp/mur-source-sync.err</string>
+</dict>
+</plist>
+"#
+        );
+        let path = dirs::home_dir()
+            .context("no home dir")?
+            .join("Library/LaunchAgents/run.mur.source-sync.plist");
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let mut f = std::fs::File::create(&path)?;
+        f.write_all(plist.as_bytes())?;
+        println!("wrote {}", path.display());
+        println!("Enable with: launchctl load -w {}", path.display());
+        println!("Disable with: launchctl unload {}", path.display());
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let svc_dir = dirs::config_dir()
+            .context("no config dir")?
+            .join("systemd/user");
+        std::fs::create_dir_all(&svc_dir)?;
+        let svc_file = svc_dir.join("mur-source-sync.service");
+        let timer_file = svc_dir.join("mur-source-sync.timer");
+
+        let svc = format!(
+            "[Unit]\nDescription=mur source sync\n\n[Service]\nType=oneshot\nExecStart={mur_path_str} source sync\n"
+        );
+        let timer = format!(
+            "[Unit]\nDescription=Run mur source sync periodically\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec={}s\nUnit=mur-source-sync.service\n\n[Install]\nWantedBy=timers.target\n",
+            interval_secs
+        );
+        std::fs::write(&svc_file, svc)?;
+        std::fs::write(&timer_file, timer)?;
+        println!(
+            "wrote {} and {}",
+            svc_file.display(),
+            timer_file.display()
+        );
+        println!("Enable with: systemctl --user enable --now mur-source-sync.timer");
+        println!("Disable with: systemctl --user disable --now mur-source-sync.timer");
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        anyhow::bail!("install-schedule supported on macOS/Linux only");
+    }
 }
 
 // ---------- Task 15 handlers ----------
