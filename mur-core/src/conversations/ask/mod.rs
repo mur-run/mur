@@ -163,6 +163,7 @@ pub async fn ask_stream(
     // 3. Build prompt
     let prompt = prompt::render(
         &req.question,
+        &[],
         &hits,
         req.max_context_tokens,
         req.response_tokens,
