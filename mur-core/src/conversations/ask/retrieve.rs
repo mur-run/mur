@@ -32,7 +32,7 @@ pub struct RetrieveArgs<'a> {
 
 /// LanceDB cosine distance = 1 - cosine_similarity.
 /// Converts to similarity (higher = better, range 0..1).
-fn similarity_of(h: &SearchHit) -> f64 {
+pub(crate) fn similarity_of(h: &SearchHit) -> f64 {
     (1.0 - h.distance as f64).clamp(0.0, 1.0)
 }
 
@@ -230,7 +230,7 @@ fn similar(a: &ResolvedHit, b: &ResolvedHit, threshold: f64) -> bool {
     }
 }
 
-fn mmr_dedupe_cosine(hits: Vec<ResolvedHit>, threshold: f64) -> Vec<ResolvedHit> {
+pub(crate) fn mmr_dedupe_cosine(hits: Vec<ResolvedHit>, threshold: f64) -> Vec<ResolvedHit> {
     let mut kept: Vec<ResolvedHit> = Vec::new();
     for h in hits {
         let dup = kept.iter().any(|k| similar(&h, k, threshold));
