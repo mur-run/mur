@@ -8,6 +8,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
+pub mod chunker;
 pub mod credentials;
 pub mod instance;
 pub mod kind;
