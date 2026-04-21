@@ -10,11 +10,14 @@ use chrono::{DateTime, Utc};
 
 pub mod factory;
 pub mod lancedb;
+pub mod qdrant;
 
 #[cfg(test)]
 pub mod tests;
 
 pub use self::lancedb::LanceDbStore;
+#[cfg(feature = "sources")]
+pub use self::qdrant::QdrantStore;
 
 /// An embedded chunk ready to be stored.
 ///
