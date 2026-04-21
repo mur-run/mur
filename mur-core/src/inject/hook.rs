@@ -530,6 +530,60 @@ pub fn format_notes_section(hits: &[crate::store::vector::Hit]) -> String {
     out
 }
 
+/// Fetch source hits for a query from the vector + BM25 index.
+///
+/// Returns up to `k` hits from the unified retrieve pipeline. All errors
+/// are swallowed (returns empty vec) so injection never fails due to sources.
+///
+/// Wiring into the main inject entry is deferred: the top-level inject
+/// functions (`format_for_injection_with_store`, `format_unified_injection_with_store`)
+/// are synchronous, and making them async touches several callers across the
+/// codebase. The recommended approach for a follow-up task is to either:
+///   (a) make the inject entry async and call this directly, or
+///   (b) resolve the hits in the async CLI handler and pass them in as a slice.
+#[cfg(feature = "sources")]
+pub async fn fetch_source_hits_for_query(
+    query: &str,
+    k: usize,
+) -> Vec<crate::store::vector::Hit> {
+    use crate::store::embedding::{EmbeddingConfig, embed};
+    use crate::store::vector::{SearchFilter, factory::get_vector_store};
+
+    let Ok(cfg) = crate::store::config::load_config() else {
+        return vec![];
+    };
+    let emb_cfg = EmbeddingConfig::from_config(&cfg);
+    let Some(home) = dirs::home_dir() else {
+        return vec![];
+    };
+    let index_path = home.join(".mur").join("index");
+    let Ok(vs) = get_vector_store(&cfg, &index_path).await else {
+        return vec![];
+    };
+    let Ok(tantivy) =
+        crate::sources::tantivy::TantivyIndex::open_or_create(&home.join(".mur"))
+    else {
+        return vec![];
+    };
+    let weights: std::collections::HashMap<String, f32> =
+        crate::sources::instance::SourceInstanceStore::default_store()
+            .and_then(|s| s.list())
+            .map(|v| v.into_iter().map(|i| (i.id, i.weight)).collect())
+            .unwrap_or_default();
+    let Ok(_qvec) = embed(query, &emb_cfg).await else {
+        return vec![];
+    };
+    let filter = SearchFilter::default();
+    let Ok(unified) = crate::retrieve::retrieve_unified(
+        query, vs, &tantivy, &emb_cfg, &weights, &filter, 0, k, 0.35,
+    )
+    .await
+    else {
+        return vec![];
+    };
+    unified.into_iter().map(|u| u.hit).collect()
+}
+
 #[cfg(all(test, feature = "sources"))]
 mod notes_tests {
     use super::*;
