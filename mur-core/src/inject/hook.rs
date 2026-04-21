@@ -498,6 +498,81 @@ fn format_content(content: &Content) -> String {
     }
 }
 
+// ---------- P1.3: format external-source notes ----------
+
+#[cfg(feature = "sources")]
+pub fn format_notes_section(hits: &[crate::store::vector::Hit]) -> String {
+    if hits.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push_str(&format!("\n## Notes ({})\n\n", hits.len()));
+    for h in hits {
+        let hp = if h.heading_path.is_empty() {
+            String::new()
+        } else {
+            format!(" § \"{}\"", h.heading_path.join(" / "))
+        };
+        out.push_str(&format!(
+            "[Note: {} / {}{}]\n",
+            h.source_id, h.external_id, hp
+        ));
+        let preview: String = h.text.chars().take(400).collect();
+        out.push_str("  ");
+        out.push_str(&preview);
+        if h.text.chars().count() > 400 {
+            out.push_str("...");
+        }
+        out.push('\n');
+    }
+    out.push('\n');
+    out
+}
+
+#[cfg(all(test, feature = "sources"))]
+mod notes_tests {
+    use super::*;
+    use crate::store::vector::Hit;
+
+    #[test]
+    fn empty_hits_yields_empty_string() {
+        assert!(format_notes_section(&[]).is_empty());
+    }
+
+    #[test]
+    fn renders_source_id_and_heading_path() {
+        let hit = Hit {
+            chunk_id: "c".into(),
+            source_id: "obsidian:main".into(),
+            external_id: "design/auth.md".into(),
+            score: 0.9,
+            text: "JWT 15min + 7d refresh.".into(),
+            heading_path: vec!["Design".into(), "Auth".into()],
+            updated_at: chrono::Utc::now(),
+        };
+        let out = format_notes_section(&[hit]);
+        assert!(out.contains("## Notes (1)"));
+        assert!(out.contains("obsidian:main / design/auth.md"));
+        assert!(out.contains("Design / Auth"));
+    }
+
+    #[test]
+    fn long_text_gets_truncated() {
+        let big = "x".repeat(1000);
+        let hit = Hit {
+            chunk_id: "c".into(),
+            source_id: "s".into(),
+            external_id: "d".into(),
+            score: 0.5,
+            text: big,
+            heading_path: vec![],
+            updated_at: chrono::Utc::now(),
+        };
+        let out = format_notes_section(&[hit]);
+        assert!(out.contains("..."));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
