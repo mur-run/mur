@@ -398,6 +398,50 @@ fn mur_ask_show_session_prints_summary_without_ollama() {
     assert!(stdout.contains("session:"), "got:\n{stdout}");
 }
 
+/// Phase 3.3 follow-up: streaming-path Error events no longer hard-exit
+/// before append_turn. The empty-archive path emits the "don't cover that"
+/// fallback Token + Done; ensure that turn still persists to the JSONL.
+/// (The pre-fix code path was structurally identical for the
+/// generation-Error case, which is harder to exercise without faking Ollama.)
+#[test]
+fn mur_ask_persists_turn_on_empty_archive_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["ask", "what did I ship?"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("run mur ask");
+    assert!(
+        out.status.success(),
+        "mur ask should succeed on empty archive (mock); stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let session_path = mur_home.join("conversations").join("ask-session.jsonl");
+    assert!(
+        session_path.exists(),
+        "session file missing after ask on empty archive"
+    );
+    let body = std::fs::read_to_string(&session_path).unwrap();
+    assert_eq!(
+        body.lines().count(),
+        1,
+        "expected 1 turn persisted, got body:\n{body}"
+    );
+    // The persisted turn should record the empty-archive fallback answer.
+    let turn: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+    let answer = turn["answer"].as_str().unwrap_or("");
+    assert!(
+        answer.contains("don't cover that"),
+        "expected 'don't cover that' in answer, got: {answer}"
+    );
+}
+
 #[test]
 fn mur_ask_continue_without_prior_session_errors() {
     let tmp = tempfile::tempdir().unwrap();

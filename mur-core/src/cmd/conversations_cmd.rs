@@ -1170,6 +1170,9 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     };
 
     // Generate + collect response
+    // streaming_error is set if the streaming branch sees an AskEvent::Error;
+    // surfaced after persistence so degraded turns still write to the JSONL.
+    let mut streaming_error: Option<String> = None;
     let resp = if args.json {
         let r = ask::ask(req, None).await?;
         println!("{}", serde_json::to_string_pretty(&r)?);
@@ -1183,6 +1186,10 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         let mut tokens_in = 0;
         let mut tokens_out = 0;
         let mut duration = 0;
+        // Phase 3.3 follow-up: capture (don't exit on) Error events so that
+        // degraded turns under Ollama-unavailable still get persisted to the
+        // session JSONL via append_turn below. The exit happens at the end
+        // (after persist), preserving the original non-zero exit semantics.
         while let Some(evt) = stream.next().await {
             match evt? {
                 ask::AskEvent::Token(t) => {
@@ -1204,8 +1211,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
                     duration = duration_ms;
                 }
                 ask::AskEvent::Error(e) => {
-                    eprintln!("\nerror: {e}");
-                    std::process::exit(1);
+                    streaming_error = Some(e);
                 }
             }
         }
@@ -1261,6 +1267,15 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         duration_ms: resp.duration_ms,
     };
     ask::session::SessionStore::append_turn(&mut session, turn)?;
+
+    // Phase 3.3 follow-up: report streaming-path Error events AFTER the turn
+    // has been persisted. Preserves the original `--continue`-after-failure UX
+    // (user sees the error message + non-zero exit) while ensuring the session
+    // JSONL has a record of the degraded turn.
+    if let Some(e) = streaming_error {
+        eprintln!("\nerror: {e}");
+        std::process::exit(1);
+    }
 
     Ok(())
 }
