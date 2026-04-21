@@ -34,9 +34,13 @@ pub struct Document {
     pub external_id: String,
     pub title: String,
     pub body: DocumentBody,
+    // url, tags, metadata are surfaced in search results in P1.3+.
+    #[allow(dead_code)]
     pub url: Option<String>,
     pub updated_at: DateTime<Utc>,
+    #[allow(dead_code)]
     pub tags: Vec<String>,
+    #[allow(dead_code)]
     pub metadata: serde_json::Value,
 }
 
@@ -44,14 +48,18 @@ pub struct Document {
 #[derive(Debug, Clone)]
 pub enum DocumentBody {
     Markdown(String),
+    /// Used by plain-text sources (P1.3+).
+    #[allow(dead_code)]
     PlainText(String),
     /// Notion blocks — serialized as opaque JSON so we don't depend on the
-    /// Notion SDK crate from `types.rs`.
+    /// Notion SDK crate from `types.rs`. Constructed by Notion adapter (P1.4).
+    #[allow(dead_code)]
     NotionBlocks(serde_json::Value),
 }
 
 impl DocumentBody {
-    /// Returns the content as plaintext suitable for embedding.
+    /// Returns the content as plaintext for embedding. Called by chunkers in P1.3+.
+    #[allow(dead_code)]
     pub fn as_plain_text(&self) -> String {
         match self {
             DocumentBody::Markdown(s) | DocumentBody::PlainText(s) => s.clone(),

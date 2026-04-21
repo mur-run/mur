@@ -2,11 +2,14 @@
 //!
 //! We abstract over the OS keyring so unit tests don't need Keychain /
 //! Secret Service. Production uses `OsKeyring`; tests use `InMemoryCreds`.
+//! Wired into the CLI in P1.3+ (Notion/Joplin OAuth flows).
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+// Entire module becomes live in P1.3+ when OAuth-backed adapters ship.
+#[allow(dead_code)]
 pub trait CredentialStore: Send + Sync {
     /// Store `value` under `(service, account)`.
     fn set(&self, service: &str, account: &str, value: &str) -> Result<()>;
@@ -18,6 +21,8 @@ pub trait CredentialStore: Send + Sync {
 
 /// Production implementation backed by the OS keyring (macOS Keychain,
 /// Linux Secret Service via libsecret, Windows Credential Manager).
+/// Instantiated by Notion/Joplin adapters in P1.3+.
+#[allow(dead_code)]
 pub struct OsKeyring;
 
 impl CredentialStore for OsKeyring {
@@ -52,6 +57,7 @@ impl CredentialStore for OsKeyring {
 }
 
 /// In-memory implementation for tests.
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct InMemoryCreds {
     store: Mutex<HashMap<(String, String), String>>,
@@ -85,10 +91,14 @@ impl CredentialStore for InMemoryCreds {
 }
 
 /// Canonical helper: derive the keyring account name from source id + field.
+/// Used by Notion/Joplin adapters in P1.3+.
+#[allow(dead_code)]
 pub fn account(source_id: &str, field: &str) -> String {
     format!("{source_id}:{field}")
 }
 
+// Used by all credential calls in P1.3+ adapters.
+#[allow(dead_code)]
 pub const SERVICE: &str = "mur";
 
 #[cfg(test)]

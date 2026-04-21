@@ -467,7 +467,7 @@ impl VectorStore for LanceDbStore {
                     serde_json::from_str(heading_paths.value(i)).unwrap_or_default();
                 let ms = updated_at_ms.value(i);
                 let ts = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
-                    .unwrap_or_else(|| chrono::Utc::now());
+                    .unwrap_or_else(chrono::Utc::now);
                 hits.push(Hit {
                     chunk_id: chunk_ids.value(i).to_string(),
                     source_id: source_ids.value(i).to_string(),

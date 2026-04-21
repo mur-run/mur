@@ -136,7 +136,7 @@ async fn fetch_chunk_embed_upsert(
     // Delete-by-external_id before upserting (handles the case where the same
     // document's chunk set changed — old chunk_ids no longer valid).
     vector_store
-        .delete_by_external_ids(&doc.source_id, &[doc.external_id.clone()])
+        .delete_by_external_ids(&doc.source_id, std::slice::from_ref(&doc.external_id))
         .await
         .context("delete old chunks for doc")?;
     let mut embedded: Vec<EmbeddedChunk> = Vec::with_capacity(chunks.len());

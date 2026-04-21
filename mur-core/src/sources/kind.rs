@@ -15,6 +15,9 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
+    /// Used by the P1.3+ orchestrator to dispatch between local search and
+    /// federated query paths.
+    #[allow(dead_code)]
     pub fn is_pull_index(self) -> bool {
         matches!(self, SourceKind::PullIndex)
     }

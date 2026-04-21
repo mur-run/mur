@@ -22,6 +22,8 @@ const CHUNK_MAX_CHARS: usize = 6000;
 pub struct ObsidianAdapter {
     id: String,
     vault_path: PathBuf,
+    // Applied at search-time by the P1.3+ orchestrator via KnowledgeSource::weight().
+    #[allow(dead_code)]
     weight: f32,
     exclude_folders: Vec<String>,
 }
@@ -77,7 +79,7 @@ impl ObsidianAdapter {
     fn is_excluded(&self, rel: &Path) -> bool {
         for seg in rel.components() {
             if let Some(s) = seg.as_os_str().to_str() {
-                if EXCLUDED_SEGMENTS.iter().any(|x| *x == s) {
+                if EXCLUDED_SEGMENTS.contains(&s) {
                     return true;
                 }
                 if self.exclude_folders.iter().any(|e| e == s) {
@@ -147,7 +149,7 @@ impl KnowledgeSource for ObsidianAdapter {
             {
                 continue;
             }
-            if max_ts.map_or(true, |m| updated_at > m) {
+            if max_ts.is_none_or(|m| updated_at > m) {
                 max_ts = Some(updated_at);
             }
             let external_id = rel

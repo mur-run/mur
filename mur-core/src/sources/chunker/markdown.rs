@@ -86,10 +86,8 @@ pub fn chunk_markdown(title: &str, body: &str, max_chars: usize) -> Vec<Markdown
                     cur_buf.push_str(&t);
                 }
             }
-            Event::SoftBreak | Event::HardBreak => {
-                if in_heading.is_none() {
-                    cur_buf.push('\n');
-                }
+            Event::SoftBreak | Event::HardBreak if in_heading.is_none() => {
+                cur_buf.push('\n');
             }
             Event::End(TagEnd::Paragraph) => {
                 cur_buf.push_str("\n\n");
@@ -103,10 +101,8 @@ pub fn chunk_markdown(title: &str, body: &str, max_chars: usize) -> Vec<Markdown
                     );
                 }
             }
-            Event::Code(c) => {
-                if in_heading.is_none() {
-                    cur_buf.push_str(&format!("`{c}`"));
-                }
+            Event::Code(c) if in_heading.is_none() => {
+                cur_buf.push_str(&format!("`{c}`"));
             }
             Event::Start(Tag::CodeBlock(_)) => {
                 cur_buf.push_str("\n```\n");
