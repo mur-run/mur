@@ -16,6 +16,7 @@ pub mod kind;
 pub mod sync;
 pub mod tantivy;
 pub mod types;
+pub mod watch;
 
 pub use kind::SourceKind;
 pub use types::{Chunk, DocRef, Document, SyncCursor};

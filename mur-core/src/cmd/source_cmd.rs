@@ -127,9 +127,10 @@ pub async fn handle(cmd: SourceCommand) -> Result<()> {
         SourceCommand::Remove { id, keep_index } => remove(&id, keep_index).await,
         SourceCommand::Sync { id, full, watch } => {
             if watch {
-                bail!("`mur source sync --watch` arrives in P1.4");
+                sync_watch().await
+            } else {
+                sync(id.as_deref(), full).await
             }
-            sync(id.as_deref(), full).await
         }
         SourceCommand::Status { id } => status(id.as_deref()).await,
         SourceCommand::Weight { id, value } => set_weight(&id, value).await,
@@ -746,6 +747,37 @@ async fn reindex(id: &str, vector_backend: Option<&str>) -> Result<()> {
         report.errors.len()
     );
     Ok(())
+}
+
+// ---------- Task 7 handlers ----------
+
+async fn sync_watch() -> Result<()> {
+    use crate::sources::instance::SourceInstanceStore;
+    use crate::sources::tantivy::TantivyIndex;
+    use crate::sources::watch::{WatchOptions, run_watch};
+    use crate::store::embedding::EmbeddingConfig;
+    use crate::store::vector::factory::get_vector_store;
+    use anyhow::Context;
+
+    let cfg = crate::store::config::load_config()?;
+    let emb_cfg = EmbeddingConfig::from_config(&cfg);
+    let index_path = dirs::home_dir()
+        .context("no home dir")?
+        .join(".mur")
+        .join("index");
+    let vector_store = get_vector_store(&cfg, &index_path).await?;
+    let tantivy = TantivyIndex::open_or_create(&dirs::home_dir().unwrap().join(".mur"))?;
+    let instance_store = SourceInstanceStore::default_store()?;
+    run_watch(
+        instance_store,
+        vector_store,
+        tantivy,
+        emb_cfg,
+        WatchOptions {
+            poll_interval_secs: cfg.sources_global.poll_interval_secs,
+        },
+    )
+    .await
 }
 
 // ---------- Task 15 handlers ----------
