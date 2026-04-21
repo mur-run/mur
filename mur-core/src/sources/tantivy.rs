@@ -41,7 +41,8 @@ impl TantivyIndex {
         builder.add_text_field("text", TEXT);
         let schema = builder.build();
 
-        let index = Index::open_in_dir(&dir).or_else(|_| Index::create_in_dir(&dir, schema.clone()))?;
+        let index =
+            Index::open_in_dir(&dir).or_else(|_| Index::create_in_dir(&dir, schema.clone()))?;
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -78,7 +79,12 @@ impl TantivyIndex {
         Ok(())
     }
 
-    pub fn search(&self, query: &str, k: usize, source_ids: Option<&[String]>) -> Result<Vec<Bm25Hit>> {
+    pub fn search(
+        &self,
+        query: &str,
+        k: usize,
+        source_ids: Option<&[String]>,
+    ) -> Result<Vec<Bm25Hit>> {
         let searcher = self.reader.searcher();
         let schema = self.index.schema();
         let text_f = schema.get_field("text").unwrap();
@@ -184,9 +190,7 @@ mod tests {
             mk_row("c2", "o:b", "d2", "rust async"),
         ])
         .unwrap();
-        let only_a = idx
-            .search("rust async", 5, Some(&["o:a".into()]))
-            .unwrap();
+        let only_a = idx.search("rust async", 5, Some(&["o:a".into()])).unwrap();
         assert_eq!(only_a.len(), 1);
         assert_eq!(only_a[0].source_id, "o:a");
     }
@@ -195,7 +199,8 @@ mod tests {
     fn delete_by_chunk_ids_removes_entries() {
         let tmp = TempDir::new().unwrap();
         let idx = TantivyIndex::open_or_create(tmp.path()).unwrap();
-        idx.upsert(&[mk_row("c1", "s", "d1", "alpha beta")]).unwrap();
+        idx.upsert(&[mk_row("c1", "s", "d1", "alpha beta")])
+            .unwrap();
         idx.delete_by_chunk_ids(&["c1".into()]).unwrap();
         let hits = idx.search("alpha", 5, None).unwrap();
         assert!(hits.is_empty());

@@ -131,10 +131,9 @@ pub async fn handle(cmd: SourceCommand) -> Result<()> {
             source,
             json,
         } => search(&query, limit, source.as_deref(), json).await,
-        SourceCommand::Reindex {
-            id,
-            vector_backend,
-        } => reindex(&id, vector_backend.as_deref()).await,
+        SourceCommand::Reindex { id, vector_backend } => {
+            reindex(&id, vector_backend.as_deref()).await
+        }
         SourceCommand::InstallSchedule => bail!("`mur source install-schedule` arrives in P1.4"),
         SourceCommand::Disable { id } => set_enabled(&id, false).await,
         SourceCommand::Enable { id } => set_enabled(&id, true).await,
@@ -382,7 +381,9 @@ async fn remove(id: &str, keep_index: bool) -> Result<()> {
         let tantivy = crate::sources::tantivy::TantivyIndex::open_or_create(
             &dirs::home_dir().context("no home dir")?.join(".mur"),
         )?;
-        tantivy.delete_by_source(id).context("tantivy.delete_by_source")?;
+        tantivy
+            .delete_by_source(id)
+            .context("tantivy.delete_by_source")?;
         println!("🗑  removed indexed chunks for {id}");
     }
     store.delete(id)?;
@@ -492,9 +493,8 @@ async fn reindex(id: &str, vector_backend: Option<&str>) -> Result<()> {
         .join(".mur")
         .join("index");
     let vector_store = get_vector_store(&cfg, &index_path).await?;
-    let tantivy = TantivyIndex::open_or_create(
-        &dirs::home_dir().context("no home dir")?.join(".mur"),
-    )?;
+    let tantivy =
+        TantivyIndex::open_or_create(&dirs::home_dir().context("no home dir")?.join(".mur"))?;
 
     let store = SourceInstanceStore::default_store()?;
     let mut inst = store.load(id)?;
@@ -504,10 +504,16 @@ async fn reindex(id: &str, vector_backend: Option<&str>) -> Result<()> {
     inst.sync.last_cursor = None;
 
     if inst.type_name != "obsidian" {
-        bail!("reindex for adapter `{}` arrives in a later sub-milestone", inst.type_name);
+        bail!(
+            "reindex for adapter `{}` arrives in a later sub-milestone",
+            inst.type_name
+        );
     }
     let adapter = ObsidianAdapter::from_instance(&inst)?;
-    println!("↻ reindexing {} on backend `{}`", inst.id, cfg.storage.vector_backend);
+    println!(
+        "↻ reindexing {} on backend `{}`",
+        inst.id, cfg.storage.vector_backend
+    );
     let report = sync_source(
         &adapter,
         &mut inst,

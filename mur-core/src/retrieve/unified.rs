@@ -51,8 +51,7 @@ pub async fn retrieve_unified(
         .unwrap_or_default();
 
     // Build a lookup for BM25 scores by chunk_id.
-    let mut bm25_by_id: std::collections::HashMap<String, f32> =
-        std::collections::HashMap::new();
+    let mut bm25_by_id: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
     for h in &bm25_hits {
         bm25_by_id.insert(h.chunk_id.clone(), h.score);
     }

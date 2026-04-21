@@ -10,12 +10,12 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
     Condition, CountPointsBuilder, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter,
-    PointStruct, ScrollPointsBuilder, SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
-    points_selector::PointsSelectorOneOf,
+    PointStruct, ScrollPointsBuilder, SearchPointsBuilder, UpsertPointsBuilder,
+    VectorParamsBuilder, points_selector::PointsSelectorOneOf,
 };
-use qdrant_client::Qdrant;
 
 use super::{EmbeddedChunk, Hit, SearchFilter, VectorStore};
 
@@ -78,10 +78,7 @@ impl VectorStore for QdrantStore {
                         ),
                         ("char_start", (c.char_range.0 as i64).into()),
                         ("char_end", (c.char_range.1 as i64).into()),
-                        (
-                            "updated_at_ms",
-                            c.updated_at.timestamp_millis().into(),
-                        ),
+                        ("updated_at_ms", c.updated_at.timestamp_millis().into()),
                     ],
                 )
             })
@@ -94,12 +91,7 @@ impl VectorStore for QdrantStore {
         Ok(())
     }
 
-    async fn search(
-        &self,
-        query_vec: &[f32],
-        k: usize,
-        filter: &SearchFilter,
-    ) -> Result<Vec<Hit>> {
+    async fn search(&self, query_vec: &[f32], k: usize, filter: &SearchFilter) -> Result<Vec<Hit>> {
         let mut conditions: Vec<Condition> = Vec::new();
         if let Some(ids) = &filter.source_ids {
             for id in ids {
@@ -163,9 +155,8 @@ impl VectorStore for QdrantStore {
                 .get("updated_at_ms")
                 .and_then(|v| v.as_integer())
                 .unwrap_or(0);
-            let updated_at =
-                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(updated_at_ms)
-                    .unwrap_or_else(chrono::Utc::now);
+            let updated_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(updated_at_ms)
+                .unwrap_or_else(chrono::Utc::now);
             out.push(Hit {
                 chunk_id: pid,
                 source_id,
@@ -179,11 +170,7 @@ impl VectorStore for QdrantStore {
         Ok(out)
     }
 
-    async fn delete_by_external_ids(
-        &self,
-        source_id: &str,
-        external_ids: &[String],
-    ) -> Result<()> {
+    async fn delete_by_external_ids(&self, source_id: &str, external_ids: &[String]) -> Result<()> {
         if external_ids.is_empty() {
             return Ok(());
         }
@@ -214,10 +201,7 @@ impl VectorStore for QdrantStore {
     }
 
     async fn delete_by_source(&self, source_id: &str) -> Result<()> {
-        let filter = Filter::must(vec![Condition::matches(
-            "source_id",
-            source_id.to_string(),
-        )]);
+        let filter = Filter::must(vec![Condition::matches("source_id", source_id.to_string())]);
         self.client
             .delete_points(
                 DeletePointsBuilder::new(COLLECTION)
@@ -230,10 +214,7 @@ impl VectorStore for QdrantStore {
     }
 
     async fn list_external_ids(&self, source_id: &str) -> Result<Vec<String>> {
-        let filter = Filter::must(vec![Condition::matches(
-            "source_id",
-            source_id.to_string(),
-        )]);
+        let filter = Filter::must(vec![Condition::matches("source_id", source_id.to_string())]);
         let mut out: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut offset: Option<qdrant_client::qdrant::PointId> = None;
         loop {
@@ -261,8 +242,10 @@ impl VectorStore for QdrantStore {
     async fn count(&self, source_id: Option<&str>) -> Result<usize> {
         let mut builder = CountPointsBuilder::new(COLLECTION).exact(true);
         if let Some(sid) = source_id {
-            builder = builder
-                .filter(Filter::must(vec![Condition::matches("source_id", sid.to_string())]));
+            builder = builder.filter(Filter::must(vec![Condition::matches(
+                "source_id",
+                sid.to_string(),
+            )]));
         }
         let resp = self.client.count(builder).await?;
         Ok(resp.result.map(|r| r.count as usize).unwrap_or(0))

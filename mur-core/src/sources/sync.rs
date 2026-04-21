@@ -62,7 +62,9 @@ pub async fn sync_source(
     let mut report = SyncReport::default();
 
     for doc_ref in &doc_refs {
-        match fetch_chunk_embed_upsert(adapter, doc_ref, &*vector_store, tantivy, embedding_cfg).await {
+        match fetch_chunk_embed_upsert(adapter, doc_ref, &*vector_store, tantivy, embedding_cfg)
+            .await
+        {
             Ok(n_chunks) => {
                 report.docs_synced += 1;
                 report.chunks_emitted += n_chunks;

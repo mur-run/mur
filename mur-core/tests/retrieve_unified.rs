@@ -49,8 +49,20 @@ async fn vec_and_bm25_agree_on_top_chunk() {
 
     store
         .upsert(&[
-            chunk("c1", "o:a", "match.md", "rust async tokio programming", ones.clone()),
-            chunk("c2", "o:b", "other.md", "JVM garbage collection", zeros.clone()),
+            chunk(
+                "c1",
+                "o:a",
+                "match.md",
+                "rust async tokio programming",
+                ones.clone(),
+            ),
+            chunk(
+                "c2",
+                "o:b",
+                "other.md",
+                "JVM garbage collection",
+                zeros.clone(),
+            ),
         ])
         .await
         .unwrap();

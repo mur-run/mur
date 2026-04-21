@@ -1271,7 +1271,11 @@ async fn cmd_search_unified(
                 .collect()
         };
         let filter = store::vector::SearchFilter {
-            source_ids: if source.is_empty() { None } else { Some(source) },
+            source_ids: if source.is_empty() {
+                None
+            } else {
+                Some(source)
+            },
             since: None,
         };
         source_hits = retrieve::retrieve_unified(
@@ -1290,7 +1294,9 @@ async fn cmd_search_unified(
 
     // PATTERNS SIDE — keyword + scoring fallback (full unification deferred to §8.1).
     let pattern_results: Vec<(String, f64)> = if want_patterns {
-        existing_pattern_search_names(&query).await.unwrap_or_default()
+        existing_pattern_search_names(&query)
+            .await
+            .unwrap_or_default()
     } else {
         vec![]
     };
