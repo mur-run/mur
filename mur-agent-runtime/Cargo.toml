@@ -7,6 +7,12 @@ edition = "2024"
 name = "mur-agent-runtime"
 path = "src/main.rs"
 
+[[bin]]
+name = "mock_mcp"
+path = "tests/fixtures/mock_mcp/main.rs"
+test = false
+doc = false
+
 [lib]
 path = "src/lib.rs"
 
