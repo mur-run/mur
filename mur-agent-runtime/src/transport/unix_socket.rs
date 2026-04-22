@@ -5,6 +5,7 @@ use crate::protocol::a2a_server::Dispatcher;
 use mur_common::JsonRpcRequest;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
@@ -16,7 +17,7 @@ pub struct PeerInfo {
 }
 
 pub async fn serve_unix(
-    dispatcher: Dispatcher,
+    dispatcher: Arc<Dispatcher>,
     path: PathBuf,
     mut notifications: mpsc::Receiver<Value>,
 ) -> std::io::Result<()> {
@@ -31,7 +32,6 @@ pub async fn serve_unix(
         perms.set_mode(0o600);
         std::fs::set_permissions(&path, perms)?;
     }
-    let dispatcher = std::sync::Arc::new(dispatcher);
     let (bcast_tx, _) = tokio::sync::broadcast::channel::<Value>(256);
     let bcast_forward = bcast_tx.clone();
     tokio::spawn(async move {
