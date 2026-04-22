@@ -20,7 +20,12 @@ pub fn render_citations_block(citations: &[Citation]) -> String {
             _ => format!("[cit: {} {}/{}]", c.date, c.source, c.conv_id),
         };
         let preview: String = c.snippet.chars().take(120).collect();
-        out.push_str(&format!("  {anchor}\n    — {preview}\n"));
+        let suffix = if c.compressed == Some(crate::conversations::ask::Compression::Abstractive) {
+            " (summarized)"
+        } else {
+            ""
+        };
+        out.push_str(&format!("  {anchor}\n    — {preview}{suffix}\n"));
     }
     out
 }
@@ -96,5 +101,60 @@ mod tests {
         let s = render_json(&r);
         assert!(s.contains("\"answer\""));
         assert!(s.contains("\"citations\""));
+    }
+
+    #[test]
+    fn citations_block_suffixes_summarized_for_abstractive() {
+        let c = vec![
+            Citation {
+                id: 1,
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+                source: "cc".into(),
+                conv_id: "c1".into(),
+                line_hint: Some(1),
+                span_index_in_summary: None,
+                snippet: "sample".into(),
+                score: 0.9,
+                compressed: Some(crate::conversations::ask::Compression::Abstractive),
+            },
+            Citation {
+                id: 2,
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+                source: "cc".into(),
+                conv_id: "c2".into(),
+                line_hint: Some(1),
+                span_index_in_summary: None,
+                snippet: "sample2".into(),
+                score: 0.9,
+                compressed: Some(crate::conversations::ask::Compression::Heuristic),
+            },
+            Citation {
+                id: 3,
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+                source: "cc".into(),
+                conv_id: "c3".into(),
+                line_hint: Some(1),
+                span_index_in_summary: None,
+                snippet: "sample3".into(),
+                score: 0.9,
+                compressed: None,
+            },
+        ];
+        let block = render_citations_block(&c);
+        // Abstractive → (summarized) suffix.
+        assert!(
+            block.contains("cc/c1:L1") && block.contains("(summarized)"),
+            "expected (summarized) next to c1, got:\n{block}"
+        );
+        // Heuristic → NOT suffixed.
+        let lines: Vec<&str> = block.lines().collect();
+        let c2_line = lines.iter().find(|l| l.contains("cc/c2:L1")).unwrap();
+        assert!(
+            !c2_line.contains("(summarized)"),
+            "heuristic must NOT be marked summarized in plain mode; got: {c2_line}"
+        );
+        // None → unchanged.
+        let c3_line = lines.iter().find(|l| l.contains("cc/c3:L1")).unwrap();
+        assert!(!c3_line.contains("(summarized)"));
     }
 }
