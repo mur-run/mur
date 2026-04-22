@@ -520,3 +520,220 @@ fn mur_ask_compresses_long_hits_under_tight_budget() {
         "expected 1 turn persisted, got body:\n{body}"
     );
 }
+
+/// Phase 3.2.1: `--if-stale` on `mur conversations rollup --week` must NOT
+/// force regeneration. The default behavior (force=false) already triggers
+/// the sha-based idempotency check inside rollup_week — running the same
+/// rollup twice with --if-stale should produce zero .history/ archive
+/// entries (no archive happens when input_content_sha matches existing md).
+#[test]
+fn mur_conversations_rollup_if_stale_is_idempotent_noop() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+
+    // Seed 7 day summaries for 2026-W16 (Apr 13-19).
+    let summary_dir = mur_home.join("conversations").join("summary");
+    std::fs::create_dir_all(&summary_dir).unwrap();
+    for d in 13..=19 {
+        std::fs::write(
+            summary_dir.join(format!("2026-04-{d:02}.md")),
+            format!(
+                "---\n\
+                 schema: 1\n\
+                 date: 2026-04-{d:02}\n\
+                 generated_at: 2026-04-{d:02}T03:00:00Z\n\
+                 generated_by:\n  extractive_model: qwen3:14b\n  abstractive_model: qwen3:14b\n  mur_version: 3.0.0\n\
+                 duration_ms: 50\n\
+                 conv_count: 1\n\
+                 msg_count: 1\n\
+                 sources: [cc]\n\
+                 pattern_refs: []\n\
+                 keywords: []\n\
+                 links:\n  prev: null\n  next: null\n\
+                 warnings: []\n\
+                 input_content_sha: {d}sha\n\
+                 ---\n\n\
+                 ## Extractive spans\n\n\
+                 [1] _{{cc/c1 @L1}}_:\n> day {d} span\n\n\
+                 ## Abstractive narrative\n\n\
+                 Narrative for day {d}.\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    // Populate layer=2 spans via --spans-only reindex (rollup needs them).
+    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "reindex", "--spans-only"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("reindex --spans-only");
+    assert!(
+        out.status.success(),
+        "reindex failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // First rollup invocation.
+    let out1 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args([
+            "conversations",
+            "rollup",
+            "--week",
+            "2026-W16",
+            "--if-stale",
+        ])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("first rollup");
+    assert!(
+        out1.status.success(),
+        "first rollup failed: {}",
+        String::from_utf8_lossy(&out1.stderr)
+    );
+
+    // Second invocation — same --if-stale flag. Must NOT trigger regeneration.
+    let out2 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args([
+            "conversations",
+            "rollup",
+            "--week",
+            "2026-W16",
+            "--if-stale",
+        ])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("second rollup");
+    assert!(
+        out2.status.success(),
+        "second rollup failed: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+
+    // Key assertion: the .history/ archive dir is empty (or does not exist).
+    // Each regeneration archives the prior md file — if --if-stale forced
+    // regen (pre-3.2.1 bug), we'd see 1 archived file. After 3.2.1, zero.
+    let hist = mur_home
+        .join("conversations")
+        .join("summary")
+        .join("weekly")
+        .join(".history");
+    let archived = if hist.exists() {
+        std::fs::read_dir(&hist)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .count()
+    } else {
+        0
+    };
+    assert_eq!(
+        archived,
+        0,
+        "Phase 3.2.1: --if-stale must not force regen. Found {archived} archived files; expected 0. \
+         stdout of 2nd call: {}",
+        String::from_utf8_lossy(&out2.stdout)
+    );
+}
+
+/// Phase 3.2.1: --force MUST still regenerate unconditionally, even when the
+/// content is fresh. This test verifies we didn't break --force while
+/// fixing --if-stale.
+#[test]
+fn mur_conversations_rollup_force_still_regenerates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+
+    // Same 7-day seed as above.
+    let summary_dir = mur_home.join("conversations").join("summary");
+    std::fs::create_dir_all(&summary_dir).unwrap();
+    for d in 13..=19 {
+        std::fs::write(
+            summary_dir.join(format!("2026-04-{d:02}.md")),
+            format!(
+                "---\n\
+                 schema: 1\n\
+                 date: 2026-04-{d:02}\n\
+                 generated_at: 2026-04-{d:02}T03:00:00Z\n\
+                 generated_by:\n  extractive_model: qwen3:14b\n  abstractive_model: qwen3:14b\n  mur_version: 3.0.0\n\
+                 duration_ms: 50\n\
+                 conv_count: 1\n\
+                 msg_count: 1\n\
+                 sources: [cc]\n\
+                 pattern_refs: []\n\
+                 keywords: []\n\
+                 links:\n  prev: null\n  next: null\n\
+                 warnings: []\n\
+                 input_content_sha: {d}sha\n\
+                 ---\n\n\
+                 ## Extractive spans\n\n\
+                 [1] _{{cc/c1 @L1}}_:\n> day {d} span\n\n\
+                 ## Abstractive narrative\n\n\
+                 Narrative for day {d}.\n"
+            ),
+        )
+        .unwrap();
+    }
+    let _ = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "reindex", "--spans-only"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("reindex --spans-only");
+
+    // First rollup.
+    let _ = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "rollup", "--week", "2026-W16"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("first rollup");
+
+    // Second rollup with --force — must archive the prior md.
+    let out2 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "rollup", "--week", "2026-W16", "--force"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("second rollup --force");
+    assert!(
+        out2.status.success(),
+        "second rollup --force failed: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+
+    // Verify --force triggered a .history/ entry.
+    let hist = mur_home
+        .join("conversations")
+        .join("summary")
+        .join("weekly")
+        .join(".history");
+    assert!(
+        hist.exists(),
+        ".history/ must exist after --force triggered an archive"
+    );
+    let archived = std::fs::read_dir(&hist)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .count();
+    assert!(
+        archived >= 1,
+        "Phase 3.2.1: --force must still regenerate. Found {archived} archived files; expected ≥1. \
+         stdout of --force call: {}",
+        String::from_utf8_lossy(&out2.stdout)
+    );
+}

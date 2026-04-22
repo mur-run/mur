@@ -39,11 +39,12 @@ pub(crate) fn similarity_of(h: &SearchHit) -> f64 {
 pub async fn gather_hits(args: RetrieveArgs<'_>) -> Result<Vec<ResolvedHit>> {
     let dims = args.query_embedding.len() as i32;
     let idx = ConversationIndex::open(dims, args.root_override).await?;
-    // Note: --src filtering via `primary_src` uses the `Source` enum's file_prefix
-    // strings (e.g., "cc"). Layer=3/4 rollup rows store synthetic source strings
-    // ("week"/"month") that don't match any real prefix, so --src silently drops
-    // them. Deferred to Phase 3.3: add a `sources_mask` column on rollup rows to
-    // support partial-match filtering. See spec §9 open questions.
+    // Note: --src filtering via `primary_src` applies only to day-level
+    // content (layers 0/1/2). Layer=3/4 rollup rows are multi-source
+    // aggregates and always surface based on relevance — see the l3/l4
+    // search calls below which pass None instead of `primary_src`.
+    // (Phase 3.2.1 fix — prior Phase 3.2 behavior silently dropped all
+    // rollup hits under --src; see docs/superpowers/specs/2026-04-22-mur-conversations-phase-3-2-1-design.md §5.)
     let primary_src = args.filters.source.first().copied();
 
     // Phase 3.2: collapsed tree — one k-NN per layer {2,1,3,4}, merged.
@@ -54,11 +55,16 @@ pub async fn gather_hits(args: RetrieveArgs<'_>) -> Result<Vec<ResolvedHit>> {
     let l1 = idx
         .search(&args.query_embedding, k_each, primary_src, Some(1))
         .await?;
+    // Phase 3.2.1: rollup rows are multi-source aggregates by construction
+    // (built from day summaries across all enabled sources). The --src filter
+    // applies only to day-level content (layers 0/1/2); rollups surface based
+    // purely on embedding relevance. Pass None so the LanceDB predicate
+    // doesn't exclude them via source-column mismatch.
     let l3 = idx
-        .search(&args.query_embedding, k_each, primary_src, Some(3))
+        .search(&args.query_embedding, k_each, None, Some(3))
         .await?;
     let l4 = idx
-        .search(&args.query_embedding, k_each, primary_src, Some(4))
+        .search(&args.query_embedding, k_each, None, Some(4))
         .await?;
 
     let upper_empty = l2.is_empty() && l1.is_empty() && l3.is_empty() && l4.is_empty();
@@ -749,6 +755,69 @@ mod tests {
             hits.iter().any(|h| h.layer == 0),
             "expected layer=0 via escalation; got: {:?}",
             hits.iter().map(|h| h.layer).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn gather_hits_rollup_surfaces_despite_src_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let mut idx = super::super::super::index::ConversationIndex::open(16, Some(root))
+            .await
+            .unwrap();
+
+        // Seed one layer=2 cc span + one layer=3 rollup ("week" synthetic source).
+        // Use different vectors so MMR doesn't dedupe them based on cosine similarity.
+        let mut vec_l2 = vec![0.0f32; 16];
+        vec_l2[0] = 1.0; // mostly dim-0
+        let mut vec_l3 = vec![0.0f32; 16];
+        vec_l3[1] = 1.0; // mostly dim-1
+        let s = make_msg("c_span", "span text");
+        idx.upsert_with_layer(&[(s, vec_l2.clone(), 2)])
+            .await
+            .unwrap();
+        idx.upsert_rollup_row(super::super::super::index::RollupRow {
+            id: "wk_2026-W16_L3_0",
+            ts: 0,
+            source: "week",
+            conv_id: "week:2026-W16",
+            layer: 3,
+            content: "week narrative",
+            vector: &vec_l3,
+        })
+        .await
+        .unwrap();
+
+        // Query with --src cc filter active (would exclude layer=3 rows pre-3.2.1).
+        // Use a query vector that finds both layer=2 and layer=3
+        let mut query = vec![0.0f32; 16];
+        query[0] = 1.0; // finds layer=2
+        query[1] = 1.0; // finds layer=3
+        let args = RetrieveArgs {
+            query_embedding: query,
+            filters: &Filters {
+                source: vec![Source::ClaudeCode],
+                since: None,
+                until: None,
+                min_score: 0.0,
+            },
+            k_summary: 8,
+            k_raw: 4,
+            escalation_threshold: 0.3,
+            mmr_threshold: 0.95,
+            no_escalate: false,
+            max_context_tokens: 6000,
+            root_override: Some(root),
+        };
+        let hits = gather_hits(args).await.unwrap();
+        let layers: Vec<i8> = hits.iter().map(|h| h.layer).collect();
+        assert!(
+            layers.contains(&2),
+            "cc layer=2 span must survive source filter; layers: {layers:?}"
+        );
+        assert!(
+            layers.contains(&3),
+            "layer=3 rollup must surface despite --src filter (Phase 3.2.1); layers: {layers:?}"
         );
     }
 }
