@@ -40,7 +40,9 @@ pub fn render_footer(resp: &AskResponse) -> String {
     // Stage 1b compressed at least one hit. Heuristic count (Stage 1) is
     // intentionally not shown here — matches plain-mode provenance philosophy.
     let summarized_seg = match &resp.stage_1b {
-        Some(s) if s.compressed_count > 0 => format!(" · {} summarized", s.compressed_count),
+        Some(s) if s.compressed_count + s.cache_hits > 0 => {
+            format!(" · {} summarized", s.compressed_count + s.cache_hits)
+        }
         _ => String::new(),
     };
     format!(
@@ -191,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn footer_omits_summarized_segment_when_compressed_count_zero() {
+    fn footer_omits_summarized_segment_when_no_compressed_or_cache_hits() {
         let mut r = sample_resp();
         r.stage_1b = Some(crate::conversations::ask::abstractive::Stage1bStats {
             compressed_count: 0,
@@ -202,7 +204,23 @@ mod tests {
         let f = render_footer(&r);
         assert!(
             !f.contains("summarized"),
-            "Stage 1b fired but nothing compressed — no segment"
+            "Stage 1b fired but nothing compressed or cache-hit — no segment"
+        );
+    }
+
+    #[test]
+    fn footer_includes_summarized_segment_when_stage_1b_cache_hit_only() {
+        let mut r = sample_resp();
+        r.stage_1b = Some(crate::conversations::ask::abstractive::Stage1bStats {
+            compressed_count: 0,
+            cache_hits: 3,
+            skipped_count: 0,
+            duration_ms: 5,
+        });
+        let f = render_footer(&r);
+        assert!(
+            f.contains("3 summarized"),
+            "cache hits still count as summarized; expected '· 3 summarized', got: {f}"
         );
     }
 }

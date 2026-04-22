@@ -3,8 +3,6 @@
 //! Pure I/O, no LLM knowledge. Values are UTF-8 text. Keys are 64-char lowercase
 //! hex (sha256). Layout: `~/.mur/conversations/cache/abstractive/<key>.txt`.
 //! Writes use temp + rename for atomicity (matches `store/yaml.rs`).
-#![allow(dead_code)] // wired by Task 5 (abstractive::compress_hit).
-
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;

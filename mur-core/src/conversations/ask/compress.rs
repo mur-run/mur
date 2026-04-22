@@ -4,8 +4,6 @@
 //! no I/O, deterministic. Called from `prompt::render` as Stage 1 of the
 //! overflow loop — only fires when the full prompt exceeds
 //! `max_context_tokens` AND `AskConfig.compress_hits_enabled` is true.
-#![allow(dead_code)] // wired by Task 3 (prompt::render integration).
-
 use super::retrieve::ResolvedHit;
 use std::collections::HashSet;
 
