@@ -3,6 +3,7 @@
 use mur_agent_runtime::protocol::a2a_server::Dispatcher;
 use mur_agent_runtime::transport::unix_socket::serve_unix;
 use serde_json::json;
+use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -31,6 +32,7 @@ async fn roundtrip_over_unix_socket() {
         d
     };
     let path = sock_path.clone();
+    let dispatcher = Arc::new(dispatcher);
     tokio::spawn(async move {
         let _ = serve_unix(dispatcher, path, notif_rx).await;
     });

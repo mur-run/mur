@@ -3,11 +3,12 @@
 use crate::protocol::a2a_server::Dispatcher;
 use mur_common::JsonRpcRequest;
 use serde_json::Value;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 pub async fn serve_stdio<R, W>(
-    dispatcher: Dispatcher,
+    dispatcher: Arc<Dispatcher>,
     reader: R,
     writer: W,
     mut notifications: mpsc::Receiver<Value>,
@@ -16,7 +17,7 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    let writer = std::sync::Arc::new(tokio::sync::Mutex::new(writer));
+    let writer = Arc::new(tokio::sync::Mutex::new(writer));
     let w_notif = writer.clone();
     tokio::spawn(async move {
         while let Some(notif) = notifications.recv().await {
