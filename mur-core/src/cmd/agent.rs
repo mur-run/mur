@@ -483,3 +483,72 @@ fn refuse_if_running(agent_home: &Path, name: &str) -> Result<()> {
     }
     Ok(())
 }
+
+// ─── send / card (A2A forwarders) ────────────────────────────────────────
+
+pub fn cmd_send(name: &str, message_json: &str) -> Result<()> {
+    let msg: serde_json::Value =
+        serde_json::from_str(message_json).context("parse --message JSON")?;
+    let req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "message/send",
+        "params": {"message": msg}
+    });
+    let result = dial_rpc(name, &req)?;
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(())
+}
+
+pub fn cmd_card(name: &str) -> Result<()> {
+    let req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "agent/card"
+    });
+    let result = dial_rpc(name, &req)?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+fn dial_rpc(name: &str, req: &serde_json::Value) -> Result<serde_json::Value> {
+    let mur_home = resolve_mur_home()?;
+    let lock_path = mur_home.join("agents").join(name).join("running.lock");
+    let bytes = fs::read(&lock_path)
+        .with_context(|| format!("agent '{name}' is not running (no {})", lock_path.display()))?;
+    let lock: LockFile = serde_json::from_slice(&bytes).context("parse running.lock")?;
+    let sock = lock
+        .transports
+        .unix_socket
+        .ok_or_else(|| anyhow!("agent '{name}' has no unix-socket transport"))?;
+
+    #[cfg(unix)]
+    {
+        use std::io::{BufRead, BufReader, Write};
+        let mut stream = std::os::unix::net::UnixStream::connect(&sock)
+            .with_context(|| format!("connect {sock}"))?;
+        let line = format!("{}\n", serde_json::to_string(req)?);
+        stream.write_all(line.as_bytes())?;
+        let reader = BufReader::new(stream.try_clone()?);
+        for line in reader.lines() {
+            let line = line.context("read response line")?;
+            let v: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if v.get("id") == Some(&req["id"]) {
+                if let Some(err) = v.get("error") {
+                    bail!("agent error: {err}");
+                }
+                return Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null));
+            }
+            // Ignore notifications (no matching id).
+        }
+        bail!("EOF before matching response");
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = sock;
+        bail!("unix socket transport is only supported on unix hosts")
+    }
+}
