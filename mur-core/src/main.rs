@@ -930,6 +930,19 @@ enum AgentAction {
         #[arg(long, default_value = "pkg")]
         format: String,
     },
+    /// Aggregate telemetry counters from <agent_home>/telemetry/*.jsonl
+    Stats {
+        /// Agent name
+        name: String,
+    },
+    /// Print recent lines from the agent's stderr.log
+    Logs {
+        /// Agent name
+        name: String,
+        /// Show only the last N lines (default 20)
+        #[arg(long, default_value_t = 20)]
+        tail: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1425,6 +1438,8 @@ async fn async_main() -> Result<()> {
             AgentAction::Export { name, out, format } => {
                 cmd::agent::cmd_export(&name, &out, &format)?
             }
+            AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
+            AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
