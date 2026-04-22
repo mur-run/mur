@@ -108,13 +108,12 @@ pub async fn rewrite(client: &OllamaClient, model: &str, input: RewriteInput<'_>
                     status: RewriterStatus::FailedFellBackToRaw,
                 };
             }
-            let status = if normalize_for_compare(&trimmed)
-                == normalize_for_compare(input.raw_question)
-            {
-                RewriterStatus::NoRewriteNeeded
-            } else {
-                RewriterStatus::Rewrote
-            };
+            let status =
+                if normalize_for_compare(&trimmed) == normalize_for_compare(input.raw_question) {
+                    RewriterStatus::NoRewriteNeeded
+                } else {
+                    RewriterStatus::Rewrote
+                };
             RewriteResult {
                 rewritten: if status == RewriterStatus::NoRewriteNeeded {
                     input.raw_question.to_string()
