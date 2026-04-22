@@ -109,20 +109,40 @@ impl SessionStore {
 
     /// Append a turn to the session file + update the in-memory turns vec.
     /// Creates the file (and parent dir) if missing.
-    /// `sync_all()` before return to guarantee crash durability of the line.
+    /// `sync_all()` on the file (for content) *and* on the parent directory
+    /// (for the dirent) before return, so the line is crash-durable even on
+    /// the first call that creates the file. Dir fsync is best-effort — some
+    /// filesystems (notably certain network mounts) return EINVAL on
+    /// `fsync(dirfd)`; we log and proceed rather than failing the turn.
     pub fn append_turn(session: &mut Session, turn: TurnRecord) -> Result<()> {
         if let Some(parent) = session.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let line = serde_json::to_string(&turn).context("serialize TurnRecord")?;
+        // Single write of "{json}\n" — two separate write_all calls could
+        // interleave across concurrent appenders under O_APPEND. Still not
+        // a proper cross-process lock, but at least each line is atomic.
+        let mut buf = line.into_bytes();
+        buf.push(b'\n');
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&session.path)
             .with_context(|| format!("open session for append {:?}", session.path))?;
-        file.write_all(line.as_bytes())?;
-        file.write_all(b"\n")?;
+        file.write_all(&buf)?;
         file.sync_all()?;
+        if let Some(parent) = session.path.parent() {
+            match std::fs::File::open(parent) {
+                Ok(dir) => {
+                    if let Err(e) = dir.sync_all() {
+                        tracing::warn!("fsync parent dir {:?} failed: {}", parent, e);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("open parent dir {:?} for fsync failed: {}", parent, e);
+                }
+            }
+        }
         session.turns.push(turn);
         Ok(())
     }
