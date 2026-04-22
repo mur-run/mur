@@ -13,7 +13,7 @@ use crate::protocol::methods::{
 };
 use crate::socket_path::resolve_bind_target;
 use crate::task_runner::TaskRunner;
-use crate::telemetry_writer::TelemetryWriter;
+use crate::telemetry_writer::{Event, TelemetryWriter};
 use crate::transport::{stdio::serve_stdio, unix_socket::serve_unix};
 use mur_common::{LockFile, agent::LockTransports};
 use std::path::PathBuf;
@@ -136,8 +136,6 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     };
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
-    // Keep `writer` alive so the telemetry fan-out mpsc isn't closed.
-    let _writer = writer;
 
     // 9. Drive stdio in the foreground so SIGTERM can unblock the process
     //    even while stdin is idle.
@@ -155,9 +153,23 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         _ = sigterm.recv() => info!("SIGTERM received"),
         _ = sigint.recv() => info!("SIGINT received"),
     }
+
+    // 11. Graceful shutdown
+    info!("begin graceful shutdown");
+    let _deadline = std::time::Duration::from_secs(profile.inner.lifecycle.stop_timeout_secs);
+    // TaskRunner active-task cancellation is future work (P0b); for now
+    // we just tear down transports and drain telemetry.
     for t in transport_tasks {
         t.abort();
     }
+    writer
+        .emit(Event::Warning {
+            kind: "shutdown".into(),
+            message: "SIGTERM".into(),
+        })
+        .await;
+    writer.flush().await;
+    let _ = std::fs::remove_file(&lock_path);
     Ok(())
 }
 
