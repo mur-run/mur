@@ -1,6 +1,7 @@
 use mur_agent_runtime::protocol::a2a_server::Dispatcher;
 use mur_agent_runtime::transport::stdio::serve_stdio;
 use serde_json::json;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
 use tokio::sync::mpsc;
 
@@ -26,7 +27,12 @@ async fn serves_dispatch_on_stdio_pipe() {
         d.register("ping", Box::new(Ping));
         d
     };
-    tokio::spawn(serve_stdio(dispatcher, server_read, server_write, notif_rx));
+    tokio::spawn(serve_stdio(
+        Arc::new(dispatcher),
+        server_read,
+        server_write,
+        notif_rx,
+    ));
     let req = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string() + "\n";
     client.write_all(req.as_bytes()).await.unwrap();
     let mut reader = BufReader::new(client);
