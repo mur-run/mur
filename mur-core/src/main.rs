@@ -909,6 +909,27 @@ enum AgentAction {
         #[command(subcommand)]
         action: AgentMcpAction,
     },
+    /// Manage an agent's skills (add/list/remove/show)
+    Skill {
+        #[command(subcommand)]
+        action: AgentSkillAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentSkillAction {
+    /// List attached skill ids
+    List { name: String },
+    /// Copy a skill markdown file into the agent and register it
+    Add {
+        name: String,
+        /// Path to a skill .md file (basename becomes its id)
+        source: String,
+    },
+    /// Remove a skill entry; deletes the backing file if orphaned
+    Remove { name: String, skill_id: String },
+    /// Print the contents of a skill file
+    Show { name: String, skill_id: String },
 }
 
 #[derive(Subcommand)]
@@ -1301,6 +1322,18 @@ async fn async_main() -> Result<()> {
                 }
                 AgentMcpAction::Rename { name, old, new } => {
                     cmd::agent::cmd_mcp_rename(&name, &old, &new)?
+                }
+            },
+            AgentAction::Skill { action } => match action {
+                AgentSkillAction::List { name } => cmd::agent::cmd_skill_list(&name)?,
+                AgentSkillAction::Add { name, source } => {
+                    cmd::agent::cmd_skill_add(&name, &source)?
+                }
+                AgentSkillAction::Remove { name, skill_id } => {
+                    cmd::agent::cmd_skill_remove(&name, &skill_id)?
+                }
+                AgentSkillAction::Show { name, skill_id } => {
+                    cmd::agent::cmd_skill_show(&name, &skill_id)?
                 }
             },
         },
