@@ -1,10 +1,12 @@
 //! Task state machine and orchestration (§8.3).
 //! P0a only implements `run_sync` fully; streaming is P0b.
 
+use crate::llm::{LlmClient, LlmMessage, LlmRequest};
+use crate::telemetry_writer::Event;
 use mur_common::a2a::{Message, MessagePart, Task, TaskState};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -24,13 +26,14 @@ pub enum TaskOutcome {
 pub enum RunnerBackend {
     StubEcho,
     StubSlow,
-    // Llm(Arc<dyn LLMClient>) — Task 16 plugs real backend
+    Llm(Arc<dyn LlmClient>),
 }
 
 pub struct TaskRunner {
     backend: RunnerBackend,
     registry: Arc<Mutex<HashMap<String, TaskState>>>,
     cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
+    telemetry: Option<mpsc::Sender<Event>>,
 }
 
 impl TaskRunner {
@@ -42,23 +45,34 @@ impl TaskRunner {
         Self::with_backend(RunnerBackend::StubSlow)
     }
 
+    pub fn with_llm(client: Arc<dyn LlmClient>) -> Self {
+        Self::with_backend(RunnerBackend::Llm(client))
+    }
+
     pub fn with_backend(backend: RunnerBackend) -> Self {
         Self {
             backend,
             registry: Arc::new(Mutex::new(HashMap::new())),
             cancel_signals: Arc::new(Mutex::new(HashMap::new())),
+            telemetry: None,
         }
+    }
+
+    pub fn with_telemetry(mut self, tx: mpsc::Sender<Event>) -> Self {
+        self.telemetry = Some(tx);
+        self
     }
 
     pub async fn run_sync(&self, spec: TaskSpec) -> TaskOutcome {
         let id = format!("task-{}", Uuid::now_v7());
         self.set_state(&id, TaskState::Working);
-        let result = match self.backend {
+        let result = match &self.backend {
             RunnerBackend::StubEcho => echo_response(&spec.input),
             RunnerBackend::StubSlow => {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 echo_response(&spec.input)
             }
+            RunnerBackend::Llm(client) => self.run_llm(&id, client.as_ref(), &spec.input).await,
         };
         self.set_state(&id, TaskState::Completed);
         TaskOutcome::Completed(Task {
@@ -133,6 +147,58 @@ impl TaskRunner {
     pub fn get_state(&self, id: &str) -> Option<TaskState> {
         self.registry.lock().unwrap().get(id).cloned()
     }
+
+    async fn run_llm(&self, task_id: &str, client: &dyn LlmClient, input: &Message) -> Message {
+        let prompt = text_of(input);
+        let req = LlmRequest {
+            messages: vec![LlmMessage {
+                role: input.role.clone(),
+                content: prompt,
+            }],
+            temperature: None,
+            max_tokens: None,
+        };
+        let start = std::time::Instant::now();
+        match client.generate(req).await {
+            Ok(resp) => {
+                let latency_ms = start.elapsed().as_millis() as u64;
+                if let Some(tx) = &self.telemetry {
+                    let _ = tx
+                        .send(Event::LlmCall {
+                            trace_id: task_id.to_string(),
+                            task_id: task_id.to_string(),
+                            model: resp.model.clone(),
+                            input_tokens: resp.input_tokens,
+                            output_tokens: resp.output_tokens,
+                            latency_ms,
+                            cost_usd: 0.0,
+                            provider: "ollama".into(),
+                        })
+                        .await;
+                }
+                Message {
+                    role: "agent".into(),
+                    parts: vec![MessagePart::Text { text: resp.text }],
+                }
+            }
+            Err(e) => Message {
+                role: "agent".into(),
+                parts: vec![MessagePart::Text {
+                    text: format!("llm error: {e}"),
+                }],
+            },
+        }
+    }
+}
+
+fn text_of(m: &Message) -> String {
+    m.parts
+        .iter()
+        .find_map(|p| match p {
+            MessagePart::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 pub struct AsyncTaskHandle {
