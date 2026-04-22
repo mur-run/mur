@@ -61,6 +61,7 @@ mod tests {
                 span_index_in_summary: None,
                 snippet: "sample snippet text".into(),
                 score: 0.87,
+                compressed: None,
             }],
             hits_used: vec![],
             degraded_to_mode_b: false,

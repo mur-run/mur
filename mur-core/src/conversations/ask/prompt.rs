@@ -212,6 +212,7 @@ mod tests {
             line_hint: Some(42),
             span_index_in_summary: None,
             vector: None,
+            compressed: None,
         }
     }
 
@@ -264,6 +265,7 @@ mod tests {
             line_hint: None,
             span_index_in_summary: None,
             vector: Some(vec![0.1; 16]),
+            compressed: None,
         };
         assert_eq!(cite_anchor(&h), "[cit: 2026-04-13 week/2026-W16]");
     }
@@ -283,6 +285,7 @@ mod tests {
             line_hint: None,
             span_index_in_summary: None,
             vector: None,
+            compressed: None,
         };
         assert_eq!(cite_anchor(&h), "[cit: 2026-04-01 month/2026-04]");
     }
@@ -409,6 +412,7 @@ mod tests {
             line_hint: Some(1),
             span_index_in_summary: None,
             vector: None,
+            compressed: None,
         }];
         let prior = vec![turn_rec("prev q", "prev a")];
         // Very tight budget → Stage 1 must fire.
@@ -451,6 +455,7 @@ mod tests {
             line_hint: Some(1),
             span_index_in_summary: None,
             vector: None,
+            compressed: None,
         }];
         let r = render("q?", &[], &hits, 400, 100, false);
         // No compression → the full snippet appears in the context.

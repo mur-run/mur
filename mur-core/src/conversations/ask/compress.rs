@@ -243,6 +243,7 @@ mod tests {
             line_hint: Some(1),
             span_index_in_summary: None,
             vector: None,
+            compressed: None,
         }
     }
 

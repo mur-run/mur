@@ -156,6 +156,7 @@ pub async fn rollup_week(
                 line_hint,
                 span_index_in_summary: line_hint,
                 vector: h.vector,
+                compressed: None,
             }
         })
         .collect();
@@ -397,6 +398,7 @@ pub async fn rollup_month(
                 line_hint,
                 span_index_in_summary: line_hint,
                 vector: h.vector,
+                compressed: None,
             }
         })
         .collect();

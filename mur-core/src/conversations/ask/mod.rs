@@ -53,6 +53,17 @@ pub struct AskRequest {
     pub compress_enabled: bool,
 }
 
+/// Provenance marker for hit snippets that have been reduced before going
+/// into the LLM prompt. `Heuristic` → Phase 3.4 extractive compression (free).
+/// `Abstractive` → Phase 3.5 LLM-summarized (paid). Written by the later
+/// transformation, so a hit touched by both ends up marked `Abstractive`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Compression {
+    Heuristic,
+    Abstractive,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Citation {
     pub id: u32,
@@ -63,6 +74,8 @@ pub struct Citation {
     pub span_index_in_summary: Option<u32>,
     pub snippet: String,
     pub score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed: Option<Compression>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -350,6 +363,7 @@ fn citations_map(hits: &[retrieve::ResolvedHit]) -> std::collections::HashMap<St
                 span_index_in_summary: h.span_index_in_summary,
                 snippet: h.snippet.clone(),
                 score: h.info.score,
+                compressed: h.compressed,
             },
         );
     }
@@ -382,6 +396,65 @@ mod tests {
             min_score: 0.35,
         };
         assert_eq!(f.min_score, 0.35);
+    }
+
+    #[test]
+    fn compression_enum_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&Compression::Heuristic).unwrap(),
+            "\"heuristic\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Compression::Abstractive).unwrap(),
+            "\"abstractive\""
+        );
+    }
+
+    #[test]
+    fn citation_omits_compressed_field_when_none() {
+        let c = Citation {
+            id: 1,
+            date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+            source: "cc".into(),
+            conv_id: "c1".into(),
+            line_hint: Some(1),
+            span_index_in_summary: None,
+            snippet: "s".into(),
+            score: 0.9,
+            compressed: None,
+        };
+        let j = serde_json::to_string(&c).unwrap();
+        assert!(
+            !j.contains("compressed"),
+            "expected field omitted, got: {j}"
+        );
+    }
+
+    #[test]
+    fn citation_emits_compressed_field_when_set() {
+        let c = Citation {
+            id: 1,
+            date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+            source: "cc".into(),
+            conv_id: "c1".into(),
+            line_hint: Some(1),
+            span_index_in_summary: None,
+            snippet: "s".into(),
+            score: 0.9,
+            compressed: Some(Compression::Abstractive),
+        };
+        let j = serde_json::to_string(&c).unwrap();
+        assert!(j.contains("\"compressed\":\"abstractive\""), "got: {j}");
+    }
+
+    #[test]
+    fn citation_deserializes_legacy_json_without_compressed_field() {
+        // Backwards compat: TurnRecord.citations is serde-persisted as JSONL in
+        // ask-session.jsonl across versions. A pre-3.5 record has no `compressed`
+        // key — must still parse.
+        let j = r#"{"id":1,"date":"2026-04-22","source":"cc","conv_id":"c1","line_hint":1,"span_index_in_summary":null,"snippet":"s","score":0.9}"#;
+        let c: Citation = serde_json::from_str(j).expect("legacy Citation must parse");
+        assert!(c.compressed.is_none());
     }
 
     #[allow(clippy::await_holding_lock)]
