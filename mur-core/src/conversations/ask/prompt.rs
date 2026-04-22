@@ -77,7 +77,9 @@ pub fn render(
         let ratio = 1.0 - (overage_chars as f64 / total_chars.max(1) as f64).min(0.6);
         let avg = total_chars / active_hits.len().max(1);
         let target = (avg as f64 * ratio) as usize;
-        active_hits = super::compress::compress_hits(active_hits.clone(), question, target);
+        // Move `active_hits` into `compress_hits` — it's reassigned from the
+        // return value so a clone would be wasted work.
+        active_hits = super::compress::compress_hits(active_hits, question, target);
         (user, valid_citations) = render_ctx_and_user(
             &active_hits,
             prior_turns,
