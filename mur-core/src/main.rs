@@ -350,9 +350,10 @@ enum Commands {
         /// Question to ask. Required unless --show-session is passed.
         question: Option<String>,
         /// Filter results to a specific source (e.g. "cc", "cursor").
-        /// Phase 3.2 note: source filtering does NOT apply to weekly/monthly
-        /// rollup hits (layer=3/4) — rollup rows use synthetic source strings
-        /// ("week"/"month") and are always excluded when --src is passed.
+        /// Phase 3.2.1: the source filter applies ONLY to day-level content
+        /// (layers 0/1/2). Weekly/monthly rollup hits (layers 3/4) are
+        /// multi-source aggregates and always surface based on relevance,
+        /// regardless of --src.
         #[arg(long)]
         src: Option<String>,
         #[arg(long)]
