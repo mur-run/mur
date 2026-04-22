@@ -20,7 +20,12 @@ pub fn render_citations_block(citations: &[Citation]) -> String {
             _ => format!("[cit: {} {}/{}]", c.date, c.source, c.conv_id),
         };
         let preview: String = c.snippet.chars().take(120).collect();
-        out.push_str(&format!("  {anchor}\n    — {preview}\n"));
+        let suffix = if c.compressed == Some(crate::conversations::ask::Compression::Abstractive) {
+            " (summarized)"
+        } else {
+            ""
+        };
+        out.push_str(&format!("  {anchor}\n    — {preview}{suffix}\n"));
     }
     out
 }
@@ -31,9 +36,19 @@ pub fn render_footer(resp: &AskResponse) -> String {
     } else {
         ""
     };
+    // Phase 3.5: insert "· N summarized" between hit count and latency when
+    // Stage 1b compressed at least one hit. Heuristic count (Stage 1) is
+    // intentionally not shown here — matches plain-mode provenance philosophy.
+    let summarized_seg = match &resp.stage_1b {
+        Some(s) if s.compressed_count + s.cache_hits > 0 => {
+            format!(" · {} summarized", s.compressed_count + s.cache_hits)
+        }
+        _ => String::new(),
+    };
     format!(
-        "({} hits · {}ms · {}→{} tokens{})\n",
+        "({} hits{} · {}ms · {}→{} tokens{})\n",
         resp.citations.len(),
+        summarized_seg,
         resp.duration_ms,
         resp.tokens_in,
         resp.tokens_out,
@@ -61,6 +76,7 @@ mod tests {
                 span_index_in_summary: None,
                 snippet: "sample snippet text".into(),
                 score: 0.87,
+                compressed: None,
             }],
             hits_used: vec![],
             degraded_to_mode_b: false,
@@ -69,6 +85,7 @@ mod tests {
             duration_ms: 500,
             rewritten_question: None,
             rewriter_status: crate::conversations::ask::session::RewriterStatus::Skipped,
+            stage_1b: None,
         }
     }
 
@@ -94,5 +111,116 @@ mod tests {
         let s = render_json(&r);
         assert!(s.contains("\"answer\""));
         assert!(s.contains("\"citations\""));
+    }
+
+    #[test]
+    fn citations_block_suffixes_summarized_for_abstractive() {
+        let c = vec![
+            Citation {
+                id: 1,
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+                source: "cc".into(),
+                conv_id: "c1".into(),
+                line_hint: Some(1),
+                span_index_in_summary: None,
+                snippet: "sample".into(),
+                score: 0.9,
+                compressed: Some(crate::conversations::ask::Compression::Abstractive),
+            },
+            Citation {
+                id: 2,
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+                source: "cc".into(),
+                conv_id: "c2".into(),
+                line_hint: Some(1),
+                span_index_in_summary: None,
+                snippet: "sample2".into(),
+                score: 0.9,
+                compressed: Some(crate::conversations::ask::Compression::Heuristic),
+            },
+            Citation {
+                id: 3,
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+                source: "cc".into(),
+                conv_id: "c3".into(),
+                line_hint: Some(1),
+                span_index_in_summary: None,
+                snippet: "sample3".into(),
+                score: 0.9,
+                compressed: None,
+            },
+        ];
+        let block = render_citations_block(&c);
+        // Abstractive → (summarized) suffix.
+        assert!(
+            block.contains("cc/c1:L1") && block.contains("(summarized)"),
+            "expected (summarized) next to c1, got:\n{block}"
+        );
+        // Heuristic → NOT suffixed.
+        let lines: Vec<&str> = block.lines().collect();
+        let c2_line = lines.iter().find(|l| l.contains("cc/c2:L1")).unwrap();
+        assert!(
+            !c2_line.contains("(summarized)"),
+            "heuristic must NOT be marked summarized in plain mode; got: {c2_line}"
+        );
+        // None → unchanged.
+        let c3_line = lines.iter().find(|l| l.contains("cc/c3:L1")).unwrap();
+        assert!(!c3_line.contains("(summarized)"));
+    }
+
+    #[test]
+    fn footer_includes_summarized_segment_when_stage_1b_fired() {
+        let mut r = sample_resp();
+        r.stage_1b = Some(crate::conversations::ask::abstractive::Stage1bStats {
+            compressed_count: 2,
+            cache_hits: 0,
+            skipped_count: 0,
+            duration_ms: 50,
+        });
+        let f = render_footer(&r);
+        assert!(
+            f.contains("2 summarized"),
+            "expected '· 2 summarized' in footer, got: {f}"
+        );
+    }
+
+    #[test]
+    fn footer_omits_summarized_segment_when_stage_1b_none() {
+        let r = sample_resp();
+        assert!(r.stage_1b.is_none());
+        let f = render_footer(&r);
+        assert!(!f.contains("summarized"));
+    }
+
+    #[test]
+    fn footer_omits_summarized_segment_when_no_compressed_or_cache_hits() {
+        let mut r = sample_resp();
+        r.stage_1b = Some(crate::conversations::ask::abstractive::Stage1bStats {
+            compressed_count: 0,
+            cache_hits: 0,
+            skipped_count: 1,
+            duration_ms: 10,
+        });
+        let f = render_footer(&r);
+        assert!(
+            !f.contains("summarized"),
+            "Stage 1b fired but nothing compressed or cache-hit — no segment"
+        );
+    }
+
+    #[test]
+    fn footer_includes_summarized_segment_when_stage_1b_cache_hit_only() {
+        let mut r = sample_resp();
+        r.stage_1b = Some(crate::conversations::ask::abstractive::Stage1bStats {
+            compressed_count: 0,
+            cache_hits: 3,
+            skipped_count: 0,
+            duration_ms: 5,
+        });
+        let f = render_footer(&r);
+        assert!(
+            f.contains("3 summarized"),
+            "cache hits still count as summarized; expected '· 3 summarized', got: {f}"
+        );
     }
 }
