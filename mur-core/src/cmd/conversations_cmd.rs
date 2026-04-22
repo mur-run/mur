@@ -1182,13 +1182,40 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     };
 
     // Generate + collect response
-    // streaming_error is set if the streaming branch sees an AskEvent::Error;
-    // surfaced after persistence so degraded turns still write to the JSONL.
+    // streaming_error is set if the streaming branch sees an AskEvent::Error
+    // *or* the JSON branch's `ask::ask` call returns Err. In either case the
+    // error is surfaced after persistence so degraded turns still write to
+    // the JSONL — mirroring the streaming fix in PR #15.
     let mut streaming_error: Option<String> = None;
     let resp = if args.json {
-        let r = ask::ask(req, None).await?;
-        println!("{}", serde_json::to_string_pretty(&r)?);
-        r
+        match ask::ask(req, None).await {
+            Ok(r) => {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+                r
+            }
+            Err(e) => {
+                streaming_error = Some(e.to_string());
+                // Build a degraded AskResponse so the turn still persists with
+                // the question + rewriter context. answer/hits/citations are
+                // empty; degraded_to_mode_b is true so --show-session and
+                // downstream analytics can count it.
+                ask::AskResponse {
+                    answer: String::new(),
+                    citations: Vec::new(),
+                    hits_used: Vec::new(),
+                    degraded_to_mode_b: true,
+                    tokens_in: 0,
+                    tokens_out: 0,
+                    duration_ms: 0,
+                    rewritten_question: match rewriter_status {
+                        ask::session::RewriterStatus::Skipped => None,
+                        _ => Some(rewrite.rewritten.clone()),
+                    },
+                    rewriter_status,
+                    stage_1b: None,
+                }
+            }
+        }
     } else {
         let mut stream = ask::ask_stream(req, None).await?;
         let mut answer = String::new();
