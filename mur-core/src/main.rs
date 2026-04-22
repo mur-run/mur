@@ -382,7 +382,7 @@ enum Commands {
         new_flag: bool,
         /// Print current session path, turn count, last turn time.
         /// Ignores question if given; no LLM calls.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["continue_flag", "new_flag"])]
         show_session: bool,
     },
     #[cfg(feature = "sources")]

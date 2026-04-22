@@ -189,7 +189,9 @@ fn prune_history(hist_dir: &std::path::Path, retain: u32) -> Result<()> {
     entries.sort();
     let drop_count = entries.len() - retain as usize;
     for p in entries.into_iter().take(drop_count) {
-        let _ = std::fs::remove_file(&p);
+        if let Err(e) = std::fs::remove_file(&p) {
+            tracing::warn!("prune_history: failed to remove {:?}: {}", p, e);
+        }
     }
     Ok(())
 }
@@ -377,5 +379,57 @@ mod tests {
         );
         assert_eq!(session.turns[0].turn_id, 1);
         assert_eq!(session.turns[1].turn_id, 2);
+    }
+
+    /// M2 (phase 3.3 review follow-up): after `archive_and_new`, the returned
+    /// `Session` should behave like a fresh store — subsequent `append_turn`
+    /// creates a NEW active file (not resurrecting the archived content) and
+    /// `load_latest` should see only the new turns. Regression guard against
+    /// anyone accidentally leaving the old path reference in the returned
+    /// Session.
+    #[test]
+    fn append_after_archive_starts_fresh_active_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+
+        // Seed a session with 2 turns.
+        let mut first = SessionStore::load_latest(Some(root)).unwrap();
+        SessionStore::append_turn(&mut first, dummy_turn(1, "old-q1")).unwrap();
+        SessionStore::append_turn(&mut first, dummy_turn(2, "old-q2")).unwrap();
+        assert_eq!(first.turns.len(), 2);
+
+        // Archive it, get a new Session.
+        let mut second = SessionStore::archive_and_new(Some(root), 5).unwrap();
+        assert!(
+            second.turns.is_empty(),
+            "new Session should be empty after archive"
+        );
+
+        // Append to the new Session.
+        SessionStore::append_turn(&mut second, dummy_turn(1, "new-q1")).unwrap();
+        assert_eq!(second.turns.len(), 1);
+        assert_eq!(second.turns[0].question, "new-q1");
+
+        // A fresh load_latest must also see ONLY the new turn (the archived
+        // file lives under .history/ and is not picked up by load_latest).
+        let reloaded = SessionStore::load_latest(Some(root)).unwrap();
+        assert_eq!(
+            reloaded.turns.len(),
+            1,
+            "load_latest should see only the post-archive turn"
+        );
+        assert_eq!(reloaded.turns[0].question, "new-q1");
+
+        // And the archived file must exist separately.
+        let hist = crate::conversations::paths::ask_session_history_dir(Some(root));
+        let archived: Vec<_> = std::fs::read_dir(&hist)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(
+            archived.len(),
+            1,
+            "exactly one archived session file expected"
+        );
     }
 }

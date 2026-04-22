@@ -542,6 +542,40 @@ mod tests {
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
+    /// M2 (phase 3.3 review follow-up): render must terminate with a sane
+    /// output even when the budget is unachievably tight — specifically
+    /// `max_context_tokens = 0`. Exercises the overflow-loop exit guards
+    /// (Stage 2 stops when history_cursor reaches prior_turns.len(); Stage 3
+    /// stops when trimmed_hits > 1 becomes false). No infinite loop.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn render_terminates_on_zero_budget() {
+        use crate::conversations::ENV_LOCK;
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let hits = vec![hit_raw("a", "answer one"), hit_raw("b", "answer two")];
+        let r = super::render(
+            "what happened?",
+            &[],
+            hits,
+            /* max_context_tokens = */ 0,
+            100,
+            false,
+            false,
+            None,
+        )
+        .await;
+        // Function returns; assertions confirm we exited the loops cleanly
+        // and kept at least one hit (Stage 3 guard: trimmed_hits > 1).
+        assert_eq!(
+            r.final_hits.len(),
+            1,
+            "stage-3 guard should leave exactly 1 hit on zero-budget"
+        );
+        assert!(!r.user.is_empty(), "user prompt should not be empty");
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn render_stage_1b_none_when_disabled() {
