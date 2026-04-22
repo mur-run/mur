@@ -33,6 +33,15 @@ Month 3:    Unused patterns decay. Active ones get promoted to Canonical.
 
 > **In short:** Rules sync tools write config files but don't learn. Memory frameworks store data but don't evolve it. MUR does both — and connects them in a closed loop.
 
+### Agents (P0a — `murmur`)
+
+`mur agent ...` spawns and manages long-running per-agent processes that
+speak A2A v0.3. Each agent has its own profile, prompt, MCP servers,
+skills, entitlements, and Unix socket; the runtime is one BusyBox-style
+binary symlinked once per agent (`mur_agent_<name>` → `mur-agent-runtime`).
+See [`mur-agent-runtime/README.md`](mur-agent-runtime/README.md) for the
+walkthrough (`create / start / send / card / list / export`).
+
 ## Quick Start
 
 ```bash
