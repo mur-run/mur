@@ -5,6 +5,7 @@ use mur_common::Source;
 use std::time::Duration;
 
 pub mod cite;
+pub mod compress;
 pub mod format;
 pub mod generate;
 pub mod prompt;
