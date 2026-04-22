@@ -101,6 +101,8 @@ pub struct AskResponse {
     pub duration_ms: u64,
     pub rewritten_question: Option<String>,
     pub rewriter_status: session::RewriterStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_1b: Option<abstractive::Stage1bStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +115,7 @@ pub enum AskEvent {
         tokens_out: usize,
         degraded: bool,
         duration_ms: u64,
+        stage_1b: Option<abstractive::Stage1bStats>,
     },
     Error(String),
 }
@@ -141,6 +144,7 @@ pub async fn ask_stream(
                     tokens_out: 0,
                     degraded: false,
                     duration_ms: start.elapsed().as_millis() as u64,
+                    stage_1b: None,
                 };
             }));
         }
@@ -169,6 +173,7 @@ pub async fn ask_stream(
                     tokens_out: 0,
                     degraded: false,
                     duration_ms: start.elapsed().as_millis() as u64,
+                    stage_1b: None,
                 };
             }));
         }
@@ -182,6 +187,7 @@ pub async fn ask_stream(
                 tokens_out: 0,
                 degraded: false,
                 duration_ms: start.elapsed().as_millis() as u64,
+                stage_1b: None,
             };
         }));
     }
@@ -221,8 +227,7 @@ pub async fn ask_stream(
     )
     .await;
 
-    // Task 9 consumes this; for now silence the unused warning.
-    let _stage_1b_stats = prompt.stage_1b.as_ref().map(|s| s.to_stats());
+    let stage_1b_stats = prompt.stage_1b.as_ref().map(|s| s.to_stats());
 
     // 4. Generate (streaming) with grounding filter
     let endpoint = req.endpoint.clone();
@@ -247,6 +252,7 @@ pub async fn ask_stream(
         Ok(s) => s,
         Err(e) => {
             let mode_b = hits_as_mode_b(&prompt.final_hits);
+            let stage_1b_err = stage_1b_stats.clone();
             return Ok(Box::pin(try_stream! {
                 for evt in hit_events { yield evt; }
                 yield AskEvent::Token(mode_b);
@@ -255,6 +261,7 @@ pub async fn ask_stream(
                     tokens_out: 0,
                     degraded: true,
                     duration_ms: start.elapsed().as_millis() as u64,
+                    stage_1b: stage_1b_err,
                 };
                 yield AskEvent::Error(format!("ollama unavailable: {e:#}"));
             }));
@@ -299,6 +306,7 @@ pub async fn ask_stream(
             tokens_out,
             degraded: false,
             duration_ms: start.elapsed().as_millis() as u64,
+            stage_1b: stage_1b_stats.clone(),
         };
     };
     Ok(Box::pin(out_stream))
@@ -315,6 +323,7 @@ pub async fn ask(req: AskRequest, root_override: Option<&str>) -> Result<AskResp
     let mut tokens_in = 0;
     let mut tokens_out = 0;
     let mut duration_ms = 0;
+    let mut stage_1b_final: Option<abstractive::Stage1bStats> = None;
     while let Some(evt) = stream.next().await {
         match evt? {
             AskEvent::Token(t) => answer.push_str(&t),
@@ -325,11 +334,13 @@ pub async fn ask(req: AskRequest, root_override: Option<&str>) -> Result<AskResp
                 tokens_out: to,
                 degraded: d,
                 duration_ms: ms,
+                stage_1b: sb,
             } => {
                 tokens_in = ti;
                 tokens_out = to;
                 degraded = d;
                 duration_ms = ms;
+                stage_1b_final = sb;
             }
             AskEvent::Error(e) => return Err(anyhow::anyhow!(e)),
         }
@@ -347,6 +358,7 @@ pub async fn ask(req: AskRequest, root_override: Option<&str>) -> Result<AskResp
             _ => Some(retrieval_query),
         },
         rewriter_status,
+        stage_1b: stage_1b_final,
     })
 }
 
@@ -481,6 +493,49 @@ mod tests {
         let j = r#"{"id":1,"date":"2026-04-22","source":"cc","conv_id":"c1","line_hint":1,"span_index_in_summary":null,"snippet":"s","score":0.9}"#;
         let c: Citation = serde_json::from_str(j).expect("legacy Citation must parse");
         assert!(c.compressed.is_none());
+    }
+
+    #[test]
+    fn ask_response_omits_stage_1b_when_none() {
+        let r = AskResponse {
+            answer: "".into(),
+            citations: vec![],
+            hits_used: vec![],
+            degraded_to_mode_b: false,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+            rewritten_question: None,
+            rewriter_status: session::RewriterStatus::Skipped,
+            stage_1b: None,
+        };
+        let j = serde_json::to_string(&r).unwrap();
+        assert!(!j.contains("stage_1b"), "expected field omitted, got: {j}");
+    }
+
+    #[test]
+    fn ask_response_emits_stage_1b_when_set() {
+        let r = AskResponse {
+            answer: "".into(),
+            citations: vec![],
+            hits_used: vec![],
+            degraded_to_mode_b: false,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+            rewritten_question: None,
+            rewriter_status: session::RewriterStatus::Skipped,
+            stage_1b: Some(abstractive::Stage1bStats {
+                compressed_count: 2,
+                cache_hits: 1,
+                skipped_count: 0,
+                duration_ms: 120,
+            }),
+        };
+        let j = serde_json::to_string(&r).unwrap();
+        assert!(j.contains("\"stage_1b\""));
+        assert!(j.contains("\"compressed_count\":2"));
+        assert!(j.contains("\"cache_hits\":1"));
     }
 
     #[allow(clippy::await_holding_lock)]

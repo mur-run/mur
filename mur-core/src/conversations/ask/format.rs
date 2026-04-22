@@ -70,6 +70,7 @@ mod tests {
             duration_ms: 500,
             rewritten_question: None,
             rewriter_status: crate::conversations::ask::session::RewriterStatus::Skipped,
+            stage_1b: None,
         }
     }
 

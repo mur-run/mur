@@ -1198,6 +1198,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         let mut tokens_in = 0;
         let mut tokens_out = 0;
         let mut duration = 0;
+        let mut stage_1b_done: Option<crate::conversations::ask::abstractive::Stage1bStats> = None;
         // Phase 3.3 follow-up: capture (don't exit on) Error events so that
         // degraded turns under Ollama-unavailable still get persisted to the
         // session JSONL via append_turn below. The exit happens at the end
@@ -1216,11 +1217,13 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
                     tokens_out: to,
                     degraded: d,
                     duration_ms,
+                    stage_1b: sb,
                 } => {
                     tokens_in = ti;
                     tokens_out = to;
                     degraded = d;
                     duration = duration_ms;
+                    stage_1b_done = sb;
                 }
                 ask::AskEvent::Error(e) => {
                     streaming_error = Some(e);
@@ -1244,6 +1247,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
                     _ => Some(rewrite.rewritten.clone()),
                 },
                 rewriter_status,
+                stage_1b: stage_1b_done.clone(),
             }),
         );
         ask::AskResponse {
@@ -1259,6 +1263,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
                 _ => Some(rewrite.rewritten.clone()),
             },
             rewriter_status,
+            stage_1b: stage_1b_done,
         }
     };
 
