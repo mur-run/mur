@@ -1177,6 +1177,8 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         retrieval_query,
         rewriter_status,
         compress_enabled: ask_cfg.compress_hits_enabled,
+        summarize_enabled: ask_cfg.summarize_hits_enabled,
+        summarize_model: ask_cfg.summarize_model.clone(),
     };
 
     // Generate + collect response

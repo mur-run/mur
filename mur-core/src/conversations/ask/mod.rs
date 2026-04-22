@@ -52,6 +52,8 @@ pub struct AskRequest {
     pub retrieval_query: String,
     pub rewriter_status: session::RewriterStatus,
     pub compress_enabled: bool,
+    pub summarize_enabled: bool,
+    pub summarize_model: Option<String>,
 }
 
 /// Provenance marker for hit snippets that have been reduced before going
@@ -184,20 +186,43 @@ pub async fn ask_stream(
         }));
     }
 
-    // 3. Build prompt
-    let prompt = prompt::render(
-        &req.question,
-        &req.prior_turns,
-        &hits,
-        req.max_context_tokens,
-        req.response_tokens,
-        req.compress_enabled,
-    );
+    // 3. Build prompt (incl. Phase 3.5 Stage 1b when enabled).
+    let ollama_client = crate::conversations::ollama::OllamaClient::new(&req.endpoint, req.timeout);
+    let summarize_model_owned: Option<String> = req
+        .summarize_model
+        .clone()
+        .or_else(|| Some(req.model.clone()));
+    let abstractive_ctx_owned =
+        summarize_model_owned
+            .as_ref()
+            .map(|m| abstractive::AbstractiveCtx {
+                client: &ollama_client,
+                model: m.as_str(),
+                timeout: abstractive::CALL_TIMEOUT,
+                root_override,
+            });
 
+    // Emit HitInfo events from the ORIGINAL hits vec (pre-compression) so
+    // downstream session records still reflect retrieval state, not mutation.
     let hit_events: Vec<AskEvent> = hits
         .iter()
         .map(|h| AskEvent::HitInfo(h.info.clone()))
         .collect();
+
+    let prompt = prompt::render(
+        &req.question,
+        &req.prior_turns,
+        hits,
+        req.max_context_tokens,
+        req.response_tokens,
+        req.compress_enabled,
+        req.summarize_enabled,
+        abstractive_ctx_owned.as_ref(),
+    )
+    .await;
+
+    // Task 9 consumes this; for now silence the unused warning.
+    let _stage_1b_stats = prompt.stage_1b.as_ref().map(|s| s.to_stats());
 
     // 4. Generate (streaming) with grounding filter
     let endpoint = req.endpoint.clone();
@@ -221,7 +246,7 @@ pub async fn ask_stream(
     {
         Ok(s) => s,
         Err(e) => {
-            let mode_b = hits_as_mode_b(&hits);
+            let mode_b = hits_as_mode_b(&prompt.final_hits);
             return Ok(Box::pin(try_stream! {
                 for evt in hit_events { yield evt; }
                 yield AskEvent::Token(mode_b);
@@ -236,7 +261,7 @@ pub async fn ask_stream(
         }
     };
 
-    let citation_events_by_anchor = citations_map(&hits);
+    let citation_events_by_anchor = citations_map(&prompt.final_hits);
     let out_stream = try_stream! {
         for evt in hit_events { yield evt; }
         let mut stream = stream;
@@ -490,6 +515,8 @@ mod tests {
             retrieval_query: "What did we do yesterday?".into(),
             rewriter_status: session::RewriterStatus::Skipped,
             compress_enabled: true,
+            summarize_enabled: true,
+            summarize_model: None,
         };
         // Empty index → should yield the "don't cover that" fallback.
         let resp = ask(req, Some(root)).await.unwrap();

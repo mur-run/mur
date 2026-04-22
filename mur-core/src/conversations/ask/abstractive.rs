@@ -7,7 +7,6 @@
 //! `~/.mur/conversations/cache/abstractive/<sha256>.txt`.
 //!
 //! See `docs/superpowers/specs/2026-04-22-mur-conversations-phase-3-5-design.md`.
-#![allow(dead_code)] // wired by Task 8 (prompt::render integration).
 
 use super::cache;
 use super::retrieve::ResolvedHit;
@@ -66,6 +65,7 @@ pub mod skip_reason {
 
 /// Aggregated stats from one `run_stage_1b` invocation. Drives log lines
 /// and JSON output. `skipped` is per-hit detail for `tracing::warn!`.
+#[derive(Debug)]
 pub struct Stage1bSummary {
     pub processed: usize,
     pub compressed_count: usize,

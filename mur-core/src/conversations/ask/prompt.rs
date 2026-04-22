@@ -17,6 +17,13 @@ pub struct RenderedPrompt {
     pub user: String,
     pub tokens_est: usize,
     pub valid_citations: Vec<String>, // normalized citation anchors for grounding
+    /// Post-cascade hits (after any compression / no-op). Caller uses this
+    /// to build `citations_map` so the `compressed` provenance flag flows
+    /// through to `Citation.compressed`. Size equals `trimmed_hits` (<=
+    /// input hits.len()).
+    pub final_hits: Vec<super::retrieve::ResolvedHit>,
+    /// Present only if Stage 1b fired.
+    pub stage_1b: Option<super::abstractive::Stage1bSummary>,
 }
 
 /// Chars of each prior answer to include in the `## Chat History` section.
@@ -39,21 +46,23 @@ fn render_history_block(turns: &[super::session::TurnRecord]) -> String {
     s
 }
 
-pub fn render(
+#[allow(clippy::too_many_arguments)]
+pub async fn render(
     question: &str,
     prior_turns: &[super::session::TurnRecord],
-    hits: &[ResolvedHit],
+    hits: Vec<ResolvedHit>,
     max_context_tokens: usize,
     response_tokens: usize,
     compress_enabled: bool,
+    summarize_enabled: bool,
+    abstractive_ctx: Option<&super::abstractive::AbstractiveCtx<'_>>,
 ) -> RenderedPrompt {
     let system = SYSTEM_PROMPT.to_string();
     let truncated_question = truncate_chars(question, 2000);
 
-    // Initial render: full history + full hits.
     let mut history_cursor = 0usize;
     let mut trimmed_hits = hits.len();
-    let mut active_hits: Vec<ResolvedHit> = hits.to_vec();
+    let mut active_hits: Vec<super::retrieve::ResolvedHit> = hits;
 
     let (mut user, mut valid_citations) = render_ctx_and_user(
         &active_hits,
@@ -64,21 +73,15 @@ pub fn render(
     );
     let mut cur_tokens = tokens_est(&system, &user, response_tokens);
 
-    // Stage 1 — Phase 3.4 heuristic compression (fires at most once).
-    // Rationale: compression is less lossy than dropping a full history
-    // turn or a whole hit (Chroma "Context Rot" 2025). Fire BEFORE any
-    // drops so we preserve structure when budget is only marginally over.
+    // Stage 1 — Phase 3.4 heuristic compression (unchanged).
     if cur_tokens > max_context_tokens && compress_enabled {
         let overage_chars = cur_tokens
             .saturating_sub(max_context_tokens)
             .saturating_mul(4);
         let total_chars: usize = active_hits.iter().map(|h| h.snippet.len()).sum();
-        // Cap reduction at 60% so we don't over-prune on extremely tight budgets.
         let ratio = 1.0 - (overage_chars as f64 / total_chars.max(1) as f64).min(0.6);
         let avg = total_chars / active_hits.len().max(1);
         let target = (avg as f64 * ratio) as usize;
-        // Move `active_hits` into `compress_hits` — it's reassigned from the
-        // return value so a clone would be wasted work.
         active_hits = super::compress::compress_hits(active_hits, question, target);
         (user, valid_citations) = render_ctx_and_user(
             &active_hits,
@@ -90,7 +93,30 @@ pub fn render(
         cur_tokens = tokens_est(&system, &user, response_tokens);
     }
 
-    // Stage 2 — drop oldest history turns (existing Phase 3.3 behavior).
+    // Stage 1b — Phase 3.5 LLM-abstractive compression.
+    let mut stage_1b: Option<super::abstractive::Stage1bSummary> = None;
+    if cur_tokens > max_context_tokens
+        && summarize_enabled
+        && let Some(ctx) = abstractive_ctx
+    {
+        let summary =
+            super::abstractive::run_stage_1b(ctx, &mut active_hits, cur_tokens, max_context_tokens)
+                .await;
+        for (idx, reason) in &summary.skipped {
+            tracing::warn!(hit_idx = idx, reason, "stage-1b skipped");
+        }
+        stage_1b = Some(summary);
+        (user, valid_citations) = render_ctx_and_user(
+            &active_hits,
+            prior_turns,
+            history_cursor,
+            trimmed_hits,
+            &truncated_question,
+        );
+        cur_tokens = tokens_est(&system, &user, response_tokens);
+    }
+
+    // Stage 2 — drop oldest history turns.
     while cur_tokens > max_context_tokens && history_cursor < prior_turns.len() {
         history_cursor += 1;
         (user, valid_citations) = render_ctx_and_user(
@@ -103,7 +129,7 @@ pub fn render(
         cur_tokens = tokens_est(&system, &user, response_tokens);
     }
 
-    // Stage 3 — shrink hits from the tail (existing Phase 3.3 behavior).
+    // Stage 3 — shrink hits from the tail.
     while cur_tokens > max_context_tokens && trimmed_hits > 1 {
         trimmed_hits -= 1;
         (user, valid_citations) = render_ctx_and_user(
@@ -116,11 +142,18 @@ pub fn render(
         cur_tokens = tokens_est(&system, &user, response_tokens);
     }
 
+    // Drop hits beyond `trimmed_hits` so `final_hits` mirrors what the prompt
+    // actually references. Callers building citations_map from final_hits
+    // then only see citations that can be anchored.
+    active_hits.truncate(trimmed_hits);
+
     RenderedPrompt {
         system,
         user,
         tokens_est: cur_tokens,
         valid_citations,
+        final_hits: active_hits,
+        stage_1b,
     }
 }
 
@@ -231,20 +264,21 @@ mod tests {
         assert_eq!(cite_anchor(&h), "[cit: 2026-04-19 cc/abc @summary-span-3]");
     }
 
-    #[test]
-    fn render_shrinks_hits_on_overflow() {
-        let hits = (0..20)
+    #[tokio::test]
+    async fn render_shrinks_hits_on_overflow() {
+        let hits: Vec<_> = (0..20)
             .map(|i| hit_raw(&format!("c{i}"), &"x".repeat(3000)))
-            .collect::<Vec<_>>();
-        let r = render("question?", &[], &hits, 6000, 1024, true);
-        assert!(r.valid_citations.len() < hits.len());
+            .collect();
+        let n = hits.len();
+        let r = render("question?", &[], hits, 6000, 1024, true, false, None).await;
+        assert!(r.valid_citations.len() < n);
         assert!(!r.valid_citations.is_empty());
     }
 
-    #[test]
-    fn render_lists_valid_citations_in_order() {
+    #[tokio::test]
+    async fn render_lists_valid_citations_in_order() {
         let hits = vec![hit_raw("a", "one"), hit_raw("b", "two")];
-        let r = render("q?", &[], &hits, 6000, 1024, true);
+        let r = render("q?", &[], hits, 6000, 1024, true, false, None).await;
         assert_eq!(r.valid_citations.len(), 2);
         assert!(r.user.contains("one"));
         assert!(r.user.contains("two"));
@@ -310,11 +344,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn render_includes_chat_history_section_when_prior_turns_non_empty() {
+    #[tokio::test]
+    async fn render_includes_chat_history_section_when_prior_turns_non_empty() {
         let hits = vec![hit_raw("a", "one")];
         let prior = vec![turn_rec("prev q", "prev a")];
-        let r = render("new q?", &prior, &hits, 6000, 1024, true);
+        let r = render("new q?", &prior, hits, 6000, 1024, true, false, None).await;
         assert!(
             r.user.contains("## Chat History"),
             "expected '## Chat History' header, got:\n{}",
@@ -326,15 +360,15 @@ mod tests {
         assert!(r.user.contains("new q?"));
     }
 
-    #[test]
-    fn render_omits_chat_history_section_when_prior_turns_empty() {
+    #[tokio::test]
+    async fn render_omits_chat_history_section_when_prior_turns_empty() {
         let hits = vec![hit_raw("a", "one")];
-        let r = render("q?", &[], &hits, 6000, 1024, true);
+        let r = render("q?", &[], hits, 6000, 1024, true, false, None).await;
         assert!(!r.user.contains("## Chat History"));
     }
 
-    #[test]
-    fn render_drops_oldest_history_first_on_budget_overflow() {
+    #[tokio::test]
+    async fn render_drops_oldest_history_first_on_budget_overflow() {
         let hits = vec![hit_raw("a", "unique-hit-content")];
         // Three prior turns, each with a recognizable answer. Budget tight
         // enough that history must drop.
@@ -346,7 +380,7 @@ mod tests {
         // Budget chosen so history doesn't fit but hit does.
         // compress_enabled=false: isolate the history-drop path (Stage 2),
         // preventing Stage 1 from firing first on this tight budget.
-        let r = render("new q?", &prior, &hits, 500, 100, false);
+        let r = render("new q?", &prior, hits, 500, 100, false, false, None).await;
         // The hit must survive.
         assert!(r.user.contains("unique-hit-content"));
         // Oldest history turn must be dropped before middle/newest.
@@ -363,18 +397,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn render_falls_through_to_hit_shrinking_when_history_exhausted() {
+    #[tokio::test]
+    async fn render_falls_through_to_hit_shrinking_when_history_exhausted() {
         // 5 hits + 2 prior turns + tight budget. Expect: history fully dropped,
         // then hits start shrinking.
         let hits: Vec<_> = (0..5)
             .map(|i| hit_raw(&format!("c{i}"), &"x".repeat(800)))
             .collect();
+        let n = hits.len();
         let prior = vec![
             turn_rec("q1", &"yyyyy".repeat(100)),
             turn_rec("q2", &"zzzzz".repeat(100)),
         ];
-        let r = render("q?", &prior, &hits, 1500, 300, false);
+        let r = render("q?", &prior, hits, 1500, 300, false, false, None).await;
         // History should be entirely gone.
         assert!(
             !r.user.contains("## Chat History"),
@@ -382,16 +417,15 @@ mod tests {
         );
         // Hits should be shrunk (fewer than 5).
         assert!(
-            r.valid_citations.len() < hits.len(),
-            "expected hit count < {}, got {}",
-            hits.len(),
+            r.valid_citations.len() < n,
+            "expected hit count < {n}, got {}",
             r.valid_citations.len()
         );
         assert!(!r.valid_citations.is_empty());
     }
 
-    #[test]
-    fn render_compresses_hits_on_overflow_when_enabled() {
+    #[tokio::test]
+    async fn render_compresses_hits_on_overflow_when_enabled() {
         // Craft a single long hit (>= COMPRESS_MIN_CHARS = 400 and >= 4
         // sentences) plus a tight budget to force Stage 1 compression.
         let long_snippet = (0..10)
@@ -416,7 +450,7 @@ mod tests {
         }];
         let prior = vec![turn_rec("prev q", "prev a")];
         // Very tight budget → Stage 1 must fire.
-        let r = render("q?", &prior, &hits, 400, 100, true);
+        let r = render("q?", &prior, hits, 400, 100, true, false, None).await;
         // The rendered user message must contain LESS than the original
         // hit's snippet (i.e. compression actually shrank it).
         let context_section = r.user.find("## Context").unwrap();
@@ -432,8 +466,8 @@ mod tests {
         assert_eq!(r.valid_citations.len(), 1);
     }
 
-    #[test]
-    fn render_does_not_compress_when_disabled() {
+    #[tokio::test]
+    async fn render_does_not_compress_when_disabled() {
         // Same setup, compress_enabled = false → Stage 1 skipped → fall
         // through to Phase 3.3 behavior (drop oldest history, then shrink
         // hits). With only one hit + no history, Stage 2 and Stage 3 are
@@ -457,11 +491,80 @@ mod tests {
             vector: None,
             compressed: None,
         }];
-        let r = render("q?", &[], &hits, 400, 100, false);
+        let r = render("q?", &[], hits, 400, 100, false, false, None).await;
         // No compression → the full snippet appears in the context.
         assert!(
             r.user.contains(&long_snippet),
             "with compression disabled, full snippet should be present"
         );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn render_fires_stage_1b_when_compression_alone_insufficient() {
+        use crate::conversations::ENV_LOCK;
+        use crate::conversations::ask::abstractive::AbstractiveCtx;
+        use crate::conversations::ollama::OllamaClient;
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
+        let client = OllamaClient::new("http://unused", std::time::Duration::from_secs(1));
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = AbstractiveCtx {
+            client: &client,
+            model: "qwen3:14b",
+            timeout: std::time::Duration::from_secs(1),
+            root_override: Some(tmp.path().to_str().unwrap()),
+        };
+        // 3 long hits + tight budget so Stage 1 heuristic compression alone
+        // still overruns, forcing Stage 1b.
+        let big = (0..50)
+            .map(|i| format!("Sentence number {i} with plenty of supporting body."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let hits = vec![hit_raw("a", &big), hit_raw("b", &big), hit_raw("c", &big)];
+        let r = super::render("q?", &[], hits, 500, 100, true, true, Some(&ctx)).await;
+        assert!(
+            r.stage_1b.is_some(),
+            "Stage 1b summary must surface when fired"
+        );
+        let s = r.stage_1b.unwrap();
+        assert!(
+            s.compressed_count + s.cache_hits > 0,
+            "Stage 1b should have touched at least one hit; got {s:?}"
+        );
+        assert!(
+            r.final_hits
+                .iter()
+                .any(|h| h.compressed == Some(super::super::Compression::Abstractive)),
+            "expected at least one hit to be tagged Abstractive"
+        );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn render_stage_1b_none_when_disabled() {
+        use crate::conversations::ENV_LOCK;
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let big = (0..50)
+            .map(|i| format!("Sentence number {i} with plenty of supporting body."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let hits = vec![hit_raw("a", &big)];
+        let r = super::render(
+            "q?",
+            &[],
+            hits,
+            500,
+            100,
+            true,
+            /* summarize_enabled */ false,
+            None,
+        )
+        .await;
+        assert!(r.stage_1b.is_none());
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }
