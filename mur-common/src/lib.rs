@@ -24,6 +24,6 @@ pub use pattern::Pattern;
 pub use scope::Scope;
 pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};
 
-pub use agent::{AgentProfile, Persona, PersonaCategory, Entitlements, LockFile};
+pub use agent::{AgentProfile, Persona, PersonaCategory, Entitlements, LockFile, RetryPolicy};
 pub use a2a::{JsonRpcRequest, JsonRpcResponse, JsonRpcError, Task, TaskState};
 pub use a2a::Message as A2aMessage;
