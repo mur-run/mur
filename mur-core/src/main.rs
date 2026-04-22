@@ -919,6 +919,17 @@ enum AgentAction {
         #[command(subcommand)]
         action: AgentPermAction,
     },
+    /// Export an agent to a .murpkg or self-contained binary
+    Export {
+        /// Agent name
+        name: String,
+        /// Output path (e.g. agent.murpkg or my_agent)
+        #[arg(long, short = 'o')]
+        out: String,
+        /// Format: "pkg" (default) or "bin"
+        #[arg(long, default_value = "pkg")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1411,6 +1422,9 @@ async fn async_main() -> Result<()> {
                     cmd::agent::cmd_perm_set_limit(&name, &key, value)?
                 }
             },
+            AgentAction::Export { name, out, format } => {
+                cmd::agent::cmd_export(&name, &out, &format)?
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
