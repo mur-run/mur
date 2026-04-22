@@ -812,7 +812,10 @@ enum ConversationsAction {
         /// Overwrite existing rollup; archive prior to .history/.
         #[arg(long)]
         force: bool,
-        /// Only regenerate when source content hash changed.
+        /// Phase 3.2.1: no-op retained for backward compatibility. The
+        /// default (omitting --force) already regenerates only when the
+        /// source content hash has changed via the internal idempotency
+        /// check. Use --force to regenerate unconditionally.
         #[arg(long)]
         if_stale: bool,
         /// Override throttle for --all-missing.

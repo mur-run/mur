@@ -849,6 +849,9 @@ pub struct RollupArgs {
     pub month: Option<String>,
     pub all_missing: bool,
     pub force: bool,
+    /// Phase 3.2.1: Intentionally unused; retained for backward compatibility.
+    /// The default (force=false) already triggers sha-based idempotency checks.
+    #[allow(dead_code)]
     pub if_stale: bool,
     pub max_weeks: Option<u32>,
     pub max_months: Option<u32>,
@@ -867,13 +870,19 @@ pub async fn cmd_conversations_rollup(args: RollupArgs) -> Result<()> {
         .clone();
 
     if let Some(w) = args.week {
-        let force = args.force || args.if_stale;
+        // Phase 3.2.1: --if-stale is a no-op; the default (force=false)
+        // already triggers the sha-based idempotency check inside
+        // rollup_week. Flag retained for backward-compat with scripts.
+        let force = args.force;
         let r = rollup_week(&w, force, &rollup_cfg, None).await?;
         println!("{}: {:?} ({}ms)", r.window, r.outcome, r.duration_ms);
         return Ok(());
     }
     if let Some(m) = args.month {
-        let force = args.force || args.if_stale;
+        // Phase 3.2.1: --if-stale is a no-op; the default (force=false)
+        // already triggers the sha-based idempotency check inside
+        // rollup_month. Flag retained for backward-compat with scripts.
+        let force = args.force;
         let r = rollup_month(&m, force, &rollup_cfg, None).await?;
         println!("{}: {:?} ({}ms)", r.window, r.outcome, r.duration_ms);
         return Ok(());
