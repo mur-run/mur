@@ -859,6 +859,26 @@ enum AgentAction {
         /// Agent name
         name: String,
     },
+    /// Stop a running agent (SIGTERM, then SIGKILL after timeout)
+    Stop {
+        /// Agent name
+        name: String,
+    },
+    /// Remove an agent (symlink + optionally data)
+    Remove {
+        /// Agent name
+        name: String,
+        /// Also delete the agent's data directory
+        #[arg(long)]
+        purge: bool,
+    },
+    /// Rename an agent (updates dir, profile.name, and symlink)
+    Rename {
+        /// Old name
+        old: String,
+        /// New name
+        new: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1181,6 +1201,9 @@ async fn async_main() -> Result<()> {
             } => cmd::agent::cmd_create(&name, no_interactive, display_name, model)?,
             AgentAction::List { json } => cmd::agent::cmd_list(json)?,
             AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
+            AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
+            AgentAction::Remove { name, purge } => cmd::agent::cmd_remove(&name, purge)?,
+            AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,

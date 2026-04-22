@@ -338,3 +338,148 @@ fn pid_alive(pid: u32) -> bool {
 fn pid_alive(_pid: u32) -> bool {
     false
 }
+
+// ─── stop / remove / rename ──────────────────────────────────────────────
+
+pub fn cmd_stop(name: &str) -> Result<()> {
+    let mur_home = resolve_mur_home()?;
+    let agent_home = mur_home.join("agents").join(name);
+    if !agent_home.exists() {
+        bail!("agent '{name}' not found");
+    }
+    let lock_path = agent_home.join("running.lock");
+    if !lock_path.exists() {
+        bail!("agent '{name}' is not running");
+    }
+    let bytes = fs::read(&lock_path).with_context(|| format!("read {}", lock_path.display()))?;
+    let lock: LockFile =
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", lock_path.display()))?;
+
+    // Load stop_timeout_secs from profile, default 15.
+    let timeout = {
+        let pp = agent_home.join("profile.yaml");
+        fs::read_to_string(&pp)
+            .ok()
+            .and_then(|y| serde_yaml_ng::from_str::<_AgentProfile>(&y).ok())
+            .map(|p| p.lifecycle.stop_timeout_secs)
+            .unwrap_or(15)
+    };
+
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(lock.pid as libc::pid_t, libc::SIGTERM);
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
+    while std::time::Instant::now() < deadline {
+        if !pid_alive(lock.pid) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if pid_alive(lock.pid) {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(lock.pid as libc::pid_t, libc::SIGKILL);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    // Supervisor normally removes the lock, but after SIGKILL nothing will —
+    // or our sleep-fixture has no lock cleanup — so best-effort remove here.
+    let _ = fs::remove_file(&lock_path);
+    println!("Stopped agent '{name}'");
+    Ok(())
+}
+
+pub fn cmd_remove(name: &str, purge: bool) -> Result<()> {
+    let mur_home = resolve_mur_home()?;
+    let agent_home = mur_home.join("agents").join(name);
+    if !agent_home.exists() {
+        bail!("agent '{name}' not found");
+    }
+    refuse_if_running(&agent_home, name)?;
+
+    let bin_dir = resolve_bin_dir()?;
+    let symlink = bin_dir.join(format!("mur_agent_{name}"));
+    if symlink.symlink_metadata().is_ok() {
+        fs::remove_file(&symlink).ok();
+    }
+
+    if purge {
+        fs::remove_dir_all(&agent_home)
+            .with_context(|| format!("remove_dir_all {}", agent_home.display()))?;
+        println!("Purged agent '{name}'");
+    } else {
+        println!(
+            "Removed agent '{name}' (data preserved at {})",
+            agent_home.display()
+        );
+    }
+    Ok(())
+}
+
+pub fn cmd_rename(old: &str, new: &str) -> Result<()> {
+    validate_name(new)?;
+    let mur_home = resolve_mur_home()?;
+    let old_home = mur_home.join("agents").join(old);
+    let new_home = mur_home.join("agents").join(new);
+    if !old_home.exists() {
+        bail!("agent '{old}' not found");
+    }
+    if new_home.exists() {
+        bail!("agent '{new}' already exists");
+    }
+    refuse_if_running(&old_home, old)?;
+
+    // Update profile.yaml name + updated_at before renaming the directory
+    // so the on-disk value matches the directory once the rename completes.
+    let profile_path = old_home.join("profile.yaml");
+    let yaml = fs::read_to_string(&profile_path)
+        .with_context(|| format!("read {}", profile_path.display()))?;
+    let mut profile: _AgentProfile = serde_yaml_ng::from_str(&yaml)
+        .with_context(|| format!("parse {}", profile_path.display()))?;
+    profile.name = new.to_string();
+    profile.updated_at = chrono::Utc::now().to_rfc3339();
+    let new_yaml = serde_yaml_ng::to_string(&profile).context("serialize profile.yaml")?;
+    write_atomic(&profile_path, new_yaml.as_bytes())?;
+
+    fs::rename(&old_home, &new_home)
+        .with_context(|| format!("rename {} -> {}", old_home.display(), new_home.display()))?;
+
+    let bin_dir = resolve_bin_dir()?;
+    let old_symlink = bin_dir.join(format!("mur_agent_{old}"));
+    let new_symlink = bin_dir.join(format!("mur_agent_{new}"));
+    if old_symlink.symlink_metadata().is_ok() {
+        let target =
+            fs::read_link(&old_symlink).unwrap_or_else(|_| PathBuf::from("mur-agent-runtime"));
+        fs::remove_file(&old_symlink).ok();
+        if new_symlink.symlink_metadata().is_ok() {
+            fs::remove_file(&new_symlink).ok();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &new_symlink).with_context(|| {
+            format!("symlink {} -> {}", new_symlink.display(), target.display())
+        })?;
+        #[cfg(windows)]
+        std::fs::copy(&target, &new_symlink)
+            .with_context(|| format!("copy {} to {}", target.display(), new_symlink.display()))?;
+    }
+
+    println!("Renamed '{old}' -> '{new}'");
+    Ok(())
+}
+
+fn refuse_if_running(agent_home: &Path, name: &str) -> Result<()> {
+    let lock_path = agent_home.join("running.lock");
+    if !lock_path.exists() {
+        return Ok(());
+    }
+    let bytes = fs::read(&lock_path).with_context(|| format!("read {}", lock_path.display()))?;
+    if let Ok(lock) = serde_json::from_slice::<LockFile>(&bytes)
+        && pid_alive(lock.pid)
+    {
+        bail!("agent '{name}' is running; stop it first");
+    }
+    Ok(())
+}
