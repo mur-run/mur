@@ -254,9 +254,21 @@ llm:
   provider: anthropic
   model: claude-sonnet-4-20250514
   api_key_env: ANTHROPIC_API_KEY
+
+ask:
+  summarize_hits_enabled: true  # Enable abstractive compression in overflow cascade
+  summarize_model: null         # Override model for Stage 1b (null → falls back to llm.model)
 ```
 
 Run `mur init` for an interactive setup wizard.
+
+### Ask Configuration
+
+The `ask` section controls behavior of `mur ask` queries:
+
+- **`summarize_hits_enabled`** (default `true`) — When context is tight, `mur ask` runs an overflow cascade that compresses the longest hits using an abstractive summarization stage. This trades accuracy for context efficiency. Results cache per-hit at `~/.mur/conversations/cache/abstractive/` to amortize LLM cost. Summarization has a hardcoded 5s per-hit timeout and soft-fails silently on error. Set to `false` to restore pre-3.5 behavior (drop history first).
+
+- **`summarize_model`** (default `null`) — Override the LLM model used for Stage 1b summarization. When `null`, falls back to the main `llm.model`. Pair with a faster model like `qwen3:4b` to trade summarization accuracy for speed on tight-budget queries.
 
 ## AI Tool Integration
 
