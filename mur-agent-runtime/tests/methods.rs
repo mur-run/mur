@@ -4,6 +4,7 @@ use mur_agent_runtime::protocol::methods::{
     tasks::{TasksCancelHandler, TasksGetHandler, TasksListHandler},
 };
 use mur_agent_runtime::task_runner::TaskRunner;
+use mur_agent_runtime::telemetry_writer::Event;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -48,4 +49,26 @@ async fn tasks_list_returns_array() {
     let h = TasksListHandler::new(runner);
     let result = h.handle(None).await.unwrap();
     assert!(result.is_array());
+}
+
+#[tokio::test]
+async fn message_send_emits_task_progress_before_response() {
+    let runner = Arc::new(TaskRunner::new_stub_echo());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let h = MessageSendHandler::with_progress(runner, tx);
+    let result = h
+        .handle(Some(json!({
+            "message": {"role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        })))
+        .await
+        .unwrap();
+    assert_eq!(result["state"], "completed");
+    // At least one TaskProgress event must have been emitted.
+    let ev = rx
+        .try_recv()
+        .expect("expected a TaskProgress event on the sink");
+    assert!(
+        matches!(ev, Event::TaskProgress { .. }),
+        "first event should be TaskProgress, got {ev:?}"
+    );
 }
