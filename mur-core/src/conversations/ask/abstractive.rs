@@ -175,6 +175,84 @@ pub async fn compress_hit(
     CompressOutcome::Compressed
 }
 
+/// Orchestrate Stage 1b: sort hits largest-first, sequentially compress
+/// until the token overshoot is resolved or candidates are exhausted.
+///
+/// `cur_tokens` and `max_context_tokens` are caller-measured in _tokens_ (not
+/// chars) but the per-hit char → token conversion uses the same `len / 4`
+/// heuristic `prompt::tokens_est` uses, so they're proportional. Re-measuring
+/// between hits happens by the caller after this function returns — this fn
+/// operates on pre-computed overshoot to avoid owning the `prompt::render`
+/// responsibility of re-building the full prompt string.
+///
+/// Invariants:
+/// - Sorted by `hit.snippet.len()` descending at entry — stable sort by
+///   original index on ties so deterministic.
+/// - Early-exits when estimated post-compression tokens ≤ max.
+/// - `target_tokens_per_hit` floored at `MIN_TARGET_TOKENS_PER_HIT`.
+pub async fn run_stage_1b(
+    ctx: &AbstractiveCtx<'_>,
+    hits: &mut [ResolvedHit],
+    cur_tokens: usize,
+    max_context_tokens: usize,
+) -> Stage1bSummary {
+    let start = std::time::Instant::now();
+    let mut summary = Stage1bSummary {
+        processed: 0,
+        compressed_count: 0,
+        cache_hits: 0,
+        skipped: Vec::new(),
+        duration_ms: 0,
+    };
+    if cur_tokens <= max_context_tokens {
+        summary.duration_ms = start.elapsed().as_millis() as u64;
+        return summary;
+    }
+
+    // Index list sorted largest-first (by snippet byte length). Keep indices so
+    // we can mutate the original slice in place via &mut hits[idx].
+    let mut order: Vec<usize> = (0..hits.len()).collect();
+    order.sort_by(|&a, &b| {
+        hits[b]
+            .snippet
+            .len()
+            .cmp(&hits[a].snippet.len())
+            .then(a.cmp(&b))
+    });
+
+    let mut cur_tokens = cur_tokens;
+    let total = order.len();
+
+    for (k, idx) in order.into_iter().enumerate() {
+        if cur_tokens <= max_context_tokens {
+            break;
+        }
+        let overshoot = cur_tokens.saturating_sub(max_context_tokens);
+        let rem_denom = total - k; // always ≥ 1 (k < total inside the loop)
+        // ceil-div for "share out" the overshoot reduction.
+        let reduce_by = overshoot.div_ceil(rem_denom);
+        let cur_hit_tokens = hits[idx].snippet.len() / 4;
+        let target = cur_hit_tokens
+            .saturating_sub(reduce_by)
+            .max(MIN_TARGET_TOKENS_PER_HIT);
+
+        let before_tokens = cur_hit_tokens;
+        let outcome = compress_hit(ctx, &mut hits[idx], target).await;
+        summary.processed += 1;
+        match outcome {
+            CompressOutcome::Compressed => summary.compressed_count += 1,
+            CompressOutcome::CacheHit => summary.cache_hits += 1,
+            CompressOutcome::Skipped(reason) => summary.skipped.push((idx, reason)),
+        }
+        let after_tokens = hits[idx].snippet.len() / 4;
+        let delta = before_tokens.saturating_sub(after_tokens);
+        cur_tokens = cur_tokens.saturating_sub(delta);
+    }
+
+    summary.duration_ms = start.elapsed().as_millis() as u64;
+    summary
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +401,95 @@ mod tests {
         let o = compress_hit(&ctx(&client, tmp.path().to_str().unwrap()), &mut h, 128).await;
         assert_eq!(o, CompressOutcome::Skipped(skip_reason::NOT_SHORTER));
         unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn run_stage_1b_early_exits_when_fit_after_two_hits() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let tmp = tempfile::tempdir().unwrap();
+        // 5 hits; budget just tight enough that 1-2 compressions fit it (exact count
+        // depends on the mock response size). The assertion only requires 1 ≤ processed < 5.
+        let mut hits: Vec<ResolvedHit> = (0..5).map(|_| long_hit(20)).collect();
+        let orig_total: usize = hits.iter().map(|h| h.snippet.len()).sum();
+        let max_context_chars = orig_total - 200; // force overflow on char-ish metric
+        let summary = run_stage_1b(
+            &ctx(&client, tmp.path().to_str().unwrap()),
+            &mut hits,
+            orig_total,
+            max_context_chars,
+        )
+        .await;
+        assert!(
+            summary.processed >= 1,
+            "at least one hit must be touched; got {}",
+            summary.processed
+        );
+        assert!(
+            summary.processed < 5,
+            "early-exit should prevent touching all 5; got {}",
+            summary.processed
+        );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn run_stage_1b_largest_first_order() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let tmp = tempfile::tempdir().unwrap();
+        let mut hits = vec![long_hit(5), long_hit(30), long_hit(10)];
+        let big_idx_before = 1; // middle hit is the largest
+        let orig_big_len = hits[big_idx_before].snippet.len();
+        let orig_total: usize = hits.iter().map(|h| h.snippet.len()).sum();
+        // Budget forces at least one compression; largest hit must be the one touched
+        // first regardless of total count.
+        let max_context_chars = orig_total - (orig_big_len / 3);
+        let summary = run_stage_1b(
+            &ctx(&client, tmp.path().to_str().unwrap()),
+            &mut hits,
+            orig_total,
+            max_context_chars,
+        )
+        .await;
+        assert!(summary.compressed_count >= 1);
+        // The largest hit should have shrunk.
+        assert!(
+            hits[big_idx_before].snippet.len() < orig_big_len,
+            "largest-first: biggest hit should be touched first"
+        );
+        assert_eq!(
+            hits[big_idx_before].compressed,
+            Some(super::super::Compression::Abstractive)
+        );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn run_stage_1b_noop_when_already_fits() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let tmp = tempfile::tempdir().unwrap();
+        let mut hits = vec![long_hit(5)];
+        let orig_total: usize = hits.iter().map(|h| h.snippet.len()).sum();
+        let summary = run_stage_1b(
+            &ctx(&client, tmp.path().to_str().unwrap()),
+            &mut hits,
+            orig_total,
+            orig_total + 10_000, // huge budget → no overshoot
+        )
+        .await;
+        assert_eq!(summary.processed, 0);
+        assert_eq!(summary.compressed_count, 0);
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }
