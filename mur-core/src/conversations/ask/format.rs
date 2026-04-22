@@ -36,9 +36,17 @@ pub fn render_footer(resp: &AskResponse) -> String {
     } else {
         ""
     };
+    // Phase 3.5: insert "· N summarized" between hit count and latency when
+    // Stage 1b compressed at least one hit. Heuristic count (Stage 1) is
+    // intentionally not shown here — matches plain-mode provenance philosophy.
+    let summarized_seg = match &resp.stage_1b {
+        Some(s) if s.compressed_count > 0 => format!(" · {} summarized", s.compressed_count),
+        _ => String::new(),
+    };
     format!(
-        "({} hits · {}ms · {}→{} tokens{})\n",
+        "({} hits{} · {}ms · {}→{} tokens{})\n",
         resp.citations.len(),
+        summarized_seg,
         resp.duration_ms,
         resp.tokens_in,
         resp.tokens_out,
@@ -156,5 +164,45 @@ mod tests {
         // None → unchanged.
         let c3_line = lines.iter().find(|l| l.contains("cc/c3:L1")).unwrap();
         assert!(!c3_line.contains("(summarized)"));
+    }
+
+    #[test]
+    fn footer_includes_summarized_segment_when_stage_1b_fired() {
+        let mut r = sample_resp();
+        r.stage_1b = Some(crate::conversations::ask::abstractive::Stage1bStats {
+            compressed_count: 2,
+            cache_hits: 0,
+            skipped_count: 0,
+            duration_ms: 50,
+        });
+        let f = render_footer(&r);
+        assert!(
+            f.contains("2 summarized"),
+            "expected '· 2 summarized' in footer, got: {f}"
+        );
+    }
+
+    #[test]
+    fn footer_omits_summarized_segment_when_stage_1b_none() {
+        let r = sample_resp();
+        assert!(r.stage_1b.is_none());
+        let f = render_footer(&r);
+        assert!(!f.contains("summarized"));
+    }
+
+    #[test]
+    fn footer_omits_summarized_segment_when_compressed_count_zero() {
+        let mut r = sample_resp();
+        r.stage_1b = Some(crate::conversations::ask::abstractive::Stage1bStats {
+            compressed_count: 0,
+            cache_hits: 0,
+            skipped_count: 1,
+            duration_ms: 10,
+        });
+        let f = render_footer(&r);
+        assert!(
+            !f.contains("summarized"),
+            "Stage 1b fired but nothing compressed — no segment"
+        );
     }
 }
