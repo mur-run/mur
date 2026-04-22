@@ -644,6 +644,107 @@ fn darwin_plist(name: &str, symlink: &Path) -> String {
     )
 }
 
+// ─── mcp add/list/remove/rename ──────────────────────────────────────────
+
+fn load_profile_for_edit(name: &str) -> Result<(PathBuf, _AgentProfile)> {
+    let mur_home = resolve_mur_home()?;
+    let path = mur_home.join("agents").join(name).join("profile.yaml");
+    if !path.exists() {
+        bail!("agent '{name}' not found");
+    }
+    let yaml = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let profile: _AgentProfile =
+        serde_yaml_ng::from_str(&yaml).with_context(|| format!("parse {}", path.display()))?;
+    Ok((path, profile))
+}
+
+fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<()> {
+    profile.updated_at = chrono::Utc::now().to_rfc3339();
+    let yaml = serde_yaml_ng::to_string(profile).context("serialize profile.yaml")?;
+    write_atomic(path, yaml.as_bytes())
+}
+
+pub fn cmd_mcp_list(name: &str) -> Result<()> {
+    let (_path, profile) = load_profile_for_edit(name)?;
+    if profile.mcp_servers.is_empty() {
+        println!("(no MCP servers configured)");
+        return Ok(());
+    }
+    for s in &profile.mcp_servers {
+        println!("{}\t{} {}", s.name, s.command, s.args.join(" "));
+    }
+    Ok(())
+}
+
+pub fn cmd_mcp_add(name: &str, server_id: &str, command: &str, args: &[String]) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    if profile.mcp_servers.iter().any(|s| s.name == server_id) {
+        bail!("MCP server '{server_id}' already exists on '{name}'");
+    }
+    profile.mcp_servers.push(McpServerEntry {
+        name: server_id.to_string(),
+        command: command.to_string(),
+        args: args.to_vec(),
+    });
+    // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
+    if !profile
+        .entitlements
+        .processes
+        .spawn
+        .allowed
+        .iter()
+        .any(|a| a == command)
+    {
+        profile
+            .entitlements
+            .processes
+            .spawn
+            .allowed
+            .push(command.to_string());
+    }
+    save_profile(&path, &mut profile)
+}
+
+pub fn cmd_mcp_remove(name: &str, server_id: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    let before = profile.mcp_servers.len();
+    let removed_command = profile
+        .mcp_servers
+        .iter()
+        .find(|s| s.name == server_id)
+        .map(|s| s.command.clone());
+    profile.mcp_servers.retain(|s| s.name != server_id);
+    if profile.mcp_servers.len() == before {
+        bail!("MCP server '{server_id}' not found on '{name}'");
+    }
+    // Drop the command from the spawn allowlist only if no other mcp entry
+    // still needs it.
+    if let Some(cmd) = removed_command
+        && !profile.mcp_servers.iter().any(|s| s.command == cmd)
+    {
+        profile
+            .entitlements
+            .processes
+            .spawn
+            .allowed
+            .retain(|a| a != &cmd);
+    }
+    save_profile(&path, &mut profile)
+}
+
+pub fn cmd_mcp_rename(name: &str, old: &str, new: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    if profile.mcp_servers.iter().any(|s| s.name == new) {
+        bail!("MCP server '{new}' already exists on '{name}'");
+    }
+    let hit = profile.mcp_servers.iter_mut().find(|s| s.name == old);
+    match hit {
+        Some(s) => s.name = new.to_string(),
+        None => bail!("MCP server '{old}' not found on '{name}'"),
+    }
+    save_profile(&path, &mut profile)
+}
+
 // ─── prompt show/edit/set ────────────────────────────────────────────────
 
 fn prompt_path_for(name: &str) -> Result<PathBuf> {

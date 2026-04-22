@@ -904,6 +904,34 @@ enum AgentAction {
         #[command(subcommand)]
         action: AgentPromptAction,
     },
+    /// Manage an agent's MCP servers (add/list/remove/rename)
+    Mcp {
+        #[command(subcommand)]
+        action: AgentMcpAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentMcpAction {
+    /// List MCP servers attached to an agent
+    List { name: String },
+    /// Add an MCP server entry and sync its command into the spawn allowlist
+    Add {
+        name: String,
+        server_id: String,
+        #[arg(long)]
+        command: String,
+        #[arg(long = "arg")]
+        args: Vec<String>,
+    },
+    /// Remove an MCP server entry by id
+    Remove { name: String, server_id: String },
+    /// Rename an MCP server entry in place
+    Rename {
+        name: String,
+        old: String,
+        new: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1259,6 +1287,21 @@ async fn async_main() -> Result<()> {
                     content,
                     file,
                 } => cmd::agent::cmd_prompt_set(&name, content.as_deref(), file.as_deref())?,
+            },
+            AgentAction::Mcp { action } => match action {
+                AgentMcpAction::List { name } => cmd::agent::cmd_mcp_list(&name)?,
+                AgentMcpAction::Add {
+                    name,
+                    server_id,
+                    command,
+                    args,
+                } => cmd::agent::cmd_mcp_add(&name, &server_id, &command, &args)?,
+                AgentMcpAction::Remove { name, server_id } => {
+                    cmd::agent::cmd_mcp_remove(&name, &server_id)?
+                }
+                AgentMcpAction::Rename { name, old, new } => {
+                    cmd::agent::cmd_mcp_rename(&name, &old, &new)?
+                }
             },
         },
         Commands::Exchange { action } => match action {
