@@ -1121,12 +1121,20 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         ask::session::SessionStore::archive_and_new(None, history_retain)?
     };
 
-    // Rewriter call (only if continuing + we have prior turns)
+    // Rewriter call (only if continuing + we have prior turns).
+    // Separate shorter timeout (ask_cfg.rewriter_timeout_secs, default 8s)
+    // so a slow/unreachable Ollama doesn't burn the full generate budget
+    // before the user sees a response — we fall back to the raw question
+    // on timeout. The main generation path still uses its own client with
+    // the full ask_cfg.timeout_secs budget (plumbed via ask_stream).
     let prior_slice = session.last_n(history_turns);
     let model = args.model.clone().unwrap_or_else(|| ask_cfg.model.clone());
-    let client = OllamaClient::new(&ask_cfg.ollama_endpoint, std::time::Duration::from_secs(30));
+    let rewriter_client = OllamaClient::new(
+        &ask_cfg.ollama_endpoint,
+        std::time::Duration::from_secs(ask_cfg.rewriter_timeout_secs as u64),
+    );
     let rewrite = ask::rewriter::rewrite(
-        &client,
+        &rewriter_client,
         &model,
         ask::rewriter::RewriteInput {
             prior_turns: prior_slice,
