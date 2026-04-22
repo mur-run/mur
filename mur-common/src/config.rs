@@ -339,6 +339,8 @@ pub struct AskConfig {
     pub min_score: f64,
     #[serde(default = "ask_default_continue_history_turns")]
     pub continue_history_turns: u32,
+    #[serde(default = "ask_default_compress_hits_enabled")]
+    pub compress_hits_enabled: bool,
 }
 
 impl Default for AskConfig {
@@ -355,6 +357,7 @@ impl Default for AskConfig {
             timeout_secs: ask_default_timeout(),
             min_score: ask_default_min_score(),
             continue_history_turns: ask_default_continue_history_turns(),
+            compress_hits_enabled: ask_default_compress_hits_enabled(),
         }
     }
 }
@@ -388,6 +391,9 @@ fn ask_default_min_score() -> f64 {
 }
 fn ask_default_continue_history_turns() -> u32 {
     3
+}
+fn ask_default_compress_hits_enabled() -> bool {
+    true
 }
 
 // ── Conversations archive config (Task 23) ────────────────────────────────────
@@ -796,6 +802,12 @@ conversations:
     fn ask_config_default_continue_history_turns_is_3() {
         let c = AskConfig::default();
         assert_eq!(c.continue_history_turns, 3);
+    }
+
+    #[test]
+    fn ask_config_default_compress_hits_enabled_is_true() {
+        let c = AskConfig::default();
+        assert!(c.compress_hits_enabled);
     }
 }
 

@@ -1167,6 +1167,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         prior_turns: prior_slice.to_vec(),
         retrieval_query,
         rewriter_status,
+        compress_enabled: ask_cfg.compress_hits_enabled,
     };
 
     // Generate + collect response
