@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::agent::*;
+use mur_common::{AgentProfile as _AgentProfile, LockFile};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -206,4 +207,134 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::rename(&tmp, path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
+}
+
+// ─── list / status ───────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize)]
+struct AgentRow {
+    name: String,
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uptime: Option<String>,
+    category: String,
+}
+
+pub fn cmd_list(json: bool) -> Result<()> {
+    let rows = collect_agents()?;
+    if json {
+        println!("{}", serde_json::to_string(&rows)?);
+    } else {
+        println!(
+            "{:<20} {:<10} {:<20} {:<10} {:<12}",
+            "NAME", "STATUS", "UPTIME", "PID", "CATEGORY"
+        );
+        for r in &rows {
+            let pid = r
+                .pid
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let uptime = r.uptime.clone().unwrap_or_else(|| "-".to_string());
+            println!(
+                "{:<20} {:<10} {:<20} {:<10} {:<12}",
+                r.name, r.status, uptime, pid, r.category
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn cmd_status(name: &str) -> Result<()> {
+    let rows = collect_agents()?;
+    let row = rows
+        .iter()
+        .find(|r| r.name == name)
+        .ok_or_else(|| anyhow!("agent '{name}' not found"))?;
+    println!("● {} - {}", row.name, row.category);
+    println!(
+        "   Loaded: {}",
+        resolve_mur_home()?.join("agents").join(name).display()
+    );
+    println!("   Active: {}", row.status);
+    if let Some(pid) = row.pid {
+        println!("     Main PID: {pid}");
+    }
+    if let Some(up) = &row.uptime {
+        println!("       Uptime: {up}");
+    }
+    Ok(())
+}
+
+fn collect_agents() -> Result<Vec<AgentRow>> {
+    let mur_home = resolve_mur_home()?;
+    let agents_dir = mur_home.join("agents");
+    let mut rows = Vec::new();
+    let entries = match fs::read_dir(&agents_dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(rows),
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let profile_path = dir.join("profile.yaml");
+        if !profile_path.exists() {
+            continue;
+        }
+        let yaml = fs::read_to_string(&profile_path)
+            .with_context(|| format!("read {}", profile_path.display()))?;
+        let profile: _AgentProfile = serde_yaml_ng::from_str(&yaml)
+            .with_context(|| format!("parse {}", profile_path.display()))?;
+
+        let lock_path = dir.join("running.lock");
+        let (status, pid, uptime) = classify(&lock_path);
+        rows.push(AgentRow {
+            name: profile.name,
+            status,
+            pid,
+            uptime,
+            category: format!("{:?}", profile.persona.category).to_lowercase(),
+        });
+    }
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(rows)
+}
+
+fn classify(lock_path: &Path) -> (&'static str, Option<u32>, Option<String>) {
+    if !lock_path.exists() {
+        return ("stopped", None, None);
+    }
+    let bytes = match fs::read(lock_path) {
+        Ok(b) => b,
+        Err(_) => return ("stale", None, None),
+    };
+    let lock: LockFile = match serde_json::from_slice(&bytes) {
+        Ok(l) => l,
+        Err(_) => return ("stale", None, None),
+    };
+    if !pid_alive(lock.pid) {
+        return ("stale", Some(lock.pid), None);
+    }
+    let uptime = chrono::DateTime::parse_from_rfc3339(&lock.started_at)
+        .ok()
+        .map(|start| {
+            let secs = (chrono::Utc::now() - start.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0);
+            format!("{}s", secs)
+        });
+    ("running", Some(lock.pid), uptime)
+}
+
+#[cfg(unix)]
+fn pid_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn pid_alive(_pid: u32) -> bool {
+    false
 }
