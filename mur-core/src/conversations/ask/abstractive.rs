@@ -346,7 +346,6 @@ mod tests {
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[ignore = "mock FAIL hook lands in Task 7"]
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compress_hit_respects_timeout() {
@@ -372,7 +371,6 @@ mod tests {
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[ignore = "mock FAIL hook lands in Task 7"]
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compress_hit_skips_on_empty_response() {
@@ -388,7 +386,6 @@ mod tests {
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[ignore = "mock FAIL hook lands in Task 7"]
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compress_hit_skips_when_not_shorter() {
