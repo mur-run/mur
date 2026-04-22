@@ -281,6 +281,11 @@ enum Commands {
         #[command(subcommand)]
         action: ExchangeAction,
     },
+    /// Manage murmur agents (create, list, status, send, stop, ...)
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
     /// Verify documentation claims (paths, commands, code refs) against actual codebase
     Verify {
         /// Specific file to verify (default: scan all docs)
@@ -828,6 +833,24 @@ enum ConversationsAction {
 }
 
 #[derive(Subcommand)]
+enum AgentAction {
+    /// Create a new agent profile
+    Create {
+        /// Agent name (alphanumeric + underscore)
+        name: String,
+        /// Skip interactive prompts; use flag defaults
+        #[arg(long)]
+        no_interactive: bool,
+        /// Display name (defaults to the agent name)
+        #[arg(long)]
+        display_name: Option<String>,
+        /// Model id (e.g. llama3.2:3b)
+        #[arg(long)]
+        model: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum DeployAction {
     /// Start services (docker compose up)
     Up {
@@ -1138,6 +1161,14 @@ async fn async_main() -> Result<()> {
         } => cmd::server_cmd::cmd_serve(port, open, readonly).await?,
         Commands::Why { name } => cmd::inject_cmd::cmd_why(&name)?,
         Commands::Edit { name, quick } => cmd::pattern::cmd_edit(&name, quick)?,
+        Commands::Agent { action } => match action {
+            AgentAction::Create {
+                name,
+                no_interactive,
+                display_name,
+                model,
+            } => cmd::agent::cmd_create(&name, no_interactive, display_name, model)?,
+        },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
             ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,
