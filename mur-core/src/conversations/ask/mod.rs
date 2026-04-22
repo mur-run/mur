@@ -4,6 +4,7 @@
 use mur_common::Source;
 use std::time::Duration;
 
+pub mod abstractive;
 pub mod cache;
 pub mod cite;
 pub mod compress;
