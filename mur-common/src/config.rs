@@ -341,6 +341,10 @@ pub struct AskConfig {
     pub continue_history_turns: u32,
     #[serde(default = "ask_default_compress_hits_enabled")]
     pub compress_hits_enabled: bool,
+    #[serde(default = "ask_default_summarize_hits_enabled")]
+    pub summarize_hits_enabled: bool,
+    #[serde(default)]
+    pub summarize_model: Option<String>,
 }
 
 impl Default for AskConfig {
@@ -358,6 +362,8 @@ impl Default for AskConfig {
             min_score: ask_default_min_score(),
             continue_history_turns: ask_default_continue_history_turns(),
             compress_hits_enabled: ask_default_compress_hits_enabled(),
+            summarize_hits_enabled: ask_default_summarize_hits_enabled(),
+            summarize_model: None,
         }
     }
 }
@@ -393,6 +399,9 @@ fn ask_default_continue_history_turns() -> u32 {
     3
 }
 fn ask_default_compress_hits_enabled() -> bool {
+    true
+}
+fn ask_default_summarize_hits_enabled() -> bool {
     true
 }
 
@@ -808,6 +817,48 @@ conversations:
     fn ask_config_default_compress_hits_enabled_is_true() {
         let c = AskConfig::default();
         assert!(c.compress_hits_enabled);
+    }
+
+    #[test]
+    fn ask_config_default_summarize_hits_enabled_is_true() {
+        let c = AskConfig::default();
+        assert!(c.summarize_hits_enabled);
+    }
+
+    #[test]
+    fn ask_config_default_summarize_model_is_none() {
+        let c = AskConfig::default();
+        assert!(c.summarize_model.is_none());
+    }
+
+    #[test]
+    fn ask_config_yaml_roundtrip_preserves_summarize_fields() {
+        let y = r#"
+conversations:
+  ask:
+    summarize_hits_enabled: false
+    summarize_model: qwen3:4b
+"#;
+        let v: serde_yaml::Value = serde_yaml::from_str(y).unwrap();
+        let conv: ConversationsConfig = serde_yaml::from_value(v["conversations"].clone()).unwrap();
+        assert!(!conv.ask.summarize_hits_enabled);
+        assert_eq!(conv.ask.summarize_model.as_deref(), Some("qwen3:4b"));
+    }
+
+    #[test]
+    fn ask_config_yaml_without_summarize_fields_uses_defaults() {
+        // Phase 3.5 must be additive: an existing config.yaml with NO
+        // summarize_* keys must still parse and default to enabled=true,
+        // model=None.
+        let y = r#"
+conversations:
+  ask:
+    model: qwen3:14b
+"#;
+        let v: serde_yaml::Value = serde_yaml::from_str(y).unwrap();
+        let conv: ConversationsConfig = serde_yaml::from_value(v["conversations"].clone()).unwrap();
+        assert!(conv.ask.summarize_hits_enabled);
+        assert!(conv.ask.summarize_model.is_none());
     }
 }
 

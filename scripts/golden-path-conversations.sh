@@ -223,5 +223,94 @@ grep -q "what did I ship this week" /tmp/gp-step-17.txt \
 grep -q "session:" /tmp/gp-step-17.txt \
   || { echo "FAIL step 17: show-session did not print session path"; exit 1; }
 
+# ── Step 18: Phase 3.5 Stage 1b fires under tight budget ──────────────
+echo "--- step 18: mur ask --json (expect .stage_1b compressed_count+cache_hits > 0) ---"
+# Seed a rich daily summary (2026-04-10) with a long extractive span so
+# Stage 1b has >= 400-char content to compress. All earlier steps produced
+# short mock spans (< 400 chars) that Stage 1b would skip. This summary is
+# pre-crafted (no compact needed) and reindexed at layer=2 before asking.
+#
+# The span text is one long clause (no ". " breaks → 1 sentence → Stage 1
+# heuristic compression is skipped per COMPRESS_MIN_SENTENCES=4; Stage 1b
+# then picks it up as a long hit and compresses it via the mock Ollama call).
+GP_RICH_DATE="2026-04-10"
+GP_RICH_DIR="$TMPHOME/.mur/conversations/summary"
+# The exact span text is stored in a variable so the ask query can use the
+# same string — hash-mock embedding is text-deterministic, so matching text
+# → matching vector → cosine=1.0 → guaranteed top hit.
+# shellcheck disable=SC2016
+GP_RICH_SPAN='Phase 3.5 shipped Stage 1b LLM-abstractive compression into the mur ask overflow cascade — after heuristic Stage 1 (sentence-level extractive scoring), Stage 1b calls an Ollama model to produce shorter per-hit summaries when the prompt still overflows the max_context_tokens budget; key design decisions include a 5-second timeout with soft-fail semantics, a sha256-keyed filesystem cache at conversations/cache/abstractive/ so repeat queries skip the LLM call entirely (cache_hits), a MIN_CONTENT_CHARS=400 guard that skips trivially short hits to avoid wasting LLM calls on content that is already compact, and the compressed field on ResolvedHit which carries either Heuristic or Abstractive provenance so downstream callers can distinguish between the two compression stages in observability output'
+mkdir -p "$GP_RICH_DIR"
+cat > "$GP_RICH_DIR/${GP_RICH_DATE}.md" <<RICHMD
+---
+schema: 1
+kind: day
+date: 2026-04-10
+generated_at: 2026-04-10T12:00:00Z
+generated_by:
+  extractive_model: qwen3:14b
+  abstractive_model: qwen3:14b
+  mur_version: test
+duration_ms: 100
+conv_count: 1
+msg_count: 4
+sources: [cc]
+pattern_refs: []
+keywords: [phase, stage, compression, tokens, overflow, cascade, abstractive, pipeline, budget, hits]
+links:
+  prev: null
+  next: null
+warnings: []
+input_content_sha: aabbcc
+---
+
+## Extractive spans
+
+[1] _{cc/rich-conv @L1}_:
+> ${GP_RICH_SPAN}
+
+## Abstractive narrative
+
+Phase 3.5 shipped Stage 1b LLM-abstractive compression into the mur ask overflow cascade after heuristic Stage 1 sentence-level extractive scoring calls an Ollama model to produce shorter per-hit summaries when the prompt still overflows the max_context_tokens budget with key design decisions including a 5-second timeout with soft-fail semantics and a sha256-keyed filesystem cache at conversations/cache/abstractive/ so repeat queries skip the LLM call entirely
+
+RICHMD
+
+# Reindex the new rich summary at layer=2 using the hash mock so the ask
+# query (same text as span) gets the same vector → cosine=1.0 → top result.
+MUR_OLLAMA_MOCK=hash "$MUR" conversations reindex --spans-only > /tmp/gp-step-18-reindex.txt 2>&1
+grep -q "reindexed spans:" /tmp/gp-step-18-reindex.txt \
+  || { echo "FAIL step 18: reindex before ask failed"; cat /tmp/gp-step-18-reindex.txt; exit 1; }
+
+# Nudge the budget tight on the fly for this one invocation via a config
+# override. The rich span (>=400 chars, 1 sentence so Stage 1 skips it,
+# Stage 1b compresses it) guarantees Stage 1b fires with compressed_count>0.
+GP_CONFIG_OVERRIDE="$TMPHOME/.mur/config.yaml"
+# Back up existing config (if any) and drop a tighter one.
+if [ -f "$GP_CONFIG_OVERRIDE" ]; then
+    cp "$GP_CONFIG_OVERRIDE" "$GP_CONFIG_OVERRIDE.bak"
+fi
+cat > "$GP_CONFIG_OVERRIDE" <<'EOF'
+conversations:
+  ask:
+    max_context_tokens: 400
+    response_tokens: 200
+    summarize_hits_enabled: true
+    compress_hits_enabled: true
+EOF
+
+# Ask with the exact span text as query — hash mock vector matches exactly.
+MUR_OLLAMA_MOCK=hash "$MUR" ask --json "$GP_RICH_SPAN" > /tmp/gp-step-18.json 2>/tmp/gp-step-18.err
+test -s /tmp/gp-step-18.json || { echo "FAIL step 18: empty JSON output; stderr:"; cat /tmp/gp-step-18.err; exit 1; }
+# stage_1b may be absent on non-overflow — but under this budget it MUST fire.
+jq -e '(.stage_1b.compressed_count // 0) + (.stage_1b.cache_hits // 0) > 0' /tmp/gp-step-18.json \
+  || { echo "FAIL step 18: Stage 1b didn't fire (compressed+cache_hits = 0); JSON:"; cat /tmp/gp-step-18.json; exit 1; }
+
+# Restore prior config to avoid surprising downstream re-runs.
+if [ -f "$GP_CONFIG_OVERRIDE.bak" ]; then
+    mv "$GP_CONFIG_OVERRIDE.bak" "$GP_CONFIG_OVERRIDE"
+else
+    rm -f "$GP_CONFIG_OVERRIDE"
+fi
+
 echo ""
-echo "=== ALL 17 STEPS GREEN ==="
+echo "=== ALL 18 STEPS GREEN ==="
