@@ -848,6 +848,17 @@ enum AgentAction {
         #[arg(long)]
         model: Option<String>,
     },
+    /// List agents under $MUR_HOME/agents
+    List {
+        /// Emit JSON instead of a human-readable table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show systemctl-style status for one agent
+    Status {
+        /// Agent name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1168,6 +1179,8 @@ async fn async_main() -> Result<()> {
                 display_name,
                 model,
             } => cmd::agent::cmd_create(&name, no_interactive, display_name, model)?,
+            AgentAction::List { json } => cmd::agent::cmd_list(json)?,
+            AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
