@@ -184,6 +184,7 @@ fn compress_one(
         .join(" ");
     ResolvedHit {
         snippet: new_snippet,
+        compressed: Some(super::Compression::Heuristic),
         ..h
     }
 }
@@ -326,5 +327,33 @@ mod tests {
         // Snippet actually compressed (shorter than original)
         assert!(o.snippet.len() < long_snippet.len());
         assert!(!o.snippet.is_empty());
+    }
+
+    #[test]
+    fn compress_hits_tags_modified_hits_with_heuristic() {
+        // A hit that actually gets compressed (>= MIN_CHARS + MIN_SENTENCES) must
+        // come back tagged Compression::Heuristic. Phase 3.5 provenance contract.
+        let long = (0..12)
+            .map(|i| format!("Info sentence number {i} with extended body text content."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(long.len() >= 400);
+        let h = hit(&long);
+        let out = compress_hits(vec![h], "info", 150);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].compressed,
+            Some(crate::conversations::ask::Compression::Heuristic),
+            "compressed hits must carry Heuristic provenance for Phase 3.5 to honor it"
+        );
+    }
+
+    #[test]
+    fn compress_hits_leaves_skipped_hits_untagged() {
+        // SKIP branch (too short) → compressed stays None.
+        let h = hit("Short hit. Just two sentences.");
+        let out = compress_hits(vec![h], "query", 10);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].compressed, None);
     }
 }
