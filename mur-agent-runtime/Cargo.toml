@@ -2,6 +2,16 @@
 name = "mur-agent-runtime"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
+
+[features]
+# Bundle an agent profile into the binary at compile time; set
+# MUR_EXPORT_AGENT_DIR=<path> alongside `cargo build --features=embedded-agent`.
+embedded-agent = []
+
+[build-dependencies]
+tar = "0.4"
+flate2 = "1"
 
 [[bin]]
 name = "mur-agent-runtime"
