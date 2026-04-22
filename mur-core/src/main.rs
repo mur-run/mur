@@ -899,6 +899,28 @@ enum AgentAction {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Manage an agent's system prompt (show/edit/set)
+    Prompt {
+        #[command(subcommand)]
+        action: AgentPromptAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentPromptAction {
+    /// Print the agent's sys_prompt.md contents to stdout
+    Show { name: String },
+    /// Open $EDITOR on sys_prompt.md
+    Edit { name: String },
+    /// Write sys_prompt.md, preserving a .bak copy of the previous value
+    Set {
+        name: String,
+        /// Inline prompt text (omit when using -f)
+        content: Option<String>,
+        /// Read prompt text from a file
+        #[arg(short = 'f', long = "file")]
+        file: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1229,6 +1251,15 @@ async fn async_main() -> Result<()> {
             AgentAction::InstallService { name, dry_run } => {
                 cmd::agent::cmd_install_service(&name, dry_run)?
             }
+            AgentAction::Prompt { action } => match action {
+                AgentPromptAction::Show { name } => cmd::agent::cmd_prompt_show(&name)?,
+                AgentPromptAction::Edit { name } => cmd::agent::cmd_prompt_edit(&name)?,
+                AgentPromptAction::Set {
+                    name,
+                    content,
+                    file,
+                } => cmd::agent::cmd_prompt_set(&name, content.as_deref(), file.as_deref())?,
+            },
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
