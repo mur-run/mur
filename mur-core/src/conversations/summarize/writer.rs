@@ -347,6 +347,7 @@ pub struct RollupDoc {
 pub async fn write_rollup(
     doc: &RollupDoc,
     narrative_embedding: Vec<f32>,
+    force: bool,
     root_override: Option<&str>,
 ) -> Result<WriteResult> {
     use crate::conversations::summarize::abstractive::RollupKind;
@@ -386,7 +387,12 @@ pub async fn write_rollup(
 
     if prior_exists {
         let existing = std::fs::read_to_string(&md_path)?;
-        if existing == new_body {
+        // Byte-equality short-circuit is a best-effort optimization for the
+        // "rerun with same inputs" path. `--force` bypasses it — users who
+        // pass --force explicitly want a fresh archive + rewrite regardless
+        // of whether the body happens to be byte-identical (e.g. two runs
+        // in the same wall-clock second producing the same generated_at).
+        if !force && existing == new_body {
             return Ok(WriteResult {
                 path: md_path,
                 archived: None,
@@ -757,7 +763,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let doc = dummy_week_rollup_doc();
-        write_rollup(&doc, vec![0.1; 16], Some(root)).await.unwrap();
+        write_rollup(&doc, vec![0.1; 16], false, Some(root))
+            .await
+            .unwrap();
 
         // Disk artifact
         let p = crate::conversations::paths::weekly_summary_path_for(&doc.window_label, Some(root));
@@ -780,7 +788,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let doc = dummy_month_rollup_doc();
-        write_rollup(&doc, vec![0.1; 16], Some(root)).await.unwrap();
+        write_rollup(&doc, vec![0.1; 16], false, Some(root))
+            .await
+            .unwrap();
         let p =
             crate::conversations::paths::monthly_summary_path_for(&doc.window_label, Some(root));
         assert!(p.exists());
@@ -798,11 +808,36 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let doc = dummy_week_rollup_doc();
-        let r1 = write_rollup(&doc, vec![0.1; 16], Some(root)).await.unwrap();
+        let r1 = write_rollup(&doc, vec![0.1; 16], false, Some(root))
+            .await
+            .unwrap();
         assert!(!r1.noop);
         // Second call with identical doc (same generated_at so body is byte-identical)
-        let r2 = write_rollup(&doc, vec![0.1; 16], Some(root)).await.unwrap();
+        let r2 = write_rollup(&doc, vec![0.1; 16], false, Some(root))
+            .await
+            .unwrap();
         assert!(r2.noop, "second identical write should be noop");
+    }
+
+    #[tokio::test]
+    async fn write_rollup_force_bypasses_idempotency() {
+        // `--force` must archive + rewrite even when the body is byte-identical.
+        // Guards against the Windows flake where two back-to-back rollups share
+        // a wall-clock-second `generated_at` and the short-circuit skips the
+        // archive the user explicitly requested.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let doc = dummy_week_rollup_doc();
+        let _ = write_rollup(&doc, vec![0.1; 16], false, Some(root))
+            .await
+            .unwrap();
+        let r2 = write_rollup(&doc, vec![0.1; 16], true, Some(root))
+            .await
+            .unwrap();
+        assert!(!r2.noop, "force=true must NOT noop on identical content");
+        assert!(r2.archived.is_some(), "force=true must archive the prior");
+        let hist = crate::conversations::paths::weekly_history_dir(Some(root));
+        assert_eq!(std::fs::read_dir(&hist).unwrap().count(), 1);
     }
 
     #[tokio::test]
@@ -810,12 +845,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let doc1 = dummy_week_rollup_doc();
-        let _ = write_rollup(&doc1, vec![0.1; 16], Some(root))
+        let _ = write_rollup(&doc1, vec![0.1; 16], false, Some(root))
             .await
             .unwrap();
         let mut doc2 = dummy_week_rollup_doc();
         doc2.abstractive.narrative = Some("different narrative for week".into());
-        let r2 = write_rollup(&doc2, vec![0.1; 16], Some(root))
+        let r2 = write_rollup(&doc2, vec![0.1; 16], false, Some(root))
             .await
             .unwrap();
         assert!(r2.archived.is_some());

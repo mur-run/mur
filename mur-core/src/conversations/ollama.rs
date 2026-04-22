@@ -127,6 +127,19 @@ impl OllamaClient {
 
     pub async fn generate(&self, req: GenerateRequest<'_>) -> Result<GenerateResponse> {
         if Self::mock_from_env() {
+            // Phase 3.5: simulate a slow LLM when the caller opts in via
+            // MUR_ABSTRACTIVE_MOCK_FAIL=timeout AND the request looks
+            // abstractive. Lets `tokio::time::timeout` fire in tests without
+            // a real server.
+            let is_abstractive = req
+                .system
+                .map(|s| s.contains("You compress text for retrieval context"))
+                .unwrap_or(false);
+            if is_abstractive
+                && std::env::var("MUR_ABSTRACTIVE_MOCK_FAIL").as_deref() == Ok("timeout")
+            {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
             return Ok(mock_generate(&req));
         }
         let url = format!("{}/api/generate", self.endpoint.trim_end_matches('/'));
@@ -246,11 +259,39 @@ fn extract_latest_question_from_condense_prompt(prompt: &str) -> String {
 /// Deterministic fake response for tests. Echoes model+prompt hints so each
 /// test can assert which call site fired without a real Ollama.
 fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
-    let response = if req
+    let is_abstractive = req
+        .system
+        .map(|s| s.contains("You compress text for retrieval context"))
+        .unwrap_or(false);
+
+    let response = if is_abstractive {
+        // Phase 3.5 abstractive mock. Honor MUR_ABSTRACTIVE_MOCK_FAIL for
+        // soft-fail tests. Default path: echo a short deterministic summary
+        // that is strictly shorter than the input content, so the validator
+        // in abstractive::compress_hit accepts it.
+        match std::env::var("MUR_ABSTRACTIVE_MOCK_FAIL").as_deref() {
+            Ok("empty") => String::new(),
+            Ok("not_shorter") => req.prompt.to_string() + " [MOCK PADDING MAKES THIS LONGER]",
+            // `timeout` is handled upstream in `OllamaClient::generate` via
+            // an actual `tokio::time::sleep`; if we reach here the caller's
+            // timeout wasn't lower than the sleep, so produce a normal summary.
+            _ => {
+                // The prompt body starts after "\n\n". Take first 40 chars of
+                // that, then " [mock summary]". Deterministic, strictly
+                // shorter than the input for any content ≥ ~56 chars.
+                let body = req
+                    .prompt
+                    .split_once("\n\n")
+                    .map(|x| x.1)
+                    .unwrap_or(req.prompt);
+                let first_40: String = body.chars().take(40).collect();
+                format!("{first_40} [mock summary]")
+            }
+        }
+    } else if req
         .prompt
         .contains("Extract the 1-3 most informative spans")
     {
-        // extractive stage: one valid span echoed as JSON array
         r#"[{"role":"user","conv_id":"mock","line_hint":1,"text":"mock extractive span"}]"#
             .to_string()
     } else if req.prompt.contains("narrative paragraph") {
@@ -263,8 +304,6 @@ fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
             "Mock narrative: today the developer explored mock compression.".to_string()
         }
     } else if req.prompt.contains("Standalone question:") {
-        // Phase 3.3 rewriter: identity (echo the raw latest question).
-        // Matches LangChain prompt's "return it as is" fallback.
         extract_latest_question_from_condense_prompt(req.prompt)
     } else if req.prompt.contains("[cit:") {
         "Mock answer about the archive [cit: 2026-04-19 claude-code/mock:L1].".to_string()
@@ -498,6 +537,50 @@ mod tests {
             "expected month-specific mock narrative; got: {}",
             resp.response
         );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn mock_abstractive_branch_returns_shorter_summary() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let body: String = "fact ".repeat(30);
+        let prompt = format!("Summarize the following in ≤64 tokens.\n\n{body}");
+        let req = GenerateRequest {
+            model: "m",
+            prompt: &prompt,
+            system: Some(
+                "You compress text for retrieval context. Preserve entities, dates, numbers.",
+            ),
+            stream: false,
+            options: GenerateOptions::default(),
+        };
+        let resp = client.generate(req).await.unwrap();
+        assert!(resp.response.contains("[mock summary]"));
+        assert!(resp.response.len() < body.len());
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn mock_abstractive_fail_empty_returns_empty() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        unsafe { std::env::set_var("MUR_ABSTRACTIVE_MOCK_FAIL", "empty") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let req = GenerateRequest {
+            model: "m",
+            prompt: "Summarize the following in ≤64 tokens.\n\nlong body here",
+            system: Some("You compress text for retrieval context."),
+            stream: false,
+            options: GenerateOptions::default(),
+        };
+        let resp = client.generate(req).await.unwrap();
+        assert_eq!(resp.response, "");
+        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
