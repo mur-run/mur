@@ -5,6 +5,7 @@ use mur_common::Source;
 use std::time::Duration;
 
 pub mod cite;
+pub mod compress;
 pub mod format;
 pub mod generate;
 pub mod prompt;
@@ -48,6 +49,7 @@ pub struct AskRequest {
     /// this differs from `question`. If `Skipped`, equals `question`.
     pub retrieval_query: String,
     pub rewriter_status: session::RewriterStatus,
+    pub compress_enabled: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -174,6 +176,7 @@ pub async fn ask_stream(
         &hits,
         req.max_context_tokens,
         req.response_tokens,
+        req.compress_enabled,
     );
 
     let hit_events: Vec<AskEvent> = hits
@@ -411,6 +414,7 @@ mod tests {
             prior_turns: vec![],
             retrieval_query: "What did we do yesterday?".into(),
             rewriter_status: session::RewriterStatus::Skipped,
+            compress_enabled: true,
         };
         // Empty index → should yield the "don't cover that" fallback.
         let resp = ask(req, Some(root)).await.unwrap();
