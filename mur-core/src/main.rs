@@ -914,6 +914,48 @@ enum AgentAction {
         #[command(subcommand)]
         action: AgentSkillAction,
     },
+    /// Manage an agent's permissions / entitlements
+    Perm {
+        #[command(subcommand)]
+        action: AgentPermAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentPermAction {
+    /// Print the entitlements block (or one section, e.g. "network")
+    Show {
+        name: String,
+        section: Option<String>,
+    },
+    /// Set a mode (currently only `network.outbound <restricted|unrestricted|off>`)
+    SetMode {
+        name: String,
+        key: String,
+        value: String,
+    },
+    /// Allow an outbound host glob
+    AllowHost { name: String, glob: String },
+    /// Deny an outbound host glob
+    DenyHost { name: String, glob: String },
+    /// Print the outbound host allow / deny lists
+    ListHosts { name: String },
+    /// Allow filesystem read on a path
+    AllowRead { name: String, path: String },
+    /// Allow filesystem write on a path
+    AllowWrite { name: String, path: String },
+    /// Deny filesystem access on a path
+    DenyPath { name: String, path: String },
+    /// Add a binary to the spawn allowlist
+    AllowSpawn { name: String, binary: String },
+    /// Remove a binary from the spawn allowlist
+    DenySpawn { name: String, binary: String },
+    /// Set a numeric resource limit (memory_mb, file_descriptors, processes)
+    SetLimit {
+        name: String,
+        key: String,
+        value: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1334,6 +1376,39 @@ async fn async_main() -> Result<()> {
                 }
                 AgentSkillAction::Show { name, skill_id } => {
                     cmd::agent::cmd_skill_show(&name, &skill_id)?
+                }
+            },
+            AgentAction::Perm { action } => match action {
+                AgentPermAction::Show { name, section } => {
+                    cmd::agent::cmd_perm_show(&name, section.as_deref())?
+                }
+                AgentPermAction::SetMode { name, key, value } => {
+                    cmd::agent::cmd_perm_set_mode(&name, &key, &value)?
+                }
+                AgentPermAction::AllowHost { name, glob } => {
+                    cmd::agent::cmd_perm_allow_host(&name, &glob)?
+                }
+                AgentPermAction::DenyHost { name, glob } => {
+                    cmd::agent::cmd_perm_deny_host(&name, &glob)?
+                }
+                AgentPermAction::ListHosts { name } => cmd::agent::cmd_perm_list_hosts(&name)?,
+                AgentPermAction::AllowRead { name, path } => {
+                    cmd::agent::cmd_perm_allow_read(&name, &path)?
+                }
+                AgentPermAction::AllowWrite { name, path } => {
+                    cmd::agent::cmd_perm_allow_write(&name, &path)?
+                }
+                AgentPermAction::DenyPath { name, path } => {
+                    cmd::agent::cmd_perm_deny_path(&name, &path)?
+                }
+                AgentPermAction::AllowSpawn { name, binary } => {
+                    cmd::agent::cmd_perm_allow_spawn(&name, &binary)?
+                }
+                AgentPermAction::DenySpawn { name, binary } => {
+                    cmd::agent::cmd_perm_deny_spawn(&name, &binary)?
+                }
+                AgentPermAction::SetLimit { name, key, value } => {
+                    cmd::agent::cmd_perm_set_limit(&name, &key, value)?
                 }
             },
         },
