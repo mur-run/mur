@@ -879,6 +879,18 @@ enum AgentAction {
         /// New name
         new: String,
     },
+    /// Dial an agent's Unix socket and issue A2A `message/send`
+    Send {
+        /// Agent name
+        name: String,
+        /// A2A message JSON: {"role":"user","parts":[...]}
+        message: String,
+    },
+    /// Dial an agent's Unix socket and print its A2A Agent Card
+    Card {
+        /// Agent name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1204,6 +1216,8 @@ async fn async_main() -> Result<()> {
             AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
             AgentAction::Remove { name, purge } => cmd::agent::cmd_remove(&name, purge)?,
             AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
+            AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
+            AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
