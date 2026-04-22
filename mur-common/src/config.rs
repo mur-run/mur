@@ -339,6 +339,13 @@ pub struct AskConfig {
     pub min_score: f64,
     #[serde(default = "ask_default_continue_history_turns")]
     pub continue_history_turns: u32,
+    /// Separate, shorter timeout for the rewriter LLM call (Phase 3.3).
+    /// Rewriter output is small (~80 tokens) and falling back to the raw
+    /// question on failure is non-fatal, so we don't want to burn the full
+    /// `timeout_secs` budget waiting on a slow/unreachable Ollama before
+    /// the user sees any response.
+    #[serde(default = "ask_default_rewriter_timeout")]
+    pub rewriter_timeout_secs: u32,
     #[serde(default = "ask_default_compress_hits_enabled")]
     pub compress_hits_enabled: bool,
     #[serde(default = "ask_default_summarize_hits_enabled")]
@@ -361,6 +368,7 @@ impl Default for AskConfig {
             timeout_secs: ask_default_timeout(),
             min_score: ask_default_min_score(),
             continue_history_turns: ask_default_continue_history_turns(),
+            rewriter_timeout_secs: ask_default_rewriter_timeout(),
             compress_hits_enabled: ask_default_compress_hits_enabled(),
             summarize_hits_enabled: ask_default_summarize_hits_enabled(),
             summarize_model: None,
@@ -394,6 +402,9 @@ fn ask_default_timeout() -> u32 {
 }
 fn ask_default_min_score() -> f64 {
     0.35
+}
+fn ask_default_rewriter_timeout() -> u32 {
+    8
 }
 fn ask_default_continue_history_turns() -> u32 {
     3

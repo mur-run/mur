@@ -303,7 +303,10 @@ fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
         } else {
             "Mock narrative: today the developer explored mock compression.".to_string()
         }
-    } else if req.prompt.contains("Standalone question:") {
+    } else if req.prompt.trim_end().ends_with("Standalone question:") {
+        // Match only CONDENSE prompts that END with this marker (the real
+        // prompt template places it as the final line). `contains` would
+        // mis-route any user question that happens to include the phrase.
         extract_latest_question_from_condense_prompt(req.prompt)
     } else if req.prompt.contains("[cit:") {
         "Mock answer about the archive [cit: 2026-04-19 claude-code/mock:L1].".to_string()
