@@ -45,80 +45,73 @@ pub fn render(
     hits: &[ResolvedHit],
     max_context_tokens: usize,
     response_tokens: usize,
+    compress_enabled: bool,
 ) -> RenderedPrompt {
     let system = SYSTEM_PROMPT.to_string();
-
-    let mut ctx = String::new();
-    let mut valid_citations = Vec::new();
-    for h in hits.iter() {
-        let anchor = cite_anchor(h);
-        valid_citations.push(anchor.clone());
-        ctx.push_str(&anchor);
-        ctx.push('\n');
-        ctx.push_str("> ");
-        ctx.push_str(&h.snippet.replace('\n', "\n> "));
-        ctx.push_str("\n\n");
-    }
-
     let truncated_question = truncate_chars(question, 2000);
 
-    let history_block = if prior_turns.is_empty() {
-        String::new()
-    } else {
-        format!("## Chat History\n\n{}\n", render_history_block(prior_turns))
-    };
-
-    let mut user =
-        format!("{history_block}## Context\n\n{ctx}\n## Question\n\n{truncated_question}");
-    let tokens_est = (system.len() + user.len()) / 4 + response_tokens + 120;
-
-    // Overflow handling: drop oldest history turns first, then shrink hits.
-    // Rationale: Chroma "Context Rot" research (2025) — hits matter more than
-    // distant history for RAG answer quality.
-    let mut history_cursor = 0usize; // # of oldest turns dropped so far
+    // Initial render: full history + full hits.
+    let mut history_cursor = 0usize;
     let mut trimmed_hits = hits.len();
+    let mut active_hits: Vec<ResolvedHit> = hits.to_vec();
 
-    let mut cur_tokens = tokens_est;
-    while cur_tokens > max_context_tokens && history_cursor < prior_turns.len() {
-        history_cursor += 1;
-        let history_block2 = if history_cursor >= prior_turns.len() {
-            String::new()
-        } else {
-            format!(
-                "## Chat History\n\n{}\n",
-                render_history_block(&prior_turns[history_cursor..])
-            )
-        };
-        user = format!("{history_block2}## Context\n\n{ctx}\n## Question\n\n{truncated_question}");
-        cur_tokens = (system.len() + user.len()) / 4 + response_tokens + 120;
+    let (mut user, mut valid_citations) = render_ctx_and_user(
+        &active_hits,
+        prior_turns,
+        history_cursor,
+        trimmed_hits,
+        &truncated_question,
+    );
+    let mut cur_tokens = tokens_est(&system, &user, response_tokens);
+
+    // Stage 1 — Phase 3.4 heuristic compression (fires at most once).
+    // Rationale: compression is less lossy than dropping a full history
+    // turn or a whole hit (Chroma "Context Rot" 2025). Fire BEFORE any
+    // drops so we preserve structure when budget is only marginally over.
+    if cur_tokens > max_context_tokens && compress_enabled {
+        let overage_chars = cur_tokens
+            .saturating_sub(max_context_tokens)
+            .saturating_mul(4);
+        let total_chars: usize = active_hits.iter().map(|h| h.snippet.len()).sum();
+        // Cap reduction at 60% so we don't over-prune on extremely tight budgets.
+        let ratio = 1.0 - (overage_chars as f64 / total_chars.max(1) as f64).min(0.6);
+        let avg = total_chars / active_hits.len().max(1);
+        let target = (avg as f64 * ratio) as usize;
+        active_hits = super::compress::compress_hits(active_hits.clone(), question, target);
+        (user, valid_citations) = render_ctx_and_user(
+            &active_hits,
+            prior_turns,
+            history_cursor,
+            trimmed_hits,
+            &truncated_question,
+        );
+        cur_tokens = tokens_est(&system, &user, response_tokens);
     }
 
-    // If still over budget, shrink hits from the tail.
-    let remaining_history_block = if history_cursor >= prior_turns.len() {
-        String::new()
-    } else {
-        format!(
-            "## Chat History\n\n{}\n",
-            render_history_block(&prior_turns[history_cursor..])
-        )
-    };
+    // Stage 2 — drop oldest history turns (existing Phase 3.3 behavior).
+    while cur_tokens > max_context_tokens && history_cursor < prior_turns.len() {
+        history_cursor += 1;
+        (user, valid_citations) = render_ctx_and_user(
+            &active_hits,
+            prior_turns,
+            history_cursor,
+            trimmed_hits,
+            &truncated_question,
+        );
+        cur_tokens = tokens_est(&system, &user, response_tokens);
+    }
+
+    // Stage 3 — shrink hits from the tail (existing Phase 3.3 behavior).
     while cur_tokens > max_context_tokens && trimmed_hits > 1 {
         trimmed_hits -= 1;
-        let mut ctx2 = String::new();
-        valid_citations.clear();
-        for h in hits.iter().take(trimmed_hits) {
-            let anchor = cite_anchor(h);
-            valid_citations.push(anchor.clone());
-            ctx2.push_str(&anchor);
-            ctx2.push('\n');
-            ctx2.push_str("> ");
-            ctx2.push_str(&h.snippet.replace('\n', "\n> "));
-            ctx2.push_str("\n\n");
-        }
-        user = format!(
-            "{remaining_history_block}## Context\n\n{ctx2}\n## Question\n\n{truncated_question}"
+        (user, valid_citations) = render_ctx_and_user(
+            &active_hits,
+            prior_turns,
+            history_cursor,
+            trimmed_hits,
+            &truncated_question,
         );
-        cur_tokens = (system.len() + user.len()) / 4 + response_tokens + 120;
+        cur_tokens = tokens_est(&system, &user, response_tokens);
     }
 
     RenderedPrompt {
@@ -127,6 +120,46 @@ pub fn render(
         tokens_est: cur_tokens,
         valid_citations,
     }
+}
+
+/// Build the user-section prompt body for a given (hits, history_cursor,
+/// trimmed_hits) configuration. Returns (user, valid_citations).
+///
+/// Extracted for DRY — called by the initial render, each overflow stage
+/// (compression, history-drop, hit-shrink).
+fn render_ctx_and_user(
+    active_hits: &[ResolvedHit],
+    prior_turns: &[super::session::TurnRecord],
+    history_cursor: usize,
+    trimmed_hits: usize,
+    truncated_question: &str,
+) -> (String, Vec<String>) {
+    let mut ctx = String::new();
+    let mut valid_citations = Vec::new();
+    for h in active_hits.iter().take(trimmed_hits) {
+        let anchor = cite_anchor(h);
+        valid_citations.push(anchor.clone());
+        ctx.push_str(&anchor);
+        ctx.push('\n');
+        ctx.push_str("> ");
+        ctx.push_str(&h.snippet.replace('\n', "\n> "));
+        ctx.push_str("\n\n");
+    }
+    let history_block = if history_cursor >= prior_turns.len() {
+        String::new()
+    } else {
+        format!(
+            "## Chat History\n\n{}\n",
+            render_history_block(&prior_turns[history_cursor..])
+        )
+    };
+    let user = format!("{history_block}## Context\n\n{ctx}\n## Question\n\n{truncated_question}");
+    (user, valid_citations)
+}
+
+/// Token-estimate heuristic shared between initial render + overflow stages.
+fn tokens_est(system: &str, user: &str, response_tokens: usize) -> usize {
+    (system.len() + user.len()) / 4 + response_tokens + 120
 }
 
 pub fn cite_anchor(h: &ResolvedHit) -> String {
@@ -200,7 +233,7 @@ mod tests {
         let hits = (0..20)
             .map(|i| hit_raw(&format!("c{i}"), &"x".repeat(3000)))
             .collect::<Vec<_>>();
-        let r = render("question?", &[], &hits, 6000, 1024);
+        let r = render("question?", &[], &hits, 6000, 1024, true);
         assert!(r.valid_citations.len() < hits.len());
         assert!(!r.valid_citations.is_empty());
     }
@@ -208,7 +241,7 @@ mod tests {
     #[test]
     fn render_lists_valid_citations_in_order() {
         let hits = vec![hit_raw("a", "one"), hit_raw("b", "two")];
-        let r = render("q?", &[], &hits, 6000, 1024);
+        let r = render("q?", &[], &hits, 6000, 1024, true);
         assert_eq!(r.valid_citations.len(), 2);
         assert!(r.user.contains("one"));
         assert!(r.user.contains("two"));
@@ -276,7 +309,7 @@ mod tests {
     fn render_includes_chat_history_section_when_prior_turns_non_empty() {
         let hits = vec![hit_raw("a", "one")];
         let prior = vec![turn_rec("prev q", "prev a")];
-        let r = render("new q?", &prior, &hits, 6000, 1024);
+        let r = render("new q?", &prior, &hits, 6000, 1024, true);
         assert!(
             r.user.contains("## Chat History"),
             "expected '## Chat History' header, got:\n{}",
@@ -291,7 +324,7 @@ mod tests {
     #[test]
     fn render_omits_chat_history_section_when_prior_turns_empty() {
         let hits = vec![hit_raw("a", "one")];
-        let r = render("q?", &[], &hits, 6000, 1024);
+        let r = render("q?", &[], &hits, 6000, 1024, true);
         assert!(!r.user.contains("## Chat History"));
     }
 
@@ -306,7 +339,9 @@ mod tests {
             turn_rec("q3-newest", "cccc-newest-ANSWER"),
         ];
         // Budget chosen so history doesn't fit but hit does.
-        let r = render("new q?", &prior, &hits, 500, 100);
+        // compress_enabled=false: isolate the history-drop path (Stage 2),
+        // preventing Stage 1 from firing first on this tight budget.
+        let r = render("new q?", &prior, &hits, 500, 100, false);
         // The hit must survive.
         assert!(r.user.contains("unique-hit-content"));
         // Oldest history turn must be dropped before middle/newest.
@@ -334,7 +369,7 @@ mod tests {
             turn_rec("q1", &"yyyyy".repeat(100)),
             turn_rec("q2", &"zzzzz".repeat(100)),
         ];
-        let r = render("q?", &prior, &hits, 1500, 300);
+        let r = render("q?", &prior, &hits, 1500, 300, false);
         // History should be entirely gone.
         assert!(
             !r.user.contains("## Chat History"),
@@ -348,5 +383,78 @@ mod tests {
             r.valid_citations.len()
         );
         assert!(!r.valid_citations.is_empty());
+    }
+
+    #[test]
+    fn render_compresses_hits_on_overflow_when_enabled() {
+        // Craft a single long hit (>= COMPRESS_MIN_CHARS = 400 and >= 4
+        // sentences) plus a tight budget to force Stage 1 compression.
+        let long_snippet = (0..10)
+            .map(|i| format!("Fact number {i} with some supporting body detail."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(long_snippet.len() >= 400);
+        let hits = vec![ResolvedHit {
+            layer: 0,
+            info: HitInfo {
+                layer: 0,
+                source: "cc".into(),
+                conv_id: "c1".into(),
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+                score: 0.9,
+            },
+            snippet: long_snippet.clone(),
+            line_hint: Some(1),
+            span_index_in_summary: None,
+            vector: None,
+        }];
+        let prior = vec![turn_rec("prev q", "prev a")];
+        // Very tight budget → Stage 1 must fire.
+        let r = render("q?", &prior, &hits, 400, 100, true);
+        // The rendered user message must contain LESS than the original
+        // hit's snippet (i.e. compression actually shrank it).
+        let context_section = r.user.find("## Context").unwrap();
+        let question_section = r.user.find("## Question").unwrap();
+        let ctx_slice = &r.user[context_section..question_section];
+        assert!(
+            ctx_slice.len() < long_snippet.len(),
+            "context section ({} chars) should be shorter than original snippet ({} chars)",
+            ctx_slice.len(),
+            long_snippet.len()
+        );
+        // Citation survived.
+        assert_eq!(r.valid_citations.len(), 1);
+    }
+
+    #[test]
+    fn render_does_not_compress_when_disabled() {
+        // Same setup, compress_enabled = false → Stage 1 skipped → fall
+        // through to Phase 3.3 behavior (drop oldest history, then shrink
+        // hits). With only one hit + no history, Stage 2 and Stage 3 are
+        // both no-ops, so the hit body stays INTACT (even over budget).
+        let long_snippet = (0..10)
+            .map(|i| format!("Fact number {i} with some supporting body detail."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let hits = vec![ResolvedHit {
+            layer: 0,
+            info: HitInfo {
+                layer: 0,
+                source: "cc".into(),
+                conv_id: "c1".into(),
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+                score: 0.9,
+            },
+            snippet: long_snippet.clone(),
+            line_hint: Some(1),
+            span_index_in_summary: None,
+            vector: None,
+        }];
+        let r = render("q?", &[], &hits, 400, 100, false);
+        // No compression → the full snippet appears in the context.
+        assert!(
+            r.user.contains(&long_snippet),
+            "with compression disabled, full snippet should be present"
+        );
     }
 }

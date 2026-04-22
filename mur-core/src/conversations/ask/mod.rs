@@ -175,6 +175,7 @@ pub async fn ask_stream(
         &hits,
         req.max_context_tokens,
         req.response_tokens,
+        true, // Phase 3.4: compression on by default; Task 4 wires req.compress_enabled
     );
 
     let hit_events: Vec<AskEvent> = hits
