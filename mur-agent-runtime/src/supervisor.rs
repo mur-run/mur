@@ -26,22 +26,42 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    // 1. Determine profile name from argv[0] (or --profile)
-    let argv0 = std::env::args().next().unwrap_or_default();
-    let name = match extract_profile_name(&argv0) {
-        Ok(n) => n,
-        Err(DispatchError::BareRuntime) => read_flag_profile_from_args()?,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
+    // 1. Decide whether this binary carries an embedded agent.
+    //    Embedded mode short-circuits MUR_HOME-based discovery and points
+    //    agent_home at the per-binary cache extraction dir, unless the
+    //    operator overrides via MUR_AGENT_EXTERNAL_PROFILE.
+    let embedded_override = std::env::var_os("MUR_AGENT_EXTERNAL_PROFILE").is_some();
+    let agent_home = if crate::export::bin_embed::has_embedded_agent() && !embedded_override {
+        match resolve_embedded_agent_home() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("error[embedded_extract]: {e}");
+                std::process::exit(1);
+            }
         }
+    } else {
+        // Determine profile name from argv[0] (or --profile)
+        let argv0 = std::env::args().next().unwrap_or_default();
+        let name = match extract_profile_name(&argv0) {
+            Ok(n) => n,
+            Err(DispatchError::BareRuntime) => read_flag_profile_from_args()?,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        };
+        let mur_home = std::env::var_os("MUR_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
+        let candidate = mur_home.join("agents").join(&name);
+        // Verify_name_match runs after profile load below for both branches.
+        // Stash the argv0-derived name so the post-load check can use it.
+        unsafe {
+            std::env::set_var("MUR_RUNTIME_EXPECTED_NAME", &name);
+        }
+        candidate
     };
 
-    // 2. Resolve agent_home and load profile
-    let mur_home = std::env::var_os("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
-    let agent_home = mur_home.join("agents").join(&name);
     let profile = match Profile::load(&agent_home) {
         Ok(p) => p,
         Err(e) => {
@@ -49,9 +69,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             std::process::exit(1);
         }
     };
-    if let Err(e) = verify_name_match(&name, &profile.inner.name) {
-        eprintln!("error: {e}");
-        std::process::exit(1);
+    if let Some(expected) = std::env::var_os("MUR_RUNTIME_EXPECTED_NAME") {
+        let expected = expected.to_string_lossy().into_owned();
+        if let Err(e) = verify_name_match(&expected, &profile.inner.name) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
     }
 
     // 3. Warn on loose entitlements
@@ -200,6 +223,22 @@ fn parent_pid() -> u32 {
     #[cfg(not(unix))]
     {
         0
+    }
+}
+
+/// Extract the binary's embedded agent (idempotent across runs) and
+/// return the resolved agent_home directory.
+fn resolve_embedded_agent_home() -> anyhow::Result<PathBuf> {
+    #[cfg(feature = "embedded-agent")]
+    {
+        use crate::export::bin_embed::EMBEDDED_TAR;
+        use crate::export::extract::{default_cache_base, extract_embedded_to};
+        let info = extract_embedded_to(EMBEDDED_TAR, &default_cache_base())?;
+        Ok(info.agent_home)
+    }
+    #[cfg(not(feature = "embedded-agent"))]
+    {
+        anyhow::bail!("embedded-agent feature not compiled in")
     }
 }
 
