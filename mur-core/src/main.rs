@@ -891,6 +891,14 @@ enum AgentAction {
         /// Agent name
         name: String,
     },
+    /// Generate and (optionally) install a launchd/systemd user service
+    InstallService {
+        /// Agent name
+        name: String,
+        /// Print the template only; do not write files or invoke launchctl/systemctl
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1218,6 +1226,9 @@ async fn async_main() -> Result<()> {
             AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
             AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
             AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
+            AgentAction::InstallService { name, dry_run } => {
+                cmd::agent::cmd_install_service(&name, dry_run)?
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
