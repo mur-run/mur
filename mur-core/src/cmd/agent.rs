@@ -745,6 +745,79 @@ pub fn cmd_mcp_rename(name: &str, old: &str, new: &str) -> Result<()> {
     save_profile(&path, &mut profile)
 }
 
+// ─── skill add/list/remove/show ──────────────────────────────────────────
+
+pub fn cmd_skill_list(name: &str) -> Result<()> {
+    let (_path, profile) = load_profile_for_edit(name)?;
+    if profile.skills.is_empty() {
+        println!("(no skills attached)");
+        return Ok(());
+    }
+    for s in &profile.skills {
+        println!("{s}");
+    }
+    Ok(())
+}
+
+pub fn cmd_skill_add(name: &str, source: &str) -> Result<()> {
+    let src = PathBuf::from(source);
+    if !src.exists() {
+        bail!("skill source '{source}' not found");
+    }
+    let basename = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow!("skill source has no basename"))?;
+    let (path, mut profile) = load_profile_for_edit(name)?;
+
+    let agent_home = path.parent().unwrap_or(Path::new(""));
+    let skills_dir = agent_home.join("skills");
+    fs::create_dir_all(&skills_dir).with_context(|| format!("create {}", skills_dir.display()))?;
+    let dest = skills_dir.join(basename);
+    fs::copy(&src, &dest)
+        .with_context(|| format!("copy {} -> {}", src.display(), dest.display()))?;
+
+    let skill_id = format!("skills/{basename}");
+    if !profile.skills.iter().any(|s| s == &skill_id) {
+        profile.skills.push(skill_id);
+    }
+    save_profile(&path, &mut profile)
+}
+
+pub fn cmd_skill_remove(name: &str, skill_id: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    let before = profile.skills.len();
+    profile.skills.retain(|s| s != skill_id);
+    if profile.skills.len() == before {
+        bail!("skill '{skill_id}' not found on '{name}'");
+    }
+    save_profile(&path, &mut profile)?;
+
+    // Delete the backing file if no other skill entry references it.
+    let agent_home = resolve_mur_home()?.join("agents").join(name);
+    let file_path = agent_home.join(skill_id);
+    if file_path.exists() {
+        let still_referenced = profile.skills.iter().any(|s| s == skill_id);
+        if !still_referenced {
+            let _ = fs::remove_file(&file_path);
+        }
+    }
+    Ok(())
+}
+
+pub fn cmd_skill_show(name: &str, skill_id: &str) -> Result<()> {
+    let (_path, profile) = load_profile_for_edit(name)?;
+    if !profile.skills.iter().any(|s| s == skill_id) {
+        bail!("skill '{skill_id}' not registered on '{name}'");
+    }
+    let agent_home = resolve_mur_home()?.join("agents").join(name);
+    let file_path = agent_home.join(skill_id);
+    let body =
+        fs::read_to_string(&file_path).with_context(|| format!("read {}", file_path.display()))?;
+    print!("{body}");
+    Ok(())
+}
+
 // ─── prompt show/edit/set ────────────────────────────────────────────────
 
 fn prompt_path_for(name: &str) -> Result<PathBuf> {
