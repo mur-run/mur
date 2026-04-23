@@ -17,6 +17,7 @@ mod gep;
 mod inject;
 mod interactive;
 mod llm;
+mod paths;
 mod retrieve;
 mod server;
 mod session;
@@ -325,6 +326,11 @@ enum Commands {
         /// Preview what would be fetched without downloading
         #[arg(long)]
         dry_run: bool,
+    },
+    /// List / show / accept / reject pending pattern drafts (Channel 2/3 proposals).
+    Drafts {
+        #[command(subcommand)]
+        action: DraftsAction,
     },
     /// Stop recording without export (alias: quit)
     Exit,
@@ -837,6 +843,38 @@ enum ConversationsAction {
 }
 
 #[derive(Subcommand)]
+enum DraftsAction {
+    /// List pending pattern drafts in a compact table.
+    List {
+        /// Only include drafts created within the last N days (default 30).
+        #[arg(long, default_value_t = 30)]
+        since: u32,
+    },
+    /// Show the full YAML + metadata for a single draft by id-prefix.
+    Show {
+        /// Unambiguous prefix of the draft's uuid (e.g. first 8 chars).
+        id: String,
+    },
+    /// Accept a draft locally: saves the embedded Pattern to ~/.mur/patterns/
+    /// with maturity=emerging. Does NOT yet notify the server (MVP).
+    Accept {
+        /// Unambiguous prefix of the draft's uuid.
+        id: String,
+        /// Override tier: session | project | core.
+        #[arg(long = "as-tier")]
+        as_tier: Option<String>,
+    },
+    /// Reject a draft server-side with an optional reason.
+    Reject {
+        /// Unambiguous prefix of the draft's uuid.
+        id: String,
+        /// Optional human-readable reason recorded on the draft.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum DeployAction {
     /// Start services (docker compose up)
     Up {
@@ -1171,6 +1209,16 @@ async fn async_main() -> Result<()> {
             let config = crate::store::config::load_config()?;
             cmd::sync_cmd::run_fetch(&config.server.url, dry_run).await?;
         }
+        Commands::Drafts { action } => match action {
+            DraftsAction::List { since } => cmd::drafts::cmd_drafts_list(since).await?,
+            DraftsAction::Show { id } => cmd::drafts::cmd_drafts_show(&id).await?,
+            DraftsAction::Accept { id, as_tier } => {
+                cmd::drafts::cmd_drafts_accept(&id, as_tier.as_deref()).await?
+            }
+            DraftsAction::Reject { id, reason } => {
+                cmd::drafts::cmd_drafts_reject(&id, reason.as_deref()).await?
+            }
+        },
         Commands::Exit | Commands::Quit => cmd::session::cmd_session_exit()?,
         Commands::Chat { action } => match action {
             ChatAction::List { since, src } => cmd::conversations_cmd::cmd_chat_list(since, src)?,
