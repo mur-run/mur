@@ -57,6 +57,18 @@ pub fn cache_put(key: &str, value: &str, root_override: Option<&str>) -> Result<
     Ok(())
 }
 
+/// Remove a cache entry. Best-effort — any filesystem error is logged at
+/// `debug` level and ignored (missing file is a normal outcome, not a
+/// problem). Used by the abstractive path to evict invalid cache hits
+/// rather than letting them persist as a poisoning cycle.
+pub fn cache_remove(key: &str, root_override: Option<&str>) {
+    let path = cache_dir(root_override).join(format!("{key}.txt"));
+    match std::fs::remove_file(&path) {
+        Ok(()) => tracing::debug!(?path, "cache entry removed"),
+        Err(e) => tracing::debug!(?path, err = ?e, "cache_remove (ignored)"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
