@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentProfile {
     pub schema: u32,
-    pub id: String,                              // UUIDv7
+    pub id: String, // UUIDv7
     pub name: String,
     pub display_name: String,
     pub version: String,
@@ -41,12 +41,19 @@ pub struct Persona {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PersonaCategory {
-    Research, Automation, Monitor, Notify, Commerce, Custom,
+    Research,
+    Automation,
+    Monitor,
+    Notify,
+    Commerce,
+    Custom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PersonaTraits {
-    pub tone: String, pub risk: String, pub verbosity: String,
+    pub tone: String,
+    pub risk: String,
+    pub verbosity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -74,7 +81,7 @@ pub struct TransportConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SocketTransportConfig {
     pub enabled: bool,
-    pub bind: String,                           // "unix:///path" or "tcp://host:port" (P0b)
+    pub bind: String, // "unix:///path" or "tcp://host:port" (P0b)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
 }
@@ -92,7 +99,9 @@ pub struct CommunicationConfig {
     #[serde(default)]
     pub sends_to: Vec<String>,
 }
-fn default_accepts_all() -> Vec<String> { vec!["*".to_string()] }
+fn default_accepts_all() -> Vec<String> {
+    vec!["*".to_string()]
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Entitlements {
@@ -127,11 +136,17 @@ pub struct OutboundNetwork {
     #[serde(default)]
     pub resolve_dns: ResolveDnsConfig,
 }
-fn default_protocols() -> Vec<String> { vec!["tcp".to_string()] }
+fn default_protocols() -> Vec<String> {
+    vec!["tcp".to_string()]
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum NetworkOutboundMode { Unrestricted, Restricted, Off }
+pub enum NetworkOutboundMode {
+    Unrestricted,
+    Restricted,
+    Off,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolveDnsConfig {
@@ -141,9 +156,16 @@ pub struct ResolveDnsConfig {
     pub servers: Vec<String>,
 }
 impl Default for ResolveDnsConfig {
-    fn default() -> Self { Self { mode: default_dns_mode(), servers: vec![] } }
+    fn default() -> Self {
+        Self {
+            mode: default_dns_mode(),
+            servers: vec![],
+        }
+    }
 }
-fn default_dns_mode() -> String { "system".to_string() }
+fn default_dns_mode() -> String {
+    "system".to_string()
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FilesystemEntitlement {
@@ -169,7 +191,11 @@ pub struct SpawnEntitlement {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum SpawnMode { Allowlist, Any, None }
+pub enum SpawnMode {
+    Allowlist,
+    Any,
+    None,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SyscallsEntitlement {
@@ -178,7 +204,9 @@ pub struct SyscallsEntitlement {
     #[serde(default)]
     pub extra_deny: Vec<String>,
 }
-fn default_syscalls_mode() -> String { "default".to_string() }
+fn default_syscalls_mode() -> String {
+    "default".to_string()
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct LimitsEntitlement {
@@ -191,9 +219,15 @@ pub struct LimitsEntitlement {
     #[serde(default = "default_procs")]
     pub processes: u32,
 }
-fn default_memory_mb() -> u64 { 512 }
-fn default_fds() -> u32 { 1024 }
-fn default_procs() -> u32 { 32 }
+fn default_memory_mb() -> u64 {
+    512
+}
+fn default_fds() -> u32 {
+    1024
+}
+fn default_procs() -> u32 {
+    32
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct NotificationsConfig {
@@ -208,14 +242,35 @@ pub struct NotificationsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "target", rename_all = "lowercase")]
 pub enum NotificationTarget {
-    Agent { name: String },
+    Agent {
+        name: String,
+    },
     Commander,
-    Email { address: String, #[serde(default)] smtp_config_file: Option<String> },
-    Slack { #[serde(default)] channel: Option<String>, #[serde(default)] webhook_url_env: Option<String> },
-    Webpush { url: String },
-    Webhook { url: String, #[serde(default = "default_post")] method: String, #[serde(default)] auth: Option<String> },
+    Email {
+        address: String,
+        #[serde(default)]
+        smtp_config_file: Option<String>,
+    },
+    Slack {
+        #[serde(default)]
+        channel: Option<String>,
+        #[serde(default)]
+        webhook_url_env: Option<String>,
+    },
+    Webpush {
+        url: String,
+    },
+    Webhook {
+        url: String,
+        #[serde(default = "default_post")]
+        method: String,
+        #[serde(default)]
+        auth: Option<String>,
+    },
 }
-fn default_post() -> String { "POST".to_string() }
+fn default_post() -> String {
+    "POST".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RetryConfig {
@@ -236,7 +291,11 @@ pub struct RetryPolicy {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum BackoffStrategy { Linear, Exponential, Fixed }
+pub enum BackoffStrategy {
+    Linear,
+    Exponential,
+    Fixed,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LifecycleConfig {
@@ -250,14 +309,26 @@ pub struct LifecycleConfig {
     #[serde(default = "default_mcp_required")]
     pub mcp_required: bool,
 }
-fn default_max_restarts() -> u32 { 3 }
-fn default_window() -> u64 { 600 }
-fn default_stop_timeout() -> u64 { 15 }
-fn default_mcp_required() -> bool { true }
+fn default_max_restarts() -> u32 {
+    3
+}
+fn default_window() -> u64 {
+    600
+}
+fn default_stop_timeout() -> u64 {
+    15
+}
+fn default_mcp_required() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum RestartPolicy { Never, OnFailure, Always }
+pub enum RestartPolicy {
+    Never,
+    OnFailure,
+    Always,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LockFile {
@@ -326,7 +397,10 @@ updated_at: "2026-04-22T10:00:00+08:00"
         let profile: AgentProfile = serde_yaml_ng::from_str(yaml).expect("parse");
         assert_eq!(profile.name, "agent_a");
         assert_eq!(profile.persona.category, PersonaCategory::Research);
-        assert_eq!(profile.entitlements.network.outbound.mode, NetworkOutboundMode::Restricted);
+        assert_eq!(
+            profile.entitlements.network.outbound.mode,
+            NetworkOutboundMode::Restricted
+        );
         let reserialized = serde_yaml_ng::to_string(&profile).expect("emit");
         let round_tripped: AgentProfile = serde_yaml_ng::from_str(&reserialized).expect("re-parse");
         assert_eq!(profile.id, round_tripped.id);

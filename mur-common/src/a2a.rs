@@ -3,20 +3,32 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
-    pub role: String,                  // "user" | "agent" | "system"
+    pub role: String, // "user" | "agent" | "system"
     pub parts: Vec<MessagePart>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum MessagePart {
-    Text { text: String },
-    Data { #[serde(rename = "mimeType")] mime_type: String, data: serde_json::Value },
+    Text {
+        text: String,
+    },
+    Data {
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        data: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum TaskState { Submitted, Working, Completed, Failed, Cancelled }
+pub enum TaskState {
+    Submitted,
+    Working,
+    Completed,
+    Failed,
+    Cancelled,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -44,9 +56,9 @@ pub struct TaskError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
-    pub jsonrpc: String,                    // always "2.0"
+    pub jsonrpc: String, // always "2.0"
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<serde_json::Value>,      // None = notification
+    pub id: Option<serde_json::Value>, // None = notification
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
@@ -54,7 +66,7 @@ pub struct JsonRpcRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
-    pub jsonrpc: String,                    // "2.0"
+    pub jsonrpc: String, // "2.0"
     pub id: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<serde_json::Value>,

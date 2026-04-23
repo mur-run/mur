@@ -5,19 +5,19 @@
 
 #![allow(dead_code)]
 
+pub mod communication_policy;
+pub mod entitlements;
+pub mod export;
+pub mod import;
+pub mod llm;
+pub mod lock_file;
 pub mod multi_call;
 pub mod profile;
-pub mod entitlements;
-pub mod lock_file;
+pub mod protocol;
+pub mod retry;
 pub mod socket_path;
 pub mod subcommand;
 pub mod supervisor;
-pub mod telemetry_writer;
-pub mod communication_policy;
-pub mod retry;
-pub mod llm;
 pub mod task_runner;
-pub mod protocol;
+pub mod telemetry_writer;
 pub mod transport;
-pub mod export;
-pub mod import;

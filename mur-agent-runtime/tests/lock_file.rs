@@ -1,4 +1,4 @@
-use mur_agent_runtime::lock_file::{is_stale, read_lock, write_lock, LockError, LockHandle};
+use mur_agent_runtime::lock_file::{LockError, LockHandle, is_stale, read_lock, write_lock};
 use mur_common::LockFile;
 use std::fs;
 use tempfile::TempDir;

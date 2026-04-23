@@ -10,7 +10,7 @@ pub const MUR_AGENT_UUID: &str = "mur.agent.uuid";
 pub const MUR_AGENT_NAME: &str = "mur.agent.name";
 pub const MUR_TASK_ID: &str = "mur.task.id";
 pub const MUR_MCP_SERVER: &str = "mur.mcp.server";
-pub const MUR_ENTITLEMENT_DENIED: &str = "mur.entitlement.denied";  // P0b usage
+pub const MUR_ENTITLEMENT_DENIED: &str = "mur.entitlement.denied"; // P0b usage
 
 pub const METHOD_LLM_CALL: &str = "telemetry/llm_call";
 pub const METHOD_TOOL_CALL: &str = "telemetry/tool_call";
