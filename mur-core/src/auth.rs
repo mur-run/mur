@@ -48,21 +48,14 @@ pub struct ErrorResponse {
 }
 
 fn auth_path() -> PathBuf {
-    // Honor MUR_HOME (authoritative, cross-platform) the same way
-    // `store::config::config_path` and `conversations::paths::mur_root` do.
-    // On Windows, `dirs::home_dir()` calls `SHGetKnownFolderPath` and
-    // ignores `HOME`/`USERPROFILE` env overrides, so integration tests
-    // (and users relocating their mur root) need MUR_HOME to redirect
-    // `auth.json` as well.
-    if let Ok(p) = std::env::var("MUR_HOME")
-        && !p.is_empty()
-    {
-        return PathBuf::from(p).join("auth.json");
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mur")
-        .join("auth.json")
+    // Route through `crate::paths::mur_root` (added in Phase 1 of the
+    // Windows CI hardening effort, PR #26). That helper honors `MUR_HOME`
+    // authoritatively — needed on Windows because `dirs::home_dir()` uses
+    // `SHGetKnownFolderPath` and ignores `HOME` / `USERPROFILE`. Without
+    // it, integration tests (and users who relocate their mur root) hit
+    // the host profile's `~/.mur/auth.json` and `load_tokens()` returns
+    // `None`.
+    crate::paths::mur_root(None).join("auth.json")
 }
 
 /// Load stored auth tokens, if any.
