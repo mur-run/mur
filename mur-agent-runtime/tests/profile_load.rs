@@ -52,7 +52,10 @@ fn load_expands_agent_home_template() {
     let profile = Profile::load(&agent_home).expect("load ok");
     let expected = format!("unix://{}/agent.sock", agent_home.display());
     assert_eq!(profile.inner.transport.socket.bind, expected);
-    assert_eq!(profile.inner.entitlements.filesystem.read[0], agent_home.to_string_lossy());
+    assert_eq!(
+        profile.inner.entitlements.filesystem.read[0],
+        agent_home.to_string_lossy()
+    );
 }
 
 #[test]

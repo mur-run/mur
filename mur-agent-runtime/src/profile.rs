@@ -22,7 +22,7 @@ pub struct Profile {
     pub inner: AgentProfile,
     pub agent_home: PathBuf,
     pub digest: String,
-    pub raw_yaml: String,      // retained for re-emit / yaml_edit round-trip
+    pub raw_yaml: String, // retained for re-emit / yaml_edit round-trip
 }
 
 impl Profile {
@@ -37,7 +37,12 @@ impl Profile {
         validate_uuid_v7(&inner.id)?;
         validate_filesystem_paths(&inner, agent_home)?;
         let digest = compute_digest(&expanded);
-        Ok(Self { inner, agent_home: agent_home.to_path_buf(), digest, raw_yaml })
+        Ok(Self {
+            inner,
+            agent_home: agent_home.to_path_buf(),
+            digest,
+            raw_yaml,
+        })
     }
 }
 
@@ -56,10 +61,7 @@ fn validate_uuid_v7(id: &str) -> Result<(), ProfileLoadError> {
     Ok(())
 }
 
-fn validate_filesystem_paths(
-    p: &AgentProfile,
-    _agent_home: &Path,
-) -> Result<(), ProfileLoadError> {
+fn validate_filesystem_paths(p: &AgentProfile, _agent_home: &Path) -> Result<(), ProfileLoadError> {
     for entry in &p.entitlements.filesystem.read {
         if entry.starts_with('/') && !entry.contains('*') {
             let path = Path::new(entry);

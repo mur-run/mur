@@ -1,8 +1,8 @@
 //! Entitlement warnings + category presets.
 //! P0a declares; P0b enforces.
 
-use mur_common::{AgentProfile, PersonaCategory};
 use mur_common::agent::{NetworkOutboundMode, SpawnMode};
+use mur_common::{AgentProfile, PersonaCategory};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WarningKind {
@@ -24,22 +24,19 @@ pub fn detect_warnings(profile: &AgentProfile) -> Vec<Warning> {
     if profile.entitlements.network.outbound.mode == NetworkOutboundMode::Unrestricted {
         warnings.push(Warning {
             kind: WarningKind::UnrestrictedNetwork,
-            message: "network.outbound.mode=unrestricted — no outbound host filtering"
-                .to_string(),
+            message: "network.outbound.mode=unrestricted — no outbound host filtering".to_string(),
         });
     }
     if profile.entitlements.filesystem.deny.is_empty() {
         warnings.push(Warning {
             kind: WarningKind::EmptyFilesystemDeny,
-            message: "filesystem.deny is empty — consider adding ~/.ssh, ~/.aws, etc"
-                .to_string(),
+            message: "filesystem.deny is empty — consider adding ~/.ssh, ~/.aws, etc".to_string(),
         });
     }
     if profile.entitlements.processes.spawn.mode == SpawnMode::Any {
         warnings.push(Warning {
             kind: WarningKind::OpenProcessSpawn,
-            message: "processes.spawn.mode=any — agent may spawn arbitrary binaries"
-                .to_string(),
+            message: "processes.spawn.mode=any — agent may spawn arbitrary binaries".to_string(),
         });
     }
     if profile.entitlements.limits.memory_mb > 2048 {
@@ -52,8 +49,7 @@ pub fn detect_warnings(profile: &AgentProfile) -> Vec<Warning> {
         });
     }
     for write in &profile.entitlements.filesystem.write {
-        if write.trim_end_matches('/') == "~"
-            || write.trim_end_matches('/') == "{{agent_home}}/.."
+        if write.trim_end_matches('/') == "~" || write.trim_end_matches('/') == "{{agent_home}}/.."
         {
             warnings.push(Warning {
                 kind: WarningKind::OverBroadFilesystemWrite,

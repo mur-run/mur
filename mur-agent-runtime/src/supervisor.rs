@@ -11,14 +11,16 @@ use crate::protocol::methods::{
     message_send::MessageSendHandler,
     tasks::{TasksCancelHandler, TasksGetHandler, TasksListHandler},
 };
+#[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
 use crate::task_runner::TaskRunner;
 use crate::telemetry_writer::{Event, TelemetryWriter};
-use crate::transport::{stdio::serve_stdio, unix_socket::serve_unix};
+use crate::transport::stdio::serve_stdio;
+#[cfg(unix)]
+use crate::transport::unix_socket::serve_unix;
 use mur_common::{LockFile, agent::LockTransports};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::signal::unix::{SignalKind, signal};
 use tracing::{info, warn};
 
 pub async fn entrypoint() -> anyhow::Result<()> {
@@ -126,6 +128,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         }
     }));
 
+    #[cfg(unix)]
     if socket_enabled {
         let canonical = PathBuf::from(
             profile
@@ -142,6 +145,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         transport_tasks.push(tokio::spawn(async move {
             let _ = serve_unix(d, bind, sock_notif_rx).await;
         }));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = sock_notif_rx;
     }
 
     // 8. Write running.lock
@@ -169,12 +176,21 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         }));
     }
 
-    // 10. Wait for SIGTERM / SIGINT
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let mut sigint = signal(SignalKind::interrupt())?;
-    tokio::select! {
-        _ = sigterm.recv() => info!("SIGTERM received"),
-        _ = sigint.recv() => info!("SIGINT received"),
+    // 10. Wait for SIGTERM / SIGINT (or Ctrl-C on Windows)
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint = signal(SignalKind::interrupt())?;
+        tokio::select! {
+            _ = sigterm.recv() => info!("SIGTERM received"),
+            _ = sigint.recv() => info!("SIGINT received"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        info!("Ctrl-C received");
     }
 
     // 11. Graceful shutdown

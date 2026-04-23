@@ -1,4 +1,4 @@
-use mur_agent_runtime::multi_call::{extract_profile_name, DispatchError};
+use mur_agent_runtime::multi_call::{DispatchError, extract_profile_name};
 
 #[test]
 fn extracts_from_symlink_basename() {
