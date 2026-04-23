@@ -1313,3 +1313,97 @@ fn mur_conversations_rollup_force_still_regenerates() {
         String::from_utf8_lossy(&out2.stdout)
     );
 }
+
+/// Windows CI Hardening Phase 1 — adversarial regression guard for the
+/// "same-wall-clock-second byte-equality swallows --force" bug class.
+///
+/// Phase 3.5 fixed this for `write_rollup` after it flaked on Windows;
+/// Phase 1 of the hardening effort fixes the matching shape in
+/// `write_summary` and locks the invariant with this test. Fails if any
+/// future writer reintroduces the byte-equality noop short-circuit without
+/// a `!force` guard.
+///
+/// Pairs with `mur_conversations_rollup_force_still_regenerates` (Phase 3.2.1).
+#[test]
+fn mur_conversations_compact_force_unconditionally_archives() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    let yesterday = (chrono::Utc::now().date_naive() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    // Seed one raw JSONL line so compact has something to do.
+    let raw = mur_home.join("conversations").join("raw").join(&yesterday);
+    std::fs::create_dir_all(&raw).unwrap();
+    let line = serde_json::json!({
+        "v": 1,
+        "ts": format!("{yesterday}T10:00:00Z"),
+        "src": "claude-code",
+        "conv": "c1",
+        "role": "user",
+        "content": {"t": "text", "v": "seed content for force-archive test"},
+        "meta": {},
+        "refs": []
+    });
+    std::fs::write(
+        raw.join("cc_c1.jsonl"),
+        serde_json::to_string(&line).unwrap() + "\n",
+    )
+    .unwrap();
+
+    // First compact — produces .md under summary/<date>.md.
+    let out1 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "compact"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("first compact");
+    assert!(
+        out1.status.success(),
+        "first compact failed: {}",
+        String::from_utf8_lossy(&out1.stderr)
+    );
+
+    // Immediately re-compact with --force. Same wall-clock second is
+    // possible on a fast runner. Pre-fix, the byte-equality short-circuit
+    // in `write_summary` swallows --force silently. Post-fix, the !force
+    // guard archives the prior md unconditionally.
+    let out2 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "compact", "--force"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("second compact --force");
+    assert!(
+        out2.status.success(),
+        "second compact --force failed: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+
+    // Assertion: .history/ exists with ≥1 archived entry.
+    let hist = mur_home
+        .join("conversations")
+        .join("summary")
+        .join(".history");
+    assert!(
+        hist.exists(),
+        ".history/ must exist after --force triggered an archive; \
+         stdout of --force call:\n{}",
+        String::from_utf8_lossy(&out2.stdout)
+    );
+    let archived = std::fs::read_dir(&hist)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .count();
+    assert!(
+        archived >= 1,
+        "Phase 1 hardening: compact --force must unconditionally archive \
+         the prior md even when the body is byte-identical. Found \
+         {archived} archived files; expected ≥1. stdout:\n{}",
+        String::from_utf8_lossy(&out2.stdout)
+    );
+}

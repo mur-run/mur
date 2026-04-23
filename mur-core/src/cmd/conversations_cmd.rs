@@ -1040,7 +1040,8 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
         .transpose()?;
 
     let report =
-        summarize::compact_missing(&cfg, since, args.if_stale, args.max_days, None).await?;
+        summarize::compact_missing(&cfg, since, args.if_stale, args.force, args.max_days, None)
+            .await?;
 
     if report.day_reports.is_empty() {
         println!("(nothing to compact)");
