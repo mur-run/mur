@@ -1,7 +1,9 @@
-use mur_agent_runtime::export::prereq_check::{
-    check_mcp_prereqs, format_missing_error, which_exists,
-};
+use mur_agent_runtime::export::prereq_check::{check_mcp_prereqs, format_missing_error};
+#[cfg(unix)]
+use mur_agent_runtime::export::prereq_check::which_exists;
 
+// Uses `sh` as the "exists" baseline — POSIX-only.
+#[cfg(unix)]
 #[test]
 fn check_finds_missing_basenames() {
     let manifest = r#"
@@ -25,6 +27,7 @@ fn check_returns_empty_when_no_prereqs() {
     assert!(missing.is_empty());
 }
 
+#[cfg(unix)]
 #[test]
 fn which_exists_finds_sh() {
     // /bin/sh is a POSIX requirement — should always be on PATH on Unix CI.
