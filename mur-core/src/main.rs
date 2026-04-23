@@ -1302,6 +1302,8 @@ async fn async_main() -> Result<()> {
                 continue_flag,
                 new_flag,
                 show_session,
+                no_summarize: false,
+                summarize_model: None,
             })
             .await?
         }
