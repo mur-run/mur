@@ -996,12 +996,10 @@ pub struct AskArgs {
     pub show_session: bool,
     /// Phase 3.5.1: disable Stage 1b for this invocation (overrides
     /// `conversations.ask.summarize_hits_enabled`).
-    #[allow(dead_code)]
     pub no_summarize: bool,
     /// Phase 3.5.1: override the Stage 1b model for this invocation (overrides
     /// `conversations.ask.summarize_model`). `None` means "use config value, or
     /// fall back to `ask.model` per the resolver below".
-    #[allow(dead_code)]
     pub summarize_model: Option<String>,
 }
 
@@ -1102,7 +1100,6 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
 /// `AskConfig::default`). clap rejects `--no-summarize` + `--summarize-model`
 /// together at parse time (see `conflicts_with` in `main.rs`), so the
 /// combination is unreachable here.
-#[allow(dead_code)]
 pub(crate) fn resolve_summarize(
     no_summarize: bool,
     cli_model: Option<&str>,
@@ -1191,6 +1188,12 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
             .transpose()?,
         min_score: args.min_score.unwrap_or(ask_cfg.min_score),
     };
+    let (effective_summarize_enabled, effective_summarize_model) = resolve_summarize(
+        args.no_summarize,
+        args.summarize_model.as_deref(),
+        ask_cfg.summarize_hits_enabled,
+        ask_cfg.summarize_model.as_deref(),
+    );
     let req = ask::AskRequest {
         question: question.clone(),
         filters,
@@ -1215,8 +1218,8 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         retrieval_query,
         rewriter_status,
         compress_enabled: ask_cfg.compress_hits_enabled,
-        summarize_enabled: ask_cfg.summarize_hits_enabled,
-        summarize_model: ask_cfg.summarize_model.clone(),
+        summarize_enabled: effective_summarize_enabled,
+        summarize_model: effective_summarize_model,
     };
 
     // Generate + collect response
