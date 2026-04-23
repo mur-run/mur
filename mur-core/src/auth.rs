@@ -48,6 +48,17 @@ pub struct ErrorResponse {
 }
 
 fn auth_path() -> PathBuf {
+    // Honor MUR_HOME (authoritative, cross-platform) the same way
+    // `store::config::config_path` and `conversations::paths::mur_root` do.
+    // On Windows, `dirs::home_dir()` calls `SHGetKnownFolderPath` and
+    // ignores `HOME`/`USERPROFILE` env overrides, so integration tests
+    // (and users relocating their mur root) need MUR_HOME to redirect
+    // `auth.json` as well.
+    if let Ok(p) = std::env::var("MUR_HOME")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p).join("auth.json");
+    }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
         .join(".mur")
