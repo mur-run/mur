@@ -61,6 +61,12 @@ pub mod skip_reason {
     pub const NOT_SHORTER: &str = "not_shorter";
     pub const OLLAMA_ERR: &str = "ollama_err";
     pub const TOO_SHORT: &str = "too_short";
+    /// The hit was already compressed by an earlier stage (Phase 3.4's
+    /// heuristic). Re-summarising an extract compounds information loss
+    /// without justifying the LLM latency — we leave the Heuristic output
+    /// in place and let Stage 2/3 (drop history, shrink hits) handle any
+    /// remaining overflow.
+    pub const ALREADY_COMPRESSED: &str = "already_compressed";
 }
 
 /// Aggregated stats from one `run_stage_1b` invocation. Drives log lines
@@ -121,13 +127,18 @@ pub async fn compress_hit(
             return CompressOutcome::CacheHit;
         }
         // Cached value invalid (empty, or unexpectedly not-shorter because
-        // hit content drifted) — fall through and try a fresh call.
+        // hit content drifted). Evict the bad entry so a future run with the
+        // same key doesn't keep reading-and-discarding it — this closes the
+        // poisoning cycle flagged in the Phase 3.5 code review (H2). If the
+        // fresh call below also fails, the state is "no cache entry" rather
+        // than "persistent bad entry".
         tracing::debug!(
             key,
             cached_len = cached.len(),
             orig_len = hit.snippet.len(),
-            "cache entry present but invalid, retrying"
+            "cache entry present but invalid, evicting + retrying"
         );
+        cache::cache_remove(&key, ctx.root_override);
     }
 
     let prompt = user_template(target, &hit.snippet);
@@ -176,26 +187,34 @@ pub async fn compress_hit(
 }
 
 /// Orchestrate Stage 1b: sort hits largest-first, sequentially compress
-/// until the token overshoot is resolved or candidates are exhausted.
+/// until the token budget is met or candidates are exhausted.
 ///
-/// `cur_tokens` and `max_context_tokens` are caller-measured in _tokens_ (not
-/// chars) but the per-hit char → token conversion uses the same `len / 4`
-/// heuristic `prompt::tokens_est` uses, so they're proportional. Re-measuring
-/// between hits happens by the caller after this function returns — this fn
-/// operates on pre-computed overshoot to avoid owning the `prompt::render`
-/// responsibility of re-building the full prompt string.
+/// `initial_cur_tokens` is the caller's pre-computed overshoot used to
+/// enter the loop; per-iteration we call `measure_tokens(hits)` for the
+/// ground-truth post-compression token count (H1 from the Phase 3.5
+/// review — the old per-hit `len/4` delta proxy drifts from the real
+/// prompt size because it doesn't count system prompt, markdown ceremony,
+/// or response_tokens floor).
+///
+/// Hits already marked `Compression::Heuristic` by Phase 3.4 Stage 1 are
+/// skipped with `skip_reason::ALREADY_COMPRESSED` to avoid double-compression
+/// that compounds information loss (H3 from the review).
 ///
 /// Invariants:
 /// - Sorted by `hit.snippet.len()` descending at entry — stable sort by
 ///   original index on ties so deterministic.
-/// - Early-exits when estimated post-compression tokens ≤ max.
+/// - Early-exits when `measure_tokens` reports ≤ max.
 /// - `target_tokens_per_hit` floored at `MIN_TARGET_TOKENS_PER_HIT`.
-pub async fn run_stage_1b(
+pub async fn run_stage_1b<F>(
     ctx: &AbstractiveCtx<'_>,
     hits: &mut [ResolvedHit],
-    cur_tokens: usize,
+    initial_cur_tokens: usize,
     max_context_tokens: usize,
-) -> Stage1bSummary {
+    measure_tokens: F,
+) -> Stage1bSummary
+where
+    F: Fn(&[ResolvedHit]) -> usize,
+{
     let start = std::time::Instant::now();
     let mut summary = Stage1bSummary {
         processed: 0,
@@ -204,7 +223,7 @@ pub async fn run_stage_1b(
         skipped: Vec::new(),
         duration_ms: 0,
     };
-    if cur_tokens <= max_context_tokens {
+    if initial_cur_tokens <= max_context_tokens {
         summary.duration_ms = start.elapsed().as_millis() as u64;
         return summary;
     }
@@ -220,23 +239,34 @@ pub async fn run_stage_1b(
             .then(a.cmp(&b))
     });
 
-    let mut cur_tokens = cur_tokens;
     let total = order.len();
 
     for (k, idx) in order.into_iter().enumerate() {
+        // H1: re-measure against the real rebuilt prompt each iteration
+        // rather than tracking a drifting `cur_tokens` variable.
+        let cur_tokens = measure_tokens(hits);
         if cur_tokens <= max_context_tokens {
             break;
         }
+
+        // H3: if Stage 1 already compressed this hit, leave its extract
+        // alone. The hit is still counted against `processed` so the
+        // skipped taxonomy is complete, but we never charge an LLM call.
+        if matches!(hits[idx].compressed, Some(super::Compression::Heuristic)) {
+            summary.processed += 1;
+            summary.skipped.push((idx, skip_reason::ALREADY_COMPRESSED));
+            continue;
+        }
+
         let overshoot = cur_tokens.saturating_sub(max_context_tokens);
         let rem_denom = total - k; // always ≥ 1 (k < total inside the loop)
-        // ceil-div for "share out" the overshoot reduction.
+        // ceil-div for "share out" the overshoot reduction across remaining hits.
         let reduce_by = overshoot.div_ceil(rem_denom);
         let cur_hit_tokens = hits[idx].snippet.len() / 4;
         let target = cur_hit_tokens
             .saturating_sub(reduce_by)
             .max(MIN_TARGET_TOKENS_PER_HIT);
 
-        let before_tokens = cur_hit_tokens;
         let outcome = compress_hit(ctx, &mut hits[idx], target).await;
         summary.processed += 1;
         match outcome {
@@ -244,9 +274,6 @@ pub async fn run_stage_1b(
             CompressOutcome::CacheHit => summary.cache_hits += 1,
             CompressOutcome::Skipped(reason) => summary.skipped.push((idx, reason)),
         }
-        let after_tokens = hits[idx].snippet.len() / 4;
-        let delta = before_tokens.saturating_sub(after_tokens);
-        cur_tokens = cur_tokens.saturating_sub(delta);
     }
 
     summary.duration_ms = start.elapsed().as_millis() as u64;
@@ -419,6 +446,7 @@ mod tests {
             &mut hits,
             orig_total,
             max_context_chars,
+            |hs| hs.iter().map(|h| h.snippet.len()).sum::<usize>(),
         )
         .await;
         assert!(
@@ -454,6 +482,7 @@ mod tests {
             &mut hits,
             orig_total,
             max_context_chars,
+            |hs| hs.iter().map(|h| h.snippet.len()).sum::<usize>(),
         )
         .await;
         assert!(summary.compressed_count >= 1);
@@ -483,10 +512,143 @@ mod tests {
             &mut hits,
             orig_total,
             orig_total + 10_000, // huge budget → no overshoot
+            |hs| hs.iter().map(|h| h.snippet.len()).sum::<usize>(),
         )
         .await;
         assert_eq!(summary.processed, 0);
         assert_eq!(summary.compressed_count, 0);
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    /// H3 follow-up (Phase 3.5 review): hits already compressed by Stage 1's
+    /// heuristic extractive pass must be skipped by Stage 1b with the
+    /// `ALREADY_COMPRESSED` reason — re-summarising an extract via LLM
+    /// compounds information loss without justifying the latency.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn run_stage_1b_skips_heuristic_compressed_hits() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let tmp = tempfile::tempdir().unwrap();
+        let mut hits = vec![long_hit(30), long_hit(30)];
+        // Mark the first (largest) hit as already compressed by Stage 1.
+        hits[0].compressed = Some(super::super::Compression::Heuristic);
+        let orig_snippet_0 = hits[0].snippet.clone();
+        let orig_total: usize = hits.iter().map(|h| h.snippet.len()).sum();
+        let max_context_chars = orig_total / 2; // force overshoot → Stage 1b runs
+
+        let summary = run_stage_1b(
+            &ctx(&client, tmp.path().to_str().unwrap()),
+            &mut hits,
+            orig_total,
+            max_context_chars,
+            |hs| hs.iter().map(|h| h.snippet.len()).sum::<usize>(),
+        )
+        .await;
+
+        // Heuristic-marked hit should have been skipped, not compressed.
+        assert!(
+            summary
+                .skipped
+                .iter()
+                .any(|(idx, reason)| *idx == 0 && *reason == skip_reason::ALREADY_COMPRESSED),
+            "hit 0 should be ALREADY_COMPRESSED; got skipped={:?}",
+            summary.skipped
+        );
+        // Its snippet + provenance flag are untouched.
+        assert_eq!(
+            hits[0].snippet, orig_snippet_0,
+            "heuristic-compressed hit snippet must be preserved"
+        );
+        assert_eq!(
+            hits[0].compressed,
+            Some(super::super::Compression::Heuristic),
+            "heuristic-compressed hit flag must be preserved"
+        );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    /// H2 follow-up (Phase 3.5 review): an invalid cache entry (empty /
+    /// not-shorter) must be evicted during the fallback-to-fresh-call path,
+    /// so a subsequent run with the same key doesn't keep reading-and-
+    /// discarding the same bad entry every time.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn compress_hit_evicts_invalid_cache_entry_then_regenerates() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+
+        // Seed the cache with an INVALID (empty) entry keyed to the hit we're
+        // about to compress.
+        let mut h = long_hit(20);
+        let target = 128usize.max(MIN_TARGET_TOKENS_PER_HIT);
+        let key = cache::cache_key("qwen3:14b", target, &h.snippet);
+        cache::cache_put(&key, "", Some(root)).unwrap();
+        let bad_path = cache::cache_dir(Some(root)).join(format!("{key}.txt"));
+        assert!(bad_path.exists(), "precondition: bad cache entry seeded");
+
+        // Compress — the bad entry should be evicted, and the fresh LLM call
+        // should produce a new valid cache entry.
+        let outcome = compress_hit(&ctx(&client, root), &mut h, target).await;
+        assert_eq!(
+            outcome,
+            CompressOutcome::Compressed,
+            "fresh call should succeed after evicting bad entry"
+        );
+
+        // The cache file now holds the mock's summary (non-empty,
+        // strictly shorter than the original).
+        let reloaded = std::fs::read_to_string(&bad_path).unwrap();
+        assert!(
+            !reloaded.is_empty(),
+            "cache entry was re-populated with valid content"
+        );
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    /// H1 follow-up (Phase 3.5 review): the `measure_tokens` callback is
+    /// invoked at least once per loop iteration so Stage 1b's exit decision
+    /// uses ground-truth prompt size, not a drifting per-hit delta proxy.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn run_stage_1b_calls_measure_tokens_each_iteration() {
+        use std::cell::Cell;
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
+        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let tmp = tempfile::tempdir().unwrap();
+        let mut hits: Vec<ResolvedHit> = (0..3).map(|_| long_hit(30)).collect();
+        let orig_total: usize = hits.iter().map(|h| h.snippet.len()).sum();
+        // Report a static (unrealistically high) cur via the closure so Stage
+        // 1b never early-exits on ground-truth — it iterates through all 3 hits.
+        let calls = Cell::new(0usize);
+        let synthetic_cur = orig_total * 10;
+        let summary = run_stage_1b(
+            &ctx(&client, tmp.path().to_str().unwrap()),
+            &mut hits,
+            orig_total * 10,
+            orig_total,
+            |_hs| {
+                calls.set(calls.get() + 1);
+                synthetic_cur
+            },
+        )
+        .await;
+
+        assert_eq!(
+            calls.get(),
+            3,
+            "measure_tokens must be called once per iteration (expected 3 for 3 hits); got {}",
+            calls.get()
+        );
+        assert_eq!(summary.processed, 3);
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }

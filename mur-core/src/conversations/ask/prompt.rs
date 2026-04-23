@@ -99,9 +99,29 @@ pub async fn render(
         && summarize_enabled
         && let Some(ctx) = abstractive_ctx
     {
-        let summary =
-            super::abstractive::run_stage_1b(ctx, &mut active_hits, cur_tokens, max_context_tokens)
-                .await;
+        // H1: pass a closure that re-renders the full prompt and runs the
+        // real `tokens_est` heuristic so Stage 1b's early-exit uses ground
+        // truth, not a per-hit `len/4` delta that ignores system prompt +
+        // markdown ceremony + response_tokens floor.
+        let system_ref = system.as_str();
+        let truncated_question_ref = truncated_question.as_str();
+        let summary = super::abstractive::run_stage_1b(
+            ctx,
+            &mut active_hits,
+            cur_tokens,
+            max_context_tokens,
+            |hs| {
+                let (u, _) = render_ctx_and_user(
+                    hs,
+                    prior_turns,
+                    history_cursor,
+                    trimmed_hits,
+                    truncated_question_ref,
+                );
+                tokens_est(system_ref, &u, response_tokens)
+            },
+        )
+        .await;
         for (idx, reason) in &summary.skipped {
             tracing::warn!(hit_idx = idx, reason, "stage-1b skipped");
         }
@@ -517,7 +537,10 @@ mod tests {
             root_override: Some(tmp.path().to_str().unwrap()),
         };
         // 3 long hits + tight budget so Stage 1 heuristic compression alone
-        // still overruns, forcing Stage 1b.
+        // still overruns, forcing Stage 1b. Stage 1 will mark each hit
+        // Heuristic; Phase 3.5 review H3 then requires Stage 1b to SKIP them
+        // with `already_compressed` (avoids compounding extractive + abstractive
+        // loss on the same hit). Stage 2/3 pick up the remaining overflow.
         let big = (0..50)
             .map(|i| format!("Sentence number {i} with plenty of supporting body."))
             .collect::<Vec<_>>()
@@ -529,15 +552,31 @@ mod tests {
             "Stage 1b summary must surface when fired"
         );
         let s = r.stage_1b.unwrap();
-        assert!(
-            s.compressed_count + s.cache_hits > 0,
-            "Stage 1b should have touched at least one hit; got {s:?}"
+        // After H3: every hit entering Stage 1b is already Heuristic-compressed,
+        // so all are skipped with ALREADY_COMPRESSED. The Stage 1b pass still
+        // fires (surfaces a summary) but does not re-compress.
+        use crate::conversations::ask::abstractive::skip_reason;
+        assert_eq!(
+            s.processed, 3,
+            "Stage 1b should have evaluated all 3 hits; got {s:?}"
         );
+        assert_eq!(
+            s.compressed_count, 0,
+            "Stage 1b must not re-compress Heuristic extracts; got {s:?}"
+        );
+        assert!(
+            s.skipped
+                .iter()
+                .all(|(_, reason)| *reason == skip_reason::ALREADY_COMPRESSED),
+            "every skip should be ALREADY_COMPRESSED; got {:?}",
+            s.skipped
+        );
+        // All hits remain Heuristic-marked — Stage 1b must not overwrite provenance.
         assert!(
             r.final_hits
                 .iter()
-                .any(|h| h.compressed == Some(super::super::Compression::Abstractive)),
-            "expected at least one hit to be tagged Abstractive"
+                .all(|h| h.compressed == Some(super::super::Compression::Heuristic)),
+            "every final hit should retain Compression::Heuristic"
         );
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
