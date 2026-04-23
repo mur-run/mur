@@ -287,6 +287,7 @@ pub async fn compact_missing(
     cfg: &CompactConfig,
     since: Option<NaiveDate>,
     if_stale: bool,
+    force: bool,
     max_days_override: Option<u32>,
     root_override: Option<&str>,
 ) -> Result<CompactReport> {
@@ -301,12 +302,14 @@ pub async fn compact_missing(
         .collect();
     candidates.sort();
 
+    // --force implies --if-stale semantics plus unconditional archive in write_summary.
+    let effective_force = force || if_stale;
+
     let mut report = CompactReport::default();
     for date in candidates.into_iter().take(max_days) {
-        // skip logic: if summary exists and --if-stale is off, skip
+        // skip logic: if summary exists and neither --force nor --if-stale is set, skip
         let (md_path, _) = summary_paths_for(date, root_override);
-        let force = if_stale;
-        if md_path.exists() && !if_stale {
+        if md_path.exists() && !effective_force {
             report.skipped += 1;
             report.day_reports.push(DayReport {
                 date,
@@ -318,7 +321,7 @@ pub async fn compact_missing(
             });
             continue;
         }
-        let r = compact_day(date, force, cfg, root_override).await?;
+        let r = compact_day(date, effective_force, cfg, root_override).await?;
         match &r.outcome {
             Outcome::Written { .. } | Outcome::Noop => report.ok += 1,
             Outcome::Failed(_) => report.err += 1,
@@ -545,7 +548,7 @@ mod orch_tests {
         }
         let mut c = cfg();
         c.max_days_per_run = 3;
-        let report = compact_missing(&c, None, false, None, Some(root))
+        let report = compact_missing(&c, None, false, false, None, Some(root))
             .await
             .unwrap();
         assert_eq!(report.day_reports.len(), 3);
