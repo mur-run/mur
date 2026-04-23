@@ -11,7 +11,8 @@ pub mod cursor;
 pub mod inbox;
 pub mod outbox;
 
-pub use client::SyncClient;
+#[allow(unused_imports)]
+pub use client::{DraftRecord, DraftsPendingResponse, SyncClient};
 pub use cursor::{CursorStore, FetchCursor};
 pub use inbox::Inbox;
 pub use outbox::Outbox;
