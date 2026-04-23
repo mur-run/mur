@@ -994,6 +994,13 @@ pub struct AskArgs {
     #[allow(dead_code)]
     pub new_flag: bool,
     pub show_session: bool,
+    /// Phase 3.5.1: disable Stage 1b for this invocation (overrides
+    /// `conversations.ask.summarize_hits_enabled`).
+    pub no_summarize: bool,
+    /// Phase 3.5.1: override the Stage 1b model for this invocation (overrides
+    /// `conversations.ask.summarize_model`). `None` means "use config value, or
+    /// fall back to `ask.model` per the resolver below".
+    pub summarize_model: Option<String>,
 }
 
 pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
@@ -1086,6 +1093,26 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
     Ok(())
 }
 
+/// Phase 3.5.1 — collapse CLI summarize flags + AskConfig defaults into the
+/// effective `(summarize_enabled, summarize_model)` pair fed to `AskRequest`.
+///
+/// Precedence: CLI flag > config > hardcoded default (handled upstream by
+/// `AskConfig::default`). clap rejects `--no-summarize` + `--summarize-model`
+/// together at parse time (see `conflicts_with` in `main.rs`), so the
+/// combination is unreachable here.
+pub(crate) fn resolve_summarize(
+    no_summarize: bool,
+    cli_model: Option<&str>,
+    cfg_enabled: bool,
+    cfg_model: Option<&str>,
+) -> (bool, Option<String>) {
+    let enabled = !no_summarize && cfg_enabled;
+    let model = cli_model
+        .map(|s| s.to_string())
+        .or_else(|| cfg_model.map(|s| s.to_string()));
+    (enabled, model)
+}
+
 pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     use crate::conversations::ask;
     use crate::conversations::ollama::OllamaClient;
@@ -1161,6 +1188,12 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
             .transpose()?,
         min_score: args.min_score.unwrap_or(ask_cfg.min_score),
     };
+    let (effective_summarize_enabled, effective_summarize_model) = resolve_summarize(
+        args.no_summarize,
+        args.summarize_model.as_deref(),
+        ask_cfg.summarize_hits_enabled,
+        ask_cfg.summarize_model.as_deref(),
+    );
     let req = ask::AskRequest {
         question: question.clone(),
         filters,
@@ -1185,8 +1218,8 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         retrieval_query,
         rewriter_status,
         compress_enabled: ask_cfg.compress_hits_enabled,
-        summarize_enabled: ask_cfg.summarize_hits_enabled,
-        summarize_model: ask_cfg.summarize_model.clone(),
+        summarize_enabled: effective_summarize_enabled,
+        summarize_model: effective_summarize_model,
     };
 
     // Generate + collect response
@@ -1395,5 +1428,66 @@ fn system_free_memory_mb() -> Option<u64> {
         None
     } else {
         Some(avail_kib / 1024)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_summarize_no_flag_uses_config_enabled_and_model() {
+        let (enabled, model) = resolve_summarize(
+            /* no_summarize */ false,
+            /* cli_model    */ None,
+            /* cfg_enabled  */ true,
+            /* cfg_model    */ Some("qwen3:14b"),
+        );
+        assert!(enabled);
+        assert_eq!(model.as_deref(), Some("qwen3:14b"));
+    }
+
+    #[test]
+    fn resolve_summarize_no_summarize_flag_forces_disabled_regardless_of_config() {
+        let (enabled, model) = resolve_summarize(
+            /* no_summarize */ true,
+            /* cli_model    */ None,
+            /* cfg_enabled  */ true,
+            /* cfg_model    */ Some("qwen3:14b"),
+        );
+        assert!(!enabled, "--no-summarize must override enabled config");
+        // model still bubbles up (CLI didn't set one) — the disabled flag is what matters.
+        assert_eq!(model.as_deref(), Some("qwen3:14b"));
+    }
+
+    #[test]
+    fn resolve_summarize_cli_model_overrides_config_model() {
+        let (enabled, model) = resolve_summarize(
+            /* no_summarize */ false,
+            /* cli_model    */ Some("qwen3:4b"),
+            /* cfg_enabled  */ true,
+            /* cfg_model    */ Some("qwen3:14b"),
+        );
+        assert!(enabled);
+        assert_eq!(
+            model.as_deref(),
+            Some("qwen3:4b"),
+            "CLI model wins over config"
+        );
+    }
+
+    #[test]
+    fn resolve_summarize_cli_model_falls_back_to_config_when_none() {
+        let (enabled, model) = resolve_summarize(
+            /* no_summarize */ false,
+            /* cli_model    */ None,
+            /* cfg_enabled  */ false,
+            /* cfg_model    */ Some("qwen3:14b"),
+        );
+        assert!(
+            !enabled,
+            "config-disabled stays disabled without CLI override"
+        );
+        assert_eq!(model.as_deref(), Some("qwen3:14b"));
     }
 }
