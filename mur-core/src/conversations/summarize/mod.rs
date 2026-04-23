@@ -241,7 +241,15 @@ pub async fn compact_day(
         }
     };
 
-    match writer::write_summary(&doc, summary_embedding, span_embeddings, root_override).await {
+    match writer::write_summary(
+        &doc,
+        summary_embedding,
+        span_embeddings,
+        force,
+        root_override,
+    )
+    .await
+    {
         Ok(w) => Ok(DayReport {
             date,
             outcome: if w.noop {
