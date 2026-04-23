@@ -1301,11 +1301,7 @@ pub fn cmd_stats(name: &str) -> Result<()> {
         }
     }
 
-    let avg_latency = if llm_calls > 0 {
-        latency_total / llm_calls
-    } else {
-        0
-    };
+    let avg_latency = latency_total.checked_div(llm_calls).unwrap_or(0);
     println!("agent: {name}");
     println!("llm_calls: {llm_calls}");
     println!("input_tokens: {input_tokens}");
