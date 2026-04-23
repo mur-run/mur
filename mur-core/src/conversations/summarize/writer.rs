@@ -50,6 +50,7 @@ pub async fn write_summary(
     doc: &SummaryDoc,
     summary_embedding: Vec<f32>,
     span_embeddings: Vec<Vec<f32>>,
+    force: bool,
     root_override: Option<&str>,
 ) -> Result<WriteResult> {
     let (md_path, _yaml_path) = summary_paths_for(doc.date, root_override);
@@ -64,7 +65,13 @@ pub async fn write_summary(
 
     if prior_exists {
         let existing = std::fs::read_to_string(&md_path)?;
-        if existing == new_body {
+        // Byte-equality short-circuit is a best-effort optimization for the
+        // "rerun with same inputs" path. `--force` bypasses it — users who
+        // pass --force explicitly want a fresh archive + rewrite regardless
+        // of whether the body happens to be byte-identical (e.g. two runs
+        // in the same wall-clock second producing the same generated_at).
+        // Mirrors the fix in `write_rollup` (Phase 3.5 post-review).
+        if !force && existing == new_body {
             return Ok(WriteResult {
                 path: md_path,
                 archived: None,
@@ -639,7 +646,7 @@ mod tests {
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
         let doc = dummy_doc(date);
-        let r = write_summary(&doc, vec![0.0; 16], vec![], Some(root))
+        let r = write_summary(&doc, vec![0.0; 16], vec![], false, Some(root))
             .await
             .unwrap();
         assert!(!r.noop);
@@ -659,10 +666,10 @@ mod tests {
         let doc = dummy_doc(date);
         let mut d2 = dummy_doc(date);
         d2.generated_at = doc.generated_at; // force bit-identical
-        let _ = write_summary(&doc, vec![0.0; 16], vec![], Some(root))
+        let _ = write_summary(&doc, vec![0.0; 16], vec![], false, Some(root))
             .await
             .unwrap();
-        let r2 = write_summary(&d2, vec![0.0; 16], vec![], Some(root))
+        let r2 = write_summary(&d2, vec![0.0; 16], vec![], false, Some(root))
             .await
             .unwrap();
         assert!(r2.noop);
@@ -676,12 +683,12 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
         let mut doc1 = dummy_doc(date);
         doc1.abstractive.narrative = Some("version 1".into());
-        let _ = write_summary(&doc1, vec![0.0; 16], vec![], Some(root))
+        let _ = write_summary(&doc1, vec![0.0; 16], vec![], false, Some(root))
             .await
             .unwrap();
         let mut doc2 = dummy_doc(date);
         doc2.abstractive.narrative = Some("version 2".into());
-        let r2 = write_summary(&doc2, vec![0.0; 16], vec![], Some(root))
+        let r2 = write_summary(&doc2, vec![0.0; 16], vec![], false, Some(root))
             .await
             .unwrap();
         assert!(r2.archived.is_some());
@@ -696,7 +703,7 @@ mod tests {
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
         let doc = dummy_doc(date);
-        let _ = write_summary(&doc, vec![0.0; 16], vec![], Some(root))
+        let _ = write_summary(&doc, vec![0.0; 16], vec![], false, Some(root))
             .await
             .unwrap();
 
@@ -841,6 +848,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_summary_force_bypasses_idempotency() {
+        // Windows CI Hardening Phase 1 — mirrors `write_rollup_force_bypasses_idempotency`.
+        // Two consecutive writes with byte-identical bodies (same date, same
+        // `generated_at` second) must NOT noop when force=true; must archive
+        // the prior and rewrite. Guards the bug class Phase 3.5 fixed for
+        // `write_rollup` from reappearing in `write_summary`.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
+        let doc = dummy_doc(date);
+        let _ = write_summary(&doc, vec![0.0; 16], vec![], false, Some(root))
+            .await
+            .unwrap();
+        let r2 = write_summary(&doc, vec![0.0; 16], vec![], true, Some(root))
+            .await
+            .unwrap();
+        assert!(!r2.noop, "force=true must NOT noop on identical content");
+        assert!(r2.archived.is_some(), "force=true must archive the prior");
+    }
+
+    #[tokio::test]
     async fn write_rollup_archives_prior_on_overwrite() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
@@ -934,7 +962,7 @@ mod tests {
         });
         let summary_vec = vec![0.1; 16];
         let span_vecs = vec![vec![0.2; 16], vec![0.3; 16], vec![0.4; 16]];
-        write_summary(&doc, summary_vec, span_vecs, Some(root))
+        write_summary(&doc, summary_vec, span_vecs, false, Some(root))
             .await
             .unwrap();
 
@@ -960,7 +988,7 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
         let mut doc = dummy_doc(date);
         doc.extractive.clear();
-        write_summary(&doc, vec![0.1; 16], vec![], Some(root))
+        write_summary(&doc, vec![0.1; 16], vec![], false, Some(root))
             .await
             .unwrap();
         let idx = index::ConversationIndex::open(16, Some(root))
