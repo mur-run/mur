@@ -171,8 +171,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     //     Must happen BEFORE write_lock so lock_transports.tcp carries the
     //     resolved local_addr (handles `:0` ephemeral binds).
     if profile.inner.transport.tcp.enabled && !profile.inner.transport.tcp.bind.is_empty() {
-        // TODO(B8): validate_tcp_entitlement(&profile.inner)? — for now,
-        // detect_warnings() surfaces loose entitlements but does not block.
+        // Entitlement gate (B8): ensure bind port is declared in entitlements
+        if let Err(e) = validate_tcp_entitlement(&profile.inner) {
+            anyhow::bail!("TCP transport misconfigured: {e}");
+        }
         let d = dispatcher.clone();
         let handler = Arc::new(move |payload: Vec<u8>| {
             let d = d.clone();
@@ -356,4 +358,36 @@ fn read_flag_profile_from_args() -> anyhow::Result<String> {
         }
     }
     anyhow::bail!("bare mur-agent-runtime requires --profile <name>")
+}
+
+/// Error surfaced when the profile's declared TCP transport bind port is
+/// inconsistent with entitlements (P0a.5).
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct ValidationError(pub String);
+
+/// Cross-check profile: if TCP is enabled, its bind port must be in
+/// entitlements.network.inbound.ports (empty list = "no inbound").
+pub fn validate_tcp_entitlement(
+    p: &mur_common::agent::AgentProfile,
+) -> Result<(), ValidationError> {
+    if !p.transport.tcp.enabled {
+        return Ok(());
+    }
+    let port = p
+        .transport
+        .tcp
+        .bind
+        .rsplit(':')
+        .next()
+        .and_then(|s| s.parse::<u16>().ok())
+        .ok_or_else(|| {
+            ValidationError("transport.tcp.bind missing parseable port".into())
+        })?;
+    if !p.entitlements.network.inbound.ports.contains(&port) {
+        return Err(ValidationError(format!(
+            "transport.tcp bound to :{port} but entitlements.network.inbound.ports does not allow it"
+        )));
+    }
+    Ok(())
 }
