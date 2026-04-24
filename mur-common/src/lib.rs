@@ -5,6 +5,7 @@ pub mod config;
 pub mod conversation;
 pub mod error;
 pub mod event;
+pub mod identity;
 pub mod knowledge;
 pub mod llm;
 pub mod parameterize;
@@ -26,4 +27,9 @@ pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};
 
 pub use a2a::Message as A2aMessage;
 pub use a2a::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Task, TaskState};
-pub use agent::{AgentProfile, Entitlements, LockFile, Persona, PersonaCategory, RetryPolicy};
+pub use agent::{
+    AgentProfile, DeploymentConfig, DeploymentType, Entitlements, ExecutionMode,
+    FileTransferConfig, IdentityConfig, LockFile, Persona, PersonaCategory, RetryPolicy,
+    ScheduleEntry,
+};
+pub use identity::{AgentIdentity, IdentityError, decode_pubkey, encode_pubkey};
