@@ -5,7 +5,6 @@
 
 use ed25519_dalek::{SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
 use rand_core::OsRng;
-use sha2::{Sha512, Digest};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -116,23 +115,11 @@ impl AgentIdentity {
 
     /// Derive the X25519 static secret usable by Noise XK.
     ///
-    /// Ed25519 and X25519 both use Curve25519 underneath. Both derive
-    /// their scalars from the same seed material:
-    ///   1. h = SHA512(seed)
-    ///   2. scalar = clamp(h[:32])
-    ///
-    /// where clamp sets specific bits per RFC 8032.
-    /// `x25519_dalek::StaticSecret::from([u8; 32])` automatically clamps,
-    /// so we only need to provide SHA512(seed)[:32].
+    /// Ed25519 and X25519 both use Curve25519 underneath; the Ed25519
+    /// SigningKey scalar maps directly to an X25519 StaticSecret.
+    /// ed25519-dalek 2.x exposes `to_scalar_bytes()` for exactly this.
     pub fn to_x25519_static_secret(&self) -> x25519_dalek::StaticSecret {
-        let seed = self.signing.to_bytes();
-        let mut hasher = Sha512::new();
-        hasher.update(seed);
-        let hash = hasher.finalize();
-        // Extract the first 32 bytes (the scalar part)
-        let mut scalar_bytes = [0u8; 32];
-        scalar_bytes.copy_from_slice(&hash[..32]);
-        // StaticSecret::from will automatically clamp the scalar
+        let scalar_bytes = self.signing.to_scalar_bytes();
         x25519_dalek::StaticSecret::from(scalar_bytes)
     }
 }
