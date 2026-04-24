@@ -16,9 +16,11 @@ use crate::socket_path::resolve_bind_target;
 use crate::task_runner::TaskRunner;
 use crate::telemetry_writer::{Event, TelemetryWriter};
 use crate::transport::stdio::serve_stdio;
+use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
 use crate::transport::unix_socket::serve_unix;
-use mur_common::{LockFile, agent::LockTransports};
+use mur_common::identity::AgentIdentity;
+use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -83,6 +85,20 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     for w in detect_warnings(&profile.inner) {
         warn!(kind = ?w.kind, "{}", w.message);
     }
+
+    // 3a. Load agent identity (Ed25519 keypair) for Noise-XK TCP transport.
+    //     If missing, fall back to an ephemeral identity and warn that
+    //     cross-host TCP won't work (peers can't verify our static key).
+    let identity = Arc::new(match AgentIdentity::load(&agent_home) {
+        Ok(id) => id,
+        Err(e) => {
+            warn!(
+                error = %e,
+                "no identity keypair found; generating ephemeral (cross-host TCP disabled)"
+            );
+            AgentIdentity::generate()
+        }
+    });
 
     // 4. Spawn telemetry writer
     let (writer, notif_rx) = TelemetryWriter::new(
@@ -149,6 +165,77 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     #[cfg(not(unix))]
     {
         let _ = sock_notif_rx;
+    }
+
+    // 7b. Conditionally spawn Noise-XK TCP listener (P0a.5).
+    //     Must happen BEFORE write_lock so lock_transports.tcp carries the
+    //     resolved local_addr (handles `:0` ephemeral binds).
+    if profile.inner.transport.tcp.enabled && !profile.inner.transport.tcp.bind.is_empty() {
+        // Entitlement gate (B8): ensure bind port is declared in entitlements
+        if let Err(e) = validate_tcp_entitlement(&profile.inner) {
+            anyhow::bail!("TCP transport misconfigured: {e}");
+        }
+        let d = dispatcher.clone();
+        let handler = Arc::new(move |payload: Vec<u8>| {
+            let d = d.clone();
+            async move {
+                let req: JsonRpcRequest = match serde_json::from_slice(&payload) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err_resp = JsonRpcResponse {
+                            jsonrpc: "2.0".into(),
+                            id: serde_json::Value::Null,
+                            result: None,
+                            error: Some(JsonRpcError {
+                                code: -32700,
+                                message: format!("parse error: {e}"),
+                                data: None,
+                            }),
+                        };
+                        return Ok::<_, std::io::Error>(
+                            serde_json::to_vec(&err_resp)
+                                .unwrap_or_else(|_| br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error"}}"#.to_vec()),
+                        );
+                    }
+                };
+                // Dispatcher::dispatch returns Result<JsonRpcResponse, HandlerError>;
+                // map HandlerError to a JSON-RPC error envelope so the caller
+                // always receives a well-formed response frame.
+                let resp = match d.dispatch(req).await {
+                    Ok(r) => r,
+                    Err(e) => JsonRpcResponse {
+                        jsonrpc: "2.0".into(),
+                        id: serde_json::Value::Null,
+                        result: None,
+                        error: Some(JsonRpcError {
+                            code: e.code(),
+                            message: e.to_string(),
+                            data: None,
+                        }),
+                    },
+                };
+                serde_json::to_vec(&resp).map_err(|e| std::io::Error::other(e.to_string()))
+            }
+        });
+        let (tcp_shutdown_tx, tcp_shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let tcp_handle = spawn_tcp_listener(
+            TcpTransportConfig {
+                bind: profile.inner.transport.tcp.bind.clone(),
+            },
+            identity.clone(),
+            handler,
+            tcp_shutdown_rx,
+        )
+        .await?;
+        let tcp_addr = tcp_handle.local_addr();
+        info!("TCP Noise listener at {tcp_addr}");
+        lock_transports.tcp = Some(tcp_addr.to_string());
+        // Keep the shutdown sender alive inside the wrapper task; the task is
+        // aborted during graceful shutdown, which cancels the listener.
+        transport_tasks.push(tokio::spawn(async move {
+            let _keep_tx_alive = tcp_shutdown_tx;
+            tcp_handle.await_shutdown().await;
+        }));
     }
 
     // 8. Write running.lock
@@ -271,4 +358,34 @@ fn read_flag_profile_from_args() -> anyhow::Result<String> {
         }
     }
     anyhow::bail!("bare mur-agent-runtime requires --profile <name>")
+}
+
+/// Error surfaced when the profile's declared TCP transport bind port is
+/// inconsistent with entitlements (P0a.5).
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct ValidationError(pub String);
+
+/// Cross-check profile: if TCP is enabled, its bind port must be in
+/// entitlements.network.inbound.ports (empty list = "no inbound").
+pub fn validate_tcp_entitlement(
+    p: &mur_common::agent::AgentProfile,
+) -> Result<(), ValidationError> {
+    if !p.transport.tcp.enabled {
+        return Ok(());
+    }
+    let port = p
+        .transport
+        .tcp
+        .bind
+        .rsplit(':')
+        .next()
+        .and_then(|s| s.parse::<u16>().ok())
+        .ok_or_else(|| ValidationError("transport.tcp.bind missing parseable port".into()))?;
+    if !p.entitlements.network.inbound.ports.contains(&port) {
+        return Err(ValidationError(format!(
+            "transport.tcp bound to :{port} but entitlements.network.inbound.ports does not allow it"
+        )));
+    }
+    Ok(())
 }

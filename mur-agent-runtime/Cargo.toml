@@ -41,6 +41,7 @@ chrono = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 reqwest = { workspace = true }
 sha2 = "0.10"
+snow = { version = "0.9", default-features = false, features = ["default-resolver"] }
 hex = "0.4"
 glob = "0.3"
 fs2 = "0.4"
@@ -64,3 +65,4 @@ windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_F
 [dev-dependencies]
 tempfile = "3"
 httpmock = "0.7"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
