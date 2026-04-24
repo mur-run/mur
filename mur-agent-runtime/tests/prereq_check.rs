@@ -1,6 +1,6 @@
-use mur_agent_runtime::export::prereq_check::{check_mcp_prereqs, format_missing_error};
 #[cfg(unix)]
 use mur_agent_runtime::export::prereq_check::which_exists;
+use mur_agent_runtime::export::prereq_check::{check_mcp_prereqs, format_missing_error};
 
 // Uses `sh` as the "exists" baseline — POSIX-only.
 #[cfg(unix)]

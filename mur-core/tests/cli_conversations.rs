@@ -644,6 +644,582 @@ fn mur_conversations_rollup_if_stale_is_idempotent_noop() {
     );
 }
 
+/// Phase 3.5: with a tight budget + long hits, Stage 1b should fire and JSON
+/// should carry `.stage_1b.compressed_count > 0`.
+#[test]
+fn mur_ask_stage_1b_fires_on_overflow() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    std::fs::create_dir_all(&mur_home).unwrap();
+    // Tight max_context_tokens + summarize_hits_enabled (default true).
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "conversations:\n  ask:\n    max_context_tokens: 400\n    summarize_hits_enabled: true\n    compress_hits_enabled: true\n",
+    )
+    .unwrap();
+
+    // Seed a summary file directly with a long extractive span (>= 400 chars).
+    // The mock compact would produce "mock extractive span" (20 chars) which is
+    // too short for Stage 1b (MIN_CONTENT_CHARS = 400), so we bypass compact and
+    // seed the summary directly.
+    let yesterday = (chrono::Utc::now().date_naive() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    let summary_dir = mur_home.join("conversations").join("summary");
+    std::fs::create_dir_all(&summary_dir).unwrap();
+    // Long span text: "fact " * 100 = 500 chars (well above MIN_CONTENT_CHARS=400)
+    let long_span = "fact ".repeat(100);
+    std::fs::write(
+        summary_dir.join(format!("{yesterday}.md")),
+        format!(
+            "---\n\
+             schema: 1\n\
+             date: {yesterday}\n\
+             generated_at: {yesterday}T03:00:00Z\n\
+             generated_by:\n  extractive_model: qwen3:14b\n  abstractive_model: qwen3:14b\n  mur_version: 3.5.0\n\
+             duration_ms: 50\n\
+             conv_count: 1\n\
+             msg_count: 1\n\
+             sources: [cc]\n\
+             pattern_refs: []\n\
+             keywords: [fact]\n\
+             links:\n  prev: null\n  next: null\n\
+             warnings: []\n\
+             input_content_sha: abc123\n\
+             ---\n\n\
+             ## Extractive spans\n\n\
+             [1] _{{cc/c1 @L1}}_:\n> {long_span}\n\n\
+             ## Abstractive narrative\n\n\
+             Narrative about facts.\n"
+        ),
+    )
+    .unwrap();
+
+    // Reindex to populate the vector layer so retrieve can surface the span.
+    let reindex = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "reindex", "--spans-only"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("reindex --spans-only");
+    assert!(
+        reindex.status.success(),
+        "reindex failed: {}",
+        String::from_utf8_lossy(&reindex.stderr)
+    );
+
+    // Ask with JSON output.
+    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["ask", "--json", "what was discussed?"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("mur ask --json");
+    assert!(
+        out.status.success(),
+        "ask failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("parse JSON failed: {e}; stdout: {stdout}"));
+    let compressed = v
+        .pointer("/stage_1b/compressed_count")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    let cache_hits = v
+        .pointer("/stage_1b/cache_hits")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    assert!(
+        compressed + cache_hits > 0,
+        "expected Stage 1b compressed_count+cache_hits > 0 under tight budget; got JSON: {stdout}"
+    );
+}
+
+/// Phase 3.5: setting `summarize_hits_enabled: false` must short-circuit
+/// Stage 1b. JSON must either omit `stage_1b` or have zero counts.
+/// The test seeds a long span (500 chars, above MIN_CONTENT_CHARS=400) so that
+/// Stage 1b *would* fire if `summarize_hits_enabled` were true — the assertion
+/// is only meaningful when there is actually data to compress.
+#[test]
+fn mur_ask_stage_1b_disabled_via_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    std::fs::create_dir_all(&mur_home).unwrap();
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "conversations:\n  ask:\n    max_context_tokens: 400\n    summarize_hits_enabled: false\n    compress_hits_enabled: true\n",
+    )
+    .unwrap();
+
+    // Seed a long extractive span so Stage 1b *would* fire if enabled.
+    let yesterday = (chrono::Utc::now().date_naive() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    let summary_dir = mur_home.join("conversations").join("summary");
+    std::fs::create_dir_all(&summary_dir).unwrap();
+    let long_span = "fact ".repeat(100); // 500 chars, above MIN_CONTENT_CHARS=400
+    std::fs::write(
+        summary_dir.join(format!("{yesterday}.md")),
+        format!(
+            "---\n\
+             schema: 1\n\
+             date: {yesterday}\n\
+             generated_at: {yesterday}T03:00:00Z\n\
+             generated_by:\n  extractive_model: qwen3:14b\n  abstractive_model: qwen3:14b\n  mur_version: 3.5.0\n\
+             duration_ms: 50\n\
+             conv_count: 1\n\
+             msg_count: 1\n\
+             sources: [cc]\n\
+             pattern_refs: []\n\
+             keywords: [fact]\n\
+             links:\n  prev: null\n  next: null\n\
+             warnings: []\n\
+             input_content_sha: abc789\n\
+             ---\n\n\
+             ## Extractive spans\n\n\
+             [1] _{{cc/c1 @L1}}_:\n> {long_span}\n\n\
+             ## Abstractive narrative\n\n\
+             Narrative about facts.\n"
+        ),
+    )
+    .unwrap();
+
+    // Reindex to populate the vector layer.
+    let reindex_out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "reindex", "--spans-only"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("reindex");
+    assert!(
+        reindex_out.status.success(),
+        "reindex failed: {}",
+        String::from_utf8_lossy(&reindex_out.stderr)
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["ask", "--json", "what did I ship?"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("mur ask --json");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("parse JSON");
+    let stage_1b_present_and_nonzero = v.get("stage_1b").is_some_and(|s| {
+        s.get("compressed_count")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0)
+            > 0
+    });
+    assert!(
+        !stage_1b_present_and_nonzero,
+        "Stage 1b must not fire when disabled; got: {stdout}"
+    );
+}
+
+/// Phase 3.5: second ask over the same seeded archive and question should
+/// see `.stage_1b.cache_hits > 0` (fewer fresh compressions, more cache
+/// hits) when the first ask's inputs warm the cache.
+#[test]
+fn mur_ask_stage_1b_cache_hits_on_second_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    std::fs::create_dir_all(&mur_home).unwrap();
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "conversations:\n  ask:\n    max_context_tokens: 400\n    summarize_hits_enabled: true\n",
+    )
+    .unwrap();
+
+    // Seed summary directly with a long span (>= 400 chars) so Stage 1b fires.
+    // Mock compact produces "mock extractive span" (20 chars) which is too short.
+    let yesterday = (chrono::Utc::now().date_naive() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    let summary_dir = mur_home.join("conversations").join("summary");
+    std::fs::create_dir_all(&summary_dir).unwrap();
+    let long_span = "fact ".repeat(100); // 500 chars, above MIN_CONTENT_CHARS=400
+    std::fs::write(
+        summary_dir.join(format!("{yesterday}.md")),
+        format!(
+            "---\n\
+             schema: 1\n\
+             date: {yesterday}\n\
+             generated_at: {yesterday}T03:00:00Z\n\
+             generated_by:\n  extractive_model: qwen3:14b\n  abstractive_model: qwen3:14b\n  mur_version: 3.5.0\n\
+             duration_ms: 50\n\
+             conv_count: 1\n\
+             msg_count: 1\n\
+             sources: [cc]\n\
+             pattern_refs: []\n\
+             keywords: [fact]\n\
+             links:\n  prev: null\n  next: null\n\
+             warnings: []\n\
+             input_content_sha: abc123\n\
+             ---\n\n\
+             ## Extractive spans\n\n\
+             [1] _{{cc/c1 @L1}}_:\n> {long_span}\n\n\
+             ## Abstractive narrative\n\n\
+             Narrative about facts.\n"
+        ),
+    )
+    .unwrap();
+
+    let reindex_out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "reindex", "--spans-only"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("reindex");
+    assert!(
+        reindex_out.status.success(),
+        "reindex failed: {}",
+        String::from_utf8_lossy(&reindex_out.stderr)
+    );
+
+    // First ask — starts new session, warms the abstractive cache.
+    let _ = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["ask", "--json", "what was discussed?"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("ask 1");
+
+    // Second ask — identical question → same cache key. Cache is keyed on
+    // model + target + content, not on session state.
+    let out2 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["ask", "--json", "what was discussed?"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("ask 2");
+    assert!(out2.status.success());
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout2).expect("parse JSON");
+    let cache_hits = v
+        .pointer("/stage_1b/cache_hits")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    assert!(
+        cache_hits > 0,
+        "second ask should see cache_hits > 0; got JSON: {stdout2}"
+    );
+}
+
+/// Phase 3.5: when Stage 1b hits a timeout, the ask must still succeed
+/// (soft-fail). The answer is produced from the original un-summarized
+/// hits; exit code is zero.
+#[test]
+fn mur_ask_stage_1b_soft_fails_gracefully() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    std::fs::create_dir_all(&mur_home).unwrap();
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "conversations:\n  ask:\n    max_context_tokens: 400\n    summarize_hits_enabled: true\n",
+    )
+    .unwrap();
+
+    // Seed summary directly with a long span (>= 400 chars) so Stage 1b actually
+    // attempts LLM compression, which then hits the MUR_ABSTRACTIVE_MOCK_FAIL=timeout.
+    let yesterday = (chrono::Utc::now().date_naive() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    let summary_dir = mur_home.join("conversations").join("summary");
+    std::fs::create_dir_all(&summary_dir).unwrap();
+    let long_span = "fact ".repeat(100); // 500 chars, above MIN_CONTENT_CHARS=400
+    std::fs::write(
+        summary_dir.join(format!("{yesterday}.md")),
+        format!(
+            "---\n\
+             schema: 1\n\
+             date: {yesterday}\n\
+             generated_at: {yesterday}T03:00:00Z\n\
+             generated_by:\n  extractive_model: qwen3:14b\n  abstractive_model: qwen3:14b\n  mur_version: 3.5.0\n\
+             duration_ms: 50\n\
+             conv_count: 1\n\
+             msg_count: 1\n\
+             sources: [cc]\n\
+             pattern_refs: []\n\
+             keywords: [fact]\n\
+             links:\n  prev: null\n  next: null\n\
+             warnings: []\n\
+             input_content_sha: abc456\n\
+             ---\n\n\
+             ## Extractive spans\n\n\
+             [1] _{{cc/c1 @L1}}_:\n> {long_span}\n\n\
+             ## Abstractive narrative\n\n\
+             Narrative about facts.\n"
+        ),
+    )
+    .unwrap();
+
+    let reindex_out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "reindex", "--spans-only"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("reindex");
+    assert!(
+        reindex_out.status.success(),
+        "reindex failed: {}",
+        String::from_utf8_lossy(&reindex_out.stderr)
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["ask", "--json", "what was discussed?"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .env("MUR_ABSTRACTIVE_MOCK_FAIL", "timeout")
+        .output()
+        .expect("ask with FAIL=timeout");
+    assert!(
+        out.status.success(),
+        "soft-fail: ask must still exit 0 when Stage 1b times out; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("parse JSON");
+    let skipped = v
+        .pointer("/stage_1b/skipped_count")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    assert!(
+        skipped > 0,
+        "timeout must register as skipped_count > 0; got: {stdout}"
+    );
+}
+
+/// Phase 3.5.1: `--no-summarize` flag must disable Stage 1b for the
+/// invocation regardless of the config. JSON must omit `stage_1b` or
+/// report `compressed_count + cache_hits == 0`. Mirrors
+/// `mur_ask_stage_1b_disabled_via_config` but disables via CLI rather than
+/// writing config.
+#[test]
+fn mur_ask_cli_no_summarize_flag_disables_stage_1b() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    std::fs::create_dir_all(&mur_home).unwrap();
+    // Config has Stage 1b ENABLED — the CLI flag must override.
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "conversations:\n  ask:\n    max_context_tokens: 400\n    summarize_hits_enabled: true\n",
+    )
+    .unwrap();
+
+    seed_rich_span(&mur_home, "2026-04-21", "cc/c1", "sha-no-summarize");
+
+    let reindex = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "reindex", "--spans-only"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("reindex --spans-only");
+    assert!(
+        reindex.status.success(),
+        "reindex failed: {}",
+        String::from_utf8_lossy(&reindex.stderr)
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["ask", "--json", "--no-summarize", "what was discussed?"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("mur ask --no-summarize");
+    assert!(
+        out.status.success(),
+        "ask failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("parse JSON failed: {e}; stdout: {stdout}"));
+    let compressed = v
+        .pointer("/stage_1b/compressed_count")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    let cache_hits = v
+        .pointer("/stage_1b/cache_hits")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    assert_eq!(
+        compressed + cache_hits,
+        0,
+        "--no-summarize must prevent Stage 1b from firing; got: {stdout}"
+    );
+}
+
+/// Phase 3.5.1: `--summarize-model <X>` must produce a different cache key
+/// than the default model, so a query that warmed the cache under the
+/// default model must see `cache_hits == 0` when re-run with a different
+/// `--summarize-model`. The third run with the SAME --summarize-model value
+/// should see `cache_hits > 0`, confirming the new key is stable.
+#[test]
+fn mur_ask_cli_summarize_model_changes_cache_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    std::fs::create_dir_all(&mur_home).unwrap();
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "conversations:\n  ask:\n    max_context_tokens: 400\n    summarize_hits_enabled: true\n",
+    )
+    .unwrap();
+
+    seed_rich_span(&mur_home, "2026-04-21", "cc/c1", "sha-model-cachekey");
+
+    let reindex = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "reindex", "--spans-only"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("reindex --spans-only");
+    assert!(reindex.status.success());
+
+    // Run 1 — default model (config has none, so falls back to ask.model =
+    // "qwen3:14b"). Warms the cache under that key.
+    let out1 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["ask", "--json", "what was discussed?"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("ask 1");
+    assert!(out1.status.success());
+
+    // Run 2 — override model to qwen3:4b. Cache key is different → must
+    // fresh-compress, cache_hits == 0.
+    let out2 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args([
+            "ask",
+            "--json",
+            "--summarize-model",
+            "qwen3:4b",
+            "what was discussed?",
+        ])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("ask 2");
+    assert!(out2.status.success());
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+    let v2: serde_json::Value = serde_json::from_str(&stdout2).expect("parse JSON run 2");
+    let cache_hits_2 = v2
+        .pointer("/stage_1b/cache_hits")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    let compressed_2 = v2
+        .pointer("/stage_1b/compressed_count")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    assert_eq!(
+        cache_hits_2, 0,
+        "run 2 (different model) must NOT hit the run-1 cache key; got: {stdout2}"
+    );
+    assert!(
+        compressed_2 > 0,
+        "run 2 must fresh-compress under the new key; got: {stdout2}"
+    );
+
+    // Run 3 — same --summarize-model qwen3:4b. Must now hit run 2's cache.
+    let out3 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args([
+            "ask",
+            "--json",
+            "--summarize-model",
+            "qwen3:4b",
+            "what was discussed?",
+        ])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("ask 3");
+    assert!(out3.status.success());
+    let stdout3 = String::from_utf8_lossy(&out3.stdout);
+    let v3: serde_json::Value = serde_json::from_str(&stdout3).expect("parse JSON run 3");
+    let cache_hits_3 = v3
+        .pointer("/stage_1b/cache_hits")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    assert!(
+        cache_hits_3 > 0,
+        "run 3 (same model as run 2) must hit run 2's cache; got: {stdout3}"
+    );
+}
+
+/// Phase 3.5.1 — shared seeding helper. Writes a single summary markdown
+/// under `<mur_home>/conversations/summary/` with an extractive span long
+/// enough (~500 chars) to qualify for Stage 1b (`MIN_CONTENT_CHARS = 400`)
+/// and with no `. ` terminators so Stage 1's heuristic compression skips
+/// it (`COMPRESS_MIN_SENTENCES = 4`).
+fn seed_rich_span(mur_home: &std::path::Path, date: &str, conv_ref: &str, sha: &str) {
+    let summary_dir = mur_home.join("conversations").join("summary");
+    std::fs::create_dir_all(&summary_dir).unwrap();
+    let span_text = "fact ".repeat(100); // 500 chars, zero ". " terminators
+    let (src_prefix, _conv_id) = conv_ref.split_once('/').unwrap();
+    std::fs::write(
+        summary_dir.join(format!("{date}.md")),
+        format!(
+            "---\n\
+             schema: 1\n\
+             date: {date}\n\
+             generated_at: {date}T03:00:00Z\n\
+             generated_by:\n  extractive_model: qwen3:14b\n  abstractive_model: qwen3:14b\n  mur_version: 3.0.0\n\
+             duration_ms: 50\n\
+             conv_count: 1\n\
+             msg_count: 1\n\
+             sources: [{src_prefix}]\n\
+             pattern_refs: []\n\
+             keywords: []\n\
+             links:\n  prev: null\n  next: null\n\
+             warnings: []\n\
+             input_content_sha: {sha}\n\
+             ---\n\n\
+             ## Extractive spans\n\n\
+             [1] _{{{conv_ref} @L1}}_:\n> {span_text}\n\n\
+             ## Abstractive narrative\n\n\
+             Narrative.\n"
+        ),
+    )
+    .unwrap();
+}
+
 /// Phase 3.2.1: --force MUST still regenerate unconditionally, even when the
 /// content is fresh. This test verifies we didn't break --force while
 /// fixing --if-stale.
@@ -734,6 +1310,100 @@ fn mur_conversations_rollup_force_still_regenerates() {
         archived >= 1,
         "Phase 3.2.1: --force must still regenerate. Found {archived} archived files; expected ≥1. \
          stdout of --force call: {}",
+        String::from_utf8_lossy(&out2.stdout)
+    );
+}
+
+/// Windows CI Hardening Phase 1 — adversarial regression guard for the
+/// "same-wall-clock-second byte-equality swallows --force" bug class.
+///
+/// Phase 3.5 fixed this for `write_rollup` after it flaked on Windows;
+/// Phase 1 of the hardening effort fixes the matching shape in
+/// `write_summary` and locks the invariant with this test. Fails if any
+/// future writer reintroduces the byte-equality noop short-circuit without
+/// a `!force` guard.
+///
+/// Pairs with `mur_conversations_rollup_force_still_regenerates` (Phase 3.2.1).
+#[test]
+fn mur_conversations_compact_force_unconditionally_archives() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    let yesterday = (chrono::Utc::now().date_naive() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    // Seed one raw JSONL line so compact has something to do.
+    let raw = mur_home.join("conversations").join("raw").join(&yesterday);
+    std::fs::create_dir_all(&raw).unwrap();
+    let line = serde_json::json!({
+        "v": 1,
+        "ts": format!("{yesterday}T10:00:00Z"),
+        "src": "claude-code",
+        "conv": "c1",
+        "role": "user",
+        "content": {"t": "text", "v": "seed content for force-archive test"},
+        "meta": {},
+        "refs": []
+    });
+    std::fs::write(
+        raw.join("cc_c1.jsonl"),
+        serde_json::to_string(&line).unwrap() + "\n",
+    )
+    .unwrap();
+
+    // First compact — produces .md under summary/<date>.md.
+    let out1 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "compact"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("first compact");
+    assert!(
+        out1.status.success(),
+        "first compact failed: {}",
+        String::from_utf8_lossy(&out1.stderr)
+    );
+
+    // Immediately re-compact with --force. Same wall-clock second is
+    // possible on a fast runner. Pre-fix, the byte-equality short-circuit
+    // in `write_summary` swallows --force silently. Post-fix, the !force
+    // guard archives the prior md unconditionally.
+    let out2 = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args(["conversations", "compact", "--force"])
+        .env("MUR_HOME", &mur_home)
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env("MUR_OLLAMA_MOCK", "1")
+        .output()
+        .expect("second compact --force");
+    assert!(
+        out2.status.success(),
+        "second compact --force failed: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+
+    // Assertion: .history/ exists with ≥1 archived entry.
+    let hist = mur_home
+        .join("conversations")
+        .join("summary")
+        .join(".history");
+    assert!(
+        hist.exists(),
+        ".history/ must exist after --force triggered an archive; \
+         stdout of --force call:\n{}",
+        String::from_utf8_lossy(&out2.stdout)
+    );
+    let archived = std::fs::read_dir(&hist)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .count();
+    assert!(
+        archived >= 1,
+        "Phase 1 hardening: compact --force must unconditionally archive \
+         the prior md even when the body is byte-identical. Found \
+         {archived} archived files; expected ≥1. stdout:\n{}",
         String::from_utf8_lossy(&out2.stdout)
     );
 }

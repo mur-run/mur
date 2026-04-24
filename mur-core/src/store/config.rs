@@ -69,6 +69,16 @@ pub fn save_config(config: &Config) -> Result<()> {
 }
 
 fn config_path() -> PathBuf {
+    // Honor MUR_HOME (authoritative, cross-platform) the same way
+    // `conversations::paths::mur_root` does. On Windows, `dirs::home_dir()`
+    // calls `SHGetKnownFolderPath` and ignores `HOME`/`USERPROFILE` env
+    // overrides, so integration tests that override only `HOME` would read
+    // the host's real `~/.mur/config.yaml` without this MUR_HOME check.
+    if let Ok(p) = std::env::var("MUR_HOME")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p).join("config.yaml");
+    }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
         .join(".mur")

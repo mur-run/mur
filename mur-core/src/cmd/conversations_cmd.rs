@@ -994,6 +994,13 @@ pub struct AskArgs {
     #[allow(dead_code)]
     pub new_flag: bool,
     pub show_session: bool,
+    /// Phase 3.5.1: disable Stage 1b for this invocation (overrides
+    /// `conversations.ask.summarize_hits_enabled`).
+    pub no_summarize: bool,
+    /// Phase 3.5.1: override the Stage 1b model for this invocation (overrides
+    /// `conversations.ask.summarize_model`). `None` means "use config value, or
+    /// fall back to `ask.model` per the resolver below".
+    pub summarize_model: Option<String>,
 }
 
 pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
@@ -1033,7 +1040,8 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
         .transpose()?;
 
     let report =
-        summarize::compact_missing(&cfg, since, args.if_stale, args.max_days, None).await?;
+        summarize::compact_missing(&cfg, since, args.if_stale, args.force, args.max_days, None)
+            .await?;
 
     if report.day_reports.is_empty() {
         println!("(nothing to compact)");
@@ -1086,6 +1094,26 @@ pub async fn cmd_conversations_compact(args: CompactArgs) -> Result<()> {
     Ok(())
 }
 
+/// Phase 3.5.1 — collapse CLI summarize flags + AskConfig defaults into the
+/// effective `(summarize_enabled, summarize_model)` pair fed to `AskRequest`.
+///
+/// Precedence: CLI flag > config > hardcoded default (handled upstream by
+/// `AskConfig::default`). clap rejects `--no-summarize` + `--summarize-model`
+/// together at parse time (see `conflicts_with` in `main.rs`), so the
+/// combination is unreachable here.
+pub(crate) fn resolve_summarize(
+    no_summarize: bool,
+    cli_model: Option<&str>,
+    cfg_enabled: bool,
+    cfg_model: Option<&str>,
+) -> (bool, Option<String>) {
+    let enabled = !no_summarize && cfg_enabled;
+    let model = cli_model
+        .map(|s| s.to_string())
+        .or_else(|| cfg_model.map(|s| s.to_string()));
+    (enabled, model)
+}
+
 pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     use crate::conversations::ask;
     use crate::conversations::ollama::OllamaClient;
@@ -1121,12 +1149,20 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         ask::session::SessionStore::archive_and_new(None, history_retain)?
     };
 
-    // Rewriter call (only if continuing + we have prior turns)
+    // Rewriter call (only if continuing + we have prior turns).
+    // Separate shorter timeout (ask_cfg.rewriter_timeout_secs, default 8s)
+    // so a slow/unreachable Ollama doesn't burn the full generate budget
+    // before the user sees a response — we fall back to the raw question
+    // on timeout. The main generation path still uses its own client with
+    // the full ask_cfg.timeout_secs budget (plumbed via ask_stream).
     let prior_slice = session.last_n(history_turns);
     let model = args.model.clone().unwrap_or_else(|| ask_cfg.model.clone());
-    let client = OllamaClient::new(&ask_cfg.ollama_endpoint, std::time::Duration::from_secs(30));
+    let rewriter_client = OllamaClient::new(
+        &ask_cfg.ollama_endpoint,
+        std::time::Duration::from_secs(ask_cfg.rewriter_timeout_secs as u64),
+    );
     let rewrite = ask::rewriter::rewrite(
-        &client,
+        &rewriter_client,
         &model,
         ask::rewriter::RewriteInput {
             prior_turns: prior_slice,
@@ -1153,6 +1189,12 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
             .transpose()?,
         min_score: args.min_score.unwrap_or(ask_cfg.min_score),
     };
+    let (effective_summarize_enabled, effective_summarize_model) = resolve_summarize(
+        args.no_summarize,
+        args.summarize_model.as_deref(),
+        ask_cfg.summarize_hits_enabled,
+        ask_cfg.summarize_model.as_deref(),
+    );
     let req = ask::AskRequest {
         question: question.clone(),
         filters,
@@ -1177,16 +1219,45 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         retrieval_query,
         rewriter_status,
         compress_enabled: ask_cfg.compress_hits_enabled,
+        summarize_enabled: effective_summarize_enabled,
+        summarize_model: effective_summarize_model,
     };
 
     // Generate + collect response
-    // streaming_error is set if the streaming branch sees an AskEvent::Error;
-    // surfaced after persistence so degraded turns still write to the JSONL.
+    // streaming_error is set if the streaming branch sees an AskEvent::Error
+    // *or* the JSON branch's `ask::ask` call returns Err. In either case the
+    // error is surfaced after persistence so degraded turns still write to
+    // the JSONL — mirroring the streaming fix in PR #15.
     let mut streaming_error: Option<String> = None;
     let resp = if args.json {
-        let r = ask::ask(req, None).await?;
-        println!("{}", serde_json::to_string_pretty(&r)?);
-        r
+        match ask::ask(req, None).await {
+            Ok(r) => {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+                r
+            }
+            Err(e) => {
+                streaming_error = Some(e.to_string());
+                // Build a degraded AskResponse so the turn still persists with
+                // the question + rewriter context. answer/hits/citations are
+                // empty; degraded_to_mode_b is true so --show-session and
+                // downstream analytics can count it.
+                ask::AskResponse {
+                    answer: String::new(),
+                    citations: Vec::new(),
+                    hits_used: Vec::new(),
+                    degraded_to_mode_b: true,
+                    tokens_in: 0,
+                    tokens_out: 0,
+                    duration_ms: 0,
+                    rewritten_question: match rewriter_status {
+                        ask::session::RewriterStatus::Skipped => None,
+                        _ => Some(rewrite.rewritten.clone()),
+                    },
+                    rewriter_status,
+                    stage_1b: None,
+                }
+            }
+        }
     } else {
         let mut stream = ask::ask_stream(req, None).await?;
         let mut answer = String::new();
@@ -1196,6 +1267,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         let mut tokens_in = 0;
         let mut tokens_out = 0;
         let mut duration = 0;
+        let mut stage_1b_done: Option<crate::conversations::ask::abstractive::Stage1bStats> = None;
         // Phase 3.3 follow-up: capture (don't exit on) Error events so that
         // degraded turns under Ollama-unavailable still get persisted to the
         // session JSONL via append_turn below. The exit happens at the end
@@ -1214,11 +1286,13 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
                     tokens_out: to,
                     degraded: d,
                     duration_ms,
+                    stage_1b: sb,
                 } => {
                     tokens_in = ti;
                     tokens_out = to;
                     degraded = d;
                     duration = duration_ms;
+                    stage_1b_done = sb;
                 }
                 ask::AskEvent::Error(e) => {
                     streaming_error = Some(e);
@@ -1242,6 +1316,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
                     _ => Some(rewrite.rewritten.clone()),
                 },
                 rewriter_status,
+                stage_1b: stage_1b_done.clone(),
             }),
         );
         ask::AskResponse {
@@ -1257,6 +1332,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
                 _ => Some(rewrite.rewritten.clone()),
             },
             rewriter_status,
+            stage_1b: stage_1b_done,
         }
     };
 
@@ -1353,5 +1429,66 @@ fn system_free_memory_mb() -> Option<u64> {
         None
     } else {
         Some(avail_kib / 1024)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_summarize_no_flag_uses_config_enabled_and_model() {
+        let (enabled, model) = resolve_summarize(
+            /* no_summarize */ false,
+            /* cli_model    */ None,
+            /* cfg_enabled  */ true,
+            /* cfg_model    */ Some("qwen3:14b"),
+        );
+        assert!(enabled);
+        assert_eq!(model.as_deref(), Some("qwen3:14b"));
+    }
+
+    #[test]
+    fn resolve_summarize_no_summarize_flag_forces_disabled_regardless_of_config() {
+        let (enabled, model) = resolve_summarize(
+            /* no_summarize */ true,
+            /* cli_model    */ None,
+            /* cfg_enabled  */ true,
+            /* cfg_model    */ Some("qwen3:14b"),
+        );
+        assert!(!enabled, "--no-summarize must override enabled config");
+        // model still bubbles up (CLI didn't set one) — the disabled flag is what matters.
+        assert_eq!(model.as_deref(), Some("qwen3:14b"));
+    }
+
+    #[test]
+    fn resolve_summarize_cli_model_overrides_config_model() {
+        let (enabled, model) = resolve_summarize(
+            /* no_summarize */ false,
+            /* cli_model    */ Some("qwen3:4b"),
+            /* cfg_enabled  */ true,
+            /* cfg_model    */ Some("qwen3:14b"),
+        );
+        assert!(enabled);
+        assert_eq!(
+            model.as_deref(),
+            Some("qwen3:4b"),
+            "CLI model wins over config"
+        );
+    }
+
+    #[test]
+    fn resolve_summarize_cli_model_falls_back_to_config_when_none() {
+        let (enabled, model) = resolve_summarize(
+            /* no_summarize */ false,
+            /* cli_model    */ None,
+            /* cfg_enabled  */ false,
+            /* cfg_model    */ Some("qwen3:14b"),
+        );
+        assert!(
+            !enabled,
+            "config-disabled stays disabled without CLI override"
+        );
+        assert_eq!(model.as_deref(), Some("qwen3:14b"));
     }
 }
