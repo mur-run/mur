@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::agent::*;
+use mur_common::identity::AgentIdentity;
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,6 +23,16 @@ pub fn cmd_create(
         bail!("agent {name} already exists at {}", agent_home.display());
     }
     fs::create_dir_all(&agent_home).with_context(|| format!("create {}", agent_home.display()))?;
+
+    // P0a.5: generate Ed25519 identity keypair for cross-host A2A.
+    let identity = AgentIdentity::generate();
+    identity
+        .save(&agent_home)
+        .with_context(|| format!("save identity to {}", agent_home.display()))?;
+    tracing::info!(
+        pubkey = %identity.pubkey_text(),
+        "generated identity keypair"
+    );
 
     let display_name = display_name.unwrap_or_else(|| name.to_string());
     let model = model.unwrap_or_else(|| "llama3.2:3b".to_string());
@@ -92,7 +103,10 @@ pub fn cmd_create(
             execution: ExecutionMode::default(),
             schedule: Vec::new(),
         },
-        identity: IdentityConfig::default(),
+        identity: IdentityConfig {
+            pubkey: identity.pubkey_text(),
+            owner: std::env::var("USER").ok(),
+        },
         file_transfer: FileTransferConfig::default(),
         deployment: DeploymentConfig::default(),
         created_at: now.clone(),
