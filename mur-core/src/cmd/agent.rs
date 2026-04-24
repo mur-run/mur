@@ -110,6 +110,7 @@ pub fn cmd_create(
         identity: IdentityConfig {
             pubkey: identity.pubkey_text(),
             owner: std::env::var("USER").ok(),
+            ..Default::default()
         },
         file_transfer: FileTransferConfig::default(),
         deployment: DeploymentConfig::default(),

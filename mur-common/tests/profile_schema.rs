@@ -84,3 +84,46 @@ fn deployment_defaults_to_laptop() {
     );
     assert_eq!(p.deployment.environment.as_deref(), Some("dev"));
 }
+
+#[test]
+fn identity_rekey_fields_default_when_absent() {
+    // Legacy P0a.5 profile (no rekey fields) should still deserialize
+    let yaml = include_str!("fixtures/profile_p0a5_with_identity.yaml");
+    let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+    assert_eq!(p.identity.algorithm, "ed25519");
+    assert_eq!(p.identity.key_version, 0);
+    assert!(p.identity.previous_pubkey.is_none());
+    assert!(p.identity.grace_expires_at.is_none());
+    assert!(p.identity.rotated_at.is_none());
+    assert!(p.identity.emergency_rekey_at.is_none());
+}
+
+#[test]
+fn identity_rekey_fields_roundtrip() {
+    let yaml = include_str!("fixtures/profile_p0a6_rotated.yaml");
+    let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+    assert_eq!(p.identity.pubkey, "zNEWKEY");
+    assert_eq!(p.identity.algorithm, "ed25519");
+    assert_eq!(p.identity.key_version, 2);
+    assert_eq!(p.identity.previous_pubkey.as_deref(), Some("zOLDKEY"));
+    assert_eq!(p.identity.previous_key_version, Some(1));
+    assert!(p.identity.grace_expires_at.is_some());
+    assert!(p.identity.rotated_at.is_some());
+    assert!(p.identity.created_at_key.is_some());
+
+    // Roundtrip
+    let emitted = serde_yaml_ng::to_string(&p).unwrap();
+    let p2: AgentProfile = serde_yaml_ng::from_str(&emitted).unwrap();
+    assert_eq!(p, p2);
+}
+
+#[test]
+fn identity_default_sets_algorithm_ed25519() {
+    use mur_common::agent::IdentityConfig;
+    let d = IdentityConfig::default();
+    assert_eq!(d.algorithm, "ed25519");
+    assert_eq!(d.key_version, 0);
+    assert!(d.pubkey.is_empty());
+    assert!(d.owner.is_none());
+    assert!(d.previous_pubkey.is_none());
+}
