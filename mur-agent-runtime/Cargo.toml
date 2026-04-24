@@ -1,0 +1,66 @@
+[package]
+name = "mur-agent-runtime"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[features]
+# Bundle an agent profile into the binary at compile time; set
+# MUR_EXPORT_AGENT_DIR=<path> alongside `cargo build --features=embedded-agent`.
+embedded-agent = []
+
+[build-dependencies]
+tar = "0.4"
+flate2 = "1"
+
+[[bin]]
+name = "mur-agent-runtime"
+path = "src/main.rs"
+
+[[bin]]
+name = "mock_mcp"
+path = "tests/fixtures/mock_mcp/main.rs"
+test = false
+doc = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mur-common = { path = "../mur-common" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = "0.10"  # not in workspace (workspace has serde_yaml 0.9)
+clap = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true, features = ["v7"] }
+reqwest = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
+glob = "0.3"
+fs2 = "0.4"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+axum = { version = "0.8", features = ["json"] }
+tar = "0.4"
+flate2 = "1"
+dialoguer = "0.11"
+futures = "0.3"
+async-trait = "0.1"
+dirs = "5"
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
+
+[dev-dependencies]
+tempfile = "3"
+httpmock = "0.7"
