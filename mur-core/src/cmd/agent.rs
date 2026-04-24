@@ -89,8 +89,12 @@ pub fn cmd_create(
             restart_window_secs: 600,
             stop_timeout_secs: 15,
             mcp_required: false,
+            execution: ExecutionMode::default(),
+            schedule: Vec::new(),
         },
         identity: IdentityConfig::default(),
+        file_transfer: FileTransferConfig::default(),
+        deployment: DeploymentConfig::default(),
         created_at: now.clone(),
         updated_at: now,
     };

@@ -31,6 +31,10 @@ pub struct AgentProfile {
     /// (legacy P0a profiles continue to load without this block).
     #[serde(default)]
     pub identity: IdentityConfig,
+    #[serde(default)]
+    pub file_transfer: FileTransferConfig,
+    #[serde(default)]
+    pub deployment: DeploymentConfig,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -348,6 +352,10 @@ pub struct LifecycleConfig {
     pub stop_timeout_secs: u64,
     #[serde(default = "default_mcp_required")]
     pub mcp_required: bool,
+    #[serde(default)]
+    pub execution: ExecutionMode,
+    #[serde(default)]
+    pub schedule: Vec<ScheduleEntry>,
 }
 fn default_max_restarts() -> u32 {
     3
@@ -369,6 +377,89 @@ pub enum RestartPolicy {
     OnFailure,
     Always,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    #[default]
+    Daemon,
+    OnDemand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScheduleEntry {
+    pub cron: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sends_to: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FileTransferConfig {
+    #[serde(default = "default_accept_max")]
+    pub accept_incoming_file_max_bytes: u64,
+    #[serde(default = "default_accept_total")]
+    pub accept_incoming_total_per_hour: u64,
+    #[serde(default = "default_approval_threshold")]
+    pub require_approval_above_bytes: u64,
+    #[serde(default = "default_reject_paths")]
+    pub reject_paths: Vec<String>,
+    #[serde(default = "default_allowed_mime")]
+    pub allowed_mime_types: Vec<String>,
+}
+
+impl Default for FileTransferConfig {
+    fn default() -> Self {
+        Self {
+            accept_incoming_file_max_bytes: default_accept_max(),
+            accept_incoming_total_per_hour: default_accept_total(),
+            require_approval_above_bytes: default_approval_threshold(),
+            reject_paths: default_reject_paths(),
+            allowed_mime_types: default_allowed_mime(),
+        }
+    }
+}
+
+fn default_accept_max() -> u64 { 10_485_760 }
+fn default_accept_total() -> u64 { 104_857_600 }
+fn default_approval_threshold() -> u64 { 10_485_760 }
+fn default_reject_paths() -> Vec<String> {
+    vec!["~/.ssh".into(), "~/.aws".into(), "~/.gnupg".into()]
+}
+fn default_allowed_mime() -> Vec<String> { vec!["*".into()] }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentType {
+    #[default]
+    Laptop,
+    Vm,
+    Docker,
+    K8s,
+    Lambda,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DeploymentConfig {
+    #[serde(rename = "type", default)]
+    pub deployment_type: DeploymentType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(default = "default_env")]
+    pub environment: Option<String>,
+}
+
+impl Default for DeploymentConfig {
+    fn default() -> Self {
+        Self {
+            deployment_type: DeploymentType::default(),
+            region: None,
+            environment: default_env(),
+        }
+    }
+}
+
+fn default_env() -> Option<String> { Some("dev".into()) }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LockFile {
