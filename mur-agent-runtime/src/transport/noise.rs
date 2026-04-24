@@ -47,3 +47,51 @@ pub fn build_initiator(
         .build_initiator()
         .map_err(|e| NoiseError::Builder(e.to_string()))
 }
+
+/// Maximum frame payload size (16 MiB). Matches commander's HTTP body cap.
+pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Debug, Error)]
+pub enum FrameError {
+    #[error("incomplete frame")]
+    Incomplete,
+    #[error("frame too large (>{} bytes)", MAX_FRAME_BYTES)]
+    TooLarge,
+}
+
+/// Decoded frame outcome.
+#[derive(Debug)]
+pub struct DecodedFrame<'a> {
+    pub payload: &'a [u8],
+    pub consumed: usize,
+}
+
+/// Encode a single JSON-RPC payload as a 4-byte BE-length-prefixed frame.
+pub fn encode_frame(payload: &[u8]) -> Result<Vec<u8>, FrameError> {
+    if payload.len() > MAX_FRAME_BYTES {
+        return Err(FrameError::TooLarge);
+    }
+    let mut out = Vec::with_capacity(4 + payload.len());
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload);
+    Ok(out)
+}
+
+/// Decode the first complete frame from `buf`. Returns `Incomplete` if
+/// fewer than 4+len bytes are present.
+pub fn decode_frame(buf: &[u8]) -> Result<DecodedFrame<'_>, FrameError> {
+    if buf.len() < 4 {
+        return Err(FrameError::Incomplete);
+    }
+    let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+    if len > MAX_FRAME_BYTES {
+        return Err(FrameError::TooLarge);
+    }
+    if buf.len() < 4 + len {
+        return Err(FrameError::Incomplete);
+    }
+    Ok(DecodedFrame {
+        payload: &buf[4..4 + len],
+        consumed: 4 + len,
+    })
+}
