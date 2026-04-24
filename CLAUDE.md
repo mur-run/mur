@@ -111,6 +111,20 @@ The per-agent supervisor lives in `mur-agent-runtime/`. Each agent has a directo
 - **Crate README:** `mur-agent-runtime/README.md`
 - **E2E runner:** `scripts/e2e/run-all.sh`
 
+### P0a.5 additions (identity + TCP Noise + commander integration)
+
+- **`mur-common` schema** — `AgentProfile.identity` (Ed25519 pubkey + owner), `transport.tcp` (Noise XK bind + pattern, default off), `lifecycle.{execution,schedule}` (daemon vs on-demand + cron), `file_transfer` caps, `deployment` (laptop / vm / docker / k8s / lambda).
+- **`mur-agent-runtime` TCP transport** — `transport/tcp.rs` + `transport/noise.rs`: Noise_XK_25519_ChaChaPoly_BLAKE2s handshake over length-prefixed 4-byte BE JSON-RPC frames (16 MiB cap). Supervisor spawns the listener only when `transport.tcp.enabled && entitlements.network.inbound.ports` contains the bind port.
+- **Agent Card extensions** — now publishes `pubkey`, `endpoints[]` (ordered `tcp+noise` → `unix-socket` → `stdio`, each with `transport`/`url`/`reachability`), and `deployment`.
+- **`mur agent create`** — generates `identity.key` (0600) and `identity.pub` (multibase base58btc, `z…` prefix) under the agent directory and writes the pubkey into `profile.yaml`.
+- **mur-commander integration (cross-repo; see `~/Projects/mur-commander` branch `feat/murmur-bridge`):**
+  - `engine::a2a::protocol` — adds `message/send`, `message/stream`, `tasks/list` constants + v0.3 capability extension tags (`a2a.v0.3`, `a2a.message.send`, …) on the commander's own Agent Card.
+  - `engine::a2a::server` — aliases `message/send`→`tasks/send`, `message/stream`→`tasks/send`, plus a new `tasks/list` handler.
+  - `engine::remote::murmur_bridge` — notify-based watcher on `~/.mur/agents/*/running.lock`; upserts/marks-offline `RegisteredAgent` entries tagged `"murmur"`. Daemon boots it alongside the existing service manager.
+  - `engine::observability` — `redaction` (full / redacted / metadata-only), `spool` (disk-backed JSONL with rollover), `collector` (tails `telemetry/*.jsonl`, filters telemetry/task-progress notifications, redacts, spools). No hub upstream yet — that lands in P1.
+- **Plan:** `docs/superpowers/plans/2026-04-23-murmur-p0a5-implementation-plan.md` (+ `-COMPLETE.md`)
+- **E2E runner:** `scripts/e2e/p0a5-full.sh` (wraps `p0a5-identity-handshake.sh` + `p0a5-commander-autoregister.sh`).
+
 ## Development Notes
 
 - Rust edition 2024 — `let` chains are stable and used throughout (e.g., `if let … && let …`)

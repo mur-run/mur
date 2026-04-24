@@ -16,7 +16,12 @@ async fn card_returns_agent_identity_and_card_fields() {
             .iter()
             .any(|c| c == "a2a.message.send")
     );
-    assert_eq!(result["transports"].as_array().unwrap()[0], "stdio");
+    let transports = result["transports"].as_array().unwrap();
+    assert!(
+        transports.iter().any(|t| t == "stdio"),
+        "stdio must be present: {:?}",
+        transports
+    );
     assert!(
         result["entitlements"].is_object(),
         "entitlements must be exposed on card"

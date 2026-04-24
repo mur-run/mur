@@ -69,7 +69,8 @@
       "Bash(mur config:*)",
       "Bash(cargo --version)",
       "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
-      "Bash(command -v rustup)"
+      "Bash(command -v rustup)",
+      "Bash(wait)"
     ]
   }
 }

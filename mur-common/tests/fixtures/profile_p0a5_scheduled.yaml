@@ -1,0 +1,50 @@
+schema: 1
+id: 01JQX4TM8Y9K7VQH6B2N3R5DPE
+name: agent_test
+display_name: "Test"
+version: "0.1.0"
+persona:
+  category: research
+  description: "test"
+  traits: { tone: concise, risk: cautious, verbosity: low }
+sys_prompt_file: "sys_prompt.md"
+model:
+  provider: ollama
+  name: "llama3.2:3b"
+  params: { temperature: 0.2, max_tokens: 4096 }
+mcp_servers: []
+skills: []
+transport:
+  stdio: true
+  socket:
+    enabled: true
+    bind: "unix:///tmp/agent.sock"
+communication:
+  accepts_from: ["*"]
+  sends_to: []
+capabilities: []
+entitlements:
+  network:
+    inbound: { ports: [] }
+    outbound: { mode: restricted, allow_hosts: [], protocols: [tcp], resolve_dns: { mode: system } }
+  filesystem: { read: [], write: [], deny: [] }
+  processes: { spawn: { mode: allowlist, allowed: [] } }
+  syscalls: { mode: default }
+  limits: { memory_mb: 512, file_descriptors: 1024, processes: 32 }
+notifications: { on_task_complete: [], on_error: [], on_shutdown: [] }
+retry:
+  llm: { max_retries: 3, backoff: exponential, initial_delay_ms: 1000, max_delay_ms: 30000, retry_on: [rate_limit] }
+  tool: { max_retries: 1, backoff: fixed, initial_delay_ms: 500 }
+lifecycle:
+  restart: never
+  max_restarts: 3
+  restart_window_secs: 600
+  stop_timeout_secs: 15
+  mcp_required: true
+  execution: on_demand
+  schedule:
+    - cron: "0 9 * * 1-5"
+      message: "daily briefing"
+      sends_to: notify_a
+created_at: "2026-04-22T10:00:00+08:00"
+updated_at: "2026-04-22T10:00:00+08:00"

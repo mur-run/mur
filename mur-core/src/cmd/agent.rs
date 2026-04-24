@@ -1,8 +1,13 @@
 //! `mur agent` subcommands — create/list/status/... (Task 22-30).
 //! P0a: just `create`.
 
+// TODO(Q-B): `mur agent rekey <name>` — regenerate identity keypair and
+// re-register with commander. Blocked on user decision in spec § 13.
+// If accepted, keep UUID stable; only rotate pubkey + notify peers.
+
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::agent::*;
+use mur_common::identity::AgentIdentity;
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,6 +27,16 @@ pub fn cmd_create(
         bail!("agent {name} already exists at {}", agent_home.display());
     }
     fs::create_dir_all(&agent_home).with_context(|| format!("create {}", agent_home.display()))?;
+
+    // P0a.5: generate Ed25519 identity keypair for cross-host A2A.
+    let identity = AgentIdentity::generate();
+    identity
+        .save(&agent_home)
+        .with_context(|| format!("save identity to {}", agent_home.display()))?;
+    tracing::info!(
+        pubkey = %identity.pubkey_text(),
+        "generated identity keypair"
+    );
 
     let display_name = display_name.unwrap_or_else(|| name.to_string());
     let model = model.unwrap_or_else(|| "llama3.2:3b".to_string());
@@ -58,6 +73,7 @@ pub fn cmd_create(
                 bind: format!("unix://{}/agent.sock", agent_home.display()),
                 auth: None,
             },
+            tcp: TcpTransportConfig::default(),
         },
         communication: CommunicationConfig {
             accepts_from: vec!["*".into()],
@@ -88,7 +104,15 @@ pub fn cmd_create(
             restart_window_secs: 600,
             stop_timeout_secs: 15,
             mcp_required: false,
+            execution: ExecutionMode::default(),
+            schedule: Vec::new(),
         },
+        identity: IdentityConfig {
+            pubkey: identity.pubkey_text(),
+            owner: std::env::var("USER").ok(),
+        },
+        file_transfer: FileTransferConfig::default(),
+        deployment: DeploymentConfig::default(),
         created_at: now.clone(),
         updated_at: now,
     };
