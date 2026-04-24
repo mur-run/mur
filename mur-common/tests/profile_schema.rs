@@ -22,3 +22,23 @@ fn profile_identity_roundtrip() {
     let p2: AgentProfile = serde_yaml_ng::from_str(&emitted).unwrap();
     assert_eq!(p, p2);
 }
+
+#[test]
+fn tcp_transport_default_disabled() {
+    let yaml = include_str!("fixtures/profile_p0a_minimal.yaml");
+    let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+    assert!(!p.transport.tcp.enabled, "tcp must default disabled");
+    assert!(p.transport.tcp.bind.is_empty());
+}
+
+#[test]
+fn tcp_transport_roundtrip() {
+    let yaml = include_str!("fixtures/profile_p0a5_tcp_enabled.yaml");
+    let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+    assert!(p.transport.tcp.enabled);
+    assert_eq!(p.transport.tcp.bind, "0.0.0.0:39393");
+    assert_eq!(
+        p.transport.tcp.noise.pattern,
+        "Noise_XK_25519_ChaChaPoly_BLAKE2s"
+    );
+}

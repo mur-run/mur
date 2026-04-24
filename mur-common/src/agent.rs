@@ -91,6 +91,31 @@ pub struct McpServerEntry {
 pub struct TransportConfig {
     pub stdio: bool,
     pub socket: SocketTransportConfig,
+    #[serde(default)]
+    pub tcp: TcpTransportConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TcpTransportConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub bind: String,
+    #[serde(default)]
+    pub noise: NoiseConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NoiseConfig {
+    pub pattern: String,
+}
+
+impl Default for NoiseConfig {
+    fn default() -> Self {
+        Self {
+            pattern: "Noise_XK_25519_ChaChaPoly_BLAKE2s".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -58,6 +58,7 @@ pub fn cmd_create(
                 bind: format!("unix://{}/agent.sock", agent_home.display()),
                 auth: None,
             },
+            tcp: TcpTransportConfig::default(),
         },
         communication: CommunicationConfig {
             accepts_from: vec!["*".into()],
