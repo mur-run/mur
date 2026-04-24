@@ -47,7 +47,12 @@ impl Profile {
 }
 
 fn expand_template(yaml: &str, agent_home: &Path) -> String {
-    yaml.replace("{{agent_home}}", agent_home.to_string_lossy().as_ref())
+    // Escape backslashes so Windows paths (e.g. `C:\Users\...`) survive YAML
+    // double-quoted scalars, where `\U`/`\A`/... would be interpreted as escape
+    // sequences. `{{agent_home}}` is expected to appear inside double-quoted
+    // scalars; plain or single-quoted scalars are not supported.
+    let home_str = agent_home.to_string_lossy().replace('\\', "\\\\");
+    yaml.replace("{{agent_home}}", &home_str)
 }
 
 fn validate_uuid_v7(id: &str) -> Result<(), ProfileLoadError> {
