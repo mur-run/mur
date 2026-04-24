@@ -3,6 +3,11 @@ use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
+// Unix-only: exercises SIGTERM → supervisor shutdown → lock cleanup.
+// Windows has no SIGTERM equivalent; without the signal the supervisor never
+// shuts down cleanly within the test timeout, leaving running.lock on disk
+// and the assertions unsatisfiable.
+#[cfg(unix)]
 #[tokio::test]
 async fn sigterm_removes_running_lock_and_flushes_telemetry() {
     let tmp = TempDir::new().unwrap();
