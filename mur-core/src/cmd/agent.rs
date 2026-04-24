@@ -1,6 +1,10 @@
 //! `mur agent` subcommands — create/list/status/... (Task 22-30).
 //! P0a: just `create`.
 
+// TODO(Q-B): `mur agent rekey <name>` — regenerate identity keypair and
+// re-register with commander. Blocked on user decision in spec § 13.
+// If accepted, keep UUID stable; only rotate pubkey + notify peers.
+
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::agent::*;
 use mur_common::identity::AgentIdentity;
