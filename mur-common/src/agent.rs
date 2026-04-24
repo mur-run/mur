@@ -27,8 +27,23 @@ pub struct AgentProfile {
     pub notifications: NotificationsConfig,
     pub retry: RetryConfig,
     pub lifecycle: LifecycleConfig,
+    /// Cryptographic identity for cross-host A2A (P0a.5+). Default = empty
+    /// (legacy P0a profiles continue to load without this block).
+    #[serde(default)]
+    pub identity: IdentityConfig,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct IdentityConfig {
+    /// Multibase-encoded Ed25519 public key (base58btc, `z` prefix).
+    /// Empty string for legacy P0a profiles; filled on P0a.5 `mur agent create`.
+    #[serde(default)]
+    pub pubkey: String,
+    /// Free-form owner identity (email / SSO sub). None for legacy profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

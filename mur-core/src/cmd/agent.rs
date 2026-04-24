@@ -89,6 +89,7 @@ pub fn cmd_create(
             stop_timeout_secs: 15,
             mcp_required: false,
         },
+        identity: IdentityConfig::default(),
         created_at: now.clone(),
         updated_at: now,
     };

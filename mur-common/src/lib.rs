@@ -27,5 +27,5 @@ pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};
 
 pub use a2a::Message as A2aMessage;
 pub use a2a::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Task, TaskState};
-pub use agent::{AgentProfile, Entitlements, LockFile, Persona, PersonaCategory, RetryPolicy};
+pub use agent::{AgentProfile, Entitlements, IdentityConfig, LockFile, Persona, PersonaCategory, RetryPolicy};
 pub use identity::{AgentIdentity, IdentityError, decode_pubkey, encode_pubkey};
