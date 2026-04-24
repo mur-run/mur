@@ -3,3 +3,5 @@ pub mod stdio;
 
 #[cfg(unix)]
 pub mod unix_socket;
+
+pub mod noise;
