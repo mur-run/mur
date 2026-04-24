@@ -156,6 +156,7 @@ pub async fn rollup_week(
                 line_hint,
                 span_index_in_summary: line_hint,
                 vector: h.vector,
+                compressed: None,
             }
         })
         .collect();
@@ -251,7 +252,7 @@ pub async fn rollup_week(
         abstractive,
     };
 
-    match write_rollup(&doc, narrative_embedding, root_override).await {
+    match write_rollup(&doc, narrative_embedding, force, root_override).await {
         Ok(w) => Ok(RollupReport {
             window: iso_week.to_string(),
             outcome: if w.noop {
@@ -397,6 +398,7 @@ pub async fn rollup_month(
                 line_hint,
                 span_index_in_summary: line_hint,
                 vector: h.vector,
+                compressed: None,
             }
         })
         .collect();
@@ -503,7 +505,7 @@ pub async fn rollup_month(
         abstractive,
     };
 
-    match write_rollup(&doc, narrative_embedding, root_override).await {
+    match write_rollup(&doc, narrative_embedding, force, root_override).await {
         Ok(w) => Ok(RollupReport {
             window: yyyy_mm.to_string(),
             outcome: if w.noop {

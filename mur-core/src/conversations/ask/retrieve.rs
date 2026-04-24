@@ -16,6 +16,7 @@ pub struct ResolvedHit {
     pub line_hint: Option<u32>,
     pub span_index_in_summary: Option<u32>,
     pub vector: Option<Vec<f32>>,
+    pub compressed: Option<super::Compression>,
 }
 
 pub struct RetrieveArgs<'a> {
@@ -164,6 +165,7 @@ fn resolve_summary_hit(h: SearchHit, root_override: Option<&str>) -> Result<Reso
         line_hint,
         span_index_in_summary: span_idx,
         vector: h.vector,
+        compressed: None,
     })
 }
 
@@ -184,6 +186,7 @@ fn resolve_raw_hit(h: SearchHit) -> ResolvedHit {
         line_hint: None, // raw hits don't carry line hints; extensible in Phase 3
         span_index_in_summary: None,
         vector: h.vector,
+        compressed: None,
     }
 }
 
@@ -207,6 +210,7 @@ fn resolve_span_hit(h: SearchHit) -> Result<ResolvedHit> {
         line_hint,
         span_index_in_summary: line_hint,
         vector: h.vector,
+        compressed: None,
     })
 }
 
@@ -234,6 +238,7 @@ fn resolve_week_hit(h: SearchHit, _root_override: Option<&str>) -> Result<Resolv
         line_hint: None,
         span_index_in_summary: None,
         vector: h.vector,
+        compressed: None,
     })
 }
 
@@ -261,6 +266,7 @@ fn resolve_month_hit(h: SearchHit, _root_override: Option<&str>) -> Result<Resol
         line_hint: None,
         span_index_in_summary: None,
         vector: h.vector,
+        compressed: None,
     })
 }
 
@@ -425,6 +431,7 @@ mod tests {
             line_hint: Some(1),
             span_index_in_summary: Some(1),
             vector: Some(v),
+            compressed: None,
         };
         let out = mmr_dedupe_cosine(vec![mk(a_vec, "a"), mk(b_vec, "b")], 0.88);
         assert_eq!(out.len(), 1, "near-duplicate should drop to 1");
@@ -447,6 +454,7 @@ mod tests {
             line_hint: Some(1),
             span_index_in_summary: Some(1),
             vector: Some(v),
+            compressed: None,
         };
         let out = mmr_dedupe_cosine(vec![mk(a_vec, "a"), mk(b_vec, "b")], 0.88);
         assert_eq!(out.len(), 2, "orthogonal vectors should both survive");
@@ -477,6 +485,7 @@ mod tests {
             line_hint: None,
             span_index_in_summary: None,
             vector: None,
+            compressed: None,
         };
         let h2 = ResolvedHit {
             snippet: "the quick brown fox jumps".into(),
@@ -506,6 +515,7 @@ mod tests {
             line_hint: None,
             span_index_in_summary: None,
             vector: None,
+            compressed: None,
         };
         let out = cap_by_budget(vec![giant], 100);
         assert_eq!(out.len(), 1, "must keep at least one hit even over budget");

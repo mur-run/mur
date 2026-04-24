@@ -62,7 +62,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 ///
 /// Short-circuits to `Skipped` when `prior_turns` is empty — no LLM call.
 /// On Ollama error, returns `FailedFellBackToRaw`. On identity echo
-/// (trimmed, case-insensitive), returns `NoRewriteNeeded`.
+/// (trimmed, case-insensitive, ignoring trailing `?!.`), returns `NoRewriteNeeded`.
 pub async fn rewrite(client: &OllamaClient, model: &str, input: RewriteInput<'_>) -> RewriteResult {
     if input.prior_turns.is_empty() {
         return RewriteResult {
@@ -108,11 +108,12 @@ pub async fn rewrite(client: &OllamaClient, model: &str, input: RewriteInput<'_>
                     status: RewriterStatus::FailedFellBackToRaw,
                 };
             }
-            let status = if trimmed.to_lowercase() == input.raw_question.trim().to_lowercase() {
-                RewriterStatus::NoRewriteNeeded
-            } else {
-                RewriterStatus::Rewrote
-            };
+            let status =
+                if normalize_for_compare(&trimmed) == normalize_for_compare(input.raw_question) {
+                    RewriterStatus::NoRewriteNeeded
+                } else {
+                    RewriterStatus::Rewrote
+                };
             RewriteResult {
                 rewritten: if status == RewriterStatus::NoRewriteNeeded {
                     input.raw_question.to_string()
@@ -123,6 +124,16 @@ pub async fn rewrite(client: &OllamaClient, model: &str, input: RewriteInput<'_>
             }
         }
     }
+}
+
+/// Lowercase + strip trailing `?!.` + whitespace. Used so a rewriter that
+/// echoes back a question with different trailing punctuation still resolves
+/// to `NoRewriteNeeded` rather than being mislabelled as `Rewrote`.
+fn normalize_for_compare(s: &str) -> String {
+    s.trim()
+        .trim_end_matches(['?', '!', '.'])
+        .trim()
+        .to_lowercase()
 }
 
 #[cfg(test)]
