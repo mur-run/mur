@@ -71,3 +71,59 @@ fn card_ephemeral_invokes_runtime_when_not_running() {
     assert_eq!(v["name"], "agent_e");
     assert_eq!(v["protocolVersion"], "a2a/0.3");
 }
+
+#[test]
+fn card_displays_identity_pubkey() {
+    let Some(runtime_bin) = locate_runtime_binary() else {
+        eprintln!("(skipping — mur-agent-runtime binary not present in target dir)");
+        return;
+    };
+
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    let mur = env!("CARGO_BIN_EXE_mur");
+
+    // Create the agent (this writes profile.yaml + sys_prompt.md + identity keypair).
+    let create = Command::new(mur)
+        .env("MUR_HOME", mur_home.path())
+        .env("MUR_AGENT_BIN_DIR", bin_dir.path())
+        .env("MUR_AGENT_RUNTIME_BIN", &runtime_bin)
+        .args(["agent", "create", "pubkey_test", "--no-interactive"])
+        .output()
+        .expect("spawn mur create");
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    // Fetch the card without running agent — tests ephemeral path.
+    let out = Command::new(mur)
+        .env("MUR_HOME", mur_home.path())
+        .env("MUR_AGENT_BIN_DIR", bin_dir.path())
+        .env("MUR_AGENT_RUNTIME_BIN", &runtime_bin)
+        .args(["agent", "card", "pubkey_test"])
+        .output()
+        .expect("spawn mur card");
+    assert!(
+        out.status.success(),
+        "card failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let body = String::from_utf8(out.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body.trim()).expect("card stdout must be JSON");
+
+    // Verify pubkey field exists and is non-empty
+    let pubkey = v.get("pubkey")
+        .expect("card must include 'pubkey' field")
+        .as_str()
+        .expect("pubkey must be a string");
+    assert!(!pubkey.is_empty(), "pubkey must not be empty");
+
+    // Verify multibase base58btc encoding (should start with 'z').
+    assert!(
+        pubkey.starts_with('z'),
+        "pubkey should be multibase base58btc (starts with 'z'), got: {pubkey}"
+    );
+}
