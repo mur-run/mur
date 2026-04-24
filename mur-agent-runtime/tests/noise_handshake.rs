@@ -7,9 +7,7 @@ fn xk_handshake_completes_in_three_messages() {
     let initiator_id = AgentIdentity::generate();
 
     let responder_static = responder_id.to_x25519_static_secret().to_bytes();
-    let responder_pub = x25519_dalek::PublicKey::from(
-        &responder_id.to_x25519_static_secret(),
-    );
+    let responder_pub = x25519_dalek::PublicKey::from(&responder_id.to_x25519_static_secret());
 
     let mut responder = build_responder(&responder_static).unwrap();
     let mut initiator = build_initiator(
@@ -40,7 +38,6 @@ fn xk_handshake_completes_in_three_messages() {
     let remote_static = responder.get_remote_static().unwrap();
     assert_eq!(
         remote_static,
-        x25519_dalek::PublicKey::from(&initiator_id.to_x25519_static_secret())
-            .as_bytes()
+        x25519_dalek::PublicKey::from(&initiator_id.to_x25519_static_secret()).as_bytes()
     );
 }

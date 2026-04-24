@@ -49,7 +49,9 @@ async fn dialer_aborts_on_mitm_mismatch() {
     let handler = Arc::new(|p: Vec<u8>| async move { Ok::<_, std::io::Error>(p) });
     let (tx, rx) = mpsc::channel(1);
     let handle = spawn_tcp_listener(
-        TcpTransportConfig { bind: "127.0.0.1:0".into() },
+        TcpTransportConfig {
+            bind: "127.0.0.1:0".into(),
+        },
         real_server,
         handler,
         rx,
@@ -60,12 +62,7 @@ async fn dialer_aborts_on_mitm_mismatch() {
     // The test MUST fail during handshake because initiator encrypts its
     // own static key to an unrelated pubkey.
     let client_id = Arc::new(AgentIdentity::generate());
-    let res = TcpConnector::dial(
-        &handle.local_addr().to_string(),
-        client_id,
-        &fake_pub,
-    )
-    .await;
+    let res = TcpConnector::dial(&handle.local_addr().to_string(), client_id, &fake_pub).await;
     assert!(res.is_err(), "MITM-style mismatch must fail handshake");
     drop(tx);
 }

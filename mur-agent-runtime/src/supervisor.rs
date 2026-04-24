@@ -381,9 +381,7 @@ pub fn validate_tcp_entitlement(
         .rsplit(':')
         .next()
         .and_then(|s| s.parse::<u16>().ok())
-        .ok_or_else(|| {
-            ValidationError("transport.tcp.bind missing parseable port".into())
-        })?;
+        .ok_or_else(|| ValidationError("transport.tcp.bind missing parseable port".into()))?;
     if !p.entitlements.network.inbound.ports.contains(&port) {
         return Err(ValidationError(format!(
             "transport.tcp bound to :{port} but entitlements.network.inbound.ports does not allow it"

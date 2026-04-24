@@ -6,9 +6,7 @@
 //! known endpoint, knows the responder's X25519 pubkey a priori (from
 //! Agent Card lookup), and speaks the same frame protocol post-handshake.
 
-use crate::transport::noise::{
-    MAX_FRAME_BYTES, build_initiator, build_responder, encode_frame,
-};
+use crate::transport::noise::{MAX_FRAME_BYTES, build_initiator, build_responder, encode_frame};
 use mur_common::identity::AgentIdentity;
 use std::future::Future;
 use std::io;
@@ -96,8 +94,7 @@ where
     F: Fn(Vec<u8>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<Vec<u8>, io::Error>> + Send + 'static,
 {
-    let mut noise =
-        build_responder(&static_secret).map_err(|e| io::Error::other(e.to_string()))?;
+    let mut noise = build_responder(&static_secret).map_err(|e| io::Error::other(e.to_string()))?;
 
     // handshake — msg 1 in
     let buf = read_framed(&mut stream).await?;
@@ -155,7 +152,10 @@ async fn read_framed(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     stream.read_exact(&mut hdr).await?;
     let len = u32::from_be_bytes(hdr) as usize;
     if len > MAX_FRAME_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame too large",
+        ));
     }
     let mut buf = vec![0u8; len];
     stream.read_exact(&mut buf).await?;
