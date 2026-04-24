@@ -61,3 +61,29 @@ fn decode_invalid_text_errors() {
     let err = decode_pubkey("not-multibase").unwrap_err();
     assert!(matches!(err, IdentityError::Multibase(_)));
 }
+
+#[test]
+fn ed25519_to_x25519_static_key_is_deterministic() {
+    let id = AgentIdentity::generate();
+    let k1 = id.to_x25519_static_secret();
+    let k2 = id.to_x25519_static_secret();
+    // Montgomery form derivation is deterministic from Ed25519 scalar
+    assert_eq!(k1.to_bytes(), k2.to_bytes());
+}
+
+#[test]
+fn ed25519_x25519_pair_agree() {
+    // Two agents can compute matching shared secrets via X25519 derived
+    // from their Ed25519 keypairs.
+    let a = AgentIdentity::generate();
+    let b = AgentIdentity::generate();
+
+    let a_priv = a.to_x25519_static_secret();
+    let b_priv = b.to_x25519_static_secret();
+    let a_pub = x25519_dalek::PublicKey::from(&a_priv);
+    let b_pub = x25519_dalek::PublicKey::from(&b_priv);
+
+    let shared_a = a_priv.diffie_hellman(&b_pub);
+    let shared_b = b_priv.diffie_hellman(&a_pub);
+    assert_eq!(shared_a.as_bytes(), shared_b.as_bytes());
+}
