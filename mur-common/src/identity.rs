@@ -3,7 +3,7 @@
 //! Loaded from `<agent_home>/identity.key` (private, 0600) and
 //! `<agent_home>/identity.pub` (public, multibase-encoded text).
 
-use ed25519_dalek::{SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
+use ed25519_dalek::{SECRET_KEY_LENGTH, SigningKey, VerifyingKey};
 use rand_core::OsRng;
 use std::fs;
 use std::io;

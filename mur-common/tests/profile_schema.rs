@@ -47,7 +47,10 @@ fn tcp_transport_roundtrip() {
 fn lifecycle_execution_defaults_daemon() {
     let yaml = include_str!("fixtures/profile_p0a_minimal.yaml");
     let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
-    assert_eq!(p.lifecycle.execution, mur_common::agent::ExecutionMode::Daemon);
+    assert_eq!(
+        p.lifecycle.execution,
+        mur_common::agent::ExecutionMode::Daemon
+    );
     assert!(p.lifecycle.schedule.is_empty());
 }
 
@@ -55,7 +58,10 @@ fn lifecycle_execution_defaults_daemon() {
 fn lifecycle_schedule_on_demand_roundtrip() {
     let yaml = include_str!("fixtures/profile_p0a5_scheduled.yaml");
     let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
-    assert_eq!(p.lifecycle.execution, mur_common::agent::ExecutionMode::OnDemand);
+    assert_eq!(
+        p.lifecycle.execution,
+        mur_common::agent::ExecutionMode::OnDemand
+    );
     assert_eq!(p.lifecycle.schedule.len(), 1);
     assert_eq!(p.lifecycle.schedule[0].cron, "0 9 * * 1-5");
 }
@@ -72,6 +78,9 @@ fn file_transfer_defaults_sensible() {
 fn deployment_defaults_to_laptop() {
     let yaml = include_str!("fixtures/profile_p0a_minimal.yaml");
     let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
-    assert_eq!(p.deployment.deployment_type, mur_common::agent::DeploymentType::Laptop);
+    assert_eq!(
+        p.deployment.deployment_type,
+        mur_common::agent::DeploymentType::Laptop
+    );
     assert_eq!(p.deployment.environment.as_deref(), Some("dev"));
 }

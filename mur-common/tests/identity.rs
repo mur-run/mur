@@ -34,7 +34,10 @@ fn private_key_file_is_mode_0600() {
 fn pubkey_text_starts_with_z() {
     let id = AgentIdentity::generate();
     let text = id.pubkey_text();
-    assert!(text.starts_with('z'), "expected base58btc 'z' prefix, got: {text}");
+    assert!(
+        text.starts_with('z'),
+        "expected base58btc 'z' prefix, got: {text}"
+    );
 }
 
 #[test]

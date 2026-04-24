@@ -420,13 +420,21 @@ impl Default for FileTransferConfig {
     }
 }
 
-fn default_accept_max() -> u64 { 10_485_760 }
-fn default_accept_total() -> u64 { 104_857_600 }
-fn default_approval_threshold() -> u64 { 10_485_760 }
+fn default_accept_max() -> u64 {
+    10_485_760
+}
+fn default_accept_total() -> u64 {
+    104_857_600
+}
+fn default_approval_threshold() -> u64 {
+    10_485_760
+}
 fn default_reject_paths() -> Vec<String> {
     vec!["~/.ssh".into(), "~/.aws".into(), "~/.gnupg".into()]
 }
-fn default_allowed_mime() -> Vec<String> { vec!["*".into()] }
+fn default_allowed_mime() -> Vec<String> {
+    vec!["*".into()]
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -459,7 +467,9 @@ impl Default for DeploymentConfig {
     }
 }
 
-fn default_env() -> Option<String> { Some("dev".into()) }
+fn default_env() -> Option<String> {
+    Some("dev".into())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LockFile {
