@@ -1,4 +1,6 @@
+pub mod a2a;
 pub mod actor;
+pub mod agent;
 pub mod config;
 pub mod conversation;
 pub mod error;
@@ -12,6 +14,7 @@ pub mod schedule;
 pub mod schedule_claim;
 pub mod scope;
 pub mod signal;
+pub mod telemetry;
 pub mod variable;
 pub mod workflow;
 
@@ -20,3 +23,7 @@ pub use conversation::{CONVERSATION_SCHEMA_VERSION, Content, Message, Role, Sour
 pub use pattern::Pattern;
 pub use scope::Scope;
 pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};
+
+pub use a2a::Message as A2aMessage;
+pub use a2a::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Task, TaskState};
+pub use agent::{AgentProfile, Entitlements, LockFile, Persona, PersonaCategory, RetryPolicy};

@@ -282,6 +282,11 @@ enum Commands {
         #[command(subcommand)]
         action: ExchangeAction,
     },
+    /// Manage murmur agents (create, list, status, send, stop, ...)
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
     /// Verify documentation claims (paths, commands, code refs) against actual codebase
     Verify {
         /// Specific file to verify (default: scan all docs)
@@ -843,6 +848,212 @@ enum ConversationsAction {
 }
 
 #[derive(Subcommand)]
+enum AgentAction {
+    /// Create a new agent profile
+    Create {
+        /// Agent name (alphanumeric + underscore)
+        name: String,
+        /// Skip interactive prompts; use flag defaults
+        #[arg(long)]
+        no_interactive: bool,
+        /// Display name (defaults to the agent name)
+        #[arg(long)]
+        display_name: Option<String>,
+        /// Model id (e.g. llama3.2:3b)
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// List agents under $MUR_HOME/agents
+    List {
+        /// Emit JSON instead of a human-readable table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show systemctl-style status for one agent
+    Status {
+        /// Agent name
+        name: String,
+    },
+    /// Stop a running agent (SIGTERM, then SIGKILL after timeout)
+    Stop {
+        /// Agent name
+        name: String,
+    },
+    /// Remove an agent (symlink + optionally data)
+    Remove {
+        /// Agent name
+        name: String,
+        /// Also delete the agent's data directory
+        #[arg(long)]
+        purge: bool,
+    },
+    /// Rename an agent (updates dir, profile.name, and symlink)
+    Rename {
+        /// Old name
+        old: String,
+        /// New name
+        new: String,
+    },
+    /// Dial an agent's Unix socket and issue A2A `message/send`
+    Send {
+        /// Agent name
+        name: String,
+        /// A2A message JSON: {"role":"user","parts":[...]}
+        message: String,
+    },
+    /// Dial an agent's Unix socket and print its A2A Agent Card
+    Card {
+        /// Agent name
+        name: String,
+    },
+    /// Generate and (optionally) install a launchd/systemd user service
+    InstallService {
+        /// Agent name
+        name: String,
+        /// Print the template only; do not write files or invoke launchctl/systemctl
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Manage an agent's system prompt (show/edit/set)
+    Prompt {
+        #[command(subcommand)]
+        action: AgentPromptAction,
+    },
+    /// Manage an agent's MCP servers (add/list/remove/rename)
+    Mcp {
+        #[command(subcommand)]
+        action: AgentMcpAction,
+    },
+    /// Manage an agent's skills (add/list/remove/show)
+    Skill {
+        #[command(subcommand)]
+        action: AgentSkillAction,
+    },
+    /// Manage an agent's permissions / entitlements
+    Perm {
+        #[command(subcommand)]
+        action: AgentPermAction,
+    },
+    /// Export an agent to a .murpkg or self-contained binary
+    Export {
+        /// Agent name
+        name: String,
+        /// Output path (e.g. agent.murpkg or my_agent)
+        #[arg(long, short = 'o')]
+        out: String,
+        /// Format: "pkg" (default) or "bin"
+        #[arg(long, default_value = "pkg")]
+        format: String,
+    },
+    /// Aggregate telemetry counters from <agent_home>/telemetry/*.jsonl
+    Stats {
+        /// Agent name
+        name: String,
+    },
+    /// Print recent lines from the agent's stderr.log
+    Logs {
+        /// Agent name
+        name: String,
+        /// Show only the last N lines (default 20)
+        #[arg(long, default_value_t = 20)]
+        tail: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentPermAction {
+    /// Print the entitlements block (or one section, e.g. "network")
+    Show {
+        name: String,
+        section: Option<String>,
+    },
+    /// Set a mode (currently only `network.outbound <restricted|unrestricted|off>`)
+    SetMode {
+        name: String,
+        key: String,
+        value: String,
+    },
+    /// Allow an outbound host glob
+    AllowHost { name: String, glob: String },
+    /// Deny an outbound host glob
+    DenyHost { name: String, glob: String },
+    /// Print the outbound host allow / deny lists
+    ListHosts { name: String },
+    /// Allow filesystem read on a path
+    AllowRead { name: String, path: String },
+    /// Allow filesystem write on a path
+    AllowWrite { name: String, path: String },
+    /// Deny filesystem access on a path
+    DenyPath { name: String, path: String },
+    /// Add a binary to the spawn allowlist
+    AllowSpawn { name: String, binary: String },
+    /// Remove a binary from the spawn allowlist
+    DenySpawn { name: String, binary: String },
+    /// Set a numeric resource limit (memory_mb, file_descriptors, processes)
+    SetLimit {
+        name: String,
+        key: String,
+        value: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentSkillAction {
+    /// List attached skill ids
+    List { name: String },
+    /// Copy a skill markdown file into the agent and register it
+    Add {
+        name: String,
+        /// Path to a skill .md file (basename becomes its id)
+        source: String,
+    },
+    /// Remove a skill entry; deletes the backing file if orphaned
+    Remove { name: String, skill_id: String },
+    /// Print the contents of a skill file
+    Show { name: String, skill_id: String },
+}
+
+#[derive(Subcommand)]
+enum AgentMcpAction {
+    /// List MCP servers attached to an agent
+    List { name: String },
+    /// Add an MCP server entry and sync its command into the spawn allowlist
+    Add {
+        name: String,
+        server_id: String,
+        #[arg(long)]
+        command: String,
+        #[arg(long = "arg")]
+        args: Vec<String>,
+    },
+    /// Remove an MCP server entry by id
+    Remove { name: String, server_id: String },
+    /// Rename an MCP server entry in place
+    Rename {
+        name: String,
+        old: String,
+        new: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentPromptAction {
+    /// Print the agent's sys_prompt.md contents to stdout
+    Show { name: String },
+    /// Open $EDITOR on sys_prompt.md
+    Edit { name: String },
+    /// Write sys_prompt.md, preserving a .bak copy of the previous value
+    Set {
+        name: String,
+        /// Inline prompt text (omit when using -f)
+        content: Option<String>,
+        /// Read prompt text from a file
+        #[arg(short = 'f', long = "file")]
+        file: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum DraftsAction {
     /// List pending pattern drafts in a compact table.
     List {
@@ -1185,6 +1396,98 @@ async fn async_main() -> Result<()> {
         } => cmd::server_cmd::cmd_serve(port, open, readonly).await?,
         Commands::Why { name } => cmd::inject_cmd::cmd_why(&name)?,
         Commands::Edit { name, quick } => cmd::pattern::cmd_edit(&name, quick)?,
+        Commands::Agent { action } => match action {
+            AgentAction::Create {
+                name,
+                no_interactive,
+                display_name,
+                model,
+            } => cmd::agent::cmd_create(&name, no_interactive, display_name, model)?,
+            AgentAction::List { json } => cmd::agent::cmd_list(json)?,
+            AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
+            AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
+            AgentAction::Remove { name, purge } => cmd::agent::cmd_remove(&name, purge)?,
+            AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
+            AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
+            AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
+            AgentAction::InstallService { name, dry_run } => {
+                cmd::agent::cmd_install_service(&name, dry_run)?
+            }
+            AgentAction::Prompt { action } => match action {
+                AgentPromptAction::Show { name } => cmd::agent::cmd_prompt_show(&name)?,
+                AgentPromptAction::Edit { name } => cmd::agent::cmd_prompt_edit(&name)?,
+                AgentPromptAction::Set {
+                    name,
+                    content,
+                    file,
+                } => cmd::agent::cmd_prompt_set(&name, content.as_deref(), file.as_deref())?,
+            },
+            AgentAction::Mcp { action } => match action {
+                AgentMcpAction::List { name } => cmd::agent::cmd_mcp_list(&name)?,
+                AgentMcpAction::Add {
+                    name,
+                    server_id,
+                    command,
+                    args,
+                } => cmd::agent::cmd_mcp_add(&name, &server_id, &command, &args)?,
+                AgentMcpAction::Remove { name, server_id } => {
+                    cmd::agent::cmd_mcp_remove(&name, &server_id)?
+                }
+                AgentMcpAction::Rename { name, old, new } => {
+                    cmd::agent::cmd_mcp_rename(&name, &old, &new)?
+                }
+            },
+            AgentAction::Skill { action } => match action {
+                AgentSkillAction::List { name } => cmd::agent::cmd_skill_list(&name)?,
+                AgentSkillAction::Add { name, source } => {
+                    cmd::agent::cmd_skill_add(&name, &source)?
+                }
+                AgentSkillAction::Remove { name, skill_id } => {
+                    cmd::agent::cmd_skill_remove(&name, &skill_id)?
+                }
+                AgentSkillAction::Show { name, skill_id } => {
+                    cmd::agent::cmd_skill_show(&name, &skill_id)?
+                }
+            },
+            AgentAction::Perm { action } => match action {
+                AgentPermAction::Show { name, section } => {
+                    cmd::agent::cmd_perm_show(&name, section.as_deref())?
+                }
+                AgentPermAction::SetMode { name, key, value } => {
+                    cmd::agent::cmd_perm_set_mode(&name, &key, &value)?
+                }
+                AgentPermAction::AllowHost { name, glob } => {
+                    cmd::agent::cmd_perm_allow_host(&name, &glob)?
+                }
+                AgentPermAction::DenyHost { name, glob } => {
+                    cmd::agent::cmd_perm_deny_host(&name, &glob)?
+                }
+                AgentPermAction::ListHosts { name } => cmd::agent::cmd_perm_list_hosts(&name)?,
+                AgentPermAction::AllowRead { name, path } => {
+                    cmd::agent::cmd_perm_allow_read(&name, &path)?
+                }
+                AgentPermAction::AllowWrite { name, path } => {
+                    cmd::agent::cmd_perm_allow_write(&name, &path)?
+                }
+                AgentPermAction::DenyPath { name, path } => {
+                    cmd::agent::cmd_perm_deny_path(&name, &path)?
+                }
+                AgentPermAction::AllowSpawn { name, binary } => {
+                    cmd::agent::cmd_perm_allow_spawn(&name, &binary)?
+                }
+                AgentPermAction::DenySpawn { name, binary } => {
+                    cmd::agent::cmd_perm_deny_spawn(&name, &binary)?
+                }
+                AgentPermAction::SetLimit { name, key, value } => {
+                    cmd::agent::cmd_perm_set_limit(&name, &key, value)?
+                }
+            },
+            AgentAction::Export { name, out, format } => {
+                cmd::agent::cmd_export(&name, &out, &format)?
+            }
+            AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
+            AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
+        },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
             ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,

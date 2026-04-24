@@ -44,10 +44,11 @@ cargo run -- <command>          # e.g. cargo run -- search "swift testing"
 
 ## Architecture
 
-Cargo workspace with two crates:
+Cargo workspace with three crates:
 
-- **`mur-common`** — Shared types only. No logic, no I/O. `Pattern`, `KnowledgeBase`, `Workflow`, `Config`, `MurEvent`. Both crates depend on this.
-- **`mur-core`** — All CLI logic and the `mur` binary. Structured as modules that map to the four-stage pipeline.
+- **`mur-common`** — Shared types only. No logic, no I/O. `Pattern`, `KnowledgeBase`, `Workflow`, `Config`, `MurEvent`, plus `AgentProfile`/`LockFile`/A2A envelopes/telemetry constants. All other crates depend on this.
+- **`mur-core`** — All CLI logic and the `mur` binary. Structured as modules that map to the four-stage pipeline. Hosts `mur agent ...` user-facing subcommands.
+- **`mur-agent-runtime`** — Per-agent A2A v0.3 supervisor (P0a). One binary, one BusyBox-style symlink per agent (`mur_agent_<name>` → `mur-agent-runtime`). See `mur-agent-runtime/README.md` for the walkthrough; spec at `docs/superpowers/specs/2026-04-22-murmur-p0a-agent-runtime-design.md`.
 
 ### Four-Stage Pipeline
 
@@ -99,6 +100,16 @@ LanceDB vector index is always rebuildable from YAML via `mur reindex`.
 ### CLI Commands (New)
 
 - **`mur verify [--file path] [--all]`** — Scan docs for stale claims (paths, commands, code refs)
+- **`mur agent <subcommand>`** — Manage murmur agents (P0a). Subcommands: `create`, `list`, `status`, `stop`, `remove`, `rename`, `send`, `card`, `install-service`, `prompt {show|edit|set}`, `mcp {add|list|remove|rename}`, `skill {add|list|remove|show}`, `perm {show|set-mode|allow-host|deny-host|list-hosts|allow-read|allow-write|deny-path|allow-spawn|deny-spawn|set-limit}`, `export {--format=pkg|bin}`, `stats`, `logs`. The runtime binary that backs each agent lives in `mur-agent-runtime/`.
+
+### Agent Runtime (murmur P0a)
+
+The per-agent supervisor lives in `mur-agent-runtime/`. Each agent has a directory under `~/.mur/agents/<name>/` (`profile.yaml`, `sys_prompt.md`, `skills/`, `running.lock`, `telemetry/<date>.jsonl`) and a symlink in `MUR_AGENT_BIN_DIR` (default `~/.local/bin`) named `mur_agent_<name>`. The symlink is the runtime binary; argv[0] tells it which profile to load.
+
+- **Spec:** `docs/superpowers/specs/2026-04-22-murmur-p0a-agent-runtime-design.md`
+- **Plan:** `docs/superpowers/plans/2026-04-22-murmur-p0a-agent-runtime-plan.md` (+ `-part2.md`, `-COMPLETE.md`, `-e2e-coverage.md`)
+- **Crate README:** `mur-agent-runtime/README.md`
+- **E2E runner:** `scripts/e2e/run-all.sh`
 
 ## Development Notes
 
