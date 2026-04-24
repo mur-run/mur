@@ -13,6 +13,10 @@ fn short_path_binds_direct_no_symlink() {
     assert!(!res.symlink_created, "no symlink expected for short path");
 }
 
+// Unix-only: exercises the `/tmp/` fallback + std::os::unix::fs::symlink path.
+// On Windows the code takes a different branch (fs::copy) and the test's
+// `/tmp/mur-...` prefix assertion doesn't apply.
+#[cfg(unix)]
 #[test]
 fn long_path_uses_tmp_and_symlinks() {
     let tmp = TempDir::new().unwrap();
