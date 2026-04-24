@@ -263,9 +263,31 @@ llm:
   provider: anthropic
   model: claude-sonnet-4-20250514
   api_key_env: ANTHROPIC_API_KEY
+
+ask:
+  summarize_hits_enabled: true  # Enable abstractive compression in overflow cascade
+  summarize_model: null         # Override model for Stage 1b (null → falls back to ask.model)
 ```
 
 Run `mur init` for an interactive setup wizard.
+
+### Ask Configuration
+
+The `ask` section controls behavior of `mur ask` queries:
+
+- **`summarize_hits_enabled`** (default `true`) — When context is tight, `mur ask` runs an overflow cascade that compresses the longest hits using an abstractive summarization stage. This trades accuracy for context efficiency. Results cache per-hit at `~/.mur/conversations/cache/abstractive/` to amortize LLM cost. Summarization has a hardcoded 5s per-hit timeout and soft-fails silently on error. Set to `false` to restore pre-3.5 behavior (drop history first).
+
+- **`summarize_model`** (default `null`) — Override the LLM model used for Stage 1b summarization. When `null`, falls back to `ask.model`. Pair with a faster model like `qwen3:4b` to trade summarization accuracy for speed on tight-budget queries.
+
+#### CLI overrides (per-invocation)
+
+Override the `summarize_*` config keys for a single `mur ask` invocation without editing `~/.mur/config.yaml`:
+
+- **`--no-summarize`** — Disable Stage 1b for this invocation. Overrides `ask.summarize_hits_enabled`. Useful for demos, benchmarks, or scripted comparisons.
+
+- **`--summarize-model <model>`** — Override the Stage 1b model for this invocation. Overrides `ask.summarize_model`. Pair with a faster model like `qwen3:4b` to trade quality for speed on the summarize hop. The cache key includes the model name, so changing this flag produces a fresh cache entry.
+
+The two flags are mutually exclusive: passing both errors at argument-parse time.
 
 ## AI Tool Integration
 

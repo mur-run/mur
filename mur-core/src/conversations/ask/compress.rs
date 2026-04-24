@@ -4,8 +4,6 @@
 //! no I/O, deterministic. Called from `prompt::render` as Stage 1 of the
 //! overflow loop — only fires when the full prompt exceeds
 //! `max_context_tokens` AND `AskConfig.compress_hits_enabled` is true.
-#![allow(dead_code)] // wired by Task 3 (prompt::render integration).
-
 use super::retrieve::ResolvedHit;
 use std::collections::HashSet;
 
@@ -184,6 +182,7 @@ fn compress_one(
         .join(" ");
     ResolvedHit {
         snippet: new_snippet,
+        compressed: Some(super::Compression::Heuristic),
         ..h
     }
 }
@@ -243,6 +242,7 @@ mod tests {
             line_hint: Some(1),
             span_index_in_summary: None,
             vector: None,
+            compressed: None,
         }
     }
 
@@ -325,5 +325,33 @@ mod tests {
         // Snippet actually compressed (shorter than original)
         assert!(o.snippet.len() < long_snippet.len());
         assert!(!o.snippet.is_empty());
+    }
+
+    #[test]
+    fn compress_hits_tags_modified_hits_with_heuristic() {
+        // A hit that actually gets compressed (>= MIN_CHARS + MIN_SENTENCES) must
+        // come back tagged Compression::Heuristic. Phase 3.5 provenance contract.
+        let long = (0..12)
+            .map(|i| format!("Info sentence number {i} with extended body text content."))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(long.len() >= 400);
+        let h = hit(&long);
+        let out = compress_hits(vec![h], "info", 150);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].compressed,
+            Some(crate::conversations::ask::Compression::Heuristic),
+            "compressed hits must carry Heuristic provenance for Phase 3.5 to honor it"
+        );
+    }
+
+    #[test]
+    fn compress_hits_leaves_skipped_hits_untagged() {
+        // SKIP branch (too short) → compressed stays None.
+        let h = hit("Short hit. Just two sentences.");
+        let out = compress_hits(vec![h], "query", 10);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].compressed, None);
     }
 }

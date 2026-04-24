@@ -4,6 +4,8 @@
 use mur_common::Source;
 use std::time::Duration;
 
+pub mod abstractive;
+pub mod cache;
 pub mod cite;
 pub mod compress;
 pub mod format;
@@ -50,6 +52,19 @@ pub struct AskRequest {
     pub retrieval_query: String,
     pub rewriter_status: session::RewriterStatus,
     pub compress_enabled: bool,
+    pub summarize_enabled: bool,
+    pub summarize_model: Option<String>,
+}
+
+/// Provenance marker for hit snippets that have been reduced before going
+/// into the LLM prompt. `Heuristic` → Phase 3.4 extractive compression (free).
+/// `Abstractive` → Phase 3.5 LLM-summarized (paid). Written by the later
+/// transformation, so a hit touched by both ends up marked `Abstractive`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Compression {
+    Heuristic,
+    Abstractive,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -62,6 +77,8 @@ pub struct Citation {
     pub span_index_in_summary: Option<u32>,
     pub snippet: String,
     pub score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed: Option<Compression>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -84,6 +101,8 @@ pub struct AskResponse {
     pub duration_ms: u64,
     pub rewritten_question: Option<String>,
     pub rewriter_status: session::RewriterStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_1b: Option<abstractive::Stage1bStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +115,7 @@ pub enum AskEvent {
         tokens_out: usize,
         degraded: bool,
         duration_ms: u64,
+        stage_1b: Option<abstractive::Stage1bStats>,
     },
     Error(String),
 }
@@ -124,6 +144,7 @@ pub async fn ask_stream(
                     tokens_out: 0,
                     degraded: false,
                     duration_ms: start.elapsed().as_millis() as u64,
+                    stage_1b: None,
                 };
             }));
         }
@@ -152,6 +173,7 @@ pub async fn ask_stream(
                     tokens_out: 0,
                     degraded: false,
                     duration_ms: start.elapsed().as_millis() as u64,
+                    stage_1b: None,
                 };
             }));
         }
@@ -165,24 +187,47 @@ pub async fn ask_stream(
                 tokens_out: 0,
                 degraded: false,
                 duration_ms: start.elapsed().as_millis() as u64,
+                stage_1b: None,
             };
         }));
     }
 
-    // 3. Build prompt
-    let prompt = prompt::render(
-        &req.question,
-        &req.prior_turns,
-        &hits,
-        req.max_context_tokens,
-        req.response_tokens,
-        req.compress_enabled,
-    );
+    // 3. Build prompt (incl. Phase 3.5 Stage 1b when enabled).
+    let ollama_client = crate::conversations::ollama::OllamaClient::new(&req.endpoint, req.timeout);
+    let summarize_model_owned: Option<String> = req
+        .summarize_model
+        .clone()
+        .or_else(|| Some(req.model.clone()));
+    let abstractive_ctx_owned =
+        summarize_model_owned
+            .as_ref()
+            .map(|m| abstractive::AbstractiveCtx {
+                client: &ollama_client,
+                model: m.as_str(),
+                timeout: abstractive::CALL_TIMEOUT,
+                root_override,
+            });
 
+    // Emit HitInfo events from the ORIGINAL hits vec (pre-compression) so
+    // downstream session records still reflect retrieval state, not mutation.
     let hit_events: Vec<AskEvent> = hits
         .iter()
         .map(|h| AskEvent::HitInfo(h.info.clone()))
         .collect();
+
+    let prompt = prompt::render(
+        &req.question,
+        &req.prior_turns,
+        hits,
+        req.max_context_tokens,
+        req.response_tokens,
+        req.compress_enabled,
+        req.summarize_enabled,
+        abstractive_ctx_owned.as_ref(),
+    )
+    .await;
+
+    let stage_1b_stats = prompt.stage_1b.as_ref().map(|s| s.to_stats());
 
     // 4. Generate (streaming) with grounding filter
     let endpoint = req.endpoint.clone();
@@ -206,7 +251,8 @@ pub async fn ask_stream(
     {
         Ok(s) => s,
         Err(e) => {
-            let mode_b = hits_as_mode_b(&hits);
+            let mode_b = hits_as_mode_b(&prompt.final_hits);
+            let stage_1b_err = stage_1b_stats.clone();
             return Ok(Box::pin(try_stream! {
                 for evt in hit_events { yield evt; }
                 yield AskEvent::Token(mode_b);
@@ -215,13 +261,14 @@ pub async fn ask_stream(
                     tokens_out: 0,
                     degraded: true,
                     duration_ms: start.elapsed().as_millis() as u64,
+                    stage_1b: stage_1b_err,
                 };
                 yield AskEvent::Error(format!("ollama unavailable: {e:#}"));
             }));
         }
     };
 
-    let citation_events_by_anchor = citations_map(&hits);
+    let citation_events_by_anchor = citations_map(&prompt.final_hits);
     let out_stream = try_stream! {
         for evt in hit_events { yield evt; }
         let mut stream = stream;
@@ -259,6 +306,7 @@ pub async fn ask_stream(
             tokens_out,
             degraded: false,
             duration_ms: start.elapsed().as_millis() as u64,
+            stage_1b: stage_1b_stats.clone(),
         };
     };
     Ok(Box::pin(out_stream))
@@ -275,6 +323,7 @@ pub async fn ask(req: AskRequest, root_override: Option<&str>) -> Result<AskResp
     let mut tokens_in = 0;
     let mut tokens_out = 0;
     let mut duration_ms = 0;
+    let mut stage_1b_final: Option<abstractive::Stage1bStats> = None;
     while let Some(evt) = stream.next().await {
         match evt? {
             AskEvent::Token(t) => answer.push_str(&t),
@@ -285,11 +334,13 @@ pub async fn ask(req: AskRequest, root_override: Option<&str>) -> Result<AskResp
                 tokens_out: to,
                 degraded: d,
                 duration_ms: ms,
+                stage_1b: sb,
             } => {
                 tokens_in = ti;
                 tokens_out = to;
                 degraded = d;
                 duration_ms = ms;
+                stage_1b_final = sb;
             }
             AskEvent::Error(e) => return Err(anyhow::anyhow!(e)),
         }
@@ -307,6 +358,7 @@ pub async fn ask(req: AskRequest, root_override: Option<&str>) -> Result<AskResp
             _ => Some(retrieval_query),
         },
         rewriter_status,
+        stage_1b: stage_1b_final,
     })
 }
 
@@ -349,6 +401,7 @@ fn citations_map(hits: &[retrieve::ResolvedHit]) -> std::collections::HashMap<St
                 span_index_in_summary: h.span_index_in_summary,
                 snippet: h.snippet.clone(),
                 score: h.info.score,
+                compressed: h.compressed,
             },
         );
     }
@@ -383,6 +436,108 @@ mod tests {
         assert_eq!(f.min_score, 0.35);
     }
 
+    #[test]
+    fn compression_enum_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&Compression::Heuristic).unwrap(),
+            "\"heuristic\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Compression::Abstractive).unwrap(),
+            "\"abstractive\""
+        );
+    }
+
+    #[test]
+    fn citation_omits_compressed_field_when_none() {
+        let c = Citation {
+            id: 1,
+            date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+            source: "cc".into(),
+            conv_id: "c1".into(),
+            line_hint: Some(1),
+            span_index_in_summary: None,
+            snippet: "s".into(),
+            score: 0.9,
+            compressed: None,
+        };
+        let j = serde_json::to_string(&c).unwrap();
+        assert!(
+            !j.contains("compressed"),
+            "expected field omitted, got: {j}"
+        );
+    }
+
+    #[test]
+    fn citation_emits_compressed_field_when_set() {
+        let c = Citation {
+            id: 1,
+            date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+            source: "cc".into(),
+            conv_id: "c1".into(),
+            line_hint: Some(1),
+            span_index_in_summary: None,
+            snippet: "s".into(),
+            score: 0.9,
+            compressed: Some(Compression::Abstractive),
+        };
+        let j = serde_json::to_string(&c).unwrap();
+        assert!(j.contains("\"compressed\":\"abstractive\""), "got: {j}");
+    }
+
+    #[test]
+    fn citation_deserializes_legacy_json_without_compressed_field() {
+        // Backwards compat: TurnRecord.citations is serde-persisted as JSONL in
+        // ask-session.jsonl across versions. A pre-3.5 record has no `compressed`
+        // key — must still parse.
+        let j = r#"{"id":1,"date":"2026-04-22","source":"cc","conv_id":"c1","line_hint":1,"span_index_in_summary":null,"snippet":"s","score":0.9}"#;
+        let c: Citation = serde_json::from_str(j).expect("legacy Citation must parse");
+        assert!(c.compressed.is_none());
+    }
+
+    #[test]
+    fn ask_response_omits_stage_1b_when_none() {
+        let r = AskResponse {
+            answer: "".into(),
+            citations: vec![],
+            hits_used: vec![],
+            degraded_to_mode_b: false,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+            rewritten_question: None,
+            rewriter_status: session::RewriterStatus::Skipped,
+            stage_1b: None,
+        };
+        let j = serde_json::to_string(&r).unwrap();
+        assert!(!j.contains("stage_1b"), "expected field omitted, got: {j}");
+    }
+
+    #[test]
+    fn ask_response_emits_stage_1b_when_set() {
+        let r = AskResponse {
+            answer: "".into(),
+            citations: vec![],
+            hits_used: vec![],
+            degraded_to_mode_b: false,
+            tokens_in: 0,
+            tokens_out: 0,
+            duration_ms: 0,
+            rewritten_question: None,
+            rewriter_status: session::RewriterStatus::Skipped,
+            stage_1b: Some(abstractive::Stage1bStats {
+                compressed_count: 2,
+                cache_hits: 1,
+                skipped_count: 0,
+                duration_ms: 120,
+            }),
+        };
+        let j = serde_json::to_string(&r).unwrap();
+        assert!(j.contains("\"stage_1b\""));
+        assert!(j.contains("\"compressed_count\":2"));
+        assert!(j.contains("\"cache_hits\":1"));
+    }
+
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn ask_end_to_end_mock_empty_hits() {
@@ -415,6 +570,8 @@ mod tests {
             retrieval_query: "What did we do yesterday?".into(),
             rewriter_status: session::RewriterStatus::Skipped,
             compress_enabled: true,
+            summarize_enabled: true,
+            summarize_model: None,
         };
         // Empty index → should yield the "don't cover that" fallback.
         let resp = ask(req, Some(root)).await.unwrap();

@@ -17,6 +17,7 @@ mod gep;
 mod inject;
 mod interactive;
 mod llm;
+mod paths;
 mod retrieve;
 mod server;
 mod session;
@@ -331,6 +332,11 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// List / show / accept / reject pending pattern drafts (Channel 2/3 proposals).
+    Drafts {
+        #[command(subcommand)]
+        action: DraftsAction,
+    },
     /// Stop recording without export (alias: quit)
     Exit,
     /// Stop recording without export (alias: exit)
@@ -387,8 +393,17 @@ enum Commands {
         new_flag: bool,
         /// Print current session path, turn count, last turn time.
         /// Ignores question if given; no LLM calls.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["continue_flag", "new_flag"])]
         show_session: bool,
+        /// Phase 3.5.1: Disable Stage 1b (LLM-abstractive hit compression)
+        /// for this invocation. Overrides `conversations.ask.summarize_hits_enabled`.
+        #[arg(long, conflicts_with = "summarize_model")]
+        no_summarize: bool,
+        /// Phase 3.5.1: Override the Stage 1b model for this invocation.
+        /// Overrides `conversations.ask.summarize_model`; `None` (flag omitted)
+        /// falls back to the config value, and ultimately to `ask.model`.
+        #[arg(long)]
+        summarize_model: Option<String>,
     },
     #[cfg(feature = "sources")]
     /// Manage external knowledge sources (Notion, Obsidian, Joplin, ...).
@@ -1039,6 +1054,38 @@ enum AgentPromptAction {
 }
 
 #[derive(Subcommand)]
+enum DraftsAction {
+    /// List pending pattern drafts in a compact table.
+    List {
+        /// Only include drafts created within the last N days (default 30).
+        #[arg(long, default_value_t = 30)]
+        since: u32,
+    },
+    /// Show the full YAML + metadata for a single draft by id-prefix.
+    Show {
+        /// Unambiguous prefix of the draft's uuid (e.g. first 8 chars).
+        id: String,
+    },
+    /// Accept a draft locally: saves the embedded Pattern to ~/.mur/patterns/
+    /// with maturity=emerging. Does NOT yet notify the server (MVP).
+    Accept {
+        /// Unambiguous prefix of the draft's uuid.
+        id: String,
+        /// Override tier: session | project | core.
+        #[arg(long = "as-tier")]
+        as_tier: Option<String>,
+    },
+    /// Reject a draft server-side with an optional reason.
+    Reject {
+        /// Unambiguous prefix of the draft's uuid.
+        id: String,
+        /// Optional human-readable reason recorded on the draft.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum DeployAction {
     /// Start services (docker compose up)
     Up {
@@ -1465,6 +1512,16 @@ async fn async_main() -> Result<()> {
             let config = crate::store::config::load_config()?;
             cmd::sync_cmd::run_fetch(&config.server.url, dry_run).await?;
         }
+        Commands::Drafts { action } => match action {
+            DraftsAction::List { since } => cmd::drafts::cmd_drafts_list(since).await?,
+            DraftsAction::Show { id } => cmd::drafts::cmd_drafts_show(&id).await?,
+            DraftsAction::Accept { id, as_tier } => {
+                cmd::drafts::cmd_drafts_accept(&id, as_tier.as_deref()).await?
+            }
+            DraftsAction::Reject { id, reason } => {
+                cmd::drafts::cmd_drafts_reject(&id, reason.as_deref()).await?
+            }
+        },
         Commands::Exit | Commands::Quit => cmd::session::cmd_session_exit()?,
         Commands::Chat { action } => match action {
             ChatAction::List { since, src } => cmd::conversations_cmd::cmd_chat_list(since, src)?,
@@ -1589,6 +1646,8 @@ async fn async_main() -> Result<()> {
             continue_flag,
             new_flag,
             show_session,
+            no_summarize,
+            summarize_model,
         } => {
             cmd::conversations_cmd::cmd_ask(cmd::conversations_cmd::AskArgs {
                 question,
@@ -1605,6 +1664,8 @@ async fn async_main() -> Result<()> {
                 continue_flag,
                 new_flag,
                 show_session,
+                no_summarize,
+                summarize_model,
             })
             .await?
         }
@@ -1770,4 +1831,58 @@ async fn cmd_search_unified(
     // Feature-off: fall back to the existing pattern search (old behaviour).
     cmd::pattern::cmd_search(&query)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// Helper: parse a full argv and return the `Commands::Ask` variant fields
+    /// we care about. Panics on any other variant.
+    fn parse_ask(argv: &[&str]) -> (bool, Option<String>) {
+        let cli = Cli::try_parse_from(argv).expect("parse argv");
+        match cli.command {
+            Commands::Ask {
+                no_summarize,
+                summarize_model,
+                ..
+            } => (no_summarize, summarize_model),
+            _ => panic!("expected Ask variant"),
+        }
+    }
+
+    #[test]
+    fn ask_parses_no_summarize_flag() {
+        let (no_summarize, model) = parse_ask(&["mur", "ask", "q?", "--no-summarize"]);
+        assert!(no_summarize);
+        assert!(model.is_none());
+    }
+
+    #[test]
+    fn ask_parses_summarize_model_flag() {
+        let (no_summarize, model) =
+            parse_ask(&["mur", "ask", "q?", "--summarize-model", "qwen3:4b"]);
+        assert!(!no_summarize);
+        assert_eq!(model.as_deref(), Some("qwen3:4b"));
+    }
+
+    #[test]
+    fn ask_rejects_no_summarize_with_summarize_model() {
+        // clap `conflicts_with` on --no-summarize guards this.
+        let r = Cli::try_parse_from([
+            "mur",
+            "ask",
+            "q?",
+            "--no-summarize",
+            "--summarize-model",
+            "qwen3:4b",
+        ]);
+        assert!(r.is_err(), "clap must reject the conflict");
+        let msg = r.err().unwrap().to_string();
+        assert!(
+            msg.contains("--summarize-model") || msg.contains("summarize-model"),
+            "error should mention the conflicting flag; got: {msg}"
+        );
+    }
 }

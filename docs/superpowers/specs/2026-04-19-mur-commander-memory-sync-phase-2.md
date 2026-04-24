@@ -65,25 +65,38 @@
 
 ### 1.4 Signal 寫出
 
+> **Amendment (2026-04-23)**: Phase 1 already plumbed the draft carrier — no new `SignalKind::PatternDraft` variant, no schema bump. Use the existing `SignalTarget::NewDraftPattern { payload: Box<Pattern> }` to carry the full `Pattern` struct and `SignalKind::NewPatternProposal { origin_context }` for provenance. See `signal_with_new_draft_pattern_roundtrip` test in `mur-common/src/signal.rs` for the wire format.
+
 Normalize 成 Phase 1 的 `Signal`:
 
 ```rust
 Signal {
-  kind: SignalKind::PatternDraft {
-    name: extracted.name,
-    description: ...,
-    content: DualLayer { principle, technical },
-    kind: extracted.kind,
+  target: SignalTarget::NewDraftPattern {
+    payload: Box::new(Pattern {
+      base: KnowledgeBase {
+        name: extracted.name,
+        description: extracted.description,
+        content: Content::DualLayer { principle, technical },
+        tier: Tier::Session,
+        ..Default::default()
+      },
+      ..Default::default()
+    }),
   },
-  target: SignalTarget::NewPattern,
+  kind: SignalKind::NewPatternProposal {
+    origin_context: format!("slack:{channel_id}#{ts} from user {user_id}"),
+  },
   actor: Actor { source: Slack, native_id: user_id, resolved_user_id: None, ... },
   scope: <decided above>,
   confidence: extracted.confidence,
-  ...
+  schema_version: SIGNAL_SCHEMA_VERSION,  // stays at 1
+  ..
 }
 ```
 
-> 需要新 `SignalKind::PatternDraft` variant — 加到 `mur-common/src/signal.rs`,`SIGNAL_SCHEMA_VERSION` bump 到 2。mur-server 處理 v1 signals 照舊;v2 加 draft 路由。
+Why reuse the existing plumbing: `NewDraftPattern` carries a full `Pattern` struct so every downstream consumer (server drafts store, client inbox renderer, `mur drafts accept`) gets the same types they already know — no parallel `DualLayer`/`name`/`description` fields to keep in sync. `SignalKind::NewPatternProposal.origin_context` is free-form string — callers encode whatever provenance is useful (slack message URL, audit id, etc.).
+
+**No `mur-common` code changes for this phase.** The first actual Phase 2 PR is server-side (§2).
 
 ---
 
@@ -166,8 +179,8 @@ Client 傳 `POST /api/v1/core/drafts/{id}/reject` with reason;server:
 ## 4. 變更清單
 
 ### mur (OSS) client
-- `mur-common/src/signal.rs` — `SignalKind::PatternDraft`,bump `SIGNAL_SCHEMA_VERSION = 2`。
-- `mur-core/src/sync/inbox.rs` — 分流 Draft 到 `~/.mur/inbox/drafts/`。
+- ~~`mur-common/src/signal.rs` — `SignalKind::PatternDraft`,bump `SIGNAL_SCHEMA_VERSION = 2`。~~ **Amendment: unnecessary — Phase 1 already ships `SignalTarget::NewDraftPattern` + `SignalKind::NewPatternProposal`.** Reuse those; no schema bump.
+- `mur-core/src/sync/inbox.rs` — 分流 `SignalTarget::NewDraftPattern` 信號到 `~/.mur/inbox/drafts/`。
 - `mur-core/src/cmd/drafts.rs` — 新指令 `list | show | accept | reject`。
 - `mur-core/src/main.rs` — 註冊 `drafts` 子指令。
 
@@ -176,11 +189,11 @@ Client 傳 `POST /api/v1/core/drafts/{id}/reject` with reason;server:
 - `internal/models/draft.go`。
 - `internal/store/postgres/drafts.go` — insert + fetch pending + mark reviewed。
 - `internal/services/billing.go` — `HasTeamSubscription(userID, teamID)`(可能已存在,確認)。
-- `internal/api/handlers/signals.go` — `/batch` 接收時分派 Draft → drafts store。
+- `internal/api/handlers/signals.go` — `/batch` 接收時,當 `target.kind == new_draft_pattern` → drafts store。
 - `internal/api/handlers/drafts.go` — `/reject` endpoint。
 
 ### mur-commander (closed)
-- `crates/engine/src/mur_sync/signal_emit.rs` — 新 `emit_draft_signal(outbox, draft_payload, actor, scope)` 對應 `SignalKind::PatternDraft`。
+- `crates/engine/src/mur_sync/signal_emit.rs` — 新 `emit_draft_signal(outbox, pattern, origin_context, actor, scope)` — 建 `Signal { target: NewDraftPattern { payload }, kind: NewPatternProposal { origin_context } }`。
 - `crates/gateway/src/unified_handler/chat_extract.rs` — 新檔,粗篩 LLM + scope decider + 寫 signal。
 - `crates/gateway/src/unified_handler/*.rs` — 在 post-message hook 呼叫 `chat_extract::try_extract(...)`。
 
@@ -209,17 +222,18 @@ Client 傳 `POST /api/v1/core/drafts/{id}/reject` with reason;server:
 - **粗篩 LLM 成本**:每則 chat 多花 1 次 LLM。mitigation: 本地快取 "已判 learnable=false" 的 message hash;cheap model (haiku-4.5) 為主。
 - **Slack Block Kit override UX**:公開頻道詢問發言者時需要好的互動設計。Phase 2 先只發問,不阻塞,預設 Personal。
 - **Reject feedback 抑制邊界**:防止惡意用戶一直 reject 把別人的 draft 壓低。目前 feedback 只影響同一 `actor_user_id` 的未來 drafts,不跨用戶。
-- **SignalKind v1 vs v2**:舊 client 送 v1 signal 過來,server 正常處理;新 client v2 有 Draft variant。保持向後相容。
+- ~~**SignalKind v1 vs v2**:舊 client 送 v1 signal 過來,server 正常處理;新 client v2 有 Draft variant。保持向後相容。~~ **Amendment: moot — wire format unchanged at schema v1. Drafts carried via `SignalTarget::NewDraftPattern` which has been in the format since Phase 1.**
 
 ---
 
 ## 7. 推薦實作順序
 
-1. `SignalKind::PatternDraft` + schema bump — mur-common,開個 v2.4.0 tag。
-2. Server drafts store + billing gate + handler — 先只測 Personal scope。
-3. Client `mur drafts` CLI + inbox 分流 — 能手工 seed 驗 end-to-end。
-4. Gateway chat_extract LLM pipeline + scope decider — 最複雜,靠前面 gate 住品質。
-5. Team scope full flow + 403 UX。
-6. golden-path-2.sh 驗整條線。
+> **Amendment (2026-04-23)**: Step 1 dropped — Phase 1's signal wire format already carries drafts. Re-numbered.
 
-**預估**:3 個 PR per repo,共 9 PRs,~2 週專注時間。
+1. **Server drafts store + billing gate + handler** — 先只測 Personal scope。Smallest self-contained unit; unblocks client + gateway testing.
+2. Client `mur drafts` CLI + inbox 分流 — 能手工 seed 驗 end-to-end。
+3. Gateway chat_extract LLM pipeline + scope decider — 最複雜,靠前面 gate 住品質。
+4. Team scope full flow + 403 UX。
+5. golden-path-2.sh 驗整條線。
+
+**預估**:2-3 PRs per repo (mur-server 2, mur 2, mur-commander 2), ~7-8 PRs total, ~1.5-2 weeks focused time (one less PR than original estimate since the schema bump step is unnecessary).
