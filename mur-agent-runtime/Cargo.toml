@@ -41,6 +41,7 @@ chrono = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 reqwest = { workspace = true }
 sha2 = "0.10"
+snow = { version = "0.9", default-features = false, features = ["default-resolver"] }
 hex = "0.4"
 glob = "0.3"
 fs2 = "0.4"
