@@ -1,3 +1,12 @@
+// Windows: gated — all tests in this file go through mur_create(), which
+// invokes `mur agent create` that creates a unix-style symlink to the
+// runtime binary. On Windows the CLI falls back to fs::copy(/tmp/runtime-stub,
+// ...) which fails because the source path does not exist. The earlier
+// per-test #[cfg(unix)] on stop_sigterms_the_recorded_pid and
+// rename_refuses_when_agent_is_running was incomplete — the remove/rename
+// tests also rely on mur_create's unix path.
+#![cfg(unix)]
+
 use mur_common::{AgentProfile, LockFile, agent::LockTransports};
 use std::process::Command;
 use tempfile::TempDir;
