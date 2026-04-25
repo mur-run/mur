@@ -299,6 +299,153 @@ impl RotationAttestation {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Chain verification — M5.1
+// ---------------------------------------------------------------------------
+
+/// Per-call options for `verify_chain`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChainOptions {
+    /// If true, accept emergency entries with empty signature (i.e. use
+    /// `verify_or_emergency` instead of strict `verify`). Commander code
+    /// that has out-of-band approval already should set this true; peer
+    /// code that is mirroring without approval should leave it false.
+    pub allow_emergency: bool,
+}
+
+/// Outcome of a successful chain verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainOutcome {
+    /// Highest key_version observed.
+    pub head_key_version: u32,
+    /// Pubkey at head_key_version.
+    pub head_pubkey: String,
+    /// Total entries (including bootstrap).
+    pub length: usize,
+}
+
+/// Errors from `verify_chain`.
+#[derive(Debug)]
+pub enum ChainError {
+    /// Chain is empty or first entry is not a bootstrap.
+    MissingBootstrap,
+    /// Chain skipped a key_version (e.g. went 1 -> 3).
+    VersionSkip { expected: u32, got: u32 },
+    /// `a[i].old_pubkey` does not match `a[i-1].new_pubkey`.
+    PubkeyDiscontinuity { at_version: u32 },
+    /// Same `new_key_version` appears twice in the chain.
+    DuplicateVersion(u32),
+    /// Bad Ed25519 signature on a non-bootstrap, non-emergency entry.
+    BadSignature { at_version: u32, detail: String },
+    /// Emergency entry encountered with `allow_emergency = false`.
+    EmergencyDisallowed { at_version: u32 },
+}
+
+impl std::fmt::Display for ChainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingBootstrap => {
+                write!(
+                    f,
+                    "chain must start with a bootstrap entry (bootstrap=true, key_version=0)"
+                )
+            }
+            Self::VersionSkip { expected, got } => {
+                write!(f, "version skip: expected {expected}, got {got}")
+            }
+            Self::PubkeyDiscontinuity { at_version } => {
+                write!(
+                    f,
+                    "pubkey discontinuity at key_version {at_version}: old_pubkey does not match prior new_pubkey"
+                )
+            }
+            Self::DuplicateVersion(v) => write!(f, "duplicate key_version {v}"),
+            Self::BadSignature { at_version, detail } => {
+                write!(f, "bad signature at key_version {at_version}: {detail}")
+            }
+            Self::EmergencyDisallowed { at_version } => {
+                write!(
+                    f,
+                    "emergency attestation at key_version {at_version} requires allow_emergency=true"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ChainError {}
+
+/// Walk the chain top-to-bottom and verify it forms a valid history.
+/// Returns the head pubkey + version on success.
+pub fn verify_chain(
+    chain: &[RotationAttestation],
+    opts: ChainOptions,
+) -> std::result::Result<ChainOutcome, ChainError> {
+    if chain.is_empty() {
+        return Err(ChainError::MissingBootstrap);
+    }
+    let first = &chain[0];
+    if !first.bootstrap || first.new_key_version != 0 {
+        return Err(ChainError::MissingBootstrap);
+    }
+
+    let mut prev_pubkey = first.new_pubkey.clone();
+    let mut prev_version = 0u32;
+    let mut seen_versions = std::collections::HashSet::new();
+    seen_versions.insert(0u32);
+
+    for (i, a) in chain.iter().enumerate().skip(1) {
+        // No duplicate versions
+        if !seen_versions.insert(a.new_key_version) {
+            return Err(ChainError::DuplicateVersion(a.new_key_version));
+        }
+        // Strict +1 succession
+        let expected = prev_version + 1;
+        if a.old_key_version != prev_version || a.new_key_version != expected {
+            return Err(ChainError::VersionSkip {
+                expected,
+                got: a.new_key_version,
+            });
+        }
+        // Pubkey continuity
+        if a.old_pubkey != prev_pubkey {
+            return Err(ChainError::PubkeyDiscontinuity {
+                at_version: a.new_key_version,
+            });
+        }
+        // Signature (or emergency allowance)
+        if a.reason == RotationReason::Emergency {
+            if !opts.allow_emergency {
+                return Err(ChainError::EmergencyDisallowed {
+                    at_version: a.new_key_version,
+                });
+            }
+            // Lenient verify: empty signature is fine for emergency
+            if let Err(e) = a.verify_or_emergency(&a.old_pubkey) {
+                return Err(ChainError::BadSignature {
+                    at_version: a.new_key_version,
+                    detail: e.to_string(),
+                });
+            }
+        } else if let Err(e) = a.verify(&a.old_pubkey) {
+            return Err(ChainError::BadSignature {
+                at_version: a.new_key_version,
+                detail: e.to_string(),
+            });
+        }
+
+        prev_pubkey = a.new_pubkey.clone();
+        prev_version = a.new_key_version;
+        let _ = i; // silence unused
+    }
+
+    Ok(ChainOutcome {
+        head_key_version: prev_version,
+        head_pubkey: prev_pubkey,
+        length: chain.len(),
+    })
+}
+
 /// Canonical JSON: sorted keys, no whitespace. Used so that signers and
 /// verifiers compute identical byte sequences regardless of language /
 /// serializer choices.
