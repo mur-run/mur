@@ -219,3 +219,51 @@ fn rekey_emergency_aborts_without_confirmation_phrase() {
         "rotation must NOT have happened"
     );
 }
+
+#[test]
+fn rekey_status_shows_initial_v0_state() {
+    let home = TempDir::new().unwrap();
+    create_agent(home.path(), "rekey_status_a");
+
+    let out = Command::new(mur_bin())
+        .env("MUR_HOME", home.path())
+        .env("MUR_AGENT_BIN_DIR", home.path().join("bin"))
+        .env("MUR_AGENT_RUNTIME_BIN", runtime_bin())
+        .args(["agent", "rekey-status", "rekey_status_a"])
+        .output()
+        .expect("rekey-status spawn");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("key_version:        0"), "stdout: {stdout}");
+    assert!(stdout.contains("algorithm:          ed25519"));
+    assert!(stdout.contains("rotation log lines: 1"));
+    assert!(stdout.contains("previous_pubkey:    <none in grace>"));
+}
+
+#[test]
+fn rekey_status_shows_after_rotation_with_grace() {
+    let home = TempDir::new().unwrap();
+    create_agent(home.path(), "rekey_status_b");
+    rekey(home.path(), "rekey_status_b", "scheduled");
+
+    let out = Command::new(mur_bin())
+        .env("MUR_HOME", home.path())
+        .env("MUR_AGENT_BIN_DIR", home.path().join("bin"))
+        .env("MUR_AGENT_RUNTIME_BIN", runtime_bin())
+        .args(["agent", "rekey-status", "rekey_status_b", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("json output");
+    assert_eq!(v["key_version"], 1);
+    assert_eq!(v["algorithm"], "ed25519");
+    assert!(v["previous_pubkey"].as_str().unwrap_or("").starts_with('z'));
+    assert!(v["grace_expires_at"].is_string());
+    let remaining = v["grace_remaining_days"].as_i64().expect("grace days");
+    assert!(
+        (28..=30).contains(&remaining),
+        "expected ~30 days, got {remaining}"
+    );
+    assert_eq!(v["rotation_log_lines"], 2);
+}

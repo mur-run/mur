@@ -299,3 +299,95 @@ fn send_sigterm(_pid: u32) {
     // Windows: SIGTERM not available — runtime doesn't auto-restart on
     // Windows in P0a anyway. The user must restart manually.
 }
+
+/// `mur agent rekey-status <name>` — show current/previous keys, grace
+/// remaining, and the chain history length.
+pub fn cmd_rekey_status(name: &str, json_out: bool) -> Result<()> {
+    let mur_home = resolve_mur_home()?;
+    let agent_dir = mur_home.join("agents").join(name);
+    if !agent_dir.exists() {
+        bail!("agent '{name}' not found at {}", agent_dir.display());
+    }
+
+    let profile_path = agent_dir.join("profile.yaml");
+    let profile_yaml = fs::read_to_string(&profile_path)
+        .with_context(|| format!("read {}", profile_path.display()))?;
+    let profile: AgentProfile =
+        serde_yaml_ng::from_str(&profile_yaml).context("parse profile.yaml")?;
+
+    let rotations_path = agent_dir.join("rotations.jsonl");
+    let rotation_count = if rotations_path.exists() {
+        fs::read_to_string(&rotations_path)?
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count()
+    } else {
+        0
+    };
+
+    let now = chrono::Utc::now();
+    let grace_remaining_days = profile
+        .identity
+        .grace_expires_at
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|exp| (exp.with_timezone(&chrono::Utc) - now).num_days());
+
+    if json_out {
+        let out = serde_json::json!({
+            "name": name,
+            "uuid": profile.id,
+            "algorithm": profile.identity.algorithm,
+            "key_version": profile.identity.key_version,
+            "pubkey": profile.identity.pubkey,
+            "previous_pubkey": profile.identity.previous_pubkey,
+            "previous_key_version": profile.identity.previous_key_version,
+            "grace_expires_at": profile.identity.grace_expires_at,
+            "grace_remaining_days": grace_remaining_days,
+            "created_at_key": profile.identity.created_at_key,
+            "rotated_at": profile.identity.rotated_at,
+            "emergency_rekey_at": profile.identity.emergency_rekey_at,
+            "rotation_log_lines": rotation_count,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("agent: {name}");
+        println!("  uuid:               {}", profile.id);
+        println!("  algorithm:          {}", profile.identity.algorithm);
+        println!("  key_version:        {}", profile.identity.key_version);
+        println!("  pubkey:             {}", profile.identity.pubkey);
+        if let Some(t) = &profile.identity.created_at_key {
+            println!("  created_at_key:     {t}");
+        }
+        if let Some(prev) = &profile.identity.previous_pubkey {
+            println!("  previous_pubkey:    {prev}");
+            if let Some(v) = profile.identity.previous_key_version {
+                println!("  previous_key_ver:   {v}");
+            }
+        } else {
+            println!("  previous_pubkey:    <none in grace>");
+        }
+        if let Some(g) = &profile.identity.grace_expires_at {
+            print!("  grace_expires_at:   {g}");
+            if let Some(d) = grace_remaining_days {
+                if d >= 0 {
+                    println!(" ({d} days remaining)");
+                } else {
+                    println!(" (expired {} days ago)", -d);
+                }
+            } else {
+                println!();
+            }
+        }
+        if let Some(t) = &profile.identity.rotated_at {
+            println!("  last_rotation_at:   {t}");
+        }
+        if let Some(t) = &profile.identity.emergency_rekey_at {
+            println!("  EMERGENCY rekey at: {t}");
+            println!("  → peers will refuse trust until commander admin runs:");
+            println!("      murc agent approve-rekey {}", profile.id);
+        }
+        println!("  rotation log lines: {rotation_count}");
+    }
+    Ok(())
+}

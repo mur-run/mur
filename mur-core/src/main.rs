@@ -901,9 +901,18 @@ enum AgentAction {
         /// Skip the interactive confirmation prompt
         #[arg(long)]
         yes: bool,
-        /// EMERGENCY rotation (no old key required). M4 — currently errors.
+        /// EMERGENCY rotation (old key not required). Writes an UNSIGNED
+        /// attestation; peers refuse trust until commander admin approves.
         #[arg(long)]
         emergency: bool,
+    },
+    /// Show identity rotation status for an agent (P0a.6).
+    RekeyStatus {
+        /// Agent name
+        name: String,
+        /// Emit JSON instead of a human-readable table
+        #[arg(long)]
+        json: bool,
     },
     /// Generate and (optionally) install a launchd/systemd user service
     InstallService {
@@ -1383,6 +1392,9 @@ async fn async_main() -> Result<()> {
                 yes,
                 emergency,
             } => cmd::agent_rekey::cmd_rekey(&name, &reason, yes, emergency)?,
+            AgentAction::RekeyStatus { name, json } => {
+                cmd::agent_rekey::cmd_rekey_status(&name, json)?
+            }
             AgentAction::InstallService { name, dry_run } => {
                 cmd::agent::cmd_install_service(&name, dry_run)?
             }
