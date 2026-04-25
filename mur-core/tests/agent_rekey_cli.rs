@@ -143,9 +143,10 @@ fn rekey_with_suspect_compromise_reason_records_in_jsonl() {
 }
 
 #[test]
-fn rekey_emergency_flag_errors_in_m1() {
+fn rekey_emergency_writes_unsigned_attestation() {
     let home = TempDir::new().unwrap();
     create_agent(home.path(), "rekey_emerg");
+    let agent_dir = home.path().join("agents/rekey_emerg");
 
     let out = Command::new(mur_bin())
         .env("MUR_HOME", home.path())
@@ -154,7 +155,67 @@ fn rekey_emergency_flag_errors_in_m1() {
         .args(["agent", "rekey", "rekey_emerg", "--emergency", "--yes"])
         .output()
         .unwrap();
-    assert!(!out.status.success(), "emergency must fail in M1");
+    assert!(
+        out.status.success(),
+        "emergency rekey must succeed with --yes: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("PENDING APPROVAL"),
+        "stdout missing pending warn: {stdout}"
+    );
+
+    // Attestation present + signature empty + reason emergency
+    let att_str = std::fs::read_to_string(agent_dir.join("identity.attestation.json")).unwrap();
+    let att: serde_json::Value = serde_json::from_str(&att_str).unwrap();
+    assert_eq!(att["reason"], "emergency");
+    let sig = att.get("signature").and_then(|s| s.as_str()).unwrap_or("");
+    assert!(
+        sig.is_empty(),
+        "emergency attestation must have empty signature"
+    );
+
+    // Profile carries emergency_rekey_at
+    let yaml = std::fs::read_to_string(agent_dir.join("profile.yaml")).unwrap();
+    assert!(
+        yaml.contains("emergency_rekey_at:"),
+        "profile missing emergency_rekey_at: {yaml}"
+    );
+    assert!(yaml.contains("key_version: 1"));
+}
+
+#[test]
+fn rekey_emergency_aborts_without_confirmation_phrase() {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let home = TempDir::new().unwrap();
+    create_agent(home.path(), "rekey_emerg_abort");
+
+    // Without --yes, the CLI demands the literal "I UNDERSTAND" phrase.
+    // Pipe the wrong text and assert the rotation does NOT happen.
+    let mut child = Command::new(mur_bin())
+        .env("MUR_HOME", home.path())
+        .env("MUR_AGENT_BIN_DIR", home.path().join("bin"))
+        .env("MUR_AGENT_RUNTIME_BIN", runtime_bin())
+        .args(["agent", "rekey", "rekey_emerg_abort", "--emergency"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"yes\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "abort path must exit 0");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("M4"), "error must mention M4: {stderr}");
+    assert!(stderr.contains("aborted"), "must report abort: {stderr}");
+
+    // Profile must STILL be at key_version 0
+    let yaml =
+        std::fs::read_to_string(home.path().join("agents/rekey_emerg_abort/profile.yaml")).unwrap();
+    assert!(
+        yaml.contains("key_version: 0"),
+        "rotation must NOT have happened"
+    );
 }

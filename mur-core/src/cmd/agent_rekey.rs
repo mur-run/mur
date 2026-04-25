@@ -43,13 +43,15 @@ impl RekeyReason {
 }
 
 pub fn cmd_rekey(name: &str, reason: &str, yes: bool, emergency: bool) -> Result<()> {
-    if emergency {
-        bail!("--emergency lands in M4 — not yet supported");
-    }
-    let parsed_reason = RekeyReason::parse(reason)?;
-    if matches!(parsed_reason, RekeyReason::Emergency) {
-        bail!("--reason emergency requires --emergency flag (M4)");
-    }
+    let parsed_reason = if emergency {
+        RekeyReason::Emergency
+    } else {
+        let r = RekeyReason::parse(reason)?;
+        if matches!(r, RekeyReason::Emergency) {
+            bail!("--reason emergency requires --emergency flag");
+        }
+        r
+    };
 
     let mur_home = resolve_mur_home()?;
     let agent_dir = mur_home.join("agents").join(name);
@@ -57,21 +59,57 @@ pub fn cmd_rekey(name: &str, reason: &str, yes: bool, emergency: bool) -> Result
         bail!("agent '{name}' not found at {}", agent_dir.display());
     }
 
-    // Load current profile + identity
+    // Load current profile
     let profile_path = agent_dir.join("profile.yaml");
     let profile_yaml = fs::read_to_string(&profile_path)
         .with_context(|| format!("read {}", profile_path.display()))?;
     let mut profile: AgentProfile =
         serde_yaml_ng::from_str(&profile_yaml).context("parse profile.yaml")?;
-    let old_identity = AgentIdentity::load(&agent_dir)
-        .with_context(|| format!("load identity from {}", agent_dir.display()))?;
 
-    let old_pubkey = old_identity.pubkey_text();
+    // Load OLD identity for normal rekey; emergency may have lost it.
+    let old_identity_opt = if emergency {
+        AgentIdentity::load(&agent_dir).ok()
+    } else {
+        Some(
+            AgentIdentity::load(&agent_dir)
+                .with_context(|| format!("load identity from {}", agent_dir.display()))?,
+        )
+    };
+
+    let old_pubkey = old_identity_opt
+        .as_ref()
+        .map(|id| id.pubkey_text())
+        .unwrap_or_else(|| profile.identity.pubkey.clone());
     let old_key_version = profile.identity.key_version;
     let new_key_version = old_key_version + 1;
 
     // Interactive confirm
-    if !yes {
+    if emergency && !yes {
+        eprintln!();
+        eprintln!("\x1b[1;31m=== EMERGENCY REKEY — read carefully ===\x1b[0m");
+        eprintln!();
+        eprintln!("This rotation will be UNSIGNED. Other commanders / peers will");
+        eprintln!("REFUSE to trust the new key until an admin runs:");
+        eprintln!("    \x1b[1mmurc agent approve-rekey {}\x1b[0m", profile.id);
+        eprintln!("on the commander host.");
+        eprintln!();
+        eprintln!("Active Noise sessions to this agent will fail until that");
+        eprintln!("approval lands.");
+        eprintln!();
+        eprintln!("  agent name:        {name}");
+        eprintln!("  agent UUID:        {}", profile.id);
+        eprintln!("  current pubkey:    {old_pubkey}");
+        eprintln!("  key_version:       {old_key_version} -> {new_key_version}");
+        eprintln!();
+        eprint!("Type \x1b[1mI UNDERSTAND\x1b[0m to proceed: ");
+        std::io::stderr().flush().ok();
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf).ok();
+        if buf.trim() != "I UNDERSTAND" {
+            eprintln!("aborted (confirmation phrase not matched)");
+            return Ok(());
+        }
+    } else if !yes {
         eprintln!("About to rotate identity for agent '{name}':");
         eprintln!("  current key_version: {old_key_version}");
         eprintln!("  current pubkey:      {old_pubkey}");
@@ -92,7 +130,9 @@ pub fn cmd_rekey(name: &str, reason: &str, yes: bool, emergency: bool) -> Result
     let new_identity = AgentIdentity::generate();
     let new_pubkey = new_identity.pubkey_text();
 
-    // Build + sign attestation
+    // Build attestation. Normal rotations sign with the OLD key; emergency
+    // rotations leave signature empty and are gated by commander-side
+    // out-of-band approval.
     let now = chrono::Utc::now();
     let now_rfc = now.to_rfc3339();
     let mut attestation = RotationAttestation::new(
@@ -104,7 +144,12 @@ pub fn cmd_rekey(name: &str, reason: &str, yes: bool, emergency: bool) -> Result
         &now_rfc,
         parsed_reason.into_attestation(),
     );
-    attestation.sign(old_identity.signing_key());
+    if !emergency {
+        let old_id = old_identity_opt
+            .as_ref()
+            .expect("normal rekey requires old key");
+        attestation.sign(old_id.signing_key());
+    }
 
     // Atomic on-disk rotation
     rotate_files_atomic(&agent_dir, &new_identity, &attestation)?;
@@ -116,8 +161,11 @@ pub fn cmd_rekey(name: &str, reason: &str, yes: bool, emergency: bool) -> Result
     profile.identity.pubkey = new_pubkey.clone();
     profile.identity.key_version = new_key_version;
     profile.identity.created_at_key = Some(now_rfc.clone());
-    profile.identity.rotated_at = Some(now_rfc);
+    profile.identity.rotated_at = Some(now_rfc.clone());
     profile.identity.grace_expires_at = Some(grace_expires.to_rfc3339());
+    if emergency {
+        profile.identity.emergency_rekey_at = Some(now_rfc);
+    }
     profile.updated_at = chrono::Utc::now().to_rfc3339();
 
     let new_yaml = serde_yaml_ng::to_string(&profile).context("serialize updated profile.yaml")?;
@@ -130,10 +178,23 @@ pub fn cmd_rekey(name: &str, reason: &str, yes: bool, emergency: bool) -> Result
         std::thread::sleep(Duration::from_millis(500));
     }
 
-    println!("rekey ok: {name} key_version {old_key_version} -> {new_key_version}");
-    println!("  pubkey:              {new_pubkey}");
-    println!("  previous (in grace): {old_pubkey}");
-    println!("  grace expires:       {}", grace_expires.to_rfc3339());
+    if emergency {
+        println!(
+            "emergency rekey written: {name} key_version {old_key_version} -> {new_key_version}"
+        );
+        println!("  pubkey:              {new_pubkey}");
+        println!("  previous (in grace): {old_pubkey}");
+        println!();
+        println!(
+            "\x1b[1;33mPENDING APPROVAL\x1b[0m — peers will refuse trust until commander admin runs:"
+        );
+        println!("  murc agent approve-rekey {}", profile.id);
+    } else {
+        println!("rekey ok: {name} key_version {old_key_version} -> {new_key_version}");
+        println!("  pubkey:              {new_pubkey}");
+        println!("  previous (in grace): {old_pubkey}");
+        println!("  grace expires:       {}", grace_expires.to_rfc3339());
+    }
     Ok(())
 }
 
