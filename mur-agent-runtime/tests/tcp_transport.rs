@@ -66,3 +66,73 @@ async fn dialer_aborts_on_mitm_mismatch() {
     assert!(res.is_err(), "MITM-style mismatch must fail handshake");
     drop(tx);
 }
+
+#[tokio::test]
+async fn dial_with_fallback_picks_first_working_candidate() {
+    let server_id = Arc::new(AgentIdentity::generate());
+    let client_id = Arc::new(AgentIdentity::generate());
+    let bogus = [0u8; 32];
+
+    let handler = Arc::new(|p: Vec<u8>| async move { Ok::<_, std::io::Error>(p) });
+    let (tx, rx) = mpsc::channel(1);
+    let handle = spawn_tcp_listener(
+        TcpTransportConfig {
+            bind: "127.0.0.1:0".into(),
+        },
+        server_id.clone(),
+        handler,
+        rx,
+    )
+    .await
+    .unwrap();
+
+    let server_pub = x25519_dalek::PublicKey::from(&server_id.to_x25519_static_secret());
+    let candidates = [bogus, *server_pub.as_bytes()];
+
+    let mut conn =
+        TcpConnector::dial_with_fallback(&handle.local_addr().to_string(), client_id, &candidates)
+            .await
+            .expect("must succeed via fallback");
+
+    let payload = br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#.to_vec();
+    conn.send(&payload).await.unwrap();
+    let echo = conn.recv().await.unwrap();
+    assert_eq!(echo, payload);
+
+    drop(tx);
+    handle.await_shutdown().await;
+}
+
+#[tokio::test]
+async fn dial_with_fallback_all_bad_returns_last_error() {
+    let server_id = Arc::new(AgentIdentity::generate());
+    let client_id = Arc::new(AgentIdentity::generate());
+
+    let handler = Arc::new(|p: Vec<u8>| async move { Ok::<_, std::io::Error>(p) });
+    let (tx, rx) = mpsc::channel(1);
+    let handle = spawn_tcp_listener(
+        TcpTransportConfig {
+            bind: "127.0.0.1:0".into(),
+        },
+        server_id,
+        handler,
+        rx,
+    )
+    .await
+    .unwrap();
+
+    let candidates = [[0u8; 32], [1u8; 32], [2u8; 32]];
+    let res =
+        TcpConnector::dial_with_fallback(&handle.local_addr().to_string(), client_id, &candidates)
+            .await;
+    assert!(res.is_err(), "all-bad fallback must error");
+
+    drop(tx);
+}
+
+#[tokio::test]
+async fn dial_with_fallback_empty_candidates_errors() {
+    let client_id = Arc::new(AgentIdentity::generate());
+    let res = TcpConnector::dial_with_fallback("127.0.0.1:1", client_id, &[]).await;
+    assert!(res.is_err(), "empty candidates must be a hard error");
+}

@@ -906,6 +906,29 @@ enum AgentAction {
         /// Agent name
         name: String,
     },
+    /// Rotate an agent's Ed25519 identity keypair (P0a.6).
+    Rekey {
+        /// Agent name
+        name: String,
+        /// Why this rotation is happening (audit hint)
+        #[arg(long, default_value = "scheduled")]
+        reason: String,
+        /// Skip the interactive confirmation prompt
+        #[arg(long)]
+        yes: bool,
+        /// EMERGENCY rotation (old key not required). Writes an UNSIGNED
+        /// attestation; peers refuse trust until commander admin approves.
+        #[arg(long)]
+        emergency: bool,
+    },
+    /// Show identity rotation status for an agent (P0a.6).
+    RekeyStatus {
+        /// Agent name
+        name: String,
+        /// Emit JSON instead of a human-readable table
+        #[arg(long)]
+        json: bool,
+    },
     /// Generate and (optionally) install a launchd/systemd user service
     InstallService {
         /// Agent name
@@ -1410,6 +1433,15 @@ async fn async_main() -> Result<()> {
             AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
             AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
             AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
+            AgentAction::Rekey {
+                name,
+                reason,
+                yes,
+                emergency,
+            } => cmd::agent_rekey::cmd_rekey(&name, &reason, yes, emergency)?,
+            AgentAction::RekeyStatus { name, json } => {
+                cmd::agent_rekey::cmd_rekey_status(&name, json)?
+            }
             AgentAction::InstallService { name, dry_run } => {
                 cmd::agent::cmd_install_service(&name, dry_run)?
             }

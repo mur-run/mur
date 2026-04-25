@@ -32,4 +32,7 @@ pub use agent::{
     FileTransferConfig, IdentityConfig, LockFile, Persona, PersonaCategory, RetryPolicy,
     ScheduleEntry,
 };
-pub use identity::{AgentIdentity, IdentityError, decode_pubkey, encode_pubkey};
+pub use identity::{
+    AgentIdentity, ChainError, ChainOptions, ChainOutcome, IdentityError, RotationAttestation,
+    RotationReason, decode_pubkey, encode_pubkey, verify_chain,
+};

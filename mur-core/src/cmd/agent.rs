@@ -43,6 +43,27 @@ pub fn cmd_create(
     let now = chrono::Utc::now().to_rfc3339();
     let id = uuid::Uuid::now_v7().to_string();
 
+    // M1.3: Bootstrap rotation attestation — anchors the rotation chain
+    // so future `mur agent rekey` calls have a verifiable starting point.
+    use mur_common::identity::{RotationAttestation, RotationReason};
+    let bootstrap_at = now.clone();
+    let bootstrap = RotationAttestation::new(
+        &id,
+        "",
+        identity.pubkey_text(),
+        0,
+        0,
+        &bootstrap_at,
+        RotationReason::Scheduled,
+    )
+    .into_bootstrap();
+    let bootstrap_line =
+        serde_json::to_string(&bootstrap).context("serialize bootstrap attestation")?;
+    let rotations_path = agent_home.join("rotations.jsonl");
+    fs::write(&rotations_path, format!("{bootstrap_line}\n"))
+        .with_context(|| format!("write {}", rotations_path.display()))?;
+    tracing::debug!(uuid = %id, "bootstrap rotation attestation written");
+
     let profile = AgentProfile {
         schema: 1,
         id,
@@ -110,6 +131,8 @@ pub fn cmd_create(
         identity: IdentityConfig {
             pubkey: identity.pubkey_text(),
             owner: std::env::var("USER").ok(),
+            created_at_key: Some(bootstrap_at.clone()),
+            ..Default::default()
         },
         file_transfer: FileTransferConfig::default(),
         deployment: DeploymentConfig::default(),

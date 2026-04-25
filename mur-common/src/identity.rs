@@ -147,3 +147,354 @@ pub fn decode_pubkey(text: &str) -> Result<[u8; 32], IdentityError> {
 pub fn default_dir(agent_home: &Path) -> PathBuf {
     agent_home.to_path_buf()
 }
+
+// ---------------------------------------------------------------------------
+// RotationAttestation — proof that a key rotation was authorized by the
+// holder of the prior identity key.
+// ---------------------------------------------------------------------------
+
+use serde::{Deserialize, Serialize};
+
+/// Why a rotation happened. Free-form audit hint; does not affect verification
+/// rules other than `Emergency`, which permits an empty signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RotationReason {
+    Scheduled,
+    SuspectCompromise,
+    OwnerChange,
+    Emergency,
+}
+
+/// Cryptographic proof of an identity-key rotation.
+///
+/// `signature` is multibase base58btc Ed25519 over `canonical_bytes()`
+/// (which serializes every field except `signature` itself).
+///
+/// For `reason = Emergency`, signature MAY be empty — those rotations
+/// require out-of-band admin approval to take effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RotationAttestation {
+    /// Schema version. Always 1 for now.
+    pub schema: u32,
+    /// Agent UUIDv7 — stable across rotations.
+    pub uuid: String,
+    /// Signing algorithm. "ed25519" for now.
+    pub algorithm: String,
+    /// Outgoing pubkey (multibase). Empty string for the bootstrap entry only.
+    pub old_pubkey: String,
+    /// Incoming pubkey (multibase). Always present.
+    pub new_pubkey: String,
+    pub old_key_version: u32,
+    /// = old_key_version + 1 for non-emergency rotations.
+    pub new_key_version: u32,
+    /// RFC3339 timestamp.
+    pub rotated_at: String,
+    pub reason: RotationReason,
+    /// Multibase Ed25519 signature over canonical_bytes(). Empty for
+    /// Emergency reason or for the bootstrap entry.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub signature: String,
+    /// True only for the create-time entry (no prior key existed).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bootstrap: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl RotationAttestation {
+    /// Build a new (unsigned) attestation.
+    pub fn new(
+        uuid: impl Into<String>,
+        old_pubkey: impl Into<String>,
+        new_pubkey: impl Into<String>,
+        old_key_version: u32,
+        new_key_version: u32,
+        rotated_at: impl Into<String>,
+        reason: RotationReason,
+    ) -> Self {
+        Self {
+            schema: 1,
+            uuid: uuid.into(),
+            algorithm: "ed25519".into(),
+            old_pubkey: old_pubkey.into(),
+            new_pubkey: new_pubkey.into(),
+            old_key_version,
+            new_key_version,
+            rotated_at: rotated_at.into(),
+            reason,
+            signature: String::new(),
+            bootstrap: false,
+        }
+    }
+
+    /// Mark this attestation as the bootstrap entry written at agent
+    /// create time. Bootstrap entries have empty `old_pubkey` and empty
+    /// `signature`; they exist only to anchor the rotation chain.
+    pub fn into_bootstrap(mut self) -> Self {
+        self.bootstrap = true;
+        self.old_pubkey = String::new();
+        self.signature = String::new();
+        self
+    }
+
+    /// Canonical bytes used for signing. Serializes every field of `self`
+    /// EXCEPT `signature` (which is being computed) using JSON with sorted
+    /// keys and no whitespace.
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut clone = self.clone();
+        clone.signature = String::new();
+        canonical_json(&clone)
+    }
+
+    /// Compute the Ed25519 signature using the given signing key and store
+    /// it in `self.signature`. Idempotent.
+    pub fn sign(&mut self, signing: &ed25519_dalek::SigningKey) {
+        use ed25519_dalek::Signer;
+        let sig = signing.sign(&self.canonical_bytes());
+        self.signature = multibase::encode(multibase::Base::Base58Btc, sig.to_bytes());
+    }
+
+    /// Verify `self.signature` against the supplied multibase-encoded
+    /// `old_pubkey`. Returns `Ok(())` on a valid signature.
+    ///
+    /// Bootstrap entries (`bootstrap = true`) are accepted unconditionally —
+    /// they have nothing to verify against.
+    /// Emergency entries (`reason = Emergency`) with empty signature are
+    /// REJECTED here; callers must use `verify_or_emergency` if they want
+    /// the emergency-allowed semantics.
+    pub fn verify(&self, old_pubkey: &str) -> Result<(), IdentityError> {
+        if self.bootstrap {
+            return Ok(());
+        }
+        if self.signature.is_empty() {
+            return Err(IdentityError::InvalidKey(
+                "attestation signature is empty".into(),
+            ));
+        }
+        let pub_bytes = decode_pubkey(old_pubkey)?;
+        let verifying = ed25519_dalek::VerifyingKey::from_bytes(&pub_bytes)
+            .map_err(|e| IdentityError::InvalidKey(format!("verifying key: {e}")))?;
+        let (_base, sig_bytes) = multibase::decode(&self.signature)?;
+        let sig_arr: [u8; 64] = sig_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| IdentityError::InvalidKey("signature length != 64".into()))?;
+        let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
+        verifying
+            .verify_strict(&self.canonical_bytes(), &sig)
+            .map_err(|e| IdentityError::InvalidKey(format!("signature: {e}")))?;
+        Ok(())
+    }
+
+    /// Like `verify`, but accepts emergency rotations with empty signature.
+    /// Caller is responsible for the out-of-band approval check.
+    pub fn verify_or_emergency(&self, old_pubkey: &str) -> Result<(), IdentityError> {
+        if self.reason == RotationReason::Emergency && self.signature.is_empty() {
+            return Ok(());
+        }
+        self.verify(old_pubkey)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chain verification — M5.1
+// ---------------------------------------------------------------------------
+
+/// Per-call options for `verify_chain`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChainOptions {
+    /// If true, accept emergency entries with empty signature (i.e. use
+    /// `verify_or_emergency` instead of strict `verify`). Commander code
+    /// that has out-of-band approval already should set this true; peer
+    /// code that is mirroring without approval should leave it false.
+    pub allow_emergency: bool,
+}
+
+/// Outcome of a successful chain verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainOutcome {
+    /// Highest key_version observed.
+    pub head_key_version: u32,
+    /// Pubkey at head_key_version.
+    pub head_pubkey: String,
+    /// Total entries (including bootstrap).
+    pub length: usize,
+}
+
+/// Errors from `verify_chain`.
+#[derive(Debug)]
+pub enum ChainError {
+    /// Chain is empty or first entry is not a bootstrap.
+    MissingBootstrap,
+    /// Chain skipped a key_version (e.g. went 1 -> 3).
+    VersionSkip { expected: u32, got: u32 },
+    /// `a[i].old_pubkey` does not match `a[i-1].new_pubkey`.
+    PubkeyDiscontinuity { at_version: u32 },
+    /// Same `new_key_version` appears twice in the chain.
+    DuplicateVersion(u32),
+    /// Bad Ed25519 signature on a non-bootstrap, non-emergency entry.
+    BadSignature { at_version: u32, detail: String },
+    /// Emergency entry encountered with `allow_emergency = false`.
+    EmergencyDisallowed { at_version: u32 },
+}
+
+impl std::fmt::Display for ChainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingBootstrap => {
+                write!(
+                    f,
+                    "chain must start with a bootstrap entry (bootstrap=true, key_version=0)"
+                )
+            }
+            Self::VersionSkip { expected, got } => {
+                write!(f, "version skip: expected {expected}, got {got}")
+            }
+            Self::PubkeyDiscontinuity { at_version } => {
+                write!(
+                    f,
+                    "pubkey discontinuity at key_version {at_version}: old_pubkey does not match prior new_pubkey"
+                )
+            }
+            Self::DuplicateVersion(v) => write!(f, "duplicate key_version {v}"),
+            Self::BadSignature { at_version, detail } => {
+                write!(f, "bad signature at key_version {at_version}: {detail}")
+            }
+            Self::EmergencyDisallowed { at_version } => {
+                write!(
+                    f,
+                    "emergency attestation at key_version {at_version} requires allow_emergency=true"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ChainError {}
+
+/// Walk the chain top-to-bottom and verify it forms a valid history.
+/// Returns the head pubkey + version on success.
+pub fn verify_chain(
+    chain: &[RotationAttestation],
+    opts: ChainOptions,
+) -> std::result::Result<ChainOutcome, ChainError> {
+    if chain.is_empty() {
+        return Err(ChainError::MissingBootstrap);
+    }
+    let first = &chain[0];
+    if !first.bootstrap || first.new_key_version != 0 {
+        return Err(ChainError::MissingBootstrap);
+    }
+
+    let mut prev_pubkey = first.new_pubkey.clone();
+    let mut prev_version = 0u32;
+    let mut seen_versions = std::collections::HashSet::new();
+    seen_versions.insert(0u32);
+
+    for (i, a) in chain.iter().enumerate().skip(1) {
+        // No duplicate versions
+        if !seen_versions.insert(a.new_key_version) {
+            return Err(ChainError::DuplicateVersion(a.new_key_version));
+        }
+        // Strict +1 succession
+        let expected = prev_version + 1;
+        if a.old_key_version != prev_version || a.new_key_version != expected {
+            return Err(ChainError::VersionSkip {
+                expected,
+                got: a.new_key_version,
+            });
+        }
+        // Pubkey continuity
+        if a.old_pubkey != prev_pubkey {
+            return Err(ChainError::PubkeyDiscontinuity {
+                at_version: a.new_key_version,
+            });
+        }
+        // Signature (or emergency allowance)
+        if a.reason == RotationReason::Emergency {
+            if !opts.allow_emergency {
+                return Err(ChainError::EmergencyDisallowed {
+                    at_version: a.new_key_version,
+                });
+            }
+            // Lenient verify: empty signature is fine for emergency
+            if let Err(e) = a.verify_or_emergency(&a.old_pubkey) {
+                return Err(ChainError::BadSignature {
+                    at_version: a.new_key_version,
+                    detail: e.to_string(),
+                });
+            }
+        } else if let Err(e) = a.verify(&a.old_pubkey) {
+            return Err(ChainError::BadSignature {
+                at_version: a.new_key_version,
+                detail: e.to_string(),
+            });
+        }
+
+        prev_pubkey = a.new_pubkey.clone();
+        prev_version = a.new_key_version;
+        let _ = i; // silence unused
+    }
+
+    Ok(ChainOutcome {
+        head_key_version: prev_version,
+        head_pubkey: prev_pubkey,
+        length: chain.len(),
+    })
+}
+
+/// Canonical JSON: sorted keys, no whitespace. Used so that signers and
+/// verifiers compute identical byte sequences regardless of language /
+/// serializer choices.
+fn canonical_json<T: serde::Serialize>(value: &T) -> Vec<u8> {
+    // serde_json with a BTreeMap-like ordering. The simplest approach: round-trip
+    // through a `serde_json::Value`, then walk it depth-first emitting bytes.
+    let v: serde_json::Value =
+        serde_json::to_value(value).expect("serialize should not fail for our types");
+    let mut out = Vec::new();
+    write_canonical(&mut out, &v);
+    out
+}
+
+fn write_canonical(out: &mut Vec<u8>, v: &serde_json::Value) {
+    use serde_json::Value;
+    match v {
+        Value::Null => out.extend_from_slice(b"null"),
+        Value::Bool(b) => out.extend_from_slice(if *b { b"true" } else { b"false" }),
+        Value::Number(n) => out.extend_from_slice(n.to_string().as_bytes()),
+        Value::String(s) => {
+            // serde_json::to_string handles escaping for us
+            let escaped = serde_json::to_string(s).unwrap();
+            out.extend_from_slice(escaped.as_bytes());
+        }
+        Value::Array(arr) => {
+            out.push(b'[');
+            for (i, item) in arr.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                write_canonical(out, item);
+            }
+            out.push(b']');
+        }
+        Value::Object(map) => {
+            // Sort keys for deterministic output
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push(b'{');
+            for (i, k) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                let kesc = serde_json::to_string(k).unwrap();
+                out.extend_from_slice(kesc.as_bytes());
+                out.push(b':');
+                write_canonical(out, &map[*k]);
+            }
+            out.push(b'}');
+        }
+    }
+}

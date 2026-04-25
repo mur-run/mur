@@ -49,11 +49,16 @@ impl MethodHandler for CardHandler {
             }));
         }
 
-        Ok(json!({
+        // M3.1: include previous_pubkey + grace_expires_at when within grace.
+        // Peers use these to retry handshakes against either key during the
+        // grace window.
+        let mut card = json!({
             "protocolVersion": "a2a/0.3",
             "name": p.name,
             "id": p.id,
             "pubkey": p.identity.pubkey,
+            "algorithm": p.identity.algorithm,
+            "key_version": p.identity.key_version,
             "displayName": p.display_name,
             "version": p.version,
             "description": p.persona.description,
@@ -71,6 +76,24 @@ impl MethodHandler for CardHandler {
             },
             "skills": p.skills.iter().map(|s| json!({"id": s})).collect::<Vec<_>>(),
             "entitlements": p.entitlements,
-        }))
+        });
+
+        if let (Some(prev), Some(expires)) =
+            (&p.identity.previous_pubkey, &p.identity.grace_expires_at)
+        {
+            // Only advertise the previous key if grace is still active. We
+            // parse the timestamp lazily; if it's malformed we err on the
+            // side of *not* publishing it.
+            let still_in_grace = chrono::DateTime::parse_from_rfc3339(expires)
+                .map(|exp| exp > chrono::Utc::now())
+                .unwrap_or(false);
+            if still_in_grace {
+                card["previous_pubkey"] = json!(prev);
+                card["previous_key_version"] = json!(p.identity.previous_key_version);
+                card["grace_expires_at"] = json!(expires);
+            }
+        }
+
+        Ok(card)
     }
 }

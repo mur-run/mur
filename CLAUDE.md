@@ -125,6 +125,33 @@ The per-agent supervisor lives in `mur-agent-runtime/`. Each agent has a directo
 - **Plan:** `docs/superpowers/plans/2026-04-23-murmur-p0a5-implementation-plan.md` (+ `-COMPLETE.md`)
 - **E2E runner:** `scripts/e2e/p0a5-full.sh` (wraps `p0a5-identity-handshake.sh` + `p0a5-commander-autoregister.sh`).
 
+### P0a.6 additions (`mur agent rekey` — identity rotation)
+
+Per-agent Ed25519 identity keys can now be rotated via:
+
+- **`mur agent rekey <name> [--reason scheduled|suspect-compromise|owner-change] [--yes]`** — normal rotation. Generates a new keypair, signs a `RotationAttestation` with the OLD private key, atomically rotates `identity.{key,pub}` to `.prev`, writes new keypair, appends to `rotations.jsonl`, updates `profile.yaml` (`key_version++`, `previous_pubkey`, `grace_expires_at = now + 30d`), SIGTERMs the running runtime so the symlink supervisor restarts it.
+- **`mur agent rekey <name> --emergency`** — used when the old key is unrecoverable. Writes an UNSIGNED attestation; commander will quarantine the agent with `pending_emergency_approval` until an admin runs `murc agent approve-rekey <uuid>` on the commander host (option-a FS-gated).
+- **`mur agent rekey-status <name> [--json]`** — show current/previous keys, grace remaining, rotation history count.
+
+Identity schema (`mur-common::agent::IdentityConfig`) gained `algorithm`, `key_version`, `created_at_key`, `previous_pubkey`, `previous_key_version`, `grace_expires_at`, `rotated_at`, `emergency_rekey_at` — all `#[serde(default)]`. Bootstrap rotation entries are written into `rotations.jsonl` at agent create time.
+
+`mur-common::identity` exports `RotationAttestation` (with sorted-key canonical JSON for signing) and `verify_chain` (M5.1) for end-to-end chain validation.
+
+On every supervisor startup, an expired `grace_expires_at` triggers `shred -u identity.key.prev` + clears `previous_*` from `profile.yaml` (M6.1).
+
+**mur-commander integration** (`feat/agent-rekey-commander`):
+- `engine::a2a::discovery::AgentRegistry::apply_rotation` — verifies attestation signature against the OLD pubkey before advancing the registry; handles idempotent replay; quarantines on `OldKeyMismatch`; refuses emergency until approved.
+- `approve_emergency_rotation` / `reject_emergency_rotation` — out-of-band gating for emergency rotations.
+- `sweep_grace_expiries` — hourly daemon job clears expired `previous_pubkey` entries (M6.2).
+- **Split-attestation detection** (M5.2) — when two diverging attestations claim the same `key_version` boundary with different `new_pubkey`, the agent is quarantined with a `split_attestation_vN_to_vN+1` marker.
+- **`murc agent approve-rekey <uuid>` / `reject-rekey <uuid>`** (M4.2) — FS-gated CLI on the commander host.
+
+**TcpConnector** (M3.2) — `dial_with_fallback(addr, identity, &[primary, prev])` lets peers retry a Noise handshake against either pubkey during the grace window. Agent Card (M3.1) publishes `previous_pubkey` + `grace_expires_at` while grace is active.
+
+- **Spec:** `docs/superpowers/specs/2026-04-24-murmur-agent-rekey-design.md`
+- **Plan:** `docs/superpowers/plans/2026-04-24-murmur-agent-rekey-plan.md` (+ `-COMPLETE.md`)
+- **PRs:** `mur-run/mur#30` (mur side: M1, M3, M4.1, M5.1, M6.1, M6.3) + `mur-run/mur-commander#12` (commander side: M2, M4.2/4.3, M5.2, M6.2)
+
 ## Development Notes
 
 - Rust edition 2024 — `let` chains are stable and used throughout (e.g., `if let … && let …`)
