@@ -176,7 +176,46 @@ pub struct TcpConnector {
 }
 
 impl TcpConnector {
+    /// Dial with a single candidate pubkey. Convenience wrapper around
+    /// `dial_with_fallback` for the common case.
     pub async fn dial(
+        addr: &str,
+        identity: Arc<AgentIdentity>,
+        remote_static_pub: &[u8; 32],
+    ) -> io::Result<Self> {
+        Self::dial_with_fallback(addr, identity, &[*remote_static_pub]).await
+    }
+
+    /// Dial with a list of candidate pubkeys, tried in order. Used by peers
+    /// that have an ambiguous cached pubkey (e.g. mid-rotation grace period).
+    /// Returns on the first candidate whose handshake completes; returns the
+    /// last error if all candidates fail.
+    ///
+    /// Each candidate gets a fresh TCP connection — Noise XK handshakes
+    /// are not retryable on the same socket once they've started.
+    pub async fn dial_with_fallback(
+        addr: &str,
+        identity: Arc<AgentIdentity>,
+        candidates: &[[u8; 32]],
+    ) -> io::Result<Self> {
+        if candidates.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "dial_with_fallback: no candidate pubkeys",
+            ));
+        }
+        let mut last_err: Option<io::Error> = None;
+        for candidate in candidates {
+            match Self::try_dial_one(addr, identity.clone(), candidate).await {
+                Ok(conn) => return Ok(conn),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| io::Error::other("dial_with_fallback exhausted candidates")))
+    }
+
+    /// One handshake attempt against a single candidate pubkey.
+    async fn try_dial_one(
         addr: &str,
         identity: Arc<AgentIdentity>,
         remote_static_pub: &[u8; 32],

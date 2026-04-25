@@ -39,7 +39,14 @@ pub struct AgentProfile {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+fn default_algorithm() -> String {
+    "ed25519".into()
+}
+
+/// Algorithms the runtime can generate + verify.
+pub const SUPPORTED_ALGORITHMS: &[&str] = &["ed25519"];
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IdentityConfig {
     /// Multibase-encoded Ed25519 public key (base58btc, `z` prefix).
     /// Empty string for legacy P0a profiles; filled on P0a.5 `mur agent create`.
@@ -48,6 +55,50 @@ pub struct IdentityConfig {
     /// Free-form owner identity (email / SSO sub). None for legacy profiles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
+
+    // P0a.6 rekey extensions (all #[serde(default)] — back-compat)
+    /// Cryptographic algorithm for this key. Defaults to "ed25519".
+    #[serde(default = "default_algorithm")]
+    pub algorithm: String,
+    /// Monotonic version counter; 0 = initial create, increments on each rotation.
+    #[serde(default)]
+    pub key_version: u32,
+    /// RFC3339 timestamp of when this key was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_key: Option<String>,
+    /// Previous public key (before most recent rotation). None if not rotated yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_pubkey: Option<String>,
+    /// Version of the previous key. None if not rotated yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_key_version: Option<u32>,
+    /// RFC3339 timestamp when grace period expires and old key is fully retired.
+    /// Only set during rotation; cleared once grace period ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grace_expires_at: Option<String>,
+    /// RFC3339 timestamp of the most recent key rotation (normal, not emergency).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotated_at: Option<String>,
+    /// RFC3339 timestamp of emergency key rotation (set only if emergency rekey occurred).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emergency_rekey_at: Option<String>,
+}
+
+impl Default for IdentityConfig {
+    fn default() -> Self {
+        Self {
+            pubkey: String::new(),
+            owner: None,
+            algorithm: default_algorithm(),
+            key_version: 0,
+            created_at_key: None,
+            previous_pubkey: None,
+            previous_key_version: None,
+            grace_expires_at: None,
+            rotated_at: None,
+            emergency_rekey_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
