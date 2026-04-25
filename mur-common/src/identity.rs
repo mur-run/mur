@@ -147,3 +147,207 @@ pub fn decode_pubkey(text: &str) -> Result<[u8; 32], IdentityError> {
 pub fn default_dir(agent_home: &Path) -> PathBuf {
     agent_home.to_path_buf()
 }
+
+// ---------------------------------------------------------------------------
+// RotationAttestation — proof that a key rotation was authorized by the
+// holder of the prior identity key.
+// ---------------------------------------------------------------------------
+
+use serde::{Deserialize, Serialize};
+
+/// Why a rotation happened. Free-form audit hint; does not affect verification
+/// rules other than `Emergency`, which permits an empty signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RotationReason {
+    Scheduled,
+    SuspectCompromise,
+    OwnerChange,
+    Emergency,
+}
+
+/// Cryptographic proof of an identity-key rotation.
+///
+/// `signature` is multibase base58btc Ed25519 over `canonical_bytes()`
+/// (which serializes every field except `signature` itself).
+///
+/// For `reason = Emergency`, signature MAY be empty — those rotations
+/// require out-of-band admin approval to take effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RotationAttestation {
+    /// Schema version. Always 1 for now.
+    pub schema: u32,
+    /// Agent UUIDv7 — stable across rotations.
+    pub uuid: String,
+    /// Signing algorithm. "ed25519" for now.
+    pub algorithm: String,
+    /// Outgoing pubkey (multibase). Empty string for the bootstrap entry only.
+    pub old_pubkey: String,
+    /// Incoming pubkey (multibase). Always present.
+    pub new_pubkey: String,
+    pub old_key_version: u32,
+    /// = old_key_version + 1 for non-emergency rotations.
+    pub new_key_version: u32,
+    /// RFC3339 timestamp.
+    pub rotated_at: String,
+    pub reason: RotationReason,
+    /// Multibase Ed25519 signature over canonical_bytes(). Empty for
+    /// Emergency reason or for the bootstrap entry.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub signature: String,
+    /// True only for the create-time entry (no prior key existed).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bootstrap: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl RotationAttestation {
+    /// Build a new (unsigned) attestation.
+    pub fn new(
+        uuid: impl Into<String>,
+        old_pubkey: impl Into<String>,
+        new_pubkey: impl Into<String>,
+        old_key_version: u32,
+        new_key_version: u32,
+        rotated_at: impl Into<String>,
+        reason: RotationReason,
+    ) -> Self {
+        Self {
+            schema: 1,
+            uuid: uuid.into(),
+            algorithm: "ed25519".into(),
+            old_pubkey: old_pubkey.into(),
+            new_pubkey: new_pubkey.into(),
+            old_key_version,
+            new_key_version,
+            rotated_at: rotated_at.into(),
+            reason,
+            signature: String::new(),
+            bootstrap: false,
+        }
+    }
+
+    /// Mark this attestation as the bootstrap entry written at agent
+    /// create time. Bootstrap entries have empty `old_pubkey` and empty
+    /// `signature`; they exist only to anchor the rotation chain.
+    pub fn into_bootstrap(mut self) -> Self {
+        self.bootstrap = true;
+        self.old_pubkey = String::new();
+        self.signature = String::new();
+        self
+    }
+
+    /// Canonical bytes used for signing. Serializes every field of `self`
+    /// EXCEPT `signature` (which is being computed) using JSON with sorted
+    /// keys and no whitespace.
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut clone = self.clone();
+        clone.signature = String::new();
+        canonical_json(&clone)
+    }
+
+    /// Compute the Ed25519 signature using the given signing key and store
+    /// it in `self.signature`. Idempotent.
+    pub fn sign(&mut self, signing: &ed25519_dalek::SigningKey) {
+        use ed25519_dalek::Signer;
+        let sig = signing.sign(&self.canonical_bytes());
+        self.signature = multibase::encode(multibase::Base::Base58Btc, sig.to_bytes());
+    }
+
+    /// Verify `self.signature` against the supplied multibase-encoded
+    /// `old_pubkey`. Returns `Ok(())` on a valid signature.
+    ///
+    /// Bootstrap entries (`bootstrap = true`) are accepted unconditionally —
+    /// they have nothing to verify against.
+    /// Emergency entries (`reason = Emergency`) with empty signature are
+    /// REJECTED here; callers must use `verify_or_emergency` if they want
+    /// the emergency-allowed semantics.
+    pub fn verify(&self, old_pubkey: &str) -> Result<(), IdentityError> {
+        if self.bootstrap {
+            return Ok(());
+        }
+        if self.signature.is_empty() {
+            return Err(IdentityError::InvalidKey(
+                "attestation signature is empty".into(),
+            ));
+        }
+        let pub_bytes = decode_pubkey(old_pubkey)?;
+        let verifying = ed25519_dalek::VerifyingKey::from_bytes(&pub_bytes)
+            .map_err(|e| IdentityError::InvalidKey(format!("verifying key: {e}")))?;
+        let (_base, sig_bytes) = multibase::decode(&self.signature)?;
+        let sig_arr: [u8; 64] = sig_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| IdentityError::InvalidKey("signature length != 64".into()))?;
+        let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
+        verifying
+            .verify_strict(&self.canonical_bytes(), &sig)
+            .map_err(|e| IdentityError::InvalidKey(format!("signature: {e}")))?;
+        Ok(())
+    }
+
+    /// Like `verify`, but accepts emergency rotations with empty signature.
+    /// Caller is responsible for the out-of-band approval check.
+    pub fn verify_or_emergency(&self, old_pubkey: &str) -> Result<(), IdentityError> {
+        if self.reason == RotationReason::Emergency && self.signature.is_empty() {
+            return Ok(());
+        }
+        self.verify(old_pubkey)
+    }
+}
+
+/// Canonical JSON: sorted keys, no whitespace. Used so that signers and
+/// verifiers compute identical byte sequences regardless of language /
+/// serializer choices.
+fn canonical_json<T: serde::Serialize>(value: &T) -> Vec<u8> {
+    // serde_json with a BTreeMap-like ordering. The simplest approach: round-trip
+    // through a `serde_json::Value`, then walk it depth-first emitting bytes.
+    let v: serde_json::Value =
+        serde_json::to_value(value).expect("serialize should not fail for our types");
+    let mut out = Vec::new();
+    write_canonical(&mut out, &v);
+    out
+}
+
+fn write_canonical(out: &mut Vec<u8>, v: &serde_json::Value) {
+    use serde_json::Value;
+    match v {
+        Value::Null => out.extend_from_slice(b"null"),
+        Value::Bool(b) => out.extend_from_slice(if *b { b"true" } else { b"false" }),
+        Value::Number(n) => out.extend_from_slice(n.to_string().as_bytes()),
+        Value::String(s) => {
+            // serde_json::to_string handles escaping for us
+            let escaped = serde_json::to_string(s).unwrap();
+            out.extend_from_slice(escaped.as_bytes());
+        }
+        Value::Array(arr) => {
+            out.push(b'[');
+            for (i, item) in arr.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                write_canonical(out, item);
+            }
+            out.push(b']');
+        }
+        Value::Object(map) => {
+            // Sort keys for deterministic output
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push(b'{');
+            for (i, k) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                let kesc = serde_json::to_string(k).unwrap();
+                out.extend_from_slice(kesc.as_bytes());
+                out.push(b':');
+                write_canonical(out, &map[*k]);
+            }
+            out.push(b'}');
+        }
+    }
+}
