@@ -1,3 +1,7 @@
+// Windows: gated — install-service emits launchd / systemd files only;
+// the test relies on `mur agent create` succeeding (unix symlink) first.
+#![cfg(unix)]
+
 use std::process::Command;
 use tempfile::TempDir;
 

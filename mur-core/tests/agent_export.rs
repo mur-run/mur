@@ -1,3 +1,7 @@
+// Windows: gated — drives the `mur agent export/import` CLI which spawns
+// the runtime and depends on unix-style symlink + process pipe semantics.
+#![cfg(unix)]
+
 use std::process::Command;
 use tempfile::TempDir;
 

@@ -1,3 +1,8 @@
+// Windows: gated — uses std::fs::read_link on a unix-style symlink the CLI
+// creates, and depends on `std::os::unix::fs::symlink` succeeding without
+// admin privileges (Windows symlinks require elevation by default).
+#![cfg(unix)]
+
 use mur_common::AgentProfile;
 use std::process::Command;
 use tempfile::TempDir;

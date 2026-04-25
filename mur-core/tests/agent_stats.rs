@@ -1,3 +1,7 @@
+// Windows: gated — depends on `mur agent create` (unix symlink) +
+// telemetry JSONL written by an `mur agent` runtime invocation.
+#![cfg(unix)]
+
 use std::process::Command;
 use tempfile::TempDir;
 

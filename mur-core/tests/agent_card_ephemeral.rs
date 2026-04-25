@@ -6,6 +6,12 @@
 //! `cargo test -p mur-core` in isolation without first building the
 //! runtime), the test is skipped with a `println!` so default cargo test
 //! runs stay green.
+//!
+//! Windows: gated to cfg(unix) — the ephemeral runtime fork pipes stdio
+//! and Windows `Command::output()` doesn't reap the child cleanly,
+//! causing the test to hang to the GitHub Actions 6h job timeout.
+
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::process::Command;

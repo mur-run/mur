@@ -1,3 +1,7 @@
+// Windows: gated — depends on `mur agent create` (unix symlink) +
+// running.lock file semantics including unix sockets.
+#![cfg(unix)]
+
 use mur_common::{LockFile, agent::LockTransports};
 use std::process::Command;
 use tempfile::TempDir;
