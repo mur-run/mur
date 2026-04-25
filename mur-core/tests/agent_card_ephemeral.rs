@@ -115,7 +115,8 @@ fn card_displays_identity_pubkey() {
     let v: serde_json::Value = serde_json::from_str(body.trim()).expect("card stdout must be JSON");
 
     // Verify pubkey field exists and is non-empty
-    let pubkey = v.get("pubkey")
+    let pubkey = v
+        .get("pubkey")
         .expect("card must include 'pubkey' field")
         .as_str()
         .expect("pubkey must be a string");
