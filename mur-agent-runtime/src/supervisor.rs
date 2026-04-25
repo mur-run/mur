@@ -451,10 +451,10 @@ fn shred_file(path: &std::path::Path) -> anyhow::Result<()> {
         .arg("-u")
         .arg(path)
         .status();
-    if let Ok(s) = shred {
-        if s.success() {
-            return Ok(());
-        }
+    if let Ok(s) = shred
+        && s.success()
+    {
+        return Ok(());
     }
     // Fallback: overwrite with random bytes, then unlink.
     use std::io::Write as _;
