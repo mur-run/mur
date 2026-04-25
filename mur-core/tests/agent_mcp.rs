@@ -1,3 +1,6 @@
+// Windows: gated — depends on `mur agent create` (unix symlink).
+#![cfg(unix)]
+
 use mur_common::AgentProfile;
 use std::process::Command;
 use tempfile::TempDir;
