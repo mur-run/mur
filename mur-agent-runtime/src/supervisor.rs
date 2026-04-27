@@ -137,7 +137,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                     .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
                 let model = profile.inner.model.name.clone();
                 let client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(base, model));
-                Arc::new(TaskRunner::with_llm(client))
+                // E6: forward the loaded system prompt so it actually reaches the LLM.
+                Arc::new(
+                    TaskRunner::with_llm(client).with_system_prompt(profile.system_prompt.clone()),
+                )
             }
             other => {
                 tracing::warn!(provider = %other, "no LLM client implemented; falling back to echo");
