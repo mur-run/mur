@@ -13,7 +13,9 @@ use crate::protocol::methods::{
 };
 #[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
-use crate::llm::{LlmClient, ollama::OllamaClient};
+use crate::llm::{
+    LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
+};
 use crate::task_runner::TaskRunner;
 use crate::telemetry_writer::{Event, TelemetryWriter};
 use crate::transport::stdio::serve_stdio;
@@ -141,6 +143,38 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 Arc::new(
                     TaskRunner::with_llm(client).with_system_prompt(profile.system_prompt.clone()),
                 )
+            }
+            "anthropic" => {
+                let model = profile.inner.model.name.clone();
+                match AnthropicClient::from_env(model) {
+                    Ok(c) => {
+                        let client: Arc<dyn LlmClient> = Arc::new(c);
+                        Arc::new(
+                            TaskRunner::with_llm(client)
+                                .with_system_prompt(profile.system_prompt.clone()),
+                        )
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "anthropic client unavailable; falling back to echo");
+                        Arc::new(TaskRunner::new_stub_echo())
+                    }
+                }
+            }
+            "openai" => {
+                let model = profile.inner.model.name.clone();
+                match OpenAiClient::from_env(model) {
+                    Ok(c) => {
+                        let client: Arc<dyn LlmClient> = Arc::new(c);
+                        Arc::new(
+                            TaskRunner::with_llm(client)
+                                .with_system_prompt(profile.system_prompt.clone()),
+                        )
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "openai client unavailable; falling back to echo");
+                        Arc::new(TaskRunner::new_stub_echo())
+                    }
+                }
             }
             other => {
                 tracing::warn!(provider = %other, "no LLM client implemented; falling back to echo");
