@@ -19,8 +19,8 @@ fn main() -> Result<()> {
     let sidecar_mgr = Arc::new(sidecar::SidecarManager::new());
 
     tauri::Builder::default()
-        .manage(sidecar_mgr)
-        .setup(|app| {
+        .manage(sidecar_mgr.clone())
+        .setup(move |app| {
             use tauri::Manager;
             // First-launch payload extraction + identity mint.
             let resource_dir = app
@@ -36,6 +36,18 @@ fn main() -> Result<()> {
                     // Make agent name reachable from commands.rs
                     // SAFETY: setup runs before any Tauri command; single-thread.
                     unsafe { std::env::set_var("MUR_GUI_AGENT_NAME", &meta.agent_name); }
+
+                    // Auto-spawn the sidecar so "click app → agent runs"
+                    // is the default flow. User can stop/restart from
+                    // the Status tab.
+                    let app_handle = app.handle().clone();
+                    let mgr = sidecar_mgr.clone();
+                    let agent_name = meta.agent_name.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = mgr.start(&app_handle, &agent_name) {
+                            tracing::error!("auto-start sidecar failed: {e:#}");
+                        }
+                    });
                 }
                 Err(e) => {
                     tracing::error!("bootstrap failed: {e:#}");
@@ -99,9 +111,12 @@ fn init_tracing() {
     let log_dir = log_dir().unwrap_or_else(std::env::temp_dir);
     std::fs::create_dir_all(&log_dir).ok();
     let file_appender = tracing_appender::rolling::never(&log_dir, "gui.log");
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_writer(file_appender)
+        .with_ansi(false)
         .init();
 }
 

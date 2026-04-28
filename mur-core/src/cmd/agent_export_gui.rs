@@ -407,6 +407,17 @@ fn phase_7_tauri_build(opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
         other => bail!("unsupported host OS for gui build: {other}"),
     };
 
+    // Tauri's `cargo tauri build` doesn't always rebundle resources
+    // (metadata.json / agent-payload.tar.gz / themes/) when the
+    // existing bundle output is fresher than its inputs — it may
+    // reuse a stale bundle from a prior export. Clean the bundle
+    // dir up front to guarantee a fresh layout per agent.
+    let bundle_root = src_tauri
+        .join("target")
+        .join(&target)
+        .join("release/bundle");
+    let _ = std::fs::remove_dir_all(&bundle_root);
+
     info!(
         "phase 7: cargo tauri build --target={target} --bundles={bundles}"
     );

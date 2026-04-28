@@ -2,13 +2,16 @@
 #
 # P1.9 — End-to-end smoke for `mur agent export --format gui`.
 #
-# This script exercises the orchestration layer of the export pipeline.
-# On a host without tauri-cli installed, the doctor + export both fail
-# fast at the prereq phase — that IS the test (the pipeline correctly
-# refuses to attempt a build it can't complete). On a fully-equipped CI
-# host, the full pipeline runs and produces an artifact.
+# Two modes:
+#   1. Quick (default) — exercises orchestration only. Accepts either
+#      "fail-fast at prereq" (host missing tauri-cli) or "produced
+#      artifact" (host has it).
+#   2. Full (FULL_E2E=1) — actually runs the full Tauri build, then
+#      launches the produced .app and asserts the bootstrap module
+#      extracts the payload + spawns a runtime that writes
+#      `running.lock` under MUR_HOME. Cleans up afterwards.
 #
-# Exit code 0  → orchestration verified (either fail-fast OR full build)
+# Exit code 0  → orchestration verified
 # Exit code !0 → unexpected failure
 set -euo pipefail
 
@@ -46,25 +49,77 @@ echo "  ✓ all GUI flags exposed via --help"
 
 # ── 3. Create a throwaway agent + attempt export ───────────────────
 TMPHOME="$(mktemp -d)"
-trap 'rm -rf "$TMPHOME"' EXIT
+trap 'rm -rf "$TMPHOME"; pkill -f "$TMPHOME" 2>/dev/null || true' EXIT
 echo "▸ Throwaway agent at MUR_HOME=$TMPHOME"
 export MUR_HOME="$TMPHOME"
+export MUR_AGENT_BIN_DIR="$TMPHOME/bin"
 
 $MUR agent create p1-9-test-agent --no-interactive --display-name "p1.9 test" --model llama3.2:3b >/dev/null
 
 OUT_PATH="$TMPHOME/MyAgent.app"
 EXPORT_OUT="$($MUR agent export p1-9-test-agent -o "$OUT_PATH" --format gui --theme dark --skip-notarize 2>&1 || true)"
-echo "$EXPORT_OUT" | head -20
+echo "$EXPORT_OUT" | tail -10
 
 if echo "$EXPORT_OUT" | grep -q "missing prerequisites for gui export"; then
   echo "  ✓ pipeline correctly fail-fast at prereq phase (tauri-cli not installed)"
-elif [ -e "$OUT_PATH" ]; then
-  echo "  ✓ pipeline produced artifact at $OUT_PATH"
-  ls -la "$OUT_PATH"
-else
+  echo
+  echo "▸ P1.9 smoke OK (quick mode — full E2E skipped)"
+  exit 0
+fi
+
+if [ ! -e "$OUT_PATH" ]; then
   echo "  ✗ unexpected: pipeline did not fail-fast and did not produce artifact"
   exit 2
 fi
 
+echo "  ✓ pipeline produced artifact at $OUT_PATH"
+
+# ── 4. (full mode) Launch the .app and verify bootstrap + sidecar ──
+if [ "${FULL_E2E:-0}" != "1" ]; then
+  echo
+  echo "▸ P1.9 smoke OK (set FULL_E2E=1 to also launch + verify)"
+  exit 0
+fi
+
+echo "▸ Full E2E: launching produced bundle"
+case "$OSTYPE" in
+  darwin*)   EXE="$OUT_PATH/Contents/MacOS/mur-agent-gui" ;;
+  linux*)    EXE="$OUT_PATH" ;;
+  msys*|cygwin*) EXE="$OUT_PATH" ;;
+  *)         echo "unsupported OS $OSTYPE"; exit 3 ;;
+esac
+[ -x "$EXE" ] || { echo "executable not found at $EXE"; exit 3; }
+
+# Pre-create the agent home so bootstrap is a no-op on the existing
+# install, then verify the sidecar manager spawns a runtime that
+# claims the running.lock.
+"$EXE" >/tmp/p1-9-gui.log 2>&1 &
+GUI_PID=$!
+echo "  GUI launched (pid=$GUI_PID); waiting for running.lock"
+
+LOCK="$TMPHOME/agents/p1-9-test-agent/running.lock"
+for _ in $(seq 1 30); do
+  if [ -e "$LOCK" ]; then
+    echo "  ✓ running.lock appeared at $LOCK"
+    break
+  fi
+  sleep 1
+done
+
+if [ ! -e "$LOCK" ]; then
+  echo "  ✗ running.lock did not appear within 30s"
+  cat /tmp/p1-9-gui.log | tail -20 | sed 's/^/    | /'
+  kill -TERM $GUI_PID 2>/dev/null || true
+  exit 4
+fi
+
+# Tear down cleanly.
+kill -TERM $GUI_PID 2>/dev/null || true
+wait $GUI_PID 2>/dev/null || true
+sleep 1
+if [ -e "$LOCK" ]; then
+  echo "  ⚠ running.lock still present after SIGTERM; supervisor may be stuck"
+fi
+
 echo
-echo "▸ P1.9 smoke OK"
+echo "▸ P1.9 FULL E2E OK — bundle launches, bootstraps, spawns runtime, writes running.lock"
