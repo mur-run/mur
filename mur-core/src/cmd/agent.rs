@@ -167,13 +167,7 @@ pub fn cmd_create(
 }
 
 fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("agent name must not be empty");
-    }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        bail!("agent name must match [A-Za-z0-9_]+");
-    }
-    Ok(())
+    mur_common::validate_agent_name(name).with_context(|| format!("invalid agent name {name:?}"))
 }
 
 fn resolve_mur_home() -> Result<PathBuf> {
@@ -350,40 +344,42 @@ fn collect_agents() -> Result<Vec<AgentRow>> {
     Ok(rows)
 }
 
+/// Classify an agent lock for the CLI table display.
+///
+/// Returns `(status_str, pid, uptime)`. Delegates to
+/// `mur_common::lock_file::classify` for the 3-state liveness logic and
+/// adds uptime computation (CLI-specific) on top.
 fn classify(lock_path: &Path) -> (&'static str, Option<u32>, Option<String>) {
-    if !lock_path.exists() {
-        return ("stopped", None, None);
-    }
-    let bytes = match fs::read(lock_path) {
-        Ok(b) => b,
-        Err(_) => return ("stale", None, None),
+    use mur_common::lock_file::AgentStatusKind;
+    let status = mur_common::lock_file::classify(lock_path);
+    let status_str = match status.kind {
+        AgentStatusKind::Running => "running",
+        AgentStatusKind::Stale => "stale",
+        AgentStatusKind::Stopped => "stopped",
     };
-    let lock: LockFile = match serde_json::from_slice(&bytes) {
-        Ok(l) => l,
-        Err(_) => return ("stale", None, None),
+    // Compute uptime from the lock file's started_at only when running.
+    let uptime = if status.kind == AgentStatusKind::Running {
+        mur_common::lock_file::read(lock_path)
+            .ok()
+            .flatten()
+            .and_then(|lock| chrono::DateTime::parse_from_rfc3339(&lock.started_at).ok())
+            .map(|start| {
+                let secs = (chrono::Utc::now() - start.with_timezone(&chrono::Utc))
+                    .num_seconds()
+                    .max(0);
+                format!("{}s", secs)
+            })
+    } else {
+        None
     };
-    if !pid_alive(lock.pid) {
-        return ("stale", Some(lock.pid), None);
-    }
-    let uptime = chrono::DateTime::parse_from_rfc3339(&lock.started_at)
-        .ok()
-        .map(|start| {
-            let secs = (chrono::Utc::now() - start.with_timezone(&chrono::Utc))
-                .num_seconds()
-                .max(0);
-            format!("{}s", secs)
-        });
-    ("running", Some(lock.pid), uptime)
+    (status_str, status.pid, uptime)
 }
 
-#[cfg(unix)]
+/// Liveness probe for a pid. Delegates to the canonical implementation in
+/// `mur_common::lock_file` so stop/remove/rename guards share the same logic
+/// as classify().
 fn pid_alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-}
-
-#[cfg(not(unix))]
-fn pid_alive(_pid: u32) -> bool {
-    false
+    mur_common::lock_file::pid_alive(pid)
 }
 
 // ─── stop / remove / rename ──────────────────────────────────────────────

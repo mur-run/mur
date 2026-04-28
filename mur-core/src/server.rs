@@ -3,6 +3,7 @@
 //! Exposes the pattern and workflow stores over HTTP so the web dashboard
 //! (mur.run SPA or localhost dev) can read and write data.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -63,6 +64,8 @@ pub struct AppState {
     pub patterns_dir: PathBuf,
     pub workflows_dir: PathBuf,
     pub pipelines_dir: PathBuf,
+    /// `~/.mur/agents/` — root for per-agent profiles, telemetry, evals.
+    pub agents_dir: PathBuf,
     /// Path to the LanceDB vector index (`~/.mur/index`).
     /// When present the context endpoint uses hybrid scoring.
     pub index_dir: PathBuf,
@@ -205,6 +208,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/rates/{currency}", get(get_rate))
         // WebSocket for real-time events
         .route("/api/v1/ws", get(ws_handler))
+        // Agents (Phase 4 read-only routes)
+        .nest("/api/v1/agents", crate::server_agents::router())
         .layer(cors)
         .with_state(Arc::new(state))
         // Fallback: serve embedded web UI
@@ -243,7 +248,11 @@ pub async fn run_server(
         }
     }
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1498,15 +1507,18 @@ mod tests {
         let patterns_dir = tmp.path().join("patterns");
         let workflows_dir = tmp.path().join("workflows");
         let pipelines_dir = tmp.path().join("pipelines");
+        let agents_dir = tmp.path().join("agents");
         let index_dir = tmp.path().join("index"); // non-existent → keyword-only fallback
         std::fs::create_dir_all(&patterns_dir).unwrap();
         std::fs::create_dir_all(&workflows_dir).unwrap();
         std::fs::create_dir_all(&pipelines_dir).unwrap();
+        std::fs::create_dir_all(&agents_dir).unwrap();
         let (events_tx, _) = broadcast::channel(64);
         AppState {
             patterns_dir,
             workflows_dir,
             pipelines_dir,
+            agents_dir,
             index_dir,
             config: ServerConfig { readonly: false },
             events_tx,
@@ -2204,5 +2216,25 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_agents_router_mounted_returns_404_for_unknown_subpath() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = build_router(test_state(&tmp));
+
+        // /api/v1/agents/__nope__ should resolve into the agents subrouter
+        // (and fall through to a 404), proving the nested router is mounted.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/__nope__/__nope__")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }
