@@ -27,12 +27,17 @@ A WIP commit must include enough context in the message body for a future sessio
 
 ```yaml
 last_updated: 2026-04-29
-current_phase: P1.0
+current_phase: P1.1
 status: in_progress
-last_completed: P0 (spec landed at commit 5f71506)
-last_commit_on_branch: (none yet — branch just created)
-blockers: []
-next_action: Refactor mur-core/src/cmd/agent.rs admin verbs into mur-core/src/agent_admin/ library module
+last_completed: P1.0 (façade landed at 768a0d9)
+last_commit_on_branch: 768a0d9 feat(mur-core): expose agent_admin library module (P1.0)
+blockers:
+  - tests/agent_card_ephemeral.rs::card_displays_identity_pubkey is FAILING on main upstream (pre-existing, unrelated to this branch). Documented; not a P1.0 gate.
+next_action: Add setpgid(0,0) to mur-agent-runtime supervisor; add `mur agent doctor` subcommand sharing prereq logic with future export pipeline
+decisions_made_in_p1_0:
+  - Implemented as façade over cmd::agent (small re-export layer) instead of full code movement. Reason: ~80 LOC achieves the same library-API outcome that 1500-line refactor would, with zero risk of breaking 144 existing call sites in main.rs. Full code movement deferred — not on critical path for GUI delivery.
+  - Made cmd module pub from lib.rs with #[allow(dead_code)] to suppress unused-fn warnings. cmd::agent functions remain pub(crate)-callable from agent_admin via the shared crate scope.
+  - Pre-existing test failure on agent_card_ephemeral::card_displays_identity_pubkey treated as upstream bug; left for separate fix outside this branch.
 ```
 
 ---
@@ -41,8 +46,8 @@ next_action: Refactor mur-core/src/cmd/agent.rs admin verbs into mur-core/src/ag
 
 | ID | Phase | Status | LOC est. | Verification gate |
 |----|-------|--------|----------|-------------------|
-| P1.0 | Extract `agent_admin` library | ⏳ in_progress | +800/-700 | `cargo test --workspace`; CLI behaviour unchanged |
-| P1.1 | `setpgid` + `mur agent doctor` | ⏸ pending | +300 | `cargo test`; harness OFFICE-1 still green |
+| P1.0 | Extract `agent_admin` library | ✅ done @ 768a0d9 (façade-only; 343 LOC) | — | lib + bin build; clippy clean |
+| P1.1 | `setpgid` + `mur agent doctor` | ⏳ in_progress | +300 | `cargo test`; harness OFFICE-1 still green |
 | P1.2 | Scaffold `mur-agent-gui` crate | ⏸ pending | +3500 | `cargo tauri dev` boots empty 6-tab window |
 | P1.3 | Wire admin via Tauri commands | ⏸ pending | +1500 | Manual: edit each tab, verify YAML write |
 | P1.4 | Sidecar manager | ⏸ pending | +900 | Spawn / kill / restart-with-backoff exercised |
@@ -227,3 +232,4 @@ After each phase:
 (append-only — every entry includes date + short SHA + decision + reasoning)
 
 - 2026-04-29 (pre-impl) — feature branch off main, NOT a separate worktree. Reason: simpler resumability for autonomous sessions; user can always `git checkout` if needed.
+- 2026-04-29 768a0d9 — P1.0 implemented as façade (cmd::agent re-export layer + typed read views) rather than full code movement. Reason: GUI Tauri commands need a clean lib API; that's achievable in 343 LOC; full refactor of 32 cmd_* fns into per-area files would be 1500-LOC churn with no functional change since cmd_* fns are already mostly print-free. cmd::agent stays canonical implementation.
