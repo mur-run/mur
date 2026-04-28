@@ -8,15 +8,17 @@ use serde::Serialize;
 
 use crate::server::{AppError, AppState};
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone)]
 pub struct AgentDetail {
     pub profile: mur_common::AgentProfile,
     pub status: AgentStatus,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone)]
 pub struct AgentStatus {
-    pub running: bool,
+    /// One of: `"running"`, `"stale"`, `"stopped"`.
+    pub status: super::AgentStatusKind,
+    /// PID from the lock file. None when no lock or unparseable lock.
     pub pid: Option<u32>,
 }
 
@@ -46,14 +48,14 @@ pub async fn handler(
         )
     })?;
 
-    let pid = std::fs::read_to_string(home.join("running.lock"))
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok());
-    let running = super::is_running(&home);
+    let status = super::agent_status(&home);
 
     Ok(Json(AgentDetail {
         profile,
-        status: AgentStatus { running, pid },
+        status: AgentStatus {
+            status: status.kind,
+            pid: status.pid,
+        },
     }))
 }
 
@@ -79,13 +81,24 @@ mod tests {
         }
     }
 
+    /// Build a minimal but valid `LockFile` with the given pid.
+    fn make_lock(pid: u32) -> mur_common::LockFile {
+        super::super::list::tests::make_lock(pid, "alpha")
+    }
+
     #[tokio::test]
     async fn detail_returns_full_profile_and_status() {
         let tmp = tempfile::tempdir().unwrap();
         let state = build_state(&tmp);
         let home = state.agents_dir.join("alpha");
         super::super::list::tests::write_min_profile(&home, "alpha", "Alpha Bot");
-        std::fs::write(home.join("running.lock"), "9999").unwrap();
+        // Use the current process's PID so the liveness check succeeds.
+        let lock = make_lock(std::process::id());
+        std::fs::write(
+            home.join("running.lock"),
+            serde_json::to_vec_pretty(&lock).unwrap(),
+        )
+        .unwrap();
 
         let app = build_router(state);
         let resp = app
@@ -104,8 +117,88 @@ mod tests {
         assert_eq!(json["profile"]["name"], "alpha");
         assert_eq!(json["profile"]["display_name"], "Alpha Bot");
         assert_eq!(json["profile"]["model"]["provider"], "ollama");
-        assert_eq!(json["status"]["running"], true);
-        assert_eq!(json["status"]["pid"], 9999);
+        assert_eq!(json["status"]["status"], "running");
+        assert_eq!(json["status"]["pid"], std::process::id());
+    }
+
+    #[tokio::test]
+    async fn detail_reports_stale_when_pid_not_alive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = build_state(&tmp);
+        let home = state.agents_dir.join("alpha");
+        super::super::list::tests::write_min_profile(&home, "alpha", "Alpha");
+        // PID 999_999 is almost certainly dead on any real host.
+        let dead_pid: u32 = 999_999;
+        let lock = make_lock(dead_pid);
+        std::fs::write(
+            home.join("running.lock"),
+            serde_json::to_vec_pretty(&lock).unwrap(),
+        )
+        .unwrap();
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/alpha")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["status"]["status"], "stale");
+        assert_eq!(json["status"]["pid"], dead_pid);
+    }
+
+    #[tokio::test]
+    async fn detail_reports_stopped_when_no_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = build_state(&tmp);
+        let home = state.agents_dir.join("alpha");
+        super::super::list::tests::write_min_profile(&home, "alpha", "Alpha");
+        // No running.lock written.
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/alpha")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["status"]["status"], "stopped");
+        assert_eq!(json["status"]["pid"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn detail_reports_stale_when_lock_is_malformed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = build_state(&tmp);
+        let home = state.agents_dir.join("alpha");
+        super::super::list::tests::write_min_profile(&home, "alpha", "Alpha");
+        // Plain integer (the OLD broken format) is now malformed → stale.
+        std::fs::write(home.join("running.lock"), "9999").unwrap();
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/alpha")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["status"]["status"], "stale");
+        assert_eq!(json["status"]["pid"], serde_json::Value::Null);
     }
 
     #[tokio::test]

@@ -93,4 +93,27 @@ async fn end_to_end_all_readonly_routes() {
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         assert!(!bytes.is_empty(), "route {path} returned empty body");
     }
+
+    // Confirm the API shape: no lock was written, so support_bot must report "stopped".
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/support_bot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        json["status"]["status"], "stopped",
+        "agent without a lock file must report status=stopped"
+    );
+    assert_eq!(
+        json["status"]["pid"],
+        serde_json::Value::Null,
+        "agent without a lock file must have null pid"
+    );
 }

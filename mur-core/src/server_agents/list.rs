@@ -8,11 +8,11 @@ use serde::Serialize;
 
 use crate::server::{AppError, AppState};
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone)]
 pub struct AgentListEntry {
     pub name: String,
     pub display_name: String,
-    pub running: bool,
+    pub status: super::AgentStatusKind,
 }
 
 pub async fn handler(
@@ -48,7 +48,7 @@ pub async fn handler(
         out.push(AgentListEntry {
             name: profile.name,
             display_name: profile.display_name,
-            running: super::is_running(&path),
+            status: super::agent_status(&path).kind,
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -83,14 +83,39 @@ pub(crate) mod tests {
         std::fs::write(dir.join("profile.yaml"), yaml).unwrap();
     }
 
+    /// Build a minimal but valid `LockFile` with the given pid.
+    pub(crate) fn make_lock(pid: u32, name: &str) -> mur_common::LockFile {
+        mur_common::LockFile {
+            schema: 1,
+            uuid: "0192f5a1-28ab-7111-8000-000000000001".to_string(),
+            name: name.to_string(),
+            pid,
+            ppid: 1,
+            started_at: "2026-04-28T10:00:00Z".to_string(),
+            binary_version: "0.1.0".to_string(),
+            transports: mur_common::agent::LockTransports {
+                stdio: true,
+                unix_socket: None,
+                tcp: None,
+            },
+            card_digest: "sha256:abc123".to_string(),
+            capabilities: vec!["a2a.message.send".to_string()],
+        }
+    }
+
     #[tokio::test]
-    async fn list_returns_known_agents_with_running_flag() {
+    async fn list_returns_known_agents_with_status() {
         let tmp = tempfile::tempdir().unwrap();
         let agents_dir = tmp.path().join("agents");
         write_min_profile(&agents_dir.join("alpha"), "alpha", "Alpha Bot");
         write_min_profile(&agents_dir.join("beta"), "beta", "Beta Bot");
-        // alpha is "running" — touch the lock file
-        std::fs::write(agents_dir.join("alpha").join("running.lock"), "1234").unwrap();
+        // alpha is "running" — write a real LockFile JSON using the current process's pid.
+        let lock = make_lock(std::process::id(), "alpha");
+        std::fs::write(
+            agents_dir.join("alpha").join("running.lock"),
+            serde_json::to_vec_pretty(&lock).unwrap(),
+        )
+        .unwrap();
 
         // Build state pointing at this temp agents dir
         let state = crate::server::AppState {
@@ -129,9 +154,9 @@ pub(crate) mod tests {
 
         let alpha = arr.iter().find(|a| a["name"] == "alpha").unwrap();
         assert_eq!(alpha["display_name"], "Alpha Bot");
-        assert_eq!(alpha["running"], true);
+        assert_eq!(alpha["status"], "running");
 
         let beta = arr.iter().find(|a| a["name"] == "beta").unwrap();
-        assert_eq!(beta["running"], false);
+        assert_eq!(beta["status"], "stopped");
     }
 }
