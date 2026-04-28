@@ -3,6 +3,7 @@
 //! Exposes the pattern and workflow stores over HTTP so the web dashboard
 //! (mur.run SPA or localhost dev) can read and write data.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -247,7 +248,11 @@ pub async fn run_server(
         }
     }
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
