@@ -68,7 +68,11 @@ pub async fn list_handler(
             summary,
         });
     }
-    // run_id starts with `eval-<TIMESTAMP>-<HASH>`; lex sort = chronological.
+    // run_id format is `eval-<ISO8601-no-separators>-<HASH>` (e.g.
+    // `eval-20260428T072501-bbbb`). Because the timestamp prefix uses a
+    // fixed-width sortable encoding, lexicographic order matches chronological
+    // order. Reverse cmp = newest first. Files with malformed run_id are
+    // already skipped above.
     out.sort_by(|a, b| b.run_id.cmp(&a.run_id));
 
     Ok(Json(out))
