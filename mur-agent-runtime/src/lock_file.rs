@@ -67,19 +67,22 @@ pub fn read_lock(path: &Path) -> Result<LockFile, LockError> {
 /// A lock is stale if either
 /// (a) its pid is not alive, or
 /// (b) flock can be acquired (nobody's holding it).
+///
+/// Steps (a) uses `mur_common::lock_file::read` and `pid_alive` — the
+/// canonical single source of truth (closes #36). Step (b) (flock probe) is
+/// a stronger, runtime-specific check and stays local.
 pub fn is_stale(path: &Path) -> Result<bool, LockError> {
-    if !path.exists() {
-        return Ok(true);
-    }
-    let lock: LockFile = match read_lock(path) {
-        Ok(l) => l,
-        Err(_) => return Ok(true), // corrupt = stale
+    // Step (a): read + pid liveness via the canonical common helpers.
+    let lock = match mur_common::lock_file::read(path).map_err(LockError::Io)? {
+        None => return Ok(true), // no lock file → stale
+        Some(l) => l,
     };
-    if !pid_alive(lock.pid) {
+    if !mur_common::lock_file::pid_alive(lock.pid) {
         return Ok(true);
     }
-    // If this process owns the lock, flock on a fresh fd returns a misleading
-    // result on macOS/BSD (independent locks per open). Trust the pid.
+    // Step (b): flock probe — if this process owns the lock, flock on a
+    // fresh fd returns a misleading result on macOS/BSD (independent locks
+    // per open). Trust the pid in that case.
     if lock.pid == std::process::id() {
         return Ok(false);
     }
@@ -90,24 +93,4 @@ pub fn is_stale(path: &Path) -> Result<bool, LockError> {
         return Ok(true);
     }
     Ok(false)
-}
-
-#[cfg(unix)]
-fn pid_alive(pid: u32) -> bool {
-    // kill(pid, 0) checks existence without sending a signal.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-}
-
-#[cfg(windows)]
-fn pid_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    unsafe {
-        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if h.is_null() {
-            return false;
-        }
-        CloseHandle(h);
-        true
-    }
 }
