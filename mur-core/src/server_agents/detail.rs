@@ -34,17 +34,16 @@ pub async fn handler(
         }
         Err(e) => {
             return Err(AppError::Internal(
-                anyhow::Error::from(e)
-                    .context(format!("read {}", profile_path.display())),
+                anyhow::Error::from(e).context(format!("read {}", profile_path.display())),
             ));
         }
     };
 
-    let profile: mur_common::AgentProfile = serde_yaml_ng::from_str(&yaml)
-        .map_err(|e| AppError::Internal(
-            anyhow::Error::from(e)
-                .context(format!("parse {}", profile_path.display())),
-        ))?;
+    let profile: mur_common::AgentProfile = serde_yaml_ng::from_str(&yaml).map_err(|e| {
+        AppError::Internal(
+            anyhow::Error::from(e).context(format!("parse {}", profile_path.display())),
+        )
+    })?;
 
     let pid = std::fs::read_to_string(home.join("running.lock"))
         .ok()
@@ -89,7 +88,12 @@ mod tests {
 
         let app = build_router(state);
         let resp = app
-            .oneshot(Request::builder().uri("/api/v1/agents/alpha").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/alpha")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -108,7 +112,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let app = build_router(build_state(&tmp));
         let resp = app
-            .oneshot(Request::builder().uri("/api/v1/agents/ghost").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/ghost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);

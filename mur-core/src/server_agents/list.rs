@@ -25,8 +25,7 @@ pub async fn handler(
         }
         Err(e) => {
             return Err(AppError::Internal(
-                anyhow::Error::from(e)
-                    .context(format!("read_dir {}", state.agents_dir.display())),
+                anyhow::Error::from(e).context(format!("read_dir {}", state.agents_dir.display())),
             ));
         }
     };
@@ -103,13 +102,22 @@ pub(crate) mod tests {
             config: crate::server::ServerConfig { readonly: false },
             events_tx: tokio::sync::broadcast::channel(64).0,
         };
-        for d in [&state.patterns_dir, &state.workflows_dir, &state.pipelines_dir] {
+        for d in [
+            &state.patterns_dir,
+            &state.workflows_dir,
+            &state.pipelines_dir,
+        ] {
             std::fs::create_dir_all(d).unwrap();
         }
 
         let app = build_router(state);
         let resp = app
-            .oneshot(Request::builder().uri("/api/v1/agents").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

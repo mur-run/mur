@@ -52,13 +52,27 @@ pub async fn list_handler(
             Ok(v) => v,
             Err(_) => continue,
         };
-        let run_id = v.get("run_id").and_then(|s| s.as_str()).unwrap_or("").to_string();
+        let run_id = v
+            .get("run_id")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
         if run_id.is_empty() {
             continue;
         }
-        let suite = v.get("suite").and_then(|s| s.as_str()).unwrap_or("").to_string();
-        let started_at = v.get("started_at").and_then(|s| s.as_str()).map(String::from);
-        let finished_at = v.get("finished_at").and_then(|s| s.as_str()).map(String::from);
+        let suite = v
+            .get("suite")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+        let started_at = v
+            .get("started_at")
+            .and_then(|s| s.as_str())
+            .map(String::from);
+        let finished_at = v
+            .get("finished_at")
+            .and_then(|s| s.as_str())
+            .map(String::from);
         let summary = v.get("summary").cloned().unwrap_or(serde_json::json!({}));
         out.push(EvalRunSummary {
             run_id,
@@ -136,12 +150,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn write_eval(
-        home: &std::path::Path,
-        run_id: &str,
-        suite: &str,
-        started_at: &str,
-    ) {
+    pub(crate) fn write_eval(home: &std::path::Path, run_id: &str, suite: &str, started_at: &str) {
         let dir = home.join("evals");
         std::fs::create_dir_all(&dir).unwrap();
         let body = serde_json::json!({
@@ -167,13 +176,26 @@ pub(crate) mod tests {
         let state = build_state(&tmp);
         let home = state.agents_dir.join("alpha");
         super::super::list::tests::write_min_profile(&home, "alpha", "Alpha");
-        write_eval(&home, "eval-20260427T100000-aaaa", "v1", "2026-04-27T10:00:00Z");
-        write_eval(&home, "eval-20260428T072501-bbbb", "v1", "2026-04-28T07:25:01Z");
+        write_eval(
+            &home,
+            "eval-20260427T100000-aaaa",
+            "v1",
+            "2026-04-27T10:00:00Z",
+        );
+        write_eval(
+            &home,
+            "eval-20260428T072501-bbbb",
+            "v1",
+            "2026-04-28T07:25:01Z",
+        );
 
         let app = build_router(state);
         let resp = app
             .oneshot(
-                Request::builder().uri("/api/v1/agents/alpha/evals").body(Body::empty()).unwrap(),
+                Request::builder()
+                    .uri("/api/v1/agents/alpha/evals")
+                    .body(Body::empty())
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -198,7 +220,10 @@ pub(crate) mod tests {
         let app = build_router(state);
         let resp = app
             .oneshot(
-                Request::builder().uri("/api/v1/agents/alpha/evals").body(Body::empty()).unwrap(),
+                Request::builder()
+                    .uri("/api/v1/agents/alpha/evals")
+                    .body(Body::empty())
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -215,7 +240,12 @@ pub(crate) mod tests {
         let state = build_state(&tmp);
         let home = state.agents_dir.join("alpha");
         super::super::list::tests::write_min_profile(&home, "alpha", "Alpha");
-        write_eval(&home, "eval-20260428T072501-bbbb", "v1", "2026-04-28T07:25:01Z");
+        write_eval(
+            &home,
+            "eval-20260428T072501-bbbb",
+            "v1",
+            "2026-04-28T07:25:01Z",
+        );
 
         let app = build_router(state);
         let resp = app
