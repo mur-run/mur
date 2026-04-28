@@ -35,17 +35,25 @@
 
 ## What's deferred (and why)
 
-1. **P1.4 sidecar manager (full impl)** — needs Tauri toolchain installed locally to compile + exercise. Architecture is fully documented in spec § 4 + plan; the `commands::start_agent` stub explicitly returns `Err("not yet wired (P1.4)")` so frontend reflects the gap. Implementation is mechanical once a Tauri-equipped session resumes.
+After the autonomous follow-up commits (`0bc78ba` … `a769744`), the deferred list is much shorter than the original COMPLETE log:
 
-2. **P1.5 deeper theme integration** — appearance subscriber, runtime icon swap, and WCAG validator are documented in spec § 7. v1 ships 5 theme JSON files + i18n labels; runtime swap is a 30-LOC follow-up that needs the Tauri runtime up.
+1. **shadcn/ui component library integration** — UI tabs use plain Tailwind + inline styles; shadcn is referenced in design but not pulled into package.json. ~1 day polish.
+2. **Separate Logs window** — tray "Show Logs…" reuses settings window. Spec § 6.1 wants a dedicated logs window with live tail. ~50 LOC + Vite route.
+3. **`OFFICE-12-GUI-EXPORT` Python harness scenario** — `mur-agent-harness/` is a separate repo; `scripts/e2e/p1-export-gui.sh` covers the same orchestration in pure bash.
+4. **WCAG AA contrast validator** for theme JSONs as a CI check — currently the 5 built-ins were hand-checked.
+5. **Production codesign / notarize end-to-end exercise** — recipe is implemented (`codesign --options runtime --timestamp` etc.) but not run on this dev host (no Apple Developer cert).
+6. **P1.5 OS appearance subscriber** for the "Match System" toggle — schema is defined; subscriber Rust code is a 30-LOC follow-up.
 
-3. **P1.6 Tauri-side bootstrap module** — the metadata schema (`EmbeddedMetadata`, `BundleMode::{Template,Clone}`) is implemented in P1.7's payload phase. The Tauri-main first-launch logic (extract → mint identity → spawn sidecar) is documented in spec § 5; ~150 LOC follow-up.
+What's NO LONGER deferred (landed in autonomous follow-up):
 
-4. **Codesign + notarize end-to-end** (P1.7 phases 8-11 are stubs) — only meaningful with real Apple Developer ID + notary key. CI template (P1.8) exposes the env-var hooks; integrators plug in their secrets.
-
-5. **shadcn/ui component library integration** — UI tabs currently use plain Tailwind + inline styles; shadcn is referenced in design but not pulled into package.json. ~1 day polish pass.
-
-6. **OFFICE-12-GUI-EXPORT harness scenario** in `mur-agent-harness/` — the harness lives in a separate git repo. Design notes are in this plan + the e2e shell script; adding the Python scenario is a follow-up commit there.
+✓ **P1.4 sidecar manager** — `mur-agent-gui/src-tauri/src/sidecar.rs` (spawn + exponential backoff + `kill -pgid` + Windows Job Object + 2 unit tests)
+✓ **P1.6 Tauri-side bootstrap** — `bootstrap.rs` (template-mode mint + clone-mode rekey-stub + 2 unit tests)
+✓ **Per-agent CFBundleIdentifier + CFBundleName** patching during export
+✓ **Sidecar binary bundling** via `bundle.externalBin`
+✓ **Auto-spawn on launch** (click `.app` → agent runs)
+✓ **Tray menu** with Show Settings / Show Logs / Start / Stop / Quit
+✓ **SIGTERM/SIGINT proxy** to `mgr.stop()` for clean shutdown
+✓ **macOS codesign recipe** — real `codesign --options runtime --timestamp …` invocations on inner sidecar then outer .app, gated on `MUR_APPLE_DEVELOPER_ID`
 
 ## Resume protocol for the next session
 
