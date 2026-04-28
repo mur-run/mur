@@ -1,6 +1,20 @@
 //! HTTP routes for `~/.mur/agents/*` — read-only Phase 4.
 //!
 //! Mounted under `/api/v1/agents` by [`crate::server::build_router`].
+//!
+//! # Response envelope
+//!
+//! These handlers intentionally return `Json<T>` directly, not the
+//! `{data, meta: {source, version, pattern_count}}` envelope that
+//! [`crate::server::wrap`] adds to patterns / workflows responses.
+//! The `pattern_count` field is patterns-specific and would be meaningless
+//! for agent data; rather than emit a misleading `pattern_count: 0`, agent
+//! routes skip the envelope entirely.
+//!
+//! Future contributors: do **not** wrap these responses to "match" the
+//! patterns / workflows shape — the difference is intentional. If a fully
+//! consistent envelope is wanted across the API, generalize `wrap()` first
+//! (see issue #37 for the design discussion).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
