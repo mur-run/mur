@@ -988,6 +988,15 @@ enum AgentAction {
         #[arg(long, default_value_t = 20)]
         tail: usize,
     },
+    /// Run prereq checks for export targets (no build, just diagnostics)
+    Doctor {
+        /// What format the doctor should validate prereqs for: "gui" / "bin" / "pkg" / "all"
+        #[arg(long, default_value = "all")]
+        format: String,
+        /// Emit JSON instead of human text
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1532,6 +1541,7 @@ async fn async_main() -> Result<()> {
             }
             AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
             AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
+            AgentAction::Doctor { format, json } => cmd::doctor::run(&format, json)?,
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
