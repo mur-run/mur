@@ -78,6 +78,42 @@ pub async fn list_handler(
     Ok(Json(out))
 }
 
+pub async fn detail_handler(
+    State(state): State<Arc<AppState>>,
+    Path((name, run_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // run_id is used as a filename — reject anything that could escape the
+    // evals/ directory (path separators, '..', null bytes, etc.).
+    let safe = !run_id.is_empty()
+        && run_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if !safe || run_id.contains("..") {
+        return Err(AppError::BadRequest("invalid run_id".to_string()));
+    }
+
+    let home = super::agent_home(&state.agents_dir, &name);
+    let path = home.join("evals").join(format!("{run_id}.json"));
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(AppError::NotFound(format!("eval '{run_id}' not found")));
+        }
+        Err(e) => {
+            return Err(AppError::Internal(
+                anyhow::Error::from(e).context(format!("read {}", path.display())),
+            ));
+        }
+    };
+    let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+        AppError::Internal(
+            anyhow::Error::from(e).context(format!("parse eval json {}", path.display())),
+        )
+    })?;
+
+    Ok(Json(v))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::server::{AppState, ServerConfig, build_router};
@@ -171,5 +207,75 @@ pub(crate) mod tests {
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json, serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn detail_eval_returns_full_run_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = build_state(&tmp);
+        let home = state.agents_dir.join("alpha");
+        super::super::list::tests::write_min_profile(&home, "alpha", "Alpha");
+        write_eval(&home, "eval-20260428T072501-bbbb", "v1", "2026-04-28T07:25:01Z");
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/alpha/evals/eval-20260428T072501-bbbb")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["run_id"], "eval-20260428T072501-bbbb");
+        assert_eq!(json["suite"], "v1");
+        assert!(json.get("results").is_some());
+        assert!(json.get("summary").is_some());
+    }
+
+    #[tokio::test]
+    async fn detail_eval_returns_404_for_unknown_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = build_state(&tmp);
+        let home = state.agents_dir.join("alpha");
+        super::super::list::tests::write_min_profile(&home, "alpha", "Alpha");
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/alpha/evals/ghost-run")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn detail_eval_rejects_path_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = build_state(&tmp);
+        let home = state.agents_dir.join("alpha");
+        super::super::list::tests::write_min_profile(&home, "alpha", "Alpha");
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/alpha/evals/..%2F..%2Fetc%2Fpasswd")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
