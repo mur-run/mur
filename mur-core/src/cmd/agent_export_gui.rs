@@ -86,6 +86,11 @@ pub fn run(opts: ExportGuiOptions) -> Result<()> {
     phase_3_prepare_theme(&opts, &staging)?;
     phase_4_rewrite_tauri_conf(&opts, &staging, mode)?;
 
+    // RAII guard: restore tauri.conf.json on any exit path including
+    // panic. Explicit restore in the wrapper below remains for the
+    // common success path; the guard catches everything else.
+    let _guard = ConfRestoreGuard;
+
     // Wrap phases 5-13 so we always restore tauri.conf.json on the way
     // out, even on error.
     let result = (|| -> Result<()> {
@@ -101,10 +106,8 @@ pub fn run(opts: ExportGuiOptions) -> Result<()> {
         Ok(())
     })();
 
-    if let Err(e) = restore_tauri_conf() {
-        warn!("failed to restore tauri.conf.json backup: {e:#}");
-    }
     result?;
+    drop(_guard); // explicit drop on success — same effect as auto-drop
 
     println!(
         "Exported '{}' (gui, {} mode) to {} in {:.1}s",
@@ -385,6 +388,19 @@ fn restore_tauri_conf() -> Result<()> {
     let _ = std::fs::remove_file(gui_root.join("src-tauri/agent-payload.tar.gz"));
     let _ = std::fs::remove_file(gui_root.join("src-tauri/metadata.json"));
     Ok(())
+}
+
+/// RAII guard that restores `tauri.conf.json` on drop, so a panic /
+/// SIGINT mid-build doesn't leave the source tree dirty. Belt and
+/// braces with the explicit finally-style restore in `run()`.
+struct ConfRestoreGuard;
+
+impl Drop for ConfRestoreGuard {
+    fn drop(&mut self) {
+        if let Err(e) = restore_tauri_conf() {
+            warn!("ConfRestoreGuard drop: {e:#}");
+        }
+    }
 }
 
 // ─── phase 5 — build sidecar (mur-agent-runtime) ──────────────────

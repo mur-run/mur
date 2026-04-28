@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import StatusTab from "./tabs/Status";
 import PromptTab from "./tabs/Prompt";
 import SkillsTab from "./tabs/Skills";
 import McpTab from "./tabs/Mcp";
 import PermissionsTab from "./tabs/Permissions";
 import IdentityTab from "./tabs/Identity";
+import { setTheme as setThemeApi } from "./lib/api";
 
 type TabId =
   | "status"
@@ -25,6 +26,26 @@ const TABS: { id: TabId; label: string }[] = [
 
 export default function App() {
   const [tab, setTab] = useState<TabId>("status");
+
+  // OS appearance subscriber for the "Match System" mode (spec § 7.3).
+  // When the user has selected the synthetic "system" theme, follow
+  // prefers-color-scheme — applying "light" or "dark" via the Tauri
+  // command. The actual stored preference (system vs explicit theme)
+  // is persisted by tauri-plugin-store; this hook only acts when the
+  // localStorage key indicates system-following mode.
+  useEffect(() => {
+    const matcher = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const pref = localStorage.getItem("mur.theme.mode");
+      if (pref === "system") {
+        const target = matcher.matches ? "dark" : "light";
+        setThemeApi(target).catch(() => {});
+      }
+    };
+    apply();
+    matcher.addEventListener("change", apply);
+    return () => matcher.removeEventListener("change", apply);
+  }, []);
   return (
     <div className="flex h-full">
       <nav
