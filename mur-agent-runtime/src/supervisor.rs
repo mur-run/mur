@@ -2,6 +2,9 @@
 //! drives the stdio (and optionally Unix-socket) transports until SIGTERM.
 
 use crate::entitlements::detect_warnings;
+use crate::llm::{
+    LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
+};
 use crate::lock_file::{LockHandle, write_lock};
 use crate::multi_call::{DispatchError, extract_profile_name, verify_name_match};
 use crate::profile::Profile;
@@ -122,7 +125,63 @@ pub async fn entrypoint() -> anyhow::Result<()> {
 
     // 6. Build dispatcher (shared Arc so multiple transports can read it)
     let profile_arc = Arc::new(profile.clone());
-    let runner = Arc::new(TaskRunner::new_stub_echo()); // Task 21 swaps to real backend
+    // E4: select runner backend based on profile.model.provider.
+    // Ollama: real client. Other providers (anthropic/openai stubs not yet
+    // implemented) fall through to echo. Setting MUR_AGENT_FORCE_ECHO=1
+    // forces echo regardless of profile (useful for tests).
+    let force_echo = std::env::var_os("MUR_AGENT_FORCE_ECHO").is_some();
+    let runner = if force_echo {
+        Arc::new(TaskRunner::new_stub_echo())
+    } else {
+        match profile.inner.model.provider.as_str() {
+            "ollama" => {
+                let base = std::env::var("OLLAMA_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+                let model = profile.inner.model.name.clone();
+                let client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(base, model));
+                // E6: forward the loaded system prompt so it actually reaches the LLM.
+                Arc::new(
+                    TaskRunner::with_llm(client).with_system_prompt(profile.system_prompt.clone()),
+                )
+            }
+            "anthropic" => {
+                let model = profile.inner.model.name.clone();
+                match AnthropicClient::from_env(model) {
+                    Ok(c) => {
+                        let client: Arc<dyn LlmClient> = Arc::new(c);
+                        Arc::new(
+                            TaskRunner::with_llm(client)
+                                .with_system_prompt(profile.system_prompt.clone()),
+                        )
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "anthropic client unavailable; falling back to echo");
+                        Arc::new(TaskRunner::new_stub_echo())
+                    }
+                }
+            }
+            "openai" => {
+                let model = profile.inner.model.name.clone();
+                match OpenAiClient::from_env(model) {
+                    Ok(c) => {
+                        let client: Arc<dyn LlmClient> = Arc::new(c);
+                        Arc::new(
+                            TaskRunner::with_llm(client)
+                                .with_system_prompt(profile.system_prompt.clone()),
+                        )
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "openai client unavailable; falling back to echo");
+                        Arc::new(TaskRunner::new_stub_echo())
+                    }
+                }
+            }
+            other => {
+                tracing::warn!(provider = %other, "no LLM client implemented; falling back to echo");
+                Arc::new(TaskRunner::new_stub_echo())
+            }
+        }
+    };
     let dispatcher = Arc::new(build_dispatcher(&profile_arc, &runner));
 
     // 7. Transports

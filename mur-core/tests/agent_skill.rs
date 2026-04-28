@@ -117,3 +117,63 @@ fn skill_list_show_remove_roundtrip() {
     let dest = mur_home.path().join("agents/agent_x/skills/research.md");
     assert!(!dest.exists(), "orphaned skill file should be deleted");
 }
+
+/// E3 regression: `skill show` and `skill remove` accept the basename
+/// (`research.md`) and the stem (`research`) in addition to the full
+/// stored id (`skills/research.md`).
+#[test]
+fn skill_show_and_remove_accept_basename_and_stem() {
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+    let src = TempDir::new().unwrap();
+    let skill_src = src.path().join("research.md");
+    std::fs::write(&skill_src, "skill-body").unwrap();
+    let _ = run(
+        mur_home.path(),
+        &[
+            "agent",
+            "skill",
+            "add",
+            "agent_x",
+            skill_src.to_str().unwrap(),
+        ],
+    );
+
+    // show by basename
+    let out = run(
+        mur_home.path(),
+        &["agent", "skill", "show", "agent_x", "research.md"],
+    );
+    assert!(
+        out.status.success(),
+        "show by basename failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("skill-body"));
+
+    // show by stem (without .md)
+    let out = run(
+        mur_home.path(),
+        &["agent", "skill", "show", "agent_x", "research"],
+    );
+    assert!(
+        out.status.success(),
+        "show by stem failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("skill-body"));
+
+    // remove by stem
+    let out = run(
+        mur_home.path(),
+        &["agent", "skill", "remove", "agent_x", "research"],
+    );
+    assert!(
+        out.status.success(),
+        "remove by stem failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let p = read_profile(mur_home.path(), "agent_x");
+    assert!(p.skills.is_empty(), "skill should be removed");
+}

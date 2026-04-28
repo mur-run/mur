@@ -34,6 +34,8 @@ pub struct TaskRunner {
     registry: Arc<Mutex<HashMap<String, TaskState>>>,
     cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
     telemetry: Option<mpsc::Sender<Event>>,
+    /// E6: optional system prompt prepended to LLM requests.
+    system_prompt: Option<String>,
 }
 
 impl TaskRunner {
@@ -55,11 +57,18 @@ impl TaskRunner {
             registry: Arc::new(Mutex::new(HashMap::new())),
             cancel_signals: Arc::new(Mutex::new(HashMap::new())),
             telemetry: None,
+            system_prompt: None,
         }
     }
 
     pub fn with_telemetry(mut self, tx: mpsc::Sender<Event>) -> Self {
         self.telemetry = Some(tx);
+        self
+    }
+
+    /// E6: attach a system prompt to be sent on every LLM call.
+    pub fn with_system_prompt(mut self, prompt: Option<String>) -> Self {
+        self.system_prompt = prompt;
         self
     }
 
@@ -150,11 +159,19 @@ impl TaskRunner {
 
     async fn run_llm(&self, task_id: &str, client: &dyn LlmClient, input: &Message) -> Message {
         let prompt = text_of(input);
+        let mut messages: Vec<LlmMessage> = Vec::new();
+        if let Some(sp) = &self.system_prompt {
+            messages.push(LlmMessage {
+                role: "system".into(),
+                content: sp.clone(),
+            });
+        }
+        messages.push(LlmMessage {
+            role: input.role.clone(),
+            content: prompt,
+        });
         let req = LlmRequest {
-            messages: vec![LlmMessage {
-                role: input.role.clone(),
-                content: prompt,
-            }],
+            messages,
             temperature: None,
             max_tokens: None,
         };
