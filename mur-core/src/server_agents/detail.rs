@@ -46,11 +46,10 @@ pub async fn handler(
                 .context(format!("parse {}", profile_path.display())),
         ))?;
 
-    let lock_path = home.join("running.lock");
-    let pid = std::fs::read_to_string(&lock_path)
+    let pid = std::fs::read_to_string(home.join("running.lock"))
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok());
-    let running = lock_path.exists();
+    let running = super::is_running(&home);
 
     Ok(Json(AgentDetail {
         profile,
