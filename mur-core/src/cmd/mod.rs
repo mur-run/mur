@@ -1,4 +1,5 @@
 pub(crate) mod agent;
+pub(crate) mod agent_export_gui;
 pub(crate) mod agent_rekey;
 pub(crate) mod community_cmd;
 pub(crate) mod doctor;
