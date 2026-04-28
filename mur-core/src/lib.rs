@@ -30,6 +30,8 @@ pub mod yaml_edit;
 
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "server")]
+pub mod server_agents;
 
 pub use mur_common::config::Config;
 pub use mur_common::event::MurEvent;

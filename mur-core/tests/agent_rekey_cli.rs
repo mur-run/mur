@@ -1,4 +1,9 @@
 //! Integration tests for `mur agent rekey` (M1.4).
+//
+// Spawns `mur agent create` which copies a runtime binary into a temp dir;
+// on Windows the source path lacks `.exe` and the copy fails. Gate to Unix
+// matching the pattern used by the rest of `mur-core/tests/agent_*.rs`.
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::process::Command;
