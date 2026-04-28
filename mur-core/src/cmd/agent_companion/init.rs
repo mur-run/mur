@@ -43,7 +43,7 @@ pub async fn run(name: &str, answers: Option<PathBuf>, re_init: bool) -> Result<
         None => run_wizard()?,
     };
 
-    let mur_home = resolve_mur_home()?;
+    let mur_home = crate::paths::mur_root(None);
     let agent_dir = mur_home.join("agents").join(name);
     if !agent_dir.exists() {
         bail!(
@@ -201,15 +201,6 @@ fn print_narrative(locale: &str) {
             "When you want me to occasionally check in, run `mur agent companion proactive enable`."
         );
     }
-}
-
-fn resolve_mur_home() -> Result<PathBuf> {
-    if let Some(v) = std::env::var_os("MUR_HOME") {
-        return Ok(PathBuf::from(v));
-    }
-    Ok(dirs::home_dir()
-        .ok_or_else(|| anyhow!("no home dir"))?
-        .join(".mur"))
 }
 
 fn atomic_write_yaml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
