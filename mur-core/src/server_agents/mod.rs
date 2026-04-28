@@ -22,6 +22,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/", axum::routing::get(list::handler))
         .route("/{name}", axum::routing::get(detail::handler))
         .route("/{name}/telemetry", axum::routing::get(telemetry::tail_handler))
+        .route("/{name}/stream", axum::routing::get(telemetry::stream_handler))
         // Explicit 404 fallback: without this, unknown /api/v1/agents/* paths
         // bubble up to the outer router's SPA fallback and return 200 HTML.
         .fallback(|| async { StatusCode::NOT_FOUND })
