@@ -36,8 +36,8 @@ impl OpenAiClient {
     pub fn from_env(model: String) -> Result<Self, LlmError> {
         let api_key = std::env::var("OPENAI_API_KEY")
             .map_err(|_| LlmError::InvalidResponse("OPENAI_API_KEY not set".into()))?;
-        let base_url = std::env::var("OPENAI_BASE_URL")
-            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+        let base_url =
+            std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
         Ok(Self::new(base_url, api_key, model))
     }
 }
@@ -54,7 +54,11 @@ impl LlmClient for OpenAiClient {
             .iter()
             .map(|m| {
                 // OpenAI uses {system,user,assistant}. Mur internally may use "agent".
-                let role = if m.role == "agent" { "assistant" } else { m.role.as_str() };
+                let role = if m.role == "agent" {
+                    "assistant"
+                } else {
+                    m.role.as_str()
+                };
                 json!({"role": role, "content": m.content})
             })
             .collect();
@@ -91,9 +95,7 @@ impl LlmClient for OpenAiClient {
 
         let text = v["choices"][0]["message"]["content"]
             .as_str()
-            .ok_or_else(|| {
-                LlmError::InvalidResponse("missing choices[0].message.content".into())
-            })?
+            .ok_or_else(|| LlmError::InvalidResponse("missing choices[0].message.content".into()))?
             .to_string();
         let input_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
         let output_tokens = v["usage"]["completion_tokens"].as_u64().unwrap_or(0);

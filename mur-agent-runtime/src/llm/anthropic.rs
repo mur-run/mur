@@ -39,8 +39,8 @@ impl AnthropicClient {
     pub fn from_env(model: String) -> Result<Self, LlmError> {
         let api_key = std::env::var("ANTHROPIC_API_KEY")
             .map_err(|_| LlmError::InvalidResponse("ANTHROPIC_API_KEY not set".into()))?;
-        let base_url = std::env::var("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+        let base_url =
+            std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
         Ok(Self::new(base_url, api_key, model))
     }
 }
@@ -60,7 +60,11 @@ impl LlmClient for AnthropicClient {
                 system_chunks.push(m.content.clone());
             } else {
                 // Anthropic accepts roles "user" and "assistant" only.
-                let role = if m.role == "agent" { "assistant" } else { m.role.as_str() };
+                let role = if m.role == "agent" {
+                    "assistant"
+                } else {
+                    m.role.as_str()
+                };
                 convo.push(json!({"role": role, "content": m.content}));
             }
         }

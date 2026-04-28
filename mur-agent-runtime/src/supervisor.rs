@@ -2,6 +2,9 @@
 //! drives the stdio (and optionally Unix-socket) transports until SIGTERM.
 
 use crate::entitlements::detect_warnings;
+use crate::llm::{
+    LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
+};
 use crate::lock_file::{LockHandle, write_lock};
 use crate::multi_call::{DispatchError, extract_profile_name, verify_name_match};
 use crate::profile::Profile;
@@ -13,9 +16,6 @@ use crate::protocol::methods::{
 };
 #[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
-use crate::llm::{
-    LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
-};
 use crate::task_runner::TaskRunner;
 use crate::telemetry_writer::{Event, TelemetryWriter};
 use crate::transport::stdio::serve_stdio;

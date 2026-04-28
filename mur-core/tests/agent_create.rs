@@ -85,11 +85,13 @@ fn agent_create_parses_provider_slash_model_shorthand() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let yaml = std::fs::read_to_string(
-        mur_home.path().join("agents/anthropic_a/profile.yaml"),
-    )
-    .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let yaml =
+        std::fs::read_to_string(mur_home.path().join("agents/anthropic_a/profile.yaml")).unwrap();
     let p: AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(p.model.provider, "anthropic");
     assert_eq!(p.model.name, "claude-opus-4-7");
@@ -109,7 +111,11 @@ fn agent_create_parses_provider_slash_model_shorthand() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let yaml = std::fs::read_to_string(mur_home.path().join("agents/hf_a/profile.yaml")).unwrap();
     let p: AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(p.model.provider, "ollama");
@@ -140,11 +146,13 @@ fn agent_create_explicit_provider_wins_over_model_prefix() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let yaml = std::fs::read_to_string(
-        mur_home.path().join("agents/explicit_a/profile.yaml"),
-    )
-    .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let yaml =
+        std::fs::read_to_string(mur_home.path().join("agents/explicit_a/profile.yaml")).unwrap();
     let p: AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
     assert_eq!(p.model.provider, "openai");
     assert_eq!(p.model.name, "anthropic/foo");
