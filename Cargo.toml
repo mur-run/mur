@@ -30,3 +30,13 @@ thiserror = "2"
 
 # Template processing dependencies
 handlebars = "4.5"
+
+# Companion subsystem dependencies (Phase 1.1)
+rand = "0.8"
+once_cell = "1"
+seahash = "4"
+whatlang = "0.16"
+ulid = { version = "1", features = ["serde"] }
+fs2 = "0.4"
+chrono-tz = "0.8"
+insta = { version = "1", features = ["yaml"] }
