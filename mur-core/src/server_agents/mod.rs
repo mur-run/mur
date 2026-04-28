@@ -18,9 +18,11 @@ pub mod evals;
 /// Build the nested `/api/v1/agents` router. Returns an empty router for
 /// now — handlers are wired in by later tasks.
 pub fn router() -> Router<Arc<AppState>> {
-    // Explicit 404 fallback: without this, unknown /api/v1/agents/* paths
-    // bubble up to the outer router's SPA fallback and return 200 HTML.
-    Router::new().fallback(|| async { StatusCode::NOT_FOUND })
+    Router::new()
+        .route("/", axum::routing::get(list::handler))
+        // Explicit 404 fallback: without this, unknown /api/v1/agents/* paths
+        // bubble up to the outer router's SPA fallback and return 200 HTML.
+        .fallback(|| async { StatusCode::NOT_FOUND })
 }
 
 // ─── Shared helpers ────────────────────────────────────────────────
@@ -33,7 +35,6 @@ pub(crate) fn agent_home(agents_dir: &Path, name: &str) -> PathBuf {
 
 /// True when `<agent_home>/running.lock` exists. Per the runtime spec
 /// the lock is created on supervisor start and removed on clean exit.
-#[allow(dead_code)]
 pub(crate) fn is_running(home: &Path) -> bool {
     home.join("running.lock").exists()
 }
