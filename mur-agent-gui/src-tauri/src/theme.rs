@@ -84,6 +84,7 @@ fn load_def(dir: &Path) -> Result<ThemeDef> {
 /// Required-pair contrast ratios per spec § 7.7. Returns the list of
 /// failing pairs (empty Vec → all pass). Used by the build-time
 /// validator (see `validate_all()` below) and by `cargo test`.
+#[allow(dead_code)]
 pub fn validate_contrast(theme: &ThemeDef) -> Vec<String> {
     let mut failures = Vec::new();
     let pairs: &[(&str, &str, f32, &str)] = &[
@@ -119,6 +120,7 @@ pub fn validate_contrast(theme: &ThemeDef) -> Vec<String> {
 /// Validate every theme on disk; return a single Result. Used as the
 /// build-time check in `mur agent export --format gui` (phase 3) +
 /// in CI via `cargo test --lib theme::tests::all_builtin_themes`.
+#[allow(dead_code)]
 pub fn validate_all() -> Result<()> {
     let mut all_failures = Vec::new();
     for dir in iter_theme_dirs()? {
@@ -134,6 +136,7 @@ pub fn validate_all() -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn relative_luminance(hex: &str) -> Option<f32> {
     let (r, g, b) = parse_hex(hex)?;
     let f = |c: u8| {
@@ -147,11 +150,13 @@ fn relative_luminance(hex: &str) -> Option<f32> {
     Some(0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b))
 }
 
+#[allow(dead_code)]
 fn contrast_ratio(l1: f32, l2: f32) -> f32 {
     let (a, b) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
     (a + 0.05) / (b + 0.05)
 }
 
+#[allow(dead_code)]
 fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
     let s = s.trim_start_matches('#');
     if s.len() != 6 {

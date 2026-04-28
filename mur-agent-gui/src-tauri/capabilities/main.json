@@ -3,6 +3,7 @@
   "identifier": "main-capability",
   "description": "Capabilities for the settings + logs windows. Sidecar (mur-agent-runtime) is restricted via the shell plugin's `scope` in tauri.conf.json `plugins.shell.sidecars`.",
   "windows": ["settings", "logs"],
+  "_": "Both windows share the same capability set; the React frontend chooses which view to render based on getCurrent().label.",
   "permissions": [
     "core:default",
     "shell:default",

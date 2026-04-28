@@ -121,8 +121,7 @@ fn main() -> Result<()> {
                             }
                         }
                         "show-logs" => {
-                            if let Some(window) = app.get_webview_window("settings") {
-                                // P1.5 follow-up: open a dedicated logs window.
+                            if let Some(window) = app.get_webview_window("logs") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }

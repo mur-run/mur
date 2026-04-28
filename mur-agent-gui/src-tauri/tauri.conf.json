@@ -17,6 +17,15 @@
         "resizable": true,
         "fullscreen": false,
         "visible": false
+      },
+      {
+        "label": "logs",
+        "title": "Agent Logs",
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
       }
     ],
     "trayIcon": {
