@@ -148,6 +148,7 @@ pub fn cmd_create(
         },
         file_transfer: FileTransferConfig::default(),
         deployment: DeploymentConfig::default(),
+        companion: CompanionConfig::default(),
         created_at: now.clone(),
         updated_at: now,
     };
