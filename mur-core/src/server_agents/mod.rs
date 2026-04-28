@@ -67,8 +67,12 @@ pub(crate) async fn loopback_only(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    // Extract ConnectInfo from the request extensions directly so we don't
-    // depend on FromRequestParts trait resolution across multiple axum versions.
+    // Extract ConnectInfo from request extensions directly rather than using the
+    // FromRequestParts extractor parameter form. The workspace carries both axum
+    // 0.7 (via qdrant-client → tonic 0.12) and axum 0.8 (direct dep); the
+    // extractor signature fails to compile because trait bounds resolve against
+    // the wrong version. See CONTRIBUTING.md § "axum middleware in this
+    // workspace" and issue #39 for the full explanation and the intended fix.
     let is_loopback = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
