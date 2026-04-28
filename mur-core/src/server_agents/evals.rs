@@ -21,6 +21,7 @@ pub async fn list_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<Vec<EvalRunSummary>>, AppError> {
+    super::validate_agent_name(&name)?;
     let home = super::agent_home(&state.agents_dir, &name);
     if !home.exists() {
         return Err(AppError::NotFound(format!("agent '{name}' not found")));
@@ -96,6 +97,7 @@ pub async fn detail_handler(
     State(state): State<Arc<AppState>>,
     Path((name, run_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::validate_agent_name(&name)?;
     // run_id is used as a filename — reject anything that could escape the
     // evals/ directory (path separators, '..', null bytes, etc.).
     let safe = !run_id.is_empty()

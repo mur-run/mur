@@ -24,6 +24,7 @@ pub async fn handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<AgentDetail>, AppError> {
+    super::validate_agent_name(&name)?;
     let home = super::agent_home(&state.agents_dir, &name);
     let profile_path = home.join("profile.yaml");
 
@@ -121,5 +122,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn detail_rejects_path_traversal_in_agent_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = build_router(build_state(&tmp));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/..")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

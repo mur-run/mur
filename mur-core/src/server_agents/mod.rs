@@ -8,15 +8,14 @@ use std::sync::Arc;
 use axum::Router;
 use axum::http::StatusCode;
 
-use crate::server::AppState;
+use crate::server::{AppError, AppState};
 
 pub mod detail;
 pub mod evals;
 pub mod list;
 pub mod telemetry;
 
-/// Build the nested `/api/v1/agents` router. Returns an empty router for
-/// now — handlers are wired in by later tasks.
+/// Build the nested `/api/v1/agents` router (Phase 4 read-only routes).
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", axum::routing::get(list::handler))
@@ -40,6 +39,20 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 // ─── Shared helpers ────────────────────────────────────────────────
+
+/// Validate an agent name from a URL path parameter. Agent names follow a
+/// strict allowlist to prevent directory traversal via `agents_dir.join(name)`.
+pub(crate) fn validate_agent_name(name: &str) -> Result<(), AppError> {
+    let safe = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        && !name.contains("..");
+    if !safe {
+        return Err(AppError::BadRequest(format!("invalid agent name '{name}'")));
+    }
+    Ok(())
+}
 
 /// Absolute path to `~/.mur/agents/<name>/`. Does not check existence.
 pub(crate) fn agent_home(agents_dir: &Path, name: &str) -> PathBuf {

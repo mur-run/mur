@@ -14,6 +14,16 @@ use tokio::time::{Duration, sleep};
 
 use crate::server::{AppError, AppState};
 
+fn is_valid_date(date: &str) -> bool {
+    let bytes = date.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[..4].iter().all(|b| b.is_ascii_digit())
+        && bytes[5..7].iter().all(|b| b.is_ascii_digit())
+        && bytes[8..10].iter().all(|b| b.is_ascii_digit())
+}
+
 #[derive(Deserialize)]
 pub struct TelemetryQuery {
     /// `YYYY-MM-DD`. Defaults to today (UTC).
@@ -30,6 +40,7 @@ pub async fn tail_handler(
     Path(name): Path<String>,
     Query(q): Query<TelemetryQuery>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    super::validate_agent_name(&name)?;
     let home = super::agent_home(&state.agents_dir, &name);
     if !home.exists() {
         return Err(AppError::NotFound(format!("agent '{name}' not found")));
@@ -37,6 +48,9 @@ pub async fn tail_handler(
     let date = q
         .date
         .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+    if !is_valid_date(&date) {
+        return Err(AppError::BadRequest(format!("invalid date '{date}'")));
+    }
     let path = home.join("telemetry").join(format!("{date}.jsonl"));
 
     let body = match std::fs::read_to_string(&path) {
@@ -85,6 +99,13 @@ pub async fn stream_handler(
     Path(name): Path<String>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    if super::validate_agent_name(&name).is_err() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            format!("invalid agent name '{name}'"),
+        )
+            .into_response();
+    }
     let home = super::agent_home(&state.agents_dir, &name);
     if !home.exists() {
         return (StatusCode::NOT_FOUND, format!("agent '{name}' not found")).into_response();
@@ -295,6 +316,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn telemetry_rejects_invalid_date_format() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = build_state(&tmp);
+        let home = state.agents_dir.join("alpha");
+        super::super::list::tests::write_min_profile(&home, "alpha", "Alpha");
+
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/alpha/telemetry?date=../../etc/shadow")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
