@@ -1,5 +1,7 @@
 //! `GET /api/v1/agents/{name}/telemetry` and `WS /api/v1/agents/{name}/stream`.
 
+use std::collections::VecDeque;
+use std::io::BufRead;
 use std::io::SeekFrom;
 use std::sync::Arc;
 
@@ -9,7 +11,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::time::{Duration, sleep};
 
 use crate::server::{AppError, AppState};
@@ -53,24 +55,33 @@ pub async fn tail_handler(
     }
     let path = home.join("telemetry").join(format!("{date}.jsonl"));
 
-    let body = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Json(Vec::new()));
+        }
         Err(e) => {
             return Err(AppError::Internal(
-                anyhow::Error::from(e).context(format!("read {}", path.display())),
+                anyhow::Error::from(e).context(format!("open {}", path.display())),
             ));
         }
     };
 
-    let mut out: Vec<serde_json::Value> = Vec::new();
-    for line in body.lines() {
+    let reader = std::io::BufReader::new(file);
+    let mut buffer: VecDeque<serde_json::Value> = VecDeque::new();
+    let cap = q.limit;
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue, // I/O hiccup mid-file: skip the bad line, keep going
+        };
         if line.trim().is_empty() {
             continue;
         }
-        let v: serde_json::Value = match serde_json::from_str(line) {
+        let v: serde_json::Value = match serde_json::from_str(&line) {
             Ok(v) => v,
-            Err(_) => continue, // skip malformed lines
+            Err(_) => continue,
         };
         if let Some(ref since) = q.since
             && let Some(ts) = v.get("ts").and_then(|t| t.as_str())
@@ -78,21 +89,22 @@ pub async fn tail_handler(
         {
             continue;
         }
-        out.push(v);
-    }
-    if let Some(n) = q.limit
-        && out.len() > n
-    {
-        let drop = out.len() - n;
-        out.drain(0..drop);
+        buffer.push_back(v);
+        if let Some(n) = cap
+            && buffer.len() > n
+        {
+            buffer.pop_front();
+        }
     }
 
-    Ok(Json(out))
+    Ok(Json(buffer.into_iter().collect()))
 }
 
 // ─── WebSocket stream handler ───────────────────────────────────────
 
 const POLL_INTERVAL_MS: u64 = 250;
+const MAX_TICK_BYTES: usize = 1024 * 1024; // 1 MiB per tick
+const MAX_LEFTOVER_BYTES: usize = 2 * 1024 * 1024; // 2 MiB single-line cap
 
 pub async fn stream_handler(
     State(state): State<Arc<AppState>>,
@@ -122,7 +134,7 @@ async fn stream_loop(mut socket: WebSocket, home: std::path::PathBuf) {
     // the file may miss lines from the new file.
     let mut current_date = String::new();
     let mut pos: u64 = 0;
-    let mut leftover = String::new();
+    let mut leftover: Vec<u8> = Vec::new();
 
     loop {
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -145,27 +157,37 @@ async fn stream_loop(mut socket: WebSocket, home: std::path::PathBuf) {
                 pos = 0;
                 leftover.clear();
             }
-            if len > pos && f.seek(SeekFrom::Start(pos)).await.is_ok() {
-                let mut buf = String::new();
-                if BufReader::new(&mut f)
-                    .read_to_string(&mut buf)
-                    .await
-                    .is_ok()
-                {
-                    pos = len;
-                    leftover.push_str(&buf);
-                    while let Some(idx) = leftover.find('\n') {
-                        let line: String = leftover.drain(..=idx).collect();
-                        let line = line.trim_end_matches(['\r', '\n']);
-                        if line.is_empty() {
-                            continue;
+            if len > pos {
+                let want = ((len - pos) as usize).min(MAX_TICK_BYTES);
+                if f.seek(SeekFrom::Start(pos)).await.is_ok() {
+                    let mut buf = vec![0u8; want];
+                    if f.read_exact(&mut buf).await.is_ok() {
+                        pos += want as u64;
+                        leftover.extend_from_slice(&buf);
+                        while let Some(idx) = leftover.iter().position(|&b| b == b'\n') {
+                            let line_bytes: Vec<u8> = leftover.drain(..=idx).collect();
+                            // Trim CR/LF from the trailing edge
+                            let trimmed = line_bytes.strip_suffix(b"\n").unwrap_or(&line_bytes);
+                            let trimmed = trimmed.strip_suffix(b"\r").unwrap_or(trimmed);
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            // Skip non-UTF-8 lines silently — telemetry should be ASCII/UTF-8.
+                            let s = match std::str::from_utf8(trimmed) {
+                                Ok(s) => s,
+                                Err(_) => continue,
+                            };
+                            if socket
+                                .send(Message::Text(s.to_string().into()))
+                                .await
+                                .is_err()
+                            {
+                                return; // client disconnected
+                            }
                         }
-                        if socket
-                            .send(Message::Text(line.to_string().into()))
-                            .await
-                            .is_err()
-                        {
-                            return; // client disconnected
+                        // Cap unconsumed leftover — single line larger than 2 MiB is corrupt.
+                        if leftover.len() > MAX_LEFTOVER_BYTES {
+                            leftover.clear();
                         }
                     }
                 }
@@ -355,7 +377,12 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
         });
 
         let url = format!("ws://127.0.0.1:{port}/api/v1/agents/alpha/stream");
@@ -389,5 +416,62 @@ mod tests {
             }
             other => panic!("expected text frame, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn ws_stream_handles_multi_line_chunk() {
+        use tokio_tungstenite::tungstenite;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = build_state(&tmp);
+        let home = state.agents_dir.join("alpha");
+        super::super::list::tests::write_min_profile(&home, "alpha", "Alpha");
+        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        std::fs::create_dir_all(home.join("telemetry")).unwrap();
+        let log_path = home.join("telemetry").join(format!("{date}.jsonl"));
+        std::fs::write(&log_path, "").unwrap();
+
+        let app = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+
+        let url = format!("ws://127.0.0.1:{port}/api/v1/agents/alpha/stream");
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Append 3 lines in a single write
+        std::fs::write(
+            &log_path,
+            format!(
+                "{{\"ts\":\"{date}T00:00:00Z\",\"kind\":\"a\"}}\n\
+                 {{\"ts\":\"{date}T00:00:01Z\",\"kind\":\"b\"}}\n\
+                 {{\"ts\":\"{date}T00:00:02Z\",\"kind\":\"c\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        // Collect 3 frames within a generous timeout
+        use futures_util::StreamExt;
+        let mut kinds: Vec<String> = Vec::new();
+        for _ in 0..3 {
+            let msg = tokio::time::timeout(std::time::Duration::from_secs(3), ws.next())
+                .await
+                .expect("frame within 3s")
+                .expect("stream not closed")
+                .expect("frame ok");
+            if let tungstenite::Message::Text(t) = msg {
+                let v: serde_json::Value = serde_json::from_str(&t).unwrap();
+                kinds.push(v["kind"].as_str().unwrap().to_string());
+            }
+        }
+        assert_eq!(kinds, vec!["a", "b", "c"]);
     }
 }
