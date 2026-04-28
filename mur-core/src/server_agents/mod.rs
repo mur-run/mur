@@ -18,6 +18,8 @@ pub mod evals;
 /// Build the nested `/api/v1/agents` router. Returns an empty router for
 /// now — handlers are wired in by later tasks.
 pub fn router() -> Router<Arc<AppState>> {
+    // Explicit 404 fallback: without this, unknown /api/v1/agents/* paths
+    // bubble up to the outer router's SPA fallback and return 200 HTML.
     Router::new().fallback(|| async { StatusCode::NOT_FOUND })
 }
 
