@@ -40,9 +40,9 @@ After the autonomous follow-up commits (`0bc78ba` … `a769744`), the deferred l
 1. **shadcn/ui component library integration** — UI tabs use plain Tailwind + inline styles; shadcn is referenced in design but not pulled into package.json. ~1 day polish.
 2. **Separate Logs window** — tray "Show Logs…" reuses settings window. Spec § 6.1 wants a dedicated logs window with live tail. ~50 LOC + Vite route.
 3. **`OFFICE-12-GUI-EXPORT` Python harness scenario** — `mur-agent-harness/` is a separate repo; `scripts/e2e/p1-export-gui.sh` covers the same orchestration in pure bash.
-4. **WCAG AA contrast validator** for theme JSONs as a CI check — currently the 5 built-ins were hand-checked.
-5. **Production codesign / notarize end-to-end exercise** — recipe is implemented (`codesign --options runtime --timestamp` etc.) but not run on this dev host (no Apple Developer cert).
-6. **P1.5 OS appearance subscriber** for the "Match System" toggle — schema is defined; subscriber Rust code is a 30-LOC follow-up.
+4. **Production codesign / notarize end-to-end exercise** — recipe is implemented (`codesign --options runtime --timestamp` etc.) but not run on this dev host (no Apple Developer cert).
+5. **P1.5 OS appearance subscriber** for the "Match System" toggle — schema is defined; CSS-variable swap on `prefers-color-scheme` change can be done in the React frontend (`window.matchMedia`) — ~10 lines.
+6. **`Drop`-based tauri.conf.json restore** — currently restored via finally-style wrapper; if `mur agent export --format gui` is killed mid-build the user's working tree shows the patched conf. A `Drop` impl + atomic-rename would tighten this.
 
 What's NO LONGER deferred (landed in autonomous follow-up):
 
@@ -54,6 +54,7 @@ What's NO LONGER deferred (landed in autonomous follow-up):
 ✓ **Tray menu** with Show Settings / Show Logs / Start / Stop / Quit
 ✓ **SIGTERM/SIGINT proxy** to `mgr.stop()` for clean shutdown
 ✓ **macOS codesign recipe** — real `codesign --options runtime --timestamp …` invocations on inner sidecar then outer .app, gated on `MUR_APPLE_DEVELOPER_ID`
+✓ **WCAG AA contrast validator** — implemented as `mur-agent-gui::theme::validate_contrast`/`validate_all`, mirrored as `mur-core::cmd::agent_export_gui::wcag_contrast_failures` for the build-time gate. CI red on any fail. All 5 built-in themes audited and patched to pass.
 
 ## Resume protocol for the next session
 
