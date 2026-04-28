@@ -988,6 +988,8 @@ enum AgentAction {
         #[arg(long, default_value_t = 20)]
         tail: usize,
     },
+    /// Manage companion (warm voice + optional proactive messaging).
+    Companion(cmd::agent_companion::CompanionArgs),
 }
 
 #[derive(Subcommand)]
@@ -1532,6 +1534,7 @@ async fn async_main() -> Result<()> {
             }
             AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
             AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
+            AgentAction::Companion(args) => cmd::agent_companion::run(args).await?,
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
