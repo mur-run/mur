@@ -85,15 +85,26 @@ pub fn run(opts: ExportGuiOptions) -> Result<()> {
     let mode = phase_2_prepare_payload(&opts, &staging)?;
     phase_3_prepare_theme(&opts, &staging)?;
     phase_4_rewrite_tauri_conf(&opts, &staging, mode)?;
-    phase_5_build_sidecar(&opts, &staging)?;
-    phase_6_build_frontend(&opts, &staging)?;
-    phase_7_tauri_build(&opts, &staging)?;
-    phase_8_codesign(&opts, &staging)?;
-    phase_9_notarize(&opts, &staging)?;
-    phase_10_staple(&opts, &staging)?;
-    phase_11_assess(&opts, &staging)?;
-    let bundle = phase_12_package(&opts, &staging)?;
-    phase_13_move_to_out(&opts, &bundle)?;
+
+    // Wrap phases 5-13 so we always restore tauri.conf.json on the way
+    // out, even on error.
+    let result = (|| -> Result<()> {
+        phase_5_build_sidecar(&opts, &staging)?;
+        phase_6_build_frontend(&opts, &staging)?;
+        phase_7_tauri_build(&opts, &staging)?;
+        phase_8_codesign(&opts, &staging)?;
+        phase_9_notarize(&opts, &staging)?;
+        phase_10_staple(&opts, &staging)?;
+        phase_11_assess(&opts, &staging)?;
+        let bundle = phase_12_package(&opts, &staging)?;
+        phase_13_move_to_out(&opts, &bundle)?;
+        Ok(())
+    })();
+
+    if let Err(e) = restore_tauri_conf() {
+        warn!("failed to restore tauri.conf.json backup: {e:#}");
+    }
+    result?;
 
     println!(
         "Exported '{}' (gui, {} mode) to {} in {:.1}s",
@@ -217,8 +228,14 @@ fn phase_3_prepare_theme(opts: &ExportGuiOptions, staging: &Path) -> Result<()> 
     Ok(())
 }
 
-// ─── phase 4 — rewrite tauri.conf.json ────────────────────────────
+// ─── phase 4 — rewrite tauri.conf.json + stage payload ───────────
 
+/// Patches tauri.conf.json IN PLACE under src-tauri/ so `cargo tauri
+/// build` picks up the per-agent identifiers + payload resources.
+/// The original is backed up to `<src-tauri>/tauri.conf.json.bak` and
+/// restored by phase 12 (or the next export's prepare_payload, on
+/// crash). Also drops `agent-payload.tar.gz` + `metadata.json` into
+/// `src-tauri/` so bundle.resources can include them.
 fn phase_4_rewrite_tauri_conf(
     opts: &ExportGuiOptions,
     staging: &Path,
@@ -226,24 +243,72 @@ fn phase_4_rewrite_tauri_conf(
 ) -> Result<()> {
     let span = Instant::now();
     let gui_root = workspace_gui_root()?;
-    let template = gui_root.join("src-tauri/tauri.conf.json");
-    let body = std::fs::read_to_string(&template)
-        .with_context(|| format!("read {}", template.display()))?;
+    let src_tauri = gui_root.join("src-tauri");
+    let conf_path = src_tauri.join("tauri.conf.json");
+    let backup_path = src_tauri.join("tauri.conf.json.bak");
+
+    // Restore any leftover backup from a prior crashed run before
+    // overwriting (so we don't lose the pristine template).
+    if backup_path.exists() && !conf_path.exists() {
+        std::fs::rename(&backup_path, &conf_path).ok();
+    }
+    std::fs::copy(&conf_path, &backup_path)
+        .with_context(|| format!("backup {}", conf_path.display()))?;
+
+    let body = std::fs::read_to_string(&conf_path)
+        .with_context(|| format!("read {}", conf_path.display()))?;
     let mut conf: serde_json::Value =
-        serde_json::from_str(&body).with_context(|| format!("parse {}", template.display()))?;
+        serde_json::from_str(&body).with_context(|| format!("parse {}", conf_path.display()))?;
 
     let safe_name = sanitize_for_bundle_id(&opts.agent_name);
     conf["productName"] = serde_json::json!(opts.agent_name.clone());
     conf["identifier"] = serde_json::json!(format!("run.mur.agent.{safe_name}"));
     conf["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
 
-    let out_path = staging.join("tauri.conf.json");
-    std::fs::write(&out_path, serde_json::to_string_pretty(&conf)?)?;
+    // Ensure the bundle includes our staged payload + metadata.
+    if let Some(bundle) = conf.get_mut("bundle")
+        && let Some(resources) = bundle.get_mut("resources")
+        && let Some(arr) = resources.as_array_mut()
+    {
+        let want = ["agent-payload.tar.gz", "metadata.json"];
+        for w in want {
+            if !arr.iter().any(|v| v.as_str() == Some(w)) {
+                arr.push(serde_json::json!(w));
+            }
+        }
+    }
+
+    std::fs::write(&conf_path, serde_json::to_string_pretty(&conf)?)?;
+
+    // Copy staged payload + metadata next to tauri.conf.json so the
+    // bundle resources spec finds them.
+    std::fs::copy(
+        staging.join("agent-payload.tar.gz"),
+        src_tauri.join("agent-payload.tar.gz"),
+    )?;
+    std::fs::copy(staging.join("metadata.json"), src_tauri.join("metadata.json"))?;
+
     info!(
-        "phase 4 (rewrite_tauri_conf → {}) ok in {:?}",
-        out_path.display(),
+        "phase 4 (rewrite_tauri_conf → {}, productName={}, identifier=run.mur.agent.{safe_name}) ok in {:?}",
+        conf_path.display(),
+        opts.agent_name,
         span.elapsed()
     );
+    Ok(())
+}
+
+/// Restore the pristine tauri.conf.json after the build (called from
+/// phase_13 success path AND from any failure; idempotent).
+fn restore_tauri_conf() -> Result<()> {
+    let gui_root = workspace_gui_root()?;
+    let conf_path = gui_root.join("src-tauri/tauri.conf.json");
+    let backup_path = gui_root.join("src-tauri/tauri.conf.json.bak");
+    if backup_path.exists() {
+        std::fs::rename(&backup_path, &conf_path)?;
+    }
+    // Clean up the per-export drop-ins.
+    let _ = std::fs::remove_file(gui_root.join("src-tauri/agent-payload.tar.gz"));
+    let _ = std::fs::remove_file(gui_root.join("src-tauri/metadata.json"));
     Ok(())
 }
 
@@ -377,14 +442,42 @@ fn phase_8_codesign(opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
         info!("phase 8 (codesign) skipped: --skip-notarize");
         return Ok(());
     }
-    let Ok(_dev_id) = std::env::var("MUR_APPLE_DEVELOPER_ID") else {
+    let Ok(dev_id) = std::env::var("MUR_APPLE_DEVELOPER_ID") else {
         warn!("phase 8 (codesign) skipped: MUR_APPLE_DEVELOPER_ID not set");
         return Ok(());
     };
-    // Real signing flow (sidecar then outer .app --deep) lands in
-    // P1.7 follow-up. This stub records the intent so an integrator
-    // can plug in their CI's signing recipe.
-    warn!("phase 8 (codesign) recipe is stubbed for v1; integrate with your CI's codesign step");
+    let bundle = phase_12_package(opts, _staging)?;
+    let entitlements = workspace_gui_root()?.join("src-tauri/entitlements.plist");
+
+    // Sign the embedded sidecar first, then the outer app --deep.
+    let sidecar_glob = bundle.join("Contents/Resources/_up_/mur-agent-runtime");
+    if sidecar_glob.exists() {
+        codesign_one(&sidecar_glob, &dev_id, &entitlements)?;
+    }
+    codesign_one(&bundle, &dev_id, &entitlements)?;
+    info!("phase 8 (codesign) ok");
+    Ok(())
+}
+
+fn codesign_one(path: &Path, dev_id: &str, entitlements: &Path) -> Result<()> {
+    let status = Command::new("codesign")
+        .args([
+            "--force",
+            "--options",
+            "runtime",
+            "--timestamp",
+            "--sign",
+            dev_id,
+            "--entitlements",
+            &entitlements.to_string_lossy(),
+            "--deep",
+            &path.to_string_lossy(),
+        ])
+        .status()
+        .with_context(|| format!("spawn codesign for {}", path.display()))?;
+    if !status.success() {
+        bail!("codesign failed for {} (exit={status})", path.display());
+    }
     Ok(())
 }
 
