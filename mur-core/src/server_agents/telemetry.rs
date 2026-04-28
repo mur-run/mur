@@ -191,4 +191,20 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json, serde_json::json!([]));
     }
+
+    #[tokio::test]
+    async fn telemetry_returns_404_for_missing_agent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = build_router(build_state(&tmp));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/agents/ghost/telemetry")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
 }
