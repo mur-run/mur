@@ -5,15 +5,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use axum::http::StatusCode;
 use axum::Router;
+use axum::http::StatusCode;
 
 use crate::server::AppState;
 
-pub mod list;
 pub mod detail;
-pub mod telemetry;
 pub mod evals;
+pub mod list;
+pub mod telemetry;
 
 /// Build the nested `/api/v1/agents` router. Returns an empty router for
 /// now — handlers are wired in by later tasks.
@@ -21,8 +21,15 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", axum::routing::get(list::handler))
         .route("/{name}", axum::routing::get(detail::handler))
-        .route("/{name}/telemetry", axum::routing::get(telemetry::tail_handler))
-        .route("/{name}/stream", axum::routing::get(telemetry::stream_handler))
+        .route(
+            "/{name}/telemetry",
+            axum::routing::get(telemetry::tail_handler),
+        )
+        .route(
+            "/{name}/stream",
+            axum::routing::get(telemetry::stream_handler),
+        )
+        .route("/{name}/evals", axum::routing::get(evals::list_handler))
         // Explicit 404 fallback: without this, unknown /api/v1/agents/* paths
         // bubble up to the outer router's SPA fallback and return 200 HTML.
         .fallback(|| async { StatusCode::NOT_FOUND })
