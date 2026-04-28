@@ -1,4 +1,9 @@
 //! M6.1 — agent-side grace expiry cleanup.
+//
+// Uses `std::os::unix::fs::PermissionsExt::set_mode` which is Unix-only.
+// Gate the whole file matching the pattern used by other Unix-only tests
+// in this crate (sigterm_shutdown, long_path, etc.).
+#![cfg(unix)]
 
 use mur_agent_runtime::supervisor::grace_cleanup_if_expired;
 use mur_common::agent::AgentProfile;

@@ -1,3 +1,8 @@
+// Hardcodes a `/tmp/...` path for the runtime stub binary which doesn't exist
+// on Windows. Gate to Unix matching the pattern used by other Unix-only tests
+// in this crate.
+#![cfg(unix)]
+
 use mur_common::identity::AgentIdentity;
 use std::process::Command;
 use tempfile::TempDir;

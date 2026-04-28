@@ -10,6 +10,7 @@ pub(crate) async fn cmd_serve(port: u16, open: bool, readonly: bool) -> Result<(
         patterns_dir: mur_dir.join("patterns"),
         workflows_dir: mur_dir.join("workflows"),
         pipelines_dir: mur_dir.join("pipelines"),
+        agents_dir: mur_dir.join("agents"),
         index_dir: mur_dir.join("index"),
         config: crate::server::ServerConfig { readonly },
         events_tx,
