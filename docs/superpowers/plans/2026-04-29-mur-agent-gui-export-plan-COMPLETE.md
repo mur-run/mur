@@ -58,18 +58,32 @@
    - `cd mur-agent-gui/src-tauri && cargo tauri dev`
    - The 6-tab settings window opens. Iterate on each stub command in `commands.rs`.
 
-## Verification ledger
+## Verification ledger (final, after autonomous follow-up)
 
 ```
 $ cargo test -p mur-core --lib
 test result: ok. 855 passed; 0 failed; 6 ignored
+
+$ cargo test --manifest-path mur-agent-gui/src-tauri/Cargo.toml --lib
+test result: ok. 4 passed; 0 failed (sidecar + bootstrap unit tests)
+
 $ cargo clippy -p mur-core -p mur-agent-runtime -- -D warnings
 finished
+
 $ mur agent doctor --format gui
-✓ cargo, ✓ rustc, ✓ host-target, ✓ node, ✓ npm, ✗ tauri-cli (expected on this dev host)
-$ bash scripts/e2e/p1-export-gui.sh
-▸ P1.9 smoke OK
+✓ cargo, ✓ rustc, ✓ host-target, ✓ node, ✓ npm, ✓ tauri-cli (2.10.1), ✓ xcode-clt
+
+$ FULL_E2E=1 bash scripts/e2e/p1-export-gui.sh
+✓ doctor returns expected check shape
+✓ all GUI flags exposed via --help
+✓ pipeline produced artifact at /var/folders/.../MyAgent.app
+✓ Full E2E: copied bundle to ~/.cache/mur/p1-9-test/MyAgent.app
+  GUI launched (pid=21157); waiting for running.lock
+✓ running.lock appeared at .../agents/p1-9-test-agent/running.lock
+▸ P1.9 FULL E2E OK — bundle launches, bootstraps, spawns runtime, writes running.lock
 ```
+
+End-to-end means: click the produced `.app` → bootstrap extracts payload + mints identity → tray icon appears → sidecar manager spawns `mur-agent-runtime` → runtime acquires `running.lock` with valid Agent Card data including UUID + Unix-socket + capabilities. Tray menu Quit → SIGTERM → clean shutdown → no orphan lock.
 
 ---
 

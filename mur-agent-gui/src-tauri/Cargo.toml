@@ -45,6 +45,7 @@ tar = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+signal-hook = "0.3"
 
 [features]
 # By default we include the `custom-protocol` feature so the bundled

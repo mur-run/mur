@@ -18,6 +18,42 @@ fn main() -> Result<()> {
     use std::sync::Arc;
     let sidecar_mgr = Arc::new(sidecar::SidecarManager::new());
 
+    // SIGTERM/SIGINT proxy — when the GUI is killed externally
+    // (kill, launchd shutdown, parent process death), make sure the
+    // runtime sidecar gets a clean SIGTERM so it flushes telemetry
+    // and drops running.lock before we exit. The tray Quit menu has
+    // its own handler (in setup) that does the same; this covers
+    // the SIGTERM-from-outside path.
+    #[cfg(unix)]
+    {
+        let mgr = sidecar_mgr.clone();
+        std::thread::spawn(move || {
+            // SAFETY: signal(7) handlers must not allocate or take
+            // locks. We only set a flag-like Mutex<bool> via
+            // SidecarManager::stop, which uses parking_lot-style
+            // logic — close enough for the "process is dying anyway"
+            // path. If this proves problematic, swap to libc::signal
+            // with a global atomic flag and check it from a tokio
+            // task instead.
+            let mut signals = match signal_hook::iterator::Signals::new([
+                signal_hook::consts::SIGTERM,
+                signal_hook::consts::SIGINT,
+            ]) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("install signal handler: {e}");
+                    return;
+                }
+            };
+            for _sig in signals.forever() {
+                tracing::info!("received SIGTERM/SIGINT, stopping sidecar");
+                let _ = mgr.stop();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                std::process::exit(0);
+            }
+        });
+    }
+
     tauri::Builder::default()
         .manage(sidecar_mgr.clone())
         .setup(move |app| {
