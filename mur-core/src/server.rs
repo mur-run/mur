@@ -64,6 +64,7 @@ pub struct AppState {
     pub workflows_dir: PathBuf,
     pub pipelines_dir: PathBuf,
     /// `~/.mur/agents/` — root for per-agent profiles, telemetry, evals.
+    #[allow(dead_code)]
     pub agents_dir: PathBuf,
     /// Path to the LanceDB vector index (`~/.mur/index`).
     /// When present the context endpoint uses hybrid scoring.

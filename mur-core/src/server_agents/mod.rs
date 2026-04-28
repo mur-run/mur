@@ -24,12 +24,14 @@ pub fn router() -> Router<Arc<AppState>> {
 // ─── Shared helpers ────────────────────────────────────────────────
 
 /// Absolute path to `~/.mur/agents/<name>/`. Does not check existence.
+#[allow(dead_code)]
 pub(crate) fn agent_home(agents_dir: &Path, name: &str) -> PathBuf {
     agents_dir.join(name)
 }
 
 /// True when `<agent_home>/running.lock` exists. Per the runtime spec
 /// the lock is created on supervisor start and removed on clean exit.
+#[allow(dead_code)]
 pub(crate) fn is_running(home: &Path) -> bool {
     home.join("running.lock").exists()
 }
