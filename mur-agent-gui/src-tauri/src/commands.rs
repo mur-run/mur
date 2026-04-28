@@ -31,20 +31,32 @@ pub fn status() -> Result<agent_admin::lifecycle::StatusView, String> {
 }
 
 #[tauri::command]
-pub fn start_agent() -> Result<(), String> {
-    // Sidecar manager is wired in P1.4. Stub for now.
-    Err("not yet wired (P1.4)".into())
+pub fn start_agent(
+    app: tauri::AppHandle,
+    mgr: tauri::State<'_, std::sync::Arc<crate::sidecar::SidecarManager>>,
+) -> Result<(), String> {
+    mgr.start(&app, &agent_name()).map_err(err)
 }
 
 #[tauri::command]
-pub fn stop_agent() -> Result<(), String> {
-    agent_admin::lifecycle::stop(&agent_name()).map_err(err)
+pub fn stop_agent(
+    mgr: tauri::State<'_, std::sync::Arc<crate::sidecar::SidecarManager>>,
+) -> Result<(), String> {
+    mgr.stop().map_err(err)?;
+    // Also call the agent_admin stop for consistency (it uses
+    // running.lock to send SIGTERM in case the sidecar mgr is out
+    // of sync with the on-disk state).
+    let _ = agent_admin::lifecycle::stop(&agent_name());
+    Ok(())
 }
 
 #[tauri::command]
-pub fn restart_agent() -> Result<(), String> {
-    stop_agent()?;
-    start_agent()
+pub fn restart_agent(
+    app: tauri::AppHandle,
+    mgr: tauri::State<'_, std::sync::Arc<crate::sidecar::SidecarManager>>,
+) -> Result<(), String> {
+    mgr.stop().map_err(err)?;
+    mgr.start(&app, &agent_name()).map_err(err)
 }
 
 // ─── System Prompt ─────────────────────────────────────────────────

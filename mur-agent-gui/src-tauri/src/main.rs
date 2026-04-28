@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod sidecar;
 mod theme;
 
 use anyhow::Result;
@@ -13,7 +14,11 @@ fn main() -> Result<()> {
 
     info!("starting mur-agent-gui");
 
+    use std::sync::Arc;
+    let sidecar_mgr = Arc::new(sidecar::SidecarManager::new());
+
     tauri::Builder::default()
+        .manage(sidecar_mgr)
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())

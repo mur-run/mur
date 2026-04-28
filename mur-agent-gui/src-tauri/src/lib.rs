@@ -3,4 +3,5 @@
 //! command + theme modules.
 
 pub mod commands;
+pub mod sidecar;
 pub mod theme;
