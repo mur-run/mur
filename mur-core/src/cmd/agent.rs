@@ -18,6 +18,7 @@ pub fn cmd_create(
     _no_interactive: bool,
     display_name: Option<String>,
     model: Option<String>,
+    provider: Option<String>,
 ) -> Result<()> {
     validate_name(name)?;
 
@@ -39,7 +40,18 @@ pub fn cmd_create(
     );
 
     let display_name = display_name.unwrap_or_else(|| name.to_string());
-    let model = model.unwrap_or_else(|| "llama3.2:3b".to_string());
+    let raw_model = model.unwrap_or_else(|| "llama3.2:3b".to_string());
+    // E2 fix: support `provider/model` shorthand in --model. Explicit --provider
+    // wins. Default provider is `ollama` for backward compatibility.
+    let (resolved_provider, resolved_model) = match provider {
+        Some(p) => (p, raw_model),
+        None => match raw_model.split_once('/') {
+            Some((p, rest)) if !p.is_empty() && !rest.is_empty() && is_known_provider(p) => {
+                (p.to_string(), rest.to_string())
+            }
+            _ => ("ollama".to_string(), raw_model),
+        },
+    };
     let now = chrono::Utc::now().to_rfc3339();
     let id = uuid::Uuid::now_v7().to_string();
 
@@ -81,8 +93,8 @@ pub fn cmd_create(
         },
         sys_prompt_file: "sys_prompt.md".into(),
         model: ModelConfig {
-            provider: "ollama".into(),
-            name: model,
+            provider: resolved_provider,
+            name: resolved_model,
             params: BTreeMap::new(),
         },
         mcp_servers: vec![],
@@ -168,6 +180,55 @@ pub fn cmd_create(
 
 fn validate_name(name: &str) -> Result<()> {
     mur_common::validate_agent_name(name).with_context(|| format!("invalid agent name {name:?}"))
+}
+
+/// Whether a string is one of the providers we recognize when splitting
+/// `provider/model` shorthand. Conservative allowlist to avoid mis-splitting
+/// HuggingFace-style model ids like `meta-llama/Llama-3.2-3B`.
+fn is_known_provider(s: &str) -> bool {
+    matches!(
+        s,
+        "ollama"
+            | "anthropic"
+            | "openai"
+            | "azure"
+            | "bedrock"
+            | "gemini"
+            | "google"
+            | "mistral"
+            | "together"
+            | "groq"
+            | "fireworks"
+            | "deepseek"
+            | "xai"
+            | "cohere"
+    )
+}
+
+/// Resolve a user-supplied skill query against a profile's skill list.
+/// Tries exact match, then trailing path component, then trailing path component
+/// without the `.md` suffix. Returns the canonical stored id on success.
+fn resolve_skill_id<'a>(profile: &'a _AgentProfile, query: &str) -> Option<&'a String> {
+    if let Some(s) = profile.skills.iter().find(|s| s.as_str() == query) {
+        return Some(s);
+    }
+    if let Some(s) = profile.skills.iter().find(|s| {
+        Path::new(s.as_str())
+            .file_name()
+            .and_then(|f| f.to_str())
+            .is_some_and(|f| f == query)
+    }) {
+        return Some(s);
+    }
+    if let Some(s) = profile.skills.iter().find(|s| {
+        Path::new(s.as_str())
+            .file_stem()
+            .and_then(|f| f.to_str())
+            .is_some_and(|f| f == query)
+    }) {
+        return Some(s);
+    }
+    None
 }
 
 fn resolve_mur_home() -> Result<PathBuf> {
@@ -1120,34 +1181,29 @@ pub fn cmd_skill_add(name: &str, source: &str) -> Result<()> {
     save_profile(&path, &mut profile)
 }
 
-pub fn cmd_skill_remove(name: &str, skill_id: &str) -> Result<()> {
+pub fn cmd_skill_remove(name: &str, query: &str) -> Result<()> {
     let (path, mut profile) = load_profile_for_edit(name)?;
-    let before = profile.skills.len();
-    profile.skills.retain(|s| s != skill_id);
-    if profile.skills.len() == before {
-        bail!("skill '{skill_id}' not found on '{name}'");
-    }
+    let resolved = resolve_skill_id(&profile, query)
+        .ok_or_else(|| anyhow!("skill '{query}' not found on '{name}'"))?
+        .clone();
+    profile.skills.retain(|s| s != &resolved);
     save_profile(&path, &mut profile)?;
 
     // Delete the backing file if no other skill entry references it.
     let agent_home = resolve_mur_home()?.join("agents").join(name);
-    let file_path = agent_home.join(skill_id);
-    if file_path.exists() {
-        let still_referenced = profile.skills.iter().any(|s| s == skill_id);
-        if !still_referenced {
-            let _ = fs::remove_file(&file_path);
-        }
+    let file_path = agent_home.join(&resolved);
+    if file_path.exists() && !profile.skills.iter().any(|s| s == &resolved) {
+        let _ = fs::remove_file(&file_path);
     }
     Ok(())
 }
 
-pub fn cmd_skill_show(name: &str, skill_id: &str) -> Result<()> {
+pub fn cmd_skill_show(name: &str, query: &str) -> Result<()> {
     let (_path, profile) = load_profile_for_edit(name)?;
-    if !profile.skills.iter().any(|s| s == skill_id) {
-        bail!("skill '{skill_id}' not registered on '{name}'");
-    }
+    let resolved = resolve_skill_id(&profile, query)
+        .ok_or_else(|| anyhow!("skill '{query}' not registered on '{name}'"))?;
     let agent_home = resolve_mur_home()?.join("agents").join(name);
-    let file_path = agent_home.join(skill_id);
+    let file_path = agent_home.join(resolved);
     let body =
         fs::read_to_string(&file_path).with_context(|| format!("read {}", file_path.display()))?;
     print!("{body}");

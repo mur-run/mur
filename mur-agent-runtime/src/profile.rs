@@ -23,6 +23,10 @@ pub struct Profile {
     pub agent_home: PathBuf,
     pub digest: String,
     pub raw_yaml: String, // retained for re-emit / yaml_edit round-trip
+    /// E6 fix: contents of `sys_prompt_file`, loaded once at startup so the
+    /// task runner can inject it as the system message on every LLM call.
+    /// None when the file is missing or empty.
+    pub system_prompt: Option<String>,
 }
 
 impl Profile {
@@ -37,11 +41,19 @@ impl Profile {
         validate_uuid_v7(&inner.id)?;
         validate_filesystem_paths(&inner, agent_home)?;
         let digest = compute_digest(&expanded);
+        let system_prompt = {
+            let sp_path = agent_home.join(&inner.sys_prompt_file);
+            match fs::read_to_string(&sp_path) {
+                Ok(s) if !s.trim().is_empty() => Some(s),
+                _ => None,
+            }
+        };
         Ok(Self {
             inner,
             agent_home: agent_home.to_path_buf(),
             digest,
             raw_yaml,
+            system_prompt,
         })
     }
 }
