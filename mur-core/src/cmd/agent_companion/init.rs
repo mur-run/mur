@@ -1,12 +1,13 @@
 //! Onboarding wizard for `mur agent companion init`.
 //!
-//! Phase 1.1 — non-interactive (`--answers <file>`) path implemented here.
-//! Interactive `dialoguer`-based wizard lands in M1.7.
+//! Phase 1.1 — non-interactive (`--answers <file>`) path and
+//! interactive 3-step `dialoguer`-based wizard.
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
+use dialoguer::{Input, Select};
 use fs2::FileExt;
-use mur_common::agent::{AgentProfile, OnboardingState, VoiceOverrides};
+use mur_common::agent::{AgentProfile, OnboardingState, VoiceOverrides, default_locale};
 use mur_common::companion::{Formality, Relationship};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -39,9 +40,7 @@ struct RelationshipFile<'a> {
 pub async fn run(name: &str, answers: Option<PathBuf>, re_init: bool) -> Result<()> {
     let answers = match answers {
         Some(path) => load_answers(&path)?,
-        None => bail!(
-            "interactive mode lands in M1.7; for now pass --answers <yaml-file>"
-        ),
+        None => run_wizard()?,
     };
 
     let mur_home = resolve_mur_home()?;
@@ -123,6 +122,85 @@ fn load_answers(path: &Path) -> Result<Answers> {
         .with_context(|| format!("read answers {}", path.display()))?;
     serde_yaml_ng::from_str::<Answers>(&s)
         .with_context(|| format!("parse answers {}", path.display()))
+}
+
+/// Three-step interactive wizard. Mirrors the `--answers` shape so the
+/// downstream atomic-write code path is identical.
+fn run_wizard() -> Result<Answers> {
+    // Step 1: locale + name.
+    let locale: String = Input::new()
+        .with_prompt("Language (BCP-47, e.g. zh-TW)")
+        .default(default_locale())
+        .interact_text()
+        .context("read locale")?;
+    let name_for_user: String = Input::new()
+        .with_prompt("What should I call you?")
+        .interact_text()
+        .context("read name")?;
+
+    // Step 2: relationship slot + example greeting.
+    let choices = ["Friend", "Coach", "Accountability buddy", "Mentor"];
+    let idx = Select::new()
+        .with_prompt("How should this agent relate to you?")
+        .items(&choices)
+        .default(0)
+        .interact()
+        .context("select relationship")?;
+    let relationship = match idx {
+        0 => Relationship::Friend,
+        1 => Relationship::Coach,
+        2 => Relationship::AccountabilityBuddy,
+        _ => Relationship::Mentor,
+    };
+    if let Some(example) = example_greeting(&locale, &relationship) {
+        println!("{example}");
+    }
+
+    // Step 3: earned-permission narrative (print only).
+    print_narrative(&locale);
+
+    Ok(Answers {
+        locale,
+        name_for_user,
+        relationship,
+        formality: Some(Formality::Casual),
+        extra_instructions: Some(String::new()),
+    })
+}
+
+/// Locale-keyed example greeting. zh-* prints zh-TW phrasing; en-* / fallback
+/// prints English. Other locale families return None (we'd rather print
+/// nothing than print Chinese to a French user).
+fn example_greeting(locale: &str, r: &Relationship) -> Option<&'static str> {
+    if locale.starts_with("zh") {
+        Some(match r {
+            Relationship::Friend => "「嗨，今天好嗎？」",
+            Relationship::Coach => "「嗨，目標是什麼？」",
+            Relationship::AccountabilityBuddy => "「嗨，今天有什麼想做的嗎？」",
+            Relationship::Mentor => "「嗨，最近在思考什麼？」",
+        })
+    } else if locale.starts_with("en") {
+        Some(match r {
+            Relationship::Friend => "\"Hey — how's it going?\"",
+            Relationship::Coach => "\"Hey. What's the goal?\"",
+            Relationship::AccountabilityBuddy => "\"Hi, what's on your plate today?\"",
+            Relationship::Mentor => "\"Hi. What's been on your mind?\"",
+        })
+    } else {
+        None
+    }
+}
+
+fn print_narrative(locale: &str) {
+    if locale.starts_with("zh") {
+        println!("現在我會更暖和地回應你。");
+        println!("如果哪天你想讓我偶爾主動打招呼，跑 `mur agent companion proactive enable`。");
+    } else {
+        println!("I'll respond more warmly from now on.");
+        println!(
+            "When you want me to occasionally check in, run `mur agent companion proactive enable`."
+        );
+    }
 }
 
 fn resolve_mur_home() -> Result<PathBuf> {

@@ -95,8 +95,9 @@ fn init_with_answers_writes_profile_and_relationship_json() {
 
 #[test]
 fn init_without_answers_or_interactive_fails_clean() {
-    // Without --answers (and no TTY in test), init should bail with an
-    // M1.7 hint, not crash.
+    // Without --answers AND without a TTY (test harness pipes stdio), the
+    // dialoguer wizard fails cleanly on the first prompt. We only assert
+    // the process exits non-zero and prints a clear error — not a crash.
     let home = TempDir::new().unwrap();
     let out = Command::new(mur_bin())
         .env("HOME", home.path())
@@ -106,9 +107,13 @@ fn init_without_answers_or_interactive_fails_clean() {
         .unwrap();
     assert!(!out.status.success(), "init should fail without --answers");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{stderr}{}", String::from_utf8_lossy(&out.stdout));
     assert!(
-        stderr.contains("M1.7") || stderr.contains("--answers"),
-        "expected M1.7 hint or --answers note, got: {stderr}"
+        combined.contains("not a terminal")
+            || combined.contains("--answers")
+            || combined.contains("read locale")
+            || combined.contains("Error:"),
+        "expected a clean error (TTY or --answers hint), got: {combined}"
     );
 }
 
