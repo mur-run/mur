@@ -1,0 +1,45 @@
+[package]
+name = "mur-agent-gui"
+version = "2.4.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/mur-run/mur"
+description = "Tauri 2 desktop shell for a single mur agent"
+
+# Library required by Tauri build for binding generation.
+[lib]
+name = "mur_agent_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "mur-agent-gui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-shell = "2"
+tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-process = "2"
+
+# Reuse the upstream library so admin commands and types match the CLI.
+mur-core = { path = "../../mur-core" }
+mur-common = { path = "../../mur-common" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+# By default we include the `custom-protocol` feature so the bundled
+# webview can serve frontend assets.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

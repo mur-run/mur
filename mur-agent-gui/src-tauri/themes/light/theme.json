@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "light",
+  "display_name": {
+    "default": "Light",
+    "zh-TW": "亮色",
+    "ja": "ライト"
+  },
+  "kind": "light",
+  "match_system": false,
+  "colors": {
+    "bg":              "#ffffff",
+    "fg":              "#1a1a1a",
+    "bg_secondary":    "#f5f5f7",
+    "fg_secondary":    "#5d5d63",
+    "accent":          "#2563eb",
+    "accent_fg":       "#ffffff",
+    "border":          "#d4d4d8",
+    "success":         "#16a34a",
+    "warning":         "#ca8a04",
+    "danger":          "#dc2626"
+  },
+  "icons": {
+    "app":                  "app.icns",
+    "tray_template":        "tray-template.png",
+    "tray_running_overlay": "tray-running-overlay.png"
+  }
+}

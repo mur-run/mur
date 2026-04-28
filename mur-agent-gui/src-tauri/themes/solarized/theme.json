@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "solarized",
+  "display_name": {
+    "default": "Solarized",
+    "zh-TW": "Solarized",
+    "ja": "Solarized"
+  },
+  "kind": "dark",
+  "match_system": false,
+  "colors": {
+    "bg":              "#002b36",
+    "fg":              "#fdf6e3",
+    "bg_secondary":    "#073642",
+    "fg_secondary":    "#93a1a1",
+    "accent":          "#268bd2",
+    "accent_fg":       "#fdf6e3",
+    "border":          "#586e75",
+    "success":         "#859900",
+    "warning":         "#b58900",
+    "danger":          "#dc322f"
+  },
+  "icons": {
+    "app":                  "app.icns",
+    "tray_template":        "tray-template.png",
+    "tray_running_overlay": "tray-running-overlay.png"
+  }
+}

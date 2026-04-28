@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Capabilities for the settings + logs windows",
+  "windows": ["settings", "logs"],
+  "permissions": [
+    "core:default",
+    "shell:default",
+    "shell:allow-execute-sidecar-mur-agent-runtime",
+    "store:default",
+    "dialog:default",
+    "fs:default",
+    "process:default",
+    "autostart:default"
+  ]
+}

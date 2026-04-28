@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "dark",
+  "display_name": {
+    "default": "Dark",
+    "zh-TW": "暗色",
+    "ja": "ダーク"
+  },
+  "kind": "dark",
+  "match_system": false,
+  "colors": {
+    "bg":              "#0a0a0a",
+    "fg":              "#fafafa",
+    "bg_secondary":    "#1a1a1a",
+    "fg_secondary":    "#a8a8b0",
+    "accent":          "#60a5fa",
+    "accent_fg":       "#0a0a0a",
+    "border":          "#2a2a2a",
+    "success":         "#22c55e",
+    "warning":         "#facc15",
+    "danger":          "#ef4444"
+  },
+  "icons": {
+    "app":                  "app.icns",
+    "tray_template":        "tray-template.png",
+    "tray_running_overlay": "tray-running-overlay.png"
+  }
+}

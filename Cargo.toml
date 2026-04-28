@@ -6,6 +6,13 @@ members = [
     "mur-agent-runtime",
     # "mur-commander",  # separate crate — v0.2.0 released
 ]
+exclude = [
+    # Tauri 2 GUI shell. Excluded from the workspace so default
+    # `cargo build --workspace` does not pull WebKitGTK / Cocoa /
+    # WebView2 toolchains. Built only by `mur agent export --format gui`
+    # and the GUI-relevant CI job.
+    "mur-agent-gui",
+]
 
 [workspace.package]
 version = "2.4.1"
