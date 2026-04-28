@@ -63,7 +63,7 @@ impl SidecarManager {
             .env("MUR_GUI_AGENT_NAME", agent_name);
 
         let (mut rx, child) = cmd.spawn().context("spawn sidecar")?;
-        info!("sidecar spawned, pid={}", child.pid());
+        info!(pid = child.pid(), agent = %agent_name, "sidecar spawned");
 
         let app_clone = app.clone();
         let agent_name_clone = agent_name.to_string();
@@ -84,7 +84,7 @@ impl SidecarManager {
                         let _ = app_clone.emit("sidecar:error", msg);
                     }
                     CommandEvent::Terminated(payload) => {
-                        info!("sidecar exit: {:?}", payload);
+                        info!(?payload, "sidecar terminated");
                         let _ = app_clone.emit("sidecar:terminated", payload);
                         // Trigger restart-with-backoff (registered globally).
                         let mgr = app_clone.state::<Arc<SidecarManager>>();
@@ -141,7 +141,7 @@ impl SidecarManager {
             state.crash_window.push(Instant::now());
             let n = state.crash_window.len();
             if n > 5 {
-                warn!("sidecar crashed >5 times in 60s; stop auto-restart");
+                warn!(crashes = n, window_secs = 60, "sidecar crashed too often; stop auto-restart");
                 let _ = app.emit("sidecar:gave-up", n);
                 return;
             }
@@ -155,7 +155,7 @@ impl SidecarManager {
                 _ => Duration::from_secs(60),
             }
         };
-        info!("sidecar restart in {backoff:?}");
+        info!(?backoff, "sidecar restart scheduled");
         let app_clone = app.clone();
         let agent = agent_name.to_string();
         tauri::async_runtime::spawn(async move {

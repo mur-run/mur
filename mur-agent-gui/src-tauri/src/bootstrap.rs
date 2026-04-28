@@ -65,8 +65,8 @@ pub fn bootstrap_if_needed(bundle_resource_dir: &Path) -> Result<EmbeddedMetadat
 
     if agent_home.exists() {
         info!(
-            "agent home already at {}; skipping payload extract",
-            agent_home.display()
+            agent_home = %agent_home.display(),
+            "agent home already exists; skipping payload extract"
         );
         // P1.6 follow-up: read existing UUID + compare to embedded one
         // for the conflict dialog. v1 just trusts the existing install.
@@ -83,10 +83,11 @@ pub fn bootstrap_if_needed(bundle_resource_dir: &Path) -> Result<EmbeddedMetadat
     }
 
     info!(
-        "first-launch ({:?} mode): extracting {} → {}",
-        metadata.mode,
-        payload_path.display(),
-        agent_home.display()
+        mode = ?metadata.mode,
+        agent = %metadata.agent_name,
+        payload = %payload_path.display(),
+        target = %agent_home.display(),
+        "first-launch payload extract"
     );
     fs::create_dir_all(&agent_home)
         .with_context(|| format!("create {}", agent_home.display()))?;
@@ -98,7 +99,7 @@ pub fn bootstrap_if_needed(bundle_resource_dir: &Path) -> Result<EmbeddedMetadat
     }
 
     ensure_symlink(&metadata.agent_name)?;
-    info!("bootstrap complete for agent '{}'", metadata.agent_name);
+    info!(agent = %metadata.agent_name, "bootstrap complete");
     Ok(metadata)
 }
 
@@ -128,10 +129,7 @@ fn mint_template_identity(agent_home: &Path) -> Result<()> {
     identity
         .save(agent_home)
         .with_context(|| "save freshly minted identity")?;
-    info!(
-        "template mode: minted Ed25519 keypair → {}",
-        identity.pubkey_text()
-    );
+    info!(pubkey = %identity.pubkey_text(), "template mode: minted Ed25519 keypair");
     Ok(())
 }
 
