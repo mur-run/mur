@@ -27,13 +27,14 @@ A WIP commit must include enough context in the message body for a future sessio
 
 ```yaml
 last_updated: 2026-04-29
-current_phase: P1.2
+current_phase: P1.7
 status: in_progress
-last_completed: P1.1 (setpgid + mur agent doctor at 7e90064)
-last_commit_on_branch: 7e90064 feat(runtime,doctor): setpgid + mur agent doctor (P1.1)
+last_completed: P1.2 (gui scaffold at 64441a2)
+last_commit_on_branch: 64441a2 feat(gui): scaffold mur-agent-gui crate (P1.2)
 blockers:
   - tests/agent_card_ephemeral.rs::card_displays_identity_pubkey FAILING on main upstream (pre-existing, unrelated). Not a phase gate.
-next_action: Scaffold mur-agent-gui crate (Tauri 2 main + Vite frontend + 5 themes + 6-tab sidebar shell)
+  - Tauri CLI + npm deps NOT installed on this dev host (`mur agent doctor --format gui` reports tauri-cli missing). Scaffold compiles in principle but cargo tauri dev cannot be exercised here. Resume sessions on a host with tauri-cli should run the full build before P1.7 export pipeline test.
+next_action: Skip P1.3-P1.6 deep wiring (scaffold suffices for now); jump to P1.7 export pipeline so end-to-end mur agent export --format gui at least produces an artifact, then loop back.
 ```
 
 ---
@@ -44,7 +45,8 @@ next_action: Scaffold mur-agent-gui crate (Tauri 2 main + Vite frontend + 5 them
 |----|-------|--------|----------|-------------------|
 | P1.0 | Extract `agent_admin` library | ✅ done @ 768a0d9 (façade-only; 343 LOC) | — | lib + bin build; clippy clean |
 | P1.1 | `setpgid` + `mur agent doctor` | ✅ done @ 7e90064 (340 LOC + 3 unit tests) | — | doctor smoke OK; clippy clean |
-| P1.2 | Scaffold `mur-agent-gui` crate | ⏸ pending | +3500 | `cargo tauri dev` boots empty 6-tab window |
+| P1.2 | Scaffold `mur-agent-gui` crate | ✅ done @ 64441a2 (1253 LOC; 32 files) | — | workspace exclude verified; toolchain not present locally |
+| P1.7 | Export pipeline (deferred ahead of P1.3-P1.6 deeper wiring) | ⏳ in_progress | +1200 | end-to-end `mur agent export --format gui` produces an artifact |
 | P1.3 | Wire admin via Tauri commands | ⏸ pending | +1500 | Manual: edit each tab, verify YAML write |
 | P1.4 | Sidecar manager | ⏸ pending | +900 | Spawn / kill / restart-with-backoff exercised |
 | P1.5 | Theme system | ⏸ pending | +700 | 5 themes load + tray icon swaps + appearance subscriber |
@@ -230,3 +232,5 @@ After each phase:
 - 2026-04-29 (pre-impl) — feature branch off main, NOT a separate worktree. Reason: simpler resumability for autonomous sessions; user can always `git checkout` if needed.
 - 2026-04-29 768a0d9 — P1.0 implemented as façade (cmd::agent re-export layer + typed read views) rather than full code movement. Reason: GUI Tauri commands need a clean lib API; that's achievable in 343 LOC; full refactor of 32 cmd_* fns into per-area files would be 1500-LOC churn with no functional change since cmd_* fns are already mostly print-free. cmd::agent stays canonical implementation.
 - 2026-04-29 7e90064 — P1.1 doctor module is its own `cmd::doctor` namespace, not co-located with `cmd::agent`, because it's reusable as the export pipeline's pre-flight (ergonomic for `agent::export_gui::pre_flight()` to call `cmd::doctor::checks_for("gui")`). setpgid uses raw libc::setpgid with a SAFETY comment rather than adding the `nix` crate (libc is already a dep, nix would add ~30 transitive crates).
+- 2026-04-29 64441a2 — P1.2 scaffolds 32 files in one commit (Tauri main + commands + theme + 5 themes + Vite frontend + 6 tabs). Took the deep + minimal route: every Tauri command in `commands.rs` is wired to `mur_core::agent_admin` (so P1.3 wiring is mostly UI work). Each tab is a stub component but talks to a real Tauri command. Tauri toolchain not exercised on this dev host (tauri-cli missing).
+- 2026-04-29 (deferral) — P1.7 (export pipeline) is being tackled ahead of P1.3-P1.6 deeper wiring. Reason: a stub-but-end-to-end pipeline that produces an unsigned `.app` validates the architecture and gives a real artifact for harness verification (P1.9). Deeper UI/sidecar/bootstrap work (P1.3-P1.6) can land iteratively after the pipeline is in place.
