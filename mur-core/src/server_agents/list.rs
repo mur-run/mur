@@ -4,11 +4,9 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
 use serde::Serialize;
 
-use crate::server::AppState;
+use crate::server::{AppError, AppState};
 
 #[derive(Serialize)]
 pub struct AgentListEntry {
@@ -17,14 +15,19 @@ pub struct AgentListEntry {
     pub running: bool,
 }
 
-pub async fn handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<AgentListEntry>>, AppError> {
     let entries = match std::fs::read_dir(&state.agents_dir) {
         Ok(it) => it,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return (StatusCode::OK, Json(Vec::<AgentListEntry>::new())).into_response();
+            return Ok(Json(Vec::new()));
         }
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            return Err(AppError::Internal(
+                anyhow::Error::from(e)
+                    .context(format!("read_dir {}", state.agents_dir.display())),
+            ));
         }
     };
 
@@ -51,7 +54,7 @@ pub async fn handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
 
-    (StatusCode::OK, Json(out)).into_response()
+    Ok(Json(out))
 }
 
 #[cfg(test)]
