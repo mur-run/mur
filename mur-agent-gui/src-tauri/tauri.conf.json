@@ -4,8 +4,6 @@
   "version": "2.4.1",
   "identifier": "run.mur.agent.template",
   "build": {
-    "beforeBuildCommand": "npm run build",
-    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../ui/dist"
   },

@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bootstrap;
 mod commands;
 mod sidecar;
 mod theme;
@@ -19,6 +20,29 @@ fn main() -> Result<()> {
 
     tauri::Builder::default()
         .manage(sidecar_mgr)
+        .setup(|app| {
+            use tauri::Manager;
+            // First-launch payload extraction + identity mint.
+            let resource_dir = app
+                .path()
+                .resource_dir()
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+            match bootstrap::bootstrap_if_needed(&resource_dir) {
+                Ok(meta) => {
+                    info!(
+                        "bootstrap ok: agent='{}', mode={:?}, theme='{}'",
+                        meta.agent_name, meta.mode, meta.theme_default
+                    );
+                    // Make agent name reachable from commands.rs
+                    // SAFETY: setup runs before any Tauri command; single-thread.
+                    unsafe { std::env::set_var("MUR_GUI_AGENT_NAME", &meta.agent_name); }
+                }
+                Err(e) => {
+                    tracing::error!("bootstrap failed: {e:#}");
+                }
+            }
+            Ok(())
+        })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())

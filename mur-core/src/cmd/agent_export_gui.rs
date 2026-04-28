@@ -419,34 +419,40 @@ fn phase_11_assess(_opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
 
 // ─── phase 12 — package ───────────────────────────────────────────
 
-fn phase_12_package(opts: &ExportGuiOptions, _staging: &Path) -> Result<PathBuf> {
+fn phase_12_package(_opts: &ExportGuiOptions, _staging: &Path) -> Result<PathBuf> {
     let gui_root = workspace_gui_root()?;
     let target = host_target_triple()?;
-    let bundle = match std::env::consts::OS {
-        "macos" => gui_root
-            .join("src-tauri/target")
-            .join(&target)
-            .join("release/bundle/macos")
-            .join(format!("{}.app", opts.agent_name)),
-        "linux" => gui_root
-            .join("src-tauri/target")
-            .join(&target)
-            .join("release/bundle/appimage")
-            .join(format!("{}.AppImage", opts.agent_name)),
-        "windows" => gui_root
-            .join("src-tauri/target")
-            .join(&target)
-            .join("release/bundle/nsis")
-            .join(format!("{}_setup.exe", opts.agent_name)),
+    let (subdir, ext): (&str, &str) = match std::env::consts::OS {
+        "macos" => ("release/bundle/macos", "app"),
+        "linux" => ("release/bundle/appimage", "AppImage"),
+        "windows" => ("release/bundle/nsis", "exe"),
         other => bail!("unsupported host OS: {other}"),
     };
-    if !bundle.exists() {
+    let dir = gui_root.join("src-tauri/target").join(&target).join(subdir);
+    if !dir.exists() {
         bail!(
-            "expected bundle artifact not found: {}; check `cargo tauri build` output",
-            bundle.display()
+            "bundle dir not found: {} — `cargo tauri build` may have failed earlier",
+            dir.display()
         );
     }
-    Ok(bundle)
+    // Pick the first artifact matching the expected extension.
+    // The Tauri productName comes from src-tauri/tauri.conf.json which
+    // currently isn't patched per-agent (P1.7 follow-up); the artifact
+    // is whatever Tauri produced.
+    let mut found = None;
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let matches = match ext {
+            "app" => path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("app"),
+            other => path.extension().and_then(|s| s.to_str()) == Some(other),
+        };
+        if matches {
+            found = Some(path);
+            break;
+        }
+    }
+    found.ok_or_else(|| anyhow!("no .{ext} artifact found in {}", dir.display()))
 }
 
 // ─── phase 13 — move to out ───────────────────────────────────────

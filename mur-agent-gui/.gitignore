@@ -10,3 +10,4 @@ ui/node_modules/
 src-tauri/binaries/
 src-tauri/agent-payload.tar.gz
 src-tauri/metadata.json
+ui/tsconfig.tsbuildinfo
