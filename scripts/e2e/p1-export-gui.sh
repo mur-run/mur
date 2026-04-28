@@ -49,7 +49,7 @@ echo "  ✓ all GUI flags exposed via --help"
 
 # ── 3. Create a throwaway agent + attempt export ───────────────────
 TMPHOME="$(mktemp -d)"
-trap 'rm -rf "$TMPHOME"; pkill -f "$TMPHOME" 2>/dev/null || true' EXIT
+trap 'pkill -f "p1-9-test" 2>/dev/null || true; rm -rf "$TMPHOME" "$HOME/.cache/mur/p1-9-test"' EXIT
 echo "▸ Throwaway agent at MUR_HOME=$TMPHOME"
 export MUR_HOME="$TMPHOME"
 export MUR_AGENT_BIN_DIR="$TMPHOME/bin"
@@ -81,11 +81,21 @@ if [ "${FULL_E2E:-0}" != "1" ]; then
   exit 0
 fi
 
-echo "▸ Full E2E: launching produced bundle"
+# macOS Tauri rejects current_exe() paths that contain symlinks;
+# mktemp returns /var/folders/... which is a symlink to /private/var.
+# Copy the bundle to ~/.cache/mur/p1-9-test/ (a stable, non-symlinked
+# location) before launching.
+STABLE_DIR="$HOME/.cache/mur/p1-9-test"
+rm -rf "$STABLE_DIR"
+mkdir -p "$STABLE_DIR"
+cp -R "$OUT_PATH" "$STABLE_DIR/"
+STABLE_BUNDLE="$STABLE_DIR/$(basename "$OUT_PATH")"
+echo "▸ Full E2E: copied bundle to $STABLE_BUNDLE for launch"
+
 case "$OSTYPE" in
-  darwin*)   EXE="$OUT_PATH/Contents/MacOS/mur-agent-gui" ;;
-  linux*)    EXE="$OUT_PATH" ;;
-  msys*|cygwin*) EXE="$OUT_PATH" ;;
+  darwin*)   EXE="$STABLE_BUNDLE/Contents/MacOS/mur-agent-gui" ;;
+  linux*)    EXE="$STABLE_BUNDLE" ;;
+  msys*|cygwin*) EXE="$STABLE_BUNDLE" ;;
   *)         echo "unsupported OS $OSTYPE"; exit 3 ;;
 esac
 [ -x "$EXE" ] || { echo "executable not found at $EXE"; exit 3; }

@@ -22,6 +22,9 @@ fn main() -> Result<()> {
         .manage(sidecar_mgr.clone())
         .setup(move |app| {
             use tauri::Manager;
+            use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+            use tauri::tray::TrayIconBuilder;
+
             // First-launch payload extraction + identity mint.
             let resource_dir = app
                 .path()
@@ -33,13 +36,12 @@ fn main() -> Result<()> {
                         "bootstrap ok: agent='{}', mode={:?}, theme='{}'",
                         meta.agent_name, meta.mode, meta.theme_default
                     );
-                    // Make agent name reachable from commands.rs
                     // SAFETY: setup runs before any Tauri command; single-thread.
                     unsafe { std::env::set_var("MUR_GUI_AGENT_NAME", &meta.agent_name); }
 
                     // Auto-spawn the sidecar so "click app → agent runs"
                     // is the default flow. User can stop/restart from
-                    // the Status tab.
+                    // the tray menu or Status tab.
                     let app_handle = app.handle().clone();
                     let mgr = sidecar_mgr.clone();
                     let agent_name = meta.agent_name.clone();
@@ -53,6 +55,68 @@ fn main() -> Result<()> {
                     tracing::error!("bootstrap failed: {e:#}");
                 }
             }
+
+            // Tray menu — primary UX for the menubar launcher.
+            let show_settings = MenuItem::with_id(app, "show-settings", "Show Settings…", true, None::<&str>)?;
+            let show_logs = MenuItem::with_id(app, "show-logs", "Show Logs…", true, None::<&str>)?;
+            let sep1 = PredefinedMenuItem::separator(app)?;
+            let start = MenuItem::with_id(app, "start", "Start Agent", true, None::<&str>)?;
+            let stop = MenuItem::with_id(app, "stop", "Stop Agent", true, None::<&str>)?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_settings, &show_logs, &sep1, &start, &stop, &sep2, &quit])?;
+
+            let mgr_for_menu = sidecar_mgr.clone();
+            let _tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .show_menu_on_left_click(true)
+                .icon(app.default_window_icon().cloned().unwrap_or_else(|| {
+                    // Fallback to a transparent 16x16 if Tauri couldn't
+                    // resolve the bundle icon (e.g. dev runs).
+                    tauri::image::Image::new_owned(vec![0u8; 16 * 16 * 4], 16, 16)
+                }))
+                .on_menu_event(move |app, event| {
+                    let agent_name = std::env::var("MUR_GUI_AGENT_NAME").unwrap_or_else(|_| "template".to_string());
+                    match event.id.as_ref() {
+                        "show-settings" => {
+                            if let Some(window) = app.get_webview_window("settings") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "show-logs" => {
+                            if let Some(window) = app.get_webview_window("settings") {
+                                // P1.5 follow-up: open a dedicated logs window.
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "start" => {
+                            let app_clone = app.clone();
+                            let mgr = mgr_for_menu.clone();
+                            let name = agent_name.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(e) = mgr.start(&app_clone, &name) {
+                                    tracing::error!("tray Start: {e:#}");
+                                }
+                            });
+                        }
+                        "stop" => {
+                            if let Err(e) = mgr_for_menu.stop() {
+                                tracing::error!("tray Stop: {e:#}");
+                            }
+                        }
+                        "quit" => {
+                            // Stop sidecar before quitting so the runtime gets
+                            // a clean SIGTERM and drops running.lock.
+                            let _ = mgr_for_menu.stop();
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .build(app)?;
+
             Ok(())
         })
         .plugin(tauri_plugin_shell::init())
