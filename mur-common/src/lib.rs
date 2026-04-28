@@ -1,6 +1,7 @@
 pub mod a2a;
 pub mod actor;
 pub mod agent;
+pub mod agent_name;
 pub mod config;
 pub mod conversation;
 pub mod error;
@@ -32,6 +33,7 @@ pub use agent::{
     FileTransferConfig, IdentityConfig, LockFile, Persona, PersonaCategory, RetryPolicy,
     ScheduleEntry,
 };
+pub use agent_name::{AgentNameError, MAX_AGENT_NAME_LEN, validate_agent_name};
 pub use identity::{
     AgentIdentity, ChainError, ChainOptions, ChainOutcome, IdentityError, RotationAttestation,
     RotationReason, decode_pubkey, encode_pubkey, verify_chain,

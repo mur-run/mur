@@ -75,18 +75,11 @@ pub(crate) async fn loopback_only(
 
 // ─── Shared helpers ────────────────────────────────────────────────
 
-/// Validate an agent name from a URL path parameter. Agent names follow a
-/// strict allowlist to prevent directory traversal via `agents_dir.join(name)`.
+/// Validate an agent name from a URL path parameter. Delegates to the
+/// canonical validator in `mur_common` so the HTTP API and CLI share a single
+/// source of truth.
 pub(crate) fn validate_agent_name(name: &str) -> Result<(), AppError> {
-    let safe = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
-        && !name.contains("..");
-    if !safe {
-        return Err(AppError::BadRequest(format!("invalid agent name '{name}'")));
-    }
-    Ok(())
+    mur_common::validate_agent_name(name).map_err(|e| AppError::BadRequest(e.to_string()))
 }
 
 /// Absolute path to `~/.mur/agents/<name>/`. Does not check existence.

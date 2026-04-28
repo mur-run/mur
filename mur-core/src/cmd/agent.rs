@@ -167,13 +167,7 @@ pub fn cmd_create(
 }
 
 fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("agent name must not be empty");
-    }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        bail!("agent name must match [A-Za-z0-9_]+");
-    }
-    Ok(())
+    mur_common::validate_agent_name(name).with_context(|| format!("invalid agent name {name:?}"))
 }
 
 fn resolve_mur_home() -> Result<PathBuf> {
