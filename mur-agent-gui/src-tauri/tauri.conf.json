@@ -41,9 +41,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "themes/**/*",
-      "agent-payload.tar.gz",
-      "metadata.json"
+      "themes/**/*"
     ],
     "macOS": {
       "minimumSystemVersion": "12.0",

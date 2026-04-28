@@ -78,15 +78,15 @@ fn init_tracing() {
 
 #[cfg(target_os = "macos")]
 fn log_dir() -> Option<std::path::PathBuf> {
-    dirs_next::home_dir().map(|h| h.join("Library/Logs/MurAgent"))
+    dirs::home_dir().map(|h| h.join("Library/Logs/MurAgent"))
 }
 
 #[cfg(target_os = "linux")]
 fn log_dir() -> Option<std::path::PathBuf> {
-    dirs_next::data_local_dir().map(|d| d.join("MurAgent/logs"))
+    dirs::data_local_dir().map(|d| d.join("MurAgent/logs"))
 }
 
 #[cfg(target_os = "windows")]
 fn log_dir() -> Option<std::path::PathBuf> {
-    dirs_next::data_local_dir().map(|d| d.join("MurAgent/Logs"))
+    dirs::data_local_dir().map(|d| d.join("MurAgent/Logs"))
 }

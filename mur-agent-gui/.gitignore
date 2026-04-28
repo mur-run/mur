@@ -1,0 +1,12 @@
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+# Frontend
+ui/dist/
+ui/node_modules/
+
+# Per-export bundle artifacts
+src-tauri/binaries/
+src-tauri/agent-payload.tar.gz
+src-tauri/metadata.json

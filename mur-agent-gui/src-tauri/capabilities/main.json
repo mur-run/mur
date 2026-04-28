@@ -1,12 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
-  "description": "Capabilities for the settings + logs windows",
+  "description": "Capabilities for the settings + logs windows. Sidecar (mur-agent-runtime) is restricted via the shell plugin's `scope` in tauri.conf.json `plugins.shell.sidecars`.",
   "windows": ["settings", "logs"],
   "permissions": [
     "core:default",
     "shell:default",
-    "shell:allow-execute-sidecar-mur-agent-runtime",
+    "shell:allow-spawn",
+    "shell:allow-execute",
+    "shell:allow-kill",
     "store:default",
     "dialog:default",
     "fs:default",
