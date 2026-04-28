@@ -1,5 +1,7 @@
 //! Companion subsystem shared types (Phase 1.1).
 
+pub mod voice_template;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
