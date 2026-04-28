@@ -1,0 +1,117 @@
+name: Build agent app (multi-platform)
+
+# Triggered manually from the GitHub Actions UI (or `gh workflow run …`).
+# Each matrix cell builds an agent .app / .AppImage / .exe on the
+# native runner — Tauri 2 cannot cross-compile webviews.
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent-pkg-url:
+        description: "URL of a .murpkg to import + export"
+        required: true
+        type: string
+      theme:
+        description: "Default theme baked into the bundle"
+        required: false
+        default: "light"
+        type: string
+      clone-identity:
+        description: "Embed identity (NOT recommended for distribution)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14            # Apple Silicon — universal binary
+            target: universal-apple-darwin
+            bundle: app
+          - os: ubuntu-22.04        # OLDEST supported = widest glibc compat
+            target: x86_64-unknown-linux-gnu
+            bundle: appimage
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundle: nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: 'mur-agent-gui/ui/.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: 'mur-agent-gui/ui/package-lock.json'
+
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libfuse2 \
+            pkg-config
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2.0' --locked
+
+      - name: Install mur CLI
+        run: cargo install --path mur-core --bin mur --locked
+
+      - name: Cache cargo + node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            mur-agent-gui/src-tauri/target
+            mur-agent-gui/ui/node_modules
+          key: ${{ runner.os }}-tauri-${{ hashFiles('**/Cargo.lock', 'mur-agent-gui/ui/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-tauri-
+
+      - name: Download + import agent
+        run: |
+          curl -sL "${{ inputs.agent-pkg-url }}" -o agent.murpkg
+          mur agent import agent.murpkg
+
+      - name: Doctor (fail-fast diagnostics)
+        run: mur agent doctor --format gui
+
+      - name: Export
+        env:
+          # macOS-only — leave unset to skip notarization
+          MUR_APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          MUR_APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          MUR_APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          MUR_APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+          # Windows
+          MUR_WINDOWS_CERT_THUMBPRINT: ${{ secrets.WIN_CERT_THUMBPRINT }}
+        run: |
+          mur agent export "$(jq -r '.agent_name' < agent.murpkg-manifest.json 2>/dev/null || echo myagent)" \
+            -o dist/MyAgent \
+            --format gui \
+            --theme "${{ inputs.theme }}" \
+            ${{ inputs.clone-identity && '--clone-identity' || '' }} \
+            ${{ secrets.APPLE_NOTARY_KEY == '' && '--skip-notarize' || '' }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyAgent-${{ runner.os }}
+          path: dist/
+          retention-days: 14

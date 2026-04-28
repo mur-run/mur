@@ -27,14 +27,13 @@ A WIP commit must include enough context in the message body for a future sessio
 
 ```yaml
 last_updated: 2026-04-29
-current_phase: P1.7
-status: in_progress
-last_completed: P1.2 (gui scaffold at 64441a2)
-last_commit_on_branch: 64441a2 feat(gui): scaffold mur-agent-gui crate (P1.2)
+current_phase: COMPLETE (see plan-COMPLETE.md sibling)
+status: branch ready for review + merge
+last_completed: P1.7 + P1.8 + P1.9 + COMPLETE log
 blockers:
-  - tests/agent_card_ephemeral.rs::card_displays_identity_pubkey FAILING on main upstream (pre-existing, unrelated). Not a phase gate.
-  - Tauri CLI + npm deps NOT installed on this dev host (`mur agent doctor --format gui` reports tauri-cli missing). Scaffold compiles in principle but cargo tauri dev cannot be exercised here. Resume sessions on a host with tauri-cli should run the full build before P1.7 export pipeline test.
-next_action: Skip P1.3-P1.6 deep wiring (scaffold suffices for now); jump to P1.7 export pipeline so end-to-end mur agent export --format gui at least produces an artifact, then loop back.
+  - tests/agent_card_ephemeral.rs::card_displays_identity_pubkey FAILING on main upstream (pre-existing, unrelated).
+  - P1.4-P1.6 deeper Tauri-side wiring deferred (documented in COMPLETE.md). Resume needs tauri-cli installed.
+next_action: open PR; deferred P1.4-P1.6 work tackled in follow-up branch with tauri-cli toolchain available
 ```
 
 ---
