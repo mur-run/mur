@@ -215,6 +215,21 @@ fn phase_3_prepare_theme(opts: &ExportGuiOptions, staging: &Path) -> Result<()> 
         );
     }
 
+    // WCAG AA contrast gate — refuse to ship a theme that fails the
+    // text + UI contrast thresholds documented in spec § 7.7. Same
+    // logic exposed as `cargo test --lib theme::tests` for CI.
+    let theme_json = std::fs::read_to_string(theme_src.join("theme.json"))?;
+    let theme: serde_json::Value = serde_json::from_str(&theme_json)?;
+    if let Some(failures) = wcag_contrast_failures(&theme)
+        && !failures.is_empty()
+    {
+        bail!(
+            "theme '{}' fails WCAG AA contrast:\n  {}",
+            opts.theme,
+            failures.join("\n  ")
+        );
+    }
+
     if let Some(custom_icon) = &opts.icon {
         // P1.5 will transcode PNG → icns/ico/multi-PNG; v1 stub:
         // copy into staging custom theme dir as-is.
@@ -226,6 +241,66 @@ fn phase_3_prepare_theme(opts: &ExportGuiOptions, staging: &Path) -> Result<()> 
 
     info!("phase 3 (prepare_theme={}) ok in {:?}", opts.theme, span.elapsed());
     Ok(())
+}
+
+// ─── WCAG AA helpers (mirror of mur-agent-gui::theme) ─────────────
+
+fn wcag_contrast_failures(theme: &serde_json::Value) -> Option<Vec<String>> {
+    let colors = theme.get("colors")?.as_object()?;
+    let name = theme
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let mut failures = Vec::new();
+    let pairs: &[(&str, &str, f32, &str)] = &[
+        ("fg", "bg", 4.5, "body text"),
+        ("fg_secondary", "bg", 4.5, "secondary text"),
+        ("accent_fg", "accent", 4.5, "accent button text"),
+        ("border", "bg", 3.0, "UI border"),
+    ];
+    for (fg_k, bg_k, threshold, label) in pairs {
+        let (Some(fg), Some(bg)) = (
+            colors.get(*fg_k).and_then(|v| v.as_str()),
+            colors.get(*bg_k).and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        let (Some(fg_lum), Some(bg_lum)) = (relative_luminance(fg), relative_luminance(bg))
+        else {
+            continue;
+        };
+        let r = contrast_ratio(fg_lum, bg_lum);
+        if r < *threshold {
+            failures.push(format!(
+                "{name} '{label}': {fg_k} ({fg}) vs {bg_k} ({bg}) = {r:.2}:1, want ≥ {threshold}:1"
+            ));
+        }
+    }
+    Some(failures)
+}
+
+fn relative_luminance(hex: &str) -> Option<f32> {
+    let s = hex.trim_start_matches('#');
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    let f = |c: u8| {
+        let cs = c as f32 / 255.0;
+        if cs <= 0.03928 {
+            cs / 12.92
+        } else {
+            ((cs + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    Some(0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b))
+}
+
+fn contrast_ratio(l1: f32, l2: f32) -> f32 {
+    let (a, b) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (a + 0.05) / (b + 0.05)
 }
 
 // ─── phase 4 — rewrite tauri.conf.json + stage payload ───────────

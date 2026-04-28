@@ -13,9 +13,9 @@
     "fg":              "#fdf6e3",
     "bg_secondary":    "#073642",
     "fg_secondary":    "#93a1a1",
-    "accent":          "#268bd2",
+    "accent":          "#1a4d7a",
     "accent_fg":       "#fdf6e3",
-    "border":          "#586e75",
+    "border":          "#7a939a",
     "success":         "#859900",
     "warning":         "#b58900",
     "danger":          "#dc322f"

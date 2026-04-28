@@ -15,7 +15,7 @@
     "fg_secondary":    "#a8a8b0",
     "accent":          "#60a5fa",
     "accent_fg":       "#0a0a0a",
-    "border":          "#2a2a2a",
+    "border":          "#5e5e64",
     "success":         "#22c55e",
     "warning":         "#facc15",
     "danger":          "#ef4444"
