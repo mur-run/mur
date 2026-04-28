@@ -20,6 +20,7 @@ mod llm;
 mod paths;
 mod retrieve;
 mod server;
+mod server_agents;
 mod session;
 #[cfg(feature = "sources")]
 mod sources;
