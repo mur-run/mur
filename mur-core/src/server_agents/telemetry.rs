@@ -34,7 +34,9 @@ pub async fn tail_handler(
     if !home.exists() {
         return Err(AppError::NotFound(format!("agent '{name}' not found")));
     }
-    let date = q.date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+    let date = q
+        .date
+        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
     let path = home.join("telemetry").join(format!("{date}.jsonl"));
 
     let body = match std::fs::read_to_string(&path) {
@@ -93,6 +95,10 @@ pub async fn stream_handler(
 async fn stream_loop(mut socket: WebSocket, home: std::path::PathBuf) {
     // Always tail today's file (UTC). On midnight rollover the loop
     // re-resolves the path on the next tick.
+    //
+    // Assumes append-only writers: detects truncation (`len < pos`) but not
+    // file replacement (inode change). External rotation tools that rm+recreate
+    // the file may miss lines from the new file.
     let mut current_date = String::new();
     let mut pos: u64 = 0;
     let mut leftover = String::new();
@@ -120,7 +126,11 @@ async fn stream_loop(mut socket: WebSocket, home: std::path::PathBuf) {
             }
             if len > pos && f.seek(SeekFrom::Start(pos)).await.is_ok() {
                 let mut buf = String::new();
-                if BufReader::new(&mut f).read_to_string(&mut buf).await.is_ok() {
+                if BufReader::new(&mut f)
+                    .read_to_string(&mut buf)
+                    .await
+                    .is_ok()
+                {
                     pos = len;
                     leftover.push_str(&buf);
                     while let Some(idx) = leftover.find('\n') {
@@ -129,7 +139,11 @@ async fn stream_loop(mut socket: WebSocket, home: std::path::PathBuf) {
                         if line.is_empty() {
                             continue;
                         }
-                        if socket.send(Message::Text(line.to_string().into())).await.is_err() {
+                        if socket
+                            .send(Message::Text(line.to_string().into()))
+                            .await
+                            .is_err()
+                        {
                             return; // client disconnected
                         }
                     }
@@ -226,7 +240,9 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/v1/agents/alpha/telemetry?date=2026-04-28&since=2026-04-28T07:00:04Z")
+                    .uri(
+                        "/api/v1/agents/alpha/telemetry?date=2026-04-28&since=2026-04-28T07:00:04Z",
+                    )
                     .body(Body::empty())
                     .unwrap(),
             )
