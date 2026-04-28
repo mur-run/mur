@@ -58,14 +58,14 @@ pub async fn handler(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::server::build_router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    fn write_min_profile(dir: &std::path::Path, name: &str, display: &str) {
+    pub(crate) fn write_min_profile(dir: &std::path::Path, name: &str, display: &str) {
         std::fs::create_dir_all(dir).unwrap();
         let id_suffix = name.bytes().fold(0u64, |a, b| a.wrapping_add(b as u64));
         // Use a minimal but valid profile YAML structure

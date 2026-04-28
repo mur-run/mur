@@ -20,6 +20,7 @@ pub mod evals;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", axum::routing::get(list::handler))
+        .route("/{name}", axum::routing::get(detail::handler))
         // Explicit 404 fallback: without this, unknown /api/v1/agents/* paths
         // bubble up to the outer router's SPA fallback and return 200 HTML.
         .fallback(|| async { StatusCode::NOT_FOUND })
@@ -28,7 +29,6 @@ pub fn router() -> Router<Arc<AppState>> {
 // ─── Shared helpers ────────────────────────────────────────────────
 
 /// Absolute path to `~/.mur/agents/<name>/`. Does not check existence.
-#[allow(dead_code)]
 pub(crate) fn agent_home(agents_dir: &Path, name: &str) -> PathBuf {
     agents_dir.join(name)
 }
