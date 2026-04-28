@@ -861,9 +861,14 @@ enum AgentAction {
         /// Display name (defaults to the agent name)
         #[arg(long)]
         display_name: Option<String>,
-        /// Model id (e.g. llama3.2:3b)
+        /// Model id (e.g. llama3.2:3b, claude-opus-4-7).
+        /// May also be `provider/model` (e.g. anthropic/claude-opus-4-7).
         #[arg(long)]
         model: Option<String>,
+        /// Model provider (e.g. ollama, anthropic, openai). Defaults to ollama.
+        /// Takes precedence over a `provider/model` prefix in --model.
+        #[arg(long)]
+        provider: Option<String>,
     },
     /// List agents under $MUR_HOME/agents
     List {
@@ -1026,15 +1031,20 @@ enum AgentPermAction {
 enum AgentSkillAction {
     /// List attached skill ids
     List { name: String },
-    /// Copy a skill markdown file into the agent and register it
+    /// Copy a skill markdown file into the agent and register it.
+    /// The skill is stored under `skills/<basename>` inside the agent dir.
     Add {
         name: String,
-        /// Path to a skill .md file (basename becomes its id)
+        /// Path to a skill .md file. Stored id is `skills/<basename>`.
         source: String,
     },
-    /// Remove a skill entry; deletes the backing file if orphaned
+    /// Remove a skill entry; deletes the backing file if orphaned.
+    /// `skill_id` may be the full id (`skills/foo.md`), the basename (`foo.md`),
+    /// or the basename without extension (`foo`).
     Remove { name: String, skill_id: String },
-    /// Print the contents of a skill file
+    /// Print the contents of a skill file.
+    /// `skill_id` may be the full id (`skills/foo.md`), the basename (`foo.md`),
+    /// or the basename without extension (`foo`).
     Show { name: String, skill_id: String },
 }
 
@@ -1427,7 +1437,8 @@ async fn async_main() -> Result<()> {
                 no_interactive,
                 display_name,
                 model,
-            } => cmd::agent::cmd_create(&name, no_interactive, display_name, model)?,
+                provider,
+            } => cmd::agent::cmd_create(&name, no_interactive, display_name, model, provider)?,
             AgentAction::List { json } => cmd::agent::cmd_list(json)?,
             AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
             AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
