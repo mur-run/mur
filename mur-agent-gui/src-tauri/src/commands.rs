@@ -188,6 +188,28 @@ pub struct ThemeInfo {
     pub kind: String,
 }
 
+#[derive(Serialize)]
+pub struct AppliedTheme {
+    pub name: String,
+    pub display_name: String,
+    pub kind: String,
+    pub colors: std::collections::BTreeMap<String, String>,
+}
+
+fn to_applied(def: crate::theme::ThemeDef) -> AppliedTheme {
+    let display_name = def
+        .display_name
+        .get("default")
+        .cloned()
+        .unwrap_or_else(|| def.name.clone());
+    AppliedTheme {
+        name: def.name,
+        display_name,
+        kind: def.kind,
+        colors: def.colors,
+    }
+}
+
 #[tauri::command]
 pub fn list_themes(app: tauri::AppHandle) -> Result<Vec<ThemeInfo>, String> {
     use tauri::Manager;
@@ -197,9 +219,20 @@ pub fn list_themes(app: tauri::AppHandle) -> Result<Vec<ThemeInfo>, String> {
 }
 
 #[tauri::command]
-pub fn set_theme(app: tauri::AppHandle, name: String) -> Result<(), String> {
+pub fn set_theme(app: tauri::AppHandle, name: String) -> Result<AppliedTheme, String> {
     use tauri::Manager;
     let resource_dir = app.path().resource_dir().ok();
     let root = crate::theme::resolve_themes_root(resource_dir.as_deref());
-    crate::theme::activate(&root, &name).map_err(err)
+    let def = crate::theme::activate(&root, &name).map_err(err)?;
+    Ok(to_applied(def))
+}
+
+#[tauri::command]
+pub fn get_default_theme(app: tauri::AppHandle) -> Result<AppliedTheme, String> {
+    use tauri::Manager;
+    let resource_dir = app.path().resource_dir().ok();
+    let root = crate::theme::resolve_themes_root(resource_dir.as_deref());
+    let name = std::env::var("MUR_GUI_THEME_DEFAULT").unwrap_or_else(|_| "light".to_string());
+    let def = crate::theme::activate(&root, &name).map_err(err)?;
+    Ok(to_applied(def))
 }

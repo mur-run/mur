@@ -87,5 +87,19 @@ export interface ThemeInfo {
   display_name: string;
   kind: string;
 }
+export interface AppliedTheme {
+  name: string;
+  display_name: string;
+  kind: string;
+  colors: Record<string, string>;
+}
 export const listThemes = () => invoke<ThemeInfo[]>("list_themes");
-export const setTheme = (name: string) => invoke<void>("set_theme", { name });
+export const setTheme = (name: string) => invoke<AppliedTheme>("set_theme", { name });
+export const getDefaultTheme = () => invoke<AppliedTheme>("get_default_theme");
+
+export function applyThemeColors(colors: Record<string, string>) {
+  const root = document.documentElement;
+  for (const [key, value] of Object.entries(colors)) {
+    root.style.setProperty(`--color-${key.replaceAll("_", "-")}`, value);
+  }
+}

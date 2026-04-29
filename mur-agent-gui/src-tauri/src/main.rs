@@ -73,6 +73,7 @@ fn main() -> Result<()> {
                     // SAFETY: setup runs before any Tauri command; single-thread.
                     unsafe {
                         std::env::set_var("MUR_GUI_AGENT_NAME", &meta.agent_name);
+                        std::env::set_var("MUR_GUI_THEME_DEFAULT", &meta.theme_default);
                     }
 
                     // Auto-spawn the sidecar so "click app → agent runs"
@@ -212,6 +213,7 @@ fn main() -> Result<()> {
             // Theme
             commands::list_themes,
             commands::set_theme,
+            commands::get_default_theme,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -39,12 +39,10 @@ pub fn list(themes_root: &Path) -> Result<Vec<crate::commands::ThemeInfo>> {
     Ok(out)
 }
 
-pub fn activate(themes_root: &Path, name: &str) -> Result<()> {
-    // P1.5: swap tray icon, dock icon, broadcast theme event to webview.
-    // Scaffold: just verify the theme dir exists in the resolved root.
+pub fn activate(themes_root: &Path, name: &str) -> Result<ThemeDef> {
     let dir = themes_root.join(name);
     anyhow::ensure!(dir.exists(), "theme '{name}' not found in bundle");
-    Ok(())
+    load_def(&dir)
 }
 
 /// Resolve the directory that holds `themes/<name>/theme.json` for

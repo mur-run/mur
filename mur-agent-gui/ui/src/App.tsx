@@ -5,7 +5,7 @@ import SkillsTab from "./tabs/Skills";
 import McpTab from "./tabs/Mcp";
 import PermissionsTab from "./tabs/Permissions";
 import IdentityTab from "./tabs/Identity";
-import { setTheme as setThemeApi } from "./lib/api";
+import { setTheme as setThemeApi, getDefaultTheme, applyThemeColors } from "./lib/api";
 
 type TabId =
   | "status"
@@ -27,6 +27,14 @@ const TABS: { id: TabId; label: string }[] = [
 export default function App() {
   const [tab, setTab] = useState<TabId>("status");
 
+  // Apply the bundle's baked-in default theme on mount, so the
+  // window picks up the colors chosen at `mur agent export --theme`.
+  useEffect(() => {
+    getDefaultTheme()
+      .then((t) => applyThemeColors(t.colors))
+      .catch(() => {});
+  }, []);
+
   // OS appearance subscriber for the "Match System" mode (spec § 7.3).
   // When the user has selected the synthetic "system" theme, follow
   // prefers-color-scheme — applying "light" or "dark" via the Tauri
@@ -45,7 +53,9 @@ export default function App() {
       const target = matcher.matches ? "dark" : "light";
       if (target === lastApplied) return;
       lastApplied = target;
-      setThemeApi(target).catch(() => {});
+      setThemeApi(target)
+        .then((t) => applyThemeColors(t.colors))
+        .catch(() => {});
     };
     apply();
     matcher.addEventListener("change", apply);
