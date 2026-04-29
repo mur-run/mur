@@ -2,6 +2,7 @@
 use clap::{Args, Subcommand};
 use proactive::ProactiveArgs;
 use quiet::QuietArgs;
+use templates::TemplatesArgs;
 use voice::VoiceArgs;
 
 #[derive(Args, Debug)]
@@ -24,6 +25,8 @@ pub enum CompanionCmd {
     Proactive(ProactiveArgs),
     /// Pause or clear proactive messages for a duration or until a timestamp.
     Quiet(QuietArgs),
+    /// Eject embedded voice templates to disk for editing.
+    Templates(TemplatesArgs),
     /// Write, re-compose, or diff the agent's voice.md.
     Voice(VoiceArgs),
 }
@@ -37,6 +40,7 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
         } => init::run(&name, answers, re_init).await,
         CompanionCmd::Proactive(args) => proactive::run(args).await,
         CompanionCmd::Quiet(args) => quiet::run(args).await,
+        CompanionCmd::Templates(args) => templates::run(args).await,
         CompanionCmd::Voice(args) => voice::run(args).await,
     }
 }
@@ -44,5 +48,6 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
 mod init;
 mod proactive;
 mod quiet;
+mod templates;
 mod util;
 mod voice;

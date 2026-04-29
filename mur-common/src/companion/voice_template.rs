@@ -29,6 +29,32 @@ pub fn embedded(relationship: &Relationship, locale: &str) -> Option<&'static st
     }
 }
 
+/// Returns every (relationship, locale, body) triple that is embedded.
+/// Used by `mur agent companion templates eject` to write all templates to disk.
+pub fn all_templates() -> Vec<(Relationship, &'static str, &'static str)> {
+    use Relationship::*;
+    vec![
+        (Friend, "zh-TW", include_str!("templates/friend.zh-TW.md")),
+        (Friend, "en-US", include_str!("templates/friend.en-US.md")),
+        (Friend, "zh-CN", include_str!("templates/friend.zh-CN.md")),
+        (Friend, "ja-JP", include_str!("templates/friend.ja-JP.md")),
+        (Coach, "zh-TW", include_str!("templates/coach.zh-TW.md")),
+        (Coach, "en-US", include_str!("templates/coach.en-US.md")),
+        (
+            AccountabilityBuddy,
+            "zh-TW",
+            include_str!("templates/accountability_buddy.zh-TW.md"),
+        ),
+        (
+            AccountabilityBuddy,
+            "en-US",
+            include_str!("templates/accountability_buddy.en-US.md"),
+        ),
+        (Mentor, "zh-TW", include_str!("templates/mentor.zh-TW.md")),
+        (Mentor, "en-US", include_str!("templates/mentor.en-US.md")),
+    ]
+}
+
 /// Locale fallback chain: exact → language-only → en-US.
 /// Returns (locale_actually_used, template_body).
 pub fn resolve_locale(relationship: &Relationship, locale: &str) -> (String, &'static str) {
