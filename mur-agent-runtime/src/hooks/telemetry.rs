@@ -33,7 +33,9 @@ impl TelemetryHook {
             MUR_HOOK_PHASE: format!("{phase:?}"),
             "attrs": attrs,
         });
-        ctx.telemetry.emit_span_event(METHOD_HOOK_FIRED, merged).await;
+        ctx.telemetry
+            .emit_span_event(METHOD_HOOK_FIRED, merged)
+            .await;
     }
 }
 
@@ -109,8 +111,12 @@ impl Hook for TelemetryHook {
         _: &PromptView,
         _: &CancellationToken,
     ) -> Result<PromptPatch, HookError> {
-        self.emit(ctx, Phase::PromptSubmit, json!({ GEN_AI_OPERATION_NAME: "chat" }))
-            .await;
+        self.emit(
+            ctx,
+            Phase::PromptSubmit,
+            json!({ GEN_AI_OPERATION_NAME: "chat" }),
+        )
+        .await;
         Ok(PromptPatch::noop())
     }
 
@@ -221,8 +227,12 @@ impl Hook for TelemetryHook {
         reason: ShutdownReason,
         _: &CancellationToken,
     ) -> Result<(), HookError> {
-        self.emit(ctx, Phase::Shutdown, json!({ "reason": format!("{reason:?}") }))
-            .await;
+        self.emit(
+            ctx,
+            Phase::Shutdown,
+            json!({ "reason": format!("{reason:?}") }),
+        )
+        .await;
         Ok(())
     }
 }

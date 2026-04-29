@@ -110,7 +110,11 @@ impl HookChain {
             .iter()
             .map(|h| h.on_startup(ctx, profile, tok))
             .collect::<Vec<_>>();
-        for (i, res) in futures::future::join_all(futs).await.into_iter().enumerate() {
+        for (i, res) in futures::future::join_all(futs)
+            .await
+            .into_iter()
+            .enumerate()
+        {
             if let Err(e) = res {
                 warn!(handler = self.hooks[i].name(), error = %e, "on_startup failed");
             }
@@ -129,7 +133,11 @@ impl HookChain {
             .iter()
             .map(|h| h.on_trigger_fired(ctx, kind.clone(), payload, tok))
             .collect::<Vec<_>>();
-        for (i, res) in futures::future::join_all(futs).await.into_iter().enumerate() {
+        for (i, res) in futures::future::join_all(futs)
+            .await
+            .into_iter()
+            .enumerate()
+        {
             if let Err(e) = res {
                 warn!(handler = self.hooks[i].name(), error = %e, "on_trigger_fired failed");
             }
@@ -147,7 +155,11 @@ impl HookChain {
             .iter()
             .map(|h| h.on_message_received(ctx, env, tok))
             .collect::<Vec<_>>();
-        for (i, res) in futures::future::join_all(futs).await.into_iter().enumerate() {
+        for (i, res) in futures::future::join_all(futs)
+            .await
+            .into_iter()
+            .enumerate()
+        {
             if let Err(e) = res {
                 warn!(handler = self.hooks[i].name(), error = %e, "on_message_received failed");
             }
@@ -166,7 +178,11 @@ impl HookChain {
             .iter()
             .map(|h| h.post_tool_use(ctx, call, result, tok))
             .collect::<Vec<_>>();
-        for (i, res) in futures::future::join_all(futs).await.into_iter().enumerate() {
+        for (i, res) in futures::future::join_all(futs)
+            .await
+            .into_iter()
+            .enumerate()
+        {
             if let Err(e) = res {
                 warn!(handler = self.hooks[i].name(), error = %e, "post_tool_use failed");
             }
@@ -179,7 +195,11 @@ impl HookChain {
             .iter()
             .map(|h| h.on_step_finish(ctx, step, tok))
             .collect::<Vec<_>>();
-        for (i, res) in futures::future::join_all(futs).await.into_iter().enumerate() {
+        for (i, res) in futures::future::join_all(futs)
+            .await
+            .into_iter()
+            .enumerate()
+        {
             if let Err(e) = res {
                 warn!(handler = self.hooks[i].name(), error = %e, "on_step_finish failed");
             }
@@ -198,7 +218,11 @@ impl HookChain {
             .iter()
             .map(|h| h.on_error(ctx, err, phase, tok))
             .collect::<Vec<_>>();
-        for (i, res) in futures::future::join_all(futs).await.into_iter().enumerate() {
+        for (i, res) in futures::future::join_all(futs)
+            .await
+            .into_iter()
+            .enumerate()
+        {
             if let Err(e) = res {
                 warn!(handler = self.hooks[i].name(), error = %e, "on_error failed");
             }
@@ -216,7 +240,11 @@ impl HookChain {
             .iter()
             .map(|h| h.on_shutdown(ctx, reason.clone(), tok))
             .collect::<Vec<_>>();
-        for (i, res) in futures::future::join_all(futs).await.into_iter().enumerate() {
+        for (i, res) in futures::future::join_all(futs)
+            .await
+            .into_iter()
+            .enumerate()
+        {
             if let Err(e) = res {
                 warn!(handler = self.hooks[i].name(), error = %e, "on_shutdown failed");
             }

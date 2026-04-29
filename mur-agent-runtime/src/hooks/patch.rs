@@ -118,10 +118,7 @@ mod tests {
             ..PromptPatch::noop()
         };
         let folded = a.clone().merge(b.clone());
-        assert_eq!(
-            folded.set_system_prefix.as_deref(),
-            Some("voice\nsafety")
-        );
+        assert_eq!(folded.set_system_prefix.as_deref(), Some("voice\nsafety"));
         assert_eq!(folded.wrap_untrusted.len(), 1);
         assert_eq!(folded.turn_flags, vec!["a".to_string(), "b".to_string()]);
 

@@ -38,12 +38,11 @@ async fn runtime_starts_and_responds_to_agent_card_over_stdio() {
     // to our agent/card request. Notifications now include the
     // `telemetry/hook_fired` events the A0 hook chain emits on startup.
     let resp = loop {
-        let line =
-            tokio::time::timeout(std::time::Duration::from_secs(5), reader.next_line())
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
+        let line = tokio::time::timeout(std::time::Duration::from_secs(5), reader.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
         if v.get("id").is_some() {
             break v;

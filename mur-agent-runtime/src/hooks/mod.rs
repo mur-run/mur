@@ -23,9 +23,8 @@ pub use chain::HookChain;
 pub use decision::Decision;
 pub use patch::{MessagePatch, PromptPatch, UntrustedWrapper};
 pub use types::{
-    A2AEnvelopeView, AskDefault, ErrorAction, HookCtx, HookError, OutboundView, Phase,
-    PromptView, ShutdownReason, Step, TelemetryEmitter, ToolCall, ToolResult, TriggerKind,
-    TriggerPayload,
+    A2AEnvelopeView, AskDefault, ErrorAction, HookCtx, HookError, OutboundView, Phase, PromptView,
+    ShutdownReason, Step, TelemetryEmitter, ToolCall, ToolResult, TriggerKind, TriggerPayload,
 };
 
 use mur_common::AgentProfile;
