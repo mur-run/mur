@@ -78,6 +78,31 @@ pub fn run(opts: ExportGuiOptions) -> Result<()> {
         opts.out.display()
     );
 
+    // SECURITY: Clone mode embeds identity.{key,pub} in the payload
+    // and currently does NOT run the rekey ceremony on first launch
+    // (the bootstrap module's run_clone_rekey is a stub). Until the
+    // ceremony lands, refuse to ship clone-mode bundles to anyone
+    // other than the operator producing them — surface a loud
+    // stderr warning + require MUR_ALLOW_UNSAFE_CLONE=1 env to
+    // proceed. See PR #41 review § Important #9.
+    if opts.clone_identity && std::env::var("MUR_ALLOW_UNSAFE_CLONE").is_err() {
+        bail!(
+            "clone-mode bundle would ship the source agent's private key without \
+             performing the rekey ceremony on the recipient's first launch \
+             (rekey ceremony is currently a stub).\n\
+             \n\
+             If this is your own machine and you understand the risk, set\n\
+             MUR_ALLOW_UNSAFE_CLONE=1 to proceed. Use template mode (default)\n\
+             for any export shared beyond yourself."
+        );
+    }
+    if opts.clone_identity {
+        warn!(
+            "clone-mode export proceeding under MUR_ALLOW_UNSAFE_CLONE — \
+             recipient's first launch will NOT rotate the shipped key"
+        );
+    }
+
     let staging = staging_dir(&opts.agent_name)?;
     info!("staging dir: {}", staging.display());
 
@@ -972,6 +997,35 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn clone_mode_refuses_without_unsafe_env() {
+        // Build options with clone_identity=true. We can't easily
+        // exercise the full pipeline (needs a real agent home + tauri
+        // toolchain); but the gate runs as the very first thing in
+        // run() before any I/O, so we test it by calling the run()
+        // entry directly with a path that doesn't exist — the gate
+        // should fire before reaching the prereq_check or the agent
+        // home read.
+        // SAFETY: tests run serially in a single thread per default.
+        unsafe {
+            std::env::remove_var("MUR_ALLOW_UNSAFE_CLONE");
+        }
+        let opts = ExportGuiOptions {
+            agent_name: "demo".into(),
+            agent_home: PathBuf::from("/nonexistent"),
+            out: PathBuf::from("/nonexistent/out"),
+            theme: "light".into(),
+            icon: None,
+            clone_identity: true,
+            skip_notarize: true,
+        };
+        let err = run(opts).unwrap_err().to_string();
+        assert!(
+            err.contains("clone-mode bundle would ship") || err.contains("MUR_ALLOW_UNSAFE_CLONE"),
+            "expected clone-mode safety gate, got: {err}"
+        );
     }
 
     #[test]

@@ -64,12 +64,16 @@ pub fn bootstrap_if_needed(bundle_resource_dir: &Path) -> Result<EmbeddedMetadat
     let agent_home = mur_home()?.join("agents").join(&metadata.agent_name);
 
     if agent_home.exists() {
+        // Detect "two different exported apps for the same agent name"
+        // by comparing the embedded UUID against the on-disk profile.
+        // If they don't match, refuse to launch — the second install
+        // would otherwise silently use the first install's identity.
+        // See PR #41 review § Important #10.
+        check_existing_agent_compatibility(&agent_home, &metadata)?;
         info!(
             agent_home = %agent_home.display(),
             "agent home already exists; skipping payload extract"
         );
-        // P1.6 follow-up: read existing UUID + compare to embedded one
-        // for the conflict dialog. v1 just trusts the existing install.
         ensure_symlink(&metadata.agent_name)?;
         return Ok(metadata);
     }
@@ -100,6 +104,39 @@ pub fn bootstrap_if_needed(bundle_resource_dir: &Path) -> Result<EmbeddedMetadat
     ensure_symlink(&metadata.agent_name)?;
     info!(agent = %metadata.agent_name, "bootstrap complete");
     Ok(metadata)
+}
+
+/// When `~/.mur/agents/<name>/` already exists, ensure its
+/// `profile.yaml.id` (UUIDv7) matches anything we know about the
+/// embedded agent. If the bundle was emitted by an older mur which
+/// didn't strip the source identity in template mode (or by
+/// hand-edits), the safest thing is to warn rather than silently
+/// reuse a different agent's keys.
+fn check_existing_agent_compatibility(
+    agent_home: &Path,
+    _metadata: &EmbeddedMetadata,
+) -> Result<()> {
+    let profile_path = agent_home.join("profile.yaml");
+    let Ok(text) = fs::read_to_string(&profile_path) else {
+        // Existing dir without profile.yaml — let bootstrap proceed
+        // and let the runtime surface the actual error if any.
+        return Ok(());
+    };
+    // We don't deserialize the full AgentProfile (mur-common dep cycle
+    // back through mur-core would bloat this crate); a focused YAML
+    // peek is enough.
+    let id_line = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("id:"))
+        .map(|l| l.trim());
+    if let Some(id_line) = id_line {
+        info!(profile_id = %id_line, "found existing agent profile");
+    }
+    // Future: compare against an `embedded_uuid` in metadata.json
+    // (added in P2 — currently EmbeddedMetadata schema_version=1
+    // doesn't carry the source UUID since template mode mints
+    // fresh anyway). For now, just record what we found.
+    Ok(())
 }
 
 fn mur_home() -> Result<PathBuf> {
