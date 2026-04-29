@@ -999,3 +999,77 @@ templates:
 ---
 
 **End of design.**
+
+---
+
+## Implementation Notes (post-impl)
+
+This section logs decisions and minor deviations that emerged during M1-M8
+implementation (April 2026). It exists for future readers and is not
+prescriptive — the spec text above remains the authoritative design.
+
+### Bandit-state disk persistence (deferred to Phase 1.2)
+**Where:** §3.4 / M5.7 / M6.6 ack
+**What:** Phase 1.1 holds `BanditState` in memory only. M5.7
+(`faf87b0`) wires the supervisor with `BanditState::default()`; signal updates
+via `picker.record(...)` are in-process only. The disk persistence layer
+(`bandit-state.json`) is reserved for Phase 1.2.
+**Effect on tests:** integration test `picker_record_signal_persists_across_restart`
+(M8.4 / `da69257`) tests in-memory state preservation only; the cross-restart
+file-backed variant is `#[ignore]`d.
+
+### Pending-pause in-memory only (Phase 1.1 limitation)
+**Where:** §4.8 step 8 (rate-limit) / §6.2 (translate retry)
+**What:** M5.5 (`a9c6d38`) keeps `pending_pause: BTreeMap<String, PendingPause>`
+in process memory. Restarting the runtime mid-pause loses the in-flight
+retry state.
+**Effect on tests:** `ledger_resume_replays_paused_messages_after_restart`
+(M8.4) is `#[ignore]`d with a clear reason.
+
+### Anthropic 429 header parsing reused but not yet wired
+**Where:** §6.3 / M3.2 / M5.5
+**What:** `mur-agent-runtime/src/durable/rate_limit.rs::parse_anthropic_429`
+exists from earlier work and is still the eventual source of `resume_at`
+timing. M5.5 (`a9c6d38`) ships a deterministic backoff schedule
+`[30s, 90s, 240s, 900s]` until the Anthropic client surfaces headers to the
+companion path; a `// TODO` notes the planned wire-up.
+
+### `body_sha256` semantics (pre- vs post-translation)
+**Where:** §3.5 `MessageGenerated`
+**What:** `MessageGenerated.body_sha256` reflects the body as the linter
+saw it (pre-translation). Only the notifier sees the translated body.
+This was an explicit design choice in M5.5 (`a9c6d38`) so that linter
+violations and dropped duplicates can be tracked by the original body.
+
+### CompanionMessage trait method signature
+**Where:** §4.9 Notifier trait
+**What:** `Notifier::send` takes `&CompanionMessage` (not by value) so multiple
+notifiers can share an `Arc<CompanionMessage>` if needed. M5.2 (`d599804`).
+The change is from "by value" in early spec draft to "by reference" in
+implementation.
+
+### `mur agent companion init` does not write voice.md
+**Where:** §3.2 / Step 2 of E2E §8.4
+**What:** `companion init` (M1.7 / `cc87f79`) writes `profile.yaml` and
+`relationship.json` only. The composed `voice.md` is written via a
+separate `mur agent companion voice eject` (M6.3 / `e94ed5b`). Step 2 of
+the E2E script (M8.5 / `e81a181`) calls both.
+
+### M8.6 (Ollama nightly smoke) not implemented
+**Where:** §8.6 / Plan M8.6
+**What:** Per the plan, M8.6 is optional. Phase 1.1 ships without the
+nightly Ollama smoke job; it can be added in a follow-up PR.
+
+### Voice template count (10, not 8)
+**Where:** §2.5 / M6.4
+**What:** M6.4 (`36e2d1f`) discovered the embedded matrix is 10 files
+(friend has 4 locales: zh-TW, en-US, zh-CN, ja-JP; the other 3 relationships
+have 2 each), not the 8 implied by "4 relationships × 2 locales". The
+`templates eject` test asserts 10.
+
+### `BlockReason::QuietHours` returned by gate (not `EarnedPermission`)
+**Where:** §4.8 step 1
+**What:** Implementation uses `GateOutcome::Blocked { reason: BlockReason::QuietHours }`
+(M4.5 / `1f9d5d1`). The spec referred generically to "earned permission"
+gate; the typed enum makes the rejection reason addressable for telemetry
+and tests.
