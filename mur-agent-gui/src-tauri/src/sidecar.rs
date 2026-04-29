@@ -56,8 +56,7 @@ impl SidecarManager {
 
         // Resolve the active model's secret synchronously (we're already
         // inside Tauri's runtime; block_on on the helper is fine).
-        let secret_envs =
-            tauri::async_runtime::block_on(resolve_secrets_for_agent(agent_name));
+        let secret_envs = tauri::async_runtime::block_on(resolve_secrets_for_agent(agent_name));
         for (k, _) in &secret_envs {
             info!(env_key = %k, "injecting resolved secret into sidecar env");
         }
