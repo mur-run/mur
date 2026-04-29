@@ -123,6 +123,48 @@ impl SecretRef {
             SecretRef::Cmd(spec) => resolve_cmd(spec).await,
         }
     }
+
+    /// Probe whether the secret resolves successfully without surfacing the
+    /// value. Used by GUI/CLI status indicators. Note: for `Cmd` refs this
+    /// actually runs the command, which may have side effects or be slow.
+    pub async fn check(&self) -> bool {
+        self.resolve().await.is_ok()
+    }
+}
+
+/// Write a secret to the OS keychain. Used by `mur agent secret set` and the
+/// GUI's `set_secret` command.
+pub async fn keychain_set(service: &str, account: &str, value: &str) -> Result<(), SecretError> {
+    let svc = service.to_string();
+    let acct = account.to_string();
+    let val = value.to_string();
+    tokio::task::spawn_blocking(move || -> Result<(), SecretError> {
+        let entry = keyring::Entry::new(&svc, &acct)
+            .map_err(|e| SecretError::KeychainBackend(e.to_string()))?;
+        entry
+            .set_password(&val)
+            .map_err(|e| SecretError::KeychainBackend(e.to_string()))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| SecretError::KeychainBackend(format!("join: {e}")))?
+}
+
+/// Delete a secret from the OS keychain. Idempotent: missing entries are not
+/// an error. Used by `mur agent secret delete`.
+pub async fn keychain_delete(service: &str, account: &str) -> Result<(), SecretError> {
+    let svc = service.to_string();
+    let acct = account.to_string();
+    tokio::task::spawn_blocking(move || -> Result<(), SecretError> {
+        let entry = keyring::Entry::new(&svc, &acct)
+            .map_err(|e| SecretError::KeychainBackend(e.to_string()))?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(SecretError::KeychainBackend(e.to_string())),
+        }
+    })
+    .await
+    .map_err(|e| SecretError::KeychainBackend(format!("join: {e}")))?
 }
 
 async fn resolve_cmd(spec: &str) -> Result<SecretString, SecretError> {
@@ -316,22 +358,26 @@ mod resolve_env_tests {
 }
 
 #[cfg(test)]
-mod resolve_keychain_tests {
-    use super::*;
+mod keychain_test_fixture {
+    //! Shared mock fixture used by every test module that touches the keyring.
+    //!
+    //! v3's stock `keyring::mock` advertises CredentialPersistence::EntryOnly
+    //! and gives each Entry its own private storage — that breaks our tests
+    //! because resolve() creates a fresh `Entry::new` after setup. The fixture
+    //! below installs a SharedMockBuilder backed by an Arc<Mutex<HashMap>>
+    //! so all Entry instances see the same data.
+    //!
+    //! Tests serialize on a tokio::sync::Mutex (held across await) because
+    //! `set_default_credential_builder` mutates a process-global.
+
     use keyring::credential::{
         Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi, CredentialPersistence,
     };
-    use secrecy::ExposeSecret;
     use std::any::Any;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
-    // keyring v3's built-in `mock` backend uses CredentialPersistence::EntryOnly:
-    // each `Entry::new` returns a fresh credential with its own storage, so a
-    // password set in setup is invisible to a later `Entry::new` inside
-    // resolve(). We need persistence across Entry instances, so we provide
-    // our own builder backed by a shared HashMap.
     type Store = Arc<Mutex<HashMap<(String, String), Vec<u8>>>>;
 
     struct SharedMockCredential {
@@ -392,13 +438,11 @@ mod resolve_keychain_tests {
         }
     }
 
-    // Serialize tests: `set_default_credential_builder` mutates a process-global,
-    // and we hold the lock across `.await` points so the builder doesn't get
-    // swapped out from under our resolve() call. Use tokio's async-aware Mutex
-    // so Clippy's await_holding_lock lint is satisfied.
     static MOCK_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 
-    async fn install_mock(initial: Option<(&str, &str, &str)>) -> AsyncMutexGuard<'static, ()> {
+    pub(super) async fn install_mock(
+        initial: Option<(&str, &str, &str)>,
+    ) -> AsyncMutexGuard<'static, ()> {
         let g = MOCK_LOCK.lock().await;
         let store: Store = Arc::new(Mutex::new(HashMap::new()));
         if let Some((svc, user, pw)) = initial {
@@ -411,6 +455,13 @@ mod resolve_keychain_tests {
         keyring::set_default_credential_builder(builder);
         g
     }
+}
+
+#[cfg(test)]
+mod resolve_keychain_tests {
+    use super::*;
+    use super::keychain_test_fixture::install_mock;
+    use secrecy::ExposeSecret;
 
     #[tokio::test]
     async fn resolves_when_set() {
@@ -524,5 +575,70 @@ mod resolve_cmd_tests {
             SecretError::Cmd { status, .. } => assert_eq!(status, 7),
             other => panic!("unexpected: {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod check_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn check_env_present() {
+        // SAFETY: uniquely named env var so concurrent tests don't collide.
+        unsafe {
+            std::env::set_var("MUR_TEST_CHECK_ENV", "1");
+        }
+        assert!(SecretRef::Env("MUR_TEST_CHECK_ENV".into()).check().await);
+    }
+
+    #[tokio::test]
+    async fn check_env_absent() {
+        assert!(
+            !SecretRef::Env("MUR_TEST_CHECK_DEFINITELY_UNSET".into())
+                .check()
+                .await
+        );
+    }
+}
+
+#[cfg(test)]
+mod keychain_helpers_tests {
+    use super::*;
+    use super::keychain_test_fixture::install_mock;
+    use secrecy::ExposeSecret;
+
+    #[tokio::test]
+    async fn set_then_resolve_round_trips() {
+        let _g = install_mock(None).await;
+        keychain_set("mur-test", "round-trip", "v1").await.unwrap();
+        let v = SecretRef::Keychain {
+            service: "mur-test".into(),
+            account: "round-trip".into(),
+        }
+        .resolve()
+        .await
+        .unwrap();
+        assert_eq!(v.expose_secret(), "v1");
+    }
+
+    #[tokio::test]
+    async fn delete_works() {
+        let _g = install_mock(None).await;
+        keychain_set("mur-test", "to-delete", "v").await.unwrap();
+        keychain_delete("mur-test", "to-delete").await.unwrap();
+        let r = SecretRef::Keychain {
+            service: "mur-test".into(),
+            account: "to-delete".into(),
+        }
+        .resolve()
+        .await;
+        assert!(matches!(r, Err(SecretError::KeychainNotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn delete_missing_is_idempotent() {
+        let _g = install_mock(None).await;
+        // No prior set — must still return Ok.
+        keychain_delete("mur-test", "never-set").await.unwrap();
     }
 }
