@@ -716,12 +716,53 @@ fn phase_13_move_to_out(opts: &ExportGuiOptions, bundle: &Path) -> Result<()> {
 // ─── helpers ──────────────────────────────────────────────────────
 
 fn staging_dir(agent_name: &str) -> Result<PathBuf> {
-    let dir = dirs::cache_dir()
+    let root = dirs::cache_dir()
         .ok_or_else(|| anyhow!("cannot resolve cache dir"))?
-        .join("mur/export-gui")
-        .join(format!("{agent_name}-{}", std::process::id()));
+        .join("mur/export-gui");
+    sweep_stale_staging(&root, agent_name);
+    let dir = root.join(format!("{agent_name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+/// Best-effort sweep of `~/.cache/mur/export-gui/<agent>-<pid>/`
+/// directories left by previous runs that crashed or were killed.
+/// Never bails — if a sibling export is racing, just leaves it.
+/// Per PR #41 review § Minor #18.
+fn sweep_stale_staging(root: &Path, current_agent: &str) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let prefix = format!("{current_agent}-");
+    let our_pid = std::process::id();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        // Match `<current_agent>-<pid>` or anything from a prior
+        // version that no longer matches a live process.
+        let Some(suffix) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Ok(pid) = suffix.parse::<u32>() else {
+            continue;
+        };
+        if pid == our_pid {
+            continue;
+        }
+        // POSIX kill(0, pid) returns 0 if alive, ESRCH if dead.
+        #[cfg(unix)]
+        {
+            // SAFETY: kill(0, pid) is a POSIX liveness probe.
+            let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+            if alive {
+                continue;
+            }
+        }
+        let _ = std::fs::remove_dir_all(entry.path());
+        tracing::debug!(stale = name, "sweeping leftover staging dir");
+    }
 }
 
 fn workspace_root() -> Result<PathBuf> {

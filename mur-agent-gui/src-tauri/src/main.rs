@@ -234,13 +234,21 @@ fn main() -> Result<()> {
 }
 
 fn init_tracing() {
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+
     let log_dir = log_dir().unwrap_or_else(std::env::temp_dir);
     std::fs::create_dir_all(&log_dir).ok();
     let file_appender = tracing_appender::rolling::never(&log_dir, "gui.log");
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    // Tee to stderr too: if the file writer fails (disk full, perm
+    // denied, container without home dir), the operator still sees
+    // logs in the terminal that launched the .app for debugging.
+    // Per PR #41 review § Minor #14.
+    let writer = file_appender.and(std::io::stderr);
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(file_appender)
+        .with_writer(writer)
         .with_ansi(false)
         .init();
 }
