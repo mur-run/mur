@@ -794,4 +794,88 @@ mod tests {
         assert_eq!(back.agent_name, "demo");
         assert_eq!(back.mode, BundleMode::Template);
     }
+
+    // ─── WCAG AA validator (build-time gate inside phase_3) ──────
+
+    #[test]
+    fn wcag_passes_for_high_contrast_palette() {
+        let theme = serde_json::json!({
+            "name": "test-pass",
+            "colors": {
+                "bg": "#000000",
+                "fg": "#ffffff",
+                "fg_secondary": "#cccccc",
+                "accent": "#ffff00",
+                "accent_fg": "#000000",
+                "border": "#888888"
+            }
+        });
+        let failures = wcag_contrast_failures(&theme).expect("colors object present");
+        assert!(failures.is_empty(), "unexpected failures: {failures:?}");
+    }
+
+    #[test]
+    fn wcag_flags_low_contrast_body_text() {
+        // fg #444 vs bg #555 → 1.04:1 ratio (way below 4.5:1).
+        let theme = serde_json::json!({
+            "name": "test-fail",
+            "colors": {
+                "bg": "#555555",
+                "fg": "#444444",
+                "accent": "#000000",
+                "accent_fg": "#ffffff",
+                "border": "#222222"
+            }
+        });
+        let failures = wcag_contrast_failures(&theme).expect("colors object present");
+        assert!(
+            failures.iter().any(|f| f.contains("body text")),
+            "expected a body-text failure, got: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn wcag_returns_none_when_colors_block_missing() {
+        let theme = serde_json::json!({"name": "no-colors"});
+        assert!(wcag_contrast_failures(&theme).is_none());
+    }
+
+    #[test]
+    fn wcag_skips_pairs_where_one_color_is_absent() {
+        // accent_fg is missing — that pair should be skipped, not error.
+        let theme = serde_json::json!({
+            "name": "partial",
+            "colors": {
+                "bg": "#000000",
+                "fg": "#ffffff",
+                "accent": "#ffff00",
+                "border": "#888888"
+            }
+        });
+        let failures = wcag_contrast_failures(&theme).expect("colors present");
+        // No failures expected — fg/bg, border/bg are both fine; accent_fg
+        // pair is skipped.
+        assert!(failures.is_empty(), "expected pass, got: {failures:?}");
+    }
+
+    #[test]
+    fn wcag_treats_invalid_hex_as_skip() {
+        let theme = serde_json::json!({
+            "name": "bad-hex",
+            "colors": {
+                "bg": "#000000",
+                "fg": "not-a-color",
+                "accent": "#ffff00",
+                "accent_fg": "#000000",
+                "border": "#888888"
+            }
+        });
+        // fg is unparseable → fg/bg pair is skipped silently. Should
+        // not panic, should not produce a failure for that pair.
+        let failures = wcag_contrast_failures(&theme).expect("colors present");
+        assert!(
+            !failures.iter().any(|f| f.contains("body text")),
+            "expected fg/bg pair to be skipped on bad hex, got: {failures:?}"
+        );
+    }
 }
