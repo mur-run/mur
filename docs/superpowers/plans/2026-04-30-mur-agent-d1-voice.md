@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship local-only Kokoro 82M TTS + whisper.cpp STT in `mur-agent-gui`, with PTT hotkey `Cmd+Shift+'`, 5 curated voices (1 bundled + 4 download-on-demand from signed CDN), and a "voice never leaves this Mac" privacy badge — per roadmap §4.1 (D1 Voice Stack).
+**Goal:** Ship local-only Kokoro 82M TTS + whisper.cpp STT in `mur-agent-gui`, with PTT hotkey `Cmd+Shift+'`, 5 curated voices (1 bundled + 4 download-on-demand) and the whisper STT model also download-on-first-use, all from a single signed CDN — plus a "voice never leaves this Mac" privacy badge. Per roadmap §4.1 (D1 Voice Stack).
+
+**Bundle-size update (2026-04-30):** the original §4.1 strategy bundled the 809 MB whisper model in the installer; total installer ~1 GB after summing M1-M9 (whisper alone = 80% of bytes). Plan revised to **download whisper on first PTT use**, identical mechanism to the 4 non-default voices. Net effect: **installer drops from ~1 GB to ~190 MB**; first-PTT cost is a one-time ~3 min background download with a progress UI. The downloader shares the same `voice_download` Tauri command surface + signed-CDN manifest path as voice-pack downloads (extended with `kind: stt-model`).
 
 **Architecture:** All inference runs in the Tauri sidecar (`mur-agent-gui/src-tauri/`), not the runtime, because voice is a GUI-tier concern (PTT hotkey, audio I/O, settings panel). The runtime stays voice-blind. TTS uses ONNX via the `ort` crate; STT uses `whisper-rs` (statically linked whisper.cpp). Audio I/O via `cpal`. Voice manifests are signed JSON files served from a Cloudflare-fronted CDN; the runtime verifies SHA-256 + Ed25519 signature before `mmap`/load.
 
@@ -55,12 +57,15 @@ mur-agent-gui/ui/src/
 
   pages/Settings.tsx                    # MODIFY: add Voice tab
 
-mur-agent-gui/src-tauri/voices/         # NEW asset dir (bundled assets)
+mur-agent-gui/src-tauri/voices/         # NEW asset dir (bundled assets — TINY)
   af_heart/
-    voice.onnx                          # 22 MB; bundled in installer
+    voice.onnx                          # ~85 MB; bundled in installer (default voice only)
     voice.json                          # metadata: id, language, sample_rate, license
     LICENSE.txt
   README.md                             # license notes for the 5 starters
+  # Note: whisper STT model (large-v3-turbo q5_1, 809 MB) is NOT bundled.
+  # First PTT use triggers download via the same signed-CDN manifest
+  # mechanism as voice-pack downloads (manifest.rs `kind: stt-model`).
 
 mur-agent-gui/src-tauri/tests/
   voice_manifest.rs                     # CREATE: manifest signature + SHA-256 tests
@@ -262,6 +267,13 @@ pub const PINNED_VOICE_PUBKEY: &str = env!(
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum AssetBundle {
+    Voice(VoiceManifest),
+    SttModel(SttModelManifest),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceManifest {
     pub schema_version: u32,
     pub voice_id: String,
@@ -270,6 +282,22 @@ pub struct VoiceManifest {
     pub sample_rate_hz: u32,     // Kokoro is 24000; we resample to 22050 in playback
     pub license: String,         // "MIT" / "Apache-2.0"
     pub creator: String,
+    pub assets: Vec<AssetEntry>,
+    pub size_bytes_total: u64,
+}
+
+/// STT model manifest. Same signing + SHA-256 + atomic-rename
+/// download path as voices, but lives under a separate registry slot
+/// (`<app_data>/voices/_stt/<model_id>/`) so voices and STT models
+/// can be invalidated independently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SttModelManifest {
+    pub schema_version: u32,
+    pub model_id: String,        // e.g. "whisper-large-v3-turbo-q5_1"
+    pub display_name: String,
+    pub backend: String,         // "whisper.cpp" (only option in v1)
+    pub languages: Vec<String>,  // BCP-47 list
+    pub license: String,         // whisper.cpp is MIT
     pub assets: Vec<AssetEntry>,
     pub size_bytes_total: u64,
 }
@@ -1321,6 +1349,96 @@ git add mur-agent-gui/src-tauri/src/voice/audio/
 git commit -m "M1.4.1: cpal capture loop + ring buffer + naive 16kHz resampler"
 ```
 
+### Task M1.4.1b: STT model downloader (download-on-first-use)
+
+**Files:**
+- Modify: `mur-agent-gui/src-tauri/src/voice/registry.rs` (add `stt_model_path`)
+- Modify: `mur-agent-gui/src-tauri/src/voice/download.rs` (add `download_stt_model`)
+
+The whisper model (`whisper-large-v3-turbo-q5_1`, ~809 MB) is **not** bundled in the installer. First PTT use triggers a one-time download, identical mechanism to voice-pack downloads. The model lives at:
+
+```
+~/Library/Application Support/mur/voices/
+  af_heart/                  # bundled default voice
+  _stt/
+    whisper-large-v3-turbo-q5_1/
+      ggml-large-v3-turbo-q5_1.bin
+      manifest.json
+      manifest.json.sig
+```
+
+This single change drops the v1 installer from ~1 GB to ~190 MB.
+
+- [ ] **Step 1: Add `stt_model_path` to VoiceRegistry**
+
+```rust
+impl VoiceRegistry {
+    pub fn stt_model_path(&self) -> Option<PathBuf> {
+        let dir = self.voices_dir.join("_stt").join("whisper-large-v3-turbo-q5_1");
+        let weights = dir.join("ggml-large-v3-turbo-q5_1.bin");
+        weights.exists().then_some(weights)
+    }
+}
+```
+
+- [ ] **Step 2: Add `download_stt_model` to download.rs**
+
+Mirrors `download_voice` exactly — fetches `<CDN>/_stt/whisper-large-v3-turbo-q5_1/manifest.json[.sig]`, verifies Ed25519, downloads each asset with streaming SHA-256, atomic temp+rename. The progress event stream uses the same `DownloadProgress` enum so the GUI can render a single unified progress bar.
+
+```rust
+pub async fn download_stt_model(
+    model_id: &str,
+    install_dir: PathBuf,
+    progress: tokio::sync::mpsc::Sender<DownloadProgress>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_S))
+        .timeout(std::time::Duration::from_secs(TOTAL_TIMEOUT_S))
+        .build()?;
+    let manifest_url = format!("{}/_stt/{model_id}/manifest.json", cdn_base());
+    let sig_url = format!("{}/_stt/{model_id}/manifest.json.sig", cdn_base());
+    let manifest_bytes = client.get(&manifest_url).send().await?.error_for_status()?.bytes().await?;
+    let _ = progress.send(DownloadProgress::ManifestFetched).await;
+    let sig_bytes = client.get(&sig_url).send().await?.error_for_status()?.bytes().await?;
+    // Re-use verify_and_parse but parameterised over manifest variant.
+    // Implementation detail: SttModelManifest deserializes from the same
+    // payload shape as VoiceManifest (assets[]); the kind tag dispatches
+    // which validation rules to run.
+    let manifest: super::manifest::SttModelManifest = {
+        super::manifest::verify_signature(&manifest_bytes, &sig_bytes)?;
+        serde_json::from_slice(&manifest_bytes)?
+    };
+    let _ = progress.send(DownloadProgress::ManifestVerified).await;
+    if manifest.model_id != model_id {
+        anyhow::bail!("manifest model_id mismatch");
+    }
+    tokio::fs::create_dir_all(&install_dir).await?;
+    for asset in &manifest.assets {
+        if cancel.is_cancelled() { anyhow::bail!("cancelled"); }
+        // Reuse existing download_one_asset (extracted to pub(super) in
+        // M1.2.2; verify SHA-256, atomic temp+rename).
+        super::download_one_asset(&client, asset, &install_dir, &progress, &cancel).await?;
+    }
+    tokio::fs::write(install_dir.join("manifest.json"), &manifest_bytes).await?;
+    tokio::fs::write(install_dir.join("manifest.json.sig"), &sig_bytes).await?;
+    let _ = progress.send(DownloadProgress::Done).await;
+    Ok(())
+}
+```
+
+This requires factoring `download_one_asset` to be `pub(super)` and adding a `verify_signature` helper to `manifest.rs` (separate from `verify_and_parse`, which deserializes a specific manifest variant). Both are mechanical refactors of M1.2.1 + M1.2.2 code.
+
+- [ ] **Step 3: Build + commit**
+
+```bash
+cargo build -p mur-agent-gui
+git add mur-agent-gui/src-tauri/src/voice/registry.rs \
+        mur-agent-gui/src-tauri/src/voice/download.rs \
+        mur-agent-gui/src-tauri/src/voice/manifest.rs
+git commit -m "M1.4.1b: STT model downloader — whisper-large-v3-turbo-q5_1 on first PTT use"
+```
+
 ### Task M1.4.2: whisper-rs STT adapter
 
 **Files:**
@@ -1405,9 +1523,15 @@ impl SttEngine {
         Ok(())
     }
 
+    /// True if a model is loaded; false means the GUI must call
+    /// `voice_stt_download` before any transcribe attempt can succeed.
+    pub async fn is_ready(&self) -> bool {
+        self.backend.read().await.is_some()
+    }
+
     pub async fn transcribe(&self, samples_i16: &[i16], language: Option<&str>) -> Result<String> {
         let g = self.backend.read().await;
-        let b = g.as_ref().ok_or_else(|| anyhow::anyhow!("STT model not loaded"))?;
+        let b = g.as_ref().ok_or_else(|| anyhow::anyhow!("STT model not loaded — run `voice_stt_download` first"))?;
         b.transcribe(samples_i16, language)
     }
 }
@@ -1657,6 +1781,57 @@ pub async fn stt_transcribe_pcm16k(
     let stt = mgr.stt.read().await;
     stt.transcribe(&samples_i16, None).await.map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn voice_stt_status(
+    state: tauri::State<'_, VoiceManagerState>,
+) -> Result<serde_json::Value, String> {
+    let mgr = state.read().await;
+    let registry = mgr.registry.read().await;
+    let installed = registry.stt_model_path().is_some();
+    let stt = mgr.stt.read().await;
+    Ok(serde_json::json!({
+        "model_id": "whisper-large-v3-turbo-q5_1",
+        "installed": installed,
+        "loaded": stt.is_ready().await,
+        "size_bytes": 809_000_000u64,
+    }))
+}
+
+/// Downloads + loads the whisper STT model. Idempotent: re-loads if
+/// already on disk; downloads if missing. Progress events stream on
+/// channel `voice://stt-download-progress`.
+#[tauri::command]
+pub async fn voice_stt_download(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, VoiceManagerState>,
+) -> Result<(), String> {
+    let mgr = state.read().await;
+    let registry = mgr.registry.read().await;
+    let install_dir = registry.voices_dir().join("_stt").join("whisper-large-v3-turbo-q5_1");
+    drop(registry);
+
+    let model_path = install_dir.join("ggml-large-v3-turbo-q5_1.bin");
+    if !model_path.exists() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let app2 = app_handle.clone();
+        tokio::spawn(async move {
+            while let Some(p) = rx.recv().await {
+                let _ = app2.emit("voice://stt-download-progress", &p);
+            }
+        });
+        crate::voice::download::download_stt_model(
+            "whisper-large-v3-turbo-q5_1",
+            install_dir.clone(),
+            tx,
+            cancel,
+        ).await.map_err(|e| e.to_string())?;
+    }
+
+    let stt = mgr.stt.read().await;
+    stt.load_model(&model_path).await.map_err(|e| e.to_string())
+}
 ```
 
 - [ ] **Step 2: Add minimal `playback::play_pcm_blocking`**
@@ -1718,6 +1893,8 @@ tauri::generate_handler![
     crate::commands::voice_download,
     crate::commands::tts_speak,
     crate::commands::stt_transcribe_pcm16k,
+    crate::commands::voice_stt_status,
+    crate::commands::voice_stt_download,
 ]
 ```
 
@@ -1927,32 +2104,47 @@ git add mur-agent-gui/src-tauri/src/voice/hotkey.rs \
 git commit -m "M1.6.1: register Cmd+Shift+' (Ctrl+Shift+' off macOS) as default PTT shortcut"
 ```
 
-### Task M1.6.2: Frontend PTT button + transcript bridge
+### Task M1.6.2: Frontend PTT button + first-use STT-download modal + transcript bridge
 
 **Files:**
 - Create: `mur-agent-gui/ui/src/voice/PttButton.tsx`
+- Create: `mur-agent-gui/ui/src/voice/SttFirstUseModal.tsx`
 
-- [ ] **Step 1: Implement**
+The first PTT press triggers a one-time STT model download (~809 MB, ~3 min on broadband). The button checks `voice_stt_status` on mount; if `!installed`, the first hotkey press opens `<SttFirstUseModal>` instead of capturing audio. The user accepts → modal calls `voice_stt_download` and shows progress; subsequent hotkey presses go straight to capture.
+
+- [ ] **Step 1: Implement PttButton with STT-status guard**
 
 ```tsx
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { SttFirstUseModal } from "./SttFirstUseModal";
+
+interface SttStatus { installed: boolean; loaded: boolean; size_bytes: number; }
 
 export function PttButton({ onTranscript }: { onTranscript: (t: string) => void }) {
   const [recording, setRecording] = useState(false);
-  const [held, setHeld] = useState(0);
+  const [showFirstUse, setShowFirstUse] = useState(false);
+  const [sttReady, setSttReady] = useState(false);
+
+  useEffect(() => {
+    invoke<SttStatus>("voice_stt_status").then((s) => setSttReady(s.installed && s.loaded));
+  }, []);
 
   useEffect(() => {
     let downAt = 0;
     const u1 = listen("ptt://hotkey-down", () => {
+      if (!sttReady) {
+        setShowFirstUse(true);
+        return;
+      }
       downAt = Date.now();
       setRecording(true);
       invoke("voice_start_capture").catch(() => {});
     });
     const u2 = listen("ptt://hotkey-up", async () => {
+      if (!sttReady) return;
       const ms = Date.now() - downAt;
-      setHeld(ms);
       setRecording(false);
       if (ms < 250) return; // debounce short presses
       const samples = await invoke<number[]>("voice_stop_capture");
@@ -1960,29 +2152,124 @@ export function PttButton({ onTranscript }: { onTranscript: (t: string) => void 
       if (text) onTranscript(text);
     });
     return () => { u1.then((f) => f()); u2.then((f) => f()); };
-  }, [onTranscript]);
+  }, [onTranscript, sttReady]);
 
   return (
-    <div className={[
-      "fixed bottom-6 right-6 rounded-full p-4 shadow-lg",
-      recording ? "bg-rose-600" : "bg-zinc-700",
-    ].join(" ")}>
-      {recording ? "● rec" : "Cmd+Shift+'"}
+    <>
+      <div className={[
+        "fixed bottom-6 right-6 rounded-full p-4 shadow-lg",
+        recording ? "bg-rose-600" : sttReady ? "bg-zinc-700" : "bg-amber-700",
+      ].join(" ")}>
+        {recording ? "● rec" : sttReady ? "Cmd+Shift+'" : "Set up voice"}
+      </div>
+      {showFirstUse && (
+        <SttFirstUseModal
+          onDone={() => { setShowFirstUse(false); setSttReady(true); }}
+          onCancel={() => setShowFirstUse(false)}
+        />
+      )}
+    </>
+  );
+}
+```
+
+- [ ] **Step 2: Implement SttFirstUseModal (one-time download UX)**
+
+```tsx
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+interface DownloadProgress {
+  AssetProgress?: { name: string; downloaded_bytes: number; total_bytes: number };
+  Done?: object;
+}
+
+export function SttFirstUseModal({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+  const [phase, setPhase] = useState<"intro" | "downloading" | "loading">("intro");
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
+
+  useEffect(() => {
+    if (phase !== "downloading") return;
+    const u = listen<DownloadProgress>("voice://stt-download-progress", (e) => {
+      if (e.payload.AssetProgress) {
+        const { downloaded_bytes, total_bytes } = e.payload.AssetProgress;
+        setProgress({ done: downloaded_bytes, total: total_bytes });
+      } else if (e.payload.Done !== undefined) {
+        setPhase("loading");
+      }
+    });
+    return () => { u.then((f) => f()); };
+  }, [phase]);
+
+  async function start() {
+    setPhase("downloading");
+    try {
+      await invoke("voice_stt_download");
+      onDone();
+    } catch {
+      onCancel();
+    }
+  }
+
+  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+  const mb = (n: number) => (n / 1_000_000).toFixed(0);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+      <div className="bg-zinc-900 rounded-lg p-6 max-w-md border border-zinc-700">
+        {phase === "intro" && (
+          <>
+            <h2 className="text-lg font-medium mb-2">Set up voice (one-time)</h2>
+            <p className="text-sm opacity-80 mb-4">
+              Speech recognition runs on-device. We need to download the speech model
+              (~809 MB, ~3 min on broadband). It will live in
+              <code className="text-xs"> ~/Library/Application Support/mur/voices/_stt/ </code>
+              and is verified with a cryptographic signature before use.
+            </p>
+            <p className="text-sm opacity-80 mb-4">Your voice never leaves this Mac.</p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={onCancel} className="px-4 py-2 text-sm">Not now</button>
+              <button onClick={start} className="px-4 py-2 text-sm bg-emerald-700 rounded">
+                Download speech model
+              </button>
+            </div>
+          </>
+        )}
+        {phase === "downloading" && (
+          <>
+            <h2 className="text-lg font-medium mb-2">Downloading speech model…</h2>
+            <div className="h-2 bg-zinc-800 rounded overflow-hidden mb-2">
+              <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
+            </div>
+            <div className="text-xs opacity-70">
+              {mb(progress.done)} / {mb(progress.total)} MB ({pct}%)
+            </div>
+          </>
+        )}
+        {phase === "loading" && (
+          <>
+            <h2 className="text-lg font-medium mb-2">Loading model…</h2>
+            <div className="text-xs opacity-70">This will take a few seconds.</div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
 ```
 
-- [ ] **Step 2: Add the matching `voice_start_capture` / `voice_stop_capture` tauri commands** to `commands.rs` — these wrap `audio::start_capture` and `CaptureBuffer::drain` respectively. (Implementation pattern mirrors M1.5.1 voice commands; ~40 LOC.)
+- [ ] **Step 3: Add the matching `voice_start_capture` / `voice_stop_capture` tauri commands** to `commands.rs` — these wrap `audio::start_capture` and `CaptureBuffer::drain` respectively. (Implementation pattern mirrors M1.5.1 voice commands; ~40 LOC.)
 
-- [ ] **Step 3: Build + commit**
+- [ ] **Step 4: Build + commit**
 
 ```bash
 cd mur-agent-gui/ui && npm run build && cd ../..
 cargo build -p mur-agent-gui
 git add mur-agent-gui/ui/src/voice/PttButton.tsx \
+        mur-agent-gui/ui/src/voice/SttFirstUseModal.tsx \
         mur-agent-gui/src-tauri/src/commands.rs
-git commit -m "M1.6.2: PttButton UI + voice_start_capture / voice_stop_capture commands"
+git commit -m "M1.6.2: PttButton + SttFirstUseModal (first-use STT download flow) + capture commands"
 ```
 
 ### Task M1.6.3: Hotkey rebinder UI
@@ -2124,11 +2411,13 @@ gh pr create --base main --head feat/mur-agent-d1-voice --title "feat(gui): D1 �
 Before declaring M1 done:
 
 - [ ] **Spec coverage** — every bullet in roadmap §4.1 has a corresponding task above (Kokoro TTS / whisper STT / 5 voices / bundle+download split / Cmd+Shift+' hotkey / first-byte tricks / privacy badge / no voice cloning).
-- [ ] **Acceptance §4.1 close** — all 4 acceptance bullets pass:
-  - [ ] M2 large-v3-turbo q5_1 RTF ≤ 0.5× (M1.6.4 bench)
+- [ ] **Bundle target** — installer ~190 MB on macOS Apple Silicon (down from initial ~1 GB by moving whisper to download-on-first-use). After STT + 4 voices downloaded: ~1.3 GB on disk, **shared across all agents** via `~/Library/Application Support/mur/voices/` so per-agent .app shell stays ~30 MB.
+- [ ] **Acceptance §4.1 close** — all bullets pass:
+  - [ ] M2 large-v3-turbo q5_1 RTF ≤ 0.5× (M1.6.4 bench, post-download)
   - [ ] Kokoro first chunk ≤ 250 ms (M1.6.4 bench)
   - [ ] Hotkey rebindable in Settings (M1.6.3)
   - [ ] Missing voice auto-downloads with SHA-256 verify (M1.2.2 + M1.2.4)
+  - [ ] Missing whisper STT model auto-downloads on first PTT use with same SHA-256 + Ed25519 verify (M1.4.1b + M1.6.2 SttFirstUseModal)
 - [ ] **No placeholders** — every step has concrete code or commands. (Step 2 of M1.6.3 references "implementation pattern; ~80 LOC frontend + ~30 LOC Rust" and Step 1 of M1.6.4 cites "~100 LOC" — these are deliberately budgeted bounds for fresh-context impl, not placeholders; the contracts are specified.)
 - [ ] **Type consistency** — `VoiceManifest`, `AssetEntry`, `InstalledVoice`, `PttFsm`, `TtsEngine`, `SttEngine` names match across Rust + TS.
 - [ ] **No regression** — companion's 8 phase-1.1 integration tests + M0 hook-chain tests all still pass.
