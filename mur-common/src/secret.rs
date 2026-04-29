@@ -119,11 +119,84 @@ impl SecretRef {
                 .map_err(|e| SecretError::KeychainBackend(format!("join: {e}")))?;
                 res.map(SecretString::from)
             }
+            SecretRef::File(path) => resolve_file(path).await,
             _ => Err(SecretError::Parse(
                 "resolve not implemented for this variant yet".into(),
             )),
         }
     }
+}
+
+async fn resolve_file(path: &std::path::Path) -> Result<SecretString, SecretError> {
+    let expanded = shellexpand::full(&path.to_string_lossy())
+        .map_err(|e| SecretError::Parse(format!("expand {path:?}: {e}")))?
+        .to_string();
+    let p = std::path::PathBuf::from(expanded);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = tokio::fs::metadata(&p)
+            .await
+            .map_err(|e| SecretError::FileRead {
+                path: p.display().to_string(),
+                source: e,
+            })?;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(SecretError::FileMode(format!(
+                "{}: mode {:o} grants group/world access",
+                p.display(),
+                mode
+            )));
+        }
+    }
+
+    let bytes = tokio::fs::read(&p).await.map_err(|e| SecretError::FileRead {
+        path: p.display().to_string(),
+        source: e,
+    })?;
+
+    let plaintext = if p.extension().and_then(|s| s.to_str()) == Some("age") {
+        decrypt_age(&bytes).await?
+    } else {
+        String::from_utf8(bytes).map_err(|e| SecretError::AgeDecrypt(e.to_string()))?
+    };
+    let trimmed = plaintext.trim_end_matches(['\n', '\r']).to_string();
+    Ok(SecretString::from(trimmed))
+}
+
+async fn decrypt_age(bytes: &[u8]) -> Result<String, SecretError> {
+    let id_path: std::path::PathBuf = match std::env::var("MUR_AGE_IDENTITY_PATH") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => dirs::home_dir()
+            .ok_or_else(|| {
+                SecretError::AgeDecrypt(
+                    "MUR_AGE_IDENTITY_PATH unset and home dir not resolvable".into(),
+                )
+            })?
+            .join(".mur/age/identity.txt"),
+    };
+
+    let id_str = tokio::fs::read_to_string(&id_path).await.map_err(|e| {
+        SecretError::AgeDecrypt(format!("read identity {}: {}", id_path.display(), e))
+    })?;
+    let identity: age::x25519::Identity = id_str
+        .trim()
+        .parse()
+        .map_err(|e: &str| SecretError::AgeDecrypt(format!("parse identity: {e}")))?;
+
+    let decryptor = age::Decryptor::new(bytes)
+        .map_err(|e| SecretError::AgeDecrypt(e.to_string()))?;
+    let mut reader = decryptor
+        .decrypt(std::iter::once(&identity as &dyn age::Identity))
+        .map_err(|e| SecretError::AgeDecrypt(e.to_string()))?;
+    let mut out = String::new();
+    use std::io::Read;
+    reader
+        .read_to_string(&mut out)
+        .map_err(|e| SecretError::AgeDecrypt(e.to_string()))?;
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -334,5 +407,71 @@ mod resolve_keychain_tests {
             matches!(err, SecretError::KeychainNotFound { .. }),
             "got {err:?}"
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod resolve_file_tests {
+    use super::*;
+    use secrecy::ExposeSecret;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn reads_plaintext_0600() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("k.txt");
+        std::fs::write(&p, "abc\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let s = SecretRef::File(p);
+        let v = s.resolve().await.unwrap();
+        assert_eq!(v.expose_secret(), "abc"); // trailing newline stripped
+    }
+
+    #[tokio::test]
+    async fn rejects_world_readable() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("k.txt");
+        std::fs::write(&p, "abc").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let s = SecretRef::File(p);
+        let err = s.resolve().await.unwrap_err();
+        assert!(matches!(err, SecretError::FileMode(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn decrypts_age_recipient_file() {
+        let dir = tempdir().unwrap();
+        let identity = age::x25519::Identity::generate();
+        let recipient = identity.to_public();
+        let payload = b"shh-from-age";
+
+        let mut encrypted: Vec<u8> = Vec::new();
+        let encryptor =
+            age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
+                .unwrap();
+        let mut writer = encryptor.wrap_output(&mut encrypted).unwrap();
+        std::io::Write::write_all(&mut writer, payload).unwrap();
+        writer.finish().unwrap();
+
+        let enc_path = dir.path().join("k.age");
+        std::fs::write(&enc_path, &encrypted).unwrap();
+        std::fs::set_permissions(&enc_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let id_path = dir.path().join("identity.txt");
+        use secrecy::ExposeSecret as _;
+        std::fs::write(&id_path, identity.to_string().expose_secret()).unwrap();
+        std::fs::set_permissions(&id_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        // SAFETY: setting an env var read by decrypt_age. Tests serialize on
+        // the same env var, so concurrent writes would race; we serialize via
+        // a Mutex-held guard.
+        unsafe {
+            std::env::set_var("MUR_AGE_IDENTITY_PATH", &id_path);
+        }
+        let s = SecretRef::File(enc_path);
+        let v = s.resolve().await.unwrap();
+        assert_eq!(v.expose_secret(), "shh-from-age");
+        unsafe {
+            std::env::remove_var("MUR_AGE_IDENTITY_PATH");
+        }
     }
 }
