@@ -103,29 +103,40 @@ impl SidecarManager {
     }
 
     /// Send SIGTERM to the runtime + its process group. Idempotent.
+    ///
+    /// Releases the inner Mutex before the 2s drain sleep so concurrent
+    /// `start`/`pid`/`handle_exit` callers don't block. The taken
+    /// `CommandChild` handles its own SIGKILL on drop if we never get
+    /// to it.
     pub fn stop(&self) -> Result<()> {
-        let mut state = self.inner.lock().unwrap();
-        state.user_stopped = true;
-        if let Some(child) = state.child.take() {
-            // tauri-plugin-shell's CommandChild::kill sends SIGKILL
-            // on Unix. Better: send SIGTERM to the process group so
-            // the runtime can flush telemetry + drop its lock.
-            #[cfg(unix)]
-            {
-                let pid = child.pid() as i32;
-                // SAFETY: kill(2) with -pid sends to process group;
-                // POSIX-defined behaviour; runtime catches SIGTERM.
-                unsafe {
-                    libc::kill(-pid, libc::SIGTERM);
-                }
-                // Give the runtime up to 5s to clean up; then SIGKILL.
-                std::thread::sleep(Duration::from_secs(2));
-                let _ = child.kill();
+        // Take the child (and set user_stopped) under the lock, then
+        // release before the long-running drain sleep.
+        let child = {
+            let mut state = self.inner.lock().unwrap();
+            state.user_stopped = true;
+            state.child.take()
+        };
+
+        let Some(child) = child else { return Ok(()) };
+
+        // tauri-plugin-shell's CommandChild::kill sends SIGKILL
+        // on Unix. Better: send SIGTERM to the process group so
+        // the runtime can flush telemetry + drop its lock.
+        #[cfg(unix)]
+        {
+            let pid = child.pid() as i32;
+            // SAFETY: kill(2) with -pid sends to process group;
+            // POSIX-defined behaviour; runtime catches SIGTERM.
+            unsafe {
+                libc::kill(-pid, libc::SIGTERM);
             }
-            #[cfg(not(unix))]
-            {
-                let _ = child.kill();
-            }
+            // Give the runtime up to 2s to clean up; then SIGKILL.
+            std::thread::sleep(Duration::from_secs(2));
+            let _ = child.kill();
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = child.kill();
         }
         Ok(())
     }

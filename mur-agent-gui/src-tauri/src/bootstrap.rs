@@ -144,6 +144,22 @@ fn run_clone_rekey(_agent_home: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Best-effort: create the `mur_agent_<name>` discovery symlink in
+/// `MUR_AGENT_BIN_DIR` (default `~/.local/bin`) so an installed
+/// `mur` CLI can `agent list` / `agent send` against this install.
+///
+/// Resolution order for the symlink target:
+/// 1. `MUR_AGENT_RUNTIME_BIN` env (explicit override)
+/// 2. The bundled sidecar's absolute path (Tauri puts it next to
+///    the GUI executable, e.g. `MyAgent.app/Contents/MacOS/
+///    mur-agent-runtime`)
+/// 3. Skip — the GUI is the lifecycle owner; CLI integration just
+///    isn't available without a separate `mur` install.
+///
+/// The previous version naively `symlink("mur-agent-runtime", …)`
+/// which produced a DANGLING symlink for users who never had a
+/// system-wide runtime. That broke `mur agent list` for any
+/// GUI-installed agent. See PR #41 review § Critical #1.
 fn ensure_symlink(agent_name: &str) -> Result<()> {
     let bin_dir = if let Ok(d) = std::env::var("MUR_AGENT_BIN_DIR") {
         PathBuf::from(d)
@@ -157,23 +173,51 @@ fn ensure_symlink(agent_name: &str) -> Result<()> {
     if symlink.exists() {
         return Ok(());
     }
-    // Resolve the runtime binary (sidecar) by querying the current
-    // exe parent — `mur_agent_<name>` symlinks are conventionally
-    // created by `mur agent create` to point at the runtime; in
-    // GUI-app mode the sidecar binary may not be exposed there yet
-    // (Tauri puts it inside the .app bundle). v1 leaves a dangling
-    // symlink for CLI users to fix; P2 may resolve to the bundled
-    // sidecar's actual disk path.
-    let runtime_target =
-        std::env::var("MUR_AGENT_RUNTIME_BIN").unwrap_or_else(|_| "mur-agent-runtime".to_string());
+
+    let runtime_target = if let Ok(v) = std::env::var("MUR_AGENT_RUNTIME_BIN") {
+        Some(PathBuf::from(v))
+    } else {
+        // Resolve the bundled sidecar relative to the current
+        // executable. Tauri 2 places `bundle.externalBin` entries
+        // next to the main bin on Unix; on macOS specifically
+        // they end up in `.app/Contents/MacOS/`.
+        std::env::current_exe().ok().and_then(|exe| {
+            exe.parent().map(|p| {
+                p.join(if cfg!(windows) {
+                    "mur-agent-runtime.exe"
+                } else {
+                    "mur-agent-runtime"
+                })
+            })
+        })
+    };
+
+    let Some(target) = runtime_target else {
+        warn!(
+            agent = %agent_name,
+            "skipping CLI discovery symlink: cannot resolve runtime binary path \
+             (set MUR_AGENT_RUNTIME_BIN to override)"
+        );
+        return Ok(());
+    };
+
+    if !target.exists() {
+        warn!(
+            target = %target.display(),
+            agent = %agent_name,
+            "skipping CLI discovery symlink: target binary not present"
+        );
+        return Ok(());
+    }
+
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&runtime_target, &symlink)
+        std::os::unix::fs::symlink(&target, &symlink)
             .with_context(|| format!("symlink {}", symlink.display()))?;
     }
     #[cfg(not(unix))]
     {
-        let _ = symlink; // Windows would need a junction or .lnk; out of v1 scope
+        let _ = (symlink, target); // Windows: junctions need elevation; defer to P2
     }
     Ok(())
 }

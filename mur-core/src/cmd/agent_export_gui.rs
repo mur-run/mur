@@ -161,9 +161,16 @@ fn phase_2_prepare_payload(opts: &ExportGuiOptions, staging: &Path) -> Result<Bu
     let payload_dir = staging.join("payload");
     std::fs::create_dir_all(&payload_dir)?;
 
-    // Template mode strips identity + UUID; clone mode preserves them.
-    // For v1 we use the existing pkg::export_to_pkg and post-process
-    // for template mode by re-tarring without identity files.
+    // Template mode strips identity + rotation history; clone mode
+    // preserves everything. We use the existing pkg::export_to_pkg
+    // to produce a base tarball, then post-process for template
+    // mode by re-tarring without identity.{key,pub} and rotations.jsonl.
+    //
+    // SECURITY: Shipping a "template" bundle that contains the
+    // source agent's private key would be a class-A foot-gun
+    // (see Cisco SSH host-key incident). Bootstrap mints a fresh
+    // keypair anyway, so stripping is pure defence-in-depth.
+    // See PR #41 review § Important #8.
     let raw_pkg = staging.join("agent.murpkg.tar.gz");
     mur_agent_runtime::export::pkg::export_to_pkg(&opts.agent_home, &raw_pkg)?;
 
@@ -174,11 +181,12 @@ fn phase_2_prepare_payload(opts: &ExportGuiOptions, staging: &Path) -> Result<Bu
             std::fs::copy(&raw_pkg, &bundled)?;
         }
         BundleMode::Template => {
-            // For v1 keep clone-equivalent on disk; the bootstrap-
-            // mode field in metadata.json signals to first-launch
-            // logic to mint fresh identity. P1.6 may strip
-            // identity.* files here for defence-in-depth.
-            std::fs::copy(&raw_pkg, &bundled)?;
+            strip_identity_from_tarball(&raw_pkg, &bundled).with_context(|| {
+                format!(
+                    "strip identity from template-mode payload ({})",
+                    raw_pkg.display()
+                )
+            })?;
         }
     }
 
@@ -706,6 +714,48 @@ fn host_target_triple() -> Result<String> {
     Ok(triple.into())
 }
 
+/// Re-tar `src` into `dst`, omitting any entry whose path basename
+/// matches a name that could leak the source agent's identity.
+/// Used by template-mode export to ensure the recipient's bootstrap
+/// must mint fresh keys.
+fn strip_identity_from_tarball(src: &Path, dst: &Path) -> Result<()> {
+    use flate2::read::GzDecoder;
+    use flate2::write::GzEncoder;
+    use std::io::Read;
+
+    const STRIP: &[&str] = &["identity.key", "identity.pub", "rotations.jsonl"];
+
+    let in_file = std::fs::File::open(src).with_context(|| format!("open {}", src.display()))?;
+    let mut decoder = tar::Archive::new(GzDecoder::new(in_file));
+
+    let out_file =
+        std::fs::File::create(dst).with_context(|| format!("create {}", dst.display()))?;
+    let encoder = GzEncoder::new(out_file, flate2::Compression::default());
+    let mut builder = tar::Builder::new(encoder);
+
+    for entry in decoder.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let basename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        if STRIP.contains(&basename) {
+            tracing::debug!(stripped = %path.display(), "template mode: omitting from payload");
+            continue;
+        }
+        let mut header = entry.header().clone();
+        let size = header.size()?;
+        let mut buf = Vec::with_capacity(size as usize);
+        entry.read_to_end(&mut buf)?;
+        builder.append_data(&mut header, &path, buf.as_slice())?;
+    }
+
+    let encoder = builder.into_inner()?;
+    encoder.finish()?;
+    Ok(())
+}
+
 fn sanitize_for_bundle_id(name: &str) -> String {
     name.chars()
         .map(|c| {
@@ -847,6 +897,81 @@ mod tests {
         // No failures expected — fg/bg, border/bg are both fine; accent_fg
         // pair is skipped.
         assert!(failures.is_empty(), "expected pass, got: {failures:?}");
+    }
+
+    #[test]
+    fn strip_identity_removes_sensitive_files_and_keeps_others() {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+
+        let tmp = std::env::temp_dir().join(format!("mur-strip-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Build a fake source tarball with all the sensitive
+        // names + one innocent file.
+        let src = tmp.join("source.tar.gz");
+        {
+            let f = std::fs::File::create(&src).unwrap();
+            let enc = GzEncoder::new(f, Compression::default());
+            let mut t = tar::Builder::new(enc);
+            for (path, body) in [
+                ("identity.key", b"SECRET" as &[u8]),
+                ("identity.pub", b"z123pub"),
+                ("rotations.jsonl", b"{\"rotation\":1}"),
+                ("profile.yaml", b"name: demo"),
+                ("sys_prompt.md", b"You are a demo agent."),
+                ("skills/web.md", b"# Web skill"),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                t.append_data(&mut header, path, body).unwrap();
+            }
+            let enc = t.into_inner().unwrap();
+            enc.finish().unwrap();
+        }
+
+        let dst = tmp.join("stripped.tar.gz");
+        super::strip_identity_from_tarball(&src, &dst).unwrap();
+
+        // Re-read the stripped tarball.
+        let f = std::fs::File::open(&dst).unwrap();
+        let mut a = tar::Archive::new(flate2::read::GzDecoder::new(f));
+        let mut paths = Vec::new();
+        for entry in a.entries().unwrap() {
+            let entry = entry.unwrap();
+            paths.push(entry.path().unwrap().to_string_lossy().to_string());
+        }
+        paths.sort();
+
+        assert!(
+            !paths.iter().any(|p| p.contains("identity.key")),
+            "identity.key should be stripped: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("identity.pub")),
+            "identity.pub should be stripped: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("rotations.jsonl")),
+            "rotations.jsonl should be stripped: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p == "profile.yaml"),
+            "profile.yaml must survive: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p == "sys_prompt.md"),
+            "sys_prompt.md must survive: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p == "skills/web.md"),
+            "skills/ tree must survive: {paths:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
