@@ -10,27 +10,14 @@
 //! See spec § 5.
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
+use mur_common::bundle::{BundleMode, EmbeddedMetadata};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BundleMode {
-    Template,
-    Clone,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddedMetadata {
-    pub schema_version: u32,
-    pub agent_name: String,
-    pub display_name: String,
-    pub mode: BundleMode,
-    pub theme_default: String,
-    pub mur_version: String,
-}
+// BundleMode + EmbeddedMetadata are imported from mur-common; the
+// types live there so the writer (mur-core's export pipeline) and
+// the reader (this module) share a single schema source.
 
 /// Public entry — call once at app launch. `bundle_resource_dir` is
 /// `app.path().resource_dir()` from the Tauri main; passed as an
@@ -68,7 +55,6 @@ pub fn bootstrap_if_needed(bundle_resource_dir: &Path) -> Result<EmbeddedMetadat
         // by comparing the embedded UUID against the on-disk profile.
         // If they don't match, refuse to launch — the second install
         // would otherwise silently use the first install's identity.
-        // See PR #41 review § Important #10.
         check_existing_agent_compatibility(&agent_home, &metadata)?;
         info!(
             agent_home = %agent_home.display(),
@@ -193,10 +179,11 @@ fn run_clone_rekey(_agent_home: &Path) -> Result<()> {
 /// 3. Skip — the GUI is the lifecycle owner; CLI integration just
 ///    isn't available without a separate `mur` install.
 ///
-/// The previous version naively `symlink("mur-agent-runtime", …)`
-/// which produced a DANGLING symlink for users who never had a
-/// system-wide runtime. That broke `mur agent list` for any
-/// GUI-installed agent. See PR #41 review § Critical #1.
+/// A naïve `symlink("mur-agent-runtime", …)` (resolved through
+/// `PATH`) would produce a dangling symlink for users without a
+/// system-wide runtime, breaking `mur agent list` for any
+/// GUI-installed agent. We resolve to the bundled binary's
+/// absolute path instead.
 fn ensure_symlink(agent_name: &str) -> Result<()> {
     let bin_dir = if let Ok(d) = std::env::var("MUR_AGENT_BIN_DIR") {
         PathBuf::from(d)

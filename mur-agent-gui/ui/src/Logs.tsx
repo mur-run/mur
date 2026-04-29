@@ -1,27 +1,39 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { logs as fetchLogs, stats, type StatsView } from "./lib/api";
 
+// Bound the in-memory tail so a chatty agent doesn't OOM the webview.
+// At 100 chars/line this caps the buffer at ~500 KB.
+const MAX_TAIL_LINES = 5_000;
+
 export default function Logs() {
-  const [tail, setTail] = useState<string>("");
+  const [tail, setTail] = useState<string[]>([]);
   const [statsView, setStatsView] = useState<StatsView | null>(null);
   const [filter, setFilter] = useState("");
   const followRef = useRef<HTMLDivElement>(null);
 
   // Initial load: pull last 200 lines of stderr.log + stats counters.
   useEffect(() => {
-    fetchLogs(200).then(setTail).catch(() => {});
+    fetchLogs(200)
+      .then((s) => setTail(s.split("\n")))
+      .catch(() => {});
     stats().then(setStatsView).catch(() => {});
   }, []);
 
   // Subscribe to live sidecar:stdout / sidecar:stderr events emitted
-  // by sidecar.rs. Append each line to the tail buffer.
+  // by sidecar.rs. Append each line to the tail buffer with a hard
+  // cap (drop oldest) so long-running agents don't grow it forever.
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
     const subscribe = async () => {
       for (const ev of ["sidecar:stdout", "sidecar:stderr"]) {
         const off = await listen<string>(ev, (e) => {
-          setTail((prev) => `${prev}\n${e.payload}`);
+          setTail((prev) => {
+            const next = prev.length >= MAX_TAIL_LINES
+              ? [...prev.slice(prev.length - MAX_TAIL_LINES + 1), e.payload]
+              : [...prev, e.payload];
+            return next;
+          });
         });
         unlisteners.push(off);
       }
@@ -39,12 +51,14 @@ export default function Logs() {
     }
   }, [tail]);
 
-  const visible = filter
-    ? tail
-        .split("\n")
-        .filter((l) => l.toLowerCase().includes(filter.toLowerCase()))
-        .join("\n")
-    : tail;
+  // Recompute filter only when tail or filter changes (not on
+  // every keystroke unrelated to the buffer).
+  const visible = useMemo(() => {
+    const lines = filter
+      ? tail.filter((l) => l.toLowerCase().includes(filter.toLowerCase()))
+      : tail;
+    return lines.join("\n");
+  }, [tail, filter]);
 
   return (
     <div

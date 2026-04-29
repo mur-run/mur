@@ -31,8 +31,7 @@ fn main() -> Result<()> {
             // telemetry and drops running.lock before we exit. Routes
             // exit through `app.exit(0)` so Tauri tears down windows
             // and runs plugin on_exit hooks (vs. std::process::exit
-            // which bypasses them). Per PR #41 review § Important #6
-            // + § Minor #15.
+            // which bypasses them).
             #[cfg(unix)]
             {
                 let app_handle = app.handle().clone();
@@ -231,7 +230,6 @@ fn init_tracing() {
     // Tee to stderr too: if the file writer fails (disk full, perm
     // denied, container without home dir), the operator still sees
     // logs in the terminal that launched the .app for debugging.
-    // Per PR #41 review § Minor #14.
     let writer = file_appender.and(std::io::stderr);
     tracing_subscriber::fmt()
         .with_env_filter(filter)

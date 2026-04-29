@@ -32,15 +32,20 @@ export default function App() {
   // prefers-color-scheme — applying "light" or "dark" via the Tauri
   // command. The actual stored preference (system vs explicit theme)
   // is persisted by tauri-plugin-store; this hook only acts when the
-  // localStorage key indicates system-following mode.
+  // localStorage key indicates system-following mode. Caches the last
+  // applied target in a ref so we don't fire a Tauri IPC on every
+  // matchMedia event when the OS toggles back and forth without a
+  // semantic change.
   useEffect(() => {
     const matcher = window.matchMedia("(prefers-color-scheme: dark)");
+    let lastApplied: string | null = null;
     const apply = () => {
       const pref = localStorage.getItem("mur.theme.mode");
-      if (pref === "system") {
-        const target = matcher.matches ? "dark" : "light";
-        setThemeApi(target).catch(() => {});
-      }
+      if (pref !== "system") return;
+      const target = matcher.matches ? "dark" : "light";
+      if (target === lastApplied) return;
+      lastApplied = target;
+      setThemeApi(target).catch(() => {});
     };
     apply();
     matcher.addEventListener("change", apply);
