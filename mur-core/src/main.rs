@@ -893,6 +893,9 @@ enum AgentAction {
         /// Also delete the agent's data directory
         #[arg(long)]
         purge: bool,
+        /// Skip the unread-inbox guard (R13)
+        #[arg(long)]
+        force: bool,
     },
     /// Rename an agent (updates dir, profile.name, and symlink)
     Rename {
@@ -1444,7 +1447,9 @@ async fn async_main() -> Result<()> {
             AgentAction::List { json } => cmd::agent::cmd_list(json)?,
             AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
             AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
-            AgentAction::Remove { name, purge } => cmd::agent::cmd_remove(&name, purge)?,
+            AgentAction::Remove { name, purge, force } => {
+                cmd::agent::cmd_remove(&name, purge, force)?
+            }
             AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
             AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
             AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
