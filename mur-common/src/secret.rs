@@ -222,10 +222,12 @@ async fn resolve_file(path: &std::path::Path) -> Result<SecretString, SecretErro
         }
     }
 
-    let bytes = tokio::fs::read(&p).await.map_err(|e| SecretError::FileRead {
-        path: p.display().to_string(),
-        source: e,
-    })?;
+    let bytes = tokio::fs::read(&p)
+        .await
+        .map_err(|e| SecretError::FileRead {
+            path: p.display().to_string(),
+            source: e,
+        })?;
 
     let plaintext = if p.extension().and_then(|s| s.to_str()) == Some("age") {
         decrypt_age(&bytes).await?
@@ -256,8 +258,8 @@ async fn decrypt_age(bytes: &[u8]) -> Result<String, SecretError> {
         .parse()
         .map_err(|e: &str| SecretError::AgeDecrypt(format!("parse identity: {e}")))?;
 
-    let decryptor = age::Decryptor::new(bytes)
-        .map_err(|e| SecretError::AgeDecrypt(e.to_string()))?;
+    let decryptor =
+        age::Decryptor::new(bytes).map_err(|e| SecretError::AgeDecrypt(e.to_string()))?;
     let mut reader = decryptor
         .decrypt(std::iter::once(&identity as &dyn age::Identity))
         .map_err(|e| SecretError::AgeDecrypt(e.to_string()))?;
@@ -301,10 +303,7 @@ mod tests {
     #[test]
     fn parses_cmd_form() {
         let s: SecretRef = yaml::from_str("cmd:op read op://vault/item/field").unwrap();
-        assert_eq!(
-            s,
-            SecretRef::Cmd("op read op://vault/item/field".into())
-        );
+        assert_eq!(s, SecretRef::Cmd("op read op://vault/item/field".into()));
     }
 
     #[test]
@@ -343,7 +342,9 @@ mod resolve_env_tests {
     #[tokio::test]
     async fn resolves_env_when_set() {
         // SAFETY: uniquely named env var so concurrent tests don't collide.
-        unsafe { std::env::set_var("MUR_TEST_RESOLVE_ENV", "shhh"); }
+        unsafe {
+            std::env::set_var("MUR_TEST_RESOLVE_ENV", "shhh");
+        }
         let s = SecretRef::Env("MUR_TEST_RESOLVE_ENV".into());
         let v = s.resolve().await.unwrap();
         assert_eq!(v.expose_secret(), "shhh");
@@ -459,8 +460,8 @@ mod keychain_test_fixture {
 
 #[cfg(test)]
 mod resolve_keychain_tests {
-    use super::*;
     use super::keychain_test_fixture::install_mock;
+    use super::*;
     use secrecy::ExposeSecret;
 
     #[tokio::test]
@@ -603,8 +604,8 @@ mod check_tests {
 
 #[cfg(test)]
 mod keychain_helpers_tests {
-    use super::*;
     use super::keychain_test_fixture::install_mock;
+    use super::*;
     use secrecy::ExposeSecret;
 
     #[tokio::test]
