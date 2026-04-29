@@ -41,7 +41,7 @@ pub fn resolve_locale(relationship: &Relationship, locale: &str) -> (String, &'s
     {
         return (lang.into(), t);
     }
-    let t = embedded(relationship, "en-US")
-        .expect("en-US template must exist for every relationship");
+    let t =
+        embedded(relationship, "en-US").expect("en-US template must exist for every relationship");
     ("en-US".into(), t)
 }

@@ -3,8 +3,8 @@ use mur_common::companion::content_seed;
 #[test]
 fn all_seeds_parse_and_have_minimum_templates() {
     for (situation, locale, raw) in content_seed::all_seeds() {
-        let parsed =
-            content_seed::parse(raw).unwrap_or_else(|e| panic!("parse {situation:?} {locale}: {e}"));
+        let parsed = content_seed::parse(raw)
+            .unwrap_or_else(|e| panic!("parse {situation:?} {locale}: {e}"));
         assert_eq!(parsed.situation, situation);
         assert_eq!(parsed.locale, locale);
         assert!(

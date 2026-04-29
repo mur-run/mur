@@ -1,6 +1,7 @@
 //! `mur agent companion ...` subcommands (Phase 1.1).
 use clap::{Args, Subcommand};
 use proactive::ProactiveArgs;
+use quiet::QuietArgs;
 
 #[derive(Args, Debug)]
 pub struct CompanionArgs {
@@ -20,6 +21,8 @@ pub enum CompanionCmd {
     },
     /// Enable or disable proactive (companion-initiated) messages.
     Proactive(ProactiveArgs),
+    /// Pause or clear proactive messages for a duration or until a timestamp.
+    Quiet(QuietArgs),
 }
 
 pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
@@ -30,9 +33,11 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
             re_init,
         } => init::run(&name, answers, re_init).await,
         CompanionCmd::Proactive(args) => proactive::run(args).await,
+        CompanionCmd::Quiet(args) => quiet::run(args).await,
     }
 }
 
 mod init;
 mod proactive;
+mod quiet;
 mod util;

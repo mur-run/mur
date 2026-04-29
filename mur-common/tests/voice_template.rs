@@ -48,9 +48,8 @@ fn all_templates_use_only_known_placeholders() {
                 let mut idx = 0;
                 while let Some(start) = body[idx..].find("{{") {
                     let abs_start = idx + start;
-                    let end = body[abs_start..].find("}}").expect("unterminated {{")
-                        + abs_start
-                        + 2;
+                    let end =
+                        body[abs_start..].find("}}").expect("unterminated {{") + abs_start + 2;
                     let placeholder = &body[abs_start..end];
                     assert!(
                         allowed.contains(&placeholder),
