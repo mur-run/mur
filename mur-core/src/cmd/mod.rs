@@ -12,6 +12,7 @@ pub(crate) mod init;
 pub(crate) mod inject_cmd;
 pub(crate) mod learn;
 pub(crate) mod misc;
+pub(crate) mod model;
 pub(crate) mod pattern;
 pub(crate) mod reindex;
 pub(crate) mod server_cmd;

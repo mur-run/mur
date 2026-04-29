@@ -289,6 +289,8 @@ enum Commands {
         #[command(subcommand)]
         action: AgentAction,
     },
+    /// Manage shared model registry (~/.mur/models.yaml)
+    Model(cmd::model::ModelArgs),
     /// Verify documentation claims (paths, commands, code refs) against actual codebase
     Verify {
         /// Specific file to verify (default: scan all docs)
@@ -1453,6 +1455,7 @@ async fn async_main() -> Result<()> {
         } => cmd::server_cmd::cmd_serve(port, open, readonly).await?,
         Commands::Why { name } => cmd::inject_cmd::cmd_why(&name)?,
         Commands::Edit { name, quick } => cmd::pattern::cmd_edit(&name, quick)?,
+        Commands::Model(args) => cmd::model::run(args)?,
         Commands::Agent { action } => match action {
             AgentAction::Create {
                 name,
