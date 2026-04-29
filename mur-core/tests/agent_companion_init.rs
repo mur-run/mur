@@ -14,11 +14,14 @@ fn mur_bin() -> &'static str {
 fn init_with_answers_writes_profile_and_relationship_json() {
     let home = TempDir::new().unwrap();
     let mur_home = home.path().join(".mur");
+    let bin_dir = home.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
 
     // Pre-create an agent (--no-interactive uses defaults).
     let create = Command::new(mur_bin())
         .env("HOME", home.path())
         .env("MUR_HOME", &mur_home)
+        .env("MUR_AGENT_BIN_DIR", &bin_dir)
         .args([
             "agent",
             "create",
@@ -121,11 +124,14 @@ fn init_without_answers_or_interactive_fails_clean() {
 fn init_refuses_when_already_onboarded_without_re_init() {
     let home = TempDir::new().unwrap();
     let mur_home = home.path().join(".mur");
+    let bin_dir = home.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
 
     // Create + first init.
     let create = Command::new(mur_bin())
         .env("HOME", home.path())
         .env("MUR_HOME", &mur_home)
+        .env("MUR_AGENT_BIN_DIR", &bin_dir)
         .args([
             "agent",
             "create",
@@ -138,7 +144,12 @@ fn init_refuses_when_already_onboarded_without_re_init() {
         ])
         .output()
         .unwrap();
-    assert!(create.status.success());
+    assert!(
+        create.status.success(),
+        "agent create failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
 
     let answers = home.path().join("answers.yaml");
     std::fs::write(

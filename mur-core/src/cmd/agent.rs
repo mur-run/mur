@@ -255,15 +255,20 @@ fn resolve_runtime_target() -> PathBuf {
     if let Some(v) = std::env::var_os("MUR_AGENT_RUNTIME_BIN") {
         return PathBuf::from(v);
     }
+    let runtime_filename = if cfg!(windows) {
+        "mur-agent-runtime.exe"
+    } else {
+        "mur-agent-runtime"
+    };
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        let candidate = dir.join("mur-agent-runtime");
+        let candidate = dir.join(runtime_filename);
         if candidate.exists() {
             return candidate;
         }
     }
-    PathBuf::from("mur-agent-runtime")
+    PathBuf::from(runtime_filename)
 }
 
 fn default_entitlements_custom() -> Entitlements {
