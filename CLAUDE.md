@@ -102,6 +102,18 @@ LanceDB vector index is always rebuildable from YAML via `mur reindex`.
 - **`mur verify [--file path] [--all]`** — Scan docs for stale claims (paths, commands, code refs)
 - **`mur agent <subcommand>`** — Manage murmur agents (P0a). Subcommands: `create`, `list`, `status`, `stop`, `remove`, `rename`, `send`, `card`, `install-service`, `prompt {show|edit|set}`, `mcp {add|list|remove|rename}`, `skill {add|list|remove|show}`, `perm {show|set-mode|allow-host|deny-host|list-hosts|allow-read|allow-write|deny-path|allow-spawn|deny-spawn|set-limit}`, `export {--format=pkg|bin|gui}`, `doctor [--format ...]`, `stats`, `logs`. The runtime binary that backs each agent lives in `mur-agent-runtime/`.
 - **`mur agent doctor [--format pkg|bin|gui|all] [--json]`** — Pre-flight prereq check for export targets (no build, just diagnostics). Same logic is reused as the fail-fast step inside `--format gui` export pipeline.
+- **`mur agent companion <subcommand>`** — Manage the companion subsystem for an agent (Phase 1.1):
+  - `companion init <name> [--answers <yaml>] [--re-init]` — run the onboarding wizard or re-initialise voice config
+  - `companion proactive enable|disable <name>` — opt in or out of proactive sends
+  - `companion quiet <name> --for <duration>|--until <rfc3339>|--off` — pause proactive sends
+  - `companion voice <name> eject|rebuild|diff` — manage the composed `voice.md` file on disk
+  - `companion templates eject [--scope agent|user] [<rel>.<locale>]` — eject embedded voice templates for editing
+  - `companion content add <name> <situation> [--from-stdin|--file]` — add content-pool entries
+  - `companion inbox <name> [--unread-only]` — list messages in the inbox
+  - `companion ack <name> <msg-id> --good|--bad|--dismiss` — rate or dismiss a message
+  - `companion preview <name> --situation <s> [--no-llm]` — preview a generated message
+  - `companion why-did-you-message <name> [<msg-id>]` — replay the event chain that triggered a message
+  - `companion rhythm wipe <name> [--yes]` — reset companion state (preserves voice config)
 
 ### GUI Export (`mur agent export --format gui`)
 
@@ -176,6 +188,28 @@ On every supervisor startup, an expired `grace_expires_at` triggers `shred -u id
 - **Spec:** `docs/superpowers/specs/2026-04-24-murmur-agent-rekey-design.md`
 - **Plan:** `docs/superpowers/plans/2026-04-24-murmur-agent-rekey-plan.md` (+ `-COMPLETE.md`)
 - **PRs:** `mur-run/mur#30` (mur side: M1, M3, M4.1, M5.1, M6.1, M6.3) + `mur-run/mur-commander#12` (commander side: M2, M4.2/4.3, M5.2, M6.2)
+
+### Companion subsystem (Phase 1.1)
+
+The companion subsystem lives in `mur-agent-runtime/src/companion/`. It injects a relationship-keyed warm voice into the agent's `sys_prompt` and drives an opt-in proactive outbox. All state is stored under `~/.mur/agents/<name>/companion/` (`state.yaml`, `inbox/`, `content/`, `telemetry/`). The voice template chain is: embedded templates → `~/.mur/companion/templates/` (user-level overrides) → `~/.mur/agents/<name>/companion/voice.md` (ejected disk override).
+
+Submodules:
+
+- **`clock.rs`** — `Clock` trait + `SystemClock` + `MockClock` (deterministic test harness)
+- **`voice.rs`** — voice.md composition: in-memory rendering from onboarding answers, disk override chain, eject/rebuild/diff operations
+- **`i18n.rs`** — locale heuristic + `ensure_locale` (translate fallback via LLM or no-op)
+- **`linter.rs`** — voice quality linter: sentence count, banned phrase detection, emoji check, exclamation density, zh/English ratio
+- **`picker.rs`** — bandit-state `WeightedIndex` situation/template picker with cooldown tracking and `record(Signal)`
+- **`schedule.rs`** — deterministic interval `should_send_now` + active window enforcement (Spec §4.7)
+- **`situations.rs`** — hour-of-day situation weight table (Spec §4.6)
+- **`earned_permission.rs`** — proactive gate: enabled / paused / learning / quiet states
+- **`notifier.rs`** — `Notifier` trait + `StdoutNotifier` (writes inbox markdown files)
+- **`inbox.rs`** — front-matter + body markdown writer (`O_CREAT | O_EXCL`, R16 atomicity)
+- **`outbox.rs`** — 12-step tick loop: gate → resume → dismiss → schedule → pick → generate → lint → i18n → deliver → finalize
+- **`telemetry.rs`** — frozen `OutboxEvent` ledger schema (13 variants)
+
+- **Spec:** `docs/superpowers/specs/2026-04-29-mur-companion-phase-1-1-design.md`
+- **Plan:** `docs/superpowers/plans/2026-04-29-companion-phase-1-1-plan.md`
 
 ## Development Notes
 

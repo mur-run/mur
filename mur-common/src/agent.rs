@@ -1,6 +1,7 @@
 //! Agent profile, Agent Card, and LockFile types shared between
 //! mur-agent-runtime and mur-core.
 
+use crate::companion::{Formality, Relationship};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -35,6 +36,10 @@ pub struct AgentProfile {
     pub file_transfer: FileTransferConfig,
     #[serde(default)]
     pub deployment: DeploymentConfig,
+    /// Companion subsystem (Phase 1.1+). Default = disabled (legacy profiles
+    /// continue to load without this block).
+    #[serde(default)]
+    pub companion: CompanionConfig,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -543,6 +548,116 @@ pub struct LockTransports {
     pub unix_socket: Option<String>,
     #[serde(default)]
     pub tcp: Option<String>,
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Companion subsystem (Phase 1.1+) — see
+// docs/superpowers/specs/2026-04-29-mur-companion-phase-1-1-design.md §3.1
+// ──────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompanionConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_locale")]
+    pub locale: String,
+    #[serde(default)]
+    pub relationship: Relationship,
+    #[serde(default)]
+    pub voice_overrides: VoiceOverrides,
+    #[serde(default)]
+    pub onboarding: OnboardingState,
+    #[serde(default)]
+    pub rhythm: RhythmConfig,
+    #[serde(default)]
+    pub proactive: ProactiveConfig,
+}
+
+/// Resolve a default BCP-47 locale from the `LANG` environment variable
+/// (e.g. `zh_TW.UTF-8` → `zh-TW`). Falls back to `en-US`.
+pub fn default_locale() -> String {
+    std::env::var("LANG")
+        .ok()
+        .and_then(|v| v.split('.').next().map(|s| s.replace('_', "-")))
+        .unwrap_or_else(|| "en-US".into())
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_for_user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formality: Option<Formality>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_instructions: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OnboardingState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub version: u32,
+}
+
+/// Phase 1.2 reservation. 1.1 keeps `enabled = false` (rhythm collection is
+/// out of 1.1 scope).
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RhythmConfig {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProactiveConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// 1.1 reserves the field; 1.2 will write `now + 7d` at rhythm-enable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub learning_until: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_hours: Option<QuietHours>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_hours: Option<ActiveHours>,
+    #[serde(default = "default_daily_cap")]
+    pub daily_cap: u8,
+    #[serde(default = "default_channels")]
+    pub channels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_until: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl Default for ProactiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            learning_until: None,
+            quiet_hours: None,
+            active_hours: None,
+            daily_cap: default_daily_cap(),
+            channels: default_channels(),
+            paused_until: None,
+        }
+    }
+}
+
+fn default_daily_cap() -> u8 {
+    3
+}
+fn default_channels() -> Vec<String> {
+    vec!["stdout".into()]
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuietHours {
+    pub start: String,
+    pub end: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActiveHours {
+    pub start: String,
+    pub end: String,
 }
 
 #[cfg(test)]

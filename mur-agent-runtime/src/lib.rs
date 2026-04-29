@@ -6,6 +6,8 @@
 #![allow(dead_code)]
 
 pub mod communication_policy;
+pub mod companion;
+pub mod durable;
 pub mod entitlements;
 pub mod export;
 pub mod import;

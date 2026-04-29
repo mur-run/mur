@@ -334,6 +334,31 @@ mur-core/       CLI + server + all logic
 - **Optional:** [Ollama](https://ollama.com) for local embeddings (recommended)
 - **Optional:** OpenAI API key for cloud embeddings
 
+## Companion mode (Phase 1.1)
+
+Companion mode adds a relationship-keyed warm voice into an agent's `sys_prompt` and an opt-in proactive outbox. The voice is composed once from onboarding answers and can be ejected to disk for manual editing; the outbox sends occasional context-aware check-ins based on time-of-day situation weights and a bandit-state picker — all fully local, no cloud required.
+
+```bash
+mur agent create my-buddy --provider stub
+mur agent companion init my-buddy --answers <fixture>
+mur agent companion proactive enable my-buddy   # opt in to occasional check-ins
+mur agent companion inbox my-buddy --unread-only
+mur agent companion ack <msg-id> --good
+```
+
+| Subcommand | Description |
+|---|---|
+| `companion proactive enable\|disable` | Toggle proactive sends on/off |
+| `companion quiet --for\|--until\|--off` | Pause proactive sends for a duration or until a timestamp |
+| `companion voice eject\|rebuild\|diff` | Manage the composed `voice.md` file on disk |
+| `companion templates eject [--scope]` | Eject embedded voice templates for editing |
+| `companion content add <situation>` | Add entries to the content pool for a situation |
+| `companion inbox [--unread-only]` | List messages; filter to unread |
+| `companion ack <id> --good\|--bad\|--dismiss` | Rate or dismiss a message |
+| `companion preview --situation <s> [--no-llm]` | Preview a generated message without sending |
+| `companion why-did-you-message [<id>]` | Replay the event chain that triggered a message |
+| `companion rhythm wipe` | Reset companion state (preserves voice config) |
+
 ## Contributing
 
 Issues and PRs welcome.

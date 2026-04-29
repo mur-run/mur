@@ -1,0 +1,31 @@
+situation: share_link
+locale: en-US
+templates:
+  - id: link_topic_en_001
+    weight: 1.0
+    cooldown_days: 7
+    tags: [share, curiosity]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Surface ONE article topic that fits {{NAME_FOR_USER}}'s recent interests.
+      If you can cite a real, well-known domain (e.g. arxiv.org, nytimes.com),
+      do so; otherwise just describe the topic.
+  - id: link_video_en_001
+    weight: 0.8
+    cooldown_days: 7
+    tags: [share, video]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Suggest ONE video idea that might be a small treat — a known channel
+      (e.g. 3blue1brown, Veritasium) or just a topic. Keep it short and warm.
+  - id: link_pause_en_001
+    weight: 0.7
+    cooldown_days: 10
+    tags: [share, low_pressure]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Skip the link. Suggest {{NAME_FOR_USER}} take a 5-minute pause —
+      a stretch, a window, a glass of water. ONE sentence, gentle.

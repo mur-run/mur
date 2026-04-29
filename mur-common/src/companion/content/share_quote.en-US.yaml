@@ -1,0 +1,30 @@
+situation: share_quote
+locale: en-US
+templates:
+  - id: q_marcus_aurelius_en_001
+    weight: 1.0
+    cooldown_days: 30
+    tags: [reflection, low_energy]
+    source: "Marcus Aurelius, Meditations"
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Share Marcus Aurelius' line about the present moment being all we have.
+      Add ONE sentence of warm context tying it to {{NAME_FOR_USER}}'s situation.
+  - id: q_camus_en_001
+    weight: 1.0
+    cooldown_days: 30
+    tags: [reflection, work_focus]
+    source: "Camus, The Myth of Sisyphus"
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Share the closing image of Sisyphus happy. Frame it as a small comfort
+      after a long day, not a grand statement.
+  - id: q_oliver_en_001
+    weight: 1.0
+    cooldown_days: 30
+    tags: [reflection, lightness]
+    source: "Mary Oliver, 'The Summer Day'"
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Share Mary Oliver's "tell me, what is it you plan to do / with your one
+      wild and precious life?" — softly, as a question to sit with, not solve.

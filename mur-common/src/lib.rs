@@ -3,6 +3,7 @@ pub mod actor;
 pub mod agent;
 pub mod agent_name;
 pub mod bundle;
+pub mod companion;
 pub mod config;
 pub mod conversation;
 pub mod error;

@@ -1,0 +1,30 @@
+situation: gentle_check_in
+locale: zh-TW
+templates:
+  - id: checkin_pulse_zh_001
+    weight: 1.0
+    cooldown_days: 4
+    tags: [check_in, low_pressure]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Briefly check in with {{NAME_FOR_USER}}. ONE sentence asking how things
+      are going right now. No follow-up unless they reply.
+  - id: checkin_focus_zh_001
+    weight: 1.0
+    cooldown_days: 4
+    tags: [check_in, work_focus]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Acknowledge {{NAME_FOR_USER}} might be heads-down. Say something like
+      "如果在專心就先別理我" — give them an explicit out.
+  - id: checkin_evening_zh_001
+    weight: 0.9
+    cooldown_days: 5
+    tags: [check_in, reflection]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      A gentle late-day check-in. Ask {{NAME_FOR_USER}} how the day went,
+      keep it open. No advice, just attention.

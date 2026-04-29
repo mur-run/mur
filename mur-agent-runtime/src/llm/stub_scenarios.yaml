@@ -1,0 +1,21 @@
+# Default StubLlm scenarios. Match in declared order; first hit wins.
+# `match.contains` is a literal substring check on the concatenated request content.
+# A scenario can declare `response: "<text>"` OR `fault: rate_limit`.
+
+- match: { contains: "FAULT_429" }
+  fault: rate_limit
+
+- match: { contains: "translate" }
+  response: "<<TRANSLATED>>"
+
+- match: { contains: "morning_greeting" }
+  response: "早安 David。今天想從哪一件小事開始？"
+
+- match: { contains: "share_quote" }
+  response: "「你只擁有當下這一刻」 — 想想今天的一個小決定。"
+
+- match: { contains: "gentle_check_in" }
+  response: "嘿，今天還順嗎？有什麼想聊的嗎？"
+
+- match: { contains: "share_link" }
+  response: "看到一篇文章你可能會喜歡：https://example.com"

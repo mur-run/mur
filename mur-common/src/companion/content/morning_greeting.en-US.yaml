@@ -1,0 +1,30 @@
+situation: morning_greeting
+locale: en-US
+templates:
+  - id: morning_warm_en_001
+    weight: 1.0
+    cooldown_days: 3
+    tags: [warm, low_pressure]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Greet {{NAME_FOR_USER}} warmly, note that a new day is starting. ONE
+      sentence. End with a soft, optional invitation, not a demand.
+  - id: morning_check_en_001
+    weight: 1.0
+    cooldown_days: 3
+    tags: [warm, attentive]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Say good morning and gently ask {{NAME_FOR_USER}} how they slept. Two
+      sentences max. No pressure to respond.
+  - id: morning_quiet_en_001
+    weight: 0.8
+    cooldown_days: 5
+    tags: [low_energy, quiet]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      A quiet "good morning" — one short sentence acknowledging the new day,
+      no question. For days when {{NAME_FOR_USER}} likely wants space.
