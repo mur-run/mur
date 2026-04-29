@@ -1,0 +1,30 @@
+situation: share_quote
+locale: zh-TW
+templates:
+  - id: q_marcus_aurelius_001
+    weight: 1.0
+    cooldown_days: 30
+    tags: [reflection, low_energy]
+    source: "Marcus Aurelius, Meditations"
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Share Marcus Aurelius' line about the present moment being all we have.
+      Add ONE sentence of warm context tying it to {{NAME_FOR_USER}}'s situation.
+  - id: q_camus_001
+    weight: 1.0
+    cooldown_days: 30
+    tags: [reflection, work_focus]
+    source: "Camus, The Myth of Sisyphus"
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Share the closing image of Sisyphus happy. Frame it as a small comfort
+      after a long day, not a grand statement.
+  - id: q_zhuangzi_001
+    weight: 1.0
+    cooldown_days: 30
+    tags: [reflection, lightness]
+    source: "莊子《齊物論》"
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Share the 莊周夢蝶 (Zhuangzi dreams of a butterfly) image briefly.
+      Frame as a soft reminder that not every question needs an answer today.
