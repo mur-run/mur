@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "name": "cyberpunk",
+  "display_name": {
+    "default": "Cyberpunk",
+    "zh-TW": "賽博龐克",
+    "ja": "サイバーパンク"
+  },
+  "kind": "dark",
+  "match_system": false,
+  "colors": {
+    "bg":              "#0d0221",
+    "fg":              "#f9f9f9",
+    "bg_secondary":    "#1a0e3a",
+    "fg_secondary":    "#a89cc8",
+    "accent":          "#ff2cd6",
+    "accent_fg":       "#0d0221",
+    "border":          "#7e5fcf",
+    "success":         "#39ff14",
+    "warning":         "#fce300",
+    "danger":          "#ff003c"
+  },
+  "icons": {
+    "app":                  "app.icns",
+    "tray_template":        "tray-template.png",
+    "tray_color":           "tray-color.png",
+    "tray_running_overlay": "tray-running-overlay.png"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "high-contrast",
+  "display_name": {
+    "default": "High Contrast",
+    "zh-TW": "高對比",
+    "ja": "ハイコントラスト"
+  },
+  "kind": "dark",
+  "match_system": false,
+  "colors": {
+    "bg":              "#000000",
+    "fg":              "#ffffff",
+    "bg_secondary":    "#1a1a1a",
+    "fg_secondary":    "#e6e6e6",
+    "accent":          "#ffff00",
+    "accent_fg":       "#000000",
+    "border":          "#ffffff",
+    "success":         "#00ff66",
+    "warning":         "#ffaa00",
+    "danger":          "#ff5555"
+  },
+  "icons": {
+    "app":                  "app.icns",
+    "tray_template":        "tray-template.png",
+    "tray_running_overlay": "tray-running-overlay.png"
+  }
+}

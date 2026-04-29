@@ -100,7 +100,32 @@ LanceDB vector index is always rebuildable from YAML via `mur reindex`.
 ### CLI Commands (New)
 
 - **`mur verify [--file path] [--all]`** — Scan docs for stale claims (paths, commands, code refs)
-- **`mur agent <subcommand>`** — Manage murmur agents (P0a). Subcommands: `create`, `list`, `status`, `stop`, `remove`, `rename`, `send`, `card`, `install-service`, `prompt {show|edit|set}`, `mcp {add|list|remove|rename}`, `skill {add|list|remove|show}`, `perm {show|set-mode|allow-host|deny-host|list-hosts|allow-read|allow-write|deny-path|allow-spawn|deny-spawn|set-limit}`, `export {--format=pkg|bin}`, `stats`, `logs`. The runtime binary that backs each agent lives in `mur-agent-runtime/`.
+- **`mur agent <subcommand>`** — Manage murmur agents (P0a). Subcommands: `create`, `list`, `status`, `stop`, `remove`, `rename`, `send`, `card`, `install-service`, `prompt {show|edit|set}`, `mcp {add|list|remove|rename}`, `skill {add|list|remove|show}`, `perm {show|set-mode|allow-host|deny-host|list-hosts|allow-read|allow-write|deny-path|allow-spawn|deny-spawn|set-limit}`, `export {--format=pkg|bin|gui}`, `doctor [--format ...]`, `stats`, `logs`. The runtime binary that backs each agent lives in `mur-agent-runtime/`.
+- **`mur agent doctor [--format pkg|bin|gui|all] [--json]`** — Pre-flight prereq check for export targets (no build, just diagnostics). Same logic is reused as the fail-fast step inside `--format gui` export pipeline.
+
+### GUI Export (`mur agent export --format gui`)
+
+The third format. Produces a click-to-launch desktop app (`MyAgent.app` / `MyAgent.AppImage` / `MyAgent.exe`) bundling a single agent. Built on Tauri 2 + React 18 + Vite + Tailwind 4. The `mur-agent-gui` crate is **workspace-EXCLUDED** in the root `Cargo.toml` so default `cargo build --workspace` doesn't pull WebKitGTK / Cocoa / WebView2 toolchains.
+
+- **`mur-agent-gui/`** — Tauri 2 main + React frontend. Sidecar manager (`src/sidecar.rs`), bootstrap (`src/bootstrap.rs`), theme loader (`src/theme.rs`), Tauri commands (`src/commands.rs`) that wrap `mur_core::agent_admin::*`. 5 built-in themes (light / dark / high-contrast / solarized / cyberpunk) with WCAG AA contrast validation enforced at build time.
+- **`mur-core/src/agent_admin/`** — Public library façade over the existing CLI verbs. `perm`, `mcp`, `skill`, `prompt`, `lifecycle`, `observability` modules each expose mutators (delegating to `cmd::agent::cmd_*`) plus typed read views (StatusView / Entitlements / Vec<McpServerEntry> / etc.) for callers that need structured data instead of stdout.
+- **`mur-core/src/cmd/agent_export_gui.rs`** — 13-phase pipeline: prereq_check → prepare_payload → prepare_theme → rewrite_tauri_conf → build_sidecar → build_frontend → tauri_build → codesign → notarize → staple → assess → package → move_to_out. RAII guard restores `tauri.conf.json` on any exit path.
+- **CLI flags:** `--theme {light|dark|high-contrast|solarized|cyberpunk}`, `--icon /path/to.png`, `--clone-identity` (embed identity, recipient rekeys on launch; default = template mode mints fresh keys), `--skip-notarize` (testing only).
+- **Spec:** `docs/superpowers/specs/2026-04-29-mur-agent-gui-export-design.md`
+- **Plan:** `docs/superpowers/plans/2026-04-29-mur-agent-gui-export-plan.md` + `-COMPLETE.md`
+- **Cookbook:** `docs/cookbook/multi-platform-export.md`, `docs/cookbook/harness-office-12-gui-export.md`
+- **E2E runner:** `scripts/e2e/p1-export-gui.sh` (quick or `FULL_E2E=1` mode)
+- **CI matrix template:** `scripts/templates/agent-export-multi-platform.yml`
+
+When iterating on the GUI shell:
+
+```bash
+cargo install tauri-cli --version '^2.0' --locked     # one-time
+cd mur-agent-gui/ui && npm ci
+cd mur-agent-gui/src-tauri && cargo tauri dev          # 6-tab settings window opens
+```
+
+`mur agent doctor --format gui` lists every prereq.
 
 ### Agent Runtime (murmur P0a)
 

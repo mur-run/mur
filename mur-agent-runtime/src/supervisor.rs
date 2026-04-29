@@ -33,6 +33,24 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    // 0. Become our own process-group leader so a parent (CLI launcher
+    //    or future GUI sidecar manager) can SIGTERM the entire tree —
+    //    runtime + every spawned MCP child — via `kill(-pgid, …)`. On
+    //    failure (e.g. already a session leader) we log and continue;
+    //    the runtime still runs but children may need explicit cleanup.
+    //    See `docs/superpowers/specs/2026-04-29-mur-agent-gui-export-design.md` § 4.4.
+    #[cfg(unix)]
+    {
+        // SAFETY: setpgid(0,0) makes the calling process its own pgid
+        // leader; valid POSIX semantics, no preconditions beyond not
+        // already being a session leader.
+        let rc = unsafe { libc::setpgid(0, 0) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            warn!("setpgid(0,0) failed: {err} — process-group kill may not reach MCP children");
+        }
+    }
+
     // 1. Decide whether this binary carries an embedded agent.
     //    Embedded mode short-circuits MUR_HOME-based discovery and points
     //    agent_home at the per-binary cache extraction dir, unless the
