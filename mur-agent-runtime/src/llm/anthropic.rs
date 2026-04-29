@@ -129,7 +129,10 @@ impl LlmClient for AnthropicClient {
             .map_err(|e| LlmError::Http(e.to_string()))?;
 
         let status = resp.status();
-        let body_text = resp.text().await.map_err(|e| LlmError::Http(e.to_string()))?;
+        let body_text = resp
+            .text()
+            .await
+            .map_err(|e| LlmError::Http(e.to_string()))?;
         if !status.is_success() {
             tracing::warn!(status = %status, body = %body_text, "anthropic non-2xx");
             if status == 429 {
