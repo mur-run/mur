@@ -2,11 +2,12 @@
 //! service. The GUI Status tab exposes these as Start / Stop / Restart
 //! buttons.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 use mur_common::lock_file::AgentStatusKind;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use super::error::{AgentAdminError, AgentAdminResult};
 use crate::cmd::agent;
 
 // ─── mutators ─────────────────────────────────────────────────────
@@ -33,11 +34,14 @@ pub struct StatusView {
     pub key_version: u32,
 }
 
-pub fn status(name: &str) -> Result<StatusView> {
+pub fn status(name: &str) -> AgentAdminResult<StatusView> {
     let mur_home = agent::resolve_mur_home()?;
     let agent_home = mur_home.join("agents").join(name);
     if !agent_home.exists() {
-        return Err(anyhow!("agent '{name}' not found"));
+        return Err(AgentAdminError::AgentNotFound {
+            name: name.to_string(),
+            path: agent_home,
+        });
     }
 
     let lock_path = agent_home.join("running.lock");
@@ -65,10 +69,15 @@ pub fn status(name: &str) -> Result<StatusView> {
 
     // Pull key_version from profile.yaml.
     let profile_path = agent_home.join("profile.yaml");
-    let yaml = std::fs::read_to_string(&profile_path)
-        .with_context(|| format!("read {}", profile_path.display()))?;
+    let yaml = std::fs::read_to_string(&profile_path).map_err(|source| AgentAdminError::Io {
+        path: profile_path.clone(),
+        source,
+    })?;
     let profile: mur_common::AgentProfile =
-        serde_yaml_ng::from_str(&yaml).with_context(|| "parse profile.yaml")?;
+        serde_yaml_ng::from_str(&yaml).map_err(|source| AgentAdminError::ProfileMalformed {
+            path: profile_path.clone(),
+            source,
+        })?;
 
     Ok(StatusView {
         name: name.to_string(),

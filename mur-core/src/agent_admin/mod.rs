@@ -14,9 +14,12 @@
 //!
 //! See `docs/superpowers/specs/2026-04-29-mur-agent-gui-export-design.md` § 4.6.
 
+pub mod error;
 pub mod lifecycle;
 pub mod mcp;
 pub mod observability;
 pub mod perm;
 pub mod prompt;
 pub mod skill;
+
+pub use error::{AgentAdminError, AgentAdminResult};
