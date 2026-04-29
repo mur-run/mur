@@ -320,7 +320,11 @@ mod tests {
     }
 
     fn tempdir_for_test() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("mur-gui-bootstrap-test-{}", std::process::id()));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let d =
+            std::env::temp_dir().join(format!("mur-gui-bootstrap-test-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
