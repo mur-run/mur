@@ -118,7 +118,7 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             cost_usd,
             provider,
         } => {
-            params[GEN_AI_SYSTEM] = json!(provider);
+            params[GEN_AI_PROVIDER_NAME] = json!(provider);
             params[GEN_AI_REQUEST_MODEL] = json!(model);
             params[GEN_AI_USAGE_INPUT_TOKENS] = json!(input_tokens);
             params[GEN_AI_USAGE_OUTPUT_TOKENS] = json!(output_tokens);

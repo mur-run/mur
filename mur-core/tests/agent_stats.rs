@@ -37,8 +37,8 @@ fn stats_aggregates_telemetry_events() {
         mur_home.path(),
         "agent_x",
         &[
-            r#"{"gen_ai.system":"ollama","gen_ai.request.model":"m","gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":5,"latency_ms":100}"#,
-            r#"{"gen_ai.system":"ollama","gen_ai.request.model":"m","gen_ai.usage.input_tokens":20,"gen_ai.usage.output_tokens":7,"latency_ms":200}"#,
+            r#"{"gen_ai.provider.name":"ollama","gen_ai.request.model":"m","gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":5,"latency_ms":100}"#,
+            r#"{"gen_ai.provider.name":"ollama","gen_ai.request.model":"m","gen_ai.usage.input_tokens":20,"gen_ai.usage.output_tokens":7,"latency_ms":200}"#,
             r#"{"kind":"llm_rate_limit","message":"429","recoverable":true}"#,
         ],
     );
