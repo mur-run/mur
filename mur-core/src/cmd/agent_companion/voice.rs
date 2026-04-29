@@ -141,7 +141,7 @@ fn load_profile(agent_home: &Path) -> Result<AgentProfile> {
     serde_yaml_ng::from_str(&yaml).with_context(|| format!("parse {}", profile_path.display()))
 }
 
-fn compose_from_profile(profile: &AgentProfile) -> String {
+pub(super) fn compose_from_profile(profile: &AgentProfile) -> String {
     let formality = profile
         .companion
         .voice_overrides

@@ -1,6 +1,7 @@
 //! `mur agent companion ...` subcommands (Phase 1.1).
 use clap::{Args, Subcommand};
 use content::ContentArgs;
+use preview::PreviewArgs;
 use proactive::ProactiveArgs;
 use quiet::QuietArgs;
 use templates::TemplatesArgs;
@@ -36,6 +37,8 @@ pub enum CompanionCmd {
     Inbox(inbox::InboxArgs),
     /// Acknowledge an inbox message with a signal (--good / --bad / --dismiss).
     Ack(inbox::AckArgs),
+    /// Preview a companion message for a given situation (read-only).
+    Preview(PreviewArgs),
 }
 
 pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
@@ -52,12 +55,14 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
         CompanionCmd::Voice(args) => voice::run(args).await,
         CompanionCmd::Inbox(a) => inbox::run_inbox(a).await,
         CompanionCmd::Ack(a) => inbox::run_ack(a).await,
+        CompanionCmd::Preview(args) => preview::run(args).await,
     }
 }
 
 mod content;
 mod inbox;
 mod init;
+mod preview;
 mod proactive;
 mod quiet;
 mod templates;
