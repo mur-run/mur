@@ -82,7 +82,8 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             pkg-config \
-            protobuf-compiler
+            protobuf-compiler \
+            libprotobuf-dev
       - name: Install npm deps
         run: cd mur-agent-gui/ui && npm ci
       - name: Frontend build (populates dist/ for cargo check)
