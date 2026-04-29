@@ -71,6 +71,13 @@ impl ModelRegistry {
     }
 
     pub fn default_path() -> anyhow::Result<PathBuf> {
+        // Honor MUR_HOME (used by test harnesses and Windows CI, where
+        // `dirs::home_dir()` reads SHGetKnownFolderPath and ignores HOME).
+        if let Ok(p) = std::env::var("MUR_HOME")
+            && !p.is_empty()
+        {
+            return Ok(PathBuf::from(p).join("models.yaml"));
+        }
         let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
         Ok(home.join(".mur/models.yaml"))
     }

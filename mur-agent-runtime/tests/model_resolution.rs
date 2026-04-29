@@ -1,8 +1,9 @@
 //! Confirm legacy inline `model:` and new `model_ref:` both resolve.
 //!
-//! Tests that mutate `HOME` serialize on a static Mutex — `std::env::set_var`
-//! is process-global, so parallel cargo-test threads would race the registry
-//! path lookup.
+//! Tests mutate `MUR_HOME` (the cross-platform escape hatch — on Windows
+//! `dirs::home_dir()` calls SHGetKnownFolderPath and ignores HOME) so they
+//! serialize on a static Mutex; `std::env::set_var` is process-global and
+//! parallel cargo-test threads would otherwise race the registry path lookup.
 
 use mur_agent_runtime::supervisor::resolve_model_entry;
 use mur_common::agent::AgentProfile;
@@ -26,11 +27,12 @@ fn legacy_profile_resolves_inline() {
 fn model_ref_resolves_from_registry() {
     let _g = HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    // SAFETY: HOME mutation guarded by HOME_LOCK above.
+    let mur_home = dir.path().join(".mur");
+    std::fs::create_dir_all(&mur_home).unwrap();
+    // SAFETY: MUR_HOME mutation guarded by HOME_LOCK above.
     unsafe {
-        std::env::set_var("HOME", dir.path());
+        std::env::set_var("MUR_HOME", &mur_home);
     }
-    std::fs::create_dir_all(dir.path().join(".mur")).unwrap();
 
     let mut reg = ModelRegistry::default();
     reg.models.insert(
@@ -57,11 +59,12 @@ fn model_ref_resolves_from_registry() {
 fn missing_model_ref_errors_loudly() {
     let _g = HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    // SAFETY: HOME mutation guarded by HOME_LOCK above.
+    let mur_home = dir.path().join(".mur");
+    std::fs::create_dir_all(&mur_home).unwrap();
+    // SAFETY: MUR_HOME mutation guarded by HOME_LOCK above.
     unsafe {
-        std::env::set_var("HOME", dir.path());
+        std::env::set_var("MUR_HOME", &mur_home);
     }
-    std::fs::create_dir_all(dir.path().join(".mur")).unwrap();
     // Empty registry on disk.
     ModelRegistry::default()
         .save_to(&dir.path().join(".mur/models.yaml"))

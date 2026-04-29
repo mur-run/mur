@@ -7,9 +7,11 @@ fn mur_bin() -> &'static str {
 }
 
 fn run_with_home(home: &std::path::Path, args: &[&str]) -> std::process::Output {
+    let mur_home = home.join(".mur");
+    std::fs::create_dir_all(&mur_home).expect("mkdir .mur");
     Command::new(mur_bin())
         .env("HOME", home)
-        .env_remove("MUR_HOME")
+        .env("MUR_HOME", &mur_home)
         .args(args)
         .output()
         .expect("spawn mur")
