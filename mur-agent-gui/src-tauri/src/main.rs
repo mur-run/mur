@@ -231,6 +231,11 @@ fn main() -> Result<()> {
             commands::list_themes,
             commands::set_theme,
             commands::get_default_theme,
+            // Model registry (PR-5)
+            commands::list_models,
+            commands::get_active_model_ref,
+            commands::set_active_model_ref,
+            commands::set_secret,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
