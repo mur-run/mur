@@ -49,14 +49,31 @@
 **Step 1: Edit the `[dependencies]` block.** Append:
 
 ```toml
-keyring = { version = "4", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "linux-native"] }
+keyring = "4"
 secrecy = "0.10"
 age = { version = "0.11", features = ["armor"] }
-tokio = { workspace = true, features = ["fs", "process", "rt"] }
 shellexpand = "3"
+shell-words = "1"
 ```
 
-(Note: workspace `tokio` already exists. We need the `fs` / `process` / `rt` features for the resolver. If the workspace declaration is leaner, add it only at the crate level.)
+> **keyring v4 note:** v4.0.0 dropped feature-flag-gated backends. The
+> per-platform backend (`apple-native`, `windows-native`,
+> `dbus-secret-service`, `linux-keyutils`, `windows-native`) is now
+> selected automatically via `target_os`-conditional dependencies, so
+> plain `keyring = "4"` pulls in everything needed. Do NOT pass
+> `default-features = false` with feature lists like
+> `["apple-native", ...]` — those features no longer exist and the
+> build will fail.
+
+> **tokio note:** the workspace already declares `tokio` with
+> `["rt-multi-thread", "macros", "process", "fs", ...]`, so `mur-common`
+> doesn't need its own `tokio = { workspace = true, features = ... }`
+> override. Adding `tokio` to mur-common at all is only needed if the
+> crate didn't already pull it in transitively — at the time of writing
+> it was already a transitive dep, so no explicit entry is required.
+
+> **shell-words** is added now (vs. Task 1.6) to bundle dep changes in a
+> single commit.
 
 **Step 2: Build.**
 
@@ -625,7 +642,7 @@ SecretRef::Cmd(spec) => {
 }
 ```
 
-Add `shell-words = "1"` to `[dependencies]`.
+(`shell-words = "1"` was added in Task 1.1; nothing more to do here.)
 
 **Step 3: Run.**
 
