@@ -88,6 +88,12 @@ jobs:
         run: cd mur-agent-gui/ui && npm ci
       - name: Frontend build (populates dist/ for cargo check)
         run: cd mur-agent-gui/ui && npm run build
+      - name: Build sidecar (needed for tauri.conf.json bundle.externalBin)
+        run: |
+          cargo build -p mur-agent-runtime --release --target x86_64-unknown-linux-gnu
+          mkdir -p mur-agent-gui/src-tauri/binaries
+          cp target/x86_64-unknown-linux-gnu/release/mur-agent-runtime \
+             mur-agent-gui/src-tauri/binaries/mur-agent-runtime-x86_64-unknown-linux-gnu
       - name: cargo check
         run: cargo check --manifest-path mur-agent-gui/src-tauri/Cargo.toml
       - name: cargo test --lib
