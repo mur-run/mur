@@ -57,6 +57,7 @@ async-trait = "0.1"
 dirs = "5"
 tempfile = "3"
 whatlang = { workspace = true }
+rand = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
