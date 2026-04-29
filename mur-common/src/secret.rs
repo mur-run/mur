@@ -94,6 +94,19 @@ impl<'de> Deserialize<'de> for SecretRef {
     }
 }
 
+impl SecretRef {
+    pub async fn resolve(&self) -> Result<SecretString, SecretError> {
+        match self {
+            SecretRef::Env(var) => std::env::var(var)
+                .map(SecretString::from)
+                .map_err(|_| SecretError::EnvNotSet(var.clone())),
+            _ => Err(SecretError::Parse(
+                "resolve not implemented for this variant yet".into(),
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +171,27 @@ mod tests {
             let reparsed: SecretRef = yaml::from_str(&normalized).unwrap();
             assert_eq!(parsed, reparsed, "round-trip drift for {s}");
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_env_tests {
+    use super::*;
+    use secrecy::ExposeSecret;
+
+    #[tokio::test]
+    async fn resolves_env_when_set() {
+        // SAFETY: uniquely named env var so concurrent tests don't collide.
+        unsafe { std::env::set_var("MUR_TEST_RESOLVE_ENV", "shhh"); }
+        let s = SecretRef::Env("MUR_TEST_RESOLVE_ENV".into());
+        let v = s.resolve().await.unwrap();
+        assert_eq!(v.expose_secret(), "shhh");
+    }
+
+    #[tokio::test]
+    async fn errors_when_env_missing() {
+        let s = SecretRef::Env("MUR_TEST_DEFINITELY_UNSET".into());
+        let err = s.resolve().await.unwrap_err();
+        assert!(matches!(err, SecretError::EnvNotSet(_)), "got {err:?}");
     }
 }
