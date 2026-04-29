@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import StatusTab from "./tabs/Status";
 import PromptTab from "./tabs/Prompt";
+import ModelTab from "./tabs/Model";
 import SkillsTab from "./tabs/Skills";
 import McpTab from "./tabs/Mcp";
 import PermissionsTab from "./tabs/Permissions";
@@ -10,6 +11,7 @@ import { setTheme as setThemeApi, getDefaultTheme, applyThemeColors } from "./li
 type TabId =
   | "status"
   | "prompt"
+  | "model"
   | "skills"
   | "mcp"
   | "permissions"
@@ -18,6 +20,7 @@ type TabId =
 const TABS: { id: TabId; label: string }[] = [
   { id: "status", label: "Status" },
   { id: "prompt", label: "System Prompt" },
+  { id: "model", label: "Model" },
   { id: "skills", label: "Skills" },
   { id: "mcp", label: "MCP Servers" },
   { id: "permissions", label: "Permissions" },
@@ -87,6 +90,7 @@ export default function App() {
       <main className="flex-1 overflow-auto p-6">
         {tab === "status" && <StatusTab />}
         {tab === "prompt" && <PromptTab />}
+        {tab === "model" && <ModelTab />}
         {tab === "skills" && <SkillsTab />}
         {tab === "mcp" && <McpTab />}
         {tab === "permissions" && <PermissionsTab />}

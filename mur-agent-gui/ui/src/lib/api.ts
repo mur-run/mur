@@ -103,3 +103,22 @@ export function applyThemeColors(colors: Record<string, string>) {
     root.style.setProperty(`--color-${key.replaceAll("_", "-")}`, value);
   }
 }
+
+// ─── Model registry ───────────────────────────────────────────────
+export interface ModelEntryView {
+  name: string;
+  provider: string;
+  model: string;
+  base_url: string | null;
+  secret_ref: string | null;
+  /** null = no secret needed; true/false = check() result. */
+  secret_status: boolean | null;
+  capabilities: string[];
+}
+export const listModels = () => invoke<ModelEntryView[]>("list_models");
+export const getActiveModelRef = () =>
+  invoke<string | null>("get_active_model_ref");
+export const setActiveModelRef = (name: string) =>
+  invoke<void>("set_active_model_ref", { name });
+export const setSecret = (secret: string, value: string) =>
+  invoke<void>("set_secret", { secret, value });
