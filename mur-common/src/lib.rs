@@ -11,6 +11,7 @@ pub mod identity;
 pub mod knowledge;
 pub mod llm;
 pub mod lock_file;
+pub mod model;
 pub mod parameterize;
 pub mod pattern;
 pub mod pipeline;
