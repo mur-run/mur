@@ -120,11 +120,39 @@ impl SecretRef {
                 res.map(SecretString::from)
             }
             SecretRef::File(path) => resolve_file(path).await,
-            _ => Err(SecretError::Parse(
-                "resolve not implemented for this variant yet".into(),
-            )),
+            SecretRef::Cmd(spec) => resolve_cmd(spec).await,
         }
     }
+}
+
+async fn resolve_cmd(spec: &str) -> Result<SecretString, SecretError> {
+    let mut parts = shell_words::split(spec)
+        .map_err(|e| SecretError::Parse(format!("split cmd {spec:?}: {e}")))?;
+    if parts.is_empty() {
+        return Err(SecretError::Parse("empty cmd".into()));
+    }
+    let program = parts.remove(0);
+    let output = tokio::process::Command::new(&program)
+        .args(&parts)
+        .output()
+        .await
+        .map_err(|e| SecretError::Cmd {
+            cmd: format!("{spec} ({e})"),
+            status: -1,
+        })?;
+    if !output.status.success() {
+        return Err(SecretError::Cmd {
+            cmd: spec.to_string(),
+            status: output.status.code().unwrap_or(-1),
+        });
+    }
+    let s = String::from_utf8(output.stdout).map_err(|e| SecretError::Cmd {
+        cmd: format!("{spec} (non-utf8 stdout: {e})"),
+        status: -2,
+    })?;
+    Ok(SecretString::from(
+        s.trim_end_matches(['\n', '\r']).to_string(),
+    ))
 }
 
 async fn resolve_file(path: &std::path::Path) -> Result<SecretString, SecretError> {
@@ -472,6 +500,29 @@ mod resolve_file_tests {
         assert_eq!(v.expose_secret(), "shh-from-age");
         unsafe {
             std::env::remove_var("MUR_AGE_IDENTITY_PATH");
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod resolve_cmd_tests {
+    use super::*;
+    use secrecy::ExposeSecret;
+
+    #[tokio::test]
+    async fn echoes_stdout() {
+        let s = SecretRef::Cmd("printf shh-from-cmd".into());
+        let v = s.resolve().await.unwrap();
+        assert_eq!(v.expose_secret(), "shh-from-cmd");
+    }
+
+    #[tokio::test]
+    async fn errors_on_non_zero_exit() {
+        let s = SecretRef::Cmd("sh -c 'exit 7'".into());
+        let err = s.resolve().await.unwrap_err();
+        match err {
+            SecretError::Cmd { status, .. } => assert_eq!(status, 7),
+            other => panic!("unexpected: {other:?}"),
         }
     }
 }
