@@ -572,7 +572,7 @@ fn phase_8_codesign(opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
         warn!("phase 8 (codesign) skipped: MUR_APPLE_DEVELOPER_ID not set");
         return Ok(());
     };
-    let bundle = phase_12_package(opts, _staging)?;
+    let bundle = locate_bundle()?;
     let entitlements = workspace_gui_root()?.join("src-tauri/entitlements.plist");
 
     // Sign the embedded sidecar first, then the outer app --deep.
@@ -639,6 +639,15 @@ fn phase_11_assess(_opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
 // ─── phase 12 — package ───────────────────────────────────────────
 
 fn phase_12_package(_opts: &ExportGuiOptions, _staging: &Path) -> Result<PathBuf> {
+    locate_bundle()
+}
+
+/// Locate the artifact `cargo tauri build` produced under
+/// `mur-agent-gui/src-tauri/target/<triple>/release/bundle/<subdir>/`.
+/// Used by both phase_8_codesign (which needs the bundle path before
+/// signing) and phase_12_package. Pure read; safe to call multiple
+/// times.
+fn locate_bundle() -> Result<PathBuf> {
     let gui_root = workspace_gui_root()?;
     let target = host_target_triple()?;
     let (subdir, ext): (&str, &str) = match std::env::consts::OS {
@@ -656,9 +665,8 @@ fn phase_12_package(_opts: &ExportGuiOptions, _staging: &Path) -> Result<PathBuf
     }
     // Pick the first artifact matching the expected extension.
     // The Tauri productName comes from src-tauri/tauri.conf.json which
-    // currently isn't patched per-agent (P1.7 follow-up); the artifact
-    // is whatever Tauri produced.
-    let mut found = None;
+    // is patched per-agent in phase 4; the artifact is whatever Tauri
+    // produced.
     for entry in std::fs::read_dir(&dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -667,11 +675,10 @@ fn phase_12_package(_opts: &ExportGuiOptions, _staging: &Path) -> Result<PathBuf
             other => path.extension().and_then(|s| s.to_str()) == Some(other),
         };
         if matches {
-            found = Some(path);
-            break;
+            return Ok(path);
         }
     }
-    found.ok_or_else(|| anyhow!("no .{ext} artifact found in {}", dir.display()))
+    Err(anyhow!("no .{ext} artifact found in {}", dir.display()))
 }
 
 // ─── phase 13 — move to out ───────────────────────────────────────

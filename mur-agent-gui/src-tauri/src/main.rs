@@ -16,25 +16,24 @@ fn main() -> Result<()> {
     info!("starting mur-agent-gui");
 
     use std::sync::Arc;
+    use std::sync::OnceLock;
     let sidecar_mgr = Arc::new(sidecar::SidecarManager::new());
+
+    // App-handle slot the signal thread can read once Tauri's setup
+    // hook has fired. Routing the exit through `app.exit(0)` (rather
+    // than `std::process::exit`) lets Tauri tear down windows + run
+    // plugin on_exit hooks before the process dies. See PR #41
+    // review § Important #6.
+    static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
     // SIGTERM/SIGINT proxy — when the GUI is killed externally
     // (kill, launchd shutdown, parent process death), make sure the
     // runtime sidecar gets a clean SIGTERM so it flushes telemetry
-    // and drops running.lock before we exit. The tray Quit menu has
-    // its own handler (in setup) that does the same; this covers
-    // the SIGTERM-from-outside path.
+    // and drops running.lock before we exit.
     #[cfg(unix)]
     {
         let mgr = sidecar_mgr.clone();
         std::thread::spawn(move || {
-            // SAFETY: signal(7) handlers must not allocate or take
-            // locks. We only set a flag-like Mutex<bool> via
-            // SidecarManager::stop, which uses parking_lot-style
-            // logic — close enough for the "process is dying anyway"
-            // path. If this proves problematic, swap to libc::signal
-            // with a global atomic flag and check it from a tokio
-            // task instead.
             let mut signals = match signal_hook::iterator::Signals::new([
                 signal_hook::consts::SIGTERM,
                 signal_hook::consts::SIGINT,
@@ -48,8 +47,15 @@ fn main() -> Result<()> {
             for _sig in signals.forever() {
                 tracing::info!("received SIGTERM/SIGINT, stopping sidecar");
                 let _ = mgr.stop();
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                std::process::exit(0);
+                if let Some(handle) = APP_HANDLE.get() {
+                    handle.exit(0);
+                } else {
+                    // Tauri setup never fired — fall back to a hard
+                    // exit. Don't hold the runtime hostage if the
+                    // initial bootstrap is what's hanging.
+                    std::process::exit(0);
+                }
+                return;
             }
         });
     }
@@ -60,6 +66,10 @@ fn main() -> Result<()> {
             use tauri::Manager;
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
             use tauri::tray::TrayIconBuilder;
+
+            // Stash the app handle so the signal-handler thread can
+            // route exit through Tauri's clean teardown.
+            let _ = APP_HANDLE.set(app.handle().clone());
 
             // First-launch payload extraction + identity mint.
             let resource_dir = app
