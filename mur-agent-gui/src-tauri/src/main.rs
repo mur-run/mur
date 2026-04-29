@@ -16,49 +16,7 @@ fn main() -> Result<()> {
     info!("starting mur-agent-gui");
 
     use std::sync::Arc;
-    use std::sync::OnceLock;
     let sidecar_mgr = Arc::new(sidecar::SidecarManager::new());
-
-    // App-handle slot the signal thread can read once Tauri's setup
-    // hook has fired. Routing the exit through `app.exit(0)` (rather
-    // than `std::process::exit`) lets Tauri tear down windows + run
-    // plugin on_exit hooks before the process dies. See PR #41
-    // review § Important #6.
-    static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
-
-    // SIGTERM/SIGINT proxy — when the GUI is killed externally
-    // (kill, launchd shutdown, parent process death), make sure the
-    // runtime sidecar gets a clean SIGTERM so it flushes telemetry
-    // and drops running.lock before we exit.
-    #[cfg(unix)]
-    {
-        let mgr = sidecar_mgr.clone();
-        std::thread::spawn(move || {
-            let mut signals = match signal_hook::iterator::Signals::new([
-                signal_hook::consts::SIGTERM,
-                signal_hook::consts::SIGINT,
-            ]) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("install signal handler: {e}");
-                    return;
-                }
-            };
-            for _sig in signals.forever() {
-                tracing::info!("received SIGTERM/SIGINT, stopping sidecar");
-                let _ = mgr.stop();
-                if let Some(handle) = APP_HANDLE.get() {
-                    handle.exit(0);
-                } else {
-                    // Tauri setup never fired — fall back to a hard
-                    // exit. Don't hold the runtime hostage if the
-                    // initial bootstrap is what's hanging.
-                    std::process::exit(0);
-                }
-                return;
-            }
-        });
-    }
 
     tauri::Builder::default()
         .manage(sidecar_mgr.clone())
@@ -67,9 +25,38 @@ fn main() -> Result<()> {
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
             use tauri::tray::TrayIconBuilder;
 
-            // Stash the app handle so the signal-handler thread can
-            // route exit through Tauri's clean teardown.
-            let _ = APP_HANDLE.set(app.handle().clone());
+            // SIGTERM/SIGINT proxy — when the GUI is killed externally
+            // (kill, launchd shutdown, parent process death), make sure
+            // the runtime sidecar gets a clean SIGTERM so it flushes
+            // telemetry and drops running.lock before we exit. Routes
+            // exit through `app.exit(0)` so Tauri tears down windows
+            // and runs plugin on_exit hooks (vs. std::process::exit
+            // which bypasses them). Per PR #41 review § Important #6
+            // + § Minor #15.
+            #[cfg(unix)]
+            {
+                let app_handle = app.handle().clone();
+                let mgr = sidecar_mgr.clone();
+                tauri::async_runtime::spawn(async move {
+                    use tokio::signal::unix::{SignalKind, signal};
+                    let (mut term, mut int) = match (
+                        signal(SignalKind::terminate()),
+                        signal(SignalKind::interrupt()),
+                    ) {
+                        (Ok(t), Ok(i)) => (t, i),
+                        _ => {
+                            tracing::warn!("install tokio signal handlers failed");
+                            return;
+                        }
+                    };
+                    tokio::select! {
+                        _ = term.recv() => tracing::info!("SIGTERM received"),
+                        _ = int.recv()  => tracing::info!("SIGINT received"),
+                    }
+                    let _ = mgr.stop();
+                    app_handle.exit(0);
+                });
+            }
 
             // First-launch payload extraction + identity mint.
             let resource_dir = app
