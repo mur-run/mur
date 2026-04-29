@@ -54,4 +54,55 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
+      - name: fmt mur-agent-gui (workspace-excluded)
+        run: cargo fmt --manifest-path mur-agent-gui/src-tauri/Cargo.toml -- --check
+
+  gui:
+    name: GUI crate (mur-agent-gui)
+    runs-on: ubuntu-22.04   # widest glibc compat for AppImage downstream
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mur-agent-gui/src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: 'mur-agent-gui/ui/.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: 'mur-agent-gui/ui/package-lock.json'
+      - name: Install Linux system libraries (Tauri 2)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            pkg-config \
+            protobuf-compiler
+      - name: Install npm deps
+        run: cd mur-agent-gui/ui && npm ci
+      - name: Frontend build (populates dist/ for cargo check)
+        run: cd mur-agent-gui/ui && npm run build
+      - name: cargo check
+        run: cargo check --manifest-path mur-agent-gui/src-tauri/Cargo.toml
+      - name: cargo test --lib
+        run: cargo test --manifest-path mur-agent-gui/src-tauri/Cargo.toml --lib
+      - name: cargo clippy
+        run: cargo clippy --manifest-path mur-agent-gui/src-tauri/Cargo.toml --lib -- -D warnings
+
+  e2e_quick:
+    name: E2E orchestration smoke (quick mode)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protobuf
+        run: brew install protobuf
+      - name: Run quick e2e smoke
+        run: bash scripts/e2e/p1-export-gui.sh
 
