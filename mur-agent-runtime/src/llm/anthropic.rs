@@ -61,6 +61,21 @@ impl AnthropicClient {
             std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
         Ok(Self::new(base_url, api_key, model))
     }
+
+    /// Construct from a resolved SecretString and an optional registry-supplied
+    /// base URL. Used by the supervisor when a model_ref provides the secret
+    /// (so we don't have to round-trip through ANTHROPIC_API_KEY).
+    pub fn from_secret_string(
+        key: &secrecy::SecretString,
+        model: String,
+        base_url: Option<String>,
+    ) -> Self {
+        use secrecy::ExposeSecret;
+        let base = base_url.unwrap_or_else(|| {
+            std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
+        });
+        Self::new(base, key.expose_secret().to_string(), model)
+    }
 }
 
 #[async_trait]

@@ -97,6 +97,7 @@ pub fn cmd_create(
             name: resolved_model,
             params: BTreeMap::new(),
         },
+        model_ref: None,
         mcp_servers: vec![],
         skills: vec![],
         transport: TransportConfig {

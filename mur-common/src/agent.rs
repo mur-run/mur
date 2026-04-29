@@ -14,6 +14,10 @@ pub struct AgentProfile {
     pub persona: Persona,
     pub sys_prompt_file: String,
     pub model: ModelConfig,
+    /// Optional pointer into ~/.mur/models.yaml. When set, the runtime
+    /// prefers the registry entry over the inline `model:` block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_ref: Option<String>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerEntry>,
     #[serde(default)]
@@ -596,5 +600,31 @@ updated_at: "2026-04-22T10:00:00+08:00"
         let reserialized = serde_yaml_ng::to_string(&profile).expect("emit");
         let round_tripped: AgentProfile = serde_yaml_ng::from_str(&reserialized).expect("re-parse");
         assert_eq!(profile.id, round_tripped.id);
+    }
+}
+
+#[cfg(test)]
+mod model_ref_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_profile_without_model_ref_still_parses() {
+        let yaml = include_str!("../tests/fixtures/profile_p0a_minimal.yaml");
+        let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(
+            p.model_ref.is_none(),
+            "legacy profile must not have model_ref"
+        );
+    }
+
+    #[test]
+    fn round_trip_with_model_ref_preserves_field() {
+        let yaml = include_str!("../tests/fixtures/profile_p0a_minimal.yaml");
+        let mut p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+        p.model_ref = Some("anthropic_opus_4_7".into());
+        let s = serde_yaml_ng::to_string(&p).unwrap();
+        assert!(s.contains("model_ref: anthropic_opus_4_7"), "yaml: {s}");
+        let p2: AgentProfile = serde_yaml_ng::from_str(&s).unwrap();
+        assert_eq!(p2.model_ref.as_deref(), Some("anthropic_opus_4_7"));
     }
 }

@@ -151,27 +151,55 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let runner = if force_echo {
         Arc::new(TaskRunner::new_stub_echo())
     } else {
-        match profile.inner.model.provider.as_str() {
+        let resolved = resolve_model_entry(&profile.inner);
+        if let Err(ref e) = resolved {
+            tracing::warn!(error = %e, "model resolution failed; will fall back to echo");
+        }
+        let entry = resolved.unwrap_or_else(|_| mur_common::model::ModelEntry {
+            provider: "echo".into(),
+            model: String::new(),
+            base_url: None,
+            secret: None,
+            capabilities: vec![],
+            params: serde_json::Value::Null,
+        });
+        let secret_value: Option<secrecy::SecretString> = match &entry.secret {
+            Some(s) => match s.resolve().await {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(error = %e, "secret resolution failed; falling back to echo");
+                    None
+                }
+            },
+            None => None,
+        };
+        match entry.provider.as_str() {
             "ollama" => {
-                let base = std::env::var("OLLAMA_BASE_URL")
-                    .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
-                let model = profile.inner.model.name.clone();
-                let client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(base, model));
-                // E6: forward the loaded system prompt so it actually reaches the LLM.
+                let base = entry.base_url.clone().unwrap_or_else(|| {
+                    std::env::var("OLLAMA_BASE_URL")
+                        .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
+                });
+                let client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(base, entry.model));
                 Arc::new(
                     TaskRunner::with_llm(client).with_system_prompt(profile.system_prompt.clone()),
                 )
             }
             "anthropic" => {
-                let model = profile.inner.model.name.clone();
-                match AnthropicClient::from_env(model) {
-                    Ok(c) => {
-                        let client: Arc<dyn LlmClient> = Arc::new(c);
-                        Arc::new(
-                            TaskRunner::with_llm(client)
-                                .with_system_prompt(profile.system_prompt.clone()),
-                        )
-                    }
+                let client: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
+                {
+                    Ok(Arc::new(AnthropicClient::from_secret_string(
+                        key,
+                        entry.model.clone(),
+                        entry.base_url.clone(),
+                    )))
+                } else {
+                    AnthropicClient::from_env(entry.model.clone())
+                        .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
+                };
+                match client {
+                    Ok(c) => Arc::new(
+                        TaskRunner::with_llm(c).with_system_prompt(profile.system_prompt.clone()),
+                    ),
                     Err(e) => {
                         tracing::warn!(error = %e, "anthropic client unavailable; falling back to echo");
                         Arc::new(TaskRunner::new_stub_echo())
@@ -179,15 +207,21 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 }
             }
             "openai" => {
-                let model = profile.inner.model.name.clone();
-                match OpenAiClient::from_env(model) {
-                    Ok(c) => {
-                        let client: Arc<dyn LlmClient> = Arc::new(c);
-                        Arc::new(
-                            TaskRunner::with_llm(client)
-                                .with_system_prompt(profile.system_prompt.clone()),
-                        )
-                    }
+                let client: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
+                {
+                    Ok(Arc::new(OpenAiClient::from_secret_string(
+                        key,
+                        entry.model.clone(),
+                        entry.base_url.clone(),
+                    )))
+                } else {
+                    OpenAiClient::from_env(entry.model.clone())
+                        .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
+                };
+                match client {
+                    Ok(c) => Arc::new(
+                        TaskRunner::with_llm(c).with_system_prompt(profile.system_prompt.clone()),
+                    ),
                     Err(e) => {
                         tracing::warn!(error = %e, "openai client unavailable; falling back to echo");
                         Arc::new(TaskRunner::new_stub_echo())
@@ -562,4 +596,33 @@ fn shred_file(path: &std::path::Path) -> anyhow::Result<()> {
     }
     let _ = std::fs::remove_file(path);
     Ok(())
+}
+
+/// Resolve the effective `ModelEntry` for an agent. Prefers
+/// `profile.model_ref` (looks it up in `~/.mur/models.yaml`); falls back to
+/// the inline `model:` block when the field is unset.
+pub fn resolve_model_entry(
+    profile: &mur_common::agent::AgentProfile,
+) -> anyhow::Result<mur_common::model::ModelEntry> {
+    use anyhow::Context;
+    use mur_common::model::{ModelEntry, ModelRegistry};
+    if let Some(name) = profile.model_ref.as_deref() {
+        let path = ModelRegistry::default_path()?;
+        let reg = ModelRegistry::load_from(&path)
+            .with_context(|| format!("load registry {}", path.display()))?;
+        let entry = reg
+            .models
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("model_ref {name:?} not found in {}", path.display()))?;
+        Ok(entry.clone())
+    } else {
+        Ok(ModelEntry {
+            provider: profile.model.provider.clone(),
+            model: profile.model.name.clone(),
+            base_url: None,
+            secret: None,
+            capabilities: vec![],
+            params: serde_json::to_value(&profile.model.params).unwrap_or(serde_json::Value::Null),
+        })
+    }
 }
