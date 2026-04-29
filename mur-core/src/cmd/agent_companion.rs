@@ -4,6 +4,7 @@ use content::ContentArgs;
 use preview::PreviewArgs;
 use proactive::ProactiveArgs;
 use quiet::QuietArgs;
+use rhythm::RhythmArgs;
 use templates::TemplatesArgs;
 use voice::VoiceArgs;
 use why::WhyArgs;
@@ -43,6 +44,8 @@ pub enum CompanionCmd {
     /// Explain why a companion message was sent (or list last 7 days of sent messages).
     #[command(name = "why-did-you-message")]
     WhyDidYouMessage(WhyArgs),
+    /// Manage companion rhythm state (wipe inbox/ledger/bandit, preserve voice config).
+    Rhythm(RhythmArgs),
 }
 
 pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
@@ -61,6 +64,7 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
         CompanionCmd::Ack(a) => inbox::run_ack(a).await,
         CompanionCmd::Preview(args) => preview::run(args).await,
         CompanionCmd::WhyDidYouMessage(args) => why::run(args).await,
+        CompanionCmd::Rhythm(args) => rhythm::run(args).await,
     }
 }
 
@@ -70,6 +74,7 @@ mod init;
 mod preview;
 mod proactive;
 mod quiet;
+mod rhythm;
 mod templates;
 mod util;
 mod voice;
