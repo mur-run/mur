@@ -11,8 +11,8 @@
 //! `~/.mur/agents/<name>/`). Stub here; real wiring lands in P1.3 +
 //! P1.6.
 
-use mur_core::agent_admin;
 use mur_common::agent::{Entitlements, McpServerEntry};
+use mur_core::agent_admin;
 use serde::Serialize;
 
 fn agent_name() -> String {

@@ -98,11 +98,7 @@ pub fn checks_for(format: &str) -> Vec<CheckResult> {
             &["--version"],
             "Install Node 20 LTS via nvm or your package manager",
         ));
-        out.push(check_command(
-            "npm",
-            &["--version"],
-            "Bundled with Node",
-        ));
+        out.push(check_command("npm", &["--version"], "Bundled with Node"));
         out.push(check_tauri_cli());
         out.push(check_platform_libraries_for_gui());
         out.push(check_signing_credentials());
@@ -148,10 +144,7 @@ fn check_command(cmd: &str, args: &[&str], hint: &str) -> CheckResult {
 }
 
 fn check_tauri_cli() -> CheckResult {
-    match Command::new("cargo")
-        .args(["tauri", "--version"])
-        .output()
-    {
+    match Command::new("cargo").args(["tauri", "--version"]).output() {
         Ok(out) if out.status.success() => {
             let detail = String::from_utf8_lossy(&out.stdout).trim().to_string();
             CheckResult::ok("tauri-cli", detail)
@@ -168,15 +161,14 @@ fn detect_target_arch() -> CheckResult {
     // rustc again; use `cfg!` to derive the family for hint purposes.
     let triple = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "aarch64-apple-darwin (Apple Silicon)",
-        ("macos", "x86_64") => "x86_64-apple-darwin (Intel) — universal binary needs Apple Silicon host",
+        ("macos", "x86_64") => {
+            "x86_64-apple-darwin (Intel) — universal binary needs Apple Silicon host"
+        }
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu (build on ubuntu-22.04 for widest compat)",
         ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
         ("windows", "x86_64") => "x86_64-pc-windows-msvc",
         (os, arch) => {
-            return CheckResult::skipped(
-                "host-target",
-                format!("unrecognised host: {os} {arch}"),
-            );
+            return CheckResult::skipped("host-target", format!("unrecognised host: {os} {arch}"));
         }
     };
     CheckResult::ok("host-target", triple)

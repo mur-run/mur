@@ -89,8 +89,7 @@ pub fn bootstrap_if_needed(bundle_resource_dir: &Path) -> Result<EmbeddedMetadat
         target = %agent_home.display(),
         "first-launch payload extract"
     );
-    fs::create_dir_all(&agent_home)
-        .with_context(|| format!("create {}", agent_home.display()))?;
+    fs::create_dir_all(&agent_home).with_context(|| format!("create {}", agent_home.display()))?;
     extract_tar_gz(&payload_path, &agent_home)?;
 
     match metadata.mode {
@@ -115,8 +114,7 @@ fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
     use flate2::read::GzDecoder;
     use tar::Archive;
 
-    let f = fs::File::open(archive)
-        .with_context(|| format!("open {}", archive.display()))?;
+    let f = fs::File::open(archive).with_context(|| format!("open {}", archive.display()))?;
     let mut a = Archive::new(GzDecoder::new(f));
     a.unpack(dest)
         .with_context(|| format!("unpack into {}", dest.display()))?;
@@ -166,8 +164,8 @@ fn ensure_symlink(agent_name: &str) -> Result<()> {
     // (Tauri puts it inside the .app bundle). v1 leaves a dangling
     // symlink for CLI users to fix; P2 may resolve to the bundled
     // sidecar's actual disk path.
-    let runtime_target = std::env::var("MUR_AGENT_RUNTIME_BIN")
-        .unwrap_or_else(|_| "mur-agent-runtime".to_string());
+    let runtime_target =
+        std::env::var("MUR_AGENT_RUNTIME_BIN").unwrap_or_else(|_| "mur-agent-runtime".to_string());
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(&runtime_target, &symlink)
@@ -206,16 +204,16 @@ mod tests {
             theme_default: "dark".to_string(),
             mur_version: "test".to_string(),
         };
-        fs::write(tmp.join("metadata.json"), serde_json::to_string(&meta).unwrap()).unwrap();
+        fs::write(
+            tmp.join("metadata.json"),
+            serde_json::to_string(&meta).unwrap(),
+        )
+        .unwrap();
 
         // Build a minimal tar.gz with a profile.yaml inside.
         let staging = tmp.join("payload-src");
         fs::create_dir_all(&staging).unwrap();
-        fs::write(
-            staging.join("profile.yaml"),
-            "schema: 0\nname: p16-test\n",
-        )
-        .unwrap();
+        fs::write(staging.join("profile.yaml"), "schema: 0\nname: p16-test\n").unwrap();
         let archive = tmp.join("agent-payload.tar.gz");
         {
             let f = fs::File::create(&archive).unwrap();
@@ -229,10 +227,14 @@ mod tests {
         // Use a fake MUR_HOME so we don't pollute the real one.
         let fake_mur = tmp.join("mur");
         // SAFETY: test runs serially; env vars are restored at end.
-        unsafe { env::set_var("MUR_HOME", &fake_mur); }
+        unsafe {
+            env::set_var("MUR_HOME", &fake_mur);
+        }
         // Use a fake bin dir so we don't drop a symlink in ~/.local/bin.
         let fake_bin = tmp.join("bin");
-        unsafe { env::set_var("MUR_AGENT_BIN_DIR", &fake_bin); }
+        unsafe {
+            env::set_var("MUR_AGENT_BIN_DIR", &fake_bin);
+        }
 
         let result = bootstrap_if_needed(&tmp).unwrap();
         assert_eq!(result.agent_name, "p16-test");
@@ -241,15 +243,16 @@ mod tests {
         let id_pub = fake_mur.join("agents/p16-test/identity.pub");
         assert!(id_pub.exists(), "template identity.pub not minted");
 
-        unsafe { env::remove_var("MUR_HOME"); }
-        unsafe { env::remove_var("MUR_AGENT_BIN_DIR"); }
+        unsafe {
+            env::remove_var("MUR_HOME");
+        }
+        unsafe {
+            env::remove_var("MUR_AGENT_BIN_DIR");
+        }
     }
 
     fn tempdir_for_test() -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "mur-gui-bootstrap-test-{}",
-            std::process::id()
-        ));
+        let d = std::env::temp_dir().join(format!("mur-gui-bootstrap-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d

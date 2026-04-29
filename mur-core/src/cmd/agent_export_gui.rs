@@ -150,10 +150,7 @@ fn phase_1_prereq_check(_opts: &ExportGuiOptions) -> Result<()> {
 
 // ─── phase 2 — prepare payload ────────────────────────────────────
 
-fn phase_2_prepare_payload(
-    opts: &ExportGuiOptions,
-    staging: &Path,
-) -> Result<BundleMode> {
+fn phase_2_prepare_payload(opts: &ExportGuiOptions, staging: &Path) -> Result<BundleMode> {
     let span = Instant::now();
     let mode = if opts.clone_identity {
         BundleMode::Clone
@@ -242,7 +239,11 @@ fn phase_3_prepare_theme(opts: &ExportGuiOptions, staging: &Path) -> Result<()> 
         warn!("--icon transcoding stubbed; v1 copies PNG verbatim into themes/_custom/");
     }
 
-    info!("phase 3 (prepare_theme={}) ok in {:?}", opts.theme, span.elapsed());
+    info!(
+        "phase 3 (prepare_theme={}) ok in {:?}",
+        opts.theme,
+        span.elapsed()
+    );
     Ok(())
 }
 
@@ -250,10 +251,7 @@ fn phase_3_prepare_theme(opts: &ExportGuiOptions, staging: &Path) -> Result<()> 
 
 fn wcag_contrast_failures(theme: &serde_json::Value) -> Option<Vec<String>> {
     let colors = theme.get("colors")?.as_object()?;
-    let name = theme
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
+    let name = theme.get("name").and_then(|v| v.as_str()).unwrap_or("?");
     let mut failures = Vec::new();
     let pairs: &[(&str, &str, f32, &str)] = &[
         ("fg", "bg", 4.5, "body text"),
@@ -268,8 +266,7 @@ fn wcag_contrast_failures(theme: &serde_json::Value) -> Option<Vec<String>> {
         ) else {
             continue;
         };
-        let (Some(fg_lum), Some(bg_lum)) = (relative_luminance(fg), relative_luminance(bg))
-        else {
+        let (Some(fg_lum), Some(bg_lum)) = (relative_luminance(fg), relative_luminance(bg)) else {
             continue;
         };
         let r = contrast_ratio(fg_lum, bg_lum);
@@ -364,7 +361,10 @@ fn phase_4_rewrite_tauri_conf(
         staging.join("agent-payload.tar.gz"),
         src_tauri.join("agent-payload.tar.gz"),
     )?;
-    std::fs::copy(staging.join("metadata.json"), src_tauri.join("metadata.json"))?;
+    std::fs::copy(
+        staging.join("metadata.json"),
+        src_tauri.join("metadata.json"),
+    )?;
 
     info!(
         "phase 4 (rewrite_tauri_conf → {}, productName={}, identifier=run.mur.agent.{safe_name}) ok in {:?}",
@@ -509,18 +509,9 @@ fn phase_7_tauri_build(opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
         .join("release/bundle");
     let _ = std::fs::remove_dir_all(&bundle_root);
 
-    info!(
-        "phase 7: cargo tauri build --target={target} --bundles={bundles}"
-    );
+    info!("phase 7: cargo tauri build --target={target} --bundles={bundles}");
     let status = Command::new("cargo")
-        .args([
-            "tauri",
-            "build",
-            "--target",
-            &target,
-            "--bundles",
-            bundles,
-        ])
+        .args(["tauri", "build", "--target", &target, "--bundles", bundles])
         .current_dir(&src_tauri)
         .status()
         .with_context(|| "spawn cargo tauri build")?;

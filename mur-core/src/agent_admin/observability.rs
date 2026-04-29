@@ -35,8 +35,7 @@ pub fn stats(name: &str) -> Result<StatsView> {
         if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
             continue;
         }
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         view.files_scanned += 1;
         view.bytes_scanned += text.len() as u64;
         for line in text.lines() {
@@ -60,8 +59,7 @@ pub fn logs(name: &str, tail: usize) -> Result<String> {
     if !path.exists() {
         return Ok(String::new());
     }
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(tail);
     Ok(lines[start..].join("\n"))

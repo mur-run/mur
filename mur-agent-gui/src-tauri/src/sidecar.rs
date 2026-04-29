@@ -74,10 +74,12 @@ impl SidecarManager {
             while let Some(event) = rx.recv().await {
                 match event {
                     CommandEvent::Stdout(line) => {
-                        let _ = app_clone.emit("sidecar:stdout", String::from_utf8_lossy(&line).to_string());
+                        let _ = app_clone
+                            .emit("sidecar:stdout", String::from_utf8_lossy(&line).to_string());
                     }
                     CommandEvent::Stderr(line) => {
-                        let _ = app_clone.emit("sidecar:stderr", String::from_utf8_lossy(&line).to_string());
+                        let _ = app_clone
+                            .emit("sidecar:stderr", String::from_utf8_lossy(&line).to_string());
                     }
                     CommandEvent::Error(msg) => {
                         warn!("sidecar error: {msg}");
@@ -137,11 +139,17 @@ impl SidecarManager {
             if state.user_stopped {
                 return;
             }
-            state.crash_window.retain(|t| t.elapsed() < Duration::from_secs(60));
+            state
+                .crash_window
+                .retain(|t| t.elapsed() < Duration::from_secs(60));
             state.crash_window.push(Instant::now());
             let n = state.crash_window.len();
             if n > 5 {
-                warn!(crashes = n, window_secs = 60, "sidecar crashed too often; stop auto-restart");
+                warn!(
+                    crashes = n,
+                    window_secs = 60,
+                    "sidecar crashed too often; stop auto-restart"
+                );
                 let _ = app.emit("sidecar:gave-up", n);
                 return;
             }
@@ -171,12 +179,7 @@ impl SidecarManager {
     /// Used by tests + future status endpoints.
     #[allow(dead_code)]
     pub fn pid(&self) -> Option<u32> {
-        self.inner
-            .lock()
-            .unwrap()
-            .child
-            .as_ref()
-            .map(|c| c.pid())
+        self.inner.lock().unwrap().child.as_ref().map(|c| c.pid())
     }
 }
 

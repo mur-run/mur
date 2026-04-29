@@ -75,7 +75,9 @@ fn main() -> Result<()> {
                         "bootstrap ok"
                     );
                     // SAFETY: setup runs before any Tauri command; single-thread.
-                    unsafe { std::env::set_var("MUR_GUI_AGENT_NAME", &meta.agent_name); }
+                    unsafe {
+                        std::env::set_var("MUR_GUI_AGENT_NAME", &meta.agent_name);
+                    }
 
                     // Auto-spawn the sidecar so "click app → agent runs"
                     // is the default flow. User can stop/restart from
@@ -95,14 +97,26 @@ fn main() -> Result<()> {
             }
 
             // Tray menu — primary UX for the menubar launcher.
-            let show_settings = MenuItem::with_id(app, "show-settings", "Show Settings…", true, None::<&str>)?;
+            let show_settings =
+                MenuItem::with_id(app, "show-settings", "Show Settings…", true, None::<&str>)?;
             let show_logs = MenuItem::with_id(app, "show-logs", "Show Logs…", true, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let start = MenuItem::with_id(app, "start", "Start Agent", true, None::<&str>)?;
             let stop = MenuItem::with_id(app, "stop", "Stop Agent", true, None::<&str>)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_settings, &show_logs, &sep1, &start, &stop, &sep2, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &show_settings,
+                    &show_logs,
+                    &sep1,
+                    &start,
+                    &stop,
+                    &sep2,
+                    &quit,
+                ],
+            )?;
 
             let mgr_for_menu = sidecar_mgr.clone();
             let _tray = TrayIconBuilder::new()
@@ -114,7 +128,8 @@ fn main() -> Result<()> {
                     tauri::image::Image::new_owned(vec![0u8; 16 * 16 * 4], 16, 16)
                 }))
                 .on_menu_event(move |app, event| {
-                    let agent_name = std::env::var("MUR_GUI_AGENT_NAME").unwrap_or_else(|_| "template".to_string());
+                    let agent_name = std::env::var("MUR_GUI_AGENT_NAME")
+                        .unwrap_or_else(|_| "template".to_string());
                     match event.id.as_ref() {
                         "show-settings" => {
                             if let Some(window) = app.get_webview_window("settings") {
@@ -212,8 +227,7 @@ fn init_tracing() {
     let log_dir = log_dir().unwrap_or_else(std::env::temp_dir);
     std::fs::create_dir_all(&log_dir).ok();
     let file_appender = tracing_appender::rolling::never(&log_dir, "gui.log");
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(file_appender)

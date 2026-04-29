@@ -74,8 +74,8 @@ fn iter_theme_dirs() -> Result<Vec<PathBuf>> {
 
 fn load_def(dir: &Path) -> Result<ThemeDef> {
     let path = dir.join("theme.json");
-    let body = std::fs::read_to_string(&path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let body =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     serde_json::from_str(&body).with_context(|| format!("parse {}", path.display()))
 }
 
@@ -177,10 +177,7 @@ mod tests {
         let l_black = relative_luminance("#000000").unwrap();
         let l_white = relative_luminance("#ffffff").unwrap();
         let ratio = contrast_ratio(l_black, l_white);
-        assert!(
-            (ratio - 21.0).abs() < 0.01,
-            "expected 21:1, got {ratio}"
-        );
+        assert!((ratio - 21.0).abs() < 0.01, "expected 21:1, got {ratio}");
     }
 
     #[test]
