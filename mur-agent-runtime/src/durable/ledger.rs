@@ -49,6 +49,11 @@ impl Ledger {
         Ok(())
     }
 
+    /// Return the directory this ledger writes to.
+    pub fn base_dir(&self) -> &Path {
+        &self.base_dir
+    }
+
     /// Force fsync today's file. Used at shutdown / from tests.
     pub fn flush(&mut self) -> Result<()> {
         let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
