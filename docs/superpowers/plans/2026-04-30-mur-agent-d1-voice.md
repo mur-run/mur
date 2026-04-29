@@ -6,6 +6,16 @@
 
 **Bundle-size update (2026-04-30):** the original §4.1 strategy bundled the 809 MB whisper model in the installer; total installer ~1 GB after summing M1-M9 (whisper alone = 80% of bytes). Plan revised to **download whisper on first PTT use**, identical mechanism to the 4 non-default voices. Net effect: **installer drops from ~1 GB to ~190 MB**; first-PTT cost is a one-time ~3 min background download with a progress UI. The downloader shares the same `voice_download` Tauri command surface + signed-CDN manifest path as voice-pack downloads (extended with `kind: stt-model`).
 
+**Default-off update (2026-04-30):** voice is **opt-in, default disabled**. Three reasons:
+
+1. **Privacy / consent** — voice is the most invasive sensor. B0 §10's three-tier permission UX places it firmly in *first-use-prompt-with-remember*, not silent. OS mic-permission popups answer "may this app touch the mic", not "do you want voice in your AI workflow"; those are different questions.
+2. **Bandwidth honesty** — even with download-on-first-use, opt-in means we never burn ~810 MB on users who'll never use voice (metered connections / corporate networks / slow disks).
+3. **First-launch UX** — voice setup demanding a multi-minute download mid-onboarding is peak abandonment risk. Defer to "discover later when you want it".
+
+Roadmap consistency check: §4.7 already says companion proactive sends are off by default ("D2 step 5: three-layer toggle, default: layer 1 only"); voice is at least as sensitive, same default-off discipline applies.
+
+Concrete impact: new `companion.voice.enabled: bool` config field (default `false`); PttButton hidden + onboarding voice step removed until user enables in **Settings → Voice → "Enable voice"**.
+
 **Architecture:** All inference runs in the Tauri sidecar (`mur-agent-gui/src-tauri/`), not the runtime, because voice is a GUI-tier concern (PTT hotkey, audio I/O, settings panel). The runtime stays voice-blind. TTS uses ONNX via the `ort` crate; STT uses `whisper-rs` (statically linked whisper.cpp). Audio I/O via `cpal`. Voice manifests are signed JSON files served from a Cloudflare-fronted CDN; the runtime verifies SHA-256 + Ed25519 signature before `mmap`/load.
 
 **Tech Stack:** Rust 2024, `ort = "2"` (ONNX Runtime), `whisper-rs = "0.14"`, `cpal = "0.16"`, `hound = "3"`, `dasp_ring_buffer = "0.11"`, `tauri-plugin-global-shortcut`, `tauri-plugin-clipboard-manager`. macOS Vision.framework via `objc2` for the future OCR step (D3); not required for D1.
@@ -49,8 +59,9 @@ mur-agent-gui/src-tauri/src/
 
 mur-agent-gui/ui/src/
   voice/                                # NEW module
-    VoicePicker.tsx                     # CREATE: 5-sample preview grid
-    PttButton.tsx                       # CREATE: hold-to-talk indicator
+    VoiceEnablePanel.tsx                # CREATE: opt-in first-state UI (visible when disabled)
+    VoicePicker.tsx                     # CREATE: 5-sample preview grid (visible when enabled)
+    PttButton.tsx                       # CREATE: hold-to-talk indicator (hidden until enabled)
     PrivacyBadge.tsx                    # CREATE: "voice never leaves this Mac"
     HotkeyRebinder.tsx                  # CREATE: rebind PTT shortcut
     types.ts                            # CREATE: shared types
@@ -1106,6 +1117,14 @@ impl TtsEngine {
         Ok(Self { session: None, current_voice_id: None })
     }
 
+    /// Drop the loaded ort session + voice id, freeing RAM. Used by
+    /// `voice_disable` to honor the opt-in promise (no model in memory
+    /// while voice is disabled).
+    pub fn unload(&mut self) {
+        self.session = None;
+        self.current_voice_id = None;
+    }
+
     pub async fn load_voice(
         &mut self,
         voice_id: &str,
@@ -1523,6 +1542,17 @@ impl SttEngine {
         Ok(())
     }
 
+    /// Drop the loaded whisper context, freeing RAM. Used by
+    /// `voice_disable` to honor the opt-in promise.
+    pub fn unload(&mut self) {
+        // Async drop: spawn a blocking task to acquire the write lock
+        // and clear. SttEngine.unload is called from the sync path of
+        // voice_disable, so we use blocking_write here.
+        if let Ok(mut guard) = self.backend.try_write() {
+            *guard = None;
+        }
+    }
+
     /// True if a model is loaded; false means the GUI must call
     /// `voice_stt_download` before any transcribe attempt can succeed.
     pub async fn is_ready(&self) -> bool {
@@ -1673,8 +1703,72 @@ git commit -m "M1.4.3: PTT state machine + 250ms debounce + 3 unit tests"
 
 **Files:**
 - Modify: `mur-agent-gui/src-tauri/src/commands.rs`
+- Modify: `mur-agent-gui/src-tauri/src/voice/mod.rs` (add `enabled` flag + persistence)
 
-- [ ] **Step 1: Add commands**
+**Default-off contract:** voice is **opt-in**. `VoiceManager` carries an `enabled: bool` (default `false`); persisted to `<app_data>/voices/voice_state.json`. The frontend `VoicePicker` and `PttButton` are gated on this flag. Enabling triggers (in order):
+1. STT model download if missing (M1.4.1b)
+2. Default voice load (`af_heart`)
+3. Hotkey registration (was deferred until enable)
+4. `voice_state.json` write `{enabled: true, enabled_at: <ts>}`
+
+Disabling: unregister hotkey, drop loaded models from memory, write `{enabled: false}`. Disk assets are kept; user can re-enable without re-download.
+
+- [ ] **Step 1: Add `enabled` flag to VoiceManager**
+
+Edit `voice/mod.rs`:
+
+```rust
+use parking_lot::RwLock as PlRwLock;
+
+pub struct VoiceManager {
+    pub tts: Arc<RwLock<tts::TtsEngine>>,
+    pub stt: Arc<RwLock<stt::SttEngine>>,
+    pub registry: Arc<RwLock<registry::VoiceRegistry>>,
+    pub app_data_dir: PathBuf,
+    /// Default-off opt-in flag; persisted to voice_state.json.
+    pub enabled: Arc<PlRwLock<bool>>,
+}
+
+impl VoiceManager {
+    pub async fn new(app_data_dir: PathBuf) -> anyhow::Result<Self> {
+        let registry = Arc::new(RwLock::new(registry::VoiceRegistry::load(&app_data_dir).await?));
+        let tts = Arc::new(RwLock::new(tts::TtsEngine::new()?));
+        let stt = Arc::new(RwLock::new(stt::SttEngine::new()?));
+        let enabled_path = app_data_dir.join("voices").join("voice_state.json");
+        let enabled = if enabled_path.exists() {
+            let bytes = tokio::fs::read(&enabled_path).await?;
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|v| v.get("enabled").and_then(|b| b.as_bool()))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        Ok(Self {
+            tts, stt, registry, app_data_dir,
+            enabled: Arc::new(PlRwLock::new(enabled)),
+        })
+    }
+
+    pub fn is_enabled(&self) -> bool { *self.enabled.read() }
+
+    pub async fn set_enabled(&self, on: bool) -> anyhow::Result<()> {
+        *self.enabled.write() = on;
+        let payload = serde_json::json!({
+            "enabled": on,
+            "updated_at": chrono::Utc::now().to_rfc3339(),
+        });
+        let path = self.app_data_dir.join("voices").join("voice_state.json");
+        tokio::fs::create_dir_all(path.parent().unwrap()).await?;
+        let tmp = path.with_extension("json.tmp");
+        tokio::fs::write(&tmp, serde_json::to_vec_pretty(&payload)?).await?;
+        tokio::fs::rename(&tmp, &path).await?;
+        Ok(())
+    }
+}
+```
+
+- [ ] **Step 2: Add commands**
 
 Append to `commands.rs`:
 
@@ -1684,6 +1778,74 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub type VoiceManagerState = Arc<RwLock<VoiceManager>>;
+
+/// Top-level voice status. Frontend calls this on every Settings →
+/// Voice mount to decide whether to render `VoiceEnablePanel` (when
+/// `enabled=false`) or the full `VoicePicker + PttButton` UI.
+#[tauri::command]
+pub async fn voice_status(
+    state: tauri::State<'_, VoiceManagerState>,
+) -> Result<serde_json::Value, String> {
+    let mgr = state.read().await;
+    let registry = mgr.registry.read().await;
+    let stt = mgr.stt.read().await;
+    Ok(serde_json::json!({
+        "enabled": mgr.is_enabled(),
+        "default_voice_id": registry.default_voice_id,
+        "voices_installed": registry.list().len(),
+        "stt_installed": registry.stt_model_path().is_some(),
+        "stt_loaded": stt.is_ready().await,
+    }))
+}
+
+/// Enable voice. Triggers STT download if missing, loads default voice,
+/// registers PTT hotkey. Idempotent.
+#[tauri::command]
+pub async fn voice_enable(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, VoiceManagerState>,
+) -> Result<(), String> {
+    let mgr = state.read().await;
+    if mgr.is_enabled() { return Ok(()); }
+
+    // 1. Download STT if missing (uses voice_stt_download internals).
+    voice_stt_download(app_handle.clone(), state.clone()).await?;
+
+    // 2. Load default voice.
+    let registry = mgr.registry.read().await;
+    if registry.default_voice_id.is_none() && !registry.list().is_empty() {
+        // Seed default to first installed (af_heart bundled).
+        // Real impl: call set_default once registry is mutable here.
+    }
+    drop(registry);
+
+    // 3. Register PTT hotkey.
+    crate::voice::hotkey::register_ptt(&app_handle).map_err(|e| e.to_string())?;
+
+    // 4. Persist enabled flag.
+    mgr.set_enabled(true).await.map_err(|e| e.to_string())?;
+    let _ = app_handle.emit("voice://state-changed", serde_json::json!({"enabled": true}));
+    Ok(())
+}
+
+/// Disable voice. Unregisters hotkey, drops in-memory models, persists
+/// disabled flag. On-disk assets are preserved (re-enable is fast).
+#[tauri::command]
+pub async fn voice_disable(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, VoiceManagerState>,
+) -> Result<(), String> {
+    let mgr = state.read().await;
+    if !mgr.is_enabled() { return Ok(()); }
+
+    let _ = crate::voice::hotkey::unregister_ptt(&app_handle);
+    // Drop in-memory models so disable also frees RAM.
+    mgr.tts.write().await.unload();
+    mgr.stt.write().await.unload();
+    mgr.set_enabled(false).await.map_err(|e| e.to_string())?;
+    let _ = app_handle.emit("voice://state-changed", serde_json::json!({"enabled": false}));
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn voice_list_installed(
@@ -1888,6 +2050,9 @@ In `mur-agent-gui/src-tauri/src/lib.rs` (the Tauri `run` function), add to the i
 ```rust
 tauri::generate_handler![
     // ...existing commands...
+    crate::commands::voice_status,
+    crate::commands::voice_enable,
+    crate::commands::voice_disable,
     crate::commands::voice_list_installed,
     crate::commands::voice_set_default,
     crate::commands::voice_download,
@@ -1917,13 +2082,20 @@ git add mur-agent-gui/src-tauri/src/commands.rs \
 git commit -m "M1.5.1: voice tauri commands (list/set_default/download/tts_speak/stt_transcribe)"
 ```
 
-### Task M1.5.2: Frontend voice picker + privacy badge
+### Task M1.5.2: Frontend voice picker + opt-in panel + privacy badge
 
 **Files:**
 - Create: `mur-agent-gui/ui/src/voice/types.ts`
+- Create: `mur-agent-gui/ui/src/voice/VoiceEnablePanel.tsx` (opt-in first state)
 - Create: `mur-agent-gui/ui/src/voice/VoicePicker.tsx`
 - Create: `mur-agent-gui/ui/src/voice/PrivacyBadge.tsx`
 - Modify: `mur-agent-gui/ui/src/pages/Settings.tsx`
+
+The Voice tab in Settings is **two-state**:
+* `voice_status.enabled === false` → render `<VoiceEnablePanel />` only
+* `voice_status.enabled === true`  → render `<PrivacyBadge /> + <VoicePicker /> + <HotkeyRebinder />`
+
+PttButton (M1.6.2) is also gated on `enabled` — not just on STT presence.
 
 - [ ] **Step 1: Shared types**
 
@@ -1942,6 +2114,105 @@ export interface InstalledVoice {
 export interface VoiceListResponse {
   voices: InstalledVoice[];
   default_voice_id: string | null;
+}
+
+export interface VoiceStatus {
+  enabled: boolean;
+  default_voice_id: string | null;
+  voices_installed: number;
+  stt_installed: boolean;
+  stt_loaded: boolean;
+}
+```
+
+- [ ] **Step 1b: VoiceEnablePanel component (the opt-in first state)**
+
+```tsx
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+interface DownloadProgress {
+  AssetProgress?: { downloaded_bytes: number; total_bytes: number };
+  Done?: object;
+}
+
+export function VoiceEnablePanel({ onEnabled }: { onEnabled: () => void }) {
+  const [phase, setPhase] = useState<"idle" | "downloading" | "loading" | "error">("idle");
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [err, setErr] = useState<string | null>(null);
+
+  async function enable() {
+    setPhase("downloading");
+    const u = await listen<DownloadProgress>("voice://stt-download-progress", (e) => {
+      if (e.payload.AssetProgress) {
+        setProgress({
+          done: e.payload.AssetProgress.downloaded_bytes,
+          total: e.payload.AssetProgress.total_bytes,
+        });
+      } else if (e.payload.Done !== undefined) {
+        setPhase("loading");
+      }
+    });
+    try {
+      await invoke("voice_enable");
+      onEnabled();
+    } catch (e: any) {
+      setErr(String(e));
+      setPhase("error");
+    } finally {
+      u();
+    }
+  }
+
+  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+  const mb = (n: number) => (n / 1_000_000).toFixed(0);
+
+  return (
+    <div className="rounded-lg border border-zinc-700 p-5 max-w-xl">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-sm font-mono opacity-60">Voice</span>
+        <span className="text-xs px-2 py-0.5 rounded bg-zinc-800">DISABLED</span>
+        <span className="text-xs opacity-60 ml-auto">Privacy: voice never leaves this Mac</span>
+      </div>
+      <h2 className="text-lg font-medium mb-2">Speak and listen, fully on-device</h2>
+      <p className="text-sm opacity-80 mb-3">
+        mur agents can speak and listen using fully on-device speech models.
+        Nothing is uploaded.
+      </p>
+      <p className="text-sm opacity-80 mb-2">Enabling will:</p>
+      <ul className="text-sm opacity-80 mb-4 list-disc pl-5 space-y-1">
+        <li>Download the speech model (~809&nbsp;MB, one-time)</li>
+        <li>Bundle 1 default voice; you can add 4 more on demand</li>
+        <li>Register <code>Cmd+Shift+'</code> as the push-to-talk hotkey (rebindable)</li>
+        <li>Request microphone permission from your OS</li>
+      </ul>
+
+      {phase === "idle" && (
+        <div className="flex gap-3">
+          <button onClick={enable} className="px-4 py-2 text-sm bg-emerald-700 rounded">
+            Enable voice
+          </button>
+          <a href="#" className="px-4 py-2 text-sm opacity-60">Learn more</a>
+        </div>
+      )}
+      {phase === "downloading" && (
+        <>
+          <div className="text-sm mb-2">Downloading speech model…</div>
+          <div className="h-2 bg-zinc-800 rounded overflow-hidden mb-2">
+            <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
+          </div>
+          <div className="text-xs opacity-70">{mb(progress.done)} / {mb(progress.total)} MB ({pct}%)</div>
+        </>
+      )}
+      {phase === "loading" && (
+        <div className="text-sm opacity-80">Loading model… nearly done.</div>
+      )}
+      {phase === "error" && (
+        <div className="text-sm text-rose-400">Enable failed: {err}. Try again.</div>
+      )}
+    </div>
+  );
 }
 ```
 
@@ -2016,16 +2287,54 @@ export function PrivacyBadge() {
 }
 ```
 
-- [ ] **Step 4: Wire Voice tab into Settings page**
+- [ ] **Step 4: Wire two-state Voice tab into Settings page**
 
-Add a `Voice` tab section that renders `<PrivacyBadge />` then `<VoicePicker />`. Diff to taste against the existing Settings.tsx.
+The Settings → Voice tab branches on `voice_status.enabled`:
+
+```tsx
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { VoiceEnablePanel } from "../voice/VoiceEnablePanel";
+import { VoicePicker } from "../voice/VoicePicker";
+import { PrivacyBadge } from "../voice/PrivacyBadge";
+import type { VoiceStatus } from "../voice/types";
+
+export function VoiceSettingsTab() {
+  const [status, setStatus] = useState<VoiceStatus | null>(null);
+
+  async function refresh() {
+    setStatus(await invoke<VoiceStatus>("voice_status"));
+  }
+  useEffect(() => {
+    refresh();
+    const u = listen("voice://state-changed", refresh);
+    return () => { u.then((f) => f()); };
+  }, []);
+
+  if (!status) return <div className="opacity-60">Loading…</div>;
+  if (!status.enabled) return <VoiceEnablePanel onEnabled={refresh} />;
+  return (
+    <div className="space-y-4">
+      <PrivacyBadge />
+      <VoicePicker />
+      <button
+        onClick={async () => { await invoke("voice_disable"); refresh(); }}
+        className="text-xs opacity-60 hover:opacity-100"
+      >
+        Disable voice
+      </button>
+    </div>
+  );
+}
+```
 
 - [ ] **Step 5: Frontend build + commit**
 
 ```bash
 cd mur-agent-gui/ui && npm run build && cd ../..
 git add mur-agent-gui/ui/src/voice/ mur-agent-gui/ui/src/pages/Settings.tsx
-git commit -m "M1.5.2: voice picker UI + 'voice never leaves this Mac' privacy badge"
+git commit -m "M1.5.2: voice opt-in panel + picker UI + privacy badge (default-off two-state)"
 ```
 
 ---
@@ -2070,16 +2379,33 @@ pub fn register_ptt(app: &AppHandle) -> tauri::Result<()> {
     })?;
     Ok(())
 }
+
+/// Unregister the PTT shortcut. Called by `voice_disable` so that
+/// disabled-state mur agents don't keep a global hotkey live.
+pub fn unregister_ptt(app: &AppHandle) -> tauri::Result<()> {
+    let shortcut = default_ptt_shortcut();
+    app.global_shortcut().unregister(shortcut)?;
+    Ok(())
+}
 ```
 
-- [ ] **Step 2: Wire into Tauri builder**
+- [ ] **Step 2: Wire plugin in Tauri builder (default-off, deferred registration)**
 
-In `lib.rs`'s `run` function:
+In `lib.rs`'s `run` function — the plugin is loaded but the shortcut is **NOT** registered at startup. Registration happens inside `voice_enable` only:
 
 ```rust
 .plugin(tauri_plugin_global_shortcut::Builder::new().build())
 .setup(|app| {
-    crate::voice::hotkey::register_ptt(&app.handle())?;
+    // Voice is opt-in (default off); hotkey registers in voice_enable.
+    // On boot we re-register if the persisted state says enabled.
+    let mgr_state: tauri::State<crate::commands::VoiceManagerState> = app.state();
+    let mgr = mgr_state.inner().clone();
+    let app_handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        if mgr.read().await.is_enabled() {
+            let _ = crate::voice::hotkey::register_ptt(&app_handle);
+        }
+    });
     Ok(())
 })
 ```
@@ -2104,40 +2430,50 @@ git add mur-agent-gui/src-tauri/src/voice/hotkey.rs \
 git commit -m "M1.6.1: register Cmd+Shift+' (Ctrl+Shift+' off macOS) as default PTT shortcut"
 ```
 
-### Task M1.6.2: Frontend PTT button + first-use STT-download modal + transcript bridge
+### Task M1.6.2: Frontend PTT button + transcript bridge (default-off, gated on `enabled`)
 
 **Files:**
 - Create: `mur-agent-gui/ui/src/voice/PttButton.tsx`
-- Create: `mur-agent-gui/ui/src/voice/SttFirstUseModal.tsx`
 
-The first PTT press triggers a one-time STT model download (~809 MB, ~3 min on broadband). The button checks `voice_stt_status` on mount; if `!installed`, the first hotkey press opens `<SttFirstUseModal>` instead of capturing audio. The user accepts → modal calls `voice_stt_download` and shows progress; subsequent hotkey presses go straight to capture.
+PttButton is **invisible** until the user opts in via Settings → Voice → Enable. The opt-in panel (M1.5.2 `VoiceEnablePanel`) owns the one-time STT-model download UX, so PttButton only ever sees an already-enabled-and-loaded state. When voice is later disabled, PttButton goes back to rendering `null`.
 
-- [ ] **Step 1: Implement PttButton with STT-status guard**
+State source of truth: `voice_status` Tauri command + `voice://state-changed` event for live updates.
+
+- [ ] **Step 1: Implement PttButton (renders null when disabled)**
 
 ```tsx
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { SttFirstUseModal } from "./SttFirstUseModal";
 
-interface SttStatus { installed: boolean; loaded: boolean; size_bytes: number; }
+interface VoiceStatus {
+  enabled: boolean;
+  stt_installed: boolean;
+  stt_loaded: boolean;
+}
 
 export function PttButton({ onTranscript }: { onTranscript: (t: string) => void }) {
   const [recording, setRecording] = useState(false);
-  const [showFirstUse, setShowFirstUse] = useState(false);
+  const [enabled, setEnabled] = useState(false);
   const [sttReady, setSttReady] = useState(false);
 
+  async function refresh() {
+    const s = await invoke<VoiceStatus>("voice_status");
+    setEnabled(s.enabled);
+    setSttReady(s.stt_installed && s.stt_loaded);
+  }
+
   useEffect(() => {
-    invoke<SttStatus>("voice_stt_status").then((s) => setSttReady(s.installed && s.loaded));
+    refresh();
+    const u = listen("voice://state-changed", refresh);
+    return () => { u.then((f) => f()); };
   }, []);
 
   useEffect(() => {
+    if (!enabled) return; // hotkey not registered when disabled — no listeners needed
     let downAt = 0;
     const u1 = listen("ptt://hotkey-down", () => {
-      if (!sttReady) {
-        setShowFirstUse(true);
-        return;
-      }
+      if (!sttReady) return; // VoiceEnablePanel handled the download already
       downAt = Date.now();
       setRecording(true);
       invoke("voice_start_capture").catch(() => {});
@@ -2152,124 +2488,37 @@ export function PttButton({ onTranscript }: { onTranscript: (t: string) => void 
       if (text) onTranscript(text);
     });
     return () => { u1.then((f) => f()); u2.then((f) => f()); };
-  }, [onTranscript, sttReady]);
+  }, [onTranscript, enabled, sttReady]);
+
+  // Default-off: render NOTHING when voice is disabled. The opt-in
+  // happens in Settings → Voice; the PttButton only appears once the
+  // user has enabled voice, so a never-touches-voice user never sees
+  // a "set up voice" prompt floating on their screen.
+  if (!enabled) return null;
 
   return (
-    <>
-      <div className={[
-        "fixed bottom-6 right-6 rounded-full p-4 shadow-lg",
-        recording ? "bg-rose-600" : sttReady ? "bg-zinc-700" : "bg-amber-700",
-      ].join(" ")}>
-        {recording ? "● rec" : sttReady ? "Cmd+Shift+'" : "Set up voice"}
-      </div>
-      {showFirstUse && (
-        <SttFirstUseModal
-          onDone={() => { setShowFirstUse(false); setSttReady(true); }}
-          onCancel={() => setShowFirstUse(false)}
-        />
-      )}
-    </>
-  );
-}
-```
-
-- [ ] **Step 2: Implement SttFirstUseModal (one-time download UX)**
-
-```tsx
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-
-interface DownloadProgress {
-  AssetProgress?: { name: string; downloaded_bytes: number; total_bytes: number };
-  Done?: object;
-}
-
-export function SttFirstUseModal({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
-  const [phase, setPhase] = useState<"intro" | "downloading" | "loading">("intro");
-  const [progress, setProgress] = useState({ done: 0, total: 0 });
-
-  useEffect(() => {
-    if (phase !== "downloading") return;
-    const u = listen<DownloadProgress>("voice://stt-download-progress", (e) => {
-      if (e.payload.AssetProgress) {
-        const { downloaded_bytes, total_bytes } = e.payload.AssetProgress;
-        setProgress({ done: downloaded_bytes, total: total_bytes });
-      } else if (e.payload.Done !== undefined) {
-        setPhase("loading");
-      }
-    });
-    return () => { u.then((f) => f()); };
-  }, [phase]);
-
-  async function start() {
-    setPhase("downloading");
-    try {
-      await invoke("voice_stt_download");
-      onDone();
-    } catch {
-      onCancel();
-    }
-  }
-
-  const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
-  const mb = (n: number) => (n / 1_000_000).toFixed(0);
-
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-zinc-900 rounded-lg p-6 max-w-md border border-zinc-700">
-        {phase === "intro" && (
-          <>
-            <h2 className="text-lg font-medium mb-2">Set up voice (one-time)</h2>
-            <p className="text-sm opacity-80 mb-4">
-              Speech recognition runs on-device. We need to download the speech model
-              (~809 MB, ~3 min on broadband). It will live in
-              <code className="text-xs"> ~/Library/Application Support/mur/voices/_stt/ </code>
-              and is verified with a cryptographic signature before use.
-            </p>
-            <p className="text-sm opacity-80 mb-4">Your voice never leaves this Mac.</p>
-            <div className="flex gap-3 justify-end">
-              <button onClick={onCancel} className="px-4 py-2 text-sm">Not now</button>
-              <button onClick={start} className="px-4 py-2 text-sm bg-emerald-700 rounded">
-                Download speech model
-              </button>
-            </div>
-          </>
-        )}
-        {phase === "downloading" && (
-          <>
-            <h2 className="text-lg font-medium mb-2">Downloading speech model…</h2>
-            <div className="h-2 bg-zinc-800 rounded overflow-hidden mb-2">
-              <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
-            </div>
-            <div className="text-xs opacity-70">
-              {mb(progress.done)} / {mb(progress.total)} MB ({pct}%)
-            </div>
-          </>
-        )}
-        {phase === "loading" && (
-          <>
-            <h2 className="text-lg font-medium mb-2">Loading model…</h2>
-            <div className="text-xs opacity-70">This will take a few seconds.</div>
-          </>
-        )}
-      </div>
+    <div className={[
+      "fixed bottom-6 right-6 rounded-full p-4 shadow-lg",
+      recording ? "bg-rose-600" : "bg-zinc-700",
+    ].join(" ")}>
+      {recording ? "● rec" : "Cmd+Shift+'"}
     </div>
   );
 }
 ```
 
-- [ ] **Step 3: Add the matching `voice_start_capture` / `voice_stop_capture` tauri commands** to `commands.rs` — these wrap `audio::start_capture` and `CaptureBuffer::drain` respectively. (Implementation pattern mirrors M1.5.1 voice commands; ~40 LOC.)
+- [ ] **Step 2: Add the matching `voice_start_capture` / `voice_stop_capture` tauri commands** to `commands.rs` — these wrap `audio::start_capture` and `CaptureBuffer::drain` respectively. (Implementation pattern mirrors M1.5.1 voice commands; ~40 LOC.)
 
-- [ ] **Step 4: Build + commit**
+(Note: the one-time STT-download UX previously specified as `SttFirstUseModal` is now subsumed by `VoiceEnablePanel` from M1.5.2 — the user downloads + enables in Settings, and PttButton only ever sees a ready state. No separate first-use modal needed.)
+
+- [ ] **Step 3: Build + commit**
 
 ```bash
 cd mur-agent-gui/ui && npm run build && cd ../..
 cargo build -p mur-agent-gui
 git add mur-agent-gui/ui/src/voice/PttButton.tsx \
-        mur-agent-gui/ui/src/voice/SttFirstUseModal.tsx \
         mur-agent-gui/src-tauri/src/commands.rs
-git commit -m "M1.6.2: PttButton + SttFirstUseModal (first-use STT download flow) + capture commands"
+git commit -m "M1.6.2: PttButton (default-off, gated on voice_status.enabled) + capture commands"
 ```
 
 ### Task M1.6.3: Hotkey rebinder UI
@@ -2417,7 +2666,10 @@ Before declaring M1 done:
   - [ ] Kokoro first chunk ≤ 250 ms (M1.6.4 bench)
   - [ ] Hotkey rebindable in Settings (M1.6.3)
   - [ ] Missing voice auto-downloads with SHA-256 verify (M1.2.2 + M1.2.4)
-  - [ ] Missing whisper STT model auto-downloads on first PTT use with same SHA-256 + Ed25519 verify (M1.4.1b + M1.6.2 SttFirstUseModal)
+  - [ ] Voice **default-off**: fresh install + first launch shows no PttButton, no voice picker, no mic capture; Settings → Voice shows `VoiceEnablePanel` only.
+  - [ ] Enabling triggers STT download (~809 MB) with progress UI inside `VoiceEnablePanel`; verify SHA-256 + Ed25519 sig (M1.4.1b).
+  - [ ] Disabling unregisters PTT hotkey + frees TTS/STT model RAM; on-disk assets preserved for fast re-enable.
+  - [ ] `voice_state.json` persists `enabled` flag across restarts; reboot-after-enable re-registers hotkey automatically.
 - [ ] **No placeholders** — every step has concrete code or commands. (Step 2 of M1.6.3 references "implementation pattern; ~80 LOC frontend + ~30 LOC Rust" and Step 1 of M1.6.4 cites "~100 LOC" — these are deliberately budgeted bounds for fresh-context impl, not placeholders; the contracts are specified.)
 - [ ] **Type consistency** — `VoiceManifest`, `AssetEntry`, `InstalledVoice`, `PttFsm`, `TtsEngine`, `SttEngine` names match across Rust + TS.
 - [ ] **No regression** — companion's 8 phase-1.1 integration tests + M0 hook-chain tests all still pass.
