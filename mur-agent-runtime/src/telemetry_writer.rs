@@ -51,6 +51,15 @@ pub enum Event {
         message: Option<String>,
         percent: Option<u8>,
     },
+    /// Generic hook fire event. `method` is the JSON-RPC notification
+    /// method (typically `METHOD_HOOK_FIRED`); `attrs` is the
+    /// pre-shaped attribute payload the hook itself produced. The
+    /// agent_name / agent_uuid / ts envelope is added by
+    /// `event_to_notification`.
+    HookFired {
+        method: String,
+        attrs: Value,
+    },
 }
 
 pub struct TelemetryWriter {
@@ -94,6 +103,12 @@ impl TelemetryWriter {
 
     pub async fn emit(&self, ev: Event) {
         let _ = self.tx.send(ev).await;
+    }
+
+    /// Returns a clonable sender for use as a `TelemetryEmitter` (hook
+    /// chain). Sending fails silently if the writer task has stopped.
+    pub fn sender(&self) -> mpsc::Sender<Event> {
+        self.tx.clone()
     }
 
     pub async fn flush(&self) {
@@ -189,6 +204,45 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             }
             METHOD_TASK_PROGRESS
         }
+        Event::HookFired { method, attrs } => {
+            // `attrs` is the hook-shaped payload (already includes
+            // mur.hook.name, mur.hook.phase, agent identity, etc.); merge
+            // its keys onto the envelope and use the requested method.
+            if let Value::Object(map) = attrs {
+                for (k, v) in map {
+                    params[k] = v.clone();
+                }
+            }
+            return json!({"jsonrpc": "2.0", "method": method, "params": params});
+        }
     };
     json!({"jsonrpc": "2.0", "method": method, "params": params})
+}
+
+/// Adapter from the runtime's `TelemetryWriter` channel to the
+/// `hooks::TelemetryEmitter` trait. Constructed once at supervisor
+/// startup and shared across the hook chain.
+pub struct WriterTelemetryEmitter {
+    tx: mpsc::Sender<Event>,
+}
+
+impl WriterTelemetryEmitter {
+    pub fn new(tx: mpsc::Sender<Event>) -> Self {
+        Self { tx }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::hooks::TelemetryEmitter for WriterTelemetryEmitter {
+    async fn emit_span_event(&self, name: &str, attrs: Value) {
+        // Best-effort. If the channel is full / closed we silently drop —
+        // telemetry must never block the hook chain.
+        let _ = self
+            .tx
+            .send(Event::HookFired {
+                method: name.to_string(),
+                attrs,
+            })
+            .await;
+    }
 }
