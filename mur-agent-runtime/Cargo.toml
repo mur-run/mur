@@ -45,6 +45,7 @@ snow = { version = "0.9", default-features = false, features = ["default-resolve
 hex = "0.4"
 glob = "0.3"
 fs2 = "0.4"
+http = "1"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 axum = { version = "0.8", features = ["json"] }

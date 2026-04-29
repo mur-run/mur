@@ -3,4 +3,5 @@
 //! Spec §4.10 and §4.11.
 
 pub mod ledger;
+pub mod rate_limit;
 pub mod resume;
