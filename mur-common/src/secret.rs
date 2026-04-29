@@ -100,6 +100,25 @@ impl SecretRef {
             SecretRef::Env(var) => std::env::var(var)
                 .map(SecretString::from)
                 .map_err(|_| SecretError::EnvNotSet(var.clone())),
+            SecretRef::Keychain { service, account } => {
+                let svc = service.clone();
+                let acct = account.clone();
+                let res = tokio::task::spawn_blocking(move || -> Result<String, SecretError> {
+                    let entry = keyring::Entry::new(&svc, &acct)
+                        .map_err(|e| SecretError::KeychainBackend(e.to_string()))?;
+                    match entry.get_password() {
+                        Ok(s) => Ok(s),
+                        Err(keyring::Error::NoEntry) => Err(SecretError::KeychainNotFound {
+                            service: svc.clone(),
+                            account: acct.clone(),
+                        }),
+                        Err(e) => Err(SecretError::KeychainBackend(e.to_string())),
+                    }
+                })
+                .await
+                .map_err(|e| SecretError::KeychainBackend(format!("join: {e}")))?;
+                res.map(SecretString::from)
+            }
             _ => Err(SecretError::Parse(
                 "resolve not implemented for this variant yet".into(),
             )),
@@ -110,7 +129,6 @@ impl SecretRef {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::de::Error as _;
     use serde_yaml_ng as yaml;
 
     #[test]
@@ -193,5 +211,128 @@ mod resolve_env_tests {
         let s = SecretRef::Env("MUR_TEST_DEFINITELY_UNSET".into());
         let err = s.resolve().await.unwrap_err();
         assert!(matches!(err, SecretError::EnvNotSet(_)), "got {err:?}");
+    }
+}
+
+#[cfg(test)]
+mod resolve_keychain_tests {
+    use super::*;
+    use keyring::credential::{
+        Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi, CredentialPersistence,
+    };
+    use secrecy::ExposeSecret;
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
+
+    // keyring v3's built-in `mock` backend uses CredentialPersistence::EntryOnly:
+    // each `Entry::new` returns a fresh credential with its own storage, so a
+    // password set in setup is invisible to a later `Entry::new` inside
+    // resolve(). We need persistence across Entry instances, so we provide
+    // our own builder backed by a shared HashMap.
+    type Store = Arc<Mutex<HashMap<(String, String), Vec<u8>>>>;
+
+    struct SharedMockCredential {
+        store: Store,
+        key: (String, String),
+    }
+
+    impl CredentialApi for SharedMockCredential {
+        fn set_secret(&self, password: &[u8]) -> keyring::Result<()> {
+            self.store
+                .lock()
+                .unwrap()
+                .insert(self.key.clone(), password.to_vec());
+            Ok(())
+        }
+        fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+            self.store
+                .lock()
+                .unwrap()
+                .get(&self.key)
+                .cloned()
+                .ok_or(keyring::Error::NoEntry)
+        }
+        fn delete_credential(&self) -> keyring::Result<()> {
+            self.store
+                .lock()
+                .unwrap()
+                .remove(&self.key)
+                .map(|_| ())
+                .ok_or(keyring::Error::NoEntry)
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    struct SharedMockBuilder {
+        store: Store,
+    }
+
+    impl CredentialBuilderApi for SharedMockBuilder {
+        fn build(
+            &self,
+            _target: Option<&str>,
+            service: &str,
+            user: &str,
+        ) -> keyring::Result<Box<Credential>> {
+            Ok(Box::new(SharedMockCredential {
+                store: self.store.clone(),
+                key: (service.to_string(), user.to_string()),
+            }))
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn persistence(&self) -> CredentialPersistence {
+            CredentialPersistence::ProcessOnly
+        }
+    }
+
+    // Serialize tests: `set_default_credential_builder` mutates a process-global,
+    // and we hold the lock across `.await` points so the builder doesn't get
+    // swapped out from under our resolve() call. Use tokio's async-aware Mutex
+    // so Clippy's await_holding_lock lint is satisfied.
+    static MOCK_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
+
+    async fn install_mock(initial: Option<(&str, &str, &str)>) -> AsyncMutexGuard<'static, ()> {
+        let g = MOCK_LOCK.lock().await;
+        let store: Store = Arc::new(Mutex::new(HashMap::new()));
+        if let Some((svc, user, pw)) = initial {
+            store
+                .lock()
+                .unwrap()
+                .insert((svc.to_string(), user.to_string()), pw.as_bytes().to_vec());
+        }
+        let builder: Box<CredentialBuilder> = Box::new(SharedMockBuilder { store });
+        keyring::set_default_credential_builder(builder);
+        g
+    }
+
+    #[tokio::test]
+    async fn resolves_when_set() {
+        let _g = install_mock(Some(("mur-test", "kc-acct", "kc-secret"))).await;
+        let s = SecretRef::Keychain {
+            service: "mur-test".into(),
+            account: "kc-acct".into(),
+        };
+        let v = s.resolve().await.unwrap();
+        assert_eq!(v.expose_secret(), "kc-secret");
+    }
+
+    #[tokio::test]
+    async fn errors_when_missing() {
+        let _g = install_mock(None).await;
+        let s = SecretRef::Keychain {
+            service: "mur-test".into(),
+            account: "kc-acct".into(),
+        };
+        let err = s.resolve().await.unwrap_err();
+        assert!(
+            matches!(err, SecretError::KeychainNotFound { .. }),
+            "got {err:?}"
+        );
     }
 }

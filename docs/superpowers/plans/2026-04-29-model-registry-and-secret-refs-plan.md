@@ -356,7 +356,11 @@ EOF
 
 **File:** `mur-common/src/secret.rs`
 
-**Step 1: Test first** — keyring v3 always exposes `keyring::mock`, so no additional dev-dep is required. The mock backend is an in-memory map keyed on (service, account); calling `set_default_credential_builder(mock::default_credential_builder())` swaps it in for the duration of the test process. Append to `secret.rs`:
+**Step 1: Test first.** keyring v3 always exposes `keyring::mock`, so no additional dev-dep is required.
+
+> **Pitfall (revised 2026-04-30):** v3's stock `mock::default_credential_builder()` advertises `CredentialPersistence::EntryOnly` — each `Entry::new()` returns a *fresh* credential with its own private storage. That breaks our usage pattern (we resolve by re-creating an `Entry` from `(service, account)` strings inside `spawn_blocking`, so the password set during setup is invisible at resolve time). Provide a small in-test `SharedMockBuilder` that implements `CredentialBuilderApi` over a shared `Arc<Mutex<HashMap<(String,String), Vec<u8>>>>`, and install it via `set_default_credential_builder(...)`. Tests serialize on a `Mutex<()>` because the builder slot is a process-global. See the implementation in `mur-common/src/secret.rs::resolve_keychain_tests`.
+
+Append to `secret.rs`:
 
 ```rust
 #[cfg(test)]
