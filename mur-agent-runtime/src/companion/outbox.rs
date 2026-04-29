@@ -1,4 +1,4 @@
-//! Outbox tick loop — Spec §4.8 steps 1, 4, 5, 6, 7, 8, 9, 11, 12.
+//! Outbox tick loop — Spec §4.8 steps 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12.
 //!
 //! ## Rationale for struct shape
 //!
@@ -17,15 +17,24 @@
 //! - `notifier`: `Arc<dyn Notifier>` for delivery (step 11 — M5.4).
 //! - `voice_md`: pre-composed system prompt for the LLM (supplied by the
 //!   supervisor in M5.7; a plain string in tests).
+//! - `pending_pause`: in-memory map of paused sends (id → PendingPause).
 //!
-//! ## Locale resolution (step 8)
+//! ## Locale resolution (step 10)
 //!
 //! The locale is taken from `proactive.locale` if that field exists — but
 //! `ProactiveConfig` does not carry a `locale` field in the current schema.
 //! For M5.4 we therefore fall back to the `locale` field carried in the
 //! `Outbox` struct itself, which callers set from `CompanionConfig.locale`
 //! (the field closest to the spec's "agent_profile.locale").
+//!
+//! ## Phase 1.1 M5.5 pause-state limitation
+//!
+//! Phase 1.1 M5.5 holds pause state in-memory only.  After supervisor restart,
+//! in-flight paused sends are lost; the next ledger scan only resumes events
+//! but does not re-attempt from scratch.  Persistence of `pending_pause` to
+//! disk is deferred to a follow-up task.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Local, NaiveDate, Utc};
@@ -37,6 +46,7 @@ use uuid::Uuid;
 use crate::companion::{
     clock::Clock,
     earned_permission::{self, BlockReason, GateOutcome},
+    i18n::{self, EnsureLocaleOutcome},
     linter,
     notifier::{CompanionMessage, NotifyOutcome, Notifier},
     picker::{Picker, TemplateId},
@@ -47,6 +57,53 @@ use crate::companion::{
 use crate::durable::ledger::Ledger;
 use crate::llm::{LlmClient, LlmError, LlmMessage, LlmRequest};
 use mur_common::agent::ProactiveConfig;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Retry backoff schedule (Spec §6.2)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Deterministic retry backoff delays: 30 s, 90 s, 4 min, 15 min.
+/// Index corresponds to the attempt number (0-based).
+/// `backoff_for_attempt(4)` returns `None` → terminal drop.
+const RETRY_BACKOFF_SECS: [i64; 4] = [30, 90, 240, 900];
+
+fn backoff_for_attempt(attempt: u8) -> Option<chrono::Duration> {
+    RETRY_BACKOFF_SECS
+        .get(attempt as usize)
+        .map(|s| chrono::Duration::seconds(*s))
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// PendingPause — in-memory pause state
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Why a send was paused.
+#[derive(Debug, Clone)]
+pub enum PauseKind {
+    /// Translation LLM returned rate-limit or an error.
+    LocaleRetry,
+    /// Generation LLM returned rate-limit.
+    RateLimitGenerate,
+}
+
+/// In-memory pause record for a single scheduled message.
+///
+/// Populated when the outbox pauses a send; consumed when `resume_at` elapses
+/// and the outbox re-attempts.
+#[derive(Debug, Clone)]
+pub struct PendingPause {
+    pub situation: Situation,
+    pub template_id: TemplateId,
+    /// BCP-47 locale at scheduling time.
+    pub locale_at_schedule: String,
+    /// Number of pause attempts so far (starts at 0; incremented before each retry).
+    pub attempts: u8,
+    pub kind: PauseKind,
+    pub resume_at: DateTime<Utc>,
+    /// The already-generated (and linted) body.  `None` when the generation itself
+    /// failed (RateLimitGenerate); `Some(body)` when only translation failed.
+    pub body: Option<String>,
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Public outcome types
@@ -79,14 +136,18 @@ pub enum SkipReason {
     NoSituation,
     /// `picker::Picker::pick` returned `None` (all templates on cooldown).
     NoTemplate,
-    /// LLM returned a rate-limit error (M5.5 will implement pause/resume).
-    LlmRateLimit,
+    /// LLM generation returned a rate-limit error; send is paused until `resume_at`.
+    /// (Spec §6.3)
+    PausedRateLimit { resume_at: DateTime<Utc> },
     /// Linter failed on both the original and regenerated body.
     LinterPersistent,
     /// Notifier returned `Failed`.
     NotifierFailed,
     /// Notifier returned `Skipped`.
     NotifierSkipped,
+    /// Translation retries exhausted after 4 failures.
+    /// (Spec §6.2)
+    LocaleUnresolved,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -147,6 +208,13 @@ pub struct Outbox<R: RngCore + Send = StdRng> {
     pub morning_sent_today: Option<NaiveDate>,
     /// Local date we last saw — used to detect day rollovers.
     pub today_date: NaiveDate,
+
+    // ── pause state (in-memory only; Phase 1.1 M5.5 limitation) ──
+    /// In-memory map of paused sends.  Key = message id.
+    ///
+    /// Phase 1.1 M5.5: holds pause state in memory only.  After supervisor
+    /// restart, in-flight paused sends are lost.  Disk persistence is deferred.
+    pub pending_pause: BTreeMap<String, PendingPause>,
 }
 
 impl Outbox<StdRng> {
@@ -172,6 +240,7 @@ impl Outbox<StdRng> {
             sent_today: 0,
             morning_sent_today: None,
             today_date: today,
+            pending_pause: BTreeMap::new(),
         }
     }
 }
@@ -199,14 +268,14 @@ impl<R: RngCore + Send> Outbox<R> {
             sent_today: 0,
             morning_sent_today: None,
             today_date: today,
+            pending_pause: BTreeMap::new(),
         }
     }
 
     /// Execute one tick of the outbox loop.
     ///
-    /// Steps implemented: **1, 4, 5, 6, 7, 8, 9, 11, 12**.
-    /// Steps 2/3 (resume-paused / passive-dismiss) → M5.5 / M5.6.
-    /// Step 10 (i18n locale-mismatch loop) → M5.5.
+    /// Steps implemented: **1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12**.
+    /// Step 3 (passive-dismiss) → M5.6.
     pub async fn run_tick(
         &mut self,
         now_utc: DateTime<Utc>,
@@ -230,7 +299,154 @@ impl<R: RngCore + Send> Outbox<R> {
             GateOutcome::Allowed => {}
         }
 
-        // ── (Steps 2 + 3 skipped — M5.5 / M5.6) ────────────────────────────
+        // ── Step 2: resume paused sends ──────────────────────────────────────
+        // Check in-memory pending_pause map for entries whose resume_at has
+        // elapsed.  Attempt re-delivery for each one.  If a resumed send
+        // succeeds, return `TickOutcome::Sent` immediately (the tick is done).
+        // If it fails again, re-park it.
+        //
+        // We collect the IDs first to avoid borrow conflicts.
+        let resumable_ids: Vec<String> = self
+            .pending_pause
+            .iter()
+            .filter(|(_, p)| p.resume_at <= now_utc)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for id in resumable_ids {
+            // Move the PendingPause out of the map; re-insert on re-pause.
+            let Some(mut paused) = self.pending_pause.remove(&id) else {
+                continue;
+            };
+
+            // Increment attempts before deciding.
+            paused.attempts += 1;
+
+            match paused.kind {
+                PauseKind::RateLimitGenerate => {
+                    // Re-attempt generation.
+                    let situation_str = format!("{:?}", paused.situation);
+                    let locale = paused.locale_at_schedule.clone();
+                    match self
+                        .generate_with_lint(&id, &situation_str, &locale, now_utc)
+                        .await
+                    {
+                        GenerateResult::Ok(body) => {
+                            // Step 10: i18n on resumed body.
+                            let deliver_body = match self
+                                .handle_i18n(&id, &body, &locale, now_utc, paused.attempts)
+                                .await
+                            {
+                                I18nResult::UseBody(b) => b,
+                                I18nResult::Paused(resume_at) => {
+                                    // Re-park as LocaleRetry.
+                                    self.pending_pause.insert(
+                                        id.clone(),
+                                        PendingPause {
+                                            kind: PauseKind::LocaleRetry,
+                                            body: Some(body),
+                                            attempts: paused.attempts,
+                                            resume_at,
+                                            ..paused
+                                        },
+                                    );
+                                    continue;
+                                }
+                                I18nResult::Terminal => {
+                                    continue;
+                                }
+                            };
+                            // Deliver — return early on success.
+                            let outcome = self
+                                .deliver_and_finalise(
+                                    &id,
+                                    &deliver_body,
+                                    &locale,
+                                    paused.situation.clone(),
+                                    paused.template_id.clone(),
+                                    now_utc,
+                                    now_local,
+                                )
+                                .await;
+                            if matches!(outcome, TickOutcome::Sent { .. }) {
+                                return outcome;
+                            }
+                        }
+                        GenerateResult::RateLimit => {
+                            // Still rate-limited; schedule next backoff or drop.
+                            if let Some(backoff) = backoff_for_attempt(paused.attempts) {
+                                let resume_at = now_utc + backoff;
+                                let _ = self.ledger.append(&OutboxEvent::MessagePaused {
+                                    id: id.clone(),
+                                    resume_at,
+                                    reason: "rate_limit_429".to_string(),
+                                });
+                                self.pending_pause.insert(
+                                    id.clone(),
+                                    PendingPause {
+                                        resume_at,
+                                        attempts: paused.attempts,
+                                        ..paused
+                                    },
+                                );
+                            } else {
+                                // Terminal drop.
+                                let _ = self.ledger.append(&OutboxEvent::MessageDropped {
+                                    id: id.clone(),
+                                    reason: "rate_limit_terminal".to_string(),
+                                });
+                            }
+                        }
+                        GenerateResult::LinterPersistent => {
+                            // Already dropped inside generate_with_lint.
+                        }
+                    }
+                }
+
+                PauseKind::LocaleRetry => {
+                    // Body was already generated; only translation needs retry.
+                    let body = paused.body.clone().unwrap_or_default();
+                    let locale = paused.locale_at_schedule.clone();
+                    match self
+                        .handle_i18n(&id, &body, &locale, now_utc, paused.attempts)
+                        .await
+                    {
+                        I18nResult::UseBody(deliver_body) => {
+                            // Deliver — return early on success.
+                            let outcome = self
+                                .deliver_and_finalise(
+                                    &id,
+                                    &deliver_body,
+                                    &locale,
+                                    paused.situation.clone(),
+                                    paused.template_id.clone(),
+                                    now_utc,
+                                    now_local,
+                                )
+                                .await;
+                            if matches!(outcome, TickOutcome::Sent { .. }) {
+                                return outcome;
+                            }
+                        }
+                        I18nResult::Paused(resume_at) => {
+                            self.pending_pause.insert(
+                                id.clone(),
+                                PendingPause {
+                                    resume_at,
+                                    attempts: paused.attempts,
+                                    ..paused
+                                },
+                            );
+                        }
+                        I18nResult::Terminal => {
+                            // Already logged inside handle_i18n.
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── (Step 3 skipped — M5.6: passive-dismiss sweep) ──────────────────
 
         // ── Step 4: should_send_new ──────────────────────────────────────────
         let window_end = match schedule::active_window_end_for_today(
@@ -309,12 +525,44 @@ impl<R: RngCore + Send> Outbox<R> {
         {
             GenerateResult::Ok(text) => text,
             GenerateResult::RateLimit => {
+                // TODO(M5.x or later): wire raw HeaderMap from anthropic.rs once that
+                // surfaces 429 details; for now use deterministic backoff schedule.
+                //
+                // Attempt index 0 → first pause; if later attempts exhaust backoffs,
+                // they are handled in the resume loop.
+                let attempt: u8 = 0;
+                if let Some(backoff) = backoff_for_attempt(attempt) {
+                    let resume_at = now_utc + backoff;
+                    let _ = self.ledger.append(&OutboxEvent::MessagePaused {
+                        id: id.clone(),
+                        resume_at,
+                        reason: "rate_limit_429".to_string(),
+                    });
+                    self.pending_pause.insert(
+                        id.clone(),
+                        PendingPause {
+                            situation,
+                            template_id,
+                            locale_at_schedule: locale,
+                            attempts: attempt,
+                            kind: PauseKind::RateLimitGenerate,
+                            resume_at,
+                            body: None,
+                        },
+                    );
+                    return TickOutcome::Skipped {
+                        reason: SkipReason::PausedRateLimit { resume_at },
+                    };
+                }
+                // Should not happen at attempt 0, but handle defensively.
                 let _ = self.ledger.append(&OutboxEvent::MessageDropped {
                     id: id.clone(),
-                    reason: "llm_rate_limit_pending_m5_5".to_string(),
+                    reason: "rate_limit_terminal".to_string(),
                 });
                 return TickOutcome::Skipped {
-                    reason: SkipReason::LlmRateLimit,
+                    reason: SkipReason::PausedRateLimit {
+                        resume_at: now_utc,
+                    },
                 };
             }
             GenerateResult::LinterPersistent => {
@@ -325,13 +573,127 @@ impl<R: RngCore + Send> Outbox<R> {
             }
         };
 
+        // ── Step 10: i18n ensure_locale ──────────────────────────────────────
+        let deliver_body = match self
+            .handle_i18n(&id, &body, &locale, now_utc, 0)
+            .await
+        {
+            I18nResult::UseBody(b) => b,
+            I18nResult::Paused(resume_at) => {
+                self.pending_pause.insert(
+                    id.clone(),
+                    PendingPause {
+                        situation,
+                        template_id,
+                        locale_at_schedule: locale,
+                        attempts: 0,
+                        kind: PauseKind::LocaleRetry,
+                        resume_at,
+                        body: Some(body),
+                    },
+                );
+                return TickOutcome::Skipped {
+                    reason: SkipReason::LocaleUnresolved,
+                };
+            }
+            I18nResult::Terminal => {
+                return TickOutcome::Skipped {
+                    reason: SkipReason::LocaleUnresolved,
+                };
+            }
+        };
+
         // ── Step 11: deliver ─────────────────────────────────────────────────
+        self.deliver_and_finalise(
+            &id,
+            &deliver_body,
+            &locale,
+            situation.clone(),
+            template_id.clone(),
+            now_utc,
+            now_local,
+        )
+        .await
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Internal helper: i18n step
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Call `i18n::ensure_locale` and interpret the result.
+    ///
+    /// `attempt_index` is the current attempt (0 = first try from the new-send
+    /// path; ≥1 means we are in a resume cycle).
+    ///
+    /// On `QueuedRetry`: if `attempt_index` < 4 → schedule next backoff and
+    /// return `I18nResult::Paused`; if attempt_index ≥ 4 → terminal drop.
+    async fn handle_i18n(
+        &mut self,
+        id: &str,
+        body: &str,
+        locale: &str,
+        now_utc: DateTime<Utc>,
+        attempt_index: u8,
+    ) -> I18nResult {
+        match i18n::ensure_locale(body, locale, self.llm.as_ref(), false).await {
+            EnsureLocaleOutcome::Original => I18nResult::UseBody(body.to_string()),
+            EnsureLocaleOutcome::Translated(new_body) => I18nResult::UseBody(new_body),
+            // Unreachable in proactive path (reactive=false), but treat as Original.
+            EnsureLocaleOutcome::OriginalWithLog(_err) => I18nResult::UseBody(body.to_string()),
+            EnsureLocaleOutcome::QueuedRetry(_err) => {
+                // append LocaleMismatchUnresolved event for this attempt.
+                let _ = self.ledger.append(&OutboxEvent::LocaleMismatchUnresolved {
+                    id: id.to_string(),
+                    attempts: attempt_index + 1,
+                    at: now_utc,
+                });
+
+                if let Some(backoff) = backoff_for_attempt(attempt_index) {
+                    let resume_at = now_utc + backoff;
+                    let _ = self.ledger.append(&OutboxEvent::MessagePaused {
+                        id: id.to_string(),
+                        resume_at,
+                        reason: "locale_retry".to_string(),
+                    });
+                    I18nResult::Paused(resume_at)
+                } else {
+                    // 4th failure — terminal drop (attempts 0..3 exhausted).
+                    let _ = self.ledger.append(&OutboxEvent::LocaleMismatchUnresolved {
+                        id: id.to_string(),
+                        attempts: 4,
+                        at: now_utc,
+                    });
+                    let _ = self.ledger.append(&OutboxEvent::MessageDropped {
+                        id: id.to_string(),
+                        reason: "locale_unresolved".to_string(),
+                    });
+                    I18nResult::Terminal
+                }
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Internal helper: deliver + finalise (step 11 + 12)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[allow(clippy::too_many_arguments)]
+    async fn deliver_and_finalise(
+        &mut self,
+        id: &str,
+        body: &str,
+        locale: &str,
+        situation: Situation,
+        template_id: TemplateId,
+        now_utc: DateTime<Utc>,
+        now_local: DateTime<Local>,
+    ) -> TickOutcome {
         let msg = CompanionMessage {
-            id: id.clone(),
+            id: id.to_string(),
             situation: situation.clone(),
             template_id: template_id.clone(),
-            locale: locale.clone(),
-            body,
+            locale: locale.to_string(),
+            body: body.to_string(),
             generated_at: now_utc,
         };
 
@@ -341,7 +703,7 @@ impl<R: RngCore + Send> Outbox<R> {
             }
             Ok(NotifyOutcome::Skipped { reason }) => {
                 let _ = self.ledger.append(&OutboxEvent::MessageDropped {
-                    id: id.clone(),
+                    id: id.to_string(),
                     reason: format!("notifier_skipped:{reason}"),
                 });
                 return TickOutcome::Skipped {
@@ -350,7 +712,7 @@ impl<R: RngCore + Send> Outbox<R> {
             }
             Ok(NotifyOutcome::Failed(_)) | Err(_) => {
                 let _ = self.ledger.append(&OutboxEvent::MessageDropped {
-                    id: id.clone(),
+                    id: id.to_string(),
                     reason: "notifier_failed".to_string(),
                 });
                 return TickOutcome::Skipped {
@@ -361,11 +723,12 @@ impl<R: RngCore + Send> Outbox<R> {
 
         // ── Step 12: finalise ────────────────────────────────────────────────
         let _ = self.ledger.append(&OutboxEvent::MessageSent {
-            id: id.clone(),
+            id: id.to_string(),
             channel: self.notifier.name().to_string(),
             sent_at: now_utc,
         });
 
+        let today = now_local.date_naive();
         self.picker.record(&template_id, Signal::Sent, now_utc);
         self.last_send_at = Some(now_local);
         self.sent_today += 1;
@@ -374,7 +737,7 @@ impl<R: RngCore + Send> Outbox<R> {
         }
 
         TickOutcome::Sent {
-            id,
+            id: id.to_string(),
             situation,
             template_id,
         }
@@ -481,6 +844,16 @@ enum GenerateResult {
     LinterPersistent,
 }
 
+/// Internal result of the i18n step.
+enum I18nResult {
+    /// Caller should use this body (original or translated).
+    UseBody(String),
+    /// Translation failed; send was paused until `resume_at`.
+    Paused(DateTime<Utc>),
+    /// Terminal: 4 failures exhausted; message dropped.
+    Terminal,
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Tests
 // ──────────────────────────────────────────────────────────────────────────────
@@ -534,6 +907,9 @@ mod tests {
         }
         fn call_count(&self) -> usize {
             self.calls.lock().unwrap().len()
+        }
+        fn last_body(&self) -> Option<String> {
+            self.calls.lock().unwrap().last().map(|m| m.body.clone())
         }
     }
 
@@ -705,7 +1081,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // M5.3 tests (must remain green after M5.4 changes)
+    // M5.3 tests (must remain green after M5.4/M5.5 changes)
     // ─────────────────────────────────────────────────────────────────────────
 
     // Test 1: proactive disabled → 24 h sim yields 0 scheduled
@@ -1068,6 +1444,354 @@ mod tests {
                 OutboxEvent::MessageDropped { reason, .. } if reason == "notifier_failed"
             )),
             "must have MessageDropped(notifier_failed)"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
+            "must NOT have MessageSent"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // M5.5 new tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // M5.5 Test 1: mixed-language body (passes linter, fails heuristic_matches),
+    //              locale = zh-TW → stub returns translated zh-TW body → notifier
+    //              sees translated body.
+    //
+    // We use "Ok, 好。" as the generated body because:
+    //   - linter: "Ok," has comma so is NOT an all-ascii-alpha token; 0/2 English
+    //     tokens = 0% → passes PreservedEnglishRatioZh.  1 sentence → passes.
+    //   - heuristic_matches: CJK char "好" = 1 out of 5 non-whitespace = 20% < 30%
+    //     → fails → translation is triggered.
+    #[tokio::test]
+    async fn i18n_force_english_in_zh_locale_translates_then_sends() {
+        let tmp = TempDir::new().unwrap();
+        let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
+        let clock = Arc::new(MockClock::at(base_utc));
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let picker = Picker::with_seed(seed_bandit_state(), 99);
+        let proactive = make_proactive(true, 5, None, None);
+        let notifier = Arc::new(FakeNotifier::delivered());
+
+        // Stub: generate returns a mixed body that passes the linter but triggers
+        // translation (CJK ratio too low for zh-TW).  Translate call returns
+        // the full zh-TW body.
+        let translated = "早安！今天想從哪一件小事開始？";
+        let llm = Arc::new(
+            StubLlm::from_yaml(&format!(
+                r#"
+- match:
+    contains: "Translate the following"
+  response: "{translated}"
+- match:
+    contains: "situation:"
+  response: "Ok, 好。"
+"#
+            ))
+            .unwrap(),
+        );
+
+        let mut outbox = Outbox::with_picker(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            OutboxConfig {
+                llm,
+                notifier: notifier.clone(),
+                voice_md: "You are a warm companion.".to_string(),
+                locale: "zh-TW".to_string(),
+            },
+        );
+
+        let outcome = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+        assert!(
+            matches!(outcome, TickOutcome::Sent { .. }),
+            "expected Sent, got {outcome:?}"
+        );
+        assert_eq!(notifier.call_count(), 1);
+        assert_eq!(
+            notifier.last_body().as_deref(),
+            Some(translated),
+            "notifier should have received translated body"
+        );
+
+        let events = all_events(tmp.path());
+        assert!(events.iter().any(|e| matches!(e, OutboxEvent::MessageScheduled { .. })));
+        // MessageGenerated should have the English body sha256 (pre-translation).
+        assert!(events.iter().any(|e| matches!(e, OutboxEvent::MessageGenerated { .. })));
+        assert!(events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })));
+    }
+
+    // M5.5 Test 2: generate succeeds (mixed body that triggers translation),
+    //              translate → RateLimit on tick 1; tick 2 (after resume_at):
+    //              translate succeeds → MessageSent.
+    #[tokio::test]
+    async fn translate_429_pauses_then_resumes_after_resume_at() {
+        let tmp = TempDir::new().unwrap();
+        let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
+        let clock = Arc::new(MockClock::at(base_utc));
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let picker = Picker::with_seed(seed_bandit_state(), 99);
+        let proactive = make_proactive(true, 5, None, None);
+        let notifier = Arc::new(FakeNotifier::delivered());
+
+        let translated = "早安！今天想從哪一件小事開始？";
+
+        // Use a counter to flip behavior: first translate attempt → RateLimit,
+        // subsequent → success.  We use a shared Mutex<u32> inside a custom LLM.
+        use crate::llm::{LlmError, LlmRequest, LlmResponse};
+
+        struct FlipLlm {
+            translate_calls: Mutex<u32>,
+            translated: String,
+        }
+
+        #[async_trait]
+        impl LlmClient for FlipLlm {
+            async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
+                let joined: String = req.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n");
+                if joined.contains("Translate the following") {
+                    let mut calls = self.translate_calls.lock().unwrap();
+                    *calls += 1;
+                    if *calls == 1 {
+                        return Err(LlmError::RateLimit);
+                    }
+                    return Ok(LlmResponse {
+                        text: self.translated.clone(),
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        model: "flip".into(),
+                    });
+                }
+                // Generation call: return a body that passes linter but triggers
+                // translation (CJK ratio < 30% for zh-TW).
+                Ok(LlmResponse {
+                    text: "Ok, 好。".into(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    model: "flip".into(),
+                })
+            }
+            fn model_name(&self) -> &str { "flip" }
+        }
+
+        let llm: Arc<dyn LlmClient> = Arc::new(FlipLlm {
+            translate_calls: Mutex::new(0),
+            translated: translated.to_string(),
+        });
+
+        let mut outbox = Outbox::with_picker(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            OutboxConfig {
+                llm,
+                notifier: notifier.clone(),
+                voice_md: "You are a warm companion.".to_string(),
+                locale: "zh-TW".to_string(),
+            },
+        );
+
+        // Tick 1: translate fails → paused.
+        let outcome1 = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+        assert!(
+            matches!(
+                outcome1,
+                TickOutcome::Skipped {
+                    reason: SkipReason::LocaleUnresolved
+                }
+            ),
+            "tick 1 should pause on translate failure; got {outcome1:?}"
+        );
+        assert_eq!(notifier.call_count(), 0, "notifier must not be called on tick 1");
+
+        // Ledger must have MessagePaused but no MessageSent.
+        {
+            let events = all_events(tmp.path());
+            assert!(
+                events.iter().any(|e| matches!(e, OutboxEvent::MessagePaused { .. })),
+                "must have MessagePaused after tick 1"
+            );
+            assert!(
+                !events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
+                "must NOT have MessageSent after tick 1"
+            );
+        }
+
+        // Advance clock past the first backoff (30 s).
+        clock.advance(Duration::seconds(31));
+
+        // Tick 2: resume_at has elapsed; translate succeeds → sent.
+        let outcome2 = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+        assert!(
+            matches!(outcome2, TickOutcome::Sent { .. }),
+            "tick 2 should succeed; got {outcome2:?}"
+        );
+        assert_eq!(notifier.call_count(), 1);
+        assert_eq!(
+            notifier.last_body().as_deref(),
+            Some(translated),
+            "notifier should have received translated body"
+        );
+    }
+
+    // M5.5 Test 3: generate succeeds; translate always → RateLimit; 4 ticks →
+    //              MessageDropped(locale_unresolved) + LocaleMismatchUnresolved{attempts:4}.
+    #[tokio::test]
+    async fn translate_4_failures_drops_locale_unresolved() {
+        let tmp = TempDir::new().unwrap();
+        let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
+        let clock = Arc::new(MockClock::at(base_utc));
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let picker = Picker::with_seed(seed_bandit_state(), 99);
+        let proactive = make_proactive(true, 10, None, None);
+        let notifier = Arc::new(FakeNotifier::delivered());
+
+        use crate::llm::{LlmError, LlmRequest, LlmResponse};
+
+        struct AlwaysRateLimitTranslate;
+
+        #[async_trait]
+        impl LlmClient for AlwaysRateLimitTranslate {
+            async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
+                let joined: String = req.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n");
+                if joined.contains("Translate the following") {
+                    return Err(LlmError::RateLimit);
+                }
+                // Generation returns a body that passes the linter but triggers
+                // translation (CJK ratio < 30% for zh-TW).
+                Ok(LlmResponse {
+                    text: "Ok, 好。".into(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    model: "always-rl".into(),
+                })
+            }
+            fn model_name(&self) -> &str { "always-rl" }
+        }
+
+        let llm: Arc<dyn LlmClient> = Arc::new(AlwaysRateLimitTranslate);
+
+        let mut outbox = Outbox::with_picker(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            OutboxConfig {
+                llm,
+                notifier: notifier.clone(),
+                voice_md: "You are a warm companion.".to_string(),
+                locale: "zh-TW".to_string(),
+            },
+        );
+
+        // Backoff schedule: [30s, 90s, 240s, 900s].
+        // Tick 1: new send → translate fails → pause(attempt=0, backoff=30s).
+        let outcome1 = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+        assert!(
+            matches!(outcome1, TickOutcome::Skipped { reason: SkipReason::LocaleUnresolved }),
+            "tick 1: {outcome1:?}"
+        );
+
+        // Advance past 30s → tick 2: resume → translate fails again → pause(attempt=1, backoff=90s).
+        clock.advance(Duration::seconds(35));
+        let outcome2 = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+        // Tick 2 may Sent a new message or Skipped — what matters is the resumed
+        // attempt fails again.  We check ledger at the end.
+        let _ = outcome2;
+
+        // Advance past 90s → tick 3: resume → translate fails → pause(attempt=2, backoff=240s).
+        clock.advance(Duration::seconds(95));
+        let _ = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+
+        // Advance past 240s → tick 4: resume → translate fails → attempt=3 → backoff=900s.
+        clock.advance(Duration::seconds(245));
+        let _ = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+
+        // Advance past 900s → tick 5: resume → translate fails → attempt=4 → TERMINAL drop.
+        clock.advance(Duration::seconds(905));
+        let _ = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+
+        // Check ledger.
+        let events = all_events(tmp.path());
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                OutboxEvent::MessageDropped { reason, .. } if reason == "locale_unresolved"
+            )),
+            "must have MessageDropped(locale_unresolved); events: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                OutboxEvent::LocaleMismatchUnresolved { attempts: 4, .. }
+            )),
+            "must have LocaleMismatchUnresolved{{attempts: 4}}; events: {events:?}"
+        );
+        assert_eq!(notifier.call_count(), 0, "notifier must never be called");
+    }
+
+    // M5.5 Test 4: generate stub → RateLimit → ledger has MessagePaused{reason:rate_limit_429};
+    //              outcome = Skipped{PausedRateLimit}; sent_today unchanged.
+    #[tokio::test]
+    async fn llm_rate_limit_pauses_send() {
+        let tmp = TempDir::new().unwrap();
+        let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
+        let clock = Arc::new(MockClock::at(base_utc));
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let picker = Picker::with_seed(seed_bandit_state(), 99);
+        let proactive = make_proactive(true, 5, None, None);
+        let notifier = Arc::new(FakeNotifier::delivered());
+
+        let llm = Arc::new(
+            StubLlm::from_yaml(
+                r#"
+- match:
+    contains: "situation:"
+  fault: rate_limit
+"#,
+            )
+            .unwrap(),
+        );
+
+        let mut outbox = make_outbox(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            llm,
+            notifier.clone(),
+        );
+
+        let now_utc = clock.now_utc();
+        let outcome = outbox.run_tick(now_utc, clock.now_local()).await;
+
+        // Verify outcome is PausedRateLimit.
+        let resume_at = match &outcome {
+            TickOutcome::Skipped {
+                reason: SkipReason::PausedRateLimit { resume_at },
+            } => *resume_at,
+            other => panic!("expected PausedRateLimit, got {other:?}"),
+        };
+        assert!(
+            resume_at > now_utc,
+            "resume_at must be in the future; resume_at={resume_at}, now={now_utc}"
+        );
+
+        // sent_today must not have advanced.
+        assert_eq!(outbox.sent_today, 0, "sent_today must be unchanged");
+
+        // Ledger must have MessagePaused(rate_limit_429) but no MessageSent.
+        let events = all_events(tmp.path());
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                OutboxEvent::MessagePaused { reason, .. } if reason == "rate_limit_429"
+            )),
+            "must have MessagePaused(rate_limit_429); events: {events:?}"
         );
         assert!(
             !events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
