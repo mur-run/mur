@@ -1,0 +1,33 @@
+---
+source: mur-agent-runtime/tests/hooks_snapshot.rs
+assertion_line: 259
+expression: events
+---
+- "Telemetry:msg_recv:message/send"
+- "Voice:msg_recv:message/send"
+- "B0:msg_recv:message/send"
+- "Ledger:msg_recv:message/send"
+- "Telemetry:trigger:Companion"
+- "Voice:trigger:Companion"
+- "B0:trigger:Companion"
+- "Ledger:trigger:Companion"
+- "Telemetry:prompt"
+- "Voice:prompt"
+- "B0:prompt"
+- "Ledger:prompt"
+- "Telemetry:pre_tool:telegram.send"
+- "Voice:pre_tool:telegram.send"
+- "B0:pre_tool:telegram.send"
+- "Ledger:pre_tool:telegram.send"
+- "Telemetry:post_tool:telegram.send"
+- "Voice:post_tool:telegram.send"
+- "B0:post_tool:telegram.send"
+- "Ledger:post_tool:telegram.send"
+- "Telemetry:step"
+- "Voice:step"
+- "B0:step"
+- "Ledger:step"
+- "Telemetry:msg_send"
+- "Voice:msg_send"
+- "B0:msg_send"
+- "Ledger:msg_send"

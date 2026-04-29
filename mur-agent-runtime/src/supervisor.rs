@@ -1,7 +1,12 @@
 //! Agent runtime entrypoint — assembles profile, dispatcher, telemetry, and
 //! drives the stdio (and optionally Unix-socket) transports until SIGTERM.
 
+use crate::companion::clock::SystemClock;
 use crate::entitlements::detect_warnings;
+use crate::hooks::{
+    Hook, HookChain, HookCtx, ShutdownReason, TelemetryEmitter, b0::B0SafetyHook,
+    ledger::LedgerHook, telemetry::TelemetryHook,
+};
 use crate::llm::{
     LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
 };
@@ -17,7 +22,7 @@ use crate::protocol::methods::{
 #[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
 use crate::task_runner::TaskRunner;
-use crate::telemetry_writer::{Event, TelemetryWriter};
+use crate::telemetry_writer::{Event, TelemetryWriter, WriterTelemetryEmitter};
 use crate::transport::stdio::serve_stdio;
 use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
@@ -135,6 +140,31 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         profile.inner.id.clone(),
     )
     .await?;
+
+    // 4a. Build the A0 hook chain. M0 ships TelemetryHook + B0SafetyHook
+    //     (no-op stub) + LedgerHook (no-op stub). CompanionVoiceHook is
+    //     registered when the companion subsystem renders its voice (out
+    //     of M0 scope; companion phase 1.1's reactive path remains
+    //     unchanged). The on_startup observe-hooks fire before transports
+    //     bind so telemetry includes the create_agent span event.
+    let telemetry_emitter: Arc<dyn TelemetryEmitter> =
+        Arc::new(WriterTelemetryEmitter::new(writer.sender()));
+    let hook_chain = HookChain::new(vec![
+        Arc::new(TelemetryHook::new()) as Arc<dyn Hook>,
+        Arc::new(B0SafetyHook::new()),
+        Arc::new(LedgerHook::new()),
+    ]);
+    let hook_ctx = HookCtx {
+        agent_name: profile.inner.name.clone(),
+        agent_uuid: profile.inner.id.clone(),
+        run_id: format!("supervisor-{}", uuid::Uuid::now_v7()),
+        clock: Arc::new(SystemClock),
+        telemetry: telemetry_emitter.clone(),
+    };
+    let hook_cancel = tokio_util::sync::CancellationToken::new();
+    hook_chain
+        .on_startup(&hook_ctx, &profile.inner, &hook_cancel)
+        .await;
 
     // 5. Acquire running.lock
     let lock_path = agent_home.join("running.lock");
@@ -407,6 +437,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // 11. Graceful shutdown
     info!("begin graceful shutdown");
     let _deadline = std::time::Duration::from_secs(profile.inner.lifecycle.stop_timeout_secs);
+    // Fire observe-hooks before transport teardown so the telemetry
+    // event makes it into the JSONL file.
+    hook_chain
+        .on_shutdown(&hook_ctx, ShutdownReason::Sigterm, &hook_cancel)
+        .await;
     // TaskRunner active-task cancellation is future work (P0b); for now
     // we just tear down transports and drain telemetry.
     for t in transport_tasks {
