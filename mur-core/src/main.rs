@@ -1012,6 +1012,33 @@ enum AgentAction {
         #[arg(long)]
         json: bool,
     },
+    /// Manage an agent's keychain-backed secrets (set/list/delete)
+    Secret {
+        /// Agent name
+        agent: String,
+        #[command(subcommand)]
+        action: AgentSecretAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AgentSecretAction {
+    /// Write a secret to the OS keychain (service=mur-agent,
+    /// account=<agent>/<key>). Reads from stdin / hidden prompt if VALUE
+    /// is omitted.
+    Set {
+        /// Secret key (e.g. ANTHROPIC_API_KEY).
+        key: String,
+        /// Optional value; omit to read from a hidden prompt.
+        value: Option<String>,
+    },
+    /// List which secret refs the agent's active model expects, with status.
+    List,
+    /// Delete a keychain entry by key name. Idempotent.
+    Delete {
+        /// Secret key to delete.
+        key: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1585,6 +1612,15 @@ async fn async_main() -> Result<()> {
             AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
             AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
             AgentAction::Doctor { format, json } => cmd::doctor::run(&format, json)?,
+            AgentAction::Secret { agent, action } => match action {
+                AgentSecretAction::Set { key, value } => {
+                    cmd::agent::cmd_secret_set(&agent, &key, value.as_deref()).await?
+                }
+                AgentSecretAction::List => cmd::agent::cmd_secret_list(&agent).await?,
+                AgentSecretAction::Delete { key } => {
+                    cmd::agent::cmd_secret_delete(&agent, &key).await?
+                }
+            },
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
