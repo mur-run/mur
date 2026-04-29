@@ -1,5 +1,6 @@
 //! `mur agent companion ...` subcommands (Phase 1.1).
 use clap::{Args, Subcommand};
+use content::ContentArgs;
 use proactive::ProactiveArgs;
 use quiet::QuietArgs;
 use templates::TemplatesArgs;
@@ -21,6 +22,8 @@ pub enum CompanionCmd {
         #[arg(long)]
         re_init: bool,
     },
+    /// Manage the per-agent content pool (add entries to situation files).
+    Content(ContentArgs),
     /// Enable or disable proactive (companion-initiated) messages.
     Proactive(ProactiveArgs),
     /// Pause or clear proactive messages for a duration or until a timestamp.
@@ -38,6 +41,7 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
             answers,
             re_init,
         } => init::run(&name, answers, re_init).await,
+        CompanionCmd::Content(args) => content::run(args).await,
         CompanionCmd::Proactive(args) => proactive::run(args).await,
         CompanionCmd::Quiet(args) => quiet::run(args).await,
         CompanionCmd::Templates(args) => templates::run(args).await,
@@ -45,6 +49,7 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
     }
 }
 
+mod content;
 mod init;
 mod proactive;
 mod quiet;
