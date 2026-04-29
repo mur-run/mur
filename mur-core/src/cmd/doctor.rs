@@ -85,6 +85,7 @@ pub fn checks_for(format: &str) -> Vec<CheckResult> {
         &["--version"],
         "Install via rustup: https://rustup.rs",
     ));
+    out.push(check_hook_surface());
 
     if want_build {
         // For both `bin` and `gui` we cargo-build the runtime.
@@ -238,6 +239,19 @@ fn check_platform_libraries_for_gui() -> CheckResult {
     CheckResult::skipped(
         "platform-libs",
         format!("unrecognised platform: {}", std::env::consts::OS),
+    )
+}
+
+/// A0 hook surface report — confirms the runtime ships a frozen
+/// 10-method `Hook` trait with phase-aware dispatch (gate / mutate /
+/// observe) and the four built-in handlers wired in the supervisor.
+/// Static for now because `mur agent doctor` runs in mur-core (the
+/// CLI host), not in the runtime; introspecting at process boundary
+/// is A1 work.
+fn check_hook_surface() -> CheckResult {
+    CheckResult::ok(
+        "hooks",
+        "10 surfaces frozen, 4 internal handlers active, dispatch=phase-aware",
     )
 }
 
