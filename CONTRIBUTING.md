@@ -81,3 +81,42 @@ If a snapshot mismatch occurs, review the diff with:
     cargo insta review
 
 CI sets `INSTA_UPDATE=no` so a missing or stale snapshot fails the build.
+
+### Updating snapshots locally
+1. `cargo insta review` — interactive review of pending snapshot changes.
+2. After accepting, commit the `.snap` files alongside the test changes.
+
+### CI policy
+CI sets `INSTA_UPDATE=no`, so any stale or missing snapshot fails the build.
+
+## `MUR_AGENT_FORCE_ECHO=1` for fast dev
+
+The companion subsystem uses an LLM for message generation. To run companion
+tests or commands without hitting a real provider, set:
+
+    export MUR_AGENT_FORCE_ECHO=1
+
+This is wired in `mur-agent-runtime/src/supervisor.rs`: when the variable is
+set, the supervisor skips provider initialisation and routes all LLM calls
+through a deterministic stub-echo runner. The integration tests (M8.*) all
+use it. Real-LLM smoke runs are nightly-only
+(`scripts/e2e/companion-ollama-nightly.sh`, optional).
+
+Note: `MUR_LLM_PROVIDER=stub` is NOT currently wired. Use
+`MUR_AGENT_FORCE_ECHO=1` instead.
+
+## Content-pool PR review checklist (companion phase 1.1)
+
+When a PR adds entries to `companion/content/<situation>.<locale>.yaml`, the
+reviewer must confirm each entry has:
+
+- [ ] `id` — unique within the file
+- [ ] `weight` — float, default 1.0
+- [ ] `cooldown_days` — non-negative integer
+- [ ] `tags` — list, may be empty
+- [ ] `source` — required, names where the prompt seed came from (curated, user-derived, etc.)
+- [ ] `reviewed_by` — required, names the human who reviewed
+- [ ] `prompt_seed` — required, non-empty
+
+Spec §8.5 R6 / risk mitigation: `source` and `reviewed_by` ensure no unattributed
+content lands in the embedded pool.
