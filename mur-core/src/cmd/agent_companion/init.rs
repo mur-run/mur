@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
+use super::util::{atomic_write_json, atomic_write_yaml};
+
 /// On-disk shape of the `--answers <file>` YAML payload.
 #[derive(Debug, Deserialize)]
 struct Answers {
@@ -43,13 +45,7 @@ pub async fn run(name: &str, answers: Option<PathBuf>, re_init: bool) -> Result<
         None => run_wizard()?,
     };
 
-    let mur_home = crate::paths::mur_root(None);
-    let agent_dir = mur_home.join("agents").join(name);
-    if !agent_dir.exists() {
-        bail!(
-            "agent {name} does not exist; run `mur agent create {name}` first"
-        );
-    }
+    let agent_dir = super::util::agent_home_for(name)?;
 
     let companion_dir = agent_dir.join("companion");
     fs::create_dir_all(&companion_dir)
@@ -105,8 +101,7 @@ pub async fn run(name: &str, answers: Option<PathBuf>, re_init: bool) -> Result<
         extra_instructions: &answers.extra_instructions,
         onboarded_at: now,
     };
-    atomic_write_json(&rel_path, &rel)
-        .with_context(|| format!("write {}", rel_path.display()))?;
+    atomic_write_json(&rel_path, &rel).with_context(|| format!("write {}", rel_path.display()))?;
 
     println!("Companion mode enabled for {name}.");
     println!(
@@ -118,8 +113,7 @@ pub async fn run(name: &str, answers: Option<PathBuf>, re_init: bool) -> Result<
 }
 
 fn load_answers(path: &Path) -> Result<Answers> {
-    let s = fs::read_to_string(path)
-        .with_context(|| format!("read answers {}", path.display()))?;
+    let s = fs::read_to_string(path).with_context(|| format!("read answers {}", path.display()))?;
     serde_yaml_ng::from_str::<Answers>(&s)
         .with_context(|| format!("parse answers {}", path.display()))
 }
@@ -201,25 +195,4 @@ fn print_narrative(locale: &str) {
             "When you want me to occasionally check in, run `mur agent companion proactive enable`."
         );
     }
-}
-
-fn atomic_write_yaml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let body = serde_yaml_ng::to_string(value).context("serialize yaml")?;
-    atomic_write_bytes(path, body.as_bytes())
-}
-
-fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let body = serde_json::to_string_pretty(value).context("serialize json")?;
-    atomic_write_bytes(path, body.as_bytes())
-}
-
-fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension(format!(
-        "{}.tmp",
-        path.extension().and_then(|s| s.to_str()).unwrap_or("tmp")
-    ));
-    fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
-    fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
 }
