@@ -1,0 +1,30 @@
+situation: morning_greeting
+locale: zh-TW
+templates:
+  - id: morning_warm_zh_001
+    weight: 1.0
+    cooldown_days: 3
+    tags: [warm, low_pressure]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Greet {{NAME_FOR_USER}} warmly, mention it's a new day. ONE sentence.
+      End with a soft, optional question like "今天想從哪一件小事開始？".
+  - id: morning_check_zh_001
+    weight: 1.0
+    cooldown_days: 3
+    tags: [warm, attentive]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Say good morning and ask {{NAME_FOR_USER}} how they slept. Keep it under
+      two sentences. Don't push for a reply.
+  - id: morning_quiet_zh_001
+    weight: 0.8
+    cooldown_days: 5
+    tags: [low_energy, quiet]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      A quiet "good morning" — just one short sentence acknowledging the day,
+      no question. For when {{NAME_FOR_USER}} might prefer space.

@@ -1,5 +1,6 @@
 //! Companion subsystem shared types (Phase 1.1).
 
+pub mod content_seed;
 pub mod voice_template;
 
 use serde::{Deserialize, Serialize};
