@@ -81,7 +81,14 @@ pub fn active_window_end_for_today(
         Some(qh) => {
             let t = parse_hhmm(&qh.start)?;
             Local
-                .with_ymd_and_hms(date.year(), date.month(), date.day(), t.hour(), t.minute(), 0)
+                .with_ymd_and_hms(
+                    date.year(),
+                    date.month(),
+                    date.day(),
+                    t.hour(),
+                    t.minute(),
+                    0,
+                )
                 .single()
         }
         None => Local
@@ -89,4 +96,3 @@ pub fn active_window_end_for_today(
             .single(),
     }
 }
-

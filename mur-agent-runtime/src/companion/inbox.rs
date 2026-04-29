@@ -41,8 +41,7 @@ fn render(msg: &CompanionMessage) -> String {
 
     // generated_at as RFC3339 with local offset, seconds resolution.
     let generated_at_local = msg.generated_at.with_timezone(&chrono::Local);
-    let generated_at_str =
-        generated_at_local.to_rfc3339_opts(SecondsFormat::Secs, false);
+    let generated_at_str = generated_at_local.to_rfc3339_opts(SecondsFormat::Secs, false);
 
     let mut out = String::new();
     writeln!(out, "---").unwrap();
@@ -73,9 +72,7 @@ mod tests {
             template_id: "greet_warm_zh_001".to_string(),
             locale: "zh-TW".to_string(),
             body: "早安 David。今天想從哪一件小事開始？".to_string(),
-            generated_at: Utc
-                .with_ymd_and_hms(2026, 4, 29, 7, 13, 3)
-                .unwrap(),
+            generated_at: Utc.with_ymd_and_hms(2026, 4, 29, 7, 13, 3).unwrap(),
         }
     }
 

@@ -198,7 +198,11 @@ mod tests {
         assert!(
             report.passed,
             "expected pass; violations: {:?}",
-            report.violations.iter().map(|v| &v.detail).collect::<Vec<_>>()
+            report
+                .violations
+                .iter()
+                .map(|v| &v.detail)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -305,7 +309,11 @@ mod tests {
         assert!(
             report.passed,
             "3 sentences should pass; violations: {:?}",
-            report.violations.iter().map(|v| &v.detail).collect::<Vec<_>>()
+            report
+                .violations
+                .iter()
+                .map(|v| &v.detail)
+                .collect::<Vec<_>>()
         );
     }
 

@@ -5,7 +5,9 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 fn local_at(hour: u32, minute: u32) -> chrono::DateTime<Local> {
-    Local.with_ymd_and_hms(2026, 4, 29, hour, minute, 0).unwrap()
+    Local
+        .with_ymd_and_hms(2026, 4, 29, hour, minute, 0)
+        .unwrap()
 }
 
 #[test]

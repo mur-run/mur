@@ -2,7 +2,7 @@
 //! [`mur_common::companion::voice_template`], applies placeholder substitution.
 //! Disk override (per-agent → user-wide → embedded) lives in [`compose_with_overrides`].
 
-use mur_common::companion::{voice_template, Relationship};
+use mur_common::companion::{Relationship, voice_template};
 use std::path::Path;
 
 pub struct VoiceInput<'a> {

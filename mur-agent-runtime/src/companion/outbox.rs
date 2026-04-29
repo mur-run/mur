@@ -48,7 +48,7 @@ use crate::companion::{
     earned_permission::{self, BlockReason, GateOutcome},
     i18n::{self, EnsureLocaleOutcome},
     linter,
-    notifier::{CompanionMessage, NotifyOutcome, Notifier},
+    notifier::{CompanionMessage, Notifier, NotifyOutcome},
     picker::{Picker, TemplateId},
     schedule::{self, ScheduleDecision},
     situations,
@@ -463,12 +463,13 @@ impl<R: RngCore + Send> Outbox<R> {
             // id → sent_at from MessageSent events
             let mut sent_at_for_id: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
             // ids that already have a UserSignal, PassiveDismissInferred, or MessageDropped
-            let mut acked_ids: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
+            let mut acked_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
             for event in &events {
                 match event {
-                    OutboxEvent::MessageScheduled { id, template_id, .. } => {
+                    OutboxEvent::MessageScheduled {
+                        id, template_id, ..
+                    } => {
                         template_for_id.insert(id.clone(), template_id.clone());
                     }
                     OutboxEvent::MessageSent { id, sent_at, .. } => {
@@ -617,9 +618,7 @@ impl<R: RngCore + Send> Outbox<R> {
                     reason: "rate_limit_terminal".to_string(),
                 });
                 return TickOutcome::Skipped {
-                    reason: SkipReason::PausedRateLimit {
-                        resume_at: now_utc,
-                    },
+                    reason: SkipReason::PausedRateLimit { resume_at: now_utc },
                 };
             }
             GenerateResult::LinterPersistent => {
@@ -631,10 +630,7 @@ impl<R: RngCore + Send> Outbox<R> {
         };
 
         // ── Step 10: i18n ensure_locale ──────────────────────────────────────
-        let deliver_body = match self
-            .handle_i18n(&id, &body, &locale, now_utc, 0)
-            .await
-        {
+        let deliver_body = match self.handle_i18n(&id, &body, &locale, now_utc, 0).await {
             I18nResult::UseBody(b) => b,
             I18nResult::Paused(resume_at) => {
                 self.pending_pause.insert(
@@ -924,8 +920,8 @@ mod tests {
     use crate::companion::picker::{BanditState, Picker, TemplateState};
     use crate::companion::telemetry::OutboxEvent;
     use crate::durable::ledger::Ledger;
-    use crate::llm::stub::StubLlm;
     use crate::llm::LlmClient;
+    use crate::llm::stub::StubLlm;
     use anyhow::Result as AnyhowResult;
     use async_trait::async_trait;
     use chrono::{Duration, Local, NaiveDate, NaiveTime, TimeZone};
@@ -980,9 +976,7 @@ mod tests {
             self.calls.lock().unwrap().push(msg.clone());
             Ok(match &self.outcome {
                 NotifyOutcomeKind::Delivered => NotifyOutcome::Delivered,
-                NotifyOutcomeKind::Skipped(r) => NotifyOutcome::Skipped {
-                    reason: r.clone(),
-                },
+                NotifyOutcomeKind::Skipped(r) => NotifyOutcome::Skipped { reason: r.clone() },
                 NotifyOutcomeKind::Failed => {
                     NotifyOutcome::Failed(anyhow::anyhow!("fake notifier failure"))
                 }
@@ -1339,18 +1333,31 @@ mod tests {
             matches!(outcome, TickOutcome::Sent { .. }),
             "expected Sent, got {outcome:?}"
         );
-        assert_eq!(notifier.call_count(), 1, "notifier should have been called once");
+        assert_eq!(
+            notifier.call_count(),
+            1,
+            "notifier should have been called once"
+        );
 
         let events = all_events(tmp.path());
-        let has_scheduled = events.iter().any(|e| matches!(e, OutboxEvent::MessageScheduled { .. }));
-        let has_generated = events.iter().any(|e| matches!(
-            e,
-            OutboxEvent::MessageGenerated { regen_count: 0, .. }
-        ));
-        let has_sent = events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. }));
+        let has_scheduled = events
+            .iter()
+            .any(|e| matches!(e, OutboxEvent::MessageScheduled { .. }));
+        let has_generated = events
+            .iter()
+            .any(|e| matches!(e, OutboxEvent::MessageGenerated { regen_count: 0, .. }));
+        let has_sent = events
+            .iter()
+            .any(|e| matches!(e, OutboxEvent::MessageSent { .. }));
 
-        assert!(has_scheduled, "must have MessageScheduled; events: {events:?}");
-        assert!(has_generated, "must have MessageGenerated(regen_count=0); events: {events:?}");
+        assert!(
+            has_scheduled,
+            "must have MessageScheduled; events: {events:?}"
+        );
+        assert!(
+            has_generated,
+            "must have MessageGenerated(regen_count=0); events: {events:?}"
+        );
         assert!(has_sent, "must have MessageSent; events: {events:?}");
     }
 
@@ -1393,17 +1400,25 @@ mod tests {
             "expected 2 MessageGenerated events; got: {generated_events:?}"
         );
         assert!(
-            matches!(generated_events[0], OutboxEvent::MessageGenerated { regen_count: 0, .. }),
+            matches!(
+                generated_events[0],
+                OutboxEvent::MessageGenerated { regen_count: 0, .. }
+            ),
             "first MessageGenerated must have regen_count=0"
         );
         assert!(
-            matches!(generated_events[1], OutboxEvent::MessageGenerated { regen_count: 1, .. }),
+            matches!(
+                generated_events[1],
+                OutboxEvent::MessageGenerated { regen_count: 1, .. }
+            ),
             "second MessageGenerated must have regen_count=1"
         );
 
         // Final event is MessageSent.
         assert!(
-            events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
             "must end with MessageSent"
         );
     }
@@ -1459,7 +1474,9 @@ mod tests {
             "must have MessageDropped(linter_persistent)"
         );
         assert!(
-            !events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
             "must NOT have MessageSent"
         );
     }
@@ -1503,7 +1520,9 @@ mod tests {
             "must have MessageDropped(notifier_failed)"
         );
         assert!(
-            !events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
             "must NOT have MessageSent"
         );
     }
@@ -1575,10 +1594,22 @@ mod tests {
         );
 
         let events = all_events(tmp.path());
-        assert!(events.iter().any(|e| matches!(e, OutboxEvent::MessageScheduled { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, OutboxEvent::MessageScheduled { .. }))
+        );
         // MessageGenerated should have the English body sha256 (pre-translation).
-        assert!(events.iter().any(|e| matches!(e, OutboxEvent::MessageGenerated { .. })));
-        assert!(events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, OutboxEvent::MessageGenerated { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, OutboxEvent::MessageSent { .. }))
+        );
     }
 
     // M5.5 Test 2: generate succeeds (mixed body that triggers translation),
@@ -1608,7 +1639,12 @@ mod tests {
         #[async_trait]
         impl LlmClient for FlipLlm {
             async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
-                let joined: String = req.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n");
+                let joined: String = req
+                    .messages
+                    .iter()
+                    .map(|m| m.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 if joined.contains("Translate the following") {
                     let mut calls = self.translate_calls.lock().unwrap();
                     *calls += 1;
@@ -1631,7 +1667,9 @@ mod tests {
                     model: "flip".into(),
                 })
             }
-            fn model_name(&self) -> &str { "flip" }
+            fn model_name(&self) -> &str {
+                "flip"
+            }
         }
 
         let llm: Arc<dyn LlmClient> = Arc::new(FlipLlm {
@@ -1663,17 +1701,25 @@ mod tests {
             ),
             "tick 1 should pause on translate failure; got {outcome1:?}"
         );
-        assert_eq!(notifier.call_count(), 0, "notifier must not be called on tick 1");
+        assert_eq!(
+            notifier.call_count(),
+            0,
+            "notifier must not be called on tick 1"
+        );
 
         // Ledger must have MessagePaused but no MessageSent.
         {
             let events = all_events(tmp.path());
             assert!(
-                events.iter().any(|e| matches!(e, OutboxEvent::MessagePaused { .. })),
+                events
+                    .iter()
+                    .any(|e| matches!(e, OutboxEvent::MessagePaused { .. })),
                 "must have MessagePaused after tick 1"
             );
             assert!(
-                !events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
+                !events
+                    .iter()
+                    .any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
                 "must NOT have MessageSent after tick 1"
             );
         }
@@ -1714,7 +1760,12 @@ mod tests {
         #[async_trait]
         impl LlmClient for AlwaysRateLimitTranslate {
             async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
-                let joined: String = req.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n");
+                let joined: String = req
+                    .messages
+                    .iter()
+                    .map(|m| m.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 if joined.contains("Translate the following") {
                     return Err(LlmError::RateLimit);
                 }
@@ -1727,7 +1778,9 @@ mod tests {
                     model: "always-rl".into(),
                 })
             }
-            fn model_name(&self) -> &str { "always-rl" }
+            fn model_name(&self) -> &str {
+                "always-rl"
+            }
         }
 
         let llm: Arc<dyn LlmClient> = Arc::new(AlwaysRateLimitTranslate);
@@ -1749,7 +1802,12 @@ mod tests {
         // Tick 1: new send → translate fails → pause(attempt=0, backoff=30s).
         let outcome1 = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
         assert!(
-            matches!(outcome1, TickOutcome::Skipped { reason: SkipReason::LocaleUnresolved }),
+            matches!(
+                outcome1,
+                TickOutcome::Skipped {
+                    reason: SkipReason::LocaleUnresolved
+                }
+            ),
             "tick 1: {outcome1:?}"
         );
 
@@ -1782,10 +1840,9 @@ mod tests {
             "must have MessageDropped(locale_unresolved); events: {events:?}"
         );
         assert!(
-            events.iter().any(|e| matches!(
-                e,
-                OutboxEvent::LocaleMismatchUnresolved { attempts: 4, .. }
-            )),
+            events
+                .iter()
+                .any(|e| matches!(e, OutboxEvent::LocaleMismatchUnresolved { attempts: 4, .. })),
             "must have LocaleMismatchUnresolved{{attempts: 4}}; events: {events:?}"
         );
         assert_eq!(notifier.call_count(), 0, "notifier must never be called");
@@ -1851,7 +1908,9 @@ mod tests {
             "must have MessagePaused(rate_limit_429); events: {events:?}"
         );
         assert!(
-            !events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
             "must NOT have MessageSent"
         );
     }
@@ -1867,7 +1926,9 @@ mod tests {
     ) -> (String, String) {
         let outcome = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
         match outcome {
-            TickOutcome::Sent { id, template_id, .. } => (id, template_id),
+            TickOutcome::Sent {
+                id, template_id, ..
+            } => (id, template_id),
             other => panic!("expected Sent, got {other:?}"),
         }
     }
@@ -1901,7 +1962,9 @@ mod tests {
         {
             let events = all_events(tmp.path());
             assert!(
-                !events.iter().any(|e| matches!(e, OutboxEvent::PassiveDismissInferred { .. })),
+                !events
+                    .iter()
+                    .any(|e| matches!(e, OutboxEvent::PassiveDismissInferred { .. })),
                 "should not have PassiveDismissInferred before 24h"
             );
         }

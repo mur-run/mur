@@ -1,4 +1,4 @@
-use mur_agent_runtime::durable::rate_limit::{parse_anthropic_429, ResumeStrategy};
+use mur_agent_runtime::durable::rate_limit::{ResumeStrategy, parse_anthropic_429};
 
 fn now() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now()
@@ -72,7 +72,10 @@ fn ratelimit_reset_takes_max_across_buckets() {
     match s {
         ResumeStrategy::AtTimestamp(t) => {
             let delta = (t - r2).num_seconds().abs();
-            assert!(delta <= 1, "expected slowest reset (r2), got delta {delta}s");
+            assert!(
+                delta <= 1,
+                "expected slowest reset (r2), got delta {delta}s"
+            );
         }
         _ => panic!("expected AtTimestamp, got {s:?}"),
     }
@@ -82,7 +85,10 @@ fn ratelimit_reset_takes_max_across_buckets() {
 fn fallback_full_jitter_backoff() {
     let h = http::HeaderMap::new();
     let s = parse_anthropic_429(&h, now(), 429);
-    assert!(matches!(s, ResumeStrategy::Backoff { attempt: 0 }), "got {s:?}");
+    assert!(
+        matches!(s, ResumeStrategy::Backoff { attempt: 0 }),
+        "got {s:?}"
+    );
 }
 
 #[test]
@@ -93,7 +99,10 @@ fn five_two_nine_multiplies_wait() {
     match s {
         ResumeStrategy::After(d) => {
             let secs = d.num_seconds();
-            assert!((40..=80).contains(&secs), "expected 4-8x of 10s, got {secs}");
+            assert!(
+                (40..=80).contains(&secs),
+                "expected 4-8x of 10s, got {secs}"
+            );
         }
         _ => panic!("expected After(multiplied), got {s:?}"),
     }
@@ -103,5 +112,8 @@ fn five_two_nine_multiplies_wait() {
 fn five_two_nine_no_headers_falls_through_to_backoff_unchanged() {
     let h = http::HeaderMap::new();
     let s = parse_anthropic_429(&h, now(), 529);
-    assert!(matches!(s, ResumeStrategy::Backoff { attempt: 0 }), "got {s:?}");
+    assert!(
+        matches!(s, ResumeStrategy::Backoff { attempt: 0 }),
+        "got {s:?}"
+    );
 }

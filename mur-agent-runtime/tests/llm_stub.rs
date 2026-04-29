@@ -37,10 +37,7 @@ async fn stub_simulates_rate_limit_429() {
 #[tokio::test]
 async fn stub_unmatched_returns_stable_echo() {
     let stub = StubLlm::with_default_scenarios();
-    let resp = stub
-        .generate(req("totally unknown content"))
-        .await
-        .unwrap();
+    let resp = stub.generate(req("totally unknown content")).await.unwrap();
     assert_eq!(resp.text, "[stub: no scenario matched]");
 }
 

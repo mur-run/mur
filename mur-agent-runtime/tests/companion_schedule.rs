@@ -5,7 +5,9 @@ use mur_agent_runtime::companion::schedule::*;
 use mur_common::agent::QuietHours;
 
 fn at(hour: u32, minute: u32) -> chrono::DateTime<chrono::Local> {
-    Local.with_ymd_and_hms(2026, 4, 29, hour, minute, 0).unwrap()
+    Local
+        .with_ymd_and_hms(2026, 4, 29, hour, minute, 0)
+        .unwrap()
 }
 
 #[test]
@@ -70,8 +72,14 @@ fn divisor_zero_safe_when_budget_one() {
 
 #[test]
 fn parse_hhmm_works() {
-    assert_eq!(parse_hhmm("22:00"), chrono::NaiveTime::from_hms_opt(22, 0, 0));
-    assert_eq!(parse_hhmm("08:30"), chrono::NaiveTime::from_hms_opt(8, 30, 0));
+    assert_eq!(
+        parse_hhmm("22:00"),
+        chrono::NaiveTime::from_hms_opt(22, 0, 0)
+    );
+    assert_eq!(
+        parse_hhmm("08:30"),
+        chrono::NaiveTime::from_hms_opt(8, 30, 0)
+    );
     assert!(parse_hhmm("nope").is_none());
 }
 

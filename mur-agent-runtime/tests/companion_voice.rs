@@ -1,4 +1,4 @@
-use mur_agent_runtime::companion::voice::{compose_in_memory, compose_with_overrides, VoiceInput};
+use mur_agent_runtime::companion::voice::{VoiceInput, compose_in_memory, compose_with_overrides};
 use mur_common::companion::Relationship;
 use tempfile::TempDir;
 

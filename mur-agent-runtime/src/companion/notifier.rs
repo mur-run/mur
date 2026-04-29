@@ -69,9 +69,7 @@ impl Notifier for StdoutNotifier {
                 let banner_off = std::env::var("MUR_COMPANION_BANNER")
                     .map(|v| v == "off")
                     .unwrap_or(false);
-                if !banner_off
-                    && std::io::IsTerminal::is_terminal(&std::io::stderr())
-                {
+                if !banner_off && std::io::IsTerminal::is_terminal(&std::io::stderr()) {
                     let id_short = msg.id.chars().take(8).collect::<String>();
                     eprintln!(
                         "[mur-companion] {:?} → {} (id={})",
@@ -168,7 +166,10 @@ mod tests {
         // Original file must be unchanged.
         let after_content = std::fs::read_to_string(&path).unwrap();
         let after_modified = path.metadata().unwrap().modified().unwrap();
-        assert_eq!(original_content, after_content, "file content must not change");
+        assert_eq!(
+            original_content, after_content,
+            "file content must not change"
+        );
         assert_eq!(
             original_modified, after_modified,
             "file mtime must not change"
