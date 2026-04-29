@@ -1,0 +1,8 @@
+---
+source: mur-agent-runtime/tests/picker_scenarios.rs
+assertion_line: 58
+expression: snap
+---
+a: 78
+b: 63
+c: 59

@@ -1,7 +1,12 @@
 //! Agent runtime entrypoint — assembles profile, dispatcher, telemetry, and
 //! drives the stdio (and optionally Unix-socket) transports until SIGTERM.
 
+use crate::companion::clock::SystemClock;
 use crate::entitlements::detect_warnings;
+use crate::hooks::{
+    Hook, HookChain, HookCtx, ShutdownReason, TelemetryEmitter, b0::B0SafetyHook,
+    ledger::LedgerHook, telemetry::TelemetryHook,
+};
 use crate::llm::{
     LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
 };
@@ -17,7 +22,7 @@ use crate::protocol::methods::{
 #[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
 use crate::task_runner::TaskRunner;
-use crate::telemetry_writer::{Event, TelemetryWriter};
+use crate::telemetry_writer::{Event, TelemetryWriter, WriterTelemetryEmitter};
 use crate::transport::stdio::serve_stdio;
 use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
@@ -136,6 +141,31 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     )
     .await?;
 
+    // 4a. Build the A0 hook chain. M0 ships TelemetryHook + B0SafetyHook
+    //     (no-op stub) + LedgerHook (no-op stub). CompanionVoiceHook is
+    //     registered when the companion subsystem renders its voice (out
+    //     of M0 scope; companion phase 1.1's reactive path remains
+    //     unchanged). The on_startup observe-hooks fire before transports
+    //     bind so telemetry includes the create_agent span event.
+    let telemetry_emitter: Arc<dyn TelemetryEmitter> =
+        Arc::new(WriterTelemetryEmitter::new(writer.sender()));
+    let hook_chain = HookChain::new(vec![
+        Arc::new(TelemetryHook::new()) as Arc<dyn Hook>,
+        Arc::new(B0SafetyHook::new()),
+        Arc::new(LedgerHook::new()),
+    ]);
+    let hook_ctx = HookCtx {
+        agent_name: profile.inner.name.clone(),
+        agent_uuid: profile.inner.id.clone(),
+        run_id: format!("supervisor-{}", uuid::Uuid::now_v7()),
+        clock: Arc::new(SystemClock),
+        telemetry: telemetry_emitter.clone(),
+    };
+    let hook_cancel = tokio_util::sync::CancellationToken::new();
+    hook_chain
+        .on_startup(&hook_ctx, &profile.inner, &hook_cancel)
+        .await;
+
     // 5. Acquire running.lock
     let lock_path = agent_home.join("running.lock");
     let _lock_handle =
@@ -148,8 +178,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // implemented) fall through to echo. Setting MUR_AGENT_FORCE_ECHO=1
     // forces echo regardless of profile (useful for tests).
     let force_echo = std::env::var_os("MUR_AGENT_FORCE_ECHO").is_some();
-    let runner = if force_echo {
-        Arc::new(TaskRunner::new_stub_echo())
+    // `llm_for_companion` carries the real LLM client (None when echo/stub) so
+    // the companion subsystem can share the same provider without a second dial.
+    let (runner, llm_for_companion): (_, Option<Arc<dyn LlmClient>>) = if force_echo {
+        (Arc::new(TaskRunner::new_stub_echo()), None)
     } else {
         let resolved = resolve_model_entry(&profile.inner);
         if let Err(ref e) = resolved {
@@ -180,12 +212,14 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                         .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
                 });
                 let client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(base, entry.model));
-                Arc::new(
-                    TaskRunner::with_llm(client).with_system_prompt(profile.system_prompt.clone()),
-                )
+                let r = Arc::new(
+                    TaskRunner::with_llm(client.clone())
+                        .with_system_prompt(profile.system_prompt.clone()),
+                );
+                (r, Some(client))
             }
             "anthropic" => {
-                let client: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
+                let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
                 {
                     Ok(Arc::new(AnthropicClient::from_secret_string(
                         key,
@@ -196,18 +230,22 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                     AnthropicClient::from_env(entry.model.clone())
                         .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
                 };
-                match client {
-                    Ok(c) => Arc::new(
-                        TaskRunner::with_llm(c).with_system_prompt(profile.system_prompt.clone()),
-                    ),
+                match built {
+                    Ok(client) => {
+                        let r = Arc::new(
+                            TaskRunner::with_llm(client.clone())
+                                .with_system_prompt(profile.system_prompt.clone()),
+                        );
+                        (r, Some(client))
+                    }
                     Err(e) => {
                         tracing::warn!(error = %e, "anthropic client unavailable; falling back to echo");
-                        Arc::new(TaskRunner::new_stub_echo())
+                        (Arc::new(TaskRunner::new_stub_echo()), None)
                     }
                 }
             }
             "openai" => {
-                let client: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
+                let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
                 {
                     Ok(Arc::new(OpenAiClient::from_secret_string(
                         key,
@@ -218,19 +256,23 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                     OpenAiClient::from_env(entry.model.clone())
                         .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
                 };
-                match client {
-                    Ok(c) => Arc::new(
-                        TaskRunner::with_llm(c).with_system_prompt(profile.system_prompt.clone()),
-                    ),
+                match built {
+                    Ok(client) => {
+                        let r = Arc::new(
+                            TaskRunner::with_llm(client.clone())
+                                .with_system_prompt(profile.system_prompt.clone()),
+                        );
+                        (r, Some(client))
+                    }
                     Err(e) => {
                         tracing::warn!(error = %e, "openai client unavailable; falling back to echo");
-                        Arc::new(TaskRunner::new_stub_echo())
+                        (Arc::new(TaskRunner::new_stub_echo()), None)
                     }
                 }
             }
             other => {
                 tracing::warn!(provider = %other, "no LLM client implemented; falling back to echo");
-                Arc::new(TaskRunner::new_stub_echo())
+                (Arc::new(TaskRunner::new_stub_echo()), None)
             }
         }
     };
@@ -372,6 +414,40 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
 
+    // 8b. Companion subsystem (Phase 1.1 M5.7).
+    //     Returns None when profile.companion.enabled is false — zero-cost path.
+    let companion_clock =
+        Arc::new(crate::companion::clock::SystemClock) as Arc<dyn crate::companion::clock::Clock>;
+    if let Some(llm) = llm_for_companion {
+        let companion = match crate::companion::Companion::new(
+            &profile.inner,
+            &agent_home,
+            companion_clock,
+            llm,
+        ) {
+            Ok(Some(c)) => Some(c),
+            Ok(None) => None,
+            Err(e) => {
+                warn!(error = %e, "companion init failed; continuing without companion");
+                None
+            }
+        };
+        if let Some(c) = companion {
+            let handle = c.clone_handle();
+            transport_tasks.push(tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                // First tick fires immediately — we want to wait 60s before the first.
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    handle.run_tick().await;
+                }
+            }));
+        }
+    } else if profile.inner.companion.enabled {
+        warn!("companion is enabled but no LLM provider is configured; companion disabled");
+    }
+
     // 9. Drive stdio in the foreground so SIGTERM can unblock the process
     //    even while stdin is idle.
     if profile.inner.transport.stdio {
@@ -401,6 +477,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // 11. Graceful shutdown
     info!("begin graceful shutdown");
     let _deadline = std::time::Duration::from_secs(profile.inner.lifecycle.stop_timeout_secs);
+    // Fire observe-hooks before transport teardown so the telemetry
+    // event makes it into the JSONL file.
+    hook_chain
+        .on_shutdown(&hook_ctx, ShutdownReason::Sigterm, &hook_cancel)
+        .await;
     // TaskRunner active-task cancellation is future work (P0b); for now
     // we just tear down transports and drain telemetry.
     for t in transport_tasks {

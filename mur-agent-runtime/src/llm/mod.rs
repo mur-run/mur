@@ -5,6 +5,7 @@ use async_trait::async_trait;
 pub mod anthropic;
 pub mod ollama;
 pub mod openai;
+pub mod stub;
 
 #[derive(Debug, Clone)]
 pub struct LlmMessage {

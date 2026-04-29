@@ -895,6 +895,9 @@ enum AgentAction {
         /// Also delete the agent's data directory
         #[arg(long)]
         purge: bool,
+        /// Skip the unread-inbox guard (R13)
+        #[arg(long)]
+        force: bool,
     },
     /// Rename an agent (updates dir, profile.name, and symlink)
     Rename {
@@ -1003,6 +1006,8 @@ enum AgentAction {
         #[arg(long, default_value_t = 20)]
         tail: usize,
     },
+    /// Manage companion (warm voice + optional proactive messaging).
+    Companion(cmd::agent_companion::CompanionArgs),
     /// Run prereq checks for export targets (no build, just diagnostics)
     Doctor {
         /// What format the doctor should validate prereqs for: "gui" / "bin" / "pkg" / "all"
@@ -1494,7 +1499,9 @@ async fn async_main() -> Result<()> {
             AgentAction::List { json } => cmd::agent::cmd_list(json)?,
             AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
             AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
-            AgentAction::Remove { name, purge } => cmd::agent::cmd_remove(&name, purge)?,
+            AgentAction::Remove { name, purge, force } => {
+                cmd::agent::cmd_remove(&name, purge, force)?
+            }
             AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
             AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
             AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
@@ -1611,6 +1618,7 @@ async fn async_main() -> Result<()> {
             }
             AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
             AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
+            AgentAction::Companion(args) => cmd::agent_companion::run(args).await?,
             AgentAction::Doctor { format, json } => cmd::doctor::run(&format, json)?,
             AgentAction::Secret { agent, action } => match action {
                 AgentSecretAction::Set { key, value } => {

@@ -149,6 +149,7 @@ pub fn cmd_create(
         },
         file_transfer: FileTransferConfig::default(),
         deployment: DeploymentConfig::default(),
+        companion: CompanionConfig::default(),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -255,15 +256,20 @@ fn resolve_runtime_target() -> PathBuf {
     if let Some(v) = std::env::var_os("MUR_AGENT_RUNTIME_BIN") {
         return PathBuf::from(v);
     }
+    let runtime_filename = if cfg!(windows) {
+        "mur-agent-runtime.exe"
+    } else {
+        "mur-agent-runtime"
+    };
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        let candidate = dir.join("mur-agent-runtime");
+        let candidate = dir.join(runtime_filename);
         if candidate.exists() {
             return candidate;
         }
     }
-    PathBuf::from("mur-agent-runtime")
+    PathBuf::from(runtime_filename)
 }
 
 fn default_entitlements_custom() -> Entitlements {
@@ -497,11 +503,20 @@ pub fn cmd_stop(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_remove(name: &str, purge: bool) -> Result<()> {
+pub fn cmd_remove(name: &str, purge: bool, force: bool) -> Result<()> {
     let mur_home = resolve_mur_home()?;
     let agent_home = mur_home.join("agents").join(name);
     if !agent_home.exists() {
         bail!("agent '{name}' not found");
+    }
+    if !force {
+        let unread = count_unread_companion_inbox(&agent_home);
+        if unread > 0 {
+            bail!(
+                "agent '{name}' has {unread} unread companion message{}. Run 'mur agent companion inbox {name} --unread-only' to view, or pass --force to remove anyway",
+                if unread == 1 { "" } else { "s" }
+            );
+        }
     }
     refuse_if_running(&agent_home, name)?;
 
@@ -1488,4 +1503,78 @@ pub async fn cmd_secret_list(agent: &str) -> Result<()> {
         None => println!("agent uses inline model — no registry secret"),
     }
     Ok(())
+}
+
+/// Count files in `<agent_home>/companion/inbox/*.md` whose response line is `<unset>`.
+/// Returns 0 if the directory does not exist (companion never enabled).
+fn count_unread_companion_inbox(agent_home: &Path) -> usize {
+    let inbox = agent_home.join("companion/inbox");
+    if !inbox.exists() {
+        return 0;
+    }
+    let entries = match std::fs::read_dir(&inbox) {
+        Ok(it) => it,
+        Err(_) => return 0,
+    };
+    let mut n = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        if let Ok(body) = std::fs::read_to_string(&path)
+            && is_unread(&body)
+        {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Returns `true` when the last `>>> response: ` line in `body` has the value `<unset>`.
+fn is_unread(body: &str) -> bool {
+    let marker = ">>> response: ";
+    body.lines()
+        .rev()
+        .find_map(|l| l.strip_prefix(marker).map(|v| v.trim() == "<unset>"))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests_remove_unread_guard {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_inbox_unread(dir: &Path, id: &str) {
+        let inbox = dir.join("companion/inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        let body = format!(
+            "---\nid: {id}\nsituation: morning_greeting\ntemplate_id: t\nlocale: en-US\ngenerated_at: 2026-04-29T08:00:00+00:00\n---\n\nHello!\n\n>>> response: <unset>\n"
+        );
+        std::fs::write(inbox.join(format!("{id}.md")), body).unwrap();
+    }
+
+    fn write_inbox_acked(dir: &Path, id: &str) {
+        let inbox = dir.join("companion/inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        let body = format!(
+            "---\nid: {id}\nsituation: morning_greeting\ntemplate_id: t\nlocale: en-US\ngenerated_at: 2026-04-29T08:00:00+00:00\n---\n\nHello!\n\n>>> response: good\n"
+        );
+        std::fs::write(inbox.join(format!("{id}.md")), body).unwrap();
+    }
+
+    #[test]
+    fn count_unread_returns_zero_for_no_inbox() {
+        let tmp = TempDir::new().unwrap();
+        assert_eq!(count_unread_companion_inbox(tmp.path()), 0);
+    }
+
+    #[test]
+    fn count_unread_counts_only_unset_response() {
+        let tmp = TempDir::new().unwrap();
+        write_inbox_unread(tmp.path(), "msg-001");
+        write_inbox_unread(tmp.path(), "msg-002");
+        write_inbox_acked(tmp.path(), "msg-003");
+        assert_eq!(count_unread_companion_inbox(tmp.path()), 2);
+    }
 }

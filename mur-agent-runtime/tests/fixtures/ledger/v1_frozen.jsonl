@@ -1,0 +1,13 @@
+{"event":"CompanionInitialized","at":"2026-04-29T12:00:00Z","version":1}
+{"event":"RelationshipChanged","old":"friend","new":"coach","at":"2026-04-29T12:00:00Z"}
+{"event":"QuietRequested","until":"2026-04-29T12:00:00Z","reason":"user_requested","at":"2026-04-29T12:00:00Z"}
+{"event":"MessageScheduled","id":"msg-001","situation":"morning_greeting","template_id":"tmpl-a","scheduled_for":"2026-04-29T12:00:00Z"}
+{"event":"MessageGenerated","id":"msg-001","locale_used":"en-US","body_sha256":"abc123","linter_violations":0,"regen_count":0}
+{"event":"MessagePaused","id":"msg-001","resume_at":"2026-04-29T12:00:00Z","reason":"rate_limit_429"}
+{"event":"MessageSent","id":"msg-001","channel":"stdout","sent_at":"2026-04-29T12:00:00Z"}
+{"event":"MessageDropped","id":"msg-001","reason":"permission_denied"}
+{"event":"UserSignal","id":"msg-001","signal":"positive","at":"2026-04-29T12:00:00Z"}
+{"event":"PassiveDismissInferred","id":"msg-001","at":"2026-04-29T12:00:00Z"}
+{"event":"LocaleMismatchUnresolved","id":"msg-001","attempts":4,"at":"2026-04-29T12:00:00Z"}
+{"event":"VoiceMdComposed","relationship":"friend","locale_used":"en-US","fallback_from":null,"at":"2026-04-29T12:00:00Z"}
+{"event":"RhythmWiped","at":"2026-04-29T12:00:00Z"}

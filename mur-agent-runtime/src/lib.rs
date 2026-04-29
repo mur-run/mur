@@ -6,8 +6,11 @@
 #![allow(dead_code)]
 
 pub mod communication_policy;
+pub mod companion;
+pub mod durable;
 pub mod entitlements;
 pub mod export;
+pub mod hooks;
 pub mod import;
 pub mod llm;
 pub mod lock_file;
