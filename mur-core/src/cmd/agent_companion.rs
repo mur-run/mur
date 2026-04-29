@@ -32,6 +32,10 @@ pub enum CompanionCmd {
     Templates(TemplatesArgs),
     /// Write, re-compose, or diff the agent's voice.md.
     Voice(VoiceArgs),
+    /// List inbox messages for an agent.
+    Inbox(inbox::InboxArgs),
+    /// Acknowledge an inbox message with a signal (--good / --bad / --dismiss).
+    Ack(inbox::AckArgs),
 }
 
 pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
@@ -46,10 +50,13 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
         CompanionCmd::Quiet(args) => quiet::run(args).await,
         CompanionCmd::Templates(args) => templates::run(args).await,
         CompanionCmd::Voice(args) => voice::run(args).await,
+        CompanionCmd::Inbox(a) => inbox::run_inbox(a).await,
+        CompanionCmd::Ack(a) => inbox::run_ack(a).await,
     }
 }
 
 mod content;
+mod inbox;
 mod init;
 mod proactive;
 mod quiet;
