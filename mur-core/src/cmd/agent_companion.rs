@@ -6,6 +6,7 @@ use proactive::ProactiveArgs;
 use quiet::QuietArgs;
 use templates::TemplatesArgs;
 use voice::VoiceArgs;
+use why::WhyArgs;
 
 #[derive(Args, Debug)]
 pub struct CompanionArgs {
@@ -39,6 +40,9 @@ pub enum CompanionCmd {
     Ack(inbox::AckArgs),
     /// Preview a companion message for a given situation (read-only).
     Preview(PreviewArgs),
+    /// Explain why a companion message was sent (or list last 7 days of sent messages).
+    #[command(name = "why-did-you-message")]
+    WhyDidYouMessage(WhyArgs),
 }
 
 pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
@@ -56,6 +60,7 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
         CompanionCmd::Inbox(a) => inbox::run_inbox(a).await,
         CompanionCmd::Ack(a) => inbox::run_ack(a).await,
         CompanionCmd::Preview(args) => preview::run(args).await,
+        CompanionCmd::WhyDidYouMessage(args) => why::run(args).await,
     }
 }
 
@@ -68,3 +73,4 @@ mod quiet;
 mod templates;
 mod util;
 mod voice;
+mod why;
