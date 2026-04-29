@@ -374,15 +374,31 @@ fn phase_4_rewrite_tauri_conf(
     conf["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
 
     // Ensure the bundle includes our staged payload + metadata.
-    if let Some(bundle) = conf.get_mut("bundle")
-        && let Some(resources) = bundle.get_mut("resources")
-        && let Some(arr) = resources.as_array_mut()
-    {
-        let want = ["agent-payload.tar.gz", "metadata.json"];
-        for w in want {
-            if !arr.iter().any(|v| v.as_str() == Some(w)) {
-                arr.push(serde_json::json!(w));
-            }
+    // Tauri allows `bundle.resources` to be either an array of paths
+    // OR a {src: dest} map. Our static template uses the array form;
+    // bail loudly if a future template change breaks that assumption
+    // (silently skipping would produce a bundle without the payload
+    // and phase 7 would emit an artifact that won't bootstrap).
+    // See PR #41 review § Minor #17.
+    let bundle = conf
+        .get_mut("bundle")
+        .ok_or_else(|| anyhow!("tauri.conf.json: missing `bundle` block"))?;
+    let resources = bundle.get_mut("resources").ok_or_else(|| {
+        anyhow!("tauri.conf.json: `bundle.resources` block missing — template drift?")
+    })?;
+    let shape_label = match resources {
+        serde_json::Value::Object(_) => "object",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        _ => "other",
+    };
+    let arr = resources.as_array_mut().ok_or_else(|| {
+        anyhow!("tauri.conf.json: `bundle.resources` must be an array (got {shape_label})")
+    })?;
+    let want = ["agent-payload.tar.gz", "metadata.json"];
+    for w in want {
+        if !arr.iter().any(|v| v.as_str() == Some(w)) {
+            arr.push(serde_json::json!(w));
         }
     }
 

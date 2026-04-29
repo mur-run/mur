@@ -189,11 +189,17 @@ pub struct ThemeInfo {
 }
 
 #[tauri::command]
-pub fn list_themes() -> Result<Vec<ThemeInfo>, String> {
-    crate::theme::list().map_err(err)
+pub fn list_themes(app: tauri::AppHandle) -> Result<Vec<ThemeInfo>, String> {
+    use tauri::Manager;
+    let resource_dir = app.path().resource_dir().ok();
+    let root = crate::theme::resolve_themes_root(resource_dir.as_deref());
+    crate::theme::list(&root).map_err(err)
 }
 
 #[tauri::command]
-pub fn set_theme(name: String) -> Result<(), String> {
-    crate::theme::activate(&name).map_err(err)
+pub fn set_theme(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    use tauri::Manager;
+    let resource_dir = app.path().resource_dir().ok();
+    let root = crate::theme::resolve_themes_root(resource_dir.as_deref());
+    crate::theme::activate(&root, &name).map_err(err)
 }

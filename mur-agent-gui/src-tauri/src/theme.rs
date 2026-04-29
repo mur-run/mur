@@ -21,9 +21,9 @@ pub struct ThemeDef {
     pub icons: BTreeMap<String, String>,
 }
 
-pub fn list() -> Result<Vec<crate::commands::ThemeInfo>> {
+pub fn list(themes_root: &Path) -> Result<Vec<crate::commands::ThemeInfo>> {
     let mut out = Vec::new();
-    for dir in iter_theme_dirs()? {
+    for dir in iter_theme_dirs(themes_root)? {
         let theme = load_def(&dir)?;
         let display_name = theme
             .display_name
@@ -39,27 +39,36 @@ pub fn list() -> Result<Vec<crate::commands::ThemeInfo>> {
     Ok(out)
 }
 
-pub fn activate(name: &str) -> Result<()> {
+pub fn activate(themes_root: &Path, name: &str) -> Result<()> {
     // P1.5: swap tray icon, dock icon, broadcast theme event to webview.
-    // Scaffold: just verify the theme dir exists.
-    let dir = themes_root()?.join(name);
+    // Scaffold: just verify the theme dir exists in the resolved root.
+    let dir = themes_root.join(name);
     anyhow::ensure!(dir.exists(), "theme '{name}' not found in bundle");
     Ok(())
 }
 
-fn themes_root() -> Result<PathBuf> {
-    // In dev (`cargo tauri dev`) themes/ is next to the binary at
-    // mur-agent-gui/src-tauri/themes/. In a packaged bundle Tauri
-    // copies bundle.resources to OS-specific places — this scaffold
-    // walks up from CARGO_MANIFEST_DIR for now; P1.5 will rebase on
-    // Tauri's resource resolver.
-    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("themes"))
+/// Resolve the directory that holds `themes/<name>/theme.json` for
+/// the running app. In dev (`cargo tauri dev`) it's next to the
+/// source — `CARGO_MANIFEST_DIR/themes`. In a packaged bundle it's
+/// under Tauri's resource_dir (e.g.
+/// `MyAgent.app/Contents/Resources/themes/`).
+///
+/// The caller (a Tauri command handler) supplies `resource_dir`
+/// from `AppHandle::path().resource_dir()`. If that doesn't exist
+/// or doesn't contain a `themes/` child, fall back to the dev path.
+pub fn resolve_themes_root(resource_dir: Option<&Path>) -> PathBuf {
+    if let Some(rd) = resource_dir {
+        let bundled = rd.join("themes");
+        if bundled.exists() {
+            return bundled;
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("themes")
 }
 
-fn iter_theme_dirs() -> Result<Vec<PathBuf>> {
-    let root = themes_root()?;
+fn iter_theme_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     let mut dirs = Vec::new();
-    for entry in std::fs::read_dir(&root)
+    for entry in std::fs::read_dir(root)
         .with_context(|| format!("read {}", root.display()))?
         .flatten()
     {
@@ -121,9 +130,9 @@ pub fn validate_contrast(theme: &ThemeDef) -> Vec<String> {
 /// build-time check in `mur agent export --format gui` (phase 3) +
 /// in CI via `cargo test --lib theme::tests::all_builtin_themes`.
 #[allow(dead_code)]
-pub fn validate_all() -> Result<()> {
+pub fn validate_all(themes_root: &Path) -> Result<()> {
     let mut all_failures = Vec::new();
-    for dir in iter_theme_dirs()? {
+    for dir in iter_theme_dirs(themes_root)? {
         let theme = load_def(&dir)?;
         all_failures.extend(validate_contrast(&theme));
     }
@@ -189,7 +198,8 @@ mod tests {
 
     #[test]
     fn all_builtin_themes_pass_wcag_aa() {
-        let failures: Vec<_> = iter_theme_dirs()
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("themes");
+        let failures: Vec<_> = iter_theme_dirs(&root)
             .unwrap()
             .into_iter()
             .map(|d| load_def(&d).unwrap())
@@ -200,5 +210,27 @@ mod tests {
             "WCAG failures in built-in themes:\n{}",
             failures.join("\n")
         );
+    }
+
+    #[test]
+    fn resolve_themes_root_prefers_bundle_when_present() {
+        let tmp = std::env::temp_dir().join(format!("mur-themes-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("themes")).unwrap();
+
+        // resource_dir/themes exists → returned as-is.
+        let resolved = resolve_themes_root(Some(&tmp));
+        assert_eq!(resolved, tmp.join("themes"));
+
+        // resource_dir without themes/ child → falls back to dev path.
+        let empty = std::env::temp_dir().join(format!("mur-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&empty);
+        std::fs::create_dir_all(&empty).unwrap();
+        let fallback = resolve_themes_root(Some(&empty));
+        assert!(fallback.ends_with("themes"));
+        assert_ne!(fallback, empty.join("themes"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&empty);
     }
 }
