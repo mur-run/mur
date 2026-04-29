@@ -4,6 +4,8 @@
 pub mod clock;
 pub mod earned_permission;
 pub mod i18n;
+pub mod inbox;
+pub mod notifier;
 pub mod picker;
 pub mod schedule;
 pub mod situations;
