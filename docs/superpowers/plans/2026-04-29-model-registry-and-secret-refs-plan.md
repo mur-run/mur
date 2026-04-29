@@ -49,21 +49,26 @@
 **Step 1: Edit the `[dependencies]` block.** Append:
 
 ```toml
-keyring = "4"
+keyring = { version = "3", default-features = false, features = ["apple-native", "linux-native", "sync-secret-service", "windows-native"] }
 secrecy = "0.10"
 age = { version = "0.11", features = ["armor"] }
 shellexpand = "3"
 shell-words = "1"
 ```
 
-> **keyring v4 note:** v4.0.0 dropped feature-flag-gated backends. The
-> per-platform backend (`apple-native`, `windows-native`,
-> `dbus-secret-service`, `linux-keyutils`, `windows-native`) is now
-> selected automatically via `target_os`-conditional dependencies, so
-> plain `keyring = "4"` pulls in everything needed. Do NOT pass
-> `default-features = false` with feature lists like
-> `["apple-native", ...]` — those features no longer exist and the
-> build will fail.
+> **keyring version note (revised 2026-04-29):** earlier drafts of this
+> plan recommended `keyring = "4"`. v4.0.0 was a major upstream redesign
+> — the `keyring` crate is now a "samples + CLI" wrapper, the actual API
+> moved to `keyring-core` 1.0, and the v4 release has **no `[features]`
+> at all** (so `apple-native`, `mock`, etc. don't exist on v4). The plan
+> below targets v3.6.3, which has the stable `Entry` / `mock` /
+> `Error::NoEntry` API and the platform features above. Migration to
+> v4/keyring-core is a future-Task 1.8 refactor when the new API
+> stabilises and gathers documentation.
+>
+> Note: keyring v3's `mock` is **always available** (it is `pub mod mock;`
+> with no `#[cfg(feature = ...)]` gate), so we don't need a separate
+> `[dev-dependencies]` entry.
 
 > **tokio note:** the workspace already declares `tokio` with
 > `["rt-multi-thread", "macros", "process", "fs", ...]`, so `mur-common`
@@ -351,7 +356,7 @@ EOF
 
 **File:** `mur-common/src/secret.rs`
 
-**Step 1: Test first** — but use the keyring `mock` feature so we're not asking the developer to populate the real OS keychain. In `mur-common/Cargo.toml` `[dev-dependencies]`, add `keyring = { version = "4", features = ["sync-secret-service", "linux-native", "apple-native", "windows-native", "mock"], default-features = false }` (or just enable `mock` on the existing keyring entry via dev-deps duplicate). Append to `secret.rs`:
+**Step 1: Test first** — keyring v3 always exposes `keyring::mock`, so no additional dev-dep is required. The mock backend is an in-memory map keyed on (service, account); calling `set_default_credential_builder(mock::default_credential_builder())` swaps it in for the duration of the test process. Append to `secret.rs`:
 
 ```rust
 #[cfg(test)]
