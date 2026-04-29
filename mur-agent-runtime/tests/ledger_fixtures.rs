@@ -131,8 +131,11 @@ fn v_current_matches_serialized_today() {
     let expected = fixture_jsonl(&events);
     let actual =
         std::fs::read_to_string(V_CURRENT_PATH).expect("read v_current_full_coverage.jsonl");
+    // Compare line-by-line to be robust against CRLF on Windows checkouts.
+    let expected_lines: Vec<&str> = expected.lines().collect();
+    let actual_lines: Vec<&str> = actual.lines().collect();
     assert_eq!(
-        actual, expected,
+        actual_lines, expected_lines,
         "v_current_full_coverage.jsonl is out of date — regenerate with:\n\
          cargo test -p mur-agent-runtime --test ledger_fixtures \
          regenerate_v_current_fixture -- --ignored\n\
