@@ -100,8 +100,10 @@ LanceDB vector index is always rebuildable from YAML via `mur reindex`.
 ### CLI Commands (New)
 
 - **`mur verify [--file path] [--all]`** — Scan docs for stale claims (paths, commands, code refs)
-- **`mur agent <subcommand>`** — Manage murmur agents (P0a). Subcommands: `create`, `list`, `status`, `stop`, `remove`, `rename`, `send`, `card`, `install-service`, `prompt {show|edit|set}`, `mcp {add|list|remove|rename}`, `skill {add|list|remove|show}`, `perm {show|set-mode|allow-host|deny-host|list-hosts|allow-read|allow-write|deny-path|allow-spawn|deny-spawn|set-limit}`, `export {--format=pkg|bin|gui}`, `doctor [--format ...]`, `stats`, `logs`. The runtime binary that backs each agent lives in `mur-agent-runtime/`.
+- **`mur agent <subcommand>`** — Manage murmur agents (P0a). Subcommands: `create`, `list`, `status`, `stop`, `remove`, `rename`, `send`, `card`, `install-service`, `prompt {show|edit|set}`, `mcp {add|list|remove|rename}`, `skill {add|list|remove|show}`, `perm {show|set-mode|allow-host|deny-host|list-hosts|allow-read|allow-write|deny-path|allow-spawn|deny-spawn|set-limit}`, `secret {set|list|delete}`, `export {--format=pkg|bin|gui}`, `doctor [--format ...]`, `stats`, `logs`. The runtime binary that backs each agent lives in `mur-agent-runtime/`.
 - **`mur agent doctor [--format pkg|bin|gui|all] [--json]`** — Pre-flight prereq check for export targets (no build, just diagnostics). Same logic is reused as the fail-fast step inside `--format gui` export pipeline.
+- **`mur model {add|list|show|remove|migrate}`** — Manage `~/.mur/models.yaml` (provider/model/secret-ref registry). `migrate` walks existing agent profiles and synthesizes registry entries idempotently. Agents opt in via `profile.yaml`'s `model_ref:` field; supervisor resolves `model_ref → registry → SecretRef`, falling back to the legacy inline `model:` block. See `docs/superpowers/specs/2026-04-29-model-registry-and-secret-refs-design.md`.
+- **`mur agent secret {set|list|delete}`** — OS-keychain CRUD for an agent's secrets (account format `{agent}/{KEY}`, service `mur-agent`). `set` uses a hidden prompt via `rpassword` when no inline value is given.
 
 ### GUI Export (`mur agent export --format gui`)
 
