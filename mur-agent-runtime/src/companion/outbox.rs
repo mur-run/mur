@@ -1,4 +1,4 @@
-//! Outbox tick loop — Spec §4.8 steps 1, 4, 5, 6, 7.
+//! Outbox tick loop — Spec §4.8 steps 1, 4, 5, 6, 7, 8, 9, 11, 12.
 //!
 //! ## Rationale for struct shape
 //!
@@ -10,29 +10,42 @@
 //!   threads in Phase 1.1; M5.4 will persist its state, not restructure ownership.
 //! - `last_send_at` / `sent_today` / `morning_sent_today` / `today_date`: in-memory
 //!   rhythm state.  They are reset on day rollover at the top of every `run_tick`.
-//!   Persistence is deferred to M5.4.
-//! - `ledger`: owned; appended to in step 7.
+//!   Persistence is deferred to a later milestone.
+//! - `ledger`: owned; appended to in steps 7, 8, 11, 12.
 //! - `clock`: `Arc<dyn Clock>` so tests can inject a `MockClock`.
+//! - `llm`: `Arc<dyn LlmClient>` for message generation (step 8 — M5.4).
+//! - `notifier`: `Arc<dyn Notifier>` for delivery (step 11 — M5.4).
+//! - `voice_md`: pre-composed system prompt for the LLM (supplied by the
+//!   supervisor in M5.7; a plain string in tests).
 //!
-//! Fields that belong to steps 2/3/8–12 (notifier, LLM client, etc.) are
-//! deliberately absent; adding them later is additive.
+//! ## Locale resolution (step 8)
+//!
+//! The locale is taken from `proactive.locale` if that field exists — but
+//! `ProactiveConfig` does not carry a `locale` field in the current schema.
+//! For M5.4 we therefore fall back to the `locale` field carried in the
+//! `Outbox` struct itself, which callers set from `CompanionConfig.locale`
+//! (the field closest to the spec's "agent_profile.locale").
 
 use std::sync::Arc;
 
 use chrono::{DateTime, Local, NaiveDate, Utc};
-use mur_common::companion::Situation;
+use mur_common::companion::{Signal, Situation};
 use rand::{RngCore, rngs::StdRng};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::companion::{
     clock::Clock,
     earned_permission::{self, BlockReason, GateOutcome},
+    linter,
+    notifier::{CompanionMessage, NotifyOutcome, Notifier},
     picker::{Picker, TemplateId},
     schedule::{self, ScheduleDecision},
     situations,
     telemetry::OutboxEvent,
 };
 use crate::durable::ledger::Ledger;
+use crate::llm::{LlmClient, LlmError, LlmMessage, LlmRequest};
 use mur_common::agent::ProactiveConfig;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -45,15 +58,15 @@ use mur_common::agent::ProactiveConfig;
 pub enum TickOutcome {
     /// The tick was a no-op; `reason` explains which gate/check stopped it.
     Skipped { reason: SkipReason },
-    /// A `MessageScheduled` event was appended to the ledger.
-    Scheduled {
+    /// A message was fully generated, delivered, and recorded.
+    Sent {
         id: String,
         situation: Situation,
         template_id: TemplateId,
     },
 }
 
-/// Why a tick produced no `MessageScheduled` event.
+/// Why a tick produced no `MessageSent` event.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkipReason {
     /// `earned_permission::check` returned `Blocked`.
@@ -66,6 +79,35 @@ pub enum SkipReason {
     NoSituation,
     /// `picker::Picker::pick` returned `None` (all templates on cooldown).
     NoTemplate,
+    /// LLM returned a rate-limit error (M5.5 will implement pause/resume).
+    LlmRateLimit,
+    /// Linter failed on both the original and regenerated body.
+    LinterPersistent,
+    /// Notifier returned `Failed`.
+    NotifierFailed,
+    /// Notifier returned `Skipped`.
+    NotifierSkipped,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// OutboxConfig — bundles construction-time dependencies to keep arg count ≤ 7
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Construction-time configuration for [`Outbox`].
+///
+/// Separates the "what to do" knobs (LLM, notifier, voice prompt, locale) from
+/// the rhythm state that changes tick-by-tick.
+pub struct OutboxConfig {
+    /// LLM client for message generation (step 8 — M5.4).
+    pub llm: Arc<dyn LlmClient>,
+    /// Delivery channel (step 11 — M5.4).
+    pub notifier: Arc<dyn Notifier>,
+    /// Pre-composed voice system prompt; passed by the supervisor (M5.7).
+    pub voice_md: String,
+    /// BCP-47 locale used as the LLM generation locale.
+    /// Taken from `CompanionConfig.locale`; `ProactiveConfig` does not carry
+    /// a locale field in the current schema.
+    pub locale: String,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -83,15 +125,25 @@ pub struct Outbox<R: RngCore + Send = StdRng> {
     pub picker: Picker<R>,
     /// Snapshot of the user's proactive config; used every tick.
     pub proactive: ProactiveConfig,
+    /// LLM client for message generation (step 8 — M5.4).
+    pub llm: Arc<dyn LlmClient>,
+    /// Delivery channel (step 11 — M5.4).
+    pub notifier: Arc<dyn Notifier>,
+    /// Pre-composed voice system prompt; passed by the supervisor (M5.7).
+    /// For tests, a plain string (possibly empty) is fine.
+    pub voice_md: String,
+    /// BCP-47 locale used as the LLM generation locale.
+    /// Comes from `CompanionConfig.locale` (or caller's choice); ProactiveConfig
+    /// does not carry a locale field in the current schema.
+    pub locale: String,
 
     // ── rhythm state ──
-    /// Local time of the last successfully scheduled send (updated at step 7).
+    /// Local time of the last successfully sent message (updated at step 12).
     pub last_send_at: Option<DateTime<Local>>,
-    /// Number of sends already scheduled today (reset on day rollover).
+    /// Number of messages already sent today (reset on day rollover).
     pub sent_today: u8,
-    /// The local date on which a `MorningGreeting` was last scheduled.
-    /// `None` means not yet today.  Stored as `Option<NaiveDate>` to match
-    /// `situations::pick_for_hour`'s parameter type exactly.
+    /// The local date on which a `MorningGreeting` was last sent.
+    /// `None` means not yet today.
     pub morning_sent_today: Option<NaiveDate>,
     /// Local date we last saw — used to detect day rollovers.
     pub today_date: NaiveDate,
@@ -104,6 +156,7 @@ impl Outbox<StdRng> {
         ledger: Ledger,
         picker: Picker<StdRng>,
         proactive: ProactiveConfig,
+        config: OutboxConfig,
     ) -> Self {
         let today = clock.now_local().date_naive();
         Self {
@@ -111,6 +164,10 @@ impl Outbox<StdRng> {
             ledger,
             picker,
             proactive,
+            llm: config.llm,
+            notifier: config.notifier,
+            voice_md: config.voice_md,
+            locale: config.locale,
             last_send_at: None,
             sent_today: 0,
             morning_sent_today: None,
@@ -126,6 +183,7 @@ impl<R: RngCore + Send> Outbox<R> {
         ledger: Ledger,
         picker: Picker<R>,
         proactive: ProactiveConfig,
+        config: OutboxConfig,
     ) -> Self {
         let today = clock.now_local().date_naive();
         Self {
@@ -133,6 +191,10 @@ impl<R: RngCore + Send> Outbox<R> {
             ledger,
             picker,
             proactive,
+            llm: config.llm,
+            notifier: config.notifier,
+            voice_md: config.voice_md,
+            locale: config.locale,
             last_send_at: None,
             sent_today: 0,
             morning_sent_today: None,
@@ -142,10 +204,14 @@ impl<R: RngCore + Send> Outbox<R> {
 
     /// Execute one tick of the outbox loop.
     ///
-    /// Steps implemented here: **1, 4, 5, 6, 7**.
+    /// Steps implemented: **1, 4, 5, 6, 7, 8, 9, 11, 12**.
     /// Steps 2/3 (resume-paused / passive-dismiss) → M5.5 / M5.6.
-    /// Steps 8–12 (LLM / lint / i18n / deliver / finalise) → M5.4 / M5.5.
-    pub fn run_tick(&mut self, now_utc: DateTime<Utc>, now_local: DateTime<Local>) -> TickOutcome {
+    /// Step 10 (i18n locale-mismatch loop) → M5.5.
+    pub async fn run_tick(
+        &mut self,
+        now_utc: DateTime<Utc>,
+        now_local: DateTime<Local>,
+    ) -> TickOutcome {
         // ── Day rollover ─────────────────────────────────────────────────────
         let today = now_local.date_naive();
         if today != self.today_date {
@@ -167,15 +233,17 @@ impl<R: RngCore + Send> Outbox<R> {
         // ── (Steps 2 + 3 skipped — M5.5 / M5.6) ────────────────────────────
 
         // ── Step 4: should_send_new ──────────────────────────────────────────
-        let window_end =
-            match schedule::active_window_end_for_today(now_local, self.proactive.quiet_hours.as_ref()) {
-                Some(w) => w,
-                None => {
-                    return TickOutcome::Skipped {
-                        reason: SkipReason::ActiveWindowEnded,
-                    };
-                }
-            };
+        let window_end = match schedule::active_window_end_for_today(
+            now_local,
+            self.proactive.quiet_hours.as_ref(),
+        ) {
+            Some(w) => w,
+            None => {
+                return TickOutcome::Skipped {
+                    reason: SkipReason::ActiveWindowEnded,
+                };
+            }
+        };
         if now_local >= window_end {
             return TickOutcome::Skipped {
                 reason: SkipReason::ActiveWindowEnded,
@@ -201,8 +269,6 @@ impl<R: RngCore + Send> Outbox<R> {
         }
 
         // ── Step 5: pick situation ───────────────────────────────────────────
-        // `pick_for_hour` suppresses `morning_greeting` if `morning_sent_today`
-        // matches today's date.  We pass the stored Option<NaiveDate> directly.
         let Some(situation) =
             situations::pick_for_hour(now_local, self.morning_sent_today, &mut self.picker.rng)
         else {
@@ -228,26 +294,191 @@ impl<R: RngCore + Send> Outbox<R> {
         };
         if let Err(e) = self.ledger.append(&event) {
             tracing::error!("outbox: ledger append failed: {e}");
-            // Treat as a scheduling failure to avoid double-counts; return
-            // NoTemplate-like skip rather than silently claiming success.
             return TickOutcome::Skipped {
                 reason: SkipReason::NoTemplate,
             };
         }
 
-        // Update rhythm state.
-        self.sent_today += 1;
+        // ── Steps 8 + 9: generate + lint (with one regenerate) ───────────────
+        let situation_str = format!("{:?}", situation);
+        let locale = self.locale.clone();
+
+        let body = match self
+            .generate_with_lint(&id, &situation_str, &locale, now_utc)
+            .await
+        {
+            GenerateResult::Ok(text) => text,
+            GenerateResult::RateLimit => {
+                let _ = self.ledger.append(&OutboxEvent::MessageDropped {
+                    id: id.clone(),
+                    reason: "llm_rate_limit_pending_m5_5".to_string(),
+                });
+                return TickOutcome::Skipped {
+                    reason: SkipReason::LlmRateLimit,
+                };
+            }
+            GenerateResult::LinterPersistent => {
+                // MessageDropped already appended inside generate_with_lint.
+                return TickOutcome::Skipped {
+                    reason: SkipReason::LinterPersistent,
+                };
+            }
+        };
+
+        // ── Step 11: deliver ─────────────────────────────────────────────────
+        let msg = CompanionMessage {
+            id: id.clone(),
+            situation: situation.clone(),
+            template_id: template_id.clone(),
+            locale: locale.clone(),
+            body,
+            generated_at: now_utc,
+        };
+
+        match self.notifier.send(&msg).await {
+            Ok(NotifyOutcome::Delivered) => {
+                // continue to step 12
+            }
+            Ok(NotifyOutcome::Skipped { reason }) => {
+                let _ = self.ledger.append(&OutboxEvent::MessageDropped {
+                    id: id.clone(),
+                    reason: format!("notifier_skipped:{reason}"),
+                });
+                return TickOutcome::Skipped {
+                    reason: SkipReason::NotifierSkipped,
+                };
+            }
+            Ok(NotifyOutcome::Failed(_)) | Err(_) => {
+                let _ = self.ledger.append(&OutboxEvent::MessageDropped {
+                    id: id.clone(),
+                    reason: "notifier_failed".to_string(),
+                });
+                return TickOutcome::Skipped {
+                    reason: SkipReason::NotifierFailed,
+                };
+            }
+        }
+
+        // ── Step 12: finalise ────────────────────────────────────────────────
+        let _ = self.ledger.append(&OutboxEvent::MessageSent {
+            id: id.clone(),
+            channel: self.notifier.name().to_string(),
+            sent_at: now_utc,
+        });
+
+        self.picker.record(&template_id, Signal::Sent, now_utc);
         self.last_send_at = Some(now_local);
+        self.sent_today += 1;
         if situation == Situation::MorningGreeting {
             self.morning_sent_today = Some(today);
         }
 
-        TickOutcome::Scheduled {
+        TickOutcome::Sent {
             id,
             situation,
             template_id,
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Internal helper: generate + lint with one regenerate
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Attempt to generate a lint-passing body.
+    ///
+    /// On first lint failure, appends `MessageGenerated { regen_count: 0 }` and
+    /// retries **once** with a `"\n[regenerate]"` suffix on the user prompt so
+    /// the `StubLlm` can match a distinct scenario.  On second failure, appends
+    /// both a second `MessageGenerated` and `MessageDropped { linter_persistent }`.
+    async fn generate_with_lint(
+        &mut self,
+        id: &str,
+        situation_str: &str,
+        locale: &str,
+        _now_utc: DateTime<Utc>,
+    ) -> GenerateResult {
+        for regen_count in 0u32..=1 {
+            // Build the user prompt; append "[regenerate]" on the retry so
+            // StubLlm can match a distinct scenario (documented contract).
+            let user_prompt = if regen_count == 0 {
+                format!(
+                    "Compose one short message for situation: {situation_str}, locale: {locale}"
+                )
+            } else {
+                format!(
+                    "Compose one short message for situation: {situation_str}, locale: {locale}\n[regenerate]"
+                )
+            };
+
+            let req = LlmRequest {
+                messages: vec![
+                    LlmMessage {
+                        role: "system".to_string(),
+                        content: self.voice_md.clone(),
+                    },
+                    LlmMessage {
+                        role: "user".to_string(),
+                        content: user_prompt,
+                    },
+                ],
+                temperature: None,
+                max_tokens: None,
+            };
+
+            let text = match self.llm.generate(req).await {
+                Ok(resp) => resp.text,
+                Err(LlmError::RateLimit) => return GenerateResult::RateLimit,
+                Err(e) => {
+                    tracing::warn!("outbox: LLM error on attempt {regen_count}: {e}");
+                    // Treat other errors like a lint failure — drop after second.
+                    if regen_count == 1 {
+                        let _ = self.ledger.append(&OutboxEvent::MessageDropped {
+                            id: id.to_string(),
+                            reason: "linter_persistent".to_string(),
+                        });
+                        return GenerateResult::LinterPersistent;
+                    }
+                    continue;
+                }
+            };
+
+            let report = linter::check(&text, locale);
+            let body_sha256 = hex::encode(Sha256::digest(text.as_bytes()));
+
+            let _ = self.ledger.append(&OutboxEvent::MessageGenerated {
+                id: id.to_string(),
+                locale_used: locale.to_string(),
+                body_sha256,
+                linter_violations: report.violations.len() as u32,
+                regen_count,
+            });
+
+            if report.passed {
+                return GenerateResult::Ok(text);
+            }
+
+            // Lint failed.
+            if regen_count == 1 {
+                // Second failure — drop.
+                let _ = self.ledger.append(&OutboxEvent::MessageDropped {
+                    id: id.to_string(),
+                    reason: "linter_persistent".to_string(),
+                });
+                return GenerateResult::LinterPersistent;
+            }
+            // regen_count == 0 → loop continues with regen_count = 1
+        }
+
+        // Unreachable, but satisfies the compiler.
+        GenerateResult::LinterPersistent
+    }
+}
+
+/// Internal result of the generate+lint loop.
+enum GenerateResult {
+    Ok(String),
+    RateLimit,
+    LinterPersistent,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -259,21 +490,77 @@ mod tests {
     use super::*;
 
     use crate::companion::clock::MockClock;
+    use crate::companion::notifier::{CompanionMessage, NotifyOutcome};
     use crate::companion::picker::{BanditState, Picker, TemplateState};
     use crate::companion::telemetry::OutboxEvent;
     use crate::durable::ledger::Ledger;
+    use crate::llm::stub::StubLlm;
+    use crate::llm::LlmClient;
+    use anyhow::Result as AnyhowResult;
+    use async_trait::async_trait;
     use chrono::{Duration, Local, NaiveDate, NaiveTime, TimeZone};
     use mur_common::agent::{ProactiveConfig, QuietHours};
     use mur_common::companion::Situation;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
+
+    // ── FakeNotifier ─────────────────────────────────────────────────────────
+
+    /// In-test notifier that records every delivered message and can be
+    /// configured to return a fixed outcome.
+    struct FakeNotifier {
+        outcome: NotifyOutcomeKind,
+        calls: Mutex<Vec<CompanionMessage>>,
+    }
+
+    enum NotifyOutcomeKind {
+        Delivered,
+        Skipped(String),
+        Failed,
+    }
+
+    impl FakeNotifier {
+        fn delivered() -> Self {
+            Self {
+                outcome: NotifyOutcomeKind::Delivered,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+        fn failed() -> Self {
+            Self {
+                outcome: NotifyOutcomeKind::Failed,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    #[async_trait]
+    impl Notifier for FakeNotifier {
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+
+        async fn send(&self, msg: &CompanionMessage) -> AnyhowResult<NotifyOutcome> {
+            self.calls.lock().unwrap().push(msg.clone());
+            Ok(match &self.outcome {
+                NotifyOutcomeKind::Delivered => NotifyOutcome::Delivered,
+                NotifyOutcomeKind::Skipped(r) => NotifyOutcome::Skipped {
+                    reason: r.clone(),
+                },
+                NotifyOutcomeKind::Failed => {
+                    NotifyOutcome::Failed(anyhow::anyhow!("fake notifier failure"))
+                }
+            })
+        }
+    }
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// Build a UTC `DateTime` that, when converted to the host's local timezone,
     /// yields the specified `(year, month, day, hour, minute, second)`.
-    /// This makes tests timezone-robust: wherever the tests run, the resulting
-    /// `MockClock::now_local().hour()` is exactly the requested hour.
     fn local_as_utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> chrono::DateTime<Utc> {
         let naive = NaiveDate::from_ymd_opt(y, mo, d)
             .unwrap()
@@ -285,8 +572,7 @@ mod tests {
             .with_timezone(&Utc)
     }
 
-    /// Build a `BanditState` with one template per situation so `picker.pick`
-    /// always has something eligible.
+    /// Build a `BanditState` with one template per situation.
     fn seed_bandit_state() -> BanditState {
         let mut state = BanditState::default();
         for (id, situation) in [
@@ -305,21 +591,28 @@ mod tests {
                     pos_count: 0,
                     neg_count: 0,
                     dismiss_count: 0,
-                    cooldown_days: 0, // no cooldown → always eligible
+                    cooldown_days: 0,
                 },
             );
         }
         state
     }
 
-    /// Count `MessageScheduled` events in the ledger for the given base dir,
-    /// scanning the last 30 days.
+    /// Count `MessageScheduled` events in the ledger.
     fn count_scheduled(base_dir: &std::path::Path) -> usize {
         Ledger::scan_days::<OutboxEvent>(base_dir, 30)
             .into_iter()
             .filter_map(|r| r.ok())
             .filter(|e| matches!(e, OutboxEvent::MessageScheduled { .. }))
             .count()
+    }
+
+    /// Collect all events from the ledger.
+    fn all_events(base_dir: &std::path::Path) -> Vec<OutboxEvent> {
+        Ledger::scan_days::<OutboxEvent>(base_dir, 30)
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .collect()
     }
 
     /// Build a `ProactiveConfig` with the given params.
@@ -340,26 +633,104 @@ mod tests {
         }
     }
 
+    /// Build a clean-body StubLlm via YAML scenarios.
+    fn stub_clean_zh() -> Arc<dyn LlmClient> {
+        Arc::new(
+            StubLlm::from_yaml(
+                r#"
+- match:
+    contains: "situation:"
+  response: "早安。今天想從哪一件小事開始？"
+"#,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// StubLlm that returns banned body on first call, clean on regenerate.
+    ///
+    /// The outbox appends `"\n[regenerate]"` to the user prompt on its retry,
+    /// so we match on that suffix for the second scenario.
+    fn stub_bad_then_clean_zh() -> Arc<dyn LlmClient> {
+        Arc::new(
+            StubLlm::from_yaml(
+                r#"
+- match:
+    contains: "[regenerate]"
+  response: "早安。今天想從哪一件小事開始？"
+- match:
+    contains: "situation:"
+  response: "今天好棒！"
+"#,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// StubLlm that always returns a banned body.
+    fn stub_always_banned_zh() -> Arc<dyn LlmClient> {
+        Arc::new(
+            StubLlm::from_yaml(
+                r#"
+- match:
+    contains: "situation:"
+  response: "今天好棒！"
+"#,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// Build a minimal outbox for tests.
+    fn make_outbox<R: RngCore + Send>(
+        clock: Arc<MockClock>,
+        ledger: Ledger,
+        picker: Picker<R>,
+        proactive: ProactiveConfig,
+        llm: Arc<dyn LlmClient>,
+        notifier: Arc<dyn Notifier>,
+    ) -> Outbox<R> {
+        Outbox::with_picker(
+            clock,
+            ledger,
+            picker,
+            proactive,
+            OutboxConfig {
+                llm,
+                notifier,
+                voice_md: "You are a warm companion.".to_string(),
+                locale: "zh-TW".to_string(),
+            },
+        )
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
+    // M5.3 tests (must remain green after M5.4 changes)
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Test 1: proactive disabled → 24 h sim yields 0 scheduled
-    // ─────────────────────────────────────────────────────────────────────────
-    #[test]
-    fn proactive_disabled_runs_24h_zero_scheduled() {
+    #[tokio::test]
+    async fn proactive_disabled_runs_24h_zero_scheduled() {
         let tmp = TempDir::new().unwrap();
-        // Start at local 08:00 so the clock is mid-morning regardless of TZ.
-        // quiet_hours are disabled so the only gate is `enabled`.
         let base_utc = local_as_utc(2026, 4, 29, 8, 0, 0);
         let clock = Arc::new(MockClock::at(base_utc));
         let ledger = Ledger::open(tmp.path()).unwrap();
         let picker = Picker::with_seed(seed_bandit_state(), 42);
         let proactive = make_proactive(false, 3, None, None);
-        let mut outbox = Outbox::with_picker(clock.clone(), ledger, picker, proactive);
+        let mut outbox = make_outbox(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            stub_clean_zh(),
+            Arc::new(FakeNotifier::delivered()),
+        );
 
-        let ticks = 24 * 60; // 1 tick per minute × 1440 min = 24 h
+        let ticks = 24 * 60;
         for _ in 0..ticks {
             let now_utc = clock.now_utc();
             let now_local = clock.now_local();
-            let outcome = outbox.run_tick(now_utc, now_local);
+            let outcome = outbox.run_tick(now_utc, now_local).await;
             assert!(
                 matches!(
                     outcome,
@@ -379,37 +750,40 @@ mod tests {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Test 2: enabled, cap=3, 12 h window → exactly 3 scheduled
-    // ─────────────────────────────────────────────────────────────────────────
-    #[test]
-    fn enabled_cap3_window12h_yields_exactly_3_scheduled() {
+    // Test 2: enabled, cap=3, 12 h window → exactly 3 MessageScheduled + 3 MessageSent
+    #[tokio::test]
+    async fn enabled_cap3_window12h_yields_exactly_3_scheduled() {
         let tmp = TempDir::new().unwrap();
-        // Start at local 10:00.  Quiet hours: 22:00–23:59 → active window 10:00–22:00 = 12 h.
-        // Using local_as_utc so MockClock::now_local() returns exactly 10:00 local.
         let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
         let clock = Arc::new(MockClock::at(base_utc));
         let ledger = Ledger::open(tmp.path()).unwrap();
         let picker = Picker::with_seed(seed_bandit_state(), 99);
-        // quiet_hours start=22:00 → window ends at local 22:00; 10:00→22:00 = 12 h
         let proactive = make_proactive(true, 3, Some("22:00"), Some("23:59"));
-        let mut outbox = Outbox::with_picker(clock.clone(), ledger, picker, proactive);
+        let notifier = Arc::new(FakeNotifier::delivered());
+        let mut outbox = make_outbox(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            stub_clean_zh(),
+            notifier.clone(),
+        );
 
-        let ticks = 12 * 60; // 720 ticks at 1/min
-        let mut scheduled_count = 0usize;
+        let ticks = 12 * 60;
+        let mut sent_count = 0usize;
         for _ in 0..ticks {
             let now_utc = clock.now_utc();
             let now_local = clock.now_local();
-            let outcome = outbox.run_tick(now_utc, now_local);
-            if matches!(outcome, TickOutcome::Scheduled { .. }) {
-                scheduled_count += 1;
+            let outcome = outbox.run_tick(now_utc, now_local).await;
+            if matches!(outcome, TickOutcome::Sent { .. }) {
+                sent_count += 1;
             }
             clock.advance(Duration::seconds(60));
         }
 
         assert_eq!(
-            scheduled_count, 3,
-            "expected exactly 3 Scheduled outcomes across a 12h window with cap=3"
+            sent_count, 3,
+            "expected exactly 3 Sent outcomes across a 12h window with cap=3"
         );
         assert_eq!(
             count_scheduled(tmp.path()),
@@ -418,31 +792,29 @@ mod tests {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     // Test 3: morning_greeting only fires once per day
-    // ─────────────────────────────────────────────────────────────────────────
-    #[test]
-    fn morning_greeting_only_once_per_day() {
+    #[tokio::test]
+    async fn morning_greeting_only_once_per_day() {
         let tmp = TempDir::new().unwrap();
-        // Start at local 06:30 — hour 6 → weights_by_hour returns morning_greeting
-        // with weight 0.6.  Using local_as_utc so MockClock::now_local().hour() == 6
-        // regardless of the host's timezone.
         let base_utc = local_as_utc(2026, 4, 29, 6, 30, 0);
         let clock = Arc::new(MockClock::at(base_utc));
         let ledger = Ledger::open(tmp.path()).unwrap();
-        // seed=0 → StdRng deterministic; with weight [0.6, 0, 0.4, 0] at hour 6,
-        // the first eligible pick will be MorningGreeting.
         let picker = Picker::with_seed(seed_bandit_state(), 0);
-        // No quiet hours, high cap so we can observe multiple sends.
         let proactive = make_proactive(true, 10, None, None);
-        let mut outbox = Outbox::with_picker(clock.clone(), ledger, picker, proactive);
+        let mut outbox = make_outbox(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            stub_clean_zh(),
+            Arc::new(FakeNotifier::delivered()),
+        );
 
         let mut morning_count = 0usize;
-        // Run for 4 h (hours 6–10) at 5-min intervals = 48 ticks.
         for _ in 0..48 {
             let now_utc = clock.now_utc();
             let now_local = clock.now_local();
-            if let TickOutcome::Scheduled { situation, .. } = outbox.run_tick(now_utc, now_local) {
+            if let TickOutcome::Sent { situation, .. } = outbox.run_tick(now_utc, now_local).await {
                 if situation == Situation::MorningGreeting {
                     morning_count += 1;
                 }
@@ -456,48 +828,250 @@ mod tests {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     // Test 4: day rollover resets counters
-    // ─────────────────────────────────────────────────────────────────────────
-    #[test]
-    fn day_rollover_resets_counters() {
+    #[tokio::test]
+    async fn day_rollover_resets_counters() {
         let tmp = TempDir::new().unwrap();
-        // Start at local 10:00 on day N.  Active window 10:00–22:00 (quiet 22:00+).
         let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
         let clock = Arc::new(MockClock::at(base_utc));
         let ledger = Ledger::open(tmp.path()).unwrap();
         let picker = Picker::with_seed(seed_bandit_state(), 7);
         // cap=1 → only 1 send per day
         let proactive = make_proactive(true, 1, Some("22:00"), Some("23:59"));
-        let mut outbox = Outbox::with_picker(clock.clone(), ledger, picker, proactive);
+        let mut outbox = make_outbox(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            stub_clean_zh(),
+            Arc::new(FakeNotifier::delivered()),
+        );
 
-        // ── Day N: first tick should schedule ─────────────────────────────
-        let outcome_day_n = outbox.run_tick(clock.now_utc(), clock.now_local());
+        // Day N: first tick should send
+        let outcome_day_n = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
         assert!(
-            matches!(outcome_day_n, TickOutcome::Scheduled { .. }),
-            "day N first tick should schedule; got {outcome_day_n:?}"
+            matches!(outcome_day_n, TickOutcome::Sent { .. }),
+            "day N first tick should send; got {outcome_day_n:?}"
         );
         assert_eq!(outbox.sent_today, 1);
 
-        // Advance 25 h → day N+1, 11:00 UTC
+        // Advance 25 h → day N+1
         clock.advance(Duration::hours(25));
 
-        // ── Day N+1: rollover should reset sent_today, and a new send fires ──
-        let outcome_day_n1 = outbox.run_tick(clock.now_utc(), clock.now_local());
+        let outcome_day_n1 = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
         assert_eq!(
             outbox.sent_today, 1,
             "after rollover sent_today should be 1 (just incremented from 0)"
         );
         assert!(
-            matches!(outcome_day_n1, TickOutcome::Scheduled { .. }),
-            "day N+1 first tick should schedule after rollover; got {outcome_day_n1:?}"
+            matches!(outcome_day_n1, TickOutcome::Sent { .. }),
+            "day N+1 first tick should send after rollover; got {outcome_day_n1:?}"
         );
 
-        // Two MessageScheduled events total (one per day).
         assert_eq!(
             count_scheduled(tmp.path()),
             2,
             "ledger should have 2 MessageScheduled events (one per day)"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // M5.4 new tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // M5.4 Test 1: clean body → MessageScheduled → MessageGenerated(regen=0) → MessageSent
+    #[tokio::test]
+    async fn linter_pass_emits_generated_then_sent() {
+        let tmp = TempDir::new().unwrap();
+        let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
+        let clock = Arc::new(MockClock::at(base_utc));
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let picker = Picker::with_seed(seed_bandit_state(), 99);
+        let proactive = make_proactive(true, 5, None, None);
+        let notifier = Arc::new(FakeNotifier::delivered());
+        let mut outbox = make_outbox(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            stub_clean_zh(),
+            notifier.clone(),
+        );
+
+        let now_utc = clock.now_utc();
+        let now_local = clock.now_local();
+        let outcome = outbox.run_tick(now_utc, now_local).await;
+
+        assert!(
+            matches!(outcome, TickOutcome::Sent { .. }),
+            "expected Sent, got {outcome:?}"
+        );
+        assert_eq!(notifier.call_count(), 1, "notifier should have been called once");
+
+        let events = all_events(tmp.path());
+        let has_scheduled = events.iter().any(|e| matches!(e, OutboxEvent::MessageScheduled { .. }));
+        let has_generated = events.iter().any(|e| matches!(
+            e,
+            OutboxEvent::MessageGenerated { regen_count: 0, .. }
+        ));
+        let has_sent = events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. }));
+
+        assert!(has_scheduled, "must have MessageScheduled; events: {events:?}");
+        assert!(has_generated, "must have MessageGenerated(regen_count=0); events: {events:?}");
+        assert!(has_sent, "must have MessageSent; events: {events:?}");
+    }
+
+    // M5.4 Test 2: first generate → banned body → regenerate → clean body → MessageSent
+    #[tokio::test]
+    async fn linter_first_fail_regenerates_then_passes() {
+        let tmp = TempDir::new().unwrap();
+        let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
+        let clock = Arc::new(MockClock::at(base_utc));
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let picker = Picker::with_seed(seed_bandit_state(), 99);
+        let proactive = make_proactive(true, 5, None, None);
+        let notifier = Arc::new(FakeNotifier::delivered());
+        let mut outbox = make_outbox(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            stub_bad_then_clean_zh(),
+            notifier.clone(),
+        );
+
+        let outcome = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+        assert!(
+            matches!(outcome, TickOutcome::Sent { .. }),
+            "expected Sent after regenerate, got {outcome:?}"
+        );
+        assert_eq!(notifier.call_count(), 1);
+
+        let events = all_events(tmp.path());
+
+        // Must have TWO MessageGenerated events: regen_count 0 then 1.
+        let generated_events: Vec<&OutboxEvent> = events
+            .iter()
+            .filter(|e| matches!(e, OutboxEvent::MessageGenerated { .. }))
+            .collect();
+        assert_eq!(
+            generated_events.len(),
+            2,
+            "expected 2 MessageGenerated events; got: {generated_events:?}"
+        );
+        assert!(
+            matches!(generated_events[0], OutboxEvent::MessageGenerated { regen_count: 0, .. }),
+            "first MessageGenerated must have regen_count=0"
+        );
+        assert!(
+            matches!(generated_events[1], OutboxEvent::MessageGenerated { regen_count: 1, .. }),
+            "second MessageGenerated must have regen_count=1"
+        );
+
+        // Final event is MessageSent.
+        assert!(
+            events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
+            "must end with MessageSent"
+        );
+    }
+
+    // M5.4 Test 3: banned body twice → MessageDropped(linter_persistent)
+    #[tokio::test]
+    async fn linter_persistent_drops() {
+        let tmp = TempDir::new().unwrap();
+        let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
+        let clock = Arc::new(MockClock::at(base_utc));
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let picker = Picker::with_seed(seed_bandit_state(), 99);
+        let proactive = make_proactive(true, 5, None, None);
+        let notifier = Arc::new(FakeNotifier::delivered());
+        let mut outbox = make_outbox(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            stub_always_banned_zh(),
+            notifier.clone(),
+        );
+
+        let outcome = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+        assert!(
+            matches!(
+                outcome,
+                TickOutcome::Skipped {
+                    reason: SkipReason::LinterPersistent
+                }
+            ),
+            "expected LinterPersistent, got {outcome:?}"
+        );
+        assert_eq!(notifier.call_count(), 0, "notifier must not be called");
+
+        let events = all_events(tmp.path());
+
+        let generated_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, OutboxEvent::MessageGenerated { .. }))
+            .collect();
+        assert_eq!(
+            generated_events.len(),
+            2,
+            "expected 2 MessageGenerated events for both attempts"
+        );
+
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                OutboxEvent::MessageDropped { reason, .. } if reason == "linter_persistent"
+            )),
+            "must have MessageDropped(linter_persistent)"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
+            "must NOT have MessageSent"
+        );
+    }
+
+    // M5.4 Test 4: notifier fails → MessageDropped(notifier_failed)
+    #[tokio::test]
+    async fn notifier_failed_drops() {
+        let tmp = TempDir::new().unwrap();
+        let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
+        let clock = Arc::new(MockClock::at(base_utc));
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let picker = Picker::with_seed(seed_bandit_state(), 99);
+        let proactive = make_proactive(true, 5, None, None);
+        let notifier = Arc::new(FakeNotifier::failed());
+        let mut outbox = make_outbox(
+            clock.clone(),
+            ledger,
+            picker,
+            proactive,
+            stub_clean_zh(),
+            notifier.clone(),
+        );
+
+        let outcome = outbox.run_tick(clock.now_utc(), clock.now_local()).await;
+        assert!(
+            matches!(
+                outcome,
+                TickOutcome::Skipped {
+                    reason: SkipReason::NotifierFailed
+                }
+            ),
+            "expected NotifierFailed, got {outcome:?}"
+        );
+
+        let events = all_events(tmp.path());
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                OutboxEvent::MessageDropped { reason, .. } if reason == "notifier_failed"
+            )),
+            "must have MessageDropped(notifier_failed)"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, OutboxEvent::MessageSent { .. })),
+            "must NOT have MessageSent"
         );
     }
 }
