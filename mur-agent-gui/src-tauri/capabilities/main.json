@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Capabilities for the settings + logs windows. Frontend never spawns arbitrary shells; the only sidecar is the bundled mur-agent-runtime, spawned from Rust via tauri-plugin-shell's typed `sidecar()` API which does NOT need shell:allow-execute. Webview-side spawn permissions are intentionally omitted.",
+  "windows": ["settings", "logs"],
+  "_": "Both windows share the same capability set; the React frontend chooses which view to render based on getCurrent().label.",
+  "permissions": [
+    "core:default",
+    "store:default",
+    "dialog:default",
+    "fs:default",
+    "process:allow-exit",
+    "process:allow-restart",
+    "autostart:default"
+  ]
+}
