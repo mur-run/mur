@@ -27,7 +27,7 @@
 //! See spec: `docs/superpowers/specs/2026-04-29-mur-agent-gui-export-design.md`
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
+use mur_common::bundle::{BundleMode, EmbeddedMetadata};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -51,22 +51,9 @@ pub struct ExportGuiOptions {
     pub skip_notarize: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BundleMode {
-    Template,
-    Clone,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddedMetadata {
-    pub schema_version: u32,
-    pub agent_name: String,
-    pub display_name: String,
-    pub mode: BundleMode,
-    pub theme_default: String,
-    pub mur_version: String,
-}
+// BundleMode + EmbeddedMetadata moved to mur_common::bundle so the
+// reader (mur-agent-gui's bootstrap module) can never drift from
+// the writer (this file).
 
 /// Public entry point — invoked from `cmd::agent::cmd_export` when
 /// `--format gui` is selected.
@@ -80,11 +67,9 @@ pub fn run(opts: ExportGuiOptions) -> Result<()> {
 
     // SECURITY: Clone mode embeds identity.{key,pub} in the payload
     // and currently does NOT run the rekey ceremony on first launch
-    // (the bootstrap module's run_clone_rekey is a stub). Until the
-    // ceremony lands, refuse to ship clone-mode bundles to anyone
-    // other than the operator producing them — surface a loud
-    // stderr warning + require MUR_ALLOW_UNSAFE_CLONE=1 env to
-    // proceed. See PR #41 review § Important #9.
+    // (bootstrap::run_clone_rekey is a stub). Until the ceremony
+    // lands, refuse to ship clone-mode bundles to anyone other than
+    // the operator producing them — require MUR_ALLOW_UNSAFE_CLONE=1.
     if opts.clone_identity && std::env::var("MUR_ALLOW_UNSAFE_CLONE").is_err() {
         bail!(
             "clone-mode bundle would ship the source agent's private key without \
@@ -117,10 +102,23 @@ pub fn run(opts: ExportGuiOptions) -> Result<()> {
     let _guard = ConfRestoreGuard;
 
     // Wrap phases 5-13 so we always restore tauri.conf.json on the way
-    // out, even on error.
+    // out, even on error. Phases 5 (build_sidecar — cargo) and 6
+    // (build_frontend — npm) share no inputs/outputs so they run in
+    // parallel scoped threads; saves ~30–60 s wall-clock per export.
     let result = (|| -> Result<()> {
-        phase_5_build_sidecar(&opts, &staging)?;
-        phase_6_build_frontend(&opts, &staging)?;
+        std::thread::scope(|s| -> Result<()> {
+            let opts_5 = &opts;
+            let staging_5 = staging.as_path();
+            let opts_6 = &opts;
+            let staging_6 = staging.as_path();
+            let h5 = s.spawn(move || phase_5_build_sidecar(opts_5, staging_5));
+            let h6 = s.spawn(move || phase_6_build_frontend(opts_6, staging_6));
+            h5.join()
+                .map_err(|_| anyhow!("build_sidecar thread panicked"))??;
+            h6.join()
+                .map_err(|_| anyhow!("build_frontend thread panicked"))??;
+            Ok(())
+        })?;
         phase_7_tauri_build(&opts, &staging)?;
         phase_8_codesign(&opts, &staging)?;
         phase_9_notarize(&opts, &staging)?;
@@ -195,7 +193,6 @@ fn phase_2_prepare_payload(opts: &ExportGuiOptions, staging: &Path) -> Result<Bu
     // source agent's private key would be a class-A foot-gun
     // (see Cisco SSH host-key incident). Bootstrap mints a fresh
     // keypair anyway, so stripping is pure defence-in-depth.
-    // See PR #41 review § Important #8.
     let raw_pkg = staging.join("agent.murpkg.tar.gz");
     mur_agent_runtime::export::pkg::export_to_pkg(&opts.agent_home, &raw_pkg)?;
 
@@ -379,7 +376,6 @@ fn phase_4_rewrite_tauri_conf(
     // bail loudly if a future template change breaks that assumption
     // (silently skipping would produce a bundle without the payload
     // and phase 7 would emit an artifact that won't bootstrap).
-    // See PR #41 review § Minor #17.
     let bundle = conf
         .get_mut("bundle")
         .ok_or_else(|| anyhow!("tauri.conf.json: missing `bundle` block"))?;
@@ -728,7 +724,6 @@ fn staging_dir(agent_name: &str) -> Result<PathBuf> {
 /// Best-effort sweep of `~/.cache/mur/export-gui/<agent>-<pid>/`
 /// directories left by previous runs that crashed or were killed.
 /// Never bails — if a sibling export is racing, just leaves it.
-/// Per PR #41 review § Minor #18.
 fn sweep_stale_staging(root: &Path, current_agent: &str) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
