@@ -7,4 +7,5 @@ pub mod i18n;
 pub mod picker;
 pub mod schedule;
 pub mod situations;
+pub mod telemetry;
 pub mod voice;
