@@ -69,3 +69,15 @@ The canonical live example lives in
 ### When the fix lands
 
 Once qdrant-client publishes a release that uses tonic 0.13+ (axum 0.8), bump `qdrant-client` in `mur-core/Cargo.toml`, verify `cargo tree --workspace -i axum` shows only one version, then rewrite `loopback_only` (and any other middleware that used this workaround) back to the natural extractor parameter form.
+
+## Insta snapshot tests
+
+Run snapshot tests:
+
+    cargo test -p mur-agent-runtime --test voice_snapshots
+
+If a snapshot mismatch occurs, review the diff with:
+
+    cargo insta review
+
+CI sets `INSTA_UPDATE=no` so a missing or stale snapshot fails the build.
