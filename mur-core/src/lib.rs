@@ -4,8 +4,17 @@
 //! retrieval, and evolution. Used by the `mur` CLI binary
 //! and by MUR Commander (daemon).
 
+pub mod agent_admin;
 pub mod auth;
 pub mod capture;
+// `cmd` is shared with the binary (`main.rs`). When compiled as part of the
+// library, most CLI dispatch fns are unreachable — they're only invoked by
+// the binary's clap parser — so `dead_code` warnings here are expected.
+// `agent_admin` calls into the small subset (perm/mcp/skill/prompt mutators
+// + helpers like `load_profile_for_edit`).
+#[doc(hidden)]
+#[allow(dead_code)]
+pub mod cmd;
 pub mod community;
 pub mod context_api;
 pub mod conversations;

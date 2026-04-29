@@ -232,7 +232,7 @@ fn resolve_skill_id<'a>(profile: &'a _AgentProfile, query: &str) -> Option<&'a S
     None
 }
 
-fn resolve_mur_home() -> Result<PathBuf> {
+pub(crate) fn resolve_mur_home() -> Result<PathBuf> {
     if let Some(v) = std::env::var_os("MUR_HOME") {
         return Ok(PathBuf::from(v));
     }
@@ -826,7 +826,7 @@ fn darwin_plist(name: &str, symlink: &Path) -> String {
 
 // ─── mcp add/list/remove/rename ──────────────────────────────────────────
 
-fn load_profile_for_edit(name: &str) -> Result<(PathBuf, _AgentProfile)> {
+pub(crate) fn load_profile_for_edit(name: &str) -> Result<(PathBuf, _AgentProfile)> {
     let mur_home = resolve_mur_home()?;
     let path = mur_home.join("agents").join(name).join("profile.yaml");
     if !path.exists() {
@@ -838,7 +838,7 @@ fn load_profile_for_edit(name: &str) -> Result<(PathBuf, _AgentProfile)> {
     Ok((path, profile))
 }
 
-fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<()> {
+pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<()> {
     profile.updated_at = chrono::Utc::now().to_rfc3339();
     let yaml = serde_yaml_ng::to_string(profile).context("serialize profile.yaml")?;
     write_atomic(path, yaml.as_bytes())
@@ -927,7 +927,7 @@ pub fn cmd_mcp_rename(name: &str, old: &str, new: &str) -> Result<()> {
 
 // ─── perm: show + mutators ───────────────────────────────────────────────
 
-fn warn_if_running(name: &str) {
+pub(crate) fn warn_if_running(name: &str) {
     let mur_home = match resolve_mur_home() {
         Ok(p) => p,
         Err(_) => return,
@@ -1222,7 +1222,7 @@ pub fn cmd_skill_show(name: &str, query: &str) -> Result<()> {
 
 // ─── prompt show/edit/set ────────────────────────────────────────────────
 
-fn prompt_path_for(name: &str) -> Result<PathBuf> {
+pub(crate) fn prompt_path_for(name: &str) -> Result<PathBuf> {
     let mur_home = resolve_mur_home()?;
     let dir = mur_home.join("agents").join(name);
     if !dir.exists() {

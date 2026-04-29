@@ -1,10 +1,12 @@
 pub(crate) mod agent;
 pub(crate) mod agent_companion;
+pub(crate) mod agent_export_gui;
 pub(crate) mod agent_rekey;
 pub(crate) mod community_cmd;
 pub(crate) mod context;
 pub(crate) mod conversations_cmd;
 pub(crate) mod deploy;
+pub(crate) mod doctor;
 pub(crate) mod drafts;
 pub(crate) mod evolve_cmd;
 pub(crate) mod init;

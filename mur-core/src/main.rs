@@ -967,16 +967,29 @@ enum AgentAction {
         #[command(subcommand)]
         action: AgentPermAction,
     },
-    /// Export an agent to a .murpkg or self-contained binary
+    /// Export an agent to a .murpkg, self-contained binary, or click-to-launch GUI app
     Export {
         /// Agent name
         name: String,
-        /// Output path (e.g. agent.murpkg or my_agent)
+        /// Output path (e.g. agent.murpkg, my_agent, or MyAgent.app)
         #[arg(long, short = 'o')]
         out: String,
-        /// Format: "pkg" (default) or "bin"
+        /// Format: "pkg" (default), "bin", or "gui"
         #[arg(long, default_value = "pkg")]
         format: String,
+        /// (gui only) Default theme baked into the bundle
+        #[arg(long, default_value = "light")]
+        theme: String,
+        /// (gui only) Override theme's app icon with this PNG
+        #[arg(long)]
+        icon: Option<String>,
+        /// (gui only) Embed identity.{key,pub} so recipient inherits identity
+        /// (rekeys on first launch). Default: template mode mints fresh keys.
+        #[arg(long)]
+        clone_identity: bool,
+        /// (gui only) Skip macOS codesign + notarization (testing only)
+        #[arg(long)]
+        skip_notarize: bool,
     },
     /// Aggregate telemetry counters from <agent_home>/telemetry/*.jsonl
     Stats {
@@ -993,6 +1006,15 @@ enum AgentAction {
     },
     /// Manage companion (warm voice + optional proactive messaging).
     Companion(cmd::agent_companion::CompanionArgs),
+    /// Run prereq checks for export targets (no build, just diagnostics)
+    Doctor {
+        /// What format the doctor should validate prereqs for: "gui" / "bin" / "pkg" / "all"
+        #[arg(long, default_value = "all")]
+        format: String,
+        /// Emit JSON instead of human text
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1534,12 +1556,40 @@ async fn async_main() -> Result<()> {
                     cmd::agent::cmd_perm_set_limit(&name, &key, value)?
                 }
             },
-            AgentAction::Export { name, out, format } => {
-                cmd::agent::cmd_export(&name, &out, &format)?
+            AgentAction::Export {
+                name,
+                out,
+                format,
+                theme,
+                icon,
+                clone_identity,
+                skip_notarize,
+            } => {
+                if format == "gui" {
+                    use std::path::PathBuf;
+                    let mur_home = mur_core::paths::mur_root(None);
+                    let agent_home = mur_home.join("agents").join(&name);
+                    if !agent_home.exists() {
+                        anyhow::bail!("agent '{name}' not found at {}", agent_home.display());
+                    }
+                    let opts = cmd::agent_export_gui::ExportGuiOptions {
+                        agent_name: name.clone(),
+                        agent_home,
+                        out: PathBuf::from(&out),
+                        theme,
+                        icon: icon.map(PathBuf::from),
+                        clone_identity,
+                        skip_notarize,
+                    };
+                    cmd::agent_export_gui::run(opts)?;
+                } else {
+                    cmd::agent::cmd_export(&name, &out, &format)?;
+                }
             }
             AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
             AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
             AgentAction::Companion(args) => cmd::agent_companion::run(args).await?,
+            AgentAction::Doctor { format, json } => cmd::doctor::run(&format, json)?,
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
