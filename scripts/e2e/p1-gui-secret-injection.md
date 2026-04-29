@@ -58,9 +58,20 @@ Cannot be automated end-to-end because it requires:
    open ~/Desktop/Kelp.app
    ```
 
-7. From the GUI's Status tab, send a real chat message. (Or, in a
+7. **Check the Model tab.** Navigate to the Model tab — confirm:
+   - The list shows `anthropic_test` (and any other registry entries).
+   - The active radio button is on `anthropic_test`.
+   - The status pill reads "✓ ready" (i.e. `secret.check()` resolved
+     the keychain item written in step 4).
+
+   If the secret pill reads "✗ secret not set" instead, click the
+   "Update secret" button and paste the value into the modal. This is
+   the in-app shortcut for step 4 — useful when the user installed the
+   .app on a different machine.
+
+8. **Send a real chat.** From the Status tab, send a message — or, in a
    *clean* shell with **no** `ANTHROPIC_API_KEY` set, run
-   `mur agent send kelp 'hello'`.)
+   `mur agent send kelp 'hello'`.
 
 ## Expected
 
