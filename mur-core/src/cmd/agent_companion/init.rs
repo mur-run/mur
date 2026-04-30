@@ -151,10 +151,49 @@ fn load_answers(path: &Path) -> Result<Answers> {
         .with_context(|| format!("parse answers {}", path.display()))
 }
 
-/// Three-step interactive wizard. Mirrors the `--answers` shape so the
-/// downstream atomic-write code path is identical.
+/// Five-step interactive wizard (D2 onboarding §M2.3.2). Mirrors the
+/// `--answers` shape so the downstream atomic-write code path is identical.
+///
+/// Steps:
+/// 1. Name the agent (`agent_display_name`).
+/// 2. Voice — consent only; the actual picker lives in the GUI.
+/// 3. Locale + `name_for_user` + relationship (with example greeting).
+/// 4. First memory — one optional fact.
+/// 5. Three-tier proactive permission (`ProactiveTier`).
+///
+/// Wraps the whole flow in an `Instant` and prints `"Elapsed {n}s."` as a
+/// soft acceptance gate; the M2.8.1 E2E script enforces ≤ 120s on the
+/// `--answers` path.
 fn run_wizard() -> Result<Answers> {
-    // Step 1: locale + name.
+    use std::time::Instant;
+    let started = Instant::now();
+
+    // Step 1 — display name. The user names *the agent*, not themselves.
+    let agent_display_name: String = Input::new()
+        .with_prompt("What should this agent be called? (display name)")
+        .interact_text()
+        .context("read agent display name")?;
+
+    // Step 2 — voice consent. The CLI doesn't open a picker; the actual
+    // voice file is selected in Settings → Voice in the GUI. This step
+    // records intent only.
+    let voice_choices = [
+        "Skip — enable voice later in Settings",
+        "Enable voice (opens picker)",
+    ];
+    let v_idx = Select::new()
+        .with_prompt("Voice (we never send audio off your machine)")
+        .items(&voice_choices)
+        .default(0)
+        .interact()
+        .context("voice choice")?;
+    if v_idx == 1 {
+        println!(
+            "(open Settings → Voice in the GUI to pick a voice; the CLI just records consent)"
+        );
+    }
+
+    // Step 3 — locale + name_for_user + relationship.
     let locale: String = Input::new()
         .with_prompt("Language (BCP-47, e.g. zh-TW)")
         .default(default_locale())
@@ -164,8 +203,6 @@ fn run_wizard() -> Result<Answers> {
         .with_prompt("What should I call you?")
         .interact_text()
         .context("read name")?;
-
-    // Step 2: relationship slot + example greeting.
     let choices = ["Friend", "Coach", "Accountability buddy", "Mentor"];
     let idx = Select::new()
         .with_prompt("How should this agent relate to you?")
@@ -183,8 +220,40 @@ fn run_wizard() -> Result<Answers> {
         println!("{example}");
     }
 
-    // Step 3: earned-permission narrative (print only).
+    // Step 4 — first memory. Empty input is allowed and stored as `None`.
+    let raw_memory: String = Input::new()
+        .with_prompt("Share one fact about you, in a sentence")
+        .with_initial_text("")
+        .allow_empty(true)
+        .interact_text()
+        .context("read first_memory")?;
+    let first_memory = if raw_memory.trim().is_empty() {
+        None
+    } else {
+        Some(raw_memory)
+    };
+
+    // Step 5 — three-tier proactive.
+    let tier_choices = [
+        "Warm voice only (recommended)",
+        "Warm voice + collect rhythm (no proactive sends)",
+        "All — including occasional proactive check-ins",
+    ];
+    let t_idx = Select::new()
+        .with_prompt("How should I behave?")
+        .items(&tier_choices)
+        .default(0)
+        .interact()
+        .context("select proactive tier")?;
+    let proactive_tier = Some(match t_idx {
+        0 => ProactiveTier::WarmOnly,
+        1 => ProactiveTier::WarmAndBehavior,
+        _ => ProactiveTier::All,
+    });
+
+    // Earned-permission narrative (print only).
     print_narrative(&locale);
+    println!("Elapsed {}s.", started.elapsed().as_secs());
 
     Ok(Answers {
         locale,
@@ -192,11 +261,9 @@ fn run_wizard() -> Result<Answers> {
         relationship,
         formality: Some(Formality::Casual),
         extra_instructions: Some(String::new()),
-        // M2.3.2 will collect these in the interactive wizard. Until then
-        // the 3-step path leaves them unset, matching pre-D2 behaviour.
-        agent_display_name: None,
-        first_memory: None,
-        proactive_tier: None,
+        agent_display_name: Some(agent_display_name),
+        first_memory,
+        proactive_tier,
     })
 }
 
