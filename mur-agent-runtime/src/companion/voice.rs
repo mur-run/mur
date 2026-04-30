@@ -76,22 +76,27 @@ fn read_template_file(p: &Path) -> Option<String> {
 }
 
 fn apply_placeholders(tpl: &str, locale_used: &str, input: &VoiceInput<'_>) -> String {
-    let mut tpl = tpl
-        .replace("{{NAME_FOR_USER}}", input.name_for_user)
-        .replace("{{FORMALITY}}", input.formality)
-        .replace("{{EXTRA_INSTRUCTIONS}}", input.extra_instructions)
-        .replace("{{LOCALE}}", locale_used);
+    // Substitute template-defined placeholders (first_memory, locale) FIRST so
+    // that user-supplied values (name_for_user, formality, extra_instructions)
+    // — which are free-form input from the onboarding wizard — cannot inject
+    // additional `{{...}}` tokens that would be re-substituted on a later pass.
+    // `Some("")` is treated identically to `None` (an empty memory is
+    // semantically not-set; collapses cleanly in paragraph form).
+    let mut tpl = tpl.replace("{{LOCALE}}", locale_used);
     match input.first_memory {
-        Some(fm) => {
+        Some(fm) if !fm.is_empty() => {
             tpl = tpl.replace("{{FIRST_MEMORY}}", fm);
             tpl = tpl.replace("{{FIRST_MEMORY_PARAGRAPH}}", &format!(" {fm}"));
         }
-        None => {
+        _ => {
             tpl = tpl.replace("{{FIRST_MEMORY}}", "");
             tpl = tpl.replace("{{FIRST_MEMORY_PARAGRAPH}}", "");
         }
     }
-    tpl
+    // User-supplied fields go LAST so any `{{...}}` they contain stays literal.
+    tpl.replace("{{NAME_FOR_USER}}", input.name_for_user)
+        .replace("{{FORMALITY}}", input.formality)
+        .replace("{{EXTRA_INSTRUCTIONS}}", input.extra_instructions)
 }
 
 /// Test-only helper exposing the placeholder substitution logic directly so
