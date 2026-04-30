@@ -142,7 +142,7 @@ fn rekey_with_suspect_compromise_reason_records_in_jsonl() {
     rekey(home.path(), "rekey_reason", "suspect-compromise");
 
     let jsonl = std::fs::read_to_string(agent_dir.join("rotations.jsonl")).unwrap();
-    let last_line = jsonl.lines().filter(|l| !l.is_empty()).last().unwrap();
+    let last_line = jsonl.lines().rfind(|l| !l.is_empty()).unwrap();
     let v: serde_json::Value = serde_json::from_str(last_line).unwrap();
     assert_eq!(v["reason"], "suspect_compromise");
 }
