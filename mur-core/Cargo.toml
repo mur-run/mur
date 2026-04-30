@@ -36,6 +36,7 @@ notify = "6"
 oauth2 = { version = "4", features = ["reqwest"] }
 governor = "0.6"
 keyring = "3"
+rpassword = "7"
 fs2 = "0.4"
 walkdir = "2"
 aho-corasick = "1"

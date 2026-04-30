@@ -217,13 +217,14 @@ async fn paused_until_blocks_until_expiry() {
     // ── Advance 2h — pause has expired. ──────────────────────────────────────
     h.advance(Duration::hours(2));
     let outcome2 = h.tick().await;
-    match outcome2 {
-        TickOutcome::Skipped {
-            reason: SkipReason::GateBlocked(BlockReason::Paused),
-        } => {
-            panic!("should NOT be blocked by Paused after expiry");
-        }
-        // Any other outcome (Sent, ScheduleNotReady, NoSituation, etc.) is fine.
-        _ => {}
-    }
+    // Any other outcome (Sent, ScheduleNotReady, NoSituation, etc.) is fine.
+    assert!(
+        !matches!(
+            outcome2,
+            TickOutcome::Skipped {
+                reason: SkipReason::GateBlocked(BlockReason::Paused),
+            }
+        ),
+        "should NOT be blocked by Paused after expiry, got {outcome2:?}"
+    );
 }

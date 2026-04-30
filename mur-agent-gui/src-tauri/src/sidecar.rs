@@ -54,13 +54,23 @@ impl SidecarManager {
             return Ok(()); // already running
         }
 
-        let cmd = app
+        // Resolve the active model's secret synchronously (we're already
+        // inside Tauri's runtime; block_on on the helper is fine).
+        let secret_envs = tauri::async_runtime::block_on(resolve_secrets_for_agent(agent_name));
+        for (k, _) in &secret_envs {
+            info!(env_key = %k, "injecting resolved secret into sidecar env");
+        }
+
+        let mut cmd = app
             .shell()
             .sidecar("mur-agent-runtime")
             .context("create sidecar command (mur-agent-runtime)")?
             .args(["--profile", agent_name])
             .env("PATH", augmented_path())
             .env("MUR_GUI_AGENT_NAME", agent_name);
+        for (k, v) in secret_envs {
+            cmd = cmd.env(k, v);
+        }
 
         let (mut rx, child) = cmd.spawn().context("spawn sidecar")?;
         info!(pid = child.pid(), agent = %agent_name, "sidecar spawned");
@@ -236,4 +246,64 @@ mod tests {
             assert!(path.contains("/usr/local/bin"));
         }
     }
+}
+
+/// Look up the agent's `model_ref`, find the matching registry entry, resolve
+/// its `SecretRef` if any, and return `(env_var_name, value)` pairs to inject
+/// into the sidecar's environment. Errors are swallowed at every step — the
+/// sidecar still launches without secrets, falling back to its own `from_env`
+/// path or an echo runner.
+async fn resolve_secrets_for_agent(agent_name: &str) -> Vec<(String, String)> {
+    use mur_common::agent::AgentProfile;
+    use mur_common::model::ModelRegistry;
+    use secrecy::ExposeSecret;
+
+    let Some(home) = dirs::home_dir() else {
+        return vec![];
+    };
+    let pyaml = home.join(format!(".mur/agents/{agent_name}/profile.yaml"));
+    let Ok(body) = std::fs::read_to_string(&pyaml) else {
+        return vec![];
+    };
+    let profile: AgentProfile = match serde_yaml_ng::from_str(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(error = %e, agent = %agent_name, "parse profile.yaml");
+            return vec![];
+        }
+    };
+    let Some(model_ref) = profile.model_ref else {
+        return vec![];
+    };
+    let reg_path = match ModelRegistry::default_path() {
+        Ok(p) => p,
+        Err(_) => return vec![],
+    };
+    let reg = match ModelRegistry::load_from(&reg_path) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "load model registry");
+            return vec![];
+        }
+    };
+    let Some(entry) = reg.models.get(&model_ref) else {
+        warn!(model_ref = %model_ref, "model_ref not in registry");
+        return vec![];
+    };
+    let Some(secret) = entry.secret.as_ref() else {
+        return vec![];
+    };
+    let resolved = match secret.resolve().await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(error = %e, "resolve secret for sidecar");
+            return vec![];
+        }
+    };
+    let env_var = match entry.provider.as_str() {
+        "anthropic" => "ANTHROPIC_API_KEY",
+        "openai" => "OPENAI_API_KEY",
+        _ => return vec![],
+    };
+    vec![(env_var.to_string(), resolved.expose_secret().to_string())]
 }
