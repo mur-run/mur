@@ -1241,10 +1241,10 @@ mod tests {
         for _ in 0..48 {
             let now_utc = clock.now_utc();
             let now_local = clock.now_local();
-            if let TickOutcome::Sent { situation, .. } = outbox.run_tick(now_utc, now_local).await {
-                if situation == Situation::MorningGreeting {
-                    morning_count += 1;
-                }
+            if let TickOutcome::Sent { situation, .. } = outbox.run_tick(now_utc, now_local).await
+                && situation == Situation::MorningGreeting
+            {
+                morning_count += 1;
             }
             clock.advance(Duration::minutes(5));
         }

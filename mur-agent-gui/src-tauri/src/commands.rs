@@ -188,6 +188,28 @@ pub struct ThemeInfo {
     pub kind: String,
 }
 
+#[derive(Serialize)]
+pub struct AppliedTheme {
+    pub name: String,
+    pub display_name: String,
+    pub kind: String,
+    pub colors: std::collections::BTreeMap<String, String>,
+}
+
+fn to_applied(def: crate::theme::ThemeDef) -> AppliedTheme {
+    let display_name = def
+        .display_name
+        .get("default")
+        .cloned()
+        .unwrap_or_else(|| def.name.clone());
+    AppliedTheme {
+        name: def.name,
+        display_name,
+        kind: def.kind,
+        colors: def.colors,
+    }
+}
+
 #[tauri::command]
 pub fn list_themes(app: tauri::AppHandle) -> Result<Vec<ThemeInfo>, String> {
     use tauri::Manager;
@@ -197,9 +219,103 @@ pub fn list_themes(app: tauri::AppHandle) -> Result<Vec<ThemeInfo>, String> {
 }
 
 #[tauri::command]
-pub fn set_theme(app: tauri::AppHandle, name: String) -> Result<(), String> {
+pub fn set_theme(app: tauri::AppHandle, name: String) -> Result<AppliedTheme, String> {
     use tauri::Manager;
     let resource_dir = app.path().resource_dir().ok();
     let root = crate::theme::resolve_themes_root(resource_dir.as_deref());
-    crate::theme::activate(&root, &name).map_err(err)
+    let def = crate::theme::activate(&root, &name).map_err(err)?;
+    Ok(to_applied(def))
+}
+
+#[tauri::command]
+pub fn get_default_theme(app: tauri::AppHandle) -> Result<AppliedTheme, String> {
+    use tauri::Manager;
+    let resource_dir = app.path().resource_dir().ok();
+    let root = crate::theme::resolve_themes_root(resource_dir.as_deref());
+    let name = std::env::var("MUR_GUI_THEME_DEFAULT").unwrap_or_else(|_| "light".to_string());
+    let def = crate::theme::activate(&root, &name).map_err(err)?;
+    Ok(to_applied(def))
+}
+
+// ── Model registry commands (PR-5 / Task 5.1) ─────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct ModelEntryView {
+    pub name: String,
+    pub provider: String,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub secret_ref: Option<String>,
+    /// `None` = no secret needed; `Some(true/false)` = check() result.
+    pub secret_status: Option<bool>,
+    pub capabilities: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn list_models() -> Result<Vec<ModelEntryView>, String> {
+    use mur_common::model::ModelRegistry;
+    let path = ModelRegistry::default_path().map_err(|e| e.to_string())?;
+    let reg = ModelRegistry::load_from(&path).map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(reg.models.len());
+    for (name, e) in &reg.models {
+        let secret_status = match &e.secret {
+            Some(s) => Some(s.check().await),
+            None => None,
+        };
+        out.push(ModelEntryView {
+            name: name.clone(),
+            provider: e.provider.clone(),
+            model: e.model.clone(),
+            base_url: e.base_url.clone(),
+            secret_ref: e.secret.as_ref().map(|s| s.to_string()),
+            secret_status,
+            capabilities: e.capabilities.clone(),
+        });
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn get_active_model_ref() -> Result<Option<String>, String> {
+    let agent = agent_name();
+    let pyaml = dirs::home_dir()
+        .ok_or_else(|| "no HOME".to_string())?
+        .join(format!(".mur/agents/{agent}/profile.yaml"));
+    let body = std::fs::read_to_string(&pyaml).map_err(|e| e.to_string())?;
+    let p: mur_common::agent::AgentProfile =
+        serde_yaml_ng::from_str(&body).map_err(|e| e.to_string())?;
+    Ok(p.model_ref)
+}
+
+#[tauri::command]
+pub fn set_active_model_ref(name: String) -> Result<(), String> {
+    let agent = agent_name();
+    let pyaml = dirs::home_dir()
+        .ok_or_else(|| "no HOME".to_string())?
+        .join(format!(".mur/agents/{agent}/profile.yaml"));
+    let body = std::fs::read_to_string(&pyaml).map_err(|e| e.to_string())?;
+    let mut p: mur_common::agent::AgentProfile =
+        serde_yaml_ng::from_str(&body).map_err(|e| e.to_string())?;
+    p.model_ref = Some(name);
+    let new = serde_yaml_ng::to_string(&p).map_err(|e| e.to_string())?;
+    let tmp = pyaml.with_extension("yaml.tmp");
+    std::fs::write(&tmp, new).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &pyaml).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_secret(secret: String, value: String) -> Result<(), String> {
+    use mur_common::secret::{SecretRef, keychain_set};
+    let s: SecretRef = secret
+        .parse()
+        .map_err(|e: mur_common::secret::SecretError| e.to_string())?;
+    match s {
+        SecretRef::Keychain { service, account } => keychain_set(&service, &account, &value)
+            .await
+            .map_err(|e| e.to_string()),
+        SecretRef::Env(_) | SecretRef::File(_) | SecretRef::Cmd(_) => {
+            Err("set_secret only writes to keychain refs".into())
+        }
+    }
 }

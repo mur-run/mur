@@ -32,6 +32,7 @@ struct BannedThenCleanStub {
 }
 
 impl BannedThenCleanStub {
+    #[allow(clippy::new_ret_no_self)]
     fn new() -> Arc<dyn LlmClient> {
         Arc::new(Self {
             calls: Mutex::new(0),
@@ -346,10 +347,10 @@ async fn morning_greeting_caps_once_per_local_day() {
     // Drive 48 ticks, 5 minutes apart (4 h total), counting MorningGreeting sends.
     let mut morning_count = 0usize;
     for _ in 0..48 {
-        if let TickOutcome::Sent { situation, .. } = h.tick().await {
-            if situation == Situation::MorningGreeting {
-                morning_count += 1;
-            }
+        if let TickOutcome::Sent { situation, .. } = h.tick().await
+            && situation == Situation::MorningGreeting
+        {
+            morning_count += 1;
         }
         h.advance(Duration::minutes(5));
     }

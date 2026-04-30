@@ -16,7 +16,7 @@
         "height": 560,
         "resizable": true,
         "fullscreen": false,
-        "visible": false
+        "visible": true
       },
       {
         "label": "logs",
@@ -28,11 +28,6 @@
         "visible": false
       }
     ],
-    "trayIcon": {
-      "iconPath": "themes/light/tray-template.png",
-      "iconAsTemplate": true,
-      "menuOnLeftClick": false
-    },
     "security": {
       "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }

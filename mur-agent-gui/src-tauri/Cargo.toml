@@ -6,6 +6,11 @@ license = "MIT"
 repository = "https://github.com/mur-run/mur"
 description = "Tauri 2 desktop shell for a single mur agent"
 
+# Mark as a standalone workspace so cargo doesn't walk past
+# `.worktrees/<name>/Cargo.toml` (which excludes mur-agent-gui) and accidentally
+# attach to the main repo's root workspace when building from a worktree.
+[workspace]
+
 # Library required by Tauri build for binding generation.
 [lib]
 name = "mur_agent_gui_lib"
@@ -39,6 +44,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 dirs = "6"
+secrecy = "0.10"
+serde_yaml_ng = "0.10"
 tokio = { version = "1", features = ["time", "signal", "macros"] }
 flate2 = "1"
 tar = "0.4"
