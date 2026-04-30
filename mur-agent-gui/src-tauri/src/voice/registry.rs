@@ -68,11 +68,7 @@ impl VoiceRegistry {
         self.voices.get(voice_id)
     }
 
-    pub async fn install(
-        &mut self,
-        manifest: &VoiceManifest,
-        install_dir: PathBuf,
-    ) -> Result<()> {
+    pub async fn install(&mut self, manifest: &VoiceManifest, install_dir: PathBuf) -> Result<()> {
         self.voices.insert(
             manifest.voice_id.clone(),
             InstalledVoice {
@@ -196,7 +192,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut reg = VoiceRegistry::load(dir.path()).await.unwrap();
         let target = reg.voices_dir.join("af_heart");
-        reg.install(&fake_voice("af_heart"), target.clone()).await.unwrap();
+        reg.install(&fake_voice("af_heart"), target.clone())
+            .await
+            .unwrap();
         assert_eq!(reg.default_voice_id.as_deref(), Some("af_heart"));
 
         // Reopen from disk; default + installed entry survive.
@@ -247,7 +245,10 @@ mod tests {
     async fn stt_model_path_detects_installed_weights() {
         let dir = tempdir().unwrap();
         let reg = VoiceRegistry::load(dir.path()).await.unwrap();
-        let stt_dir = reg.voices_dir.join("_stt").join("whisper-large-v3-turbo-q5_1");
+        let stt_dir = reg
+            .voices_dir
+            .join("_stt")
+            .join("whisper-large-v3-turbo-q5_1");
         std::fs::create_dir_all(&stt_dir).unwrap();
         std::fs::write(stt_dir.join("ggml-large-v3-turbo-q5_1.bin"), b"x").unwrap();
         assert!(reg.stt_model_path().is_some());
