@@ -63,29 +63,44 @@ fn onboarding_state_pre_d2_yaml_still_deserializes() {
 
 #[test]
 fn proactive_tiers_helper() {
-    use mur_common::agent::{CompanionConfig, ProactiveTiers};
+    use mur_common::agent::{CompanionConfig, ProactiveTier};
     let mut c = CompanionConfig::default();
     c.enabled = true;
-    let t = ProactiveTiers::from_config(&c);
-    assert_eq!(t, ProactiveTiers::WarmOnly);
+    let t = ProactiveTier::from_config(&c);
+    assert_eq!(t, ProactiveTier::WarmOnly);
 
     c.rhythm.enabled = true;
-    let t = ProactiveTiers::from_config(&c);
-    assert_eq!(t, ProactiveTiers::WarmAndBehavior);
+    let t = ProactiveTier::from_config(&c);
+    assert_eq!(t, ProactiveTier::WarmAndBehavior);
 
     c.proactive.enabled = true;
-    let t = ProactiveTiers::from_config(&c);
-    assert_eq!(t, ProactiveTiers::All);
+    let t = ProactiveTier::from_config(&c);
+    assert_eq!(t, ProactiveTier::All);
 }
 
 #[test]
 fn proactive_tiers_apply_round_trip() {
-    use mur_common::agent::{CompanionConfig, ProactiveTiers};
+    use mur_common::agent::{CompanionConfig, ProactiveTier};
     let mut c = CompanionConfig::default();
-    ProactiveTiers::All.apply(&mut c);
+    ProactiveTier::All.apply(&mut c);
     assert!(c.enabled && c.rhythm.enabled && c.proactive.enabled);
-    ProactiveTiers::WarmOnly.apply(&mut c);
+    ProactiveTier::WarmOnly.apply(&mut c);
     assert!(c.enabled && !c.rhythm.enabled && !c.proactive.enabled);
-    ProactiveTiers::Off.apply(&mut c);
+    ProactiveTier::Off.apply(&mut c);
     assert!(!c.enabled && !c.rhythm.enabled && !c.proactive.enabled);
+}
+
+#[test]
+fn proactive_tier_apply_then_from_config_is_identity() {
+    use mur_common::agent::{CompanionConfig, ProactiveTier};
+    for t in [
+        ProactiveTier::Off,
+        ProactiveTier::WarmOnly,
+        ProactiveTier::WarmAndBehavior,
+        ProactiveTier::All,
+    ] {
+        let mut c = CompanionConfig::default();
+        t.apply(&mut c);
+        assert_eq!(ProactiveTier::from_config(&c), t, "round-trip failed for {t:?}");
+    }
 }

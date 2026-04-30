@@ -759,18 +759,18 @@ mod model_ref_tests {
 /// On-disk schema doesn't change — this helper just maps between the
 /// three independent booleans (`enabled`, `rhythm.enabled`,
 /// `proactive.enabled`) and a single ordered tier. Use
-/// [`ProactiveTiers::from_config`] to read and [`ProactiveTiers::apply`]
+/// [`ProactiveTier::from_config`] to read and [`ProactiveTier::apply`]
 /// to write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProactiveTiers {
+pub enum ProactiveTier {
     Off,
     WarmOnly,
     WarmAndBehavior,
     All,
 }
 
-impl ProactiveTiers {
+impl ProactiveTier {
     pub fn from_config(c: &CompanionConfig) -> Self {
         match (c.enabled, c.rhythm.enabled, c.proactive.enabled) {
             (false, _, _) => Self::Off,
