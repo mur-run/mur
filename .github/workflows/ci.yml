@@ -85,7 +85,7 @@ jobs:
           node-version-file: 'mur-agent-gui/ui/.nvmrc'
           cache: 'npm'
           cache-dependency-path: 'mur-agent-gui/ui/package-lock.json'
-      - name: Install Linux system libraries (Tauri 2)
+      - name: Install Linux system libraries (Tauri 2 + voice)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -93,6 +93,7 @@ jobs:
             libsoup-3.0-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
+            libasound2-dev \
             pkg-config \
             protobuf-compiler \
             libprotobuf-dev
