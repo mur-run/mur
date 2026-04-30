@@ -7,7 +7,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use dialoguer::{Input, Select};
 use fs2::FileExt;
-use mur_common::agent::{AgentProfile, OnboardingState, VoiceOverrides, default_locale};
+use mur_common::agent::{
+    AgentProfile, FirstMemory, OnboardingState, ProactiveTier, VoiceOverrides, default_locale,
+};
 use mur_common::companion::{Formality, Relationship};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -16,6 +18,17 @@ use std::path::{Path, PathBuf};
 use super::util::{atomic_write_json, atomic_write_yaml};
 
 /// On-disk shape of the `--answers <file>` YAML payload.
+///
+/// D2 onboarding (Phase 1.1 §M2.3.1) extends the original 3-step shape
+/// with three optional fields:
+/// * `agent_display_name` — what the user names *the agent*
+/// * `first_memory` — the seed fact recorded as a `FirstMemory`
+/// * `proactive_tier` — three-layer permission selector mapped onto
+///   `companion.{enabled, rhythm.enabled, proactive.enabled}` via
+///   [`ProactiveTier::apply`]
+///
+/// All three are `#[serde(default)]` so legacy 3-step YAML files keep
+/// deserialising unchanged.
 #[derive(Debug, Deserialize)]
 struct Answers {
     locale: String,
@@ -25,6 +38,12 @@ struct Answers {
     formality: Option<Formality>,
     #[serde(default)]
     extra_instructions: Option<String>,
+    #[serde(default)]
+    agent_display_name: Option<String>,
+    #[serde(default)]
+    first_memory: Option<String>,
+    #[serde(default)]
+    proactive_tier: Option<ProactiveTier>,
 }
 
 /// Schema written to `companion/relationship.json`.
@@ -37,6 +56,8 @@ struct RelationshipFile<'a> {
     formality: &'a Option<Formality>,
     extra_instructions: &'a Option<String>,
     onboarded_at: chrono::DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_memory: Option<&'a FirstMemory>,
 }
 
 pub async fn run(name: &str, answers: Option<PathBuf>, re_init: bool) -> Result<()> {
@@ -74,7 +95,6 @@ pub async fn run(name: &str, answers: Option<PathBuf>, re_init: bool) -> Result<
     }
 
     let now = Utc::now();
-    profile.companion.enabled = true;
     profile.companion.locale = answers.locale.clone();
     profile.companion.relationship = answers.relationship.clone();
     profile.companion.voice_overrides = VoiceOverrides {
@@ -82,12 +102,23 @@ pub async fn run(name: &str, answers: Option<PathBuf>, re_init: bool) -> Result<
         formality: answers.formality.clone(),
         extra_instructions: answers.extra_instructions.clone(),
     };
+    let first_memory = answers.first_memory.as_ref().map(|s| FirstMemory {
+        text: s.clone(),
+        established_at: now,
+    });
     profile.companion.onboarding = OnboardingState {
         completed_at: Some(now),
         version: 1,
-        ..OnboardingState::default()
+        agent_display_name: answers.agent_display_name.clone(),
+        first_memory: first_memory.clone(),
     };
-    // proactive + rhythm are deliberately untouched.
+    // Three-tier proactive: default to WarmOnly when missing — that's the
+    // 5-step UX default and matches the prior behaviour of unconditionally
+    // setting `companion.enabled = true` while leaving rhythm + proactive
+    // dormant. `apply` is the single source of truth for the three-bool
+    // mapping (Spec §4.2 step 5 / `ProactiveTier`).
+    let tier = answers.proactive_tier.unwrap_or(ProactiveTier::WarmOnly);
+    tier.apply(&mut profile.companion);
 
     atomic_write_yaml(&profile_path, &profile)
         .with_context(|| format!("write {}", profile_path.display()))?;
@@ -101,6 +132,7 @@ pub async fn run(name: &str, answers: Option<PathBuf>, re_init: bool) -> Result<
         formality: &answers.formality,
         extra_instructions: &answers.extra_instructions,
         onboarded_at: now,
+        first_memory: first_memory.as_ref(),
     };
     atomic_write_json(&rel_path, &rel).with_context(|| format!("write {}", rel_path.display()))?;
 
@@ -160,6 +192,11 @@ fn run_wizard() -> Result<Answers> {
         relationship,
         formality: Some(Formality::Casual),
         extra_instructions: Some(String::new()),
+        // M2.3.2 will collect these in the interactive wizard. Until then
+        // the 3-step path leaves them unset, matching pre-D2 behaviour.
+        agent_display_name: None,
+        first_memory: None,
+        proactive_tier: None,
     })
 }
 
