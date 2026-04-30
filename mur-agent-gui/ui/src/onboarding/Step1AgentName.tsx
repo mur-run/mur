@@ -31,7 +31,11 @@ export function Step1AgentName({ value, onChange, onNext, onSkip }: Props) {
         </p>
       </div>
 
+      <label htmlFor="onboarding-agent-display-name" className="sr-only">
+        Agent display name
+      </label>
       <input
+        id="onboarding-agent-display-name"
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}

@@ -77,6 +77,8 @@ export function Step5ProactiveTiers({
             <button
               key={opt.value}
               type="button"
+              role="radio"
+              aria-checked={active}
               onClick={() => onChange(opt.value)}
               className="rounded-md border p-3 text-left transition-colors"
               style={{

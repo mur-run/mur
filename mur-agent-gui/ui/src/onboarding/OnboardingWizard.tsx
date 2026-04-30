@@ -11,7 +11,7 @@
 // passes `true`; we explicitly do NOT support that here so a misroute
 // can never silently overwrite a user's first_memory.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { skipOnboarding, submitOnboarding } from "./api";
 import type { ProactiveTier, Relationship } from "./types";
 import { Step1AgentName } from "./Step1AgentName";
@@ -57,6 +57,24 @@ export function OnboardingWizard({
     setErr(null);
     setStep(next);
   };
+
+  // Esc-to-skip — modal hygiene. Escape exits the wizard via the same
+  // skipOnboarding path as the explicit "Skip onboarding" button so the
+  // user never gets trapped with no clear way out. Doesn't fire while a
+  // submit / skip is already in flight.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) {
+        e.preventDefault();
+        void skipAll();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // skipAll closes over busy but referencing it would re-attach the
+    // listener every keystroke; the busy guard inside skipAll is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
 
   const skipAll = async () => {
     if (busy) return;

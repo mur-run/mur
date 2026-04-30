@@ -112,6 +112,8 @@ export function Step3Relationship({
             <button
               key={c.value}
               type="button"
+              role="radio"
+              aria-checked={active}
               onClick={() => onRelationshipChange(c.value)}
               className="rounded-md border p-3 text-left transition-colors"
               style={{
