@@ -753,3 +753,55 @@ mod model_ref_tests {
         assert_eq!(p2.model_ref.as_deref(), Some("anthropic_opus_4_7"));
     }
 }
+
+/// GUI-facing reification of the companion's three-layer permission toggle.
+///
+/// On-disk schema doesn't change — this helper just maps between the
+/// three independent booleans (`enabled`, `rhythm.enabled`,
+/// `proactive.enabled`) and a single ordered tier. Use
+/// [`ProactiveTiers::from_config`] to read and [`ProactiveTiers::apply`]
+/// to write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProactiveTiers {
+    Off,
+    WarmOnly,
+    WarmAndBehavior,
+    All,
+}
+
+impl ProactiveTiers {
+    pub fn from_config(c: &CompanionConfig) -> Self {
+        match (c.enabled, c.rhythm.enabled, c.proactive.enabled) {
+            (false, _, _) => Self::Off,
+            (true, false, false) => Self::WarmOnly,
+            (true, true, false) => Self::WarmAndBehavior,
+            (true, _, true) => Self::All,
+        }
+    }
+
+    pub fn apply(&self, c: &mut CompanionConfig) {
+        match self {
+            Self::Off => {
+                c.enabled = false;
+                c.rhythm.enabled = false;
+                c.proactive.enabled = false;
+            }
+            Self::WarmOnly => {
+                c.enabled = true;
+                c.rhythm.enabled = false;
+                c.proactive.enabled = false;
+            }
+            Self::WarmAndBehavior => {
+                c.enabled = true;
+                c.rhythm.enabled = true;
+                c.proactive.enabled = false;
+            }
+            Self::All => {
+                c.enabled = true;
+                c.rhythm.enabled = true;
+                c.proactive.enabled = true;
+            }
+        }
+    }
+}

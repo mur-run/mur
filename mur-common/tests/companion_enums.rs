@@ -60,3 +60,32 @@ fn onboarding_state_pre_d2_yaml_still_deserializes() {
     assert!(s.agent_display_name.is_none());
     assert!(s.first_memory.is_none());
 }
+
+#[test]
+fn proactive_tiers_helper() {
+    use mur_common::agent::{CompanionConfig, ProactiveTiers};
+    let mut c = CompanionConfig::default();
+    c.enabled = true;
+    let t = ProactiveTiers::from_config(&c);
+    assert_eq!(t, ProactiveTiers::WarmOnly);
+
+    c.rhythm.enabled = true;
+    let t = ProactiveTiers::from_config(&c);
+    assert_eq!(t, ProactiveTiers::WarmAndBehavior);
+
+    c.proactive.enabled = true;
+    let t = ProactiveTiers::from_config(&c);
+    assert_eq!(t, ProactiveTiers::All);
+}
+
+#[test]
+fn proactive_tiers_apply_round_trip() {
+    use mur_common::agent::{CompanionConfig, ProactiveTiers};
+    let mut c = CompanionConfig::default();
+    ProactiveTiers::All.apply(&mut c);
+    assert!(c.enabled && c.rhythm.enabled && c.proactive.enabled);
+    ProactiveTiers::WarmOnly.apply(&mut c);
+    assert!(c.enabled && !c.rhythm.enabled && !c.proactive.enabled);
+    ProactiveTiers::Off.apply(&mut c);
+    assert!(!c.enabled && !c.rhythm.enabled && !c.proactive.enabled);
+}
