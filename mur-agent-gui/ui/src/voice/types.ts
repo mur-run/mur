@@ -43,3 +43,8 @@ export type DownloadProgress =
     }
   | { kind: "AssetComplete"; name: string }
   | { kind: "Done" };
+
+export interface HotkeyConfig {
+  modifiers: string[]; // subset of: super, control, alt, shift
+  code: string; // KeyboardEvent.code, e.g. "Quote", "KeyM"
+}
