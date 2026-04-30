@@ -104,3 +104,35 @@ fn proactive_tier_apply_then_from_config_is_identity() {
         assert_eq!(ProactiveTier::from_config(&c), t, "round-trip failed for {t:?}");
     }
 }
+
+#[test]
+fn agent_profile_with_first_memory_roundtrip() {
+    use mur_common::agent::{AgentProfile, FirstMemory, OnboardingState};
+
+    // Load minimal profile from fixture and add companion + onboarding data
+    let yaml = include_str!("fixtures/profile_p0a_minimal.yaml");
+    let mut p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+
+    p.companion.enabled = true;
+    p.companion.onboarding = OnboardingState {
+        completed_at: Some(chrono::Utc::now()),
+        version: 1,
+        agent_display_name: Some("Mochi".into()),
+        first_memory: Some(FirstMemory {
+            text: "first day in Taipei".into(),
+            established_at: chrono::Utc::now(),
+        }),
+    };
+
+    let yaml_out = serde_yaml_ng::to_string(&p).unwrap();
+    assert!(yaml_out.contains("first_memory:"), "yaml missing first_memory: {}", yaml_out);
+    assert!(yaml_out.contains("agent_display_name: Mochi"), "yaml missing display name: {}", yaml_out);
+
+    let back: AgentProfile = serde_yaml_ng::from_str(&yaml_out).unwrap();
+    assert_eq!(back.companion.onboarding.agent_display_name.as_deref(), Some("Mochi"));
+    assert!(back.companion.onboarding.first_memory.is_some());
+    assert_eq!(
+        back.companion.onboarding.first_memory.as_ref().unwrap().text,
+        "first day in Taipei",
+    );
+}
