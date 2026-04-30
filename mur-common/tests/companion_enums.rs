@@ -1,6 +1,6 @@
-use mur_common::companion::{Formality, Relationship, Signal, Situation};
-use mur_common::agent::FirstMemory;
 use chrono::{TimeZone, Utc};
+use mur_common::agent::FirstMemory;
+use mur_common::companion::{Formality, Relationship, Signal, Situation};
 
 #[test]
 fn relationship_default_is_friend() {
@@ -101,7 +101,11 @@ fn proactive_tier_apply_then_from_config_is_identity() {
     ] {
         let mut c = CompanionConfig::default();
         t.apply(&mut c);
-        assert_eq!(ProactiveTier::from_config(&c), t, "round-trip failed for {t:?}");
+        assert_eq!(
+            ProactiveTier::from_config(&c),
+            t,
+            "round-trip failed for {t:?}"
+        );
     }
 }
 
@@ -125,14 +129,30 @@ fn agent_profile_with_first_memory_roundtrip() {
     };
 
     let yaml_out = serde_yaml_ng::to_string(&p).unwrap();
-    assert!(yaml_out.contains("first_memory:"), "yaml missing first_memory: {}", yaml_out);
-    assert!(yaml_out.contains("agent_display_name: Mochi"), "yaml missing display name: {}", yaml_out);
+    assert!(
+        yaml_out.contains("first_memory:"),
+        "yaml missing first_memory: {}",
+        yaml_out
+    );
+    assert!(
+        yaml_out.contains("agent_display_name: Mochi"),
+        "yaml missing display name: {}",
+        yaml_out
+    );
 
     let back: AgentProfile = serde_yaml_ng::from_str(&yaml_out).unwrap();
-    assert_eq!(back.companion.onboarding.agent_display_name.as_deref(), Some("Mochi"));
+    assert_eq!(
+        back.companion.onboarding.agent_display_name.as_deref(),
+        Some("Mochi")
+    );
     assert!(back.companion.onboarding.first_memory.is_some());
     assert_eq!(
-        back.companion.onboarding.first_memory.as_ref().unwrap().text,
+        back.companion
+            .onboarding
+            .first_memory
+            .as_ref()
+            .unwrap()
+            .text,
         "first day in Taipei",
     );
 }
