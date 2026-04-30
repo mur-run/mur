@@ -95,6 +95,7 @@ impl Companion {
                 relationship: profile.companion.relationship.clone(),
                 locale: &profile.companion.locale,
                 name_for_user,
+                first_memory: None,
                 formality: &formality_str,
                 extra_instructions,
             },

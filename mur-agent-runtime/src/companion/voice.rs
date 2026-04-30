@@ -9,6 +9,11 @@ pub struct VoiceInput<'a> {
     pub relationship: Relationship,
     pub locale: &'a str,
     pub name_for_user: &'a str,
+    /// Optional onboarding "first memory" phrase. When `Some`, expands the
+    /// `{{FIRST_MEMORY}}` placeholder verbatim and `{{FIRST_MEMORY_PARAGRAPH}}`
+    /// with a leading space so it joins surrounding prose naturally. When
+    /// `None`, both placeholders collapse to the empty string.
+    pub first_memory: Option<&'a str>,
     pub formality: &'a str,
     pub extra_instructions: &'a str,
 }
@@ -71,8 +76,29 @@ fn read_template_file(p: &Path) -> Option<String> {
 }
 
 fn apply_placeholders(tpl: &str, locale_used: &str, input: &VoiceInput<'_>) -> String {
-    tpl.replace("{{NAME_FOR_USER}}", input.name_for_user)
+    let mut tpl = tpl
+        .replace("{{NAME_FOR_USER}}", input.name_for_user)
         .replace("{{FORMALITY}}", input.formality)
         .replace("{{EXTRA_INSTRUCTIONS}}", input.extra_instructions)
-        .replace("{{LOCALE}}", locale_used)
+        .replace("{{LOCALE}}", locale_used);
+    match input.first_memory {
+        Some(fm) => {
+            tpl = tpl.replace("{{FIRST_MEMORY}}", fm);
+            tpl = tpl.replace("{{FIRST_MEMORY_PARAGRAPH}}", &format!(" {fm}"));
+        }
+        None => {
+            tpl = tpl.replace("{{FIRST_MEMORY}}", "");
+            tpl = tpl.replace("{{FIRST_MEMORY_PARAGRAPH}}", "");
+        }
+    }
+    tpl
+}
+
+/// Test-only helper exposing the placeholder substitution logic directly so
+/// integration tests can exercise `{{FIRST_MEMORY}}` / `{{FIRST_MEMORY_PARAGRAPH}}`
+/// against arbitrary template strings without going through the embedded
+/// template resolution.
+#[doc(hidden)]
+pub fn substitute_for_test(tpl: &str, input: &VoiceInput<'_>) -> String {
+    apply_placeholders(tpl, input.locale, input)
 }
