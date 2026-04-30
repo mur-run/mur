@@ -590,9 +590,35 @@ pub async fn stt_transcribe_pcm16k(
     stt.transcribe(&samples_i16, None).await.map_err(err)
 }
 
-// PTT capture lifecycle (`voice_start_capture` / `voice_stop_capture`)
-// ships in M1.6.2 alongside the PttButton frontend. `cpal::Stream` is
-// `!Send` on macOS (Core Audio callbacks must run on the spawning
-// thread), so the capture handle can't live in `tauri::State`
-// directly — it needs a dedicated worker thread + tokio channel
-// pattern. Defer to keep this PR focused on the opt-in surface.
+// ─── PTT capture lifecycle (M1.6.2) ─────────────────────────────────
+//
+// cpal::Stream is !Send on macOS so the stream must live on a
+// dedicated OS thread. CaptureWorker (audio/capture_worker.rs) owns
+// that thread and exposes Send+Sync stop channels + JoinHandle, which
+// is safe to keep in tauri::State.
+
+use crate::voice::audio::capture_worker::CaptureWorker;
+
+pub struct ActiveCapture(pub tokio::sync::Mutex<CaptureWorker>);
+
+impl Default for ActiveCapture {
+    fn default() -> Self {
+        Self(tokio::sync::Mutex::new(CaptureWorker::new()))
+    }
+}
+
+#[tauri::command]
+pub async fn voice_start_capture(
+    state: tauri::State<'_, std::sync::Arc<ActiveCapture>>,
+) -> Result<(), String> {
+    let mut w = state.0.lock().await;
+    w.start().map_err(err)
+}
+
+#[tauri::command]
+pub async fn voice_stop_capture(
+    state: tauri::State<'_, std::sync::Arc<ActiveCapture>>,
+) -> Result<Vec<i16>, String> {
+    let mut w = state.0.lock().await;
+    w.stop().map_err(err)
+}
