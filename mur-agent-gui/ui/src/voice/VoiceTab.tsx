@@ -12,6 +12,7 @@ import type { VoiceStatus } from "./types";
 import { VoiceEnablePanel } from "./VoiceEnablePanel";
 import { VoicePicker } from "./VoicePicker";
 import { PrivacyBadge } from "./PrivacyBadge";
+import { HotkeyRebinder } from "./HotkeyRebinder";
 
 export function VoiceTab() {
   const [status, setStatus] = useState<VoiceStatus | null>(null);
@@ -70,6 +71,7 @@ export function VoiceTab() {
     <div className="space-y-4">
       <PrivacyBadge />
       <VoicePicker />
+      <HotkeyRebinder />
       <div>
         <button
           onClick={handleDisable}

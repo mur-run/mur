@@ -508,8 +508,11 @@ pub async fn voice_enable(
         }
     }
 
-    // 3. Register PTT hotkey.
-    crate::voice::hotkey::register_ptt(&app_handle).map_err(err)?;
+    // 3. Register PTT hotkey using the persisted config (or default
+    //    if hotkey.json doesn't exist yet — e.g. first enable).
+    let cfg = crate::voice::hotkey::load_hotkey(&mgr.app_data_dir).await;
+    let shortcut = cfg.to_shortcut().map_err(err)?;
+    crate::voice::hotkey::register_shortcut(&app_handle, &shortcut).map_err(err)?;
 
     // 4. Persist enabled flag.
     mgr.set_enabled(true).await.map_err(err)?;
@@ -605,6 +608,35 @@ impl Default for ActiveCapture {
     fn default() -> Self {
         Self(tokio::sync::Mutex::new(CaptureWorker::new()))
     }
+}
+
+/// Get the currently-bound PTT hotkey (persisted or default).
+#[tauri::command]
+pub async fn voice_get_hotkey(
+    state: tauri::State<'_, VoiceManagerState>,
+) -> Result<crate::voice::hotkey::HotkeyConfig, String> {
+    let mgr = state.read().await;
+    Ok(crate::voice::hotkey::load_hotkey(&mgr.app_data_dir).await)
+}
+
+/// Re-bind PTT to a new shortcut. Unregisters whatever's currently
+/// bound, registers the new combo, persists on success. Frontend
+/// captures the raw `KeyboardEvent.code` + modifier flags.
+#[tauri::command]
+pub async fn voice_rebind_hotkey(
+    modifiers: Vec<String>,
+    code: String,
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, VoiceManagerState>,
+) -> Result<crate::voice::hotkey::HotkeyConfig, String> {
+    let mgr = state.read().await;
+    if !mgr.is_enabled() {
+        return Err("voice is disabled — enable first to rebind hotkey".into());
+    }
+    let cfg = crate::voice::hotkey::HotkeyConfig { modifiers, code };
+    crate::voice::hotkey::rebind_ptt(&app_handle, cfg)
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]
