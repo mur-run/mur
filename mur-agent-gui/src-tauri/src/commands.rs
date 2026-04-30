@@ -654,3 +654,69 @@ pub async fn voice_stop_capture(
     let mut w = state.0.lock().await;
     w.stop().map_err(err)
 }
+
+// ─── D2 onboarding (M2.4) ──────────────────────────────────────────
+//
+// Three commands back the GUI's onboarding wizard:
+//   * `companion_onboarding_status` — reads the persisted state so the
+//     wizard can route to "show wizard" vs "show summary" on launch
+//   * `companion_onboarding_submit` — invokes the same `init::run` path
+//     the CLI uses (`mur agent companion init --answers`)
+//   * `companion_onboarding_skip`   — closes the door for users who
+//     don't want a relationship-keyed agent: marks `completed_at = now`
+//     and applies the WarmOnly tier (Spec §4.2 default)
+//
+// All three resolve `~/.mur` via `mur_core::paths::mur_root` so the
+// `MUR_HOME` override (used in tests + first-launch bootstrap) works.
+// Helpers split out of the `#[tauri::command]` wrappers so integration
+// tests can call them without a webview.
+
+fn onboarding_agent_dir(agent: &str) -> anyhow::Result<std::path::PathBuf> {
+    let dir = mur_core::paths::mur_root(None).join("agents").join(agent);
+    if !dir.exists() {
+        anyhow::bail!(
+            "agent {agent} does not exist at {} — run `mur agent create {agent}` first",
+            dir.display()
+        );
+    }
+    Ok(dir)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OnboardingStatus {
+    pub completed_at: Option<String>,
+    pub agent_display_name: Option<String>,
+    pub first_memory_text: Option<String>,
+    /// One of `off` | `warm_only` | `warm_and_behavior` | `all`,
+    /// derived from `companion.{enabled, rhythm.enabled, proactive.enabled}`
+    /// via `ProactiveTier::from_config`. Lower-case so the React wizard
+    /// can match on the same string the submit payload uses.
+    pub proactive_tier: String,
+}
+
+pub async fn companion_onboarding_status_impl(agent: &str) -> anyhow::Result<OnboardingStatus> {
+    let dir = onboarding_agent_dir(agent)?;
+    let body = tokio::fs::read_to_string(dir.join("profile.yaml")).await?;
+    let p: mur_common::agent::AgentProfile = serde_yaml_ng::from_str(&body)?;
+    let tier = mur_common::agent::ProactiveTier::from_config(&p.companion);
+    let tier_str = serde_json::to_value(tier)?
+        .as_str()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "off".to_string());
+    Ok(OnboardingStatus {
+        completed_at: p.companion.onboarding.completed_at.map(|t| t.to_rfc3339()),
+        agent_display_name: p.companion.onboarding.agent_display_name.clone(),
+        first_memory_text: p
+            .companion
+            .onboarding
+            .first_memory
+            .as_ref()
+            .map(|f| f.text.clone()),
+        proactive_tier: tier_str,
+    })
+}
+
+#[tauri::command]
+pub async fn companion_onboarding_status(agent: String) -> Result<OnboardingStatus, String> {
+    companion_onboarding_status_impl(&agent).await.map_err(err)
+}
