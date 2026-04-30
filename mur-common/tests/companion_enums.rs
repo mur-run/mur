@@ -47,3 +47,16 @@ fn first_memory_yaml_roundtrip() {
     let back: FirstMemory = serde_yaml_ng::from_str(&s).unwrap();
     assert_eq!(back, fm);
 }
+
+#[test]
+fn onboarding_state_pre_d2_yaml_still_deserializes() {
+    // A profile written before M2.1.1 has no agent_display_name / first_memory
+    // fields; #[serde(default)] must let it round-trip cleanly with the new
+    // optional fields = None.
+    let yaml = "completed_at: null\nversion: 0\n";
+    let s: mur_common::agent::OnboardingState = serde_yaml_ng::from_str(yaml).unwrap();
+    assert!(s.completed_at.is_none());
+    assert_eq!(s.version, 0);
+    assert!(s.agent_display_name.is_none());
+    assert!(s.first_memory.is_none());
+}
