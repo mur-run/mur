@@ -19,3 +19,5 @@ export const ttsSpeak = (text: string) =>
   invoke<void>("tts_speak", { text });
 export const sttTranscribePcm16k = (samplesI16: number[]) =>
   invoke<string>("stt_transcribe_pcm16k", { samplesI16 });
+export const voiceStartCapture = () => invoke<void>("voice_start_capture");
+export const voiceStopCapture = () => invoke<number[]>("voice_stop_capture");
