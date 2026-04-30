@@ -73,6 +73,7 @@ fn main() -> Result<()> {
                     // SAFETY: setup runs before any Tauri command; single-thread.
                     unsafe {
                         std::env::set_var("MUR_GUI_AGENT_NAME", &meta.agent_name);
+                        std::env::set_var("MUR_GUI_THEME_DEFAULT", &meta.theme_default);
                     }
 
                     // Auto-spawn the sidecar so "click app → agent runs"
@@ -114,15 +115,32 @@ fn main() -> Result<()> {
                 ],
             )?;
 
+            // Load the tray icon from the active theme's resource dir.
+            // tauri.conf.json's `trayIcon.iconPath` is ignored when we
+            // build the tray manually, so we resolve it ourselves here.
+            let theme_name =
+                std::env::var("MUR_GUI_THEME_DEFAULT").unwrap_or_else(|_| "light".to_string());
+            let themes_root = theme::resolve_themes_root(Some(&resource_dir));
+            let tray_icon_path = themes_root.join(&theme_name).join("tray-template.png");
+            let tray_icon = match tauri::image::Image::from_path(&tray_icon_path) {
+                Ok(img) => img,
+                Err(e) => {
+                    tracing::warn!(
+                        "tray icon load failed at {}: {e} — using bundle icon fallback",
+                        tray_icon_path.display()
+                    );
+                    app.default_window_icon().cloned().unwrap_or_else(|| {
+                        tauri::image::Image::new_owned(vec![0u8; 16 * 16 * 4], 16, 16)
+                    })
+                }
+            };
+
             let mgr_for_menu = sidecar_mgr.clone();
             let _tray = TrayIconBuilder::new()
                 .menu(&menu)
                 .show_menu_on_left_click(true)
-                .icon(app.default_window_icon().cloned().unwrap_or_else(|| {
-                    // Fallback to a transparent 16x16 if Tauri couldn't
-                    // resolve the bundle icon (e.g. dev runs).
-                    tauri::image::Image::new_owned(vec![0u8; 16 * 16 * 4], 16, 16)
-                }))
+                .icon(tray_icon)
+                .icon_as_template(true)
                 .on_menu_event(move |app, event| {
                     let agent_name = std::env::var("MUR_GUI_AGENT_NAME")
                         .unwrap_or_else(|_| "template".to_string());
@@ -212,6 +230,12 @@ fn main() -> Result<()> {
             // Theme
             commands::list_themes,
             commands::set_theme,
+            commands::get_default_theme,
+            // Model registry (PR-5)
+            commands::list_models,
+            commands::get_active_model_ref,
+            commands::set_active_model_ref,
+            commands::set_secret,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

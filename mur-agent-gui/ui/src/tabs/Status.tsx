@@ -1,14 +1,26 @@
 import { useEffect, useState } from "react";
-import { status, listThemes, setTheme as setThemeApi, type StatusView, type ThemeInfo } from "../lib/api";
+import {
+  status,
+  listThemes,
+  setTheme as setThemeApi,
+  getDefaultTheme,
+  applyThemeColors,
+  type StatusView,
+  type ThemeInfo,
+} from "../lib/api";
 
 export default function StatusTab() {
   const [view, setView] = useState<StatusView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [themes, setThemes] = useState<ThemeInfo[]>([]);
+  const [currentTheme, setCurrentTheme] = useState<string>("");
 
   useEffect(() => {
     status().then(setView).catch((e) => setError(String(e)));
     listThemes().then(setThemes).catch(() => {});
+    getDefaultTheme()
+      .then((t) => setCurrentTheme(t.name))
+      .catch(() => {});
   }, []);
 
   if (error) return <Pre title="Error">{error}</Pre>;
@@ -32,7 +44,14 @@ export default function StatusTab() {
         <select
           className="border rounded px-2 py-1 bg-transparent"
           style={{ borderColor: "var(--color-border)", color: "var(--color-fg)" }}
-          onChange={(e) => setThemeApi(e.target.value)}
+          value={currentTheme}
+          onChange={(e) => {
+            const name = e.target.value;
+            setCurrentTheme(name);
+            setThemeApi(name)
+              .then((t) => applyThemeColors(t.colors))
+              .catch(() => {});
+          }}
         >
           {themes.map((t) => (
             <option key={t.name} value={t.name}>

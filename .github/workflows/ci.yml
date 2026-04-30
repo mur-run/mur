@@ -20,9 +20,15 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install protobuf (Linux)
+      - name: Install Linux system deps
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler \
+            libprotobuf-dev \
+            libdbus-1-dev \
+            pkg-config
       - name: Install protobuf (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf
@@ -41,8 +47,14 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install protobuf
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler \
+            libprotobuf-dev \
+            libdbus-1-dev \
+            pkg-config
       - run: cargo clippy --all -- -D warnings
 
   fmt:

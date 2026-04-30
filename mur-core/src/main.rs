@@ -289,6 +289,8 @@ enum Commands {
         #[command(subcommand)]
         action: AgentAction,
     },
+    /// Manage shared model registry (~/.mur/models.yaml)
+    Model(cmd::model::ModelArgs),
     /// Verify documentation claims (paths, commands, code refs) against actual codebase
     Verify {
         /// Specific file to verify (default: scan all docs)
@@ -1015,6 +1017,33 @@ enum AgentAction {
         #[arg(long)]
         json: bool,
     },
+    /// Manage an agent's keychain-backed secrets (set/list/delete)
+    Secret {
+        /// Agent name
+        agent: String,
+        #[command(subcommand)]
+        action: AgentSecretAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AgentSecretAction {
+    /// Write a secret to the OS keychain (service=mur-agent,
+    /// account=<agent>/<key>). Reads from stdin / hidden prompt if VALUE
+    /// is omitted.
+    Set {
+        /// Secret key (e.g. ANTHROPIC_API_KEY).
+        key: String,
+        /// Optional value; omit to read from a hidden prompt.
+        value: Option<String>,
+    },
+    /// List which secret refs the agent's active model expects, with status.
+    List,
+    /// Delete a keychain entry by key name. Idempotent.
+    Delete {
+        /// Secret key to delete.
+        key: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1458,6 +1487,7 @@ async fn async_main() -> Result<()> {
         } => cmd::server_cmd::cmd_serve(port, open, readonly).await?,
         Commands::Why { name } => cmd::inject_cmd::cmd_why(&name)?,
         Commands::Edit { name, quick } => cmd::pattern::cmd_edit(&name, quick)?,
+        Commands::Model(args) => cmd::model::run(args)?,
         Commands::Agent { action } => match action {
             AgentAction::Create {
                 name,
@@ -1590,6 +1620,15 @@ async fn async_main() -> Result<()> {
             AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
             AgentAction::Companion(args) => cmd::agent_companion::run(args).await?,
             AgentAction::Doctor { format, json } => cmd::doctor::run(&format, json)?,
+            AgentAction::Secret { agent, action } => match action {
+                AgentSecretAction::Set { key, value } => {
+                    cmd::agent::cmd_secret_set(&agent, &key, value.as_deref()).await?
+                }
+                AgentSecretAction::List => cmd::agent::cmd_secret_list(&agent).await?,
+                AgentSecretAction::Delete { key } => {
+                    cmd::agent::cmd_secret_delete(&agent, &key).await?
+                }
+            },
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,

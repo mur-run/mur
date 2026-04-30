@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
 import StatusTab from "./tabs/Status";
 import PromptTab from "./tabs/Prompt";
+import ModelTab from "./tabs/Model";
 import SkillsTab from "./tabs/Skills";
 import McpTab from "./tabs/Mcp";
 import PermissionsTab from "./tabs/Permissions";
 import IdentityTab from "./tabs/Identity";
-import { setTheme as setThemeApi } from "./lib/api";
+import { setTheme as setThemeApi, getDefaultTheme, applyThemeColors } from "./lib/api";
 
 type TabId =
   | "status"
   | "prompt"
+  | "model"
   | "skills"
   | "mcp"
   | "permissions"
@@ -18,6 +20,7 @@ type TabId =
 const TABS: { id: TabId; label: string }[] = [
   { id: "status", label: "Status" },
   { id: "prompt", label: "System Prompt" },
+  { id: "model", label: "Model" },
   { id: "skills", label: "Skills" },
   { id: "mcp", label: "MCP Servers" },
   { id: "permissions", label: "Permissions" },
@@ -26,6 +29,14 @@ const TABS: { id: TabId; label: string }[] = [
 
 export default function App() {
   const [tab, setTab] = useState<TabId>("status");
+
+  // Apply the bundle's baked-in default theme on mount, so the
+  // window picks up the colors chosen at `mur agent export --theme`.
+  useEffect(() => {
+    getDefaultTheme()
+      .then((t) => applyThemeColors(t.colors))
+      .catch(() => {});
+  }, []);
 
   // OS appearance subscriber for the "Match System" mode (spec § 7.3).
   // When the user has selected the synthetic "system" theme, follow
@@ -45,7 +56,9 @@ export default function App() {
       const target = matcher.matches ? "dark" : "light";
       if (target === lastApplied) return;
       lastApplied = target;
-      setThemeApi(target).catch(() => {});
+      setThemeApi(target)
+        .then((t) => applyThemeColors(t.colors))
+        .catch(() => {});
     };
     apply();
     matcher.addEventListener("change", apply);
@@ -77,6 +90,7 @@ export default function App() {
       <main className="flex-1 overflow-auto p-6">
         {tab === "status" && <StatusTab />}
         {tab === "prompt" && <PromptTab />}
+        {tab === "model" && <ModelTab />}
         {tab === "skills" && <SkillsTab />}
         {tab === "mcp" && <McpTab />}
         {tab === "permissions" && <PermissionsTab />}
