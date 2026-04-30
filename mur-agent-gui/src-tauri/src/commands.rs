@@ -800,3 +800,27 @@ pub async fn companion_onboarding_submit(
         .await
         .map_err(err)
 }
+
+pub async fn companion_onboarding_skip_impl(agent: &str) -> anyhow::Result<()> {
+    let dir = onboarding_agent_dir(agent)?;
+    let pf_path = dir.join("profile.yaml");
+    let body = tokio::fs::read_to_string(&pf_path).await?;
+    let mut p: mur_common::agent::AgentProfile = serde_yaml_ng::from_str(&body)?;
+    // WarmOnly tier — flips `companion.enabled` true so voice composition
+    // works, leaves rhythm + proactive dormant. Same default the 5-step
+    // wizard lands on for users who hit Enter through every step.
+    mur_common::agent::ProactiveTier::WarmOnly.apply(&mut p.companion);
+    p.companion.onboarding.completed_at = Some(chrono::Utc::now());
+    p.companion.onboarding.version = 1;
+    let yaml = serde_yaml_ng::to_string(&p)?;
+    // Atomic write: temp file + rename, mirroring `cmd::agent_companion::util`.
+    let tmp_path = pf_path.with_extension("yaml.tmp");
+    tokio::fs::write(&tmp_path, yaml).await?;
+    tokio::fs::rename(&tmp_path, &pf_path).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn companion_onboarding_skip(agent: String) -> Result<(), String> {
+    companion_onboarding_skip_impl(&agent).await.map_err(err)
+}

@@ -160,3 +160,42 @@ async fn onboarding_submit_without_first_memory_writes_none() {
     assert!(s.first_memory_text.is_none());
     assert_eq!(s.proactive_tier, "all");
 }
+
+// ─── M2.4.3 — `companion_onboarding_skip` ──────────────────────────────────
+
+#[tokio::test]
+async fn onboarding_skip_marks_completed_and_warm_only() {
+    let tmp = TempDir::new().unwrap();
+    let _guard = MurHomeGuard::set(tmp.path());
+    seed_agent(tmp.path(), "skipper");
+
+    mur_agent_gui_lib::commands::companion_onboarding_skip_impl("skipper")
+        .await
+        .expect("skip must succeed");
+
+    let s = mur_agent_gui_lib::commands::companion_onboarding_status_impl("skipper")
+        .await
+        .expect("status after skip must succeed");
+
+    assert!(s.completed_at.is_some(), "skip sets completed_at");
+    assert!(
+        s.agent_display_name.is_none(),
+        "skip must not invent a display name"
+    );
+    assert!(
+        s.first_memory_text.is_none(),
+        "skip must not invent a first memory"
+    );
+    assert_eq!(
+        s.proactive_tier, "warm_only",
+        "skip applies WarmOnly tier (Spec §4.2 default)"
+    );
+}
+
+#[tokio::test]
+async fn onboarding_skip_missing_agent_errors() {
+    let tmp = TempDir::new().unwrap();
+    let _guard = MurHomeGuard::set(tmp.path());
+    let res = mur_agent_gui_lib::commands::companion_onboarding_skip_impl("ghost").await;
+    assert!(res.is_err(), "skip on missing agent must error");
+}

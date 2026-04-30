@@ -312,6 +312,7 @@ fn main() -> Result<()> {
             // D2 onboarding (M2.4)
             commands::companion_onboarding_status,
             commands::companion_onboarding_submit,
+            commands::companion_onboarding_skip,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
