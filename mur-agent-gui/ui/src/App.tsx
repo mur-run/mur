@@ -6,12 +6,14 @@ import SkillsTab from "./tabs/Skills";
 import McpTab from "./tabs/Mcp";
 import PermissionsTab from "./tabs/Permissions";
 import IdentityTab from "./tabs/Identity";
+import { VoiceTab } from "./voice/VoiceTab";
 import { setTheme as setThemeApi, getDefaultTheme, applyThemeColors } from "./lib/api";
 
 type TabId =
   | "status"
   | "prompt"
   | "model"
+  | "voice"
   | "skills"
   | "mcp"
   | "permissions"
@@ -21,6 +23,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "status", label: "Status" },
   { id: "prompt", label: "System Prompt" },
   { id: "model", label: "Model" },
+  { id: "voice", label: "Voice" },
   { id: "skills", label: "Skills" },
   { id: "mcp", label: "MCP Servers" },
   { id: "permissions", label: "Permissions" },
@@ -91,6 +94,7 @@ export default function App() {
         {tab === "status" && <StatusTab />}
         {tab === "prompt" && <PromptTab />}
         {tab === "model" && <ModelTab />}
+        {tab === "voice" && <VoiceTab />}
         {tab === "skills" && <SkillsTab />}
         {tab === "mcp" && <McpTab />}
         {tab === "permissions" && <PermissionsTab />}

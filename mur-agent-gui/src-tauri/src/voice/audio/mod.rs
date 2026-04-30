@@ -1,6 +1,7 @@
 //! Audio I/O — cpal-based mic capture (mono i16 @ 16 kHz for whisper)
 //! and speaker playback (lands in M1.5.1).
 
+pub mod playback;
 pub mod ptt;
 pub mod ring_buffer;
 
