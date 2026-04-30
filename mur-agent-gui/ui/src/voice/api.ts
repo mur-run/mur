@@ -2,7 +2,12 @@
 // mur-agent-gui/src-tauri/src/commands.rs voice_* surface.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { VoiceListResponse, VoiceStatus, SttStatus } from "./types";
+import type {
+  HotkeyConfig,
+  SttStatus,
+  VoiceListResponse,
+  VoiceStatus,
+} from "./types";
 
 export const voiceStatus = () => invoke<VoiceStatus>("voice_status");
 export const voiceEnable = () => invoke<void>("voice_enable");
@@ -21,3 +26,6 @@ export const sttTranscribePcm16k = (samplesI16: number[]) =>
   invoke<string>("stt_transcribe_pcm16k", { samplesI16 });
 export const voiceStartCapture = () => invoke<void>("voice_start_capture");
 export const voiceStopCapture = () => invoke<number[]>("voice_stop_capture");
+export const voiceGetHotkey = () => invoke<HotkeyConfig>("voice_get_hotkey");
+export const voiceRebindHotkey = (modifiers: string[], code: string) =>
+  invoke<HotkeyConfig>("voice_rebind_hotkey", { modifiers, code });
