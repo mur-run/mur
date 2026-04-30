@@ -113,6 +113,8 @@ fn main() -> Result<()> {
                         let state: commands::VoiceManagerState =
                             std::sync::Arc::new(tokio::sync::RwLock::new(mgr));
                         voice_app_handle.manage(state);
+                        voice_app_handle
+                            .manage(std::sync::Arc::new(commands::ActiveCapture::default()));
                         if was_enabled {
                             if let Err(e) = voice::hotkey::register_ptt(&voice_app_handle) {
                                 tracing::warn!("re-register PTT on boot: {e:#}");
@@ -282,6 +284,8 @@ fn main() -> Result<()> {
             commands::voice_stt_download,
             commands::tts_speak,
             commands::stt_transcribe_pcm16k,
+            commands::voice_start_capture,
+            commands::voice_stop_capture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

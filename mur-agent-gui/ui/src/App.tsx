@@ -7,6 +7,7 @@ import McpTab from "./tabs/Mcp";
 import PermissionsTab from "./tabs/Permissions";
 import IdentityTab from "./tabs/Identity";
 import { VoiceTab } from "./voice/VoiceTab";
+import { PttButton } from "./voice/PttButton";
 import { setTheme as setThemeApi, getDefaultTheme, applyThemeColors } from "./lib/api";
 
 type TabId =
@@ -100,6 +101,15 @@ export default function App() {
         {tab === "permissions" && <PermissionsTab />}
         {tab === "identity" && <IdentityTab />}
       </main>
+      <PttButton
+        onTranscript={(text) => {
+          // For now, log + console. Future slices will wire this into
+          // an active chat composer. The transcript itself is already
+          // visible to the user via the recording → transcribing flow.
+          // eslint-disable-next-line no-console
+          console.log("ptt transcript:", text);
+        }}
+      />
     </div>
   );
 }
