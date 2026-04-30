@@ -311,6 +311,7 @@ fn main() -> Result<()> {
             commands::voice_rebind_hotkey,
             // D2 onboarding (M2.4)
             commands::companion_onboarding_status,
+            commands::companion_onboarding_submit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

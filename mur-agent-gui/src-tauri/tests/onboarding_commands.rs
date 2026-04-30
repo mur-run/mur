@@ -100,3 +100,63 @@ async fn onboarding_status_missing_agent_errors() {
     let res = mur_agent_gui_lib::commands::companion_onboarding_status_impl("nope").await;
     assert!(res.is_err(), "missing agent dir must error");
 }
+
+// ─── M2.4.2 — `companion_onboarding_submit` ────────────────────────────────
+
+#[tokio::test]
+async fn onboarding_submit_persists_fields_and_tier() {
+    let tmp = TempDir::new().unwrap();
+    let _guard = MurHomeGuard::set(tmp.path());
+    seed_agent(tmp.path(), "submit");
+
+    let payload = mur_agent_gui_lib::commands::OnboardingSubmit {
+        agent_display_name: "Mochi".into(),
+        locale: "en-US".into(),
+        name_for_user: "David".into(),
+        relationship: "friend".into(),
+        first_memory: Some("Sunday in Taipei".into()),
+        proactive_tier: "warm_only".into(),
+    };
+
+    mur_agent_gui_lib::commands::companion_onboarding_submit_impl("submit", payload)
+        .await
+        .expect("submit must succeed");
+
+    // Re-read via the status helper to confirm persistence.
+    let s = mur_agent_gui_lib::commands::companion_onboarding_status_impl("submit")
+        .await
+        .expect("status after submit must succeed");
+
+    assert!(s.completed_at.is_some(), "completed_at should be set");
+    assert_eq!(s.agent_display_name.as_deref(), Some("Mochi"));
+    assert_eq!(s.first_memory_text.as_deref(), Some("Sunday in Taipei"));
+    assert_eq!(s.proactive_tier, "warm_only");
+}
+
+#[tokio::test]
+async fn onboarding_submit_without_first_memory_writes_none() {
+    let tmp = TempDir::new().unwrap();
+    let _guard = MurHomeGuard::set(tmp.path());
+    seed_agent(tmp.path(), "nofm");
+
+    let payload = mur_agent_gui_lib::commands::OnboardingSubmit {
+        agent_display_name: "Sage".into(),
+        locale: "en-US".into(),
+        name_for_user: "Alex".into(),
+        relationship: "coach".into(),
+        first_memory: None,
+        proactive_tier: "all".into(),
+    };
+
+    mur_agent_gui_lib::commands::companion_onboarding_submit_impl("nofm", payload)
+        .await
+        .expect("submit without first_memory must succeed");
+
+    let s = mur_agent_gui_lib::commands::companion_onboarding_status_impl("nofm")
+        .await
+        .unwrap();
+    assert!(s.completed_at.is_some());
+    assert_eq!(s.agent_display_name.as_deref(), Some("Sage"));
+    assert!(s.first_memory_text.is_none());
+    assert_eq!(s.proactive_tier, "all");
+}

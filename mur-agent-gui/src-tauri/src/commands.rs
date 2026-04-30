@@ -720,3 +720,83 @@ pub async fn companion_onboarding_status_impl(agent: &str) -> anyhow::Result<Onb
 pub async fn companion_onboarding_status(agent: String) -> Result<OnboardingStatus, String> {
     companion_onboarding_status_impl(&agent).await.map_err(err)
 }
+
+/// Wizard payload — mirrors the CLI's `--answers` YAML shape one-for-one.
+/// Fields are validated downstream when `init::run` deserialises the
+/// generated YAML, so this struct stays a flat string-typed bag.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OnboardingSubmit {
+    pub agent_display_name: String,
+    pub locale: String,
+    pub name_for_user: String,
+    /// One of `friend` | `coach` | `accountability_buddy` | `mentor`.
+    pub relationship: String,
+    pub first_memory: Option<String>,
+    /// One of `off` | `warm_only` | `warm_and_behavior` | `all`.
+    pub proactive_tier: String,
+}
+
+pub async fn companion_onboarding_submit_impl(
+    agent: &str,
+    p: OnboardingSubmit,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    // Build the `--answers` payload as JSON-via-serde_json::Value first so
+    // we can omit `first_memory` cleanly when absent (a literal `null` in
+    // the YAML deserialises as `Some("null"-ish)` — but `serde_yaml_ng`
+    // round-trips `Value::Null` to a real null, which `init::run` then
+    // sees as `None` per `#[serde(default)]`).
+    let mut obj = serde_json::Map::new();
+    obj.insert("locale".into(), serde_json::Value::String(p.locale));
+    obj.insert(
+        "name_for_user".into(),
+        serde_json::Value::String(p.name_for_user),
+    );
+    obj.insert(
+        "agent_display_name".into(),
+        serde_json::Value::String(p.agent_display_name),
+    );
+    obj.insert(
+        "relationship".into(),
+        serde_json::Value::String(p.relationship),
+    );
+    obj.insert(
+        "formality".into(),
+        serde_json::Value::String("casual".into()),
+    );
+    obj.insert(
+        "extra_instructions".into(),
+        serde_json::Value::String(String::new()),
+    );
+    if let Some(text) = p.first_memory {
+        obj.insert("first_memory".into(), serde_json::Value::String(text));
+    }
+    obj.insert(
+        "proactive_tier".into(),
+        serde_json::Value::String(p.proactive_tier),
+    );
+    let yaml = serde_yaml_ng::to_string(&serde_json::Value::Object(obj))?;
+
+    // Use a NamedTempFile so the file is unlinked on drop even if
+    // `init::run` panics. The CLI parses by path, so we hand it the
+    // path (not a handle) and keep the temp file alive for the call.
+    let tmp = tempfile::NamedTempFile::new()?;
+    tmp.as_file().write_all(yaml.as_bytes())?;
+    tmp.as_file().sync_all().ok();
+    let answers_path = tmp.path().to_path_buf();
+    // re-init: the GUI wizard re-runs onboarding when the user clicks
+    // "Edit", so allow overwriting an existing onboarding state.
+    mur_core::cmd::agent_companion::init::run(agent, Some(answers_path), true).await?;
+    drop(tmp);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn companion_onboarding_submit(
+    agent: String,
+    payload: OnboardingSubmit,
+) -> Result<(), String> {
+    companion_onboarding_submit_impl(&agent, payload)
+        .await
+        .map_err(err)
+}
