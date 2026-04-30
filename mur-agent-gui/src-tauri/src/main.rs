@@ -5,6 +5,7 @@ mod bootstrap;
 mod commands;
 mod sidecar;
 mod theme;
+mod voice;
 
 use anyhow::Result;
 use tracing::info;
@@ -92,6 +93,37 @@ fn main() -> Result<()> {
                     tracing::error!("bootstrap failed: {e:#}");
                 }
             }
+
+            // Voice subsystem (D1 / M1) — default-off opt-in.
+            // Register VoiceManager state up-front so the voice_*
+            // commands can read it. Boot-time hotkey re-registration
+            // handles the case where the user enabled voice in a
+            // previous session: voice_state.json says enabled=true,
+            // so we re-register the PTT hotkey here without re-running
+            // the full voice_enable flow.
+            let app_data = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("mur-agent-gui"));
+            let voice_app_handle = app.handle().clone();
+            tauri::async_runtime::block_on(async move {
+                match voice::VoiceManager::new(app_data).await {
+                    Ok(mgr) => {
+                        let was_enabled = mgr.is_enabled();
+                        let state: commands::VoiceManagerState =
+                            std::sync::Arc::new(tokio::sync::RwLock::new(mgr));
+                        voice_app_handle.manage(state);
+                        if was_enabled {
+                            if let Err(e) = voice::hotkey::register_ptt(&voice_app_handle) {
+                                tracing::warn!("re-register PTT on boot: {e:#}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("voice subsystem init failed: {e:#}");
+                    }
+                }
+            });
 
             // Tray menu — primary UX for the menubar launcher.
             let show_settings =
@@ -194,6 +226,9 @@ fn main() -> Result<()> {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             // Status / lifecycle
             commands::status,
@@ -236,6 +271,17 @@ fn main() -> Result<()> {
             commands::get_active_model_ref,
             commands::set_active_model_ref,
             commands::set_secret,
+            // Voice (D1 / M1) — default-off, opt-in via voice_enable
+            commands::voice_status,
+            commands::voice_enable,
+            commands::voice_disable,
+            commands::voice_list_installed,
+            commands::voice_set_default,
+            commands::voice_download,
+            commands::voice_stt_status,
+            commands::voice_stt_download,
+            commands::tts_speak,
+            commands::stt_transcribe_pcm16k,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
