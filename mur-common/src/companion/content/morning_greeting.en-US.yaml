@@ -28,3 +28,21 @@ templates:
     prompt_seed: |
       A quiet "good morning" — one short sentence acknowledging the new day,
       no question. For days when {{NAME_FOR_USER}} likely wants space.
+  - id: morning_first_memory_warm_en_001
+    weight: 1.0
+    cooldown_days: 7
+    tags: [warm, reflective, memory_focused]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Good morning {{NAME_FOR_USER}} — still thinking about {{FIRST_MEMORY}}.
+      How's that shaping your day? One sentence, warm tone.
+  - id: morning_first_memory_followup_en_001
+    weight: 0.9
+    cooldown_days: 10
+    tags: [attentive, memory_followup]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      Hey {{NAME_FOR_USER}} — remember when you mentioned {{FIRST_MEMORY}}?
+      What's that turned into? Curious, two sentences max.
