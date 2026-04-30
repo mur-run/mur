@@ -81,13 +81,25 @@ pub fn verify_and_parse(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<Asset
 /// Just verify the signature without parsing — useful when the caller
 /// already deserialises into a specific variant.
 pub fn verify_signature(manifest_bytes: &[u8], sig_bytes: &[u8]) -> Result<()> {
+    let pubkey = decode_pinned_pubkey()?;
+    verify_signature_with_key(manifest_bytes, sig_bytes, &pubkey)
+}
+
+/// Pubkey-explicit signature verifier. Used by integration tests to
+/// inject a freshly-generated keypair without needing to override the
+/// compile-time pinned pubkey. Production code paths always go through
+/// `verify_signature` / `verify_and_parse`, which use the pinned key.
+pub fn verify_signature_with_key(
+    manifest_bytes: &[u8],
+    sig_bytes: &[u8],
+    pubkey: &VerifyingKey,
+) -> Result<()> {
     if sig_bytes.len() != 64 {
         bail!(
             "voice manifest signature must be 64 bytes; got {}",
             sig_bytes.len()
         );
     }
-    let pubkey = decode_pinned_pubkey()?;
     let mut sig_arr = [0u8; 64];
     sig_arr.copy_from_slice(sig_bytes);
     let signature = Signature::from_bytes(&sig_arr);
