@@ -7,9 +7,7 @@ fn main() {
     // without bypassing verification at runtime.
     if std::env::var("MUR_VOICE_PUBKEY").is_err() {
         // 32-byte zero pubkey, base58btc multibase-encoded with leading 'z'.
-        println!(
-            "cargo:rustc-env=MUR_VOICE_PUBKEY=z11111111111111111111111111111111"
-        );
+        println!("cargo:rustc-env=MUR_VOICE_PUBKEY=z11111111111111111111111111111111");
     }
     println!("cargo:rerun-if-env-changed=MUR_VOICE_PUBKEY");
 
