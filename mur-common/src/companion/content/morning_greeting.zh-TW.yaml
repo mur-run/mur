@@ -28,6 +28,11 @@ templates:
     prompt_seed: |
       A quiet "good morning" — just one short sentence acknowledging the day,
       no question. For when {{NAME_FOR_USER}} might prefer space.
+  # ── First-memory templates (day-3+ approximation) ──────────────────────
+  # See en-US sibling file for rationale: longer cooldown_days (7/10) is a
+  # placeholder for a roadmap §4.2 `min_relationship_age_days` gate that
+  # the current TemplateSeed schema doesn't support. Reduce cooldowns to
+  # normal values once picker-side day-gating ships.
   - id: morning_first_memory_warm_zh_001
     weight: 1.0
     cooldown_days: 7
