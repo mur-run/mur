@@ -724,6 +724,11 @@ pub async fn companion_onboarding_status(agent: String) -> Result<OnboardingStat
 /// Wizard payload — mirrors the CLI's `--answers` YAML shape one-for-one.
 /// Fields are validated downstream when `init::run` deserialises the
 /// generated YAML, so this struct stays a flat string-typed bag.
+///
+/// `re_init` defaults to `false` (matching the CLI safety default).
+/// The frontend must explicitly set it to `true` when re-running the
+/// wizard from the "Edit" entrypoint so a user's first_memory cannot be
+/// silently overwritten by an accidental wizard re-entry.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct OnboardingSubmit {
     pub agent_display_name: String,
@@ -734,6 +739,10 @@ pub struct OnboardingSubmit {
     pub first_memory: Option<String>,
     /// One of `off` | `warm_only` | `warm_and_behavior` | `all`.
     pub proactive_tier: String,
+    /// `true` only when the wizard is launched from the "Edit" button
+    /// against an already-onboarded agent. Default `false`.
+    #[serde(default)]
+    pub re_init: bool,
 }
 
 pub async fn companion_onboarding_submit_impl(
@@ -784,9 +793,11 @@ pub async fn companion_onboarding_submit_impl(
     tmp.as_file().write_all(yaml.as_bytes())?;
     tmp.as_file().sync_all().ok();
     let answers_path = tmp.path().to_path_buf();
-    // re-init: the GUI wizard re-runs onboarding when the user clicks
-    // "Edit", so allow overwriting an existing onboarding state.
-    mur_core::cmd::agent_companion::init::run(agent, Some(answers_path), true).await?;
+    // re-init defaults off — the frontend must set re_init=true via the
+    // "Edit" entrypoint to overwrite an existing onboarding state, so
+    // the wizard's normal first-launch path can never silently clobber
+    // a user's first_memory.
+    mur_core::cmd::agent_companion::init::run(agent, Some(answers_path), p.re_init).await?;
     drop(tmp);
     Ok(())
 }

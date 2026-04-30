@@ -116,6 +116,7 @@ async fn onboarding_submit_persists_fields_and_tier() {
         relationship: "friend".into(),
         first_memory: Some("Sunday in Taipei".into()),
         proactive_tier: "warm_only".into(),
+        re_init: false,
     };
 
     mur_agent_gui_lib::commands::companion_onboarding_submit_impl("submit", payload)
@@ -146,6 +147,7 @@ async fn onboarding_submit_without_first_memory_writes_none() {
         relationship: "coach".into(),
         first_memory: None,
         proactive_tier: "all".into(),
+        re_init: false,
     };
 
     mur_agent_gui_lib::commands::companion_onboarding_submit_impl("nofm", payload)
@@ -159,6 +161,91 @@ async fn onboarding_submit_without_first_memory_writes_none() {
     assert_eq!(s.agent_display_name.as_deref(), Some("Sage"));
     assert!(s.first_memory_text.is_none());
     assert_eq!(s.proactive_tier, "all");
+}
+
+#[tokio::test]
+async fn onboarding_submit_without_re_init_rejects_already_onboarded() {
+    // R12 first-memory-is-sacred guard — an accidental wizard re-entry
+    // must not silently overwrite an already-set first_memory.
+    let tmp = TempDir::new().unwrap();
+    let _guard = MurHomeGuard::set(tmp.path());
+    seed_agent(tmp.path(), "twice");
+
+    let first = mur_agent_gui_lib::commands::OnboardingSubmit {
+        agent_display_name: "Mochi".into(),
+        locale: "en-US".into(),
+        name_for_user: "David".into(),
+        relationship: "friend".into(),
+        first_memory: Some("Sunday in Taipei".into()),
+        proactive_tier: "warm_only".into(),
+        re_init: false,
+    };
+    mur_agent_gui_lib::commands::companion_onboarding_submit_impl("twice", first)
+        .await
+        .expect("first submit must succeed");
+
+    let second = mur_agent_gui_lib::commands::OnboardingSubmit {
+        agent_display_name: "Mochi-2".into(),
+        locale: "en-US".into(),
+        name_for_user: "Imposter".into(),
+        relationship: "coach".into(),
+        first_memory: Some("Tuesday in Tokyo".into()),
+        proactive_tier: "all".into(),
+        re_init: false, // explicitly not re-init — must be rejected
+    };
+    let err = mur_agent_gui_lib::commands::companion_onboarding_submit_impl("twice", second)
+        .await
+        .expect_err("second submit without re_init must reject");
+    assert!(
+        err.to_string().contains("already initialized"),
+        "expected re-init guard error, got: {err}"
+    );
+
+    // Original first_memory unchanged.
+    let s = mur_agent_gui_lib::commands::companion_onboarding_status_impl("twice")
+        .await
+        .unwrap();
+    assert_eq!(s.first_memory_text.as_deref(), Some("Sunday in Taipei"));
+    assert_eq!(s.agent_display_name.as_deref(), Some("Mochi"));
+}
+
+#[tokio::test]
+async fn onboarding_submit_with_re_init_overwrites() {
+    // Edit-mode wizard (re_init = true) must successfully overwrite.
+    let tmp = TempDir::new().unwrap();
+    let _guard = MurHomeGuard::set(tmp.path());
+    seed_agent(tmp.path(), "edit");
+
+    let first = mur_agent_gui_lib::commands::OnboardingSubmit {
+        agent_display_name: "Mochi".into(),
+        locale: "en-US".into(),
+        name_for_user: "David".into(),
+        relationship: "friend".into(),
+        first_memory: Some("v1".into()),
+        proactive_tier: "warm_only".into(),
+        re_init: false,
+    };
+    mur_agent_gui_lib::commands::companion_onboarding_submit_impl("edit", first)
+        .await
+        .unwrap();
+
+    let edit = mur_agent_gui_lib::commands::OnboardingSubmit {
+        agent_display_name: "Mochi".into(),
+        locale: "en-US".into(),
+        name_for_user: "David".into(),
+        relationship: "friend".into(),
+        first_memory: Some("v2".into()),
+        proactive_tier: "warm_only".into(),
+        re_init: true,
+    };
+    mur_agent_gui_lib::commands::companion_onboarding_submit_impl("edit", edit)
+        .await
+        .expect("re_init=true must succeed");
+
+    let s = mur_agent_gui_lib::commands::companion_onboarding_status_impl("edit")
+        .await
+        .unwrap();
+    assert_eq!(s.first_memory_text.as_deref(), Some("v2"));
 }
 
 // ─── M2.4.3 — `companion_onboarding_skip` ──────────────────────────────────
