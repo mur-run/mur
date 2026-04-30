@@ -596,12 +596,22 @@ pub struct VoiceOverrides {
     pub extra_instructions: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FirstMemory {
+    pub text: String,
+    pub established_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OnboardingState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_memory: Option<FirstMemory>,
 }
 
 /// Phase 1.2 reservation. 1.1 keeps `enabled = false` (rhythm collection is
