@@ -105,6 +105,7 @@ fn main() -> Result<()> {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::env::temp_dir().join("mur-agent-gui"));
+            let app_data_for_hotkey = app_data.clone();
             let voice_app_handle = app.handle().clone();
             tauri::async_runtime::block_on(async move {
                 match voice::VoiceManager::new(app_data).await {
@@ -116,8 +117,28 @@ fn main() -> Result<()> {
                         voice_app_handle
                             .manage(std::sync::Arc::new(commands::ActiveCapture::default()));
                         if was_enabled {
-                            if let Err(e) = voice::hotkey::register_ptt(&voice_app_handle) {
-                                tracing::warn!("re-register PTT on boot: {e:#}");
+                            // Re-register the persisted hotkey (falls
+                            // back to default if hotkey.json absent).
+                            let cfg = voice::hotkey::load_hotkey(&app_data_for_hotkey).await;
+                            match cfg.to_shortcut() {
+                                Ok(s) => {
+                                    if let Err(e) = voice::hotkey::register_shortcut(
+                                        &voice_app_handle,
+                                        &s,
+                                    ) {
+                                        tracing::warn!("re-register PTT on boot: {e:#}");
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "persisted hotkey config invalid ({e}); falling back to default"
+                                    );
+                                    if let Err(e2) = voice::hotkey::register_ptt(
+                                        &voice_app_handle,
+                                    ) {
+                                        tracing::warn!("re-register default PTT on boot: {e2:#}");
+                                    }
+                                }
                             }
                         }
                     }
@@ -286,6 +307,8 @@ fn main() -> Result<()> {
             commands::stt_transcribe_pcm16k,
             commands::voice_start_capture,
             commands::voice_stop_capture,
+            commands::voice_get_hotkey,
+            commands::voice_rebind_hotkey,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
