@@ -74,7 +74,10 @@ fn load_relationship_file(agent_home: &Path) -> Option<RelationshipFile> {
     match serde_json::from_str::<RelationshipFile>(&s) {
         Ok(rel) => Some(rel),
         Err(e) => {
-            tracing::warn!(
+            // A malformed relationship.json is real corruption (bad wizard
+            // output or hand-edit), not just an absent file — surface as
+            // error so the user notices the silent voice degradation.
+            tracing::error!(
                 "companion: failed to parse {}: {e} — falling back to no first_memory",
                 p.display()
             );
@@ -145,6 +148,10 @@ impl Companion {
         // Load relationship.json so we can thread first_memory.text into the
         // voice template. `rel` must outlive `compose_with_overrides` because
         // `VoiceInput.first_memory: Option<&str>` borrows from it.
+        //
+        // Lifecycle: voice_md is composed ONCE here at startup and cached on
+        // the inner state. `mur agent companion init --re-init` therefore
+        // requires a runtime restart for first_memory edits to take effect.
         let rel = load_relationship_file(agent_home);
         let first_memory: Option<&str> = rel
             .as_ref()
