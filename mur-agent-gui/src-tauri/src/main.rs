@@ -253,6 +253,35 @@ fn main() -> Result<()> {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        // ── D3 / M3.6.3 — drag-drop event → React ──────────────────
+        //
+        // Tauri 2 delivers drag-drop through `WindowEvent::DragDrop`.
+        // The webview ALSO fires HTML5 `drop` events on its own, so
+        // we use `DropDeduper` (sorted-paths within a 120ms window —
+        // workaround for Tauri issue #14134, which also covers the
+        // double-fire seen on macOS) to make sure the React side gets
+        // exactly one `multimodal://drop` per physical drop. React
+        // then invokes `multimodal_drop` with these paths via the
+        // Tauri RPC.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                use std::sync::Mutex;
+                use tauri::Emitter;
+                static DEDUPE: Mutex<Option<crate::multimodal::DropDeduper>> = Mutex::new(None);
+                let now = std::time::Instant::now();
+                let mut g = DEDUPE.lock().unwrap_or_else(|p| p.into_inner());
+                if g.is_none() {
+                    *g = Some(crate::multimodal::DropDeduper::new());
+                }
+                if !g.as_mut().unwrap().observe(paths, now) {
+                    return;
+                }
+                drop(g);
+                if let Err(e) = window.emit("multimodal://drop", paths.clone()) {
+                    tracing::warn!("emit multimodal://drop: {e:#}");
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // Status / lifecycle
             commands::status,
