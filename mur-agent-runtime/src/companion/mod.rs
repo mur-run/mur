@@ -14,6 +14,7 @@ pub mod situations;
 pub mod telemetry;
 pub mod voice;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -25,11 +26,13 @@ use crate::companion::{
     clock::Clock,
     notifier::StdoutNotifier,
     outbox::{Outbox, OutboxConfig},
-    picker::{BanditState, Picker},
+    picker::{BanditState, Picker, TemplateId},
     voice::{VoiceInput, compose_with_overrides},
 };
 use crate::durable::ledger::Ledger;
 use crate::llm::LlmClient;
+use mur_common::companion::Situation;
+use mur_common::companion::content_seed::{SituationFile, all_seeds, parse};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // relationship.json — runtime-side parser
@@ -59,6 +62,71 @@ struct FirstMemoryRef {
     #[allow(dead_code)]
     #[serde(default)]
     established_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Content-pool seed loader (M2.2.4)
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// Reads `<agent_dir>/companion/content/<situation>.<locale>.yaml` for every
+// supported situation, falling back to the embedded seeds when a disk file is
+// missing or unreadable. Returns a flat `template_id → prompt_seed` map that
+// the outbox uses (via `OutboxConfig.prompt_seeds`) to look up the picked
+// template's seed before LLM generation.
+//
+// Best-effort by design: a missing/malformed YAML is logged at warn level and
+// the situation is skipped; the outbox then falls back to the legacy hardcoded
+// "Compose one short message…" line for templates whose seed is unknown.
+
+fn load_prompt_seeds(agent_home: &Path, locale: &str) -> BTreeMap<TemplateId, String> {
+    let mut out: BTreeMap<TemplateId, String> = BTreeMap::new();
+    let situations: [(Situation, &str); 4] = [
+        (Situation::MorningGreeting, "morning_greeting"),
+        (Situation::GentleCheckIn, "gentle_check_in"),
+        (Situation::ShareQuote, "share_quote"),
+        (Situation::ShareLink, "share_link"),
+    ];
+
+    for (situation, slug) in situations {
+        // Try disk first.
+        let disk_path = agent_home
+            .join("companion/content")
+            .join(format!("{slug}.{locale}.yaml"));
+        let parsed: Option<SituationFile> = match std::fs::read_to_string(&disk_path) {
+            Ok(body) => match serde_yaml_ng::from_str::<SituationFile>(&body) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    tracing::warn!(
+                        "companion: failed to parse content seed {}: {e} — falling back to embedded",
+                        disk_path.display()
+                    );
+                    None
+                }
+            },
+            Err(_) => None,
+        };
+
+        // Fall through to embedded if disk missing or malformed.
+        let parsed = parsed.or_else(|| {
+            for (sit, loc, yaml) in all_seeds() {
+                if sit == situation
+                    && loc == locale
+                    && let Ok(p) = parse(yaml)
+                {
+                    return Some(p);
+                }
+            }
+            None
+        });
+
+        if let Some(file) = parsed {
+            for tpl in file.templates {
+                out.insert(tpl.id, tpl.prompt_seed);
+            }
+        }
+    }
+
+    out
 }
 
 /// Best-effort load of `<agent_dir>/companion/relationship.json`.
@@ -183,11 +251,23 @@ impl Companion {
         let picker = Picker::from_state(BanditState::default());
 
         // 5. OutboxConfig.
+        // M2.2.4 — load the content-pool seeds so the outbox can substitute
+        // `prompt_seed` placeholders into the LLM user prompt. The first_memory
+        // / placeholder context here is OWNED (cloned) because Outbox outlives
+        // the function-scoped `rel` we used for voice composition above.
+        let prompt_seeds = load_prompt_seeds(agent_home, &profile.companion.locale);
+        let first_memory_owned: Option<String> = first_memory.map(|s| s.to_string());
         let config = OutboxConfig {
             llm,
             notifier,
             voice_md,
             locale: profile.companion.locale.clone(),
+            prompt_seeds,
+            name_for_user: name_for_user.to_string(),
+            first_memory: first_memory_owned,
+            formality: formality_str,
+            extra_instructions: extra_instructions.to_string(),
+            relationship: profile.companion.relationship.clone(),
         };
 
         // 6. Outbox wrapped in Mutex for interior mutability across the tick task.

@@ -348,6 +348,14 @@ impl HarnessBuilder {
             notifier: notifier.clone() as Arc<dyn Notifier>,
             voice_md: self.voice_md,
             locale: self.locale,
+            // M2.2.4 — these tests pre-date prompt_seed substitution; an
+            // empty seed map keeps them on the legacy hardcoded prompt path.
+            prompt_seeds: BTreeMap::new(),
+            name_for_user: String::new(),
+            first_memory: None,
+            formality: String::new(),
+            extra_instructions: String::new(),
+            relationship: mur_common::companion::Relationship::Friend,
         };
 
         let clock_for_outbox: Arc<dyn Clock> = clock.clone();

@@ -114,6 +114,15 @@ async fn no_pii_in_ledger_after_24h_simulation() {
         notifier: Arc::new(FakeNotifier) as Arc<dyn Notifier>,
         voice_md,
         locale: "en-US".into(),
+        // M2.2.4 — empty seed map keeps this test on the legacy hardcoded
+        // prompt path; we're not asserting prompt construction here, only
+        // that the sentinel never lands in the ledger.
+        prompt_seeds: BTreeMap::new(),
+        name_for_user: String::new(),
+        first_memory: None,
+        formality: String::new(),
+        extra_instructions: String::new(),
+        relationship: mur_common::companion::Relationship::Friend,
     };
 
     let mut outbox = Outbox::with_picker(clock.clone(), ledger, picker, proactive, config);

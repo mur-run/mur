@@ -169,6 +169,31 @@ pub struct OutboxConfig {
     /// Taken from `CompanionConfig.locale`; `ProactiveConfig` does not carry
     /// a locale field in the current schema.
     pub locale: String,
+    /// Map of `template_id → prompt_seed` loaded from the agent's content
+    /// pool (`<agent_dir>/companion/content/<situation>.<locale>.yaml`,
+    /// with embedded fallback). Populated at startup by `Companion::new`.
+    ///
+    /// M2.2.4: when the picker selects a `template_id` whose entry exists
+    /// here with a non-empty seed, the outbox uses that seed (after
+    /// placeholder substitution) as the LLM user prompt; otherwise it
+    /// falls back to the legacy `"Compose one short message…"` line.
+    pub prompt_seeds: BTreeMap<TemplateId, String>,
+    /// `name_for_user` — used to substitute `{{NAME_FOR_USER}}` in `prompt_seed`.
+    /// Comes from `profile.companion.voice_overrides.name_for_user`.
+    pub name_for_user: String,
+    /// First-memory text loaded from `relationship.json` — used to substitute
+    /// `{{FIRST_MEMORY}}` / `{{FIRST_MEMORY_PARAGRAPH}}` in `prompt_seed`.
+    /// `None` (or empty) collapses both placeholders to the empty string.
+    pub first_memory: Option<String>,
+    /// `formality` (lowercased Debug rendering, e.g. `"casual"`) — used to
+    /// substitute `{{FORMALITY}}`.
+    pub formality: String,
+    /// `extra_instructions` — used to substitute `{{EXTRA_INSTRUCTIONS}}`.
+    pub extra_instructions: String,
+    /// Companion `relationship` — used to construct the `VoiceInput` for
+    /// substitution. Not directly templated, but `voice::apply_placeholders`
+    /// requires it.
+    pub relationship: mur_common::companion::Relationship,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -197,6 +222,16 @@ pub struct Outbox<R: RngCore + Send = StdRng> {
     /// Comes from `CompanionConfig.locale` (or caller's choice); ProactiveConfig
     /// does not carry a locale field in the current schema.
     pub locale: String,
+
+    // ── prompt_seed substitution context (M2.2.4) ──
+    /// Map of `template_id → prompt_seed`. See [`OutboxConfig::prompt_seeds`].
+    pub prompt_seeds: BTreeMap<TemplateId, String>,
+    /// Owned placeholder context — see the corresponding `OutboxConfig` fields.
+    pub name_for_user: String,
+    pub first_memory: Option<String>,
+    pub formality: String,
+    pub extra_instructions: String,
+    pub relationship: mur_common::companion::Relationship,
 
     // ── rhythm state ──
     /// Local time of the last successfully sent message (updated at step 12).
@@ -236,6 +271,12 @@ impl Outbox<StdRng> {
             notifier: config.notifier,
             voice_md: config.voice_md,
             locale: config.locale,
+            prompt_seeds: config.prompt_seeds,
+            name_for_user: config.name_for_user,
+            first_memory: config.first_memory,
+            formality: config.formality,
+            extra_instructions: config.extra_instructions,
+            relationship: config.relationship,
             last_send_at: None,
             sent_today: 0,
             morning_sent_today: None,
@@ -264,6 +305,12 @@ impl<R: RngCore + Send> Outbox<R> {
             notifier: config.notifier,
             voice_md: config.voice_md,
             locale: config.locale,
+            prompt_seeds: config.prompt_seeds,
+            name_for_user: config.name_for_user,
+            first_memory: config.first_memory,
+            formality: config.formality,
+            extra_instructions: config.extra_instructions,
+            relationship: config.relationship,
             last_send_at: None,
             sent_today: 0,
             morning_sent_today: None,
@@ -327,8 +374,9 @@ impl<R: RngCore + Send> Outbox<R> {
                     // Re-attempt generation.
                     let situation_str = format!("{:?}", paused.situation);
                     let locale = paused.locale_at_schedule.clone();
+                    let template_id = paused.template_id.clone();
                     match self
-                        .generate_with_lint(&id, &situation_str, &locale, now_utc)
+                        .generate_with_lint(&id, &template_id, &situation_str, &locale, now_utc)
                         .await
                     {
                         GenerateResult::Ok(body) => {
@@ -578,7 +626,7 @@ impl<R: RngCore + Send> Outbox<R> {
         let locale = self.locale.clone();
 
         let body = match self
-            .generate_with_lint(&id, &situation_str, &locale, now_utc)
+            .generate_with_lint(&id, &template_id, &situation_str, &locale, now_utc)
             .await
         {
             GenerateResult::Ok(text) => text,
@@ -797,6 +845,32 @@ impl<R: RngCore + Send> Outbox<R> {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Internal helper: prompt_seed placeholder substitution (M2.2.4)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Substitute companion placeholders into a `prompt_seed` string.
+    ///
+    /// Reuses [`crate::companion::voice::apply_placeholders`] so the
+    /// system-prompt path (voice template) and the user-prompt path
+    /// (this method, M2.2.4) never diverge in their substitution rules:
+    /// template-defined tokens (`{{LOCALE}}`, `{{FIRST_MEMORY}}`,
+    /// `{{FIRST_MEMORY_PARAGRAPH}}`) expand first, user-supplied tokens
+    /// (`{{NAME_FOR_USER}}`, `{{FORMALITY}}`, `{{EXTRA_INSTRUCTIONS}}`)
+    /// expand last (so they can't inject re-substituted `{{...}}` tokens).
+    fn substitute_prompt_seed(&self, seed: &str) -> String {
+        use crate::companion::voice::{VoiceInput, apply_placeholders};
+        let input = VoiceInput {
+            relationship: self.relationship.clone(),
+            locale: &self.locale,
+            name_for_user: &self.name_for_user,
+            first_memory: self.first_memory.as_deref(),
+            formality: &self.formality,
+            extra_instructions: &self.extra_instructions,
+        };
+        apply_placeholders(seed, &self.locale, &input)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Internal helper: generate + lint with one regenerate
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -806,24 +880,37 @@ impl<R: RngCore + Send> Outbox<R> {
     /// retries **once** with a `"\n[regenerate]"` suffix on the user prompt so
     /// the `StubLlm` can match a distinct scenario.  On second failure, appends
     /// both a second `MessageGenerated` and `MessageDropped { linter_persistent }`.
+    ///
+    /// **M2.2.4** — when the picked `template_id` has a non-empty
+    /// `prompt_seed` registered in `self.prompt_seeds`, that seed (with
+    /// placeholder substitution) is used as the user prompt instead of the
+    /// legacy `"Compose one short message…"` line. Empty / missing seeds
+    /// fall back to the legacy prompt so existing behaviour doesn't regress.
     async fn generate_with_lint(
         &mut self,
         id: &str,
+        template_id: &TemplateId,
         situation_str: &str,
         locale: &str,
         _now_utc: DateTime<Utc>,
     ) -> GenerateResult {
+        // Resolve the picked template's prompt_seed (if any) and substitute
+        // placeholders ONCE. Both regen attempts share the same base prompt;
+        // only the trailing `[regenerate]` marker differs.
+        let base_prompt: String = match self.prompt_seeds.get(template_id) {
+            Some(seed) if !seed.trim().is_empty() => self.substitute_prompt_seed(seed),
+            _ => format!(
+                "Compose one short message for situation: {situation_str}, locale: {locale}"
+            ),
+        };
+
         for regen_count in 0u32..=1 {
-            // Build the user prompt; append "[regenerate]" on the retry so
-            // StubLlm can match a distinct scenario (documented contract).
+            // Append "[regenerate]" on the retry so StubLlm can match a
+            // distinct scenario (documented contract).
             let user_prompt = if regen_count == 0 {
-                format!(
-                    "Compose one short message for situation: {situation_str}, locale: {locale}"
-                )
+                base_prompt.clone()
             } else {
-                format!(
-                    "Compose one short message for situation: {situation_str}, locale: {locale}\n[regenerate]"
-                )
+                format!("{base_prompt}\n[regenerate]")
             };
 
             let req = LlmRequest {
@@ -1127,6 +1214,12 @@ mod tests {
                 notifier,
                 voice_md: "You are a warm companion.".to_string(),
                 locale: "zh-TW".to_string(),
+                prompt_seeds: BTreeMap::new(),
+                name_for_user: String::new(),
+                first_memory: None,
+                formality: String::new(),
+                extra_instructions: String::new(),
+                relationship: mur_common::companion::Relationship::Friend,
             },
         )
     }
@@ -1578,6 +1671,12 @@ mod tests {
                 notifier: notifier.clone(),
                 voice_md: "You are a warm companion.".to_string(),
                 locale: "zh-TW".to_string(),
+                prompt_seeds: BTreeMap::new(),
+                name_for_user: String::new(),
+                first_memory: None,
+                formality: String::new(),
+                extra_instructions: String::new(),
+                relationship: mur_common::companion::Relationship::Friend,
             },
         );
 
@@ -1687,6 +1786,12 @@ mod tests {
                 notifier: notifier.clone(),
                 voice_md: "You are a warm companion.".to_string(),
                 locale: "zh-TW".to_string(),
+                prompt_seeds: BTreeMap::new(),
+                name_for_user: String::new(),
+                first_memory: None,
+                formality: String::new(),
+                extra_instructions: String::new(),
+                relationship: mur_common::companion::Relationship::Friend,
             },
         );
 
@@ -1795,6 +1900,12 @@ mod tests {
                 notifier: notifier.clone(),
                 voice_md: "You are a warm companion.".to_string(),
                 locale: "zh-TW".to_string(),
+                prompt_seeds: BTreeMap::new(),
+                name_for_user: String::new(),
+                first_memory: None,
+                formality: String::new(),
+                extra_instructions: String::new(),
+                relationship: mur_common::companion::Relationship::Friend,
             },
         );
 
