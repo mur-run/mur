@@ -1,3 +1,5 @@
+use chrono::{TimeZone, Utc};
+use mur_common::agent::FirstMemory;
 use mur_common::companion::{Formality, Relationship, Signal, Situation};
 
 #[test]
@@ -31,4 +33,126 @@ fn signal_serde_roundtrip() {
     // smoke-check: ensure Signal is in scope and serializes snake_case
     let s = serde_json::to_string(&Signal::Positive).unwrap();
     assert_eq!(s, "\"positive\"");
+}
+
+#[test]
+fn first_memory_yaml_roundtrip() {
+    let fm = FirstMemory {
+        text: "We met on a Sunday in Taipei.".into(),
+        established_at: Utc.with_ymd_and_hms(2026, 4, 30, 14, 13, 0).unwrap(),
+    };
+    let s = serde_yaml_ng::to_string(&fm).unwrap();
+    assert!(s.contains("text:"));
+    assert!(s.contains("established_at:"));
+    let back: FirstMemory = serde_yaml_ng::from_str(&s).unwrap();
+    assert_eq!(back, fm);
+}
+
+#[test]
+fn onboarding_state_pre_d2_yaml_still_deserializes() {
+    // A profile written before M2.1.1 has no agent_display_name / first_memory
+    // fields; #[serde(default)] must let it round-trip cleanly with the new
+    // optional fields = None.
+    let yaml = "completed_at: null\nversion: 0\n";
+    let s: mur_common::agent::OnboardingState = serde_yaml_ng::from_str(yaml).unwrap();
+    assert!(s.completed_at.is_none());
+    assert_eq!(s.version, 0);
+    assert!(s.agent_display_name.is_none());
+    assert!(s.first_memory.is_none());
+}
+
+#[test]
+fn proactive_tiers_helper() {
+    use mur_common::agent::{CompanionConfig, ProactiveTier};
+    let mut c = CompanionConfig::default();
+    c.enabled = true;
+    let t = ProactiveTier::from_config(&c);
+    assert_eq!(t, ProactiveTier::WarmOnly);
+
+    c.rhythm.enabled = true;
+    let t = ProactiveTier::from_config(&c);
+    assert_eq!(t, ProactiveTier::WarmAndBehavior);
+
+    c.proactive.enabled = true;
+    let t = ProactiveTier::from_config(&c);
+    assert_eq!(t, ProactiveTier::All);
+}
+
+#[test]
+fn proactive_tiers_apply_round_trip() {
+    use mur_common::agent::{CompanionConfig, ProactiveTier};
+    let mut c = CompanionConfig::default();
+    ProactiveTier::All.apply(&mut c);
+    assert!(c.enabled && c.rhythm.enabled && c.proactive.enabled);
+    ProactiveTier::WarmOnly.apply(&mut c);
+    assert!(c.enabled && !c.rhythm.enabled && !c.proactive.enabled);
+    ProactiveTier::Off.apply(&mut c);
+    assert!(!c.enabled && !c.rhythm.enabled && !c.proactive.enabled);
+}
+
+#[test]
+fn proactive_tier_apply_then_from_config_is_identity() {
+    use mur_common::agent::{CompanionConfig, ProactiveTier};
+    for t in [
+        ProactiveTier::Off,
+        ProactiveTier::WarmOnly,
+        ProactiveTier::WarmAndBehavior,
+        ProactiveTier::All,
+    ] {
+        let mut c = CompanionConfig::default();
+        t.apply(&mut c);
+        assert_eq!(
+            ProactiveTier::from_config(&c),
+            t,
+            "round-trip failed for {t:?}"
+        );
+    }
+}
+
+#[test]
+fn agent_profile_with_first_memory_roundtrip() {
+    use mur_common::agent::{AgentProfile, FirstMemory, OnboardingState};
+
+    // Load minimal profile from fixture and add companion + onboarding data
+    let yaml = include_str!("fixtures/profile_p0a_minimal.yaml");
+    let mut p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+
+    p.companion.enabled = true;
+    p.companion.onboarding = OnboardingState {
+        completed_at: Some(chrono::Utc::now()),
+        version: 1,
+        agent_display_name: Some("Mochi".into()),
+        first_memory: Some(FirstMemory {
+            text: "first day in Taipei".into(),
+            established_at: chrono::Utc::now(),
+        }),
+    };
+
+    let yaml_out = serde_yaml_ng::to_string(&p).unwrap();
+    assert!(
+        yaml_out.contains("first_memory:"),
+        "yaml missing first_memory: {}",
+        yaml_out
+    );
+    assert!(
+        yaml_out.contains("agent_display_name: Mochi"),
+        "yaml missing display name: {}",
+        yaml_out
+    );
+
+    let back: AgentProfile = serde_yaml_ng::from_str(&yaml_out).unwrap();
+    assert_eq!(
+        back.companion.onboarding.agent_display_name.as_deref(),
+        Some("Mochi")
+    );
+    assert!(back.companion.onboarding.first_memory.is_some());
+    assert_eq!(
+        back.companion
+            .onboarding
+            .first_memory
+            .as_ref()
+            .unwrap()
+            .text,
+        "first day in Taipei",
+    );
 }
