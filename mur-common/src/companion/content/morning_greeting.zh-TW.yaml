@@ -28,3 +28,26 @@ templates:
     prompt_seed: |
       A quiet "good morning" — just one short sentence acknowledging the day,
       no question. For when {{NAME_FOR_USER}} might prefer space.
+  # ── First-memory templates (day-3+ approximation) ──────────────────────
+  # See en-US sibling file for rationale: longer cooldown_days (7/10) is a
+  # placeholder for a roadmap §4.2 `min_relationship_age_days` gate that
+  # the current TemplateSeed schema doesn't support. Reduce cooldowns to
+  # normal values once picker-side day-gating ships.
+  - id: morning_first_memory_warm_zh_001
+    weight: 1.0
+    cooldown_days: 7
+    tags: [warm, reflective, memory_focused]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      早上好 {{NAME_FOR_USER}}——我還在想你說的「{{FIRST_MEMORY}}」。
+      那件事今天如何了？一句話，溫暖的語氣。
+  - id: morning_first_memory_followup_zh_001
+    weight: 0.9
+    cooldown_days: 10
+    tags: [attentive, memory_followup]
+    source: built-in
+    reviewed_by: "@maintainer"
+    prompt_seed: |
+      嘿 {{NAME_FOR_USER}}——你之前提過「{{FIRST_MEMORY}}」，
+      後來怎麼樣了？好奇一下，一兩句話。

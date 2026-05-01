@@ -26,6 +26,7 @@ fn bench_compose(c: &mut Criterion) {
                 relationship: Relationship::Friend,
                 locale: "en-US",
                 name_for_user: "user",
+                first_memory: None,
                 formality: "polite",
                 extra_instructions: "",
             });
