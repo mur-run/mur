@@ -5,7 +5,7 @@
 //! Failure modes (timeout / empty / etc.) fall back to raw question.
 #![allow(dead_code)] // wired by Task 7.
 
-use crate::conversations::ollama::{GenerateOptions, GenerateRequest, OllamaClient};
+use crate::conversations::backend::{ChatBackend, ChatRequest};
 
 use super::session::{RewriterStatus, TurnRecord};
 
@@ -63,7 +63,11 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// Short-circuits to `Skipped` when `prior_turns` is empty — no LLM call.
 /// On Ollama error, returns `FailedFellBackToRaw`. On identity echo
 /// (trimmed, case-insensitive, ignoring trailing `?!.`), returns `NoRewriteNeeded`.
-pub async fn rewrite(client: &OllamaClient, model: &str, input: RewriteInput<'_>) -> RewriteResult {
+pub async fn rewrite(
+    backend: &dyn ChatBackend,
+    model: &str,
+    input: RewriteInput<'_>,
+) -> RewriteResult {
     if input.prior_turns.is_empty() {
         return RewriteResult {
             rewritten: input.raw_question.to_string(),
@@ -76,31 +80,29 @@ pub async fn rewrite(client: &OllamaClient, model: &str, input: RewriteInput<'_>
         .replace("{history}", &history)
         .replace("{question}", input.raw_question);
 
-    let resp = client
-        .generate(GenerateRequest {
+    let resp = backend
+        .generate(ChatRequest {
             model,
-            prompt: &prompt,
+            user: &prompt,
             system: None,
-            stream: false,
-            options: GenerateOptions {
-                temperature: Some(0.1),
-                top_p: Some(0.9),
-                num_predict: Some(80),
-                stop: vec!["\n".into()],
-            },
+            max_tokens: 80,
+            temperature: Some(0.1),
+            stop: vec!["\n".into()],
+            cache_system: false,
+            cache_user_prefix: None,
         })
         .await;
 
     match resp {
         Err(e) => {
-            tracing::warn!("rewriter Ollama error: {e:#}");
+            tracing::warn!("rewriter backend error: {e:#}");
             RewriteResult {
                 rewritten: input.raw_question.to_string(),
                 status: RewriterStatus::FailedFellBackToRaw,
             }
         }
         Ok(r) => {
-            let trimmed = r.response.trim().to_string();
+            let trimmed = r.text.trim().to_string();
             if trimmed.is_empty() {
                 tracing::warn!("rewriter returned empty response; falling back to raw");
                 return RewriteResult {
@@ -186,14 +188,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_prior_turns_returns_identity_without_calling_ollama() {
-        // Unreachable endpoint — if we accidentally call Ollama, we'd panic/error.
-        let client = OllamaClient::new("http://127.0.0.1:1", Duration::from_millis(100));
+    async fn empty_prior_turns_returns_identity_without_calling_backend() {
+        // Use OllamaBackend pointing at unreachable endpoint — if we
+        // accidentally call it, we'd get a connection error. The empty-
+        // prior-turns short-circuit should fire before any backend call.
+        use crate::conversations::backend::ollama::OllamaBackend;
+        let backend = OllamaBackend::new("http://127.0.0.1:1", Duration::from_millis(100));
         let input = RewriteInput {
             prior_turns: &[],
             raw_question: "what did I ship?",
         };
-        let r = rewrite(&client, "qwen3:14b", input).await;
+        let r = rewrite(&backend, "qwen3:14b", input).await;
         assert_eq!(r.status, RewriterStatus::Skipped);
         assert_eq!(r.rewritten, "what did I ship?");
     }
@@ -201,15 +206,17 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn connection_failure_returns_fallback_to_raw() {
+        use crate::conversations::backend::ollama::OllamaBackend;
         let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        let client = OllamaClient::new("http://127.0.0.1:1", Duration::from_millis(200));
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        let backend = OllamaBackend::new("http://127.0.0.1:1", Duration::from_millis(200));
         let turns = vec![trec(1, "first q", "first a")];
         let input = RewriteInput {
             prior_turns: &turns,
             raw_question: "follow up",
         };
-        let r = rewrite(&client, "qwen3:14b", input).await;
+        let r = rewrite(&backend, "qwen3:14b", input).await;
         assert_eq!(r.status, RewriterStatus::FailedFellBackToRaw);
         assert_eq!(r.rewritten, "follow up");
     }
