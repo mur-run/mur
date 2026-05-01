@@ -5,5 +5,7 @@
 
 pub mod decode;
 pub mod decoder_protocol;
+pub mod dedupe;
 
 pub use decode::DecoderClient;
+pub use dedupe::DropDeduper;
