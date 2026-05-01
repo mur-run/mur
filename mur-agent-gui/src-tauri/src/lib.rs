@@ -4,6 +4,7 @@
 
 pub mod bootstrap;
 pub mod commands;
+pub mod multimodal;
 pub mod sidecar;
 pub mod theme;
 pub mod voice;
