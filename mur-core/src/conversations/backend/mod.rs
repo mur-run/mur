@@ -4,6 +4,7 @@
 #![allow(dead_code)] // wired progressively across P0 tasks.
 
 pub mod mock;
+pub mod ollama;
 
 use anyhow::Result;
 use futures::stream::Stream;
