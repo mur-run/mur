@@ -5,6 +5,7 @@
 
 pub mod ask;
 pub mod audit;
+pub mod backend;
 pub mod blob;
 pub mod index;
 pub mod ingest;
