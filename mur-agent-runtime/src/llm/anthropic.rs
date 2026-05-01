@@ -18,6 +18,11 @@ use serde_json::json;
 const DEFAULT_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 
+/// Service constant used by `mur agent secret set` / `mur agent secret delete`.
+/// Account format is `{agent_name}/{KEY}` (e.g. `kelp/ANTHROPIC_API_KEY`).
+/// Must stay in sync with `mur-core/src/cmd/agent.rs::SECRET_SERVICE`.
+const MUR_AGENT_KEYCHAIN_SERVICE: &str = "mur-agent";
+
 /// Beta flags required when authenticating with a Claude subscription
 /// OAuth token (sk-ant-oat01-*) instead of a console API key.
 const OAUTH_BETAS: &str =
@@ -58,6 +63,33 @@ impl AnthropicClient {
         let api_key = std::env::var("ANTHROPIC_API_KEY")
             .map_err(|_| LlmError::InvalidResponse("ANTHROPIC_API_KEY not set".into()))?;
         Ok(Self::new(anthropic_base_url(), api_key, model))
+    }
+
+    /// Resolve credentials using mur's agent-aware precedence (no `model_ref`):
+    ///
+    ///   1. OS keychain at service=`mur-agent`, account=`{agent}/ANTHROPIC_API_KEY`
+    ///      — i.e. what `mur agent secret set <agent> ANTHROPIC_API_KEY <token>` writes.
+    ///   2. The `ANTHROPIC_API_KEY` env var — only when no keychain entry exists.
+    ///
+    /// This inverts Claude Code's official precedence (env beats subscription
+    /// OAuth) and mirrors `gh auth token`'s keychain-first model. Rationale:
+    /// a per-agent keychain entry the user explicitly stored is far stronger
+    /// evidence of intent than a process-wide env var, which is often a
+    /// stale leftover from a prior shell session and silently swaps the
+    /// caller's billing identity from subscription to per-token API.
+    ///
+    /// Keychain backend errors (locked keychain, permission denied, etc.)
+    /// propagate as a hard error rather than silently falling through to
+    /// the env var — masking those would defeat the whole purpose.
+    pub async fn from_agent_credentials(agent_name: &str, model: String) -> Result<Self, LlmError> {
+        let account = format!("{agent_name}/ANTHROPIC_API_KEY");
+        match mur_common::secret::keychain_get(MUR_AGENT_KEYCHAIN_SERVICE, &account).await {
+            Ok(Some(secret)) => Ok(Self::from_secret_string(&secret, model, None)),
+            Ok(None) => Self::from_env(model),
+            Err(e) => Err(LlmError::InvalidResponse(format!(
+                "keychain backend error reading {MUR_AGENT_KEYCHAIN_SERVICE}/{account}: {e}"
+            ))),
+        }
     }
 
     /// Construct from a resolved SecretString and an optional registry-supplied

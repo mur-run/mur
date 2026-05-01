@@ -14,6 +14,9 @@ use serde_json::json;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
+/// Service constant used by `mur agent secret set` (mirrors agent.rs).
+const MUR_AGENT_KEYCHAIN_SERVICE: &str = "mur-agent";
+
 pub struct OpenAiClient {
     base_url: String,
     api_key: String,
@@ -52,6 +55,21 @@ impl OpenAiClient {
             std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
         });
         Self::new(base, key.expose_secret().to_string(), model)
+    }
+
+    /// Mur's agent-aware credential resolution, symmetric with
+    /// [`super::anthropic::AnthropicClient::from_agent_credentials`]. Keychain
+    /// at `mur-agent/{agent}/OPENAI_API_KEY` wins over the `OPENAI_API_KEY`
+    /// env var; backend errors propagate rather than silently falling through.
+    pub async fn from_agent_credentials(agent_name: &str, model: String) -> Result<Self, LlmError> {
+        let account = format!("{agent_name}/OPENAI_API_KEY");
+        match mur_common::secret::keychain_get(MUR_AGENT_KEYCHAIN_SERVICE, &account).await {
+            Ok(Some(secret)) => Ok(Self::from_secret_string(&secret, model, None)),
+            Ok(None) => Self::from_env(model),
+            Err(e) => Err(LlmError::InvalidResponse(format!(
+                "keychain backend error reading {MUR_AGENT_KEYCHAIN_SERVICE}/{account}: {e}"
+            ))),
+        }
     }
 }
 
