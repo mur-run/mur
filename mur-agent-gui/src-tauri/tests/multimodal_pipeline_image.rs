@@ -69,6 +69,41 @@ async fn pipeline_from_path_reads_file_then_processes() {
     assert_eq!(a.mime, "image/png");
 }
 
+#[tokio::test]
+async fn pipeline_image_runs_ocr_with_noop_engine() {
+    unsafe {
+        std::env::set_var(
+            "MUR_AGENT_DECODER_BIN",
+            env!("CARGO_BIN_EXE_mur-agent-decoder"),
+        );
+    }
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("telemetry")).unwrap();
+    let png = include_bytes!("fixtures/tiny.png").to_vec();
+    let pipeline = MultimodalPipeline::new(tmp.path().to_path_buf(), 1);
+    let a = pipeline
+        .process(PipelineInput::Bytes {
+            bytes: png,
+            mime_hint: "image/png".into(),
+            source: "user_drop".into(),
+        })
+        .await
+        .unwrap();
+    // M3.5.4 wires OCR. NoopOcr returns empty text → ocr_text is None
+    // (we collapse empty OCR strings to None so downstream readers
+    // don't see Some("")).
+    assert!(a.ocr_text.is_none());
+    // engine_version is always set (Noop returns "noop/1.0").
+    assert_eq!(a.ocr_engine_version.as_deref(), Some("noop/1.0"));
+
+    // Provenance entry's ocr_engine_version is also recorded.
+    let ledger =
+        mur_common::multimodal::ProvenanceLedger::new(tmp.path().join("telemetry/inputs.jsonl"));
+    let entries = ledger.read_turn(1).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].ocr_engine_version.as_deref(), Some("noop/1.0"));
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn pipeline_heic_normalizes_then_decodes() {

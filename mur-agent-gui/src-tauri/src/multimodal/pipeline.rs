@@ -1,13 +1,13 @@
 //! 9-step drag-drop pipeline orchestrator (D3, roadmap §4.3).
 //!
 //! Steps that run here: 3 (HEIC normalize), 4 (sandboxed decode +
-//! re-encode), 8 (provenance ledger entry).
+//! re-encode), 5 (OCR via `OcrEngine` — Noop today, Vision/tesseract
+//! in M3.5.2/M3.5.3), 6 (Unicode scrub on OCR output), 8 (provenance
+//! ledger entry).
 //!
 //! Steps owned by callers / other layers:
 //! * 1 dedupe — caller-side via `DropDeduper` (in `main.rs`)
 //! * 2 iCloud fallback — caller-side via `icloud_fallback_bytes`
-//! * 5 OCR — added to this module in M3.5.4
-//! * 6 Unicode scrubber — applied to OCR output in M3.5.4
 //! * 7 untrusted_image_text wrapper — `B0SafetyHook` (M3.8)
 //! * 9 turn-flag — `B0SafetyHook` (M3.8)
 
@@ -39,6 +39,7 @@ pub struct MultimodalPipeline {
     agent_home: PathBuf,
     turn_id: u64,
     decoder: DecoderClient,
+    ocr: Box<dyn super::ocr::OcrEngine>,
 }
 
 impl MultimodalPipeline {
@@ -47,6 +48,7 @@ impl MultimodalPipeline {
             agent_home,
             turn_id,
             decoder: DecoderClient::new(),
+            ocr: super::ocr::default_engine(),
         }
     }
 
@@ -95,6 +97,16 @@ impl MultimodalPipeline {
             DecodeResponse::PdfText { .. } => bail!("got PDF response on image path"),
         };
 
+        // Step 5 + Step 6: OCR + Unicode scrub.
+        let ocr_result = self.ocr.recognize_png(&png);
+        let (scrubbed_ocr, _scrubbed_count) = unicode_scrubber::scrub(&ocr_result.text);
+        let ocr_text = if scrubbed_ocr.trim().is_empty() {
+            None
+        } else {
+            Some(scrubbed_ocr)
+        };
+        let ocr_engine_version = Some(ocr_result.engine_version.clone());
+
         // Step 8: provenance ledger entry.
         let mut hasher = Sha256::new();
         hasher.update(&png);
@@ -104,7 +116,7 @@ impl MultimodalPipeline {
             sha256: sha256.clone(),
             source: source.clone(),
             decoder_version: decoder_version.clone(),
-            ocr_engine_version: None, // M3.5.4 fills this
+            ocr_engine_version: ocr_engine_version.clone(),
             turn_id: self.turn_id,
             recorded_at: Utc::now(),
         };
@@ -116,11 +128,11 @@ impl MultimodalPipeline {
             kind: ArtifactKind::Image,
             mime: "image/png".into(),
             size_bytes: png.len() as u64,
-            ocr_text: None, // M3.5.4 wires this
+            ocr_text,
             page_count: None,
             created_at: Utc::now(),
             decoder_version,
-            ocr_engine_version: None,
+            ocr_engine_version,
         })
     }
 

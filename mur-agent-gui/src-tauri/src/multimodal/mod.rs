@@ -8,6 +8,7 @@ pub mod decoder_protocol;
 pub mod dedupe;
 pub mod heic;
 pub mod icloud_fallback;
+pub mod ocr;
 pub mod pipeline;
 pub mod unicode_scrubber;
 
