@@ -309,6 +309,10 @@ fn main() -> Result<()> {
             commands::voice_stop_capture,
             commands::voice_get_hotkey,
             commands::voice_rebind_hotkey,
+            // D2 onboarding (M2.4)
+            commands::companion_onboarding_status,
+            commands::companion_onboarding_submit,
+            commands::companion_onboarding_skip,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
