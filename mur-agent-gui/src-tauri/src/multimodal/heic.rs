@@ -25,11 +25,17 @@
 //!
 //! Spec: roadmap §4.3 step 3.
 
-use anyhow::{Context, Result, bail};
+// `Context` is only used by the macOS-only sips path; on other
+// platforms the function is a one-line `bail!` so the import would be
+// dead.
+#[cfg(target_os = "macos")]
+use anyhow::Context;
+use anyhow::{Result, bail};
 
 /// Verify the input has an ISO-BMFF `ftyp` box with a HEIC-family brand.
 /// Without this guard, `sips` would happily treat any image as input
 /// and "convert" it to PNG, which is not what callers want.
+#[cfg(target_os = "macos")]
 fn has_heic_magic(bytes: &[u8]) -> bool {
     if bytes.len() < 12 {
         return false;
