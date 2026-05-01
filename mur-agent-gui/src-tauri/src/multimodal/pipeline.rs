@@ -65,10 +65,13 @@ impl MultimodalPipeline {
         };
 
         // Step 3: HEIC normalization (skip for non-HEIC).
-        let bytes = if mime_hint == "image/heic" || mime_hint == "image/heif" {
-            heic_to_png(&raw_bytes).context("HEIC → PNG")?
+        let (bytes, mime_hint) = if mime_hint == "image/heic" || mime_hint == "image/heif" {
+            (
+                heic_to_png(&raw_bytes).context("HEIC → PNG")?,
+                "image/png".to_string(),
+            )
         } else {
-            raw_bytes
+            (raw_bytes, mime_hint)
         };
 
         // Step 4: sandboxed decode + re-encode.

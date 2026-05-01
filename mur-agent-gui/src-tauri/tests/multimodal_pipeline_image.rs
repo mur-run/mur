@@ -68,3 +68,38 @@ async fn pipeline_from_path_reads_file_then_processes() {
     assert_eq!(a.kind, ArtifactKind::Image);
     assert_eq!(a.mime, "image/png");
 }
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn pipeline_heic_normalizes_then_decodes() {
+    unsafe {
+        std::env::set_var(
+            "MUR_AGENT_DECODER_BIN",
+            env!("CARGO_BIN_EXE_mur-agent-decoder"),
+        );
+    }
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("telemetry")).unwrap();
+    // Reuse the M3.3.3 fixture (804-byte HEIC produced via sips).
+    let heic = include_bytes!("fixtures/exif-gps.heic").to_vec();
+    let pipeline = MultimodalPipeline::new(tmp.path().to_path_buf(), 9);
+    let a = pipeline
+        .process(PipelineInput::Bytes {
+            bytes: heic,
+            mime_hint: "image/heic".into(),
+            source: "user_drop".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(a.kind, ArtifactKind::Image);
+    // After HEIC → PNG normalization, the artifact's MIME is
+    // canonicalized to image/png (we re-encode through image-rs).
+    assert_eq!(a.mime, "image/png");
+    assert!(a.size_bytes > 0);
+
+    // Provenance entry recorded under turn_id 9.
+    let ledger = ProvenanceLedger::new(tmp.path().join("telemetry/inputs.jsonl"));
+    let entries = ledger.read_turn(9).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].source, "user_drop");
+}
