@@ -14,9 +14,11 @@ pub mod situations;
 pub mod telemetry;
 pub mod voice;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use rand::rngs::StdRng;
+use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use crate::companion::{
@@ -28,6 +30,61 @@ use crate::companion::{
 };
 use crate::durable::ledger::Ledger;
 use crate::llm::LlmClient;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// relationship.json — runtime-side parser
+// ──────────────────────────────────────────────────────────────────────────────
+//
+// `mur agent companion init` (mur-core) writes `<agent_dir>/companion/relationship.json`
+// during onboarding. The full schema lives there as the user-facing source of
+// truth; here we parse only the fields the runtime needs. All fields use
+// `#[serde(default)]` so the runtime keeps reading older relationship files
+// written before later fields landed.
+
+/// Minimal projection of `relationship.json` that the runtime parses on
+/// startup. Forward-compatible: unknown fields are ignored, and every
+/// extension this struct cares about is `Option`.
+#[derive(Debug, Deserialize, Default)]
+struct RelationshipFile {
+    /// `first_memory` is added by the M2.1 onboarding wizard once the user
+    /// completes the "share one fact" step. Older files may not carry it.
+    #[serde(default)]
+    first_memory: Option<FirstMemoryRef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FirstMemoryRef {
+    text: String,
+    /// Kept for round-trip / future schema use; the outbox does not consume it.
+    #[allow(dead_code)]
+    #[serde(default)]
+    established_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Best-effort load of `<agent_dir>/companion/relationship.json`.
+///
+/// Returns `None` when the file is missing, unreadable, or malformed — voice
+/// composition then falls back to "no first memory", which collapses the
+/// `{{FIRST_MEMORY}}` / `{{FIRST_MEMORY_PARAGRAPH}}` placeholders to empty
+/// strings (see `voice::apply_placeholders`). This keeps Companion startup
+/// resilient to a partially-written or absent relationship file.
+fn load_relationship_file(agent_home: &Path) -> Option<RelationshipFile> {
+    let p = agent_home.join("companion/relationship.json");
+    let s = std::fs::read_to_string(&p).ok()?;
+    match serde_json::from_str::<RelationshipFile>(&s) {
+        Ok(rel) => Some(rel),
+        Err(e) => {
+            // A malformed relationship.json is real corruption (bad wizard
+            // output or hand-edit), not just an absent file — surface as
+            // error so the user notices the silent voice degradation.
+            tracing::error!(
+                "companion: failed to parse {}: {e} — falling back to no first_memory",
+                p.display()
+            );
+            None
+        }
+    }
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Companion — lightweight handle wired into the supervisor tick loop.
@@ -88,6 +145,17 @@ impl Companion {
             .extra_instructions
             .as_deref()
             .unwrap_or("");
+        // Load relationship.json so we can thread first_memory.text into the
+        // voice template. `rel` must outlive `compose_with_overrides` because
+        // `VoiceInput.first_memory: Option<&str>` borrows from it.
+        //
+        // Lifecycle: voice_md is composed ONCE here at startup and cached on
+        // the inner state. `mur agent companion init --re-init` therefore
+        // requires a runtime restart for first_memory edits to take effect.
+        let rel = load_relationship_file(agent_home);
+        let first_memory: Option<&str> = rel
+            .as_ref()
+            .and_then(|r| r.first_memory.as_ref().map(|fm| fm.text.as_str()));
         let voice_md = compose_with_overrides(
             Some(agent_home),
             None,
@@ -95,6 +163,7 @@ impl Companion {
                 relationship: profile.companion.relationship.clone(),
                 locale: &profile.companion.locale,
                 name_for_user,
+                first_memory,
                 formality: &formality_str,
                 extra_instructions,
             },
@@ -147,6 +216,15 @@ impl Companion {
         let now_local = self.clock.now_local();
         let mut g = self.inner.lock().await;
         let _ = g.run_tick(now_utc, now_local).await;
+    }
+
+    /// Test-only: snapshot the composed `voice_md` (system prompt) so
+    /// integration tests can assert that placeholders threaded from
+    /// `relationship.json` (e.g. `{{FIRST_MEMORY}}`) actually expanded.
+    /// Narrow surface — does not expose the inner `Outbox` itself.
+    #[doc(hidden)]
+    pub async fn voice_md_for_test(&self) -> String {
+        self.inner.lock().await.voice_md.clone()
     }
 }
 
