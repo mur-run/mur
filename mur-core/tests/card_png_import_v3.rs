@@ -25,6 +25,24 @@ fn no_text_chunks_errors() {
     assert!(msg.contains("chara") || msg.contains("ccv3"), "got: {msg}");
 }
 
+#[test]
+fn v3_normalizer_preserves_data() {
+    use mur_core::cmd::agent_companion::card::png::{extract_card_json, normalize_v3};
+    let png = include_bytes!("fixtures/cards/silly-v3.png");
+    let json = extract_card_json(png).unwrap();
+    let card = normalize_v3(&json).unwrap();
+    assert_eq!(card.data.name, "TestV3");
+    assert_eq!(card.data.description, "imported via fixture");
+    assert_eq!(card.spec, "murcard_v1");
+    assert_eq!(card.spec_version, "1.0");
+    let book = card
+        .data
+        .character_book
+        .as_ref()
+        .expect("character_book preserved");
+    assert_eq!(book.name, "x");
+}
+
 fn build_plain_png_no_chunks() -> Vec<u8> {
     // Reuses the M3.2.3 1x1 PNG — known good 67-byte transparent.
     vec![

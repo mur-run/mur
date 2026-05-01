@@ -14,6 +14,9 @@
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
+use serde_json::Value;
+
+use crate::character_card::schema::MurCard;
 
 const PNG_SIGNATURE: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -58,4 +61,20 @@ pub fn extract_card_json(bytes: &[u8]) -> Result<String> {
         .context("base64 decode card payload")?;
     let json = String::from_utf8(decoded).context("card payload not UTF-8 JSON")?;
     Ok(json)
+}
+
+/// Normalize a SillyTavern V3 (`ccv3`) payload into a `MurCard`.
+///
+/// V3's wire shape (`{spec, spec_version, data, ...}`) already matches
+/// `MurCard` modulo the `spec` string — V3 emits `"chara_card_v3"` while
+/// mur emits `"murcard_v1"`. Rewriting the spec at import time keeps the
+/// downstream pipeline single-format.
+pub fn normalize_v3(json: &str) -> Result<MurCard> {
+    let mut v: Value = serde_json::from_str(json).context("parse v3 JSON")?;
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("spec".into(), Value::String("murcard_v1".into()));
+        obj.insert("spec_version".into(), Value::String("1.0".into()));
+    }
+    let card: MurCard = serde_json::from_value(v).context("MurCard from V3 JSON")?;
+    Ok(card)
 }
