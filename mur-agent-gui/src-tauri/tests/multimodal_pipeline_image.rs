@@ -124,7 +124,9 @@ async fn pipeline_image_writes_text_sidecar() {
         })
         .await
         .unwrap();
-    let txt_path = tmp.path().join(format!("telemetry/inputs/{}.txt", a.sha256));
+    let txt_path = tmp
+        .path()
+        .join(format!("telemetry/inputs/{}.txt", a.sha256));
     assert!(
         txt_path.exists(),
         "text sidecar should exist at {}",
