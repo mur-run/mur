@@ -5,15 +5,15 @@
 
 use anyhow::{Context, Result};
 use clap::Args;
+use mur_agent_runtime::companion::voice::{VoiceInput, compose_in_memory};
 use mur_agent_runtime::llm::{LlmClient, LlmMessage, LlmRequest};
 use mur_common::agent::AgentProfile;
 use mur_common::companion::Situation;
 use mur_common::companion::content_seed::{SituationFile, TemplateSeed, all_seeds, parse};
+use serde::Deserialize;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-
-use super::voice::compose_from_profile;
 
 // ─── CLI types ────────────────────────────────────────────────────────────────
 
@@ -54,14 +54,25 @@ pub(crate) async fn run_at(
     let profile = load_profile(agent_home)?;
     let situation = parse_situation_slug(situation_slug)?;
 
-    // Compose voice.md in-memory — never written.
-    let voice = compose_from_profile(&profile);
+    // M2.3.3 — load first_memory from relationship.json so the rendered body
+    // can expand `{{FIRST_MEMORY}}` placeholders. Mirrors the runtime-side
+    // `mur_agent_runtime::companion::Companion::new` wiring (M2.2.3) on the
+    // CLI preview path. Best-effort: a missing/malformed file collapses
+    // first_memory placeholders to empty strings.
+    let first_memory = load_relationship_first_memory(agent_home);
 
-    // Pick deterministic first template for preview.
-    let template = pick_first_template_for_preview(agent_home, &profile, situation)?;
+    // Compose voice.md in-memory — never written.
+    let voice = compose_voice_for_preview(&profile, first_memory.as_deref());
+
+    // Pick deterministic template for preview. When first_memory is set,
+    // prefer a template whose `prompt_seed` references `{{FIRST_MEMORY}}` so
+    // the seed text actually surfaces in the rendered body — otherwise the
+    // first template is picked unchanged.
+    let template =
+        pick_first_template_for_preview(agent_home, &profile, situation, first_memory.as_deref())?;
 
     if no_llm {
-        return preview_no_llm_inner(out, &voice, &template);
+        return preview_no_llm_inner(out, &voice, &template, &profile, first_memory.as_deref());
     }
 
     // LLM path.
@@ -85,18 +96,119 @@ pub(crate) fn preview_no_llm_at(
 ) -> Result<()> {
     let profile = load_profile(agent_home)?;
     let situation = parse_situation_slug(situation_slug)?;
-    let voice = compose_from_profile(&profile);
-    let template = pick_first_template_for_preview(agent_home, &profile, situation)?;
-    preview_no_llm_inner(out, &voice, &template)
+    let first_memory = load_relationship_first_memory(agent_home);
+    let voice = compose_voice_for_preview(&profile, first_memory.as_deref());
+    let template =
+        pick_first_template_for_preview(agent_home, &profile, situation, first_memory.as_deref())?;
+    preview_no_llm_inner(out, &voice, &template, &profile, first_memory.as_deref())
 }
 
-fn preview_no_llm_inner(out: &mut impl Write, voice: &str, template: &TemplateSeed) -> Result<()> {
+fn preview_no_llm_inner(
+    out: &mut impl Write,
+    voice: &str,
+    template: &TemplateSeed,
+    profile: &AgentProfile,
+    first_memory: Option<&str>,
+) -> Result<()> {
+    let rendered_seed = substitute_prompt_seed(&template.prompt_seed, profile, first_memory);
     writeln!(out, "# voice.md")?;
     writeln!(out, "{voice}")?;
     writeln!(out)?;
     writeln!(out, "# prompt_seed (template `{}`)", template.id)?;
-    writeln!(out, "{}", template.prompt_seed)?;
+    writeln!(out, "{rendered_seed}")?;
     Ok(())
+}
+
+/// Compose voice in-memory with the same placeholder substitutions the
+/// runtime applies, so `{{FIRST_MEMORY}}`-bearing voice templates render
+/// correctly when previewed.
+fn compose_voice_for_preview(profile: &AgentProfile, first_memory: Option<&str>) -> String {
+    let formality = profile
+        .companion
+        .voice_overrides
+        .formality
+        .as_ref()
+        .map(|f| format!("{f:?}").to_lowercase())
+        .unwrap_or_default();
+    let name_for_user = profile
+        .companion
+        .voice_overrides
+        .name_for_user
+        .as_deref()
+        .unwrap_or("");
+    let extra = profile
+        .companion
+        .voice_overrides
+        .extra_instructions
+        .as_deref()
+        .unwrap_or("");
+    compose_in_memory(VoiceInput {
+        relationship: profile.companion.relationship.clone(),
+        locale: &profile.companion.locale,
+        name_for_user,
+        first_memory,
+        formality: &formality,
+        extra_instructions: extra,
+    })
+}
+
+/// Apply the same placeholder rules to a `prompt_seed` that the runtime's
+/// `voice::apply_placeholders` applies to voice templates. Keeps the
+/// substitution surface consistent: the user-facing template-defined tokens
+/// (`{{FIRST_MEMORY}}`, `{{FIRST_MEMORY_PARAGRAPH}}`, `{{NAME_FOR_USER}}`)
+/// expand here, and unknown tokens are left untouched.
+fn substitute_prompt_seed(
+    prompt_seed: &str,
+    profile: &AgentProfile,
+    first_memory: Option<&str>,
+) -> String {
+    // first_memory FIRST so user-supplied name_for_user can't inject more
+    // `{{...}}` tokens that get re-substituted.
+    let mut s = match first_memory {
+        Some(fm) if !fm.is_empty() => prompt_seed
+            .replace("{{FIRST_MEMORY}}", fm)
+            .replace("{{FIRST_MEMORY_PARAGRAPH}}", &format!(" {fm}")),
+        _ => prompt_seed
+            .replace("{{FIRST_MEMORY}}", "")
+            .replace("{{FIRST_MEMORY_PARAGRAPH}}", ""),
+    };
+    let name_for_user = profile
+        .companion
+        .voice_overrides
+        .name_for_user
+        .as_deref()
+        .unwrap_or("");
+    s = s.replace("{{NAME_FOR_USER}}", name_for_user);
+    s
+}
+
+// ─── relationship.json loader (best-effort) ──────────────────────────────────
+
+/// Minimal projection of `companion/relationship.json` — only the fields the
+/// preview path needs. Mirrors the runtime parser in
+/// `mur_agent_runtime::companion::RelationshipFile`.
+#[derive(Debug, Default, Deserialize)]
+struct RelationshipFile {
+    #[serde(default)]
+    first_memory: Option<FirstMemoryRef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FirstMemoryRef {
+    text: String,
+}
+
+/// Best-effort load of `<agent_home>/companion/relationship.json` for the
+/// preview path. Returns `None` when the file is missing, unreadable, or
+/// malformed — the preview then renders with `{{FIRST_MEMORY}}` collapsed
+/// to empty (same fallback as the runtime).
+fn load_relationship_first_memory(agent_home: &Path) -> Option<String> {
+    let p = agent_home.join("companion/relationship.json");
+    let s = std::fs::read_to_string(&p).ok()?;
+    match serde_json::from_str::<RelationshipFile>(&s) {
+        Ok(rel) => rel.first_memory.map(|fm| fm.text),
+        Err(_) => None,
+    }
 }
 
 // ─── Template picker ──────────────────────────────────────────────────────────
@@ -105,6 +217,7 @@ fn pick_first_template_for_preview(
     agent_home: &Path,
     profile: &AgentProfile,
     situation: Situation,
+    first_memory: Option<&str>,
 ) -> Result<TemplateSeed> {
     let locale = &profile.companion.locale;
     let situation_slug = situation_to_slug(&situation);
@@ -118,7 +231,7 @@ fn pick_first_template_for_preview(
             .with_context(|| format!("read {}", disk_path.display()))?;
         let parsed: SituationFile = serde_yaml_ng::from_str(&body)
             .with_context(|| format!("parse {}", disk_path.display()))?;
-        if let Some(t) = parsed.templates.into_iter().next() {
+        if let Some(t) = pick_template_from_list(parsed.templates, first_memory) {
             return Ok(t);
         }
     }
@@ -127,13 +240,42 @@ fn pick_first_template_for_preview(
     for (sit, loc, yaml) in all_seeds() {
         if sit == situation && loc == locale {
             let parsed = parse(yaml).context("parse embedded seed")?;
-            if let Some(t) = parsed.templates.into_iter().next() {
+            if let Some(t) = pick_template_from_list(parsed.templates, first_memory) {
                 return Ok(t);
             }
         }
     }
 
     anyhow::bail!("no template available for {situation_slug}.{locale} (preview cannot proceed)");
+}
+
+/// Deterministic picker: when `first_memory` is set, prefer the first
+/// template whose `prompt_seed` references `{{FIRST_MEMORY}}` so the seed
+/// text actually surfaces in the preview output. Falls back to the first
+/// template in declaration order — the same shape the picker had before
+/// M2.3.3.
+fn pick_template_from_list(
+    templates: Vec<TemplateSeed>,
+    first_memory: Option<&str>,
+) -> Option<TemplateSeed> {
+    if let Some(fm) = first_memory
+        && !fm.is_empty()
+    {
+        // Two-pass walk so the original Vec order still wins ties when no
+        // `{{FIRST_MEMORY}}` template exists for this situation.
+        let mut iter = templates.into_iter();
+        let mut head: Option<TemplateSeed> = None;
+        for t in iter.by_ref() {
+            if t.prompt_seed.contains("{{FIRST_MEMORY}}") {
+                return Some(t);
+            }
+            if head.is_none() {
+                head = Some(t);
+            }
+        }
+        return head;
+    }
+    templates.into_iter().next()
 }
 
 // ─── LLM client construction ─────────────────────────────────────────────────
