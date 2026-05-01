@@ -75,7 +75,26 @@ fn read_template_file(p: &Path) -> Option<String> {
     Some(body)
 }
 
-fn apply_placeholders(tpl: &str, locale_used: &str, input: &VoiceInput<'_>) -> String {
+/// Apply the companion's placeholder substitution rules to an arbitrary
+/// template string.
+///
+/// `locale_used` fills `{{LOCALE}}`. The other placeholders are taken from
+/// `input`. Substitution order is fixed:
+///
+/// 1. **Template-defined first** (`{{LOCALE}}`, `{{FIRST_MEMORY}}`,
+///    `{{FIRST_MEMORY_PARAGRAPH}}`) — this is content the runtime owns.
+/// 2. **User-supplied last** (`{{NAME_FOR_USER}}`, `{{FORMALITY}}`,
+///    `{{EXTRA_INSTRUCTIONS}}`) — free-form onboarding input. Going last
+///    means any `{{...}}` they happen to contain stays literal and can't
+///    inject new tokens for a re-substitution pass.
+///
+/// `Some("")` collapses identically to `None` for `first_memory` (an empty
+/// memory is semantically not-set).
+///
+/// Reused by both the system-prompt path (voice template composition) and
+/// the user-prompt path (M2.2.4: outbox `prompt_seed` substitution) so the
+/// two surfaces never diverge.
+pub(crate) fn apply_placeholders(tpl: &str, locale_used: &str, input: &VoiceInput<'_>) -> String {
     // Substitute template-defined placeholders (first_memory, locale) FIRST so
     // that user-supplied values (name_for_user, formality, extra_instructions)
     // — which are free-form input from the onboarding wizard — cannot inject
