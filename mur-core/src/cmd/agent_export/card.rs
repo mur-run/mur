@@ -6,7 +6,7 @@
 //! Spec: `docs/superpowers/specs/2026-04-30-mur-agent-d2-onboarding-design.md`
 //! §4.4.
 
-use crate::character_card::{first_memory::FirstMemoryExt, schema::*};
+use crate::character_card::{extensions::MurExt, first_memory::FirstMemoryExt, schema::*};
 use mur_common::agent::AgentProfile;
 
 /// Build a `MurCard` from an agent profile, threading the companion
@@ -44,6 +44,7 @@ pub fn build_card_from_profile(p: &AgentProfile) -> MurCard {
         extensions: first_memory.map(|fm| Extensions {
             mur: Some(MurExt {
                 first_memory: Some(fm),
+                ..Default::default()
             }),
         }),
         ccv3_passthrough: Default::default(),

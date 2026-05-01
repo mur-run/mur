@@ -63,3 +63,68 @@ fn minimal_card_still_round_trips() {
     assert_eq!(card.data.name, "Mochi");
     assert!(card.data.tags.is_empty());
 }
+
+#[test]
+fn full_extensions_mur_round_trip() {
+    let yaml = r#"
+spec: murcard_v1
+spec_version: "1.0"
+data:
+  name: Aiko
+extensions:
+  mur:
+    schema_version: 1
+    voice:
+      provider: kokoro
+      voice_id: af_heart
+      speed: 1.0
+    avatar:
+      primary_asset: main
+      emotion_map: { happy: happy, thinking: main }
+    relationship:
+      kind: companion
+      addressing: first-name
+      formality: casual
+      languages: [en, zh-TW]
+      primary_language: zh-TW
+    first_memory:
+      text: "We met debugging a tokio deadlock at 2am."
+      established_at: "2026-04-30T00:00:00Z"
+    companion:
+      proactive_enabled: false
+      active_window: "08:00-23:00"
+      situations: [morning_checkin, evening_recap]
+    provenance:
+      signature:
+        algorithm: ed25519
+        public_key: "z6MkABC..."
+        value: "z3sigDEF..."
+        signed_at: "2026-04-30T00:00:00Z"
+      content_rating: sfw
+      import_trust: untrusted
+"#;
+    let card: MurCard = serde_yaml_ng::from_str(yaml).unwrap();
+    let mur = card.extensions.as_ref().unwrap().mur.as_ref().unwrap();
+    assert_eq!(mur.schema_version, 1);
+    assert_eq!(mur.voice.as_ref().unwrap().provider, "kokoro");
+    assert_eq!(
+        mur.relationship.as_ref().unwrap().languages,
+        vec!["en".to_string(), "zh-TW".to_string()],
+    );
+    assert_eq!(
+        mur.provenance
+            .as_ref()
+            .unwrap()
+            .signature
+            .as_ref()
+            .unwrap()
+            .algorithm,
+        "ed25519",
+    );
+    assert_eq!(
+        mur.provenance.as_ref().unwrap().content_rating.as_deref(),
+        Some("sfw"),
+    );
+    let back = serde_yaml_ng::to_string(&card).unwrap();
+    assert!(back.contains("schema_version: 1"));
+}

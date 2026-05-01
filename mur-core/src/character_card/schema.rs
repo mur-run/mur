@@ -11,6 +11,8 @@
 use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Value;
 
+use super::extensions::MurExt;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MurCard {
     /// `"murcard_v1"`.
@@ -121,10 +123,4 @@ fn default_position() -> String {
 pub struct Extensions {
     #[serde(default, rename = "mur", skip_serializing_if = "Option::is_none")]
     pub mur: Option<MurExt>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MurExt {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub first_memory: Option<super::first_memory::FirstMemoryExt>,
 }
