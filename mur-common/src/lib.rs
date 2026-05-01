@@ -13,6 +13,7 @@ pub mod knowledge;
 pub mod llm;
 pub mod lock_file;
 pub mod model;
+pub mod multimodal;
 pub mod parameterize;
 pub mod pattern;
 pub mod permissions;
