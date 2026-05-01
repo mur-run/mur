@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use mur_common::config::LlmConfig;
+use mur_common::llm::anthropic_base_url;
 use serde::{Deserialize, Serialize};
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -83,52 +84,6 @@ pub fn is_reasoning_model(model: &str) -> bool {
     false
 }
 
-// ─── OAuth / Billing ────────────────────────────────────────────────
-
-/// Check if an Anthropic API key is an OAuth token (from Claude subscription).
-fn is_anthropic_oauth_token(key: &str) -> bool {
-    key.contains("sk-ant-oat")
-}
-
-/// Billing header that must be prepended to the system prompt for OAuth requests.
-const BILLING_HEADER: &str =
-    "x-anthropic-billing-header: cc_version=2.1.77; cc_entrypoint=sdk-cli;";
-
-/// Beta features required for OAuth tokens.
-const ANTHROPIC_OAUTH_BETAS: &str = "claude-code-20250219,oauth-2025-04-20";
-
-/// Read the fresh OAuth token from macOS Keychain (same source Claude Code uses).
-#[cfg(target_os = "macos")]
-fn read_oauth_from_keychain() -> Option<String> {
-    let output = std::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            "Claude Code-credentials",
-            "-w",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let json_str = String::from_utf8(output.stdout).ok()?;
-    let creds: serde_json::Value = serde_json::from_str(json_str.trim()).ok()?;
-
-    creds
-        .get("claudeAiOauth")
-        .and_then(|o| o.get("accessToken"))
-        .and_then(|t| t.as_str())
-        .map(|s| s.to_string())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn read_oauth_from_keychain() -> Option<String> {
-    None
-}
-
 // ─── Key Resolution ─────────────────────────────────────────────────
 
 fn resolve_api_key(config: &LlmConfig) -> Result<String> {
@@ -162,6 +117,31 @@ fn default_key_env(provider: &str) -> &str {
 
 // ─── Anthropic ──────────────────────────────────────────────────────
 
+/// Warn once per process if the configured key looks like a Claude
+/// subscription OAuth token (`sk-ant-oat*`) but `ANTHROPIC_BASE_URL`
+/// still points at api.anthropic.com directly. Such requests will 401 —
+/// the user almost certainly meant to route through a local OAuth
+/// bridge (e.g. cc-proxy listening on 127.0.0.1:8088).
+fn warn_if_oauth_key_misconfigured(api_key: &str) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if WARNED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    if !api_key.contains("sk-ant-oat") {
+        return;
+    }
+    let base = anthropic_base_url();
+    if base.starts_with("https://api.anthropic.com") {
+        tracing::warn!(
+            base_url = %base,
+            "ANTHROPIC_API_KEY looks like an OAuth subscription token (sk-ant-oat*), \
+             but ANTHROPIC_BASE_URL points to api.anthropic.com — Anthropic will reject \
+             the request. Set ANTHROPIC_BASE_URL to a local OAuth bridge."
+        );
+    }
+}
+
 #[derive(Serialize)]
 struct AnthropicRequest<'a> {
     model: &'a str,
@@ -192,45 +172,24 @@ async fn anthropic_complete(
     system: &str,
     prompt: &str,
 ) -> Result<String> {
-    // For OAuth tokens: try refreshing from Keychain first, then add billing header
-    let effective_key;
-    let system_final;
-    let is_oauth = is_anthropic_oauth_token(api_key);
-
-    if is_oauth {
-        effective_key = read_oauth_from_keychain().unwrap_or_else(|| api_key.to_string());
-        system_final = format!("{}\n{}", BILLING_HEADER, system);
-    } else {
-        effective_key = api_key.to_string();
-        system_final = system.to_string();
-    };
+    warn_if_oauth_key_misconfigured(api_key);
 
     let client = reqwest::Client::new();
     let body = AnthropicRequest {
         model: &config.model,
         max_tokens: 4096,
-        system: &system_final,
+        system,
         messages: vec![AnthropicMessage {
             role: "user",
             content: prompt,
         }],
     };
 
-    let mut req = client
-        .post("https://api.anthropic.com/v1/messages")
+    let resp = client
+        .post(format!("{}/v1/messages", anthropic_base_url()))
         .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json");
-
-    // OAuth tokens use Bearer auth + beta header; regular keys use x-api-key
-    if is_oauth {
-        req = req
-            .header("Authorization", format!("Bearer {}", effective_key))
-            .header("anthropic-beta", ANTHROPIC_OAUTH_BETAS);
-    } else {
-        req = req.header("x-api-key", &effective_key);
-    }
-
-    let resp = req
+        .header("content-type", "application/json")
+        .header("x-api-key", api_key)
         .json(&body)
         .send()
         .await

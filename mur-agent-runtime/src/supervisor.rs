@@ -219,6 +219,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 (r, Some(client))
             }
             "anthropic" => {
+                // Precedence: registry SecretRef → per-agent OS keychain entry
+                // → ANTHROPIC_API_KEY env var. The keychain hop closes the
+                // gotcha where a stale shell-exported ANTHROPIC_API_KEY
+                // shadows an OAuth subscription token the user explicitly
+                // stored via `mur agent secret set`.
                 let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
                 {
                     Ok(Arc::new(AnthropicClient::from_secret_string(
@@ -227,8 +232,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                         entry.base_url.clone(),
                     )))
                 } else {
-                    AnthropicClient::from_env(entry.model.clone())
-                        .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
+                    AnthropicClient::from_agent_credentials(
+                        &profile.inner.name,
+                        entry.model.clone(),
+                    )
+                    .await
+                    .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
                 };
                 match built {
                     Ok(client) => {
@@ -253,7 +262,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                         entry.base_url.clone(),
                     )))
                 } else {
-                    OpenAiClient::from_env(entry.model.clone())
+                    OpenAiClient::from_agent_credentials(&profile.inner.name, entry.model.clone())
+                        .await
                         .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
                 };
                 match built {

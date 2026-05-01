@@ -73,6 +73,10 @@ httpmock = "0.7"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 insta = { workspace = true }
 criterion = { version = "0.5", default-features = false }
+# Auth-precedence tests install a mock credential builder. Version pinned to
+# match mur-common's keyring dep so the mock-builder ABI matches what
+# mur_common::secret::keychain_get reads.
+keyring = { version = "3", default-features = false }
 
 [[bench]]
 name = "companion"
