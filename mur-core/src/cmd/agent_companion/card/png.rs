@@ -78,3 +78,19 @@ pub fn normalize_v3(json: &str) -> Result<MurCard> {
     let card: MurCard = serde_json::from_value(v).context("MurCard from V3 JSON")?;
     Ok(card)
 }
+
+/// Normalize a SillyTavern V2 (`chara`) payload into a `MurCard`.
+///
+/// V2 is flat top-level JSON (`name`, `description`, `personality`, ...)
+/// rather than CCv3's `{spec, spec_version, data}` envelope. We wrap the
+/// V2 object into `MurCard.data` and stamp the `murcard_v1` header.
+pub fn normalize_v2(json: &str) -> Result<MurCard> {
+    let v2: Value = serde_json::from_str(json).context("parse v2 JSON")?;
+    let wrapped = serde_json::json!({
+        "spec": "murcard_v1",
+        "spec_version": "1.0",
+        "data": v2,
+    });
+    let card: MurCard = serde_json::from_value(wrapped).context("MurCard from V2 JSON")?;
+    Ok(card)
+}
