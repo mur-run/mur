@@ -18,6 +18,7 @@ fn sentinel_input(rel: Relationship, locale: &'static str) -> VoiceInput<'static
         relationship: rel,
         locale,
         name_for_user: "TEST_USER",
+        first_memory: None,
         formality: "polite",
         extra_instructions: "TEST_EXTRA_INSTRUCTIONS",
     }

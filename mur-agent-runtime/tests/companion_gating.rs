@@ -44,6 +44,7 @@ async fn onboarding_writes_voice_md_and_starts_disabled() {
         relationship: Relationship::Friend,
         locale: "en-US",
         name_for_user: "tester",
+        first_memory: None,
         formality: "polite",
         extra_instructions: "",
     });

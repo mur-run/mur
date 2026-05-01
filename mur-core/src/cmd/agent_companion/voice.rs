@@ -165,6 +165,7 @@ pub(super) fn compose_from_profile(profile: &AgentProfile) -> String {
         relationship: profile.companion.relationship.clone(),
         locale: &profile.companion.locale,
         name_for_user,
+        first_memory: None,
         formality: &formality,
         extra_instructions: extra,
     })
