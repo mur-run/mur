@@ -70,7 +70,7 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
 
 mod content;
 mod inbox;
-mod init;
+pub mod init;
 mod preview;
 mod proactive;
 mod quiet;
