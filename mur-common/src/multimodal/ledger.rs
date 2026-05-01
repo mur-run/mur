@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use fs2::FileExt;
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use super::ProvenanceEntry;
@@ -22,6 +22,15 @@ impl ProvenanceLedger {
 
     /// Append one entry as a single JSON line. Atomic via flock.
     /// Creates the parent directory if missing.
+    ///
+    /// Note on the open mode: we deliberately use `write(true)` +
+    /// explicit `seek(SeekFrom::End(0))` rather than `append(true)`.
+    /// On Windows, `append(true)` requests `FILE_APPEND_DATA` only,
+    /// which is *not* sufficient for `LockFileEx` (used internally by
+    /// `fs2::FileExt::lock_exclusive`) — Windows demands `GENERIC_WRITE`
+    /// access, otherwise the lock call fails with `ERROR_ACCESS_DENIED`.
+    /// Manual seek-to-end gives us append semantics on every platform
+    /// while keeping the flock contract intact.
     pub fn append(&self, entry: &ProvenanceEntry) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)
@@ -29,10 +38,14 @@ impl ProvenanceLedger {
         }
         let mut f = OpenOptions::new()
             .create(true)
-            .append(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
             .open(&self.path)
             .with_context(|| format!("open {}", self.path.display()))?;
         f.lock_exclusive().context("flock inputs.jsonl")?;
+        f.seek(SeekFrom::End(0))
+            .context("seek to end of inputs.jsonl")?;
         let line = serde_json::to_string(entry).context("serialize provenance")?;
         writeln!(f, "{line}").context("append provenance")?;
         f.unlock().context("unlock inputs.jsonl")?;
