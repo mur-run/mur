@@ -105,3 +105,50 @@ async fn multimodal_drop_size_cap_rejects() {
         "unexpected error: {msg}"
     );
 }
+
+// ─── M3.6.2 — `multimodal_paste` ───────────────────────────────────
+
+#[tokio::test]
+async fn multimodal_paste_with_image_in_clipboard_succeeds() {
+    unsafe {
+        std::env::set_var(
+            "MUR_AGENT_DECODER_BIN",
+            env!("CARGO_BIN_EXE_mur-agent-decoder"),
+        );
+    }
+    let tmp = TempDir::new().unwrap();
+    let _g = MurHomeGuard::set(tmp.path());
+    seed(tmp.path(), "paste");
+    let png = include_bytes!("fixtures/tiny.png").to_vec();
+    let png_path = tmp.path().join("clip.png");
+    std::fs::write(&png_path, &png).unwrap();
+    unsafe {
+        std::env::set_var("MUR_TEST_CLIPBOARD_IMAGE", png_path.to_str().unwrap());
+    }
+
+    let artifacts = mur_agent_gui_lib::commands::multimodal_paste_impl("paste", 1)
+        .await
+        .unwrap();
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(artifacts[0].mime, "image/png");
+    unsafe {
+        std::env::remove_var("MUR_TEST_CLIPBOARD_IMAGE");
+    }
+}
+
+#[tokio::test]
+async fn multimodal_paste_no_clipboard_image_errors() {
+    let tmp = TempDir::new().unwrap();
+    let _g = MurHomeGuard::set(tmp.path());
+    seed(tmp.path(), "noclip");
+    unsafe {
+        std::env::remove_var("MUR_TEST_CLIPBOARD_IMAGE");
+    }
+    let err = mur_agent_gui_lib::commands::multimodal_paste_impl("noclip", 1)
+        .await
+        .expect_err("no clipboard image");
+    assert!(
+        err.to_string().to_lowercase().contains("clipboard"),
+        "unexpected error: {err}"
+    );
+}
