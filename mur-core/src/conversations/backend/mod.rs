@@ -3,6 +3,7 @@
 
 #![allow(dead_code)] // wired progressively across P0 tasks.
 
+pub mod factory;
 pub mod mock;
 pub mod ollama;
 
