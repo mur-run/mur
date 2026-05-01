@@ -19,8 +19,9 @@ use std::path::PathBuf;
 use mur_common::multimodal::{ArtifactKind, MultimodalArtifact, ProvenanceEntry, ProvenanceLedger};
 
 use super::decode::DecoderClient;
-use super::decoder_protocol::DecodeResponse;
+use super::decoder_protocol::{DecodeResponse, PdfPageText};
 use super::heic::heic_to_png;
+use super::unicode_scrubber;
 
 pub enum PipelineInput {
     Path {
@@ -63,6 +64,11 @@ impl MultimodalPipeline {
                 source,
             } => (bytes, mime_hint, source),
         };
+
+        // Dispatch on mime BEFORE HEIC handling.
+        if mime_hint == "application/pdf" {
+            return self.process_pdf(raw_bytes, source).await;
+        }
 
         // Step 3: HEIC normalization (skip for non-HEIC).
         let (bytes, mime_hint) = if mime_hint == "image/heic" || mime_hint == "image/heif" {
@@ -112,6 +118,74 @@ impl MultimodalPipeline {
             size_bytes: png.len() as u64,
             ocr_text: None, // M3.5.4 wires this
             page_count: None,
+            created_at: Utc::now(),
+            decoder_version,
+            ocr_engine_version: None,
+        })
+    }
+
+    async fn process_pdf(&self, bytes: Vec<u8>, source: String) -> Result<MultimodalArtifact> {
+        let resp = self
+            .decoder
+            .decode_pdf(bytes.clone())
+            .await
+            .context("DecoderClient::decode_pdf")?;
+        let (pages, decoder_version) = match resp {
+            DecodeResponse::PdfText {
+                pages,
+                decoder_version,
+            } => (pages, decoder_version),
+            DecodeResponse::Error(e) => bail!("pdf decoder: {e:?}"),
+            DecodeResponse::Ok { .. } => bail!("got Ok on PDF path"),
+        };
+
+        // Join page texts with quarantine markers.
+        let joined = pages
+            .iter()
+            .map(|p: &PdfPageText| {
+                if p.quarantined {
+                    format!(
+                        "--- page {} (quarantined: <1pt glyphs) ---\n{}",
+                        p.page, p.text
+                    )
+                } else {
+                    format!("--- page {} ---\n{}", p.page, p.text)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Step 6: Unicode scrub the joined text (the model never sees raw
+        // tag/bidi-override chars).
+        let (scrubbed, _scrubbed_count) = unicode_scrubber::scrub(&joined);
+
+        // Step 8: provenance ledger entry. PDF sha256 is over the input
+        // bytes (we don't re-encode PDFs).
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let sha256 = format!("{:x}", hasher.finalize());
+
+        let entry = ProvenanceEntry {
+            sha256: sha256.clone(),
+            source,
+            decoder_version: decoder_version.clone(),
+            ocr_engine_version: None,
+            turn_id: self.turn_id,
+            recorded_at: Utc::now(),
+        };
+        ProvenanceLedger::new(self.agent_home.join("telemetry/inputs.jsonl"))
+            .append(&entry)
+            .context("append provenance")?;
+
+        let page_count = pages.len() as u32;
+
+        Ok(MultimodalArtifact {
+            sha256,
+            kind: ArtifactKind::Pdf,
+            mime: "application/pdf".into(),
+            size_bytes: bytes.len() as u64,
+            ocr_text: Some(scrubbed),
+            page_count: Some(page_count),
             created_at: Utc::now(),
             decoder_version,
             ocr_engine_version: None,
