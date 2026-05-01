@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import StatusTab from "./tabs/Status";
 import PromptTab from "./tabs/Prompt";
 import ModelTab from "./tabs/Model";
@@ -9,6 +10,10 @@ import IdentityTab from "./tabs/Identity";
 import { VoiceTab } from "./voice/VoiceTab";
 import { PttButton } from "./voice/PttButton";
 import { OnboardingWizard } from "./onboarding/OnboardingWizard";
+import { DropOverlay } from "./multimodal/DropOverlay";
+import { Thumbnails } from "./multimodal/Thumbnails";
+import { multimodalDrop, multimodalPaste } from "./multimodal/api";
+import type { MultimodalArtifact } from "./multimodal/types";
 import {
   setTheme as setThemeApi,
   getDefaultTheme,
@@ -51,6 +56,46 @@ export default function App() {
   // keeps a hand-built dev shell working too.
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
   const [agent, setAgent] = useState<string>("default");
+
+  // Multimodal attachments staged for the next composer turn.
+  // The Tauri side emits `multimodal://drop` whenever the user drops
+  // files anywhere on the window; the listener below resolves those
+  // paths through the `multimodal_drop` command (which decodes,
+  // hashes, and persists each artifact) and appends to this list.
+  // The clipboard `paste` handler does the same via `multimodal_paste`.
+  // `turnId` is held flat for now — M3.8 will rotate it on send.
+  const [artifacts, setArtifacts] = useState<MultimodalArtifact[]>([]);
+  const [turnId] = useState<number>(1);
+
+  useEffect(() => {
+    const u = listen<string[]>("multimodal://drop", async (e) => {
+      const paths = e.payload;
+      try {
+        const fresh = await multimodalDrop(agent, paths, turnId);
+        setArtifacts((prev) => [...prev, ...fresh]);
+      } catch (err) {
+        console.warn("multimodal_drop failed:", err);
+      }
+    });
+    return () => {
+      u.then((un) => un()).catch(() => {});
+    };
+  }, [agent, turnId]);
+
+  useEffect(() => {
+    const onPaste = async (e: ClipboardEvent) => {
+      if (!e.clipboardData || e.clipboardData.files.length === 0) return;
+      e.preventDefault();
+      try {
+        const fresh = await multimodalPaste(agent, turnId);
+        setArtifacts((prev) => [...prev, ...fresh]);
+      } catch (err) {
+        console.warn("multimodal_paste failed:", err);
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [agent, turnId]);
 
   // Apply the bundle's baked-in default theme on mount, so the
   // window picks up the colors chosen at `mur agent export --theme`.
@@ -139,6 +184,12 @@ export default function App() {
         </ul>
       </nav>
       <main className="flex-1 overflow-auto p-6">
+        <Thumbnails
+          artifacts={artifacts}
+          onRemove={(sha) =>
+            setArtifacts((prev) => prev.filter((a) => a.sha256 !== sha))
+          }
+        />
         {tab === "status" && <StatusTab />}
         {tab === "prompt" && <PromptTab />}
         {tab === "model" && <ModelTab />}
@@ -148,6 +199,7 @@ export default function App() {
         {tab === "permissions" && <PermissionsTab />}
         {tab === "identity" && <IdentityTab />}
       </main>
+      <DropOverlay />
       <PttButton
         onTranscript={(text) => {
           // For now, log + console. Future slices will wire this into
