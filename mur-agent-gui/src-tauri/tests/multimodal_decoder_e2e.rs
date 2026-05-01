@@ -6,6 +6,7 @@
 //! at test-build time so this works without hard-coding `target/`
 //! paths.
 
+use mur_agent_gui_lib::multimodal::decode::DecoderClient;
 use mur_agent_gui_lib::multimodal::decoder_protocol::{
     DecodeRequest, DecodeResponse, read_frame, write_frame,
 };
@@ -84,6 +85,46 @@ fn decoder_returns_error_on_garbage_bytes() {
     let resp: DecodeResponse = serde_json::from_slice(&resp_bytes).unwrap();
     child.wait().unwrap();
 
+    assert!(
+        matches!(resp, DecodeResponse::Error(_)),
+        "expected Error, got {resp:?}"
+    );
+}
+
+#[tokio::test]
+async fn decoder_client_decodes_png_image() {
+    // Point the client at the bin Cargo built for this test target.
+    // SAFETY: tests run single-threaded for env mutation here.
+    unsafe {
+        std::env::set_var(
+            "MUR_AGENT_DECODER_BIN",
+            env!("CARGO_BIN_EXE_mur-agent-decoder"),
+        );
+    }
+    let png_bytes = include_bytes!("fixtures/tiny.png").to_vec();
+    let client = DecoderClient::new();
+    let resp = client.decode_image(png_bytes, "image/png").await.unwrap();
+    match resp {
+        DecodeResponse::Ok { png_bytes, .. } => {
+            assert!(png_bytes.starts_with(&[0x89, 0x50]), "PNG header preserved");
+        }
+        other => panic!("got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn decoder_client_returns_error_for_garbage() {
+    unsafe {
+        std::env::set_var(
+            "MUR_AGENT_DECODER_BIN",
+            env!("CARGO_BIN_EXE_mur-agent-decoder"),
+        );
+    }
+    let client = DecoderClient::with_timeout(std::time::Duration::from_secs(5));
+    let resp = client
+        .decode_image(vec![0xde, 0xad, 0xbe, 0xef], "image/png")
+        .await
+        .unwrap();
     assert!(
         matches!(resp, DecodeResponse::Error(_)),
         "expected Error, got {resp:?}"

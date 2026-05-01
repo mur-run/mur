@@ -3,4 +3,7 @@
 //! Capture (drop / paste) → sandboxed decode → OCR → Unicode scrubber
 //! → provenance ledger → B0SafetyHook turn-flag.
 
+pub mod decode;
 pub mod decoder_protocol;
+
+pub use decode::DecoderClient;

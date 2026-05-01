@@ -54,7 +54,7 @@ tracing-appender = "0.2"
 dirs = "6"
 secrecy = "0.10"
 serde_yaml_ng = "0.10"
-tokio = { version = "1", features = ["time", "signal", "macros", "sync", "rt-multi-thread", "io-util", "fs"] }
+tokio = { version = "1", features = ["time", "signal", "macros", "sync", "rt-multi-thread", "io-util", "fs", "process"] }
 tokio-util = { version = "0.7", features = ["io", "rt"] }
 flate2 = "1"
 tar = "0.4"
