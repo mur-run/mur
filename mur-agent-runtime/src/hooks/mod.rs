@@ -19,6 +19,7 @@ pub mod companion_voice;
 pub mod ledger;
 pub mod telemetry;
 
+pub use b0::B0SafetyHook;
 pub use chain::HookChain;
 pub use decision::Decision;
 pub use patch::{MessagePatch, PromptPatch, UntrustedWrapper};
