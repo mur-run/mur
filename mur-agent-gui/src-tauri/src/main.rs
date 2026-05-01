@@ -3,6 +3,7 @@
 
 mod bootstrap;
 mod commands;
+mod multimodal;
 mod sidecar;
 mod theme;
 mod voice;

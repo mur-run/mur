@@ -20,6 +20,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "mur-agent-gui"
 path = "src/main.rs"
 
+# Sandboxed image / PDF decoder subprocess. Spawned by the GUI, reads
+# one DecodeRequest frame from stdin, writes one DecodeResponse frame
+# to stdout, exits. Process isolation contains malicious decoder
+# exploits to this bin only. See `src/bin/mur-agent-decoder.rs`.
+[[bin]]
+name = "mur-agent-decoder"
+path = "src/bin/mur-agent-decoder.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -46,7 +54,7 @@ tracing-appender = "0.2"
 dirs = "6"
 secrecy = "0.10"
 serde_yaml_ng = "0.10"
-tokio = { version = "1", features = ["time", "signal", "macros", "sync", "rt-multi-thread", "io-util", "fs"] }
+tokio = { version = "1", features = ["time", "signal", "macros", "sync", "rt-multi-thread", "io-util", "fs", "process"] }
 tokio-util = { version = "0.7", features = ["io", "rt"] }
 flate2 = "1"
 tar = "0.4"
@@ -70,6 +78,15 @@ async-trait = "0.1"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
+
+# ───── multimodal decoder (D3 / M3) ─────
+# `image` is consumed by `mur-agent-decoder` for PNG/JPEG/WebP decode.
+# HEIC (libheif-rs) is deferred to M3.3.3 — requires `brew install libheif`
+# / `apt install libheif-dev` and is not yet on the host.
+# pdfium-render is deferred to M3.4.1 — `decode_pdf` is a stub at M3.2.2
+# so pulling in the native bindings now would be premature.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+unicode-segmentation = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
