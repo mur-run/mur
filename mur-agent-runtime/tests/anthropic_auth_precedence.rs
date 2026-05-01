@@ -1,10 +1,8 @@
-//! Anthropic credential precedence and OAuth-vs-API-key header selection.
-//!
-//! Covers the gotcha discussed in the "MAXIMIZE Your Claude Code Subscription"
-//! audit: the Anthropic client must pick the right HTTP auth scheme purely
-//! from the resolved key (sk-ant-oat* → OAuth Bearer + betas + billing header
-//! prepended to system; otherwise → x-api-key with neither). Also pins down
-//! the env-var fallback path used when the registry has no SecretRef.
+//! Anthropic credential precedence — keychain-first resolution with env-var
+//! fallback. The client itself is provider-neutral: it always sends the
+//! resolved key as `x-api-key` and never injects auth-specific headers.
+//! Subscription-OAuth shaping (Bearer + betas + billing prefix) lives in
+//! the external bridge that `ANTHROPIC_BASE_URL` points at.
 //!
 //! Tests that mutate process-global env vars serialize on a Mutex — Rust 2024
 //! marks `set_var`/`remove_var` `unsafe` precisely because parallel cargo-test
@@ -57,14 +55,34 @@ fn user_msg(text: &str) -> LlmRequest {
 }
 
 #[tokio::test]
-async fn oauth_token_uses_bearer_and_attaches_betas() {
+async fn oauth_shape_token_still_sent_as_x_api_key() {
+    // The provider-neutral client treats sk-ant-oat* like any other key.
+    // External OAuth bridges (cc-proxy etc.) are responsible for converting
+    // it to Bearer + betas + billing prefix before forwarding to Anthropic.
     let server = MockServer::start_async().await;
     let mock = server
         .mock_async(|when, then| {
             when.method(POST)
                 .path("/v1/messages")
-                .header("Authorization", format!("Bearer {FAKE_OAUTH}"))
-                .header_exists("anthropic-beta");
+                .header("x-api-key", FAKE_OAUTH)
+                .matches(|req| {
+                    let headers = req.headers.as_ref();
+                    let has_bearer = headers
+                        .map(|h| {
+                            h.iter().any(|(k, v)| {
+                                k.eq_ignore_ascii_case("authorization")
+                                    && v.to_ascii_lowercase().starts_with("bearer ")
+                            })
+                        })
+                        .unwrap_or(false);
+                    let has_beta = headers
+                        .map(|h| {
+                            h.iter()
+                                .any(|(k, _)| k.eq_ignore_ascii_case("anthropic-beta"))
+                        })
+                        .unwrap_or(false);
+                    !has_bearer && !has_beta
+                });
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(reply_body());
@@ -82,15 +100,18 @@ async fn oauth_token_uses_bearer_and_attaches_betas() {
 }
 
 #[tokio::test]
-async fn oauth_path_prepends_billing_header_into_system_prompt() {
+async fn never_injects_billing_prefix_into_system() {
+    // The disguise/billing prefix is exclusively the bridge's responsibility.
+    // The provider-neutral client must not touch the system field beyond
+    // joining the user's own system messages.
     let server = MockServer::start_async().await;
     let mock = server
         .mock_async(|when, then| {
-            when.method(POST)
-                .path("/v1/messages")
-                // Body match: system field must contain the cc_entrypoint marker
-                // injected by the OAuth path. This is what stops 429 rate_limit.
-                .body_contains("cc_entrypoint=sdk-cli");
+            when.method(POST).path("/v1/messages").matches(|req| {
+                let body = req.body.as_ref().and_then(|b| std::str::from_utf8(b).ok());
+                body.map(|s| !s.contains("cc_entrypoint=sdk-cli"))
+                    .unwrap_or(true)
+            });
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(reply_body());
@@ -173,18 +194,17 @@ async fn api_key_path_does_not_inject_billing_header() {
 }
 
 #[tokio::test]
-async fn from_env_with_oauth_prefix_key_still_routes_to_bearer() {
-    // Pins the gotcha: a user with no model_ref but an OAuth-style token
-    // exported as ANTHROPIC_API_KEY still gets the OAuth header treatment.
-    // Without this, the env-fallback path would silently treat a subscription
-    // token as a console API key and burn through rate limits.
+async fn from_env_passes_oauth_shape_key_through_unchanged() {
+    // An OAuth-shape token in ANTHROPIC_API_KEY is not given special
+    // treatment by the provider-neutral client — it goes out as x-api-key.
+    // The bridge at ANTHROPIC_BASE_URL is what turns it into Bearer + betas.
     let _g = ENV_LOCK.lock().await;
     let server = MockServer::start_async().await;
     let mock = server
         .mock_async(|when, then| {
             when.method(POST)
                 .path("/v1/messages")
-                .header("Authorization", format!("Bearer {FAKE_OAUTH}"));
+                .header("x-api-key", FAKE_OAUTH);
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(reply_body());
@@ -424,7 +444,7 @@ async fn keychain_entry_wins_over_anthropic_api_key_env() {
         .mock_async(|when, then| {
             when.method(POST)
                 .path("/v1/messages")
-                .header("Authorization", format!("Bearer {FAKE_OAUTH}"));
+                .header("x-api-key", FAKE_OAUTH);
             then.status(200)
                 .header("content-type", "application/json")
                 .json_body(reply_body());
@@ -434,9 +454,8 @@ async fn keychain_entry_wins_over_anthropic_api_key_env() {
     // The client picked up the OAuth key from keychain. Re-route its base URL
     // through the mock by reconstructing with the same key — easier than
     // reaching into private fields. The point of this test is the *resolution*
-    // outcome, which we verify by checking the key actually got bound:
-    // sending a real request via a parallel client built from the same secret
-    // confirms the OAuth Bearer header would be used.
+    // outcome (keychain wins over env), which we verify by checking the
+    // upstream sees the FAKE_OAUTH key (the keychain one), not FAKE_API_KEY.
     let routed = AnthropicClient::from_secret_string(
         &SecretString::from(FAKE_OAUTH.to_string()),
         "claude-test".into(),

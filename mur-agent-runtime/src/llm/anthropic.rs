@@ -1,11 +1,13 @@
 //! Anthropic Claude client — remote inference via Anthropic Messages API.
 //!
-//! POST https://api.anthropic.com/v1/messages
-//!   x-api-key: $ANTHROPIC_API_KEY        (regular API key, sk-ant-api03-*)
-//!   Authorization: Bearer $ANTHROPIC_API_KEY  (OAuth token, sk-ant-oat01-*)
+//! POST $ANTHROPIC_BASE_URL/v1/messages
+//!   x-api-key: $ANTHROPIC_API_KEY
 //!   anthropic-version: 2023-06-01
-//!   anthropic-beta: claude-code-20250219,oauth-2025-04-20,...  (OAuth only)
 //!   {"model": ..., "max_tokens": ..., "system": "...", "messages": [...]}
+//!
+//! Subscription-OAuth tokens (sk-ant-oat*) need different auth + headers
+//! than this provider-neutral client supplies. Point `ANTHROPIC_BASE_URL`
+//! at a local OAuth bridge (e.g. cc-proxy) for that path.
 //!
 //! The Anthropic API has a top-level `system` field rather than a system role
 //! in `messages`. We translate `LlmMessage{role:"system"}` -> top-level system.
@@ -23,20 +25,27 @@ const DEFAULT_MAX_TOKENS: u32 = 1024;
 /// Must stay in sync with `mur-core/src/cmd/agent.rs::SECRET_SERVICE`.
 const MUR_AGENT_KEYCHAIN_SERVICE: &str = "mur-agent";
 
-/// Beta flags required when authenticating with a Claude subscription
-/// OAuth token (sk-ant-oat01-*) instead of a console API key.
-const OAUTH_BETAS: &str =
-    "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,compact-2026-01-12";
-
-/// Billing identifier prepended to the system prompt on OAuth requests.
-/// Required for Anthropic to accept the call as Claude Code-shaped;
-/// without it the OAuth path returns 429 rate_limit_error immediately.
-/// Mirrors the same constant in mur-commander.
-const OAUTH_BILLING_HEADER: &str =
-    "x-anthropic-billing-header: cc_version=2.1.77; cc_entrypoint=sdk-cli;";
-
-fn is_oauth_token(key: &str) -> bool {
-    key.contains("sk-ant-oat")
+/// Warn once per process if the resolved API key looks like a Claude
+/// subscription OAuth token (`sk-ant-oat*`) but the configured base URL
+/// still points at api.anthropic.com — Anthropic will reject the call.
+fn warn_if_oauth_key_misconfigured(api_key: &str, base_url: &str) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !api_key.contains("sk-ant-oat") {
+        return;
+    }
+    if !base_url.starts_with("https://api.anthropic.com") {
+        return;
+    }
+    if WARNED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    tracing::warn!(
+        base_url = %base_url,
+        "ANTHROPIC_API_KEY looks like an OAuth subscription token (sk-ant-oat*), \
+         but base URL is api.anthropic.com — Anthropic will reject the request. \
+         Point ANTHROPIC_BASE_URL at a local OAuth bridge."
+    );
 }
 
 pub struct AnthropicClient {
@@ -135,37 +144,22 @@ impl LlmClient for AnthropicClient {
             "max_tokens": req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             "messages": convo,
         });
-        let oauth = is_oauth_token(&self.api_key);
-        let system_text = if oauth {
-            let mut chunks = vec![OAUTH_BILLING_HEADER.to_string()];
-            chunks.extend(system_chunks);
-            Some(chunks.join("\n\n"))
-        } else if !system_chunks.is_empty() {
-            Some(system_chunks.join("\n\n"))
-        } else {
-            None
-        };
-        if let Some(s) = system_text {
-            body["system"] = json!(s);
+        if !system_chunks.is_empty() {
+            body["system"] = json!(system_chunks.join("\n\n"));
         }
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
         }
 
+        warn_if_oauth_key_misconfigured(&self.api_key, &self.base_url);
+
         let url = format!("{}/v1/messages", self.base_url);
-        let mut builder = self
+        let resp = self
             .http
             .post(url)
             .header("anthropic-version", &self.version)
-            .header("content-type", "application/json");
-        builder = if is_oauth_token(&self.api_key) {
-            builder
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("anthropic-beta", OAUTH_BETAS)
-        } else {
-            builder.header("x-api-key", &self.api_key)
-        };
-        let resp = builder
+            .header("content-type", "application/json")
+            .header("x-api-key", &self.api_key)
             .json(&body)
             .send()
             .await
