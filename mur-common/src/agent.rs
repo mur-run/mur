@@ -596,12 +596,22 @@ pub struct VoiceOverrides {
     pub extra_instructions: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FirstMemory {
+    pub text: String,
+    pub established_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OnboardingState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_memory: Option<FirstMemory>,
 }
 
 /// Phase 1.2 reservation. 1.1 keeps `enabled = false` (rhythm collection is
@@ -741,5 +751,57 @@ mod model_ref_tests {
         assert!(s.contains("model_ref: anthropic_opus_4_7"), "yaml: {s}");
         let p2: AgentProfile = serde_yaml_ng::from_str(&s).unwrap();
         assert_eq!(p2.model_ref.as_deref(), Some("anthropic_opus_4_7"));
+    }
+}
+
+/// GUI-facing reification of the companion's three-layer permission toggle.
+///
+/// On-disk schema doesn't change — this helper just maps between the
+/// three independent booleans (`enabled`, `rhythm.enabled`,
+/// `proactive.enabled`) and a single ordered tier. Use
+/// [`ProactiveTier::from_config`] to read and [`ProactiveTier::apply`]
+/// to write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProactiveTier {
+    Off,
+    WarmOnly,
+    WarmAndBehavior,
+    All,
+}
+
+impl ProactiveTier {
+    pub fn from_config(c: &CompanionConfig) -> Self {
+        match (c.enabled, c.rhythm.enabled, c.proactive.enabled) {
+            (false, _, _) => Self::Off,
+            (true, false, false) => Self::WarmOnly,
+            (true, true, false) => Self::WarmAndBehavior,
+            (true, _, true) => Self::All,
+        }
+    }
+
+    pub fn apply(&self, c: &mut CompanionConfig) {
+        match self {
+            Self::Off => {
+                c.enabled = false;
+                c.rhythm.enabled = false;
+                c.proactive.enabled = false;
+            }
+            Self::WarmOnly => {
+                c.enabled = true;
+                c.rhythm.enabled = false;
+                c.proactive.enabled = false;
+            }
+            Self::WarmAndBehavior => {
+                c.enabled = true;
+                c.rhythm.enabled = true;
+                c.proactive.enabled = false;
+            }
+            Self::All => {
+                c.enabled = true;
+                c.rhythm.enabled = true;
+                c.proactive.enabled = true;
+            }
+        }
     }
 }

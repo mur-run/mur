@@ -85,6 +85,7 @@ pub async fn run(name: &str, answers: Option<PathBuf>, re_init: bool) -> Result<
     profile.companion.onboarding = OnboardingState {
         completed_at: Some(now),
         version: 1,
+        ..OnboardingState::default()
     };
     // proactive + rhythm are deliberately untouched.
 
