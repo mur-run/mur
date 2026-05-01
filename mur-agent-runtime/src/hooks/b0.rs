@@ -4,23 +4,29 @@
 //! consumer-safe baseline). The text-only rules (1-12) wait for M8
 //! per the roadmap timeline.
 //!
-//! Wiring (M3.8.1):
-//! * `on_prompt_submit` reads `<agent_home>/telemetry/inputs.jsonl`
-//!   for the current turn, looks up each entry's
-//!   `<agent_home>/telemetry/inputs/{sha256}.txt` sidecar, and builds
-//!   a `PromptPatch` with one `wrap_untrusted` per entry plus the
-//!   `after_untrusted_input` turn-flag.
+//! Wiring:
+//! * `on_prompt_submit` (M3.8.1) reads
+//!   `<agent_home>/telemetry/inputs.jsonl` for the current turn, looks
+//!   up each entry's `<agent_home>/telemetry/inputs/{sha256}.txt`
+//!   sidecar, and builds a `PromptPatch` with one `wrap_untrusted` per
+//!   entry plus the `after_untrusted_input` turn-flag.
+//! * `pre_tool_use` (M3.8.2) checks for the `after_untrusted_input`
+//!   turn-flag and denies side-effect tools (delete / spawn / send /
+//!   egress / network / .write / .publish) via `Decision::AskUser`,
+//!   per roadmap §4.3 step 9.
 //!
-//! The matching `pre_tool_use` gate that consumes the turn-flag and
-//! denies side-effect tools lands in M3.8.2. The remaining roadmap
-//! rules (sandbox attestation, GrantStore lookup, post_tool_use
-//! redaction, on_message_received untrusted flag) land with the M8
-//! text-only baseline.
+//! The remaining roadmap rules (sandbox attestation, GrantStore
+//! lookup, post_tool_use redaction, on_message_received untrusted
+//! flag) land with the M8 text-only baseline.
 
 use tokio_util::sync::CancellationToken;
 
-use crate::hooks::{Hook, HookCtx, HookError, PromptPatch, PromptView, UntrustedWrapper};
+use crate::hooks::{
+    AskDefault, Decision, Hook, HookCtx, HookError, PromptPatch, PromptView, ToolCall,
+    UntrustedWrapper,
+};
 use mur_common::multimodal::ProvenanceLedger;
+use mur_common::permissions::ScopeKey;
 
 /// Turn-flag raised by `on_prompt_submit` when at least one untrusted
 /// multimodal artifact was attached to the current turn. Read by
@@ -94,5 +100,86 @@ impl Hook for B0SafetyHook {
             turn_flags: vec![TURN_FLAG_AFTER_UNTRUSTED.into()],
             ..PromptPatch::noop()
         })
+    }
+
+    async fn pre_tool_use(
+        &self,
+        ctx: &HookCtx,
+        call: &ToolCall,
+        _tok: &CancellationToken,
+    ) -> Result<Decision, HookError> {
+        if !ctx
+            .turn_flags()
+            .iter()
+            .any(|f| f == TURN_FLAG_AFTER_UNTRUSTED)
+        {
+            return Ok(Decision::Allow);
+        }
+        if !is_side_effect_tool(call.name()) {
+            return Ok(Decision::Allow);
+        }
+        // M3.8.2 only needs the scope key as a stable identifier for the
+        // user-facing prompt; the per-input schema-hash dimension belongs
+        // to the M8 GrantStore lookup. Tag the key with the rule name so
+        // future grants are scoped to "after-untrusted-input + this tool"
+        // rather than the tool alone.
+        let scope_key = ScopeKey {
+            agent_id: ctx.agent_uuid.clone(),
+            tool_name: format!("{}::{}", TURN_FLAG_AFTER_UNTRUSTED, call.name()),
+            input_schema_hash: String::new(),
+        };
+        Ok(Decision::AskUser {
+            scope_key,
+            prompt: format!(
+                "An attached image or PDF may contain instructions. Allow `{}` to run anyway?",
+                call.name()
+            ),
+            default: AskDefault::Deny,
+        })
+    }
+}
+
+/// Side-effect tool name classifier. Errs on the safe side: better to
+/// ask once than to silently fire a deletion / spawn / egress.
+///
+/// The match list mirrors roadmap §4.3 step 9 (`delete*`, `spawn*`,
+/// `*.send`, `egress*`, `network.*`, `.write`, `.publish`).
+fn is_side_effect_tool(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.starts_with("delete")
+        || n.ends_with("delete")
+        || n.starts_with("spawn")
+        || n.ends_with("spawn")
+        || n.contains(".send")
+        || n.starts_with("send")
+        || n.starts_with("egress")
+        || n.starts_with("network.")
+        || n.contains(".write")
+        || n.contains(".publish")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn side_effect_classifier_matches_expected_names() {
+        for n in [
+            "fs.delete",
+            "delete_user",
+            "process.spawn",
+            "spawn_shell",
+            "messaging.send",
+            "send_email",
+            "egress.http",
+            "network.http_get",
+            "fs.write",
+            "feed.publish",
+        ] {
+            assert!(is_side_effect_tool(n), "{n} should be side-effect");
+        }
+        for n in ["fs.read", "search.query", "patterns.list", "config.get"] {
+            assert!(!is_side_effect_tool(n), "{n} should be allowed");
+        }
     }
 }
