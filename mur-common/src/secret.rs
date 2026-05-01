@@ -132,6 +132,36 @@ impl SecretRef {
     }
 }
 
+/// Read a secret from the OS keychain.
+///
+/// Returns `Ok(None)` when the entry doesn't exist (so callers can fall
+/// through to the next precedence layer cleanly), and `Err(...)` only for
+/// real backend failures (locked keychain, permission denied, malformed
+/// service/account, transport error). Silently swallowing those errors would
+/// mask configuration problems and let the next fallback layer take over
+/// when the user actually expected the keychain entry to be honored.
+///
+/// Pairs with [`keychain_set`] / [`keychain_delete`].
+pub async fn keychain_get(
+    service: &str,
+    account: &str,
+) -> Result<Option<SecretString>, SecretError> {
+    let svc = service.to_string();
+    let acct = account.to_string();
+    tokio::task::spawn_blocking(move || -> Result<Option<String>, SecretError> {
+        let entry = keyring::Entry::new(&svc, &acct)
+            .map_err(|e| SecretError::KeychainBackend(e.to_string()))?;
+        match entry.get_password() {
+            Ok(s) => Ok(Some(s)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(SecretError::KeychainBackend(e.to_string())),
+        }
+    })
+    .await
+    .map_err(|e| SecretError::KeychainBackend(format!("join: {e}")))?
+    .map(|opt| opt.map(SecretString::from))
+}
+
 /// Write a secret to the OS keychain. Used by `mur agent secret set` and the
 /// GUI's `set_secret` command.
 pub async fn keychain_set(service: &str, account: &str, value: &str) -> Result<(), SecretError> {
