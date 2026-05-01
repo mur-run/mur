@@ -59,6 +59,73 @@ pub struct ChatChunk {
 /// Type alias for the boxed stream of chunks returned by `generate_stream`.
 pub type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatChunk>> + Send>>;
 
+/// Backend-agnostic chat-completion interface.
+///
+/// Backends MUST be object-safe (no generics on methods, no `Self: Sized`).
+/// Both methods are async via `async-trait`. `generate_stream` MAY return
+/// a single-chunk stream when the backend doesn't natively stream
+/// (e.g. P0 OllamaBackend stubs `generate_stream` to `unimplemented!()` —
+/// only the non-streaming path is exercised in P0).
+#[async_trait::async_trait]
+pub trait ChatBackend: Send + Sync {
+    async fn generate(&self, req: ChatRequest<'_>) -> Result<ChatResponse>;
+
+    async fn generate_stream(&self, req: ChatRequest<'_>) -> Result<ChatStream>;
+
+    fn provider_name(&self) -> &'static str;
+
+    /// True when the backend honors `cache_system` / `cache_user_prefix`
+    /// hints. False = hints are silently ignored. Default: false.
+    fn supports_caching(&self) -> bool {
+        false
+    }
+}
+
+/// Typed errors at the backend boundary. Backend impls construct these
+/// and convert via `anyhow::Error::from(...)` so callers see anyhow
+/// chains but can still downcast for retry-policy decisions.
+///
+/// See spec §4.3.
+#[derive(Debug, thiserror::Error)]
+pub enum BackendError {
+    #[error("provider {provider} returned 401: invalid or missing API key")]
+    Unauthorized { provider: &'static str },
+
+    #[error("provider {provider} returned 429: rate limited (retry-after: {retry_after_secs:?}s)")]
+    RateLimited {
+        provider: &'static str,
+        retry_after_secs: Option<u64>,
+    },
+
+    #[error("provider {provider} returned {status}: server error")]
+    ServerError { provider: &'static str, status: u16 },
+
+    #[error("provider {provider} model {model} not found")]
+    ModelNotFound {
+        provider: &'static str,
+        model: String,
+    },
+
+    #[error("provider {provider} timed out after {seconds}s")]
+    Timeout {
+        provider: &'static str,
+        seconds: u64,
+    },
+
+    #[error("network error talking to {provider}: {source}")]
+    Network {
+        provider: &'static str,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    #[error("malformed response from {provider}: {message}")]
+    BadResponse {
+        provider: &'static str,
+        message: String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +159,23 @@ mod tests {
         let json = serde_json::to_string(&u).unwrap();
         assert!(json.contains("\"cache_read_input_tokens\":0"));
         assert!(json.contains("\"provider\":\"ollama\""));
+    }
+
+    #[test]
+    fn chat_backend_is_object_safe() {
+        // Compile-time check: ChatBackend must be usable as `dyn ChatBackend`.
+        // If this fails to compile, the trait broke object safety
+        // (e.g. someone added a generic method or `Self: Sized` bound).
+        fn _accepts(_: &dyn ChatBackend) {}
+    }
+
+    #[test]
+    fn backend_error_displays_with_provider_name() {
+        let e = BackendError::Unauthorized {
+            provider: "anthropic",
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("anthropic"));
+        assert!(msg.contains("401"));
     }
 }
