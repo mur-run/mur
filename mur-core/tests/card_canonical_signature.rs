@@ -83,3 +83,55 @@ fn canonical_array_order_preserved() {
     let b2 = canonical_data_bytes(&c2).unwrap();
     assert_ne!(b1, b2);
 }
+
+#[test]
+fn sign_then_verify_round_trip() {
+    use ed25519_dalek::SigningKey;
+    use mur_core::character_card::signing::{VerifyOutcome, sign_card, verify_card};
+    use rand::rngs::OsRng;
+
+    let mut card = minimal_card();
+    let sk = SigningKey::generate(&mut OsRng);
+    sign_card(&mut card, &sk).unwrap();
+
+    let sig = card
+        .extensions
+        .as_ref()
+        .unwrap()
+        .mur
+        .as_ref()
+        .unwrap()
+        .provenance
+        .as_ref()
+        .unwrap()
+        .signature
+        .as_ref()
+        .unwrap();
+    assert_eq!(sig.algorithm, "ed25519");
+    assert!(sig.public_key.starts_with('z'));
+    assert!(sig.value.starts_with('z'));
+
+    let outcome = verify_card(&card).expect("freshly-signed card verifies");
+    assert!(matches!(outcome, VerifyOutcome::Signed));
+}
+
+#[test]
+fn tampered_card_fails_verification() {
+    use ed25519_dalek::SigningKey;
+    use mur_core::character_card::signing::{sign_card, verify_card};
+    use rand::rngs::OsRng;
+
+    let mut card = minimal_card();
+    let sk = SigningKey::generate(&mut OsRng);
+    sign_card(&mut card, &sk).unwrap();
+    card.data.description = "evil instructions".into();
+    assert!(verify_card(&card).is_err(), "tampered card must fail");
+}
+
+#[test]
+fn unsigned_card_returns_unsigned() {
+    use mur_core::character_card::signing::{VerifyOutcome, verify_card};
+    let card = minimal_card();
+    let outcome = verify_card(&card).expect("missing-sig is not an error");
+    assert!(matches!(outcome, VerifyOutcome::Unsigned));
+}

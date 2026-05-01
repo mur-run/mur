@@ -9,3 +9,4 @@ pub mod extensions;
 pub mod first_memory;
 pub mod schema;
 pub mod serde_round_trip;
+pub mod signing;
