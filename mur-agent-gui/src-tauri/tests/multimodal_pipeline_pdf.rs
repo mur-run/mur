@@ -67,6 +67,31 @@ async fn drop_pdf_produces_pdf_artifact_with_page_count() {
 }
 
 #[tokio::test]
+async fn pipeline_pdf_writes_text_sidecar() {
+    set_decoder_env();
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("telemetry")).unwrap();
+    let pdf = include_bytes!("fixtures/prompt-injection.pdf").to_vec();
+    let pipeline = MultimodalPipeline::new(tmp.path().to_path_buf(), 5);
+    let a = pipeline
+        .process(PipelineInput::Bytes {
+            bytes: pdf,
+            mime_hint: "application/pdf".into(),
+            source: "user_drop".into(),
+        })
+        .await
+        .unwrap();
+    let txt_path = tmp
+        .path()
+        .join(format!("telemetry/inputs/{}.txt", a.sha256));
+    assert!(txt_path.exists());
+    let body = std::fs::read_to_string(&txt_path).unwrap();
+    // Page-N markers + the prompt-injection text.
+    assert!(body.contains("--- page 1"));
+    assert!(body.contains("ignore previous instructions"));
+}
+
+#[tokio::test]
 async fn pipeline_pdf_path_input_works() {
     set_decoder_env();
     let tmp = TempDir::new().unwrap();

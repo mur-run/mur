@@ -104,6 +104,39 @@ async fn pipeline_image_runs_ocr_with_noop_engine() {
     assert_eq!(entries[0].ocr_engine_version.as_deref(), Some("noop/1.0"));
 }
 
+#[tokio::test]
+async fn pipeline_image_writes_text_sidecar() {
+    unsafe {
+        std::env::set_var(
+            "MUR_AGENT_DECODER_BIN",
+            env!("CARGO_BIN_EXE_mur-agent-decoder"),
+        );
+    }
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("telemetry")).unwrap();
+    let png = include_bytes!("fixtures/tiny.png").to_vec();
+    let pipeline = MultimodalPipeline::new(tmp.path().to_path_buf(), 1);
+    let a = pipeline
+        .process(PipelineInput::Bytes {
+            bytes: png,
+            mime_hint: "image/png".into(),
+            source: "user_drop".into(),
+        })
+        .await
+        .unwrap();
+    let txt_path = tmp
+        .path()
+        .join(format!("telemetry/inputs/{}.txt", a.sha256));
+    assert!(
+        txt_path.exists(),
+        "text sidecar should exist at {}",
+        txt_path.display()
+    );
+    // For Noop OCR, file is empty (still created so M3.8.1 doesn't error).
+    let body = std::fs::read_to_string(&txt_path).unwrap();
+    assert_eq!(body, "");
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn pipeline_heic_normalizes_then_decodes() {
