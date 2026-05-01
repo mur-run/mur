@@ -3,6 +3,8 @@
 
 #![allow(dead_code)] // wired progressively across P0 tasks.
 
+pub mod mock;
+
 use anyhow::Result;
 use futures::stream::Stream;
 use serde::Serialize;

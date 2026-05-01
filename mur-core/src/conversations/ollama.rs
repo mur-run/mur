@@ -258,7 +258,7 @@ fn extract_latest_question_from_condense_prompt(prompt: &str) -> String {
 
 /// Deterministic fake response for tests. Echoes model+prompt hints so each
 /// test can assert which call site fired without a real Ollama.
-fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
+pub(crate) fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
     let is_abstractive = req
         .system
         .map(|s| s.contains("You compress text for retrieval context"))
