@@ -2,6 +2,7 @@
 // a `#[tauri::command]` in src-tauri/src/commands.rs.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { OnboardingStatus } from "../onboarding/types";
 
 // ─── Status ────────────────────────────────────────────────────────
 export interface StatusView {
@@ -16,6 +17,14 @@ export const status = () => invoke<StatusView>("status");
 export const startAgent = () => invoke<void>("start_agent");
 export const stopAgent = () => invoke<void>("stop_agent");
 export const restartAgent = () => invoke<void>("restart_agent");
+
+// ─── Onboarding ───────────────────────────────────────────────────
+// App.tsx's first-launch detection contract. The wizard itself uses the
+// richer helper module in `../onboarding/api.ts` (same Tauri command
+// under the hood) — keeping a separate shell-level helper here lets
+// App.tsx stay decoupled from the wizard package.
+export const getOnboardingStatus = (agent: string) =>
+  invoke<OnboardingStatus>("companion_onboarding_status", { agent });
 
 // ─── System Prompt ────────────────────────────────────────────────
 export const promptGet = () => invoke<string>("prompt_get");
