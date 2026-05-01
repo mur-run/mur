@@ -39,7 +39,7 @@ pub fn build_card_from_profile(p: &AgentProfile) -> MurCard {
                 .agent_display_name
                 .clone()
                 .unwrap_or_else(|| p.name.clone()),
-            description: String::new(),
+            ..Default::default()
         },
         extensions: first_memory.map(|fm| Extensions {
             mur: Some(MurExt {
