@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use mur_common::config::LlmConfig;
+use mur_common::llm::anthropic_base_url;
 use serde::{Deserialize, Serialize};
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -217,7 +218,7 @@ async fn anthropic_complete(
     };
 
     let mut req = client
-        .post("https://api.anthropic.com/v1/messages")
+        .post(format!("{}/v1/messages", anthropic_base_url()))
         .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json");
 

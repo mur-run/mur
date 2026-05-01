@@ -12,9 +12,9 @@
 
 use super::{LlmClient, LlmError, LlmRequest, LlmResponse};
 use async_trait::async_trait;
+use mur_common::llm::anthropic_base_url;
 use serde_json::json;
 
-const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const DEFAULT_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 
@@ -57,9 +57,7 @@ impl AnthropicClient {
     pub fn from_env(model: String) -> Result<Self, LlmError> {
         let api_key = std::env::var("ANTHROPIC_API_KEY")
             .map_err(|_| LlmError::InvalidResponse("ANTHROPIC_API_KEY not set".into()))?;
-        let base_url =
-            std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
-        Ok(Self::new(base_url, api_key, model))
+        Ok(Self::new(anthropic_base_url(), api_key, model))
     }
 
     /// Construct from a resolved SecretString and an optional registry-supplied
@@ -71,9 +69,7 @@ impl AnthropicClient {
         base_url: Option<String>,
     ) -> Self {
         use secrecy::ExposeSecret;
-        let base = base_url.unwrap_or_else(|| {
-            std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
-        });
+        let base = base_url.unwrap_or_else(anthropic_base_url);
         Self::new(base, key.expose_secret().to_string(), model)
     }
 }
