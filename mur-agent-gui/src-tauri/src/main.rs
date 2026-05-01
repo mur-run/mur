@@ -314,6 +314,8 @@ fn main() -> Result<()> {
             commands::companion_onboarding_status,
             commands::companion_onboarding_submit,
             commands::companion_onboarding_skip,
+            // D3 multimodal drag-drop / paste (M3.6)
+            commands::multimodal_drop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
