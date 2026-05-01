@@ -6,6 +6,7 @@
 pub mod decode;
 pub mod decoder_protocol;
 pub mod dedupe;
+pub mod heic;
 pub mod unicode_scrubber;
 
 pub use decode::DecoderClient;
