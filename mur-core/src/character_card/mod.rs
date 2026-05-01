@@ -4,6 +4,7 @@
 //! Spec: `docs/superpowers/specs/2026-04-30-mur-agent-d2-onboarding-design.md`
 //! §4.4.
 
+pub mod canonical;
 pub mod extensions;
 pub mod first_memory;
 pub mod schema;

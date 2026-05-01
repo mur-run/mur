@@ -71,6 +71,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sysinfo = "0.30"
 pulldown-cmark = "0.12"
 rand = "0.8"
+serde_jcs = "0.2"
 
 [features]
 default = ["cli", "server", "sources"]
