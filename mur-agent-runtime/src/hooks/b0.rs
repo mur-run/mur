@@ -77,13 +77,24 @@ impl Hook for B0SafetyHook {
             // M3.8.0 always writes the sidecar (empty file when there's no
             // text). A missing file means we're reading an older ledger
             // pre-M3.8.0 — fall back to an empty wrapper rather than
-            // silently dropping the provenance entry.
-            let content = std::fs::read_to_string(&txt_path).unwrap_or_default();
-            // Heuristic: PDF entries begin with the "--- page" marker that
-            // the pipeline (M3.4.2) prepends per page. Everything else is
-            // treated as image OCR text. The tag drives prompt
-            // spotlighting downstream.
-            let tag = if content.contains("--- page") {
+            // silently dropping the provenance entry, but warn so a
+            // forensic reader can spot the gap.
+            let content = match std::fs::read_to_string(&txt_path) {
+                Ok(c) => c,
+                Err(err) => {
+                    tracing::warn!(
+                        "B0SafetyHook: missing text sidecar at {} ({}); using empty wrapper",
+                        txt_path.display(),
+                        err,
+                    );
+                    String::new()
+                }
+            };
+            // Heuristic: PDF entries START with the "--- page" marker that
+            // the pipeline (M3.4.2) prepends per page. Anchor with
+            // `starts_with` so an OCR'd image whose body happens to
+            // include that substring isn't misclassified as a PDF.
+            let tag = if content.starts_with("--- page") {
                 "untrusted_pdf_text"
             } else {
                 "untrusted_image_text"
