@@ -1116,7 +1116,6 @@ pub(crate) fn resolve_summarize(
 
 pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     use crate::conversations::ask;
-    use crate::conversations::ollama::OllamaClient;
     use chrono::{NaiveDate, Utc};
     use futures::StreamExt;
     use std::io::Write;
@@ -1157,12 +1156,14 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     // the full ask_cfg.timeout_secs budget (plumbed via ask_stream).
     let prior_slice = session.last_n(history_turns);
     let model = args.model.clone().unwrap_or_else(|| ask_cfg.model.clone());
-    let rewriter_client = OllamaClient::new(
-        &ask_cfg.ollama_endpoint,
-        std::time::Duration::from_secs(ask_cfg.rewriter_timeout_secs as u64),
-    );
+    let rewriter_backend = crate::conversations::backend::factory::build(
+        &crate::conversations::backend::factory::BackendSpec::ollama(
+            &ask_cfg.ollama_endpoint,
+            ask_cfg.rewriter_timeout_secs as u64,
+        ),
+    )?;
     let rewrite = ask::rewriter::rewrite(
-        &rewriter_client,
+        rewriter_backend.as_ref(),
         &model,
         ask::rewriter::RewriteInput {
             prior_turns: prior_slice,
