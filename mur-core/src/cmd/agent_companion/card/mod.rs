@@ -5,6 +5,7 @@
 
 pub mod accept;
 pub mod cai;
+pub mod cli;
 pub mod export;
 pub mod import;
 pub mod list;

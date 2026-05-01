@@ -30,10 +30,6 @@ use mur_common::identity::AgentIdentity;
 /// give peers a way to verify provenance via `verify_card`. We sign AFTER
 /// `build_card_from_profile` and BEFORE the YAML serialize so the on-disk
 /// bytes are exactly what `verify_card` will canonicalize and check.
-///
-/// `#[allow(dead_code)]` lasts only until the M4.7.2 commit wires this into
-/// `cli.rs`; the binary target sees no caller until then.
-#[allow(dead_code)]
 pub async fn export_card(agent: &str, output: Option<&Path>, sign: bool) -> Result<PathBuf> {
     let agent_home = super::super::util::agent_home_for(agent)?;
     let profile_path = agent_home.join("profile.yaml");
@@ -45,8 +41,7 @@ pub async fn export_card(agent: &str, output: Option<&Path>, sign: bool) -> Resu
     let mut card: MurCard = build_card_from_profile(&profile);
 
     if sign {
-        let identity =
-            AgentIdentity::load(&agent_home).context("load identity.key for signing")?;
+        let identity = AgentIdentity::load(&agent_home).context("load identity.key for signing")?;
         sign_card(&mut card, identity.signing_key()).context("sign card")?;
     }
 
