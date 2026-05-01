@@ -110,3 +110,55 @@ async fn import_yaml_card_works() {
         .collect();
     assert_eq!(entries.len(), 2);
 }
+
+#[tokio::test]
+async fn list_returns_imported_cards() {
+    let tmp = TempDir::new().unwrap();
+    let _guard = MurHomeGuard::set(tmp.path());
+    let agent_dir = tmp.path().join("agents/list-test");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    let fixture = std::fs::read_to_string("../mur-common/tests/fixtures/profile_p0a_minimal.yaml")
+        .or_else(|_| std::fs::read_to_string("mur-common/tests/fixtures/profile_p0a_minimal.yaml"))
+        .unwrap();
+    std::fs::write(
+        agent_dir.join("profile.yaml"),
+        fixture.replace("name: agent_test", "name: list-test"),
+    )
+    .unwrap();
+
+    let png_path = tmp.path().join("input.png");
+    std::fs::write(
+        &png_path,
+        std::fs::read("mur-core/tests/fixtures/cards/silly-v3.png")
+            .or_else(|_| std::fs::read("../mur-core/tests/fixtures/cards/silly-v3.png"))
+            .unwrap(),
+    )
+    .unwrap();
+    let r = mur_core::cmd::agent_companion::card::import::import_card("list-test", &png_path)
+        .await
+        .unwrap();
+
+    let entries = mur_core::cmd::agent_companion::card::list::list_inbox("list-test").unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, r.id);
+    assert_eq!(entries[0].trust, "unsigned");
+    assert_eq!(entries[0].name, "TestV3");
+}
+
+#[tokio::test]
+async fn list_empty_inbox_returns_empty_vec() {
+    let tmp = TempDir::new().unwrap();
+    let _guard = MurHomeGuard::set(tmp.path());
+    let agent_dir = tmp.path().join("agents/empty");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    let fixture = std::fs::read_to_string("../mur-common/tests/fixtures/profile_p0a_minimal.yaml")
+        .or_else(|_| std::fs::read_to_string("mur-common/tests/fixtures/profile_p0a_minimal.yaml"))
+        .unwrap();
+    std::fs::write(
+        agent_dir.join("profile.yaml"),
+        fixture.replace("name: agent_test", "name: empty"),
+    )
+    .unwrap();
+    let entries = mur_core::cmd::agent_companion::card::list::list_inbox("empty").unwrap();
+    assert!(entries.is_empty());
+}
