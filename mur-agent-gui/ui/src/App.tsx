@@ -8,7 +8,14 @@ import PermissionsTab from "./tabs/Permissions";
 import IdentityTab from "./tabs/Identity";
 import { VoiceTab } from "./voice/VoiceTab";
 import { PttButton } from "./voice/PttButton";
-import { setTheme as setThemeApi, getDefaultTheme, applyThemeColors } from "./lib/api";
+import { OnboardingWizard } from "./onboarding/OnboardingWizard";
+import {
+  setTheme as setThemeApi,
+  getDefaultTheme,
+  applyThemeColors,
+  getOnboardingStatus,
+  status as getStatus,
+} from "./lib/api";
 
 type TabId =
   | "status"
@@ -34,12 +41,52 @@ const TABS: { id: TabId; label: string }[] = [
 export default function App() {
   const [tab, setTab] = useState<TabId>("status");
 
+  // First-launch onboarding gate. `null` while the status round-trip
+  // is in flight (UI renders normally), `false` once we've confirmed
+  // the agent has never completed onboarding (wizard overlays), `true`
+  // once it has (or once a fetch error swallows the question — we
+  // never block the UI on a status hiccup). The agent name comes from
+  // the existing `status` command, which reads `MUR_GUI_AGENT_NAME`
+  // baked in by the bundle export pipeline; falling back to `default`
+  // keeps a hand-built dev shell working too.
+  const [onboarded, setOnboarded] = useState<boolean | null>(null);
+  const [agent, setAgent] = useState<string>("default");
+
   // Apply the bundle's baked-in default theme on mount, so the
   // window picks up the colors chosen at `mur agent export --theme`.
   useEffect(() => {
     getDefaultTheme()
       .then((t) => applyThemeColors(t.colors))
       .catch(() => {});
+  }, []);
+
+  // Resolve the bundled agent name and probe its onboarding state.
+  // Both calls are tolerant of failure: a missing agent or a transient
+  // IPC error treats the user as already-onboarded so the wizard
+  // never traps them on a broken install.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let name = "default";
+      try {
+        const s = await getStatus();
+        if (s?.name) name = s.name;
+      } catch {
+        // Keep the fallback agent name; the onboarding probe below
+        // will also tolerate failure and let the UI through.
+      }
+      if (cancelled) return;
+      setAgent(name);
+      try {
+        const o = await getOnboardingStatus(name);
+        if (!cancelled) setOnboarded(!!o.completed_at);
+      } catch {
+        if (!cancelled) setOnboarded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // OS appearance subscriber for the "Match System" mode (spec § 7.3).
@@ -110,6 +157,13 @@ export default function App() {
           console.log("ptt transcript:", text);
         }}
       />
+      {onboarded === false && (
+        <OnboardingWizard
+          agent={agent}
+          onComplete={() => setOnboarded(true)}
+          onOpenVoiceSettings={() => setTab("voice")}
+        />
+      )}
     </div>
   );
 }
