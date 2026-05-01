@@ -153,6 +153,9 @@ fn ctx() -> HookCtx {
         run_id: "01HQ".into(),
         clock: Arc::new(SystemClock),
         telemetry: Arc::new(NoopTel),
+        agent_home: std::path::PathBuf::new(),
+        turn_id: 0,
+        turn_flags: Vec::new(),
     }
 }
 

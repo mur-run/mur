@@ -123,6 +123,19 @@ impl MultimodalPipeline {
         let ledger = ProvenanceLedger::new(self.agent_home.join("telemetry/inputs.jsonl"));
         ledger.append(&entry).context("append provenance")?;
 
+        // M3.8.0: persist the artifact's text to a sidecar file. The runtime's
+        // B0SafetyHook reads <agent_home>/telemetry/inputs/{sha256}.txt during
+        // on_prompt_submit to build the untrusted-content wrapper.
+        let inputs_dir = self.agent_home.join("telemetry/inputs");
+        std::fs::create_dir_all(&inputs_dir)
+            .with_context(|| format!("create {}", inputs_dir.display()))?;
+        let txt_path = inputs_dir.join(format!("{}.txt", sha256));
+        // For Noop OCR (and any case where scrubbed OCR text is empty), the
+        // file is still created — empty — so the M3.8.1 lookup never errors.
+        let body = ocr_text.clone().unwrap_or_default();
+        std::fs::write(&txt_path, body.as_bytes())
+            .with_context(|| format!("write {}", txt_path.display()))?;
+
         Ok(MultimodalArtifact {
             sha256,
             kind: ArtifactKind::Image,
@@ -188,6 +201,16 @@ impl MultimodalPipeline {
         ProvenanceLedger::new(self.agent_home.join("telemetry/inputs.jsonl"))
             .append(&entry)
             .context("append provenance")?;
+
+        // M3.8.0: persist the joined PDF page text to a sidecar file. The
+        // runtime's B0SafetyHook reads <agent_home>/telemetry/inputs/{sha256}.txt
+        // during on_prompt_submit to build the untrusted-content wrapper.
+        let inputs_dir = self.agent_home.join("telemetry/inputs");
+        std::fs::create_dir_all(&inputs_dir)
+            .with_context(|| format!("create {}", inputs_dir.display()))?;
+        let txt_path = inputs_dir.join(format!("{}.txt", sha256));
+        std::fs::write(&txt_path, scrubbed.as_bytes())
+            .with_context(|| format!("write {}", txt_path.display()))?;
 
         let page_count = pages.len() as u32;
 

@@ -160,6 +160,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         run_id: format!("supervisor-{}", uuid::Uuid::now_v7()),
         clock: Arc::new(SystemClock),
         telemetry: telemetry_emitter.clone(),
+        agent_home: agent_home.clone(),
+        // Turn lifecycle wiring (incrementing turn_id per request,
+        // flowing turn_flags from on_prompt_submit through pre_tool_use)
+        // lands with the gate-hook integration in a follow-up milestone.
+        turn_id: 0,
+        turn_flags: Vec::new(),
     };
     let hook_cancel = tokio_util::sync::CancellationToken::new();
     hook_chain
