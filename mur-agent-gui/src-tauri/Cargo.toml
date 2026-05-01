@@ -83,10 +83,11 @@ tauri-plugin-notification = "2"
 # `image` is consumed by `mur-agent-decoder` for PNG/JPEG/WebP decode.
 # HEIC (libheif-rs) is deferred to M3.3.3 — requires `brew install libheif`
 # / `apt install libheif-dev` and is not yet on the host.
-# pdfium-render is deferred to M3.4.1 — `decode_pdf` is a stub at M3.2.2
-# so pulling in the native bindings now would be premature.
+# pdfium-render landed in M3.4.1 — extracts per-page text and flags any
+# page with < 1pt glyphs as quarantined (invisible-text injection guard).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 unicode-segmentation = "1"
+pdfium-render = { version = "0.8", features = ["sync"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

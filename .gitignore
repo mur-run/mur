@@ -9,3 +9,9 @@ research/
 .github/
 .worktrees/
 .idea/
+
+# M3.4.1 — local-only PDFium dynamic library drop (per-host, large
+# binary). Tests look for it via PDFIUM_DYNAMIC_LIB_PATH or
+# `<repo>/.pdfium-bin/lib/`. Download from
+# https://github.com/bblanchon/pdfium-binaries/releases for your arch.
+/.pdfium-bin/
