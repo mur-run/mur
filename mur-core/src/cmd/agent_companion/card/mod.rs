@@ -4,4 +4,6 @@
 //! (inbox) → M4.6 (accept) → M4.7 (CLI dispatch).
 
 pub mod cai;
+pub mod import;
+pub mod list;
 pub mod png;
