@@ -36,8 +36,7 @@ struct FrontMatter {
 }
 
 pub fn parse_inbox_md(path: &Path) -> Result<BridgeEvent> {
-    let raw =
-        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let raw = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     parse_str(&raw)
 }
 

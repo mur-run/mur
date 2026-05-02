@@ -1,6 +1,6 @@
 //! Bridge event front-matter parser.
 
-use mur_agent_gui_lib::companion_bridge::event::{parse_inbox_md, BridgeResponse};
+use mur_agent_gui_lib::companion_bridge::event::{BridgeResponse, parse_inbox_md};
 
 #[test]
 fn parse_pending_message_returns_unset_response() {
