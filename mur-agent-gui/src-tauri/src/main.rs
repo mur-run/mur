@@ -351,6 +351,9 @@ fn main() -> Result<()> {
             // D5 companion → GUI bridge (M5.3)
             companion_bridge::commands::companion_bridge_pending,
             companion_bridge::commands::companion_bridge_subscribe,
+            // D5 companion → GUI bridge (M5.4) — desktop notify + dock badge
+            companion_bridge::commands::notify_message,
+            companion_bridge::commands::set_unread_badge,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

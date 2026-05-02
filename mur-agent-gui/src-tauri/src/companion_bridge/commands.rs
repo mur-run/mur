@@ -80,3 +80,82 @@ pub async fn companion_bridge_subscribe(
     });
     Ok(())
 }
+
+// ── Notification + badge ─────────────────────────────────────────────────────
+
+/// Plain-Rust DTO returned from `notify_payload_for` so unit tests
+/// don't need a Tauri runtime.
+#[derive(Debug, PartialEq)]
+pub struct NotifyPayload {
+    pub title: String,
+    pub body: String,
+}
+
+/// Build the OS-level notification payload from a BridgeEvent's
+/// situation tag + body. Title = situation (so the user knows *why*
+/// it's pinging without needing zh-TW context). Body is the message
+/// text, truncated to 200 chars with an ellipsis if longer.
+pub fn notify_payload_for(situation: &str, body: &str) -> NotifyPayload {
+    let total_chars = body.chars().count();
+    let body_out = if total_chars > 200 {
+        let mut s: String = body.chars().take(199).collect();
+        s.push('…');
+        s
+    } else {
+        body.to_string()
+    };
+    NotifyPayload {
+        title: situation.to_string(),
+        body: body_out,
+    }
+}
+
+/// Clamp the unread count to a value the macOS dock can render.
+/// `0` => `None` => clear the badge.
+pub fn sanitize_badge_count(n: u32) -> Option<u32> {
+    if n == 0 {
+        None
+    } else if n > 99 {
+        Some(99)
+    } else {
+        Some(n)
+    }
+}
+
+#[tauri::command]
+pub async fn notify_message(
+    app: tauri::AppHandle,
+    situation: String,
+    body: String,
+) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    let payload = notify_payload_for(&situation, &body);
+    app.notification()
+        .builder()
+        .title(payload.title)
+        .body(payload.body)
+        .show()
+        .map_err(|e| format!("{e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_unread_badge(app: tauri::AppHandle, count: u32) -> Result<(), String> {
+    // In Tauri 2.10 `set_badge_count` lives on `Window` / `WebviewWindow`
+    // (not `AppHandle`). On macOS the badge is per-app, so calling it on
+    // any window updates the dock for the whole app — we just need *a*
+    // window. We pick the first webview window deterministically by
+    // sorted label. The platform plugin handles main-thread dispatch
+    // for us (works around tauri #13905 macOS Sonoma+ flake).
+    use tauri::Manager;
+    let value = sanitize_badge_count(count).map(|v| v as i64);
+    let mut windows: Vec<_> = app.webview_windows().into_iter().collect();
+    windows.sort_by(|a, b| a.0.cmp(&b.0));
+    let Some((_label, window)) = windows.into_iter().next() else {
+        // No window yet — silently ignore. The next call after a
+        // window comes up will succeed.
+        return Ok(());
+    };
+    window.set_badge_count(value).map_err(|e| format!("{e}"))?;
+    Ok(())
+}
