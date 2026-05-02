@@ -6,8 +6,6 @@
 //! (M4.6) to promote a card from inbox → applied. This mirrors the
 //! `mur drafts` quarantine pattern.
 
-#![allow(dead_code)]
-
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use std::path::{Path, PathBuf};

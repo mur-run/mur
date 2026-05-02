@@ -14,11 +14,10 @@ use mur_common::agent::AgentProfile;
 /// present. The card's `data.name` prefers the onboarding display name and
 /// falls back to the agent's profile `name`.
 ///
-/// `--format card` is a D4 milestone; M2.7 only ships this helper, so the
-/// `mur` binary sees no callers yet — hence `#[allow(dead_code)]`. The
-/// integration tests in `mur-core/tests/companion_first_memory_to_card.rs`
-/// exercise it via the library.
-#[allow(dead_code)]
+/// `--format card` is a D4 milestone; the `mur agent companion card export`
+/// CLI (D4 M4.7) and the integration tests in
+/// `mur-core/tests/companion_first_memory_to_card.rs` are the current
+/// callers.
 pub fn build_card_from_profile(p: &AgentProfile) -> MurCard {
     let first_memory = p
         .companion
