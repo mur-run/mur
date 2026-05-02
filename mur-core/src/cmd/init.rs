@@ -947,27 +947,27 @@ Run `mur learn` to extract new patterns from recent sessions.
                         m.id, config.embedding.model
                     );
                 }
-                Some(LocalBackend::Mlx) => {
+                Some(LocalBackend::OMlx) => {
                     let m = select_model(MLX_RECS)?;
-                    // MLX exposes an OpenAI-compatible HTTP server
-                    // (`mlx_lm.server`); we wire it through the existing
-                    // openai provider with a localhost base URL.
+                    // oMLX serves an OpenAI-compatible API on
+                    // localhost:8000; route through the existing openai
+                    // provider with that base URL.
                     config.llm.provider = "openai".to_string();
                     config.llm.model = m.id.to_string();
-                    config.llm.api_key_env = Some("MLX_API_KEY".to_string());
-                    config.llm.openai_url = Some("http://localhost:8080/v1".to_string());
+                    config.llm.api_key_env = Some("OMLX_API_KEY".to_string());
+                    config.llm.openai_url = Some("http://localhost:8000/v1".to_string());
 
                     select_ollama_embedding(&mut config)?;
                     crate::store::config::save_config(&config)?;
                     println!(
-                        "  ✓ Config: mlx/{} (LLM) + ollama/{} (search)",
+                        "  ✓ Config: oMLX/{} (LLM) + ollama/{} (search)",
                         m.id, config.embedding.model
                     );
                     println!();
-                    println!("  ⚠ Start the MLX server in a separate terminal:");
-                    println!("      mlx_lm.server --model {} --port 8080", m.id);
+                    println!("  ⚠ Launch oMLX.app (menu bar → Start Server) and pull");
+                    println!("      the model via its admin dashboard:  {}", m.id);
                     println!(
-                        "      export MLX_API_KEY=local   # any non-empty value; mlx_lm.server ignores it"
+                        "      export OMLX_API_KEY=local   # any non-empty value; oMLX skips auth on localhost"
                     );
                 }
             }
