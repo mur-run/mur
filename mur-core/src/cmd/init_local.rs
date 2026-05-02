@@ -111,10 +111,10 @@ fn omlx_installed() -> bool {
     if Path::new("/Applications/oMLX.app").exists() {
         return true;
     }
-    if let Some(home) = dirs::home_dir() {
-        if home.join("Applications/oMLX.app").exists() {
-            return true;
-        }
+    if let Some(home) = dirs::home_dir()
+        && home.join("Applications/oMLX.app").exists()
+    {
+        return true;
     }
     false
 }
