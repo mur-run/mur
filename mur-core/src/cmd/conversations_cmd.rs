@@ -1240,12 +1240,10 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     // the full ask_cfg.timeout_secs budget (plumbed via ask_stream).
     let prior_slice = session.last_n(history_turns);
     let model = args.model.clone().unwrap_or_else(|| ask_cfg.model.clone());
-    let mut rewriter_cfg = ask_cfg.synthesize_rewriter_backend();
-    // Per-stage rewriter timeout overrides whatever the synthesized config
-    // would have used — rewriter has a tighter latency budget than the
-    // answer model.
-    rewriter_cfg.timeout_secs = Some(ask_cfg.rewriter_timeout_secs as u64);
-    let rewriter_backend = crate::conversations::backend::factory::build(&rewriter_cfg)?;
+    let rewriter_backend = crate::conversations::backend::factory::build_for_stage(
+        &ask_cfg.synthesize_rewriter_backend(),
+        "rewriter",
+    )?;
     let rewrite = ask::rewriter::rewrite(
         rewriter_backend.as_ref(),
         &model,
@@ -1281,21 +1279,18 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         ask_cfg.summarize_model.as_deref(),
     );
     // Build the answer-streaming backend via factory, honoring the per-stage
-    // `ask.backend` override. Without an override, synthesize_backend()
-    // returns an ollama BackendConfig over `ask_cfg.model` + `ollama_endpoint`,
-    // which factory::build maps to OllamaBackend wrapped in RetryingBackend
-    // — byte-identical to the pre-trait OllamaClient construction.
+    // `ask.backend` override. synthesize_backend() now bakes ask.timeout_secs
+    // into the synthesized BackendConfig (see I2 fix in P3 task 1) so factory's
+    // 120s default doesn't override the user's per-call budget.
     //
-    // The synthesized cfg leaves `timeout_secs` unset; force it to
-    // `ask_cfg.timeout_secs` so the answer call inherits the same per-call
-    // timeout it had before this migration (rather than factory's 120s
-    // default). When the user has set `ask.backend` explicitly with their
-    // own `timeout_secs`, we respect that.
-    let mut answer_cfg = ask_cfg.synthesize_backend();
-    if answer_cfg.timeout_secs.is_none() {
-        answer_cfg.timeout_secs = Some(ask_cfg.timeout_secs as u64);
-    }
-    let answer_backend = crate::conversations::backend::factory::build(&answer_cfg)?;
+    // P3 task 8: build TWO backends (Stage 1b + answer stream) from the same
+    // BackendConfig but tag them differently for telemetry — cost-report
+    // breaks down spend by stage.
+    let backend_cfg = ask_cfg.synthesize_backend();
+    let stage1b_backend =
+        crate::conversations::backend::factory::build_for_stage(&backend_cfg, "ask.compress_hit")?;
+    let answer_backend =
+        crate::conversations::backend::factory::build_for_stage(&backend_cfg, "ask.generate")?;
     let req = ask::AskRequest {
         question: question.clone(),
         filters,
@@ -1323,6 +1318,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         summarize_enabled: effective_summarize_enabled,
         summarize_model: effective_summarize_model,
         answer_backend: Some(answer_backend),
+        stage1b_backend: Some(stage1b_backend),
     };
 
     // Generate + collect response

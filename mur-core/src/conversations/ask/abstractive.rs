@@ -10,7 +10,7 @@
 
 use super::cache;
 use super::retrieve::ResolvedHit;
-use crate::conversations::ollama::{GenerateOptions, GenerateRequest, OllamaClient};
+use crate::conversations::backend::{ChatBackend, ChatRequest};
 use std::time::Duration;
 
 /// Prompt-version marker baked into cache keys. Bump when the prompt template
@@ -39,7 +39,7 @@ fn user_template(target_tokens: usize, content: &str) -> String {
 
 /// Per-run Stage 1b context. Built once in `ask_stream` from `AskConfig`.
 pub struct AbstractiveCtx<'a> {
-    pub client: &'a OllamaClient,
+    pub backend: &'a dyn ChatBackend,
     pub model: &'a str,
     pub timeout: Duration,
     pub root_override: Option<&'a str>,
@@ -59,6 +59,10 @@ pub mod skip_reason {
     pub const TIMEOUT: &str = "timeout";
     pub const EMPTY: &str = "empty";
     pub const NOT_SHORTER: &str = "not_shorter";
+    /// Backwards-compat constant name (still emitted in JSON output as
+    /// `"ollama_err"`). Semantically this is now a generic backend-error
+    /// tag — Stage 1b sees it any time `ChatBackend::generate` returns Err
+    /// (cloud HTTP failures, Ollama unreachable, etc.). Do NOT rename.
     pub const OLLAMA_ERR: &str = "ollama_err";
     pub const TOO_SHORT: &str = "too_short";
     /// The hit was already compressed by an earlier stage (Phase 3.4's
@@ -142,30 +146,31 @@ pub async fn compress_hit(
     }
 
     let prompt = user_template(target, &hit.snippet);
-    let req = GenerateRequest {
+    let req = ChatRequest {
         model: ctx.model,
-        prompt: &prompt,
+        user: &prompt,
         system: Some(SYSTEM_TEMPLATE),
-        stream: false,
-        options: GenerateOptions {
-            temperature: Some(0.0),
-            top_p: None,
-            num_predict: Some(target as u32 * 2),
-            stop: Vec::new(),
-        },
+        max_tokens: target as u32 * 2,
+        temperature: Some(0.0),
+        stop: vec![],
+        // P3 caching: SYSTEM_TEMPLATE is ~30 tokens, far below the 2048
+        // cacheable minimum (spec §5.2). Set true if SYSTEM_TEMPLATE grows
+        // past 2048 tokens.
+        cache_system: false,
+        cache_user_prefix: None,
     };
 
-    let call = ctx.client.generate(req);
+    let call = ctx.backend.generate(req);
     let out = match tokio::time::timeout(ctx.timeout, call).await {
         Err(_) => {
             tracing::warn!(target, len = hit.snippet.len(), "stage-1b timeout");
             return CompressOutcome::Skipped(skip_reason::TIMEOUT);
         }
         Ok(Err(e)) => {
-            tracing::warn!(target, err = ?e, "stage-1b ollama error");
+            tracing::warn!(target, err = ?e, "stage-1b backend error");
             return CompressOutcome::Skipped(skip_reason::OLLAMA_ERR);
         }
-        Ok(Ok(resp)) => resp.response,
+        Ok(Ok(resp)) => resp.text,
     };
 
     let trimmed = out.trim().to_string();
@@ -283,8 +288,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversations::ENV_LOCK;
     use crate::conversations::ask::HitInfo;
+    use crate::conversations::backend::mock::MockBackend;
+    use crate::conversations::backend::{
+        ChatBackend, ChatRequest, ChatResponse, ChatStream, Usage,
+    };
     use std::time::Duration;
 
     fn long_hit(n_sentences: usize) -> ResolvedHit {
@@ -309,41 +317,138 @@ mod tests {
         }
     }
 
-    fn ctx<'a>(client: &'a OllamaClient, root: &'a str) -> AbstractiveCtx<'a> {
+    fn ctx_backend<'a>(backend: &'a dyn ChatBackend, root: &'a str) -> AbstractiveCtx<'a> {
         AbstractiveCtx {
-            client,
+            backend,
             model: "qwen3:14b",
             timeout: Duration::from_millis(200),
             root_override: Some(root),
         }
     }
 
-    #[allow(clippy::await_holding_lock)]
+    /// Test-local backend that always sleeps before responding — used to
+    /// exercise the `tokio::time::timeout` wrapper around `ctx.backend.generate`.
+    /// MUR_ABSTRACTIVE_MOCK_FAIL=timeout fired only inside `OllamaClient::generate`,
+    /// which is no longer on the call path now that `compress_hit` takes
+    /// `&dyn ChatBackend`. Substituting a sleeping backend keeps coverage
+    /// of the timeout branch trait-agnostic.
+    struct SlowBackend {
+        delay: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl ChatBackend for SlowBackend {
+        async fn generate(&self, _req: ChatRequest<'_>) -> anyhow::Result<ChatResponse> {
+            tokio::time::sleep(self.delay).await;
+            Ok(ChatResponse {
+                text: "should never be returned".into(),
+                usage: Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    provider: "slow",
+                    model: "slow".into(),
+                },
+            })
+        }
+        async fn generate_stream(&self, _req: ChatRequest<'_>) -> anyhow::Result<ChatStream> {
+            unimplemented!("not used by Stage 1b")
+        }
+        fn provider_name(&self) -> &'static str {
+            "slow"
+        }
+    }
+
+    /// Test-local backend that always returns Err — exercises the
+    /// `Skipped(OLLAMA_ERR)` (now: backend-error) branch without depending on
+    /// real network failure.
+    struct ErrBackend;
+
+    #[async_trait::async_trait]
+    impl ChatBackend for ErrBackend {
+        async fn generate(&self, _req: ChatRequest<'_>) -> anyhow::Result<ChatResponse> {
+            Err(anyhow::anyhow!("synthetic backend failure"))
+        }
+        async fn generate_stream(&self, _req: ChatRequest<'_>) -> anyhow::Result<ChatStream> {
+            unimplemented!("not used by Stage 1b")
+        }
+        fn provider_name(&self) -> &'static str {
+            "err"
+        }
+    }
+
+    /// Test-local wrapper that swaps the response payload returned by
+    /// MockBackend so we can drive `Skipped(EMPTY)` and `Skipped(NOT_SHORTER)`
+    /// branches without the global env-var dance the legacy Ollama mock used.
+    struct PayloadBackend {
+        payload: String,
+    }
+
+    #[async_trait::async_trait]
+    impl ChatBackend for PayloadBackend {
+        async fn generate(&self, req: ChatRequest<'_>) -> anyhow::Result<ChatResponse> {
+            Ok(ChatResponse {
+                text: self.payload.clone(),
+                usage: Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    provider: "payload",
+                    model: req.model.to_string(),
+                },
+            })
+        }
+        async fn generate_stream(&self, _req: ChatRequest<'_>) -> anyhow::Result<ChatStream> {
+            unimplemented!("not used by Stage 1b")
+        }
+        fn provider_name(&self) -> &'static str {
+            "payload"
+        }
+    }
+
     #[tokio::test]
-    async fn compress_hit_skips_when_content_too_short() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+    async fn compress_hit_via_chat_backend_mock_short_circuits_on_short_content() {
+        let backend = MockBackend::new();
         let tmp = tempfile::tempdir().unwrap();
         let mut h = long_hit(1);
         h.snippet = "tiny".into();
-        let o = compress_hit(&ctx(&client, tmp.path().to_str().unwrap()), &mut h, 128).await;
-        assert_eq!(o, CompressOutcome::Skipped(skip_reason::TOO_SHORT));
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        let outcome = compress_hit(
+            &ctx_backend(&backend, tmp.path().to_str().unwrap()),
+            &mut h,
+            100,
+        )
+        .await;
+        assert!(matches!(
+            outcome,
+            CompressOutcome::Skipped(skip_reason::TOO_SHORT)
+        ));
     }
 
-    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn compress_hit_skips_when_content_too_short() {
+        let backend = MockBackend::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut h = long_hit(1);
+        h.snippet = "tiny".into();
+        let o = compress_hit(
+            &ctx_backend(&backend, tmp.path().to_str().unwrap()),
+            &mut h,
+            128,
+        )
+        .await;
+        assert_eq!(o, CompressOutcome::Skipped(skip_reason::TOO_SHORT));
+    }
+
     #[tokio::test]
     async fn compress_hit_success_shortens_snippet_and_writes_cache() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let backend = MockBackend::new();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let mut h = long_hit(20); // ~1100 chars, way over MIN_CONTENT_CHARS
         let orig_len = h.snippet.len();
-        let o = compress_hit(&ctx(&client, root), &mut h, 128).await;
+        let o = compress_hit(&ctx_backend(&backend, root), &mut h, 128).await;
         assert_eq!(o, CompressOutcome::Compressed);
         assert!(h.snippet.len() < orig_len, "mock summary must be shorter");
         assert_eq!(h.compressed, Some(super::super::Compression::Abstractive));
@@ -351,40 +456,33 @@ mod tests {
         let key = cache::cache_key("qwen3:14b", 128, &long_hit(20).snippet);
         let cached = cache::cache_get(&key, Some(root));
         assert_eq!(cached.as_deref(), Some(h.snippet.as_str()));
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compress_hit_cache_hit_on_second_call_skips_llm() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let backend = MockBackend::new();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let mut h1 = long_hit(20);
-        compress_hit(&ctx(&client, root), &mut h1, 128).await;
+        compress_hit(&ctx_backend(&backend, root), &mut h1, 128).await;
         let mut h2 = long_hit(20);
-        let o = compress_hit(&ctx(&client, root), &mut h2, 128).await;
+        let o = compress_hit(&ctx_backend(&backend, root), &mut h2, 128).await;
         assert_eq!(o, CompressOutcome::CacheHit);
         assert_eq!(h2.snippet, h1.snippet);
         assert_eq!(h2.compressed, Some(super::super::Compression::Abstractive));
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compress_hit_respects_timeout() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::set_var("MUR_ABSTRACTIVE_MOCK_FAIL", "timeout") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(30));
+        // SlowBackend sleeps 10s; ctx.timeout is 100ms → timeout MUST fire.
+        let backend = SlowBackend {
+            delay: Duration::from_secs(10),
+        };
         let tmp = tempfile::tempdir().unwrap();
         let mut h = long_hit(20);
         let o = compress_hit(
             &AbstractiveCtx {
-                client: &client,
+                backend: &backend,
                 model: "qwen3:14b",
                 timeout: Duration::from_millis(100),
                 root_override: Some(tmp.path().to_str().unwrap()),
@@ -394,47 +492,61 @@ mod tests {
         )
         .await;
         assert_eq!(o, CompressOutcome::Skipped(skip_reason::TIMEOUT));
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn compress_hit_skips_on_backend_error() {
+        let backend = ErrBackend;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut h = long_hit(20);
+        let o = compress_hit(
+            &ctx_backend(&backend, tmp.path().to_str().unwrap()),
+            &mut h,
+            128,
+        )
+        .await;
+        // Constant name preserved for backwards-compat JSON output.
+        assert_eq!(o, CompressOutcome::Skipped(skip_reason::OLLAMA_ERR));
+    }
+
     #[tokio::test]
     async fn compress_hit_skips_on_empty_response() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::set_var("MUR_ABSTRACTIVE_MOCK_FAIL", "empty") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let backend = PayloadBackend {
+            payload: String::new(),
+        };
         let tmp = tempfile::tempdir().unwrap();
         let mut h = long_hit(20);
-        let o = compress_hit(&ctx(&client, tmp.path().to_str().unwrap()), &mut h, 128).await;
+        let o = compress_hit(
+            &ctx_backend(&backend, tmp.path().to_str().unwrap()),
+            &mut h,
+            128,
+        )
+        .await;
         assert_eq!(o, CompressOutcome::Skipped(skip_reason::EMPTY));
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compress_hit_skips_when_not_shorter() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::set_var("MUR_ABSTRACTIVE_MOCK_FAIL", "not_shorter") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        // Build a payload that is strictly longer than the snippet so the
+        // not-shorter validator fires.
+        let h_template = long_hit(20);
+        let backend = PayloadBackend {
+            payload: format!("{} extra padding to force NOT_SHORTER", h_template.snippet),
+        };
         let tmp = tempfile::tempdir().unwrap();
         let mut h = long_hit(20);
-        let o = compress_hit(&ctx(&client, tmp.path().to_str().unwrap()), &mut h, 128).await;
+        let o = compress_hit(
+            &ctx_backend(&backend, tmp.path().to_str().unwrap()),
+            &mut h,
+            128,
+        )
+        .await;
         assert_eq!(o, CompressOutcome::Skipped(skip_reason::NOT_SHORTER));
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn run_stage_1b_early_exits_when_fit_after_two_hits() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let backend = MockBackend::new();
         let tmp = tempfile::tempdir().unwrap();
         // 5 hits; budget just tight enough that 1-2 compressions fit it (exact count
         // depends on the mock response size). The assertion only requires 1 ≤ processed < 5.
@@ -442,7 +554,7 @@ mod tests {
         let orig_total: usize = hits.iter().map(|h| h.snippet.len()).sum();
         let max_context_chars = orig_total - 200; // force overflow on char-ish metric
         let summary = run_stage_1b(
-            &ctx(&client, tmp.path().to_str().unwrap()),
+            &ctx_backend(&backend, tmp.path().to_str().unwrap()),
             &mut hits,
             orig_total,
             max_context_chars,
@@ -459,16 +571,11 @@ mod tests {
             "early-exit should prevent touching all 5; got {}",
             summary.processed
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn run_stage_1b_largest_first_order() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let backend = MockBackend::new();
         let tmp = tempfile::tempdir().unwrap();
         let mut hits = vec![long_hit(5), long_hit(30), long_hit(10)];
         let big_idx_before = 1; // middle hit is the largest
@@ -478,7 +585,7 @@ mod tests {
         // first regardless of total count.
         let max_context_chars = orig_total - (orig_big_len / 3);
         let summary = run_stage_1b(
-            &ctx(&client, tmp.path().to_str().unwrap()),
+            &ctx_backend(&backend, tmp.path().to_str().unwrap()),
             &mut hits,
             orig_total,
             max_context_chars,
@@ -495,20 +602,16 @@ mod tests {
             hits[big_idx_before].compressed,
             Some(super::super::Compression::Abstractive)
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn run_stage_1b_noop_when_already_fits() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let backend = MockBackend::new();
         let tmp = tempfile::tempdir().unwrap();
         let mut hits = vec![long_hit(5)];
         let orig_total: usize = hits.iter().map(|h| h.snippet.len()).sum();
         let summary = run_stage_1b(
-            &ctx(&client, tmp.path().to_str().unwrap()),
+            &ctx_backend(&backend, tmp.path().to_str().unwrap()),
             &mut hits,
             orig_total,
             orig_total + 10_000, // huge budget → no overshoot
@@ -517,20 +620,15 @@ mod tests {
         .await;
         assert_eq!(summary.processed, 0);
         assert_eq!(summary.compressed_count, 0);
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
     /// H3 follow-up (Phase 3.5 review): hits already compressed by Stage 1's
     /// heuristic extractive pass must be skipped by Stage 1b with the
     /// `ALREADY_COMPRESSED` reason — re-summarising an extract via LLM
     /// compounds information loss without justifying the latency.
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn run_stage_1b_skips_heuristic_compressed_hits() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let backend = MockBackend::new();
         let tmp = tempfile::tempdir().unwrap();
         let mut hits = vec![long_hit(30), long_hit(30)];
         // Mark the first (largest) hit as already compressed by Stage 1.
@@ -540,7 +638,7 @@ mod tests {
         let max_context_chars = orig_total / 2; // force overshoot → Stage 1b runs
 
         let summary = run_stage_1b(
-            &ctx(&client, tmp.path().to_str().unwrap()),
+            &ctx_backend(&backend, tmp.path().to_str().unwrap()),
             &mut hits,
             orig_total,
             max_context_chars,
@@ -567,20 +665,15 @@ mod tests {
             Some(super::super::Compression::Heuristic),
             "heuristic-compressed hit flag must be preserved"
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
     /// H2 follow-up (Phase 3.5 review): an invalid cache entry (empty /
     /// not-shorter) must be evicted during the fallback-to-fresh-call path,
     /// so a subsequent run with the same key doesn't keep reading-and-
     /// discarding the same bad entry every time.
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compress_hit_evicts_invalid_cache_entry_then_regenerates() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let backend = MockBackend::new();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
 
@@ -595,7 +688,7 @@ mod tests {
 
         // Compress — the bad entry should be evicted, and the fresh LLM call
         // should produce a new valid cache entry.
-        let outcome = compress_hit(&ctx(&client, root), &mut h, target).await;
+        let outcome = compress_hit(&ctx_backend(&backend, root), &mut h, target).await;
         assert_eq!(
             outcome,
             CompressOutcome::Compressed,
@@ -609,20 +702,15 @@ mod tests {
             !reloaded.is_empty(),
             "cache entry was re-populated with valid content"
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
     /// H1 follow-up (Phase 3.5 review): the `measure_tokens` callback is
     /// invoked at least once per loop iteration so Stage 1b's exit decision
     /// uses ground-truth prompt size, not a drifting per-hit delta proxy.
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn run_stage_1b_calls_measure_tokens_each_iteration() {
         use std::cell::Cell;
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        let client = OllamaClient::new("http://unused", Duration::from_secs(1));
+        let backend = MockBackend::new();
         let tmp = tempfile::tempdir().unwrap();
         let mut hits: Vec<ResolvedHit> = (0..3).map(|_| long_hit(30)).collect();
         let orig_total: usize = hits.iter().map(|h| h.snippet.len()).sum();
@@ -631,7 +719,7 @@ mod tests {
         let calls = Cell::new(0usize);
         let synthetic_cur = orig_total * 10;
         let summary = run_stage_1b(
-            &ctx(&client, tmp.path().to_str().unwrap()),
+            &ctx_backend(&backend, tmp.path().to_str().unwrap()),
             &mut hits,
             orig_total * 10,
             orig_total,
@@ -649,6 +737,5 @@ mod tests {
             calls.get()
         );
         assert_eq!(summary.processed, 3);
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }
