@@ -32,3 +32,72 @@ pub fn anthropic_base_url() -> String {
         .unwrap_or_else(|_| ANTHROPIC_DEFAULT_BASE_URL.to_string());
     raw.trim_end_matches('/').to_string()
 }
+
+/// Check if a model name matches recommended reasoning models for session analysis.
+///
+/// Recommended: Anthropic Opus, OpenAI GPT-5/O3/O4, Gemini Pro 3+,
+/// or any model with "reasoning" or "think" in the name.
+#[allow(clippy::collapsible_if)]
+pub fn is_reasoning_model(model: &str) -> bool {
+    let m = model.to_lowercase();
+
+    if m.contains("opus") {
+        return true;
+    }
+    if m.contains("gpt-5") || m.contains("o3") || m.contains("o4") {
+        return true;
+    }
+    if m.contains("gemini") && m.contains("pro") {
+        if let Some(pos) = m.find("pro") {
+            let after = &m[pos + 3..];
+            let version_str: String = after
+                .chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(v) = version_str.parse::<u32>()
+                && v >= 3
+            {
+                return true;
+            }
+        }
+    }
+    if m.contains("reasoning") || m.contains("think") {
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_reasoning_model() {
+        // Anthropic opus models
+        assert!(is_reasoning_model("claude-opus-4-6"));
+        assert!(is_reasoning_model("claude-opus-4-20250514"));
+
+        // OpenAI reasoning models
+        assert!(is_reasoning_model("gpt-5"));
+        assert!(is_reasoning_model("chatgpt-5.4"));
+        assert!(is_reasoning_model("o3-mini"));
+        assert!(is_reasoning_model("o4-preview"));
+
+        // Gemini pro >= 3
+        assert!(is_reasoning_model("gemini-pro-3.5"));
+        assert!(is_reasoning_model("gemini-pro-3"));
+        assert!(!is_reasoning_model("gemini-pro-2"));
+        assert!(!is_reasoning_model("gemini-pro-1.5"));
+
+        // Generic reasoning/thinking
+        assert!(is_reasoning_model("deepseek-reasoning-v2"));
+        assert!(is_reasoning_model("qwen-thinking-32b"));
+
+        // Non-recommended
+        assert!(!is_reasoning_model("claude-sonnet-4-20250514"));
+        assert!(!is_reasoning_model("gpt-4o"));
+        assert!(!is_reasoning_model("gemini-flash-2"));
+        assert!(!is_reasoning_model("llama3"));
+    }
+}

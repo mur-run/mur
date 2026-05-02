@@ -35,7 +35,14 @@ impl ChatBackend for OllamaBackend {
             options: GenerateOptions {
                 temperature: req.temperature,
                 top_p: None,
-                num_predict: Some(req.max_tokens),
+                // max_tokens == 0 is the cross-backend "use the backend default"
+                // sentinel (Anthropic/OpenAI substitute DEFAULT_MAX_TOKENS;
+                // Ollama has no hard default in this layer, so we omit
+                // num_predict and let Ollama's server-side default apply —
+                // matches the pre-P4 ollama_complete behavior. Sending
+                // num_predict: 0 over the wire would make Ollama produce
+                // exactly zero tokens (silent empty-response regression).
+                num_predict: (req.max_tokens != 0).then_some(req.max_tokens),
                 stop: req.stop.clone(),
             },
         };
@@ -68,7 +75,9 @@ impl ChatBackend for OllamaBackend {
             options: GenerateOptions {
                 temperature: req.temperature,
                 top_p: None,
-                num_predict: Some(req.max_tokens),
+                // Same sentinel as `generate`: 0 == "let Ollama's server-side
+                // default apply". See comment in `generate` above.
+                num_predict: (req.max_tokens != 0).then_some(req.max_tokens),
                 stop: req.stop.clone(),
             },
         };
@@ -129,6 +138,58 @@ mod tests {
         };
         let r = b.generate(req).await;
         assert!(r.is_err(), "unreachable endpoint should error");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_omits_num_predict_when_max_tokens_is_zero() {
+        // Regression test: the cross-backend `max_tokens == 0` sentinel must
+        // OMIT `options.num_predict` from the wire body. Sending it as 0
+        // makes Ollama interpret it literally as "produce 0 tokens" and
+        // return an empty response — the silent-empty-response regression
+        // that broke `mur learn extract --llm`, `mur out` workflow extraction
+        // and the LLM-starters path for users with provider:ollama.
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/generate"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(
+                        r#"{"response":"ok","done":true,"model":"qwen3:14b","prompt_eval_count":1,"eval_count":1}"#,
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let b = OllamaBackend::new(&server.uri(), Duration::from_secs(5));
+        let req = ChatRequest {
+            model: "qwen3:14b",
+            user: "hi",
+            system: None,
+            max_tokens: 0, // sentinel — should send options.num_predict: None
+            temperature: None,
+            stop: vec![],
+            cache_system: false,
+            cache_user_prefix: None,
+        };
+        let _ = b.generate(req).await.unwrap();
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1, "expected exactly one POST /api/generate");
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        // GenerateRequest serializes options as a nested object (see
+        // mur-core/src/conversations/ollama.rs::GenerateOptions).
+        let options = body
+            .get("options")
+            .expect("body should carry an `options` object");
+        assert!(
+            options.get("num_predict").is_none(),
+            "num_predict must be absent when max_tokens=0 — sending it as 0 makes Ollama return empty (regression introduced in P4). got options: {options:?}"
+        );
     }
 
     #[tokio::test]

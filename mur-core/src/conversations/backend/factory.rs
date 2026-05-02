@@ -47,6 +47,33 @@ pub fn build_for_stage(cfg: &BackendConfig, stage: &'static str) -> Result<Arc<d
     )))
 }
 
+/// Default env var name for an API-key-bearing provider. Mirrors the
+/// historical mur-common::config::LlmConfig fallback so users with
+/// `provider: anthropic` and no explicit `api_key_env:` keep working
+/// after P4 migrates them onto BackendConfig.
+fn default_key_env(provider: &str) -> &'static str {
+    match provider {
+        "anthropic" => "ANTHROPIC_API_KEY",
+        "openai" => "OPENAI_API_KEY",
+        "gemini" => "GEMINI_API_KEY",
+        "openrouter" => "OPENROUTER_API_KEY",
+        _ => "LLM_API_KEY",
+    }
+}
+
+fn resolve_api_key(cfg: &BackendConfig) -> Result<String> {
+    let env_var = cfg
+        .api_key_env
+        .as_deref()
+        .unwrap_or_else(|| default_key_env(&cfg.provider));
+    std::env::var(env_var).map_err(|_| {
+        anyhow::anyhow!(
+            "{} backend env var {env_var} is not set or not readable",
+            cfg.provider
+        )
+    })
+}
+
 fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
     if std::env::var("MUR_LLM_MOCK").is_ok() || std::env::var("MUR_OLLAMA_MOCK").is_ok() {
         tracing::debug!(provider = %cfg.provider, "MUR_LLM_MOCK active — using MockBackend");
@@ -59,20 +86,46 @@ fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
             Arc::new(OllamaBackend::new(endpoint, timeout))
         }
         "anthropic" => {
-            let api_key_env = cfg.api_key_env.as_deref().ok_or_else(|| {
-                anyhow::anyhow!("anthropic backend requires api_key_env in BackendConfig")
-            })?;
-            let api_key = std::env::var(api_key_env).map_err(|_| {
-                anyhow::anyhow!(
-                    "anthropic backend env var {api_key_env} is not set or not readable"
-                )
-            })?;
+            let api_key = resolve_api_key(cfg)?;
             let endpoint = cfg
                 .endpoint
                 .as_deref()
                 .unwrap_or("https://api.anthropic.com");
             let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
             Arc::new(super::anthropic::AnthropicBackend::new(
+                endpoint, &api_key, timeout,
+            ))
+        }
+        "openai" => {
+            let api_key = resolve_api_key(cfg)?;
+            let endpoint = cfg
+                .endpoint
+                .as_deref()
+                .unwrap_or("https://api.openai.com/v1");
+            let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
+            Arc::new(super::openai::OpenAIBackend::new(
+                endpoint, &api_key, timeout,
+            ))
+        }
+        "openrouter" => {
+            let api_key = resolve_api_key(cfg)?;
+            let endpoint = cfg
+                .endpoint
+                .as_deref()
+                .unwrap_or("https://openrouter.ai/api/v1");
+            let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
+            Arc::new(super::openai::OpenAIBackend::new(
+                endpoint, &api_key, timeout,
+            ))
+        }
+        "gemini" => {
+            let api_key = resolve_api_key(cfg)?;
+            let endpoint = cfg
+                .endpoint
+                .as_deref()
+                .unwrap_or("https://generativelanguage.googleapis.com");
+            let timeout = Duration::from_secs(cfg.timeout_secs.unwrap_or(120));
+            Arc::new(super::gemini::GeminiBackend::new(
                 endpoint, &api_key, timeout,
             ))
         }
@@ -174,10 +227,11 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn anthropic_provider_errors_when_api_key_env_field_missing() {
+    async fn anthropic_provider_errors_when_default_env_var_unset_and_api_key_env_field_missing() {
         let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
         unsafe { std::env::remove_var("MUR_LLM_MOCK") };
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
         let cfg = BackendConfig {
             provider: "anthropic".into(),
             model: "claude-haiku-4-5".into(),
@@ -186,9 +240,90 @@ mod tests {
             timeout_secs: None,
         };
         let r = build(&cfg);
-        assert!(r.is_err());
-        let err = r.err().unwrap();
-        assert!(format!("{err:#}").contains("api_key_env"));
+        assert!(
+            r.is_err(),
+            "should error when default env var ANTHROPIC_API_KEY is unset and api_key_env is None"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn openai_provider_returns_openai_backend_when_key_present() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TEST_OPENAI_KEY", "sk-synthetic") };
+        let cfg = BackendConfig {
+            provider: "openai".into(),
+            model: "gpt-4o-mini".into(),
+            endpoint: None,
+            api_key_env: Some("MUR_TEST_OPENAI_KEY".into()),
+            timeout_secs: None,
+        };
+        let b = build(&cfg).unwrap();
+        assert_eq!(b.provider_name(), "openai");
+        unsafe { std::env::remove_var("MUR_TEST_OPENAI_KEY") };
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn gemini_provider_returns_gemini_backend_when_key_present() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TEST_GEMINI_KEY", "synthetic") };
+        let cfg = BackendConfig {
+            provider: "gemini".into(),
+            model: "gemini-pro-3".into(),
+            endpoint: None,
+            api_key_env: Some("MUR_TEST_GEMINI_KEY".into()),
+            timeout_secs: None,
+        };
+        let b = build(&cfg).unwrap();
+        assert_eq!(b.provider_name(), "gemini");
+        unsafe { std::env::remove_var("MUR_TEST_GEMINI_KEY") };
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn openrouter_provider_aliases_to_openai_with_default_endpoint() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TEST_OR_KEY", "sk-or-v1-synthetic") };
+        let cfg = BackendConfig {
+            provider: "openrouter".into(),
+            model: "anthropic/claude-haiku-4-5".into(),
+            endpoint: None, // factory should auto-set https://openrouter.ai/api/v1
+            api_key_env: Some("MUR_TEST_OR_KEY".into()),
+            timeout_secs: None,
+        };
+        let b = build(&cfg).unwrap();
+        // openrouter alias surfaces as "openai" (it IS an OpenAI-compat backend)
+        assert_eq!(b.provider_name(), "openai");
+        unsafe { std::env::remove_var("MUR_TEST_OR_KEY") };
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn anthropic_provider_uses_default_env_when_api_key_env_field_missing() {
+        // P4 behavior change: factory now falls back to default_key_env when
+        // api_key_env is None — so LlmConfig users without explicit api_key_env
+        // (the historical default for anthropic) keep working.
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "synthetic-default") };
+        let cfg = BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: None,
+            api_key_env: None, // factory uses default_key_env("anthropic") = "ANTHROPIC_API_KEY"
+            timeout_secs: None,
+        };
+        let b = build(&cfg).unwrap();
+        assert_eq!(b.provider_name(), "anthropic");
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
     }
 
     #[tokio::test]
@@ -268,8 +403,8 @@ mod tests {
     #[test]
     fn unsupported_provider_errors() {
         let cfg = BackendConfig {
-            provider: "openai".into(),
-            model: "gpt-4".into(),
+            provider: "cohere".into(),
+            model: "command-r".into(),
             endpoint: None,
             api_key_env: None,
             timeout_secs: None,

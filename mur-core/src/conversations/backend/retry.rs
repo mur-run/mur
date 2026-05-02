@@ -76,7 +76,21 @@ impl RetryingBackend {
                     .unwrap_or(policy.base_backoff_secs);
                 Some(Duration::from_secs(after))
             }
-            // Non-retryable: Unauthorized, ModelNotFound, BadResponse, Network
+            // reqwest timeouts and connect failures land in BackendError::Network
+            // (not BackendError::Timeout — that variant is only constructed in
+            // tests). Pre-P4 extract_llm matched on the substring "timeout" in
+            // the error string; restoring parity here so transient connect/read
+            // timeouts still get the retry envelope rather than silently
+            // degrading to logic-only fallback.
+            BackendError::Network { source, .. } => {
+                if source.is_timeout() || source.is_connect() {
+                    Some(base)
+                } else {
+                    None
+                }
+            }
+            // Non-retryable: Unauthorized, ModelNotFound, BadResponse,
+            // Network{ !is_timeout && !is_connect } (e.g. TLS / decode errors)
             _ => None,
         }
     }
@@ -374,6 +388,180 @@ mod tests {
         let chunk = stream.next().await.unwrap().unwrap();
         assert_eq!(chunk.delta, "hi");
         assert_eq!(attempts.load(Ordering::SeqCst), 3); // 1 + 2 retries
+    }
+
+    /// Fixture that produces a REAL reqwest timeout error per call by hitting
+    /// a wiremock endpoint that deliberately delays past a tight client
+    /// timeout. This is the only reliable way to get an honest
+    /// `reqwest::Error` whose `is_timeout()` is true — the type can't be
+    /// hand-constructed from outside the crate. Each call increments
+    /// `attempts` so we can assert the retry envelope ran.
+    struct TimingOutNetwork {
+        server: wiremock::MockServer,
+        client: reqwest::Client,
+        attempts: Arc<AtomicU32>,
+        max_real_attempts: u32,
+    }
+
+    #[async_trait]
+    impl ChatBackend for TimingOutNetwork {
+        async fn generate(&self, _: ChatRequest<'_>) -> Result<ChatResponse> {
+            let n = self.attempts.fetch_add(1, Ordering::SeqCst);
+            if n < self.max_real_attempts {
+                // Make a real reqwest call that will time out (server delays
+                // 500ms, client timeout is 50ms). The resulting reqwest::Error
+                // has is_timeout() == true, exactly like a transient cloud-LLM
+                // timeout would produce in OpenAIBackend / GeminiBackend /
+                // AnthropicBackend.
+                let url = format!("{}/api/slow", self.server.uri());
+                let err = self
+                    .client
+                    .get(&url)
+                    .send()
+                    .await
+                    .expect_err("the wiremock delay must exceed the client timeout");
+                debug_assert!(
+                    err.is_timeout() || err.is_connect(),
+                    "fixture invariant: wanted a timeout/connect error, got {err:?}"
+                );
+                return Err(BackendError::Network {
+                    provider: "test",
+                    source: err,
+                }
+                .into());
+            }
+            // Final attempt succeeds.
+            Ok(ChatResponse {
+                text: "ok".into(),
+                usage: Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    provider: "test",
+                    model: "x".into(),
+                },
+            })
+        }
+
+        async fn generate_stream(&self, _: ChatRequest<'_>) -> Result<ChatStream> {
+            anyhow::bail!("not used in retry tests")
+        }
+
+        fn provider_name(&self) -> &'static str {
+            "test"
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_on_network_timeout_then_succeeds() {
+        // Regression test for the I1 follow-up: pre-P4 extract_llm retried
+        // on the substring "timeout" in the error string. Post-P4, reqwest
+        // timeouts land in BackendError::Network (NOT BackendError::Timeout —
+        // that variant is only constructed in tests). Ensure should_retry
+        // honors them when the underlying reqwest::Error reports is_timeout()
+        // or is_connect(), so transient cloud-LLM blips still get retried
+        // rather than silently degrading to logic-only fallback.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/slow"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(500)))
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .unwrap();
+        let inner = Arc::new(TimingOutNetwork {
+            server,
+            client,
+            attempts: Arc::new(AtomicU32::new(0)),
+            max_real_attempts: 2, // fail twice, succeed on attempt 3
+        });
+        let attempts = inner.attempts.clone();
+        let backend = RetryingBackend::new(inner, fast_policy());
+        let resp = backend.generate(req()).await.unwrap();
+        assert_eq!(resp.text, "ok");
+        // 1 initial + 2 retries = 3 calls. If should_retry didn't cover
+        // Network{is_timeout()}, this would be 1 (immediate bail).
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_on_network_decode_error() {
+        // Counterpart to the timeout case: a Network error whose underlying
+        // reqwest::Error is NOT a timeout/connect failure must NOT retry.
+        // We synthesize this by using a real "decode" reqwest error (server
+        // returns a body that can't be parsed as the expected type via
+        // resp.json::<T>(), producing reqwest::Error::is_decode() == true).
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/junk"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string("not-json{"),
+            )
+            .mount(&server)
+            .await;
+
+        struct DecodeFailingNetwork {
+            server: wiremock::MockServer,
+            client: reqwest::Client,
+            attempts: Arc<AtomicU32>,
+        }
+        #[async_trait]
+        impl ChatBackend for DecodeFailingNetwork {
+            async fn generate(&self, _: ChatRequest<'_>) -> Result<ChatResponse> {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
+                let url = format!("{}/api/junk", self.server.uri());
+                // resp.json::<Value>() will produce reqwest::Error with
+                // is_decode() == true, is_timeout() == false, is_connect() == false.
+                let err = self
+                    .client
+                    .get(&url)
+                    .send()
+                    .await
+                    .unwrap()
+                    .json::<serde_json::Value>()
+                    .await
+                    .expect_err("malformed body must fail to decode");
+                debug_assert!(
+                    !err.is_timeout() && !err.is_connect(),
+                    "fixture invariant: wanted a non-timeout reqwest error, got {err:?}"
+                );
+                Err(BackendError::Network {
+                    provider: "test",
+                    source: err,
+                }
+                .into())
+            }
+            async fn generate_stream(&self, _: ChatRequest<'_>) -> Result<ChatStream> {
+                anyhow::bail!("not used")
+            }
+            fn provider_name(&self) -> &'static str {
+                "test"
+            }
+        }
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let inner = Arc::new(DecodeFailingNetwork {
+            server,
+            client,
+            attempts: Arc::new(AtomicU32::new(0)),
+        });
+        let attempts = inner.attempts.clone();
+        let backend = RetryingBackend::new(inner, fast_policy());
+        let r = backend.generate(req()).await;
+        assert!(r.is_err());
+        // Exactly 1 call — no retries on non-transient Network errors.
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

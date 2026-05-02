@@ -146,6 +146,35 @@ impl Default for LlmConfig {
     }
 }
 
+impl LlmConfig {
+    /// Convert legacy LlmConfig (used by extract_llm, learn, capture/starter)
+    /// into a BackendConfig that the new ChatBackend factory consumes.
+    /// Mapping:
+    /// - `provider` 1:1, except: unknown providers WITH openai_url become "openai"
+    ///   (preserves the historical LlmConfig::llm_complete fall-through for
+    ///   OpenAI-compatible passthrough proxies).
+    /// - `model` 1:1.
+    /// - `api_key_env` 1:1 (factory's resolve_api_key falls back to
+    ///   default_key_env(provider) when None — preserves LlmConfig behavior).
+    /// - `openai_url` → `endpoint` (semantic rename; same string semantics).
+    /// - `timeout_secs` always None (factory defaults to 120s — matches
+    ///   the historical 60s reqwest default behavior closely enough).
+    pub fn to_backend_config(&self) -> BackendConfig {
+        let provider = match self.provider.as_str() {
+            "anthropic" | "openai" | "openrouter" | "gemini" | "ollama" => self.provider.clone(),
+            _ if self.openai_url.is_some() => "openai".into(),
+            other => other.into(), // factory will reject with "unsupported provider"
+        };
+        BackendConfig {
+            provider,
+            model: self.model.clone(),
+            endpoint: self.openai_url.clone(),
+            api_key_env: self.api_key_env.clone(),
+            timeout_secs: None,
+        }
+    }
+}
+
 /// Backend selection for a single chat-completion call site.
 ///
 /// Per spec §6 of cloud-LLM-backend design. Used by `CompactConfig`
@@ -1053,6 +1082,68 @@ embedding:
         let c: Config = serde_yaml::from_str(yaml).expect("parses");
         assert_eq!(c.storage.vector_backend, "lancedb");
         assert_eq!(c.sources_global.max_parallel_sources, 3);
+    }
+
+    #[test]
+    fn llm_config_to_backend_config_anthropic_passthrough() {
+        let cfg = LlmConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            openai_url: None,
+        };
+        let b = cfg.to_backend_config();
+        assert_eq!(b.provider, "anthropic");
+        assert_eq!(b.model, "claude-haiku-4-5");
+        assert_eq!(b.api_key_env.as_deref(), Some("ANTHROPIC_API_KEY"));
+        assert_eq!(b.endpoint, None);
+        assert_eq!(b.timeout_secs, None);
+    }
+
+    #[test]
+    fn llm_config_to_backend_config_openai_url_maps_to_endpoint() {
+        let cfg = LlmConfig {
+            provider: "openai".into(),
+            model: "gpt-4o-mini".into(),
+            api_key_env: None,
+            openai_url: Some("https://api.together.xyz/v1".into()),
+        };
+        let b = cfg.to_backend_config();
+        assert_eq!(b.provider, "openai");
+        assert_eq!(b.endpoint.as_deref(), Some("https://api.together.xyz/v1"));
+        assert_eq!(b.api_key_env, None); // factory will fall back to OPENAI_API_KEY
+    }
+
+    #[test]
+    fn llm_config_to_backend_config_ollama_openai_url_maps_to_endpoint() {
+        let cfg = LlmConfig {
+            provider: "ollama".into(),
+            model: "qwen3:14b".into(),
+            api_key_env: None,
+            openai_url: Some("http://192.168.1.10:11434".into()),
+        };
+        let b = cfg.to_backend_config();
+        assert_eq!(b.provider, "ollama");
+        assert_eq!(b.endpoint.as_deref(), Some("http://192.168.1.10:11434"));
+    }
+
+    #[test]
+    fn llm_config_to_backend_config_unknown_with_openai_url_aliases_to_openai() {
+        // Historical LlmConfig allowed provider="custom" + openai_url to act as
+        // an OpenAI-compatible passthrough. Preserve that by re-tagging as
+        // "openai" so factory dispatches to OpenAIBackend.
+        let cfg = LlmConfig {
+            provider: "custom-name".into(),
+            model: "some-model".into(),
+            api_key_env: Some("CUSTOM_KEY".into()),
+            openai_url: Some("https://my-proxy.local/v1".into()),
+        };
+        let b = cfg.to_backend_config();
+        assert_eq!(
+            b.provider, "openai",
+            "unknown provider + openai_url should alias to openai"
+        );
+        assert_eq!(b.endpoint.as_deref(), Some("https://my-proxy.local/v1"));
     }
 }
 
