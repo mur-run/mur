@@ -27,7 +27,6 @@ pub mod extract_llm;
 pub mod gep;
 pub mod inject;
 pub mod interactive;
-pub mod llm;
 pub mod paths;
 pub mod retrieve;
 pub mod session;

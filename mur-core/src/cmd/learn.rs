@@ -4,7 +4,6 @@ use mur_common::pattern::*;
 use std::io::{self};
 
 use crate::evolve;
-use crate::llm;
 use crate::store::yaml::YamlStore;
 
 pub(crate) const DEFAULT_EXTRACT_PROMPT: &str = r#"You are MUR, a pattern extraction engine. Analyze the given AI assistant session transcript and extract reusable, generalizable patterns.
@@ -85,7 +84,7 @@ pub(crate) async fn cmd_learn_extract(
         let store = YamlStore::default_store()?;
 
         let model_name = &config.llm.model;
-        let recommended = llm::is_reasoning_model(model_name);
+        let recommended = mur_common::llm::is_reasoning_model(model_name);
 
         if !recommended {
             eprintln!("⚠️  Session analysis works best with strong reasoning models.");
@@ -119,8 +118,22 @@ pub(crate) async fn cmd_learn_extract(
 
         let prompt = format!("Extract patterns from this session transcript:\n\n{truncated}");
 
-        match llm::llm_complete(&config.llm, &system, &prompt).await {
-            Ok(response) => {
+        let backend_cfg = config.llm.to_backend_config();
+        let backend =
+            crate::conversations::backend::factory::build_for_stage(&backend_cfg, "learn")?;
+        let req = crate::conversations::backend::ChatRequest {
+            model: &backend_cfg.model,
+            system: Some(&system),
+            user: &prompt,
+            max_tokens: 0,
+            temperature: None,
+            stop: vec![],
+            cache_system: false,
+            cache_user_prefix: None,
+        };
+        match backend.generate(req).await {
+            Ok(resp) => {
+                let response = resp.text;
                 let parsed = parse_llm_patterns(&response);
                 if parsed.is_empty() {
                     println!("LLM returned no extractable patterns.");
