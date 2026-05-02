@@ -5,6 +5,8 @@
 //! parses those files, watches the directory for new ones, and
 //! delivers typed events to the React UI via Tauri 2 channels.
 
+pub mod commands;
 pub mod event;
 pub mod scanner;
+pub mod state;
 pub mod watcher;
