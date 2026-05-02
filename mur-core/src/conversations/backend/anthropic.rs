@@ -326,7 +326,7 @@ fn build_request_body(
     // User content: two-block array (cached prefix + volatile suffix) only when
     // cache_user_prefix is Some and the offset is in range. Otherwise plain string.
     let content_value = match req.cache_user_prefix {
-        Some(n) if n > 0 && n < req.user.len() => {
+        Some(n) if n > 0 && n < req.user.len() && req.user.is_char_boundary(n) => {
             let prefix = &req.user[..n];
             let suffix = &req.user[n..];
             json!([
@@ -589,6 +589,33 @@ mod tests {
         assert!(
             arr[1].get("cache_control").is_none(),
             "second block must NOT have cache_control"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_user_prefix_in_middle_of_multibyte_codepoint_falls_back_to_plain_string() {
+        // The character "中" is 3 bytes (E4 B8 AD). Setting prefix to byte 1 lands mid-codepoint.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(r#"{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"output_tokens":1}}"#),
+            )
+            .mount(&server)
+            .await;
+        let b = AnthropicBackend::new(&server.uri(), "k", Duration::from_secs(5));
+        let mut r = req("claude-haiku-4-5", "中文"); // 6 bytes, char boundaries at 0, 3, 6
+        r.cache_user_prefix = Some(1); // mid "中" — must NOT panic
+        let _ = b.generate(r).await.unwrap();
+        let received = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        let messages = body.get("messages").and_then(|v| v.as_array()).unwrap();
+        // Should fall through to plain-string content (no caching applied).
+        assert!(
+            messages[0].get("content").unwrap().is_string(),
+            "mid-codepoint cache_user_prefix should fall back to plain-string content, not panic"
         );
     }
 

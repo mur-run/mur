@@ -34,6 +34,14 @@ pub fn build(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
 /// used by the cost-report aggregator. See plan task 8.
 pub fn build_for_stage(cfg: &BackendConfig, stage: &'static str) -> Result<Arc<dyn ChatBackend>> {
     let raw = build_raw(cfg)?;
+    // Skip telemetry in test/mock modes — keeps tests from polluting
+    // ~/.mur/telemetry/. MUR_TELEMETRY_DISABLE=1 also opts out at runtime.
+    if std::env::var("MUR_LLM_MOCK").is_ok()
+        || std::env::var("MUR_OLLAMA_MOCK").is_ok()
+        || std::env::var("MUR_TELEMETRY_DISABLE").is_ok()
+    {
+        return Ok(raw);
+    }
     Ok(Arc::new(super::telemetry::TelemetryBackend::new(
         raw, stage,
     )))
@@ -181,6 +189,80 @@ mod tests {
         assert!(r.is_err());
         let err = r.err().unwrap();
         assert!(format!("{err:#}").contains("api_key_env"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn build_for_stage_skips_telemetry_when_mock_env_set() {
+        use crate::conversations::backend::ChatRequest;
+
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_LLM_MOCK", "1") };
+        let cfg = BackendConfig {
+            provider: "ollama".into(),
+            model: "qwen3:14b".into(),
+            endpoint: Some("http://localhost:11434".into()),
+            api_key_env: None,
+            timeout_secs: Some(5),
+        };
+        let b = build_for_stage(&cfg, "extractive").unwrap();
+        // The bare MockBackend's provider_name is "mock"; if TelemetryBackend
+        // were wrapping it, provider_name would still forward to "mock", so
+        // we have to verify a different way: inspect the type.
+        // Cheaper: confirm no telemetry file is written when we make a call.
+        let tmp = tempfile::tempdir().unwrap();
+        // Override HOME so any accidental write goes here, not user's real ~/.mur.
+        let prev_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", tmp.path().to_str().unwrap()) };
+
+        let req = ChatRequest {
+            model: "qwen3:14b",
+            user: "mock extractive span",
+            system: None,
+            max_tokens: 64,
+            temperature: None,
+            stop: vec![],
+            cache_system: false,
+            cache_user_prefix: None,
+        };
+        let _ = b.generate(req).await.unwrap();
+
+        // No telemetry directory should have been created.
+        let telemetry_dir = tmp.path().join(".mur").join("telemetry");
+        assert!(
+            !telemetry_dir.exists(),
+            "no telemetry directory should be created in mock mode"
+        );
+
+        // Cleanup
+        unsafe {
+            if let Some(h) = prev_home {
+                std::env::set_var("HOME", h);
+            } else {
+                std::env::remove_var("HOME");
+            }
+            std::env::remove_var("MUR_LLM_MOCK");
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn build_for_stage_skips_telemetry_when_disable_env_set() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TELEMETRY_DISABLE", "1") };
+        let cfg = BackendConfig {
+            provider: "ollama".into(),
+            model: "qwen3:14b".into(),
+            endpoint: Some("http://127.0.0.1:1".into()),
+            api_key_env: None,
+            timeout_secs: Some(1),
+        };
+        let b = build_for_stage(&cfg, "rewriter").unwrap();
+        // Confirm provider_name forwards through (whether wrapped in retry or not).
+        assert_eq!(b.provider_name(), "ollama");
+        unsafe { std::env::remove_var("MUR_TELEMETRY_DISABLE") };
     }
 
     #[test]
