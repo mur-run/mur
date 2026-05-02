@@ -3,6 +3,7 @@
 
 mod bootstrap;
 mod commands;
+mod companion_bridge;
 mod multimodal;
 mod sidecar;
 mod theme;
@@ -22,6 +23,7 @@ fn main() -> Result<()> {
 
     tauri::Builder::default()
         .manage(sidecar_mgr.clone())
+        .manage(companion_bridge::state::BridgeState::default())
         .setup(move |app| {
             use tauri::Manager;
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -346,6 +348,8 @@ fn main() -> Result<()> {
             // D3 multimodal drag-drop / paste (M3.6)
             commands::multimodal_drop,
             commands::multimodal_paste,
+            // D5 companion → GUI bridge (M5.3)
+            companion_bridge::commands::companion_bridge_pending,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
