@@ -5,6 +5,7 @@
 
 pub mod anthropic;
 pub mod factory;
+pub mod gemini;
 pub mod mock;
 pub mod ollama;
 pub mod openai;
