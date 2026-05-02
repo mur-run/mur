@@ -358,6 +358,9 @@ fn main() -> Result<()> {
             companion_bridge::commands::companion_ack,
             // D5 companion → GUI bridge (M5.6) — why-accordion
             companion_bridge::commands::companion_why,
+            // D5 companion → GUI bridge (M5.6) — quiet / proactive toggles
+            companion_bridge::commands::companion_proactive,
+            companion_bridge::commands::companion_quiet,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

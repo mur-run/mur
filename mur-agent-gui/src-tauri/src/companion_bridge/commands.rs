@@ -252,3 +252,27 @@ pub async fn companion_why(
     let home = mur_core::paths::mur_root(None);
     companion_why_inner(&home, &agent, &msg_id).map_err(|e| format!("{e:#}"))
 }
+
+// ── Quiet / proactive toggles ────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn companion_proactive(agent: String, enabled: bool) -> Result<(), String> {
+    mur_core::cmd::agent_companion::proactive::set_enabled(&agent, enabled)
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Quiet-hours toggle. The GUI passes `for_seconds` (a literal seconds
+/// count); the underlying CLI helper accepts the `<n>{s,m,h,d}` shorthand,
+/// so we stringify as `<N>s`.
+#[tauri::command]
+pub async fn companion_quiet(
+    agent: String,
+    for_seconds: Option<i64>,
+    until: Option<String>,
+    off: bool,
+) -> Result<(), String> {
+    let for_str = for_seconds.map(|n| format!("{n}s"));
+    mur_core::cmd::agent_companion::quiet::set(&agent, for_str.as_deref(), until.as_deref(), off)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
