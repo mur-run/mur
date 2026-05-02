@@ -298,7 +298,12 @@ pub(crate) fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
     {
         r#"[{"role":"user","conv_id":"mock","line_hint":1,"text":"mock extractive span"}]"#
             .to_string()
-    } else if req.prompt.contains("narrative paragraph") {
+    } else if req.prompt.contains("narrative paragraph")
+        || req
+            .system
+            .map(|s| s.contains("narrative paragraph"))
+            .unwrap_or(false)
+    {
         if req.prompt.contains("one week") || req.prompt.contains("one-week") {
             "Mock narrative: this week the developer shipped several fixes and refactors."
                 .to_string()

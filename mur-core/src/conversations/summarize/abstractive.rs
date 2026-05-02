@@ -24,16 +24,16 @@ pub async fn summarize(
             word_count: 6,
         };
     }
-    let prompt = render_prompt(spans, date, max_words);
+    let (system, user) = render_prompt_split(spans, date, max_words);
     let resp = backend
         .generate(ChatRequest {
             model,
-            user: &prompt,
-            system: None,
+            user: &user,
+            system: Some(&system),
             max_tokens: max_words * 2, // tokens > words; headroom
             temperature: Some(0.2),
             stop: vec![],
-            cache_system: false,
+            cache_system: true,
             cache_user_prefix: None,
         })
         .await;
@@ -56,19 +56,28 @@ pub async fn summarize(
     }
 }
 
-fn render_prompt(spans: &[ExtractiveSpan], date: chrono::NaiveDate, max_words: u32) -> String {
+/// Split the day-narrative prompt into a fixed system instruction (cacheable
+/// across calls within a day) and a per-day user message (volatile).
+/// See P3 task 7 — caching wired even though the system prompt today is
+/// well below the 2048-token Haiku-4.5 minimum (spec §5.2). The hint is
+/// silently ignored by non-Anthropic backends.
+fn render_prompt_split(
+    spans: &[ExtractiveSpan],
+    date: chrono::NaiveDate,
+    max_words: u32,
+) -> (String, String) {
     let min_words = 150.min(max_words / 2);
-    let mut body = format!(
-        "You are summarizing one day ({}) of a developer's AI-assistant conversations into a \
-         narrative paragraph. Use ONLY information present in the spans below.\n\n\
+    let system = format!(
+        "You are summarizing one day of a developer's AI-assistant conversations into a \
+         narrative paragraph. Use ONLY information present in the spans provided.\n\n\
          Output: {}-{} words, first-person or neutral third-person, no bullet lists. \
          Reference each key point by its span index [N]. Do NOT invent details not in the spans. \
-         If spans conflict, note the conflict.\n\n\
-         Spans:\n",
-        date, min_words, max_words
+         If spans conflict, note the conflict.",
+        min_words, max_words
     );
+    let mut user = String::from("Spans:\n");
     for (i, s) in spans.iter().enumerate() {
-        body.push_str(&format!(
+        user.push_str(&format!(
             "[{}] {{{} {}/{} L{}}}: {}\n",
             i + 1,
             date,
@@ -78,8 +87,8 @@ fn render_prompt(spans: &[ExtractiveSpan], date: chrono::NaiveDate, max_words: u
             s.text,
         ));
     }
-    body.push_str("\nWrite the narrative.\n");
-    body
+    user.push_str("\nWrite the narrative.\n");
+    (system, user)
 }
 
 /// Rollup granularity for Phase 3.2.
@@ -354,6 +363,20 @@ mod tests {
         let n = r.narrative.expect("should have narrative");
         assert!(n.to_lowercase().contains("this week"), "got: {n}");
         assert!(r.word_count > 0);
+    }
+
+    #[test]
+    fn summarize_render_prompt_split_separates_system_and_user() {
+        let spans = vec![span(1, "hello world")];
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
+        let (system, user) = render_prompt_split(&spans, date, 400);
+        assert!(system.contains("summarizing one day"));
+        assert!(
+            !system.contains("Spans:"),
+            "system should not contain the per-day Spans block"
+        );
+        assert!(user.starts_with("Spans:"));
+        assert!(user.contains("hello world"));
     }
 
     #[tokio::test]
