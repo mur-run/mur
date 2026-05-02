@@ -38,6 +38,9 @@ tauri-plugin-store = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-fs = "2"
+# Companion → GUI bridge (D5) — debounced filesystem watcher on
+# ~/.mur/agents/<name>/companion/inbox/.
+notify = "6"
 tauri-plugin-process = "2"
 
 # Reuse the upstream library so admin commands and types match the CLI.
