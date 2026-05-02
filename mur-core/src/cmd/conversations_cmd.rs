@@ -1156,12 +1156,12 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     // the full ask_cfg.timeout_secs budget (plumbed via ask_stream).
     let prior_slice = session.last_n(history_turns);
     let model = args.model.clone().unwrap_or_else(|| ask_cfg.model.clone());
-    let rewriter_backend = crate::conversations::backend::factory::build(
-        &crate::conversations::backend::factory::BackendSpec::ollama(
-            &ask_cfg.ollama_endpoint,
-            ask_cfg.rewriter_timeout_secs as u64,
-        ),
-    )?;
+    let mut rewriter_cfg = ask_cfg.synthesize_rewriter_backend();
+    // Per-stage rewriter timeout overrides whatever the synthesized config
+    // would have used — rewriter has a tighter latency budget than the
+    // answer model.
+    rewriter_cfg.timeout_secs = Some(ask_cfg.rewriter_timeout_secs as u64);
+    let rewriter_backend = crate::conversations::backend::factory::build(&rewriter_cfg)?;
     let rewrite = ask::rewriter::rewrite(
         rewriter_backend.as_ref(),
         &model,
