@@ -126,3 +126,11 @@ jobs:
       - name: Run quick e2e smoke
         run: bash scripts/e2e/p1-export-gui.sh
 
+  required-reason-apis:
+    name: Required Reason API gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run gate
+        run: scripts/check-required-reason-apis.sh
+
