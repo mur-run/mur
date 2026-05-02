@@ -28,8 +28,6 @@
 //! existing relationship (default `friend`) is left untouched. M4.7
 //! can revisit if a known-mapping helper becomes useful.
 
-#![allow(dead_code)]
-
 use anyhow::{Result, bail};
 use chrono::Utc;
 use sha2::{Digest, Sha256};

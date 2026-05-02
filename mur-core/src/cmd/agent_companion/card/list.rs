@@ -3,8 +3,6 @@
 //! Returns a vector of `InboxEntry` rows the CLI renders with id +
 //! trust marker + import timestamp + display name.
 
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 

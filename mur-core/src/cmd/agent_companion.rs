@@ -46,6 +46,8 @@ pub enum CompanionCmd {
     WhyDidYouMessage(WhyArgs),
     /// Manage companion rhythm state (wipe inbox/ledger/bandit, preserve voice config).
     Rhythm(RhythmArgs),
+    /// Manage character cards (export / import / list / accept).
+    Card(card::cli::CardArgs),
 }
 
 pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
@@ -65,6 +67,7 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
         CompanionCmd::Preview(args) => preview::run(args).await,
         CompanionCmd::WhyDidYouMessage(args) => why::run(args).await,
         CompanionCmd::Rhythm(args) => rhythm::run(args).await,
+        CompanionCmd::Card(args) => card::cli::run(args).await,
     }
 }
 
