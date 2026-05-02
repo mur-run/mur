@@ -21,7 +21,6 @@ use std::time::Instant;
 use tracing::info_span;
 
 use super::audit::{self, AuditAction};
-use super::ollama::OllamaClient;
 use super::paths::summary_paths_for;
 use super::store;
 
@@ -95,10 +94,8 @@ pub async fn compact_day(
     // P1 canary: extractive uses the new ChatBackend trait via factory::build,
     // so users can override `compact.extractive_backend` in config.yaml to
     // route extractive summarization through Anthropic instead of local Ollama.
-    // Abstractive (below) stays on OllamaClient until P2 migrates it.
     let extractive_cfg = cfg.synthesize_extractive_backend();
     let extractive_backend = crate::conversations::backend::factory::build(&extractive_cfg)?;
-    let client = OllamaClient::new(&cfg.ollama_endpoint, std::time::Duration::from_secs(120));
     let chunks = chunker::chunk_day(&msgs, cfg.chunk_tokens as usize);
     let mut all_spans = Vec::new();
     for chunk in &chunks {
@@ -126,10 +123,14 @@ pub async fn compact_day(
     // {{pattern: ...}} markers polluting TF counts).
     let keywords = top_keywords(&all_spans, 10);
 
-    // Abstractive
+    // Abstractive — same trait migration as P1 extractive. compact.abstractive
+    // now flows through factory::build, so users can override
+    // `compact.abstractive_backend` to route through Anthropic.
+    let abstractive_cfg = cfg.synthesize_abstractive_backend();
+    let abstractive_backend = crate::conversations::backend::factory::build(&abstractive_cfg)?;
     let abstractive_result = abstractive::summarize(
-        &client,
-        &cfg.abstractive_model,
+        abstractive_backend.as_ref(),
+        &abstractive_cfg.model,
         &all_spans,
         date,
         cfg.max_abstractive_words,
