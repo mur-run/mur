@@ -350,6 +350,7 @@ fn main() -> Result<()> {
             commands::multimodal_paste,
             // D5 companion → GUI bridge (M5.3)
             companion_bridge::commands::companion_bridge_pending,
+            companion_bridge::commands::companion_bridge_subscribe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
