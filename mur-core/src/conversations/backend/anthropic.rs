@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::{BackendError, ChatBackend, ChatChunk, ChatRequest, ChatResponse, ChatStream, Usage};
 
@@ -39,34 +39,6 @@ impl AnthropicBackend {
 }
 
 // ── Wire types ──────────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-struct ApiRequest<'a> {
-    model: &'a str,
-    max_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<&'a str>,
-    messages: Vec<ApiMessage<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    stop_sequences: Vec<String>,
-    /// Always send `{type: "disabled"}` on Opus 4.6+ so we don't pay
-    /// for implicit adaptive thinking. Older models accept it as a no-op.
-    thinking: ApiThinking,
-}
-
-#[derive(Debug, Serialize)]
-struct ApiMessage<'a> {
-    role: &'a str, // "user"
-    content: &'a str,
-}
-
-#[derive(Debug, Serialize)]
-struct ApiThinking {
-    #[serde(rename = "type")]
-    kind: &'static str,
-}
 
 #[derive(Debug, Deserialize)]
 struct ApiResponse {
@@ -130,22 +102,7 @@ impl ChatBackend for AnthropicBackend {
             req.temperature
         };
 
-        let body = ApiRequest {
-            model: req.model,
-            max_tokens: if req.max_tokens == 0 {
-                DEFAULT_MAX_TOKENS
-            } else {
-                req.max_tokens
-            },
-            system: req.system,
-            messages: vec![ApiMessage {
-                role: "user",
-                content: req.user,
-            }],
-            temperature,
-            stop_sequences: req.stop.clone(),
-            thinking: ApiThinking { kind: "disabled" },
-        };
+        let body = build_request_body(&req, temperature, false /* stream */);
 
         let resp = self
             .http
@@ -202,17 +159,7 @@ impl ChatBackend for AnthropicBackend {
         } else {
             req.temperature
         };
-        let body = serde_json::json!({
-            "model": req.model,
-            "max_tokens": if req.max_tokens == 0 { DEFAULT_MAX_TOKENS } else { req.max_tokens },
-            "messages": [{"role": "user", "content": req.user}],
-            "stream": true,
-            "thinking": {"type": "disabled"},
-            "system": req.system,
-            "temperature": temperature,
-            "stop_sequences": if req.stop.is_empty() { serde_json::Value::Null } else { serde_json::json!(req.stop) },
-        });
-        let body = strip_null_values(body);
+        let body = build_request_body(&req, temperature, true /* stream */);
 
         let resp = self
             .http
@@ -333,10 +280,84 @@ impl ChatBackend for AnthropicBackend {
     }
 
     fn supports_caching(&self) -> bool {
-        // P3 wiring; cache_system / cache_user_prefix hints are silently
-        // ignored in P1.
-        false
+        true
     }
+}
+
+/// Build the JSON request body for /v1/messages.
+///
+/// When `cache_system` is true and a system prompt is present, emits `system`
+/// as a single-block array with `cache_control: {type: ephemeral}` (per spec
+/// §5.2 caching invariants). When `cache_user_prefix` is `Some(n)`, splits
+/// the user content at byte n and emits a two-block content array with the
+/// breakpoint on the prefix block. When neither hint is set, emits the
+/// legacy shape: `system` as a plain string, `content` as a plain string.
+///
+/// The `stream` flag adds `"stream": true` for SSE responses.
+///
+/// LIMITATION: `cache_user_prefix` is a byte offset. If it falls in the
+/// middle of a multi-byte UTF-8 codepoint, the slice operations below will
+/// panic. The `n > 0 && n < req.user.len()` guard ensures the offset is
+/// in-range but does not enforce a UTF-8 char boundary. No call site sets
+/// `cache_user_prefix` today (P3 Tasks 6-7 only set `cache_system`), so
+/// this is a known followup, not an immediate hazard.
+fn build_request_body(
+    req: &ChatRequest<'_>,
+    temperature: Option<f32>,
+    stream: bool,
+) -> serde_json::Value {
+    use serde_json::json;
+
+    let max_tokens = if req.max_tokens == 0 {
+        DEFAULT_MAX_TOKENS
+    } else {
+        req.max_tokens
+    };
+
+    // System: array form (with cache_control) only when cache_system && system present.
+    let system_value = match (req.cache_system, req.system) {
+        (true, Some(s)) => json!([
+            {"type": "text", "text": s, "cache_control": {"type": "ephemeral"}}
+        ]),
+        (_, Some(s)) => json!(s),
+        (_, None) => serde_json::Value::Null,
+    };
+
+    // User content: two-block array (cached prefix + volatile suffix) only when
+    // cache_user_prefix is Some and the offset is in range. Otherwise plain string.
+    let content_value = match req.cache_user_prefix {
+        Some(n) if n > 0 && n < req.user.len() => {
+            let prefix = &req.user[..n];
+            let suffix = &req.user[n..];
+            json!([
+                {"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": suffix},
+            ])
+        }
+        _ => json!(req.user),
+    };
+
+    let mut body = json!({
+        "model": req.model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": content_value}],
+        "thinking": {"type": "disabled"},
+    });
+
+    let map = body.as_object_mut().unwrap();
+    if !system_value.is_null() {
+        map.insert("system".into(), system_value);
+    }
+    if let Some(t) = temperature {
+        map.insert("temperature".into(), json!(t));
+    }
+    if !req.stop.is_empty() {
+        map.insert("stop_sequences".into(), json!(req.stop));
+    }
+    if stream {
+        map.insert("stream".into(), json!(true));
+    }
+    body
 }
 
 /// Parsed SSE event variants we care about. Everything else maps to Ignore.
@@ -422,25 +443,6 @@ fn parse_sse_block(block: &str, model: &str) -> SseEvent {
     }
 }
 
-/// Recursively strip null values from a JSON object so the request body
-/// matches the non-streaming serde-derived path's `skip_serializing_if`.
-fn strip_null_values(v: serde_json::Value) -> serde_json::Value {
-    match v {
-        serde_json::Value::Object(map) => {
-            let filtered: serde_json::Map<String, serde_json::Value> = map
-                .into_iter()
-                .filter(|(_, v)| !v.is_null())
-                .map(|(k, v)| (k, strip_null_values(v)))
-                .collect();
-            serde_json::Value::Object(filtered)
-        }
-        serde_json::Value::Array(arr) => {
-            serde_json::Value::Array(arr.into_iter().map(strip_null_values).collect())
-        }
-        other => other,
-    }
-}
-
 /// Map an HTTP error response to the appropriate BackendError variant.
 fn map_error(status: reqwest::StatusCode, body: &str, model: &str) -> anyhow::Error {
     let parsed: Option<ApiError> = serde_json::from_str(body).ok();
@@ -493,7 +495,135 @@ mod tests {
     async fn provider_name_is_anthropic() {
         let b = AnthropicBackend::new("http://127.0.0.1:1", "k", Duration::from_millis(100));
         assert_eq!(b.provider_name(), "anthropic");
-        assert!(!b.supports_caching());
+    }
+
+    #[test]
+    fn supports_caching_is_true_for_anthropic() {
+        let b = AnthropicBackend::new("http://unused", "k", Duration::from_millis(100));
+        assert!(b.supports_caching());
+    }
+
+    #[tokio::test]
+    async fn cache_system_true_emits_system_block_with_cache_control_ephemeral() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(r#"{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"output_tokens":1}}"#),
+            )
+            .mount(&server)
+            .await;
+        let b = AnthropicBackend::new(&server.uri(), "k", Duration::from_secs(5));
+        let mut r = req("claude-haiku-4-5", "hi");
+        r.system = Some("you are a tester");
+        r.cache_system = true;
+        let _ = b.generate(r).await.unwrap();
+
+        let received = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        // system MUST be a JSON array of blocks (not a plain string) when caching
+        let system = body.get("system").expect("system field present");
+        assert!(
+            system.is_array(),
+            "expected system to be a block array, got {system:?}"
+        );
+        let arr = system.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0].get("type").and_then(|v| v.as_str()), Some("text"));
+        assert_eq!(
+            arr[0].get("text").and_then(|v| v.as_str()),
+            Some("you are a tester")
+        );
+        assert_eq!(
+            arr[0]
+                .get("cache_control")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str()),
+            Some("ephemeral"),
+            "expected cache_control: {{type: ephemeral}} on the system block"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_user_prefix_emits_two_block_user_message() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(r#"{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"output_tokens":1}}"#),
+            )
+            .mount(&server)
+            .await;
+        let b = AnthropicBackend::new(&server.uri(), "k", Duration::from_secs(5));
+        let mut r = req("claude-haiku-4-5", "PREFIX_BLOCKsuffix");
+        r.cache_user_prefix = Some("PREFIX_BLOCK".len());
+        let _ = b.generate(r).await.unwrap();
+
+        let received = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        let messages = body.get("messages").and_then(|v| v.as_array()).unwrap();
+        let content = messages[0].get("content").unwrap();
+        // With cache_user_prefix, content MUST be an array of two blocks: cached prefix + volatile suffix.
+        assert!(
+            content.is_array(),
+            "expected content to be a block array, got {content:?}"
+        );
+        let arr = content.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(
+            arr[0].get("text").and_then(|v| v.as_str()),
+            Some("PREFIX_BLOCK")
+        );
+        assert_eq!(
+            arr[0]
+                .get("cache_control")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str()),
+            Some("ephemeral"),
+        );
+        assert_eq!(arr[1].get("text").and_then(|v| v.as_str()), Some("suffix"));
+        assert!(
+            arr[1].get("cache_control").is_none(),
+            "second block must NOT have cache_control"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_caching_hints_keeps_legacy_request_shape() {
+        // When neither cache_system nor cache_user_prefix is set, system stays
+        // a plain string and content stays a plain string — minimizes JSON
+        // shape churn for callers that don't need caching.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(r#"{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"output_tokens":1}}"#),
+            )
+            .mount(&server)
+            .await;
+        let b = AnthropicBackend::new(&server.uri(), "k", Duration::from_secs(5));
+        let mut r = req("claude-haiku-4-5", "hi");
+        r.system = Some("you are a tester");
+        // Both caching hints stay default (false / None) — same shape as before P3.
+        let _ = b.generate(r).await.unwrap();
+
+        let received = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+        assert!(
+            body.get("system").unwrap().is_string(),
+            "system should stay a string when not caching"
+        );
+        let messages = body.get("messages").and_then(|v| v.as_array()).unwrap();
+        assert!(
+            messages[0].get("content").unwrap().is_string(),
+            "content should stay a string when not caching"
+        );
     }
 
     #[tokio::test]

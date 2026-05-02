@@ -82,6 +82,7 @@ pub trait ChatBackend: Send + Sync {
 
     /// True when the backend honors `cache_system` / `cache_user_prefix`
     /// hints. False = hints are silently ignored. Default: false.
+    /// AnthropicBackend overrides to true (P3+).
     fn supports_caching(&self) -> bool {
         false
     }
