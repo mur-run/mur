@@ -20,7 +20,6 @@ mod extract_llm;
 mod gep;
 mod inject;
 mod interactive;
-mod llm;
 mod paths;
 mod retrieve;
 mod server;

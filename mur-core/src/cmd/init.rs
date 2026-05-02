@@ -920,48 +920,57 @@ Run `mur learn` to extract new patterns from recent sessions.
             );
         }
         "3" => {
-            // All local (Ollama)
-            let ollama_running = std::process::Command::new("ollama")
-                .arg("list")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-
-            if !ollama_running {
-                println!();
-                println!("  ⚠ Ollama not detected. Install from https://ollama.com");
-                println!("  Using default models in config (pull them after installing).");
-            } else {
-                println!("  ✓ Ollama detected");
-            }
-
-            println!();
-            println!("LLM model for pattern learning:");
-            println!("  1) llama3.2:3b   — lightweight, ~2GB RAM");
-            println!("  2) llama3.1:8b   — better quality, ~5GB RAM");
-            println!("  3) qwen3:4b      — good for code, ~3GB RAM");
-            print!("Choose [1/2/3] (default: 1): ");
-            io::stdout().flush()?;
-            let mut llm_choice = String::new();
-            io::stdin().read_line(&mut llm_choice)?;
-            let llm_model = match llm_choice.trim() {
-                "2" => "llama3.1:8b",
-                "3" => "qwen3:4b",
-                _ => "llama3.2:3b",
+            // All local — detect Ollama and (on Apple Silicon) MLX, then
+            // present a backend-appropriate model menu.
+            use crate::cmd::init_local::{
+                LocalBackend, MLX_RECS, OLLAMA_RECS, detect_local_runtimes, prompt_backend,
+                select_model,
             };
 
-            config.llm.provider = "ollama".to_string();
-            config.llm.model = llm_model.to_string();
-            config.llm.api_key_env = None;
-            config.llm.openai_url = None;
+            let runtimes = detect_local_runtimes();
+            match prompt_backend(&runtimes)? {
+                None => {
+                    // Neither runtime present — keep current config so the
+                    // user can re-run after installing.
+                }
+                Some(LocalBackend::Ollama) => {
+                    let m = select_model(OLLAMA_RECS)?;
+                    config.llm.provider = "ollama".to_string();
+                    config.llm.model = m.id.to_string();
+                    config.llm.api_key_env = None;
+                    config.llm.openai_url = None;
 
-            select_ollama_embedding(&mut config)?;
+                    select_ollama_embedding(&mut config)?;
+                    crate::store::config::save_config(&config)?;
+                    println!(
+                        "  ✓ Config: ollama/{} (LLM) + ollama/{} (search)",
+                        m.id, config.embedding.model
+                    );
+                }
+                Some(LocalBackend::OMlx) => {
+                    let m = select_model(MLX_RECS)?;
+                    // oMLX serves an OpenAI-compatible API on
+                    // localhost:8000; route through the existing openai
+                    // provider with that base URL.
+                    config.llm.provider = "openai".to_string();
+                    config.llm.model = m.id.to_string();
+                    config.llm.api_key_env = Some("OMLX_API_KEY".to_string());
+                    config.llm.openai_url = Some("http://localhost:8000/v1".to_string());
 
-            crate::store::config::save_config(&config)?;
-            println!(
-                "  ✓ Config: ollama/{} (LLM) + ollama/{} (search)",
-                llm_model, config.embedding.model
-            );
+                    select_ollama_embedding(&mut config)?;
+                    crate::store::config::save_config(&config)?;
+                    println!(
+                        "  ✓ Config: oMLX/{} (LLM) + ollama/{} (search)",
+                        m.id, config.embedding.model
+                    );
+                    println!();
+                    println!("  ⚠ Launch oMLX.app (menu bar → Start Server) and pull");
+                    println!("      the model via its admin dashboard:  {}", m.id);
+                    println!(
+                        "      export OMLX_API_KEY=local   # any non-empty value; oMLX skips auth on localhost"
+                    );
+                }
+            }
         }
         _ => {
             // Skip — keep current config

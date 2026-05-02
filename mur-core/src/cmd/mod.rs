@@ -12,6 +12,7 @@ pub(crate) mod doctor;
 pub(crate) mod drafts;
 pub(crate) mod evolve_cmd;
 pub(crate) mod init;
+pub(crate) mod init_local;
 pub(crate) mod inject_cmd;
 pub(crate) mod learn;
 pub(crate) mod misc;
