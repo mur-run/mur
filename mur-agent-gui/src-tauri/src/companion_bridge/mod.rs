@@ -7,3 +7,4 @@
 
 pub mod event;
 pub mod scanner;
+pub mod watcher;
