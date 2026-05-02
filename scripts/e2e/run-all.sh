@@ -62,6 +62,9 @@ echo "==> Running D2 onboarding E2E smoke..."
 echo "==> Running D3 drag-drop E2E smoke..."
 "$REPO_ROOT/scripts/e2e/v1-d3-dragdrop.sh"
 
+echo "==> Running D4 character cards E2E smoke..."
+"$REPO_ROOT/scripts/e2e/v1-d4-card.sh"
+
 if [[ "$RUN_COVERAGE" == "1" ]]; then
   if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
     echo "cargo-llvm-cov not installed (cargo install cargo-llvm-cov)" >&2
