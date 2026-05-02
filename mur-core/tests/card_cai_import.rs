@@ -18,8 +18,16 @@ fn cai_aiko_maps_correctly() {
 fn cai_without_voice_uses_provider_none() {
     let json = r#"{"name":"NoVoice","definition":"x","greeting":"hi"}"#;
     let card = normalize_cai(json).unwrap();
-    let voice = card.extensions.as_ref().unwrap().mur.as_ref().unwrap()
-        .voice.as_ref().expect("voice block always present");
+    let voice = card
+        .extensions
+        .as_ref()
+        .unwrap()
+        .mur
+        .as_ref()
+        .unwrap()
+        .voice
+        .as_ref()
+        .expect("voice block always present");
     assert_eq!(voice.provider, "none");
     assert!(voice.voice_id.is_empty());
 }
