@@ -776,8 +776,31 @@ Return ONLY the JSON array, no markdown fences or other text."#;
 
     let prompt = format!("Language: {lang}\nDependencies: {deps_str}\n\nREADME:\n{readme}");
 
-    match crate::llm::llm_complete(config, system, &prompt).await {
-        Ok(response) => {
+    let backend_cfg = config.to_backend_config();
+    let backend =
+        match crate::conversations::backend::factory::build_for_stage(&backend_cfg, "starter") {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(
+                    "LLM backend init failed for starter: {e:#}, falling back to built-in"
+                );
+                let existing = HashSet::new();
+                return generate_starter_patterns(project_dir, &existing);
+            }
+        };
+    let req = crate::conversations::backend::ChatRequest {
+        model: &backend_cfg.model,
+        system: Some(system),
+        user: &prompt,
+        max_tokens: 0,
+        temperature: None,
+        stop: vec![],
+        cache_system: false,
+        cache_user_prefix: None,
+    };
+    match backend.generate(req).await {
+        Ok(resp) => {
+            let response = resp.text;
             let patterns = parse_llm_starter_patterns(&response, lang);
             if patterns.is_empty() {
                 tracing::info!("LLM returned no patterns, falling back to built-in");

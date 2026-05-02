@@ -13,7 +13,6 @@ use mur_common::pattern::Content;
 use mur_common::workflow::{Step, VarType, Variable, Workflow};
 
 use crate::extract::{ExtractedWorkflow, extract_workflow};
-use crate::llm::llm_complete;
 use crate::session::SessionEvent;
 
 /// Cached LLM extraction result — serialized to JSON on disk.
@@ -211,50 +210,54 @@ Now output the JSON workflow definition. Remember:
 - Output ONLY the JSON object, nothing else"#
     );
 
-    // Retry LLM call up to 2 times on transient errors (overload, timeout)
-    let mut last_err = None;
-    for attempt in 0..3 {
-        if attempt > 0 {
-            tracing::debug!("LLM retry attempt {}/2", attempt);
-            tokio::time::sleep(std::time::Duration::from_secs(attempt as u64 * 2)).await;
+    // Build the cloud-LLM backend (RetryingBackend wraps it via factory::build_for_stage,
+    // which dispatches on typed BackendError → {Timeout, ServerError(5xx), RateLimited}.
+    // The previous hand-rolled 3-attempt loop classifying on 529/overload/timeout/503
+    // substrings has been deleted in favor of that typed dispatch (P4 task 6).
+    let backend_cfg = llm_config.to_backend_config();
+    let backend = match crate::conversations::backend::factory::build_for_stage(
+        &backend_cfg,
+        "extract_llm",
+    ) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("LLM backend init failed: {e:#}, falling back to logic extraction");
+            return Ok(logic_result);
         }
-        match llm_complete(&llm_config, system_prompt, &user_prompt).await {
-            Ok(response) => match parse_llm_response(&response) {
-                Some(parsed) => {
-                    let _ = save_cache(&cache_path, &parsed);
-                    return Ok(build_workflow_from_llm(session_id, events, &parsed));
-                }
-                None => {
-                    tracing::warn!("LLM returned invalid JSON, falling back to logic extraction");
-                    tracing::debug!(
-                        "LLM response (first 2000 chars): {}",
-                        &response[..response.len().min(2000)]
-                    );
-                    let _ = std::fs::write("/tmp/mur-llm-response.txt", &response);
-                    return Ok(logic_result);
-                }
-            },
-            Err(e) => {
-                let err_str = e.to_string();
-                let is_transient = err_str.contains("529")
-                    || err_str.contains("overload")
-                    || err_str.contains("timeout")
-                    || err_str.contains("503");
-                if is_transient && attempt < 2 {
-                    tracing::debug!("LLM transient error: {err_str}, retrying...");
-                    last_err = Some(err_str);
-                    continue;
-                }
-                tracing::warn!("LLM call failed: {}, falling back to logic extraction", e);
-                return Ok(logic_result);
+    };
+    let req = crate::conversations::backend::ChatRequest {
+        model: &backend_cfg.model,
+        system: Some(system_prompt),
+        user: &user_prompt,
+        max_tokens: 0, // backend default
+        temperature: None,
+        stop: vec![],
+        cache_system: false,
+        cache_user_prefix: None,
+    };
+    match backend.generate(req).await {
+        Ok(resp) => match parse_llm_response(&resp.text) {
+            Some(parsed) => {
+                let _ = save_cache(&cache_path, &parsed);
+                Ok(build_workflow_from_llm(session_id, events, &parsed))
             }
+            None => {
+                tracing::warn!("LLM returned invalid JSON, falling back to logic extraction");
+                tracing::debug!(
+                    "LLM response (first 2000 chars): {}",
+                    &resp.text[..resp.text.len().min(2000)]
+                );
+                let _ = std::fs::write("/tmp/mur-llm-response.txt", &resp.text);
+                Ok(logic_result)
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                "LLM call failed (after backend retries): {e:#}, falling back to logic extraction"
+            );
+            Ok(logic_result)
         }
     }
-    tracing::warn!(
-        "LLM call failed after retries: {:?}, falling back to logic extraction",
-        last_err
-    );
-    Ok(logic_result)
 }
 
 /// Check if an LLM config is usable (has a provider and the API key env is resolvable).
