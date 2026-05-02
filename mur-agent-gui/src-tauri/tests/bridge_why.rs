@@ -1,13 +1,24 @@
 //! companion_why surfaces the ledger event chain for one msg_id.
+//!
+//! Production layout: `outbox-ledger/` is a directory of per-day
+//! `<YYYY-MM-DD>.jsonl` files written by `mur_agent_runtime::durable::
+//! ledger::Ledger`. `Ledger::scan_days` uses `chrono::Local::now()` as
+//! the wall-clock anchor, so for determinism we write the fixture under
+//! today's date dynamically rather than hard-coding it.
 
+use chrono::Local;
 use mur_agent_gui_lib::companion_bridge::commands::companion_why_inner;
 use tempfile::TempDir;
 
 #[test]
 fn why_returns_events_in_order_for_one_msg() {
     let dir = TempDir::new().unwrap();
-    let ledger_path = dir.path().join("agents/alex/companion/outbox-ledger");
-    std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+    let ledger_dir = dir.path().join("agents/alex/companion/outbox-ledger");
+    std::fs::create_dir_all(&ledger_dir).unwrap();
+
+    // Write today's file so it falls within `scan_days(.., 7)`'s window.
+    let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
+    let ledger_path = ledger_dir.join(format!("{today}.jsonl"));
     std::fs::write(
         &ledger_path,
         "\

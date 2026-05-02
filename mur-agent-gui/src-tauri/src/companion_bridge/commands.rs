@@ -5,6 +5,7 @@
 //! `_inner` helpers exist so unit tests don't need a Tauri runtime.
 
 use anyhow::{Context, Result};
+use mur_agent_runtime::durable::ledger::Ledger;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -203,16 +204,18 @@ pub async fn companion_ack(agent: String, msg_id: String, signal: String) -> Res
 
 // ── Why-did-you-message ──────────────────────────────────────────────────────
 
-/// Inner helper — testable. Reads `<home>/agents/<agent>/companion/outbox-ledger`
-/// (a JSONL file) and returns every line whose JSON contains
-/// `"id":"<msg_id>"`. Order: append order (== chronological).
+/// Inner helper — testable. Reads `<home>/agents/<agent>/companion/outbox-ledger`,
+/// which in production is a **directory** of per-day `<YYYY-MM-DD>.jsonl` files
+/// written by `mur-agent-runtime::durable::ledger::Ledger`. Walks the most
+/// recent 7 days (chronological, oldest first) via `Ledger::scan_days`, then
+/// filters by `id == <msg_id>`. Order: chronological — same as append order
+/// across days.
 ///
-/// We intentionally do a substring match (not full JSON parse + filter)
-/// because the ledger uses `#[serde(tag = "event")]` adjacent encoding —
-/// every event variant carries the `id` at top level. A future schema
-/// change would need to revisit this. The cheap-substring path keeps
-/// the GUI from depending on the runtime's `OutboxEvent` enum and
-/// tolerates ledger-format extensions gracefully.
+/// We deserialize to `serde_json::Value` (not `OutboxEvent`) so the GUI
+/// stays loosely coupled to the runtime's telemetry enum and tolerates
+/// ledger-format extensions gracefully — every event variant carries the
+/// `id` at top level under `#[serde(tag = "event")]`. Malformed lines are
+/// already skipped by `scan_days` (logged via `tracing::warn!`).
 ///
 /// `#[allow(dead_code)]`: this is exercised by `tests/bridge_why.rs`
 /// (a separate test crate) but the bin/lib targets see it as unused
@@ -223,24 +226,18 @@ pub fn companion_why_inner(
     agent: &str,
     msg_id: &str,
 ) -> Result<Vec<serde_json::Value>> {
-    let ledger = home
+    let ledger_dir = home
         .join("agents")
         .join(agent)
         .join("companion/outbox-ledger");
-    if !ledger.exists() {
+    if !ledger_dir.exists() {
         return Ok(Vec::new());
     }
-    let mut out = Vec::new();
-    let body =
-        std::fs::read_to_string(&ledger).with_context(|| format!("read {}", ledger.display()))?;
-    let needle = format!("\"id\":\"{msg_id}\"");
-    for line in body.lines() {
-        if line.contains(&needle)
-            && let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
-        {
-            out.push(v);
-        }
-    }
+    let out: Vec<serde_json::Value> = Ledger::scan_days::<serde_json::Value>(&ledger_dir, 7)
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .filter(|v| v.get("id").and_then(|s| s.as_str()) == Some(msg_id))
+        .collect();
     Ok(out)
 }
 
