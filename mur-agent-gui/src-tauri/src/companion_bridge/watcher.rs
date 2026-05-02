@@ -13,7 +13,6 @@
 //! double-emit.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -30,7 +29,6 @@ impl InboxWatcher {
     pub fn start(inbox_dir: PathBuf, tx: Sender<BridgeEvent>) -> Result<Self> {
         std::fs::create_dir_all(&inbox_dir)
             .with_context(|| format!("create {}", inbox_dir.display()))?;
-        let dir_for_handler = Arc::new(inbox_dir.clone());
         let mut watcher = RecommendedWatcher::new(
             move |res: notify::Result<notify::Event>| {
                 let Ok(event) = res else { return };
@@ -43,7 +41,6 @@ impl InboxWatcher {
                     }
                     forward_md(&path, &tx);
                 }
-                let _ = &dir_for_handler;
             },
             Config::default(),
         )
