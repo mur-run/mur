@@ -146,6 +146,44 @@ impl Default for LlmConfig {
     }
 }
 
+/// Backend selection for a single chat-completion call site.
+///
+/// Per spec §6 of cloud-LLM-backend design. Used by `CompactConfig`
+/// (per-stage) and `AskConfig` (per-stage) to override the legacy
+/// Ollama-only path. None of the `Option` fields are required;
+/// resolution falls back to provider defaults
+/// (ollama: http://localhost:11434, anthropic: https://api.anthropic.com).
+///
+/// Stays in mur-common (not mur-core) because it is pure data and
+/// will be reused by mur-agent-runtime in a future phase.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct BackendConfig {
+    /// "ollama" | "anthropic". Defaults to "ollama" for backward compat.
+    pub provider: String,
+    /// Model name as the provider sees it ("claude-haiku-4-5", "qwen3:14b", …).
+    pub model: String,
+    /// Provider endpoint. None = provider default
+    /// (ollama: http://localhost:11434, anthropic: https://api.anthropic.com).
+    pub endpoint: Option<String>,
+    /// Env var holding the API key. None = no auth (ollama).
+    pub api_key_env: Option<String>,
+    /// Per-call timeout in seconds. None = 120s.
+    pub timeout_secs: Option<u64>,
+}
+
+impl Default for BackendConfig {
+    fn default() -> Self {
+        Self {
+            provider: "ollama".into(),
+            model: "qwen3:14b".into(),
+            endpoint: None,
+            api_key_env: None,
+            timeout_secs: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetrievalConfig {
     /// Max patterns to inject per query
@@ -916,5 +954,60 @@ embedding:
         let c: Config = serde_yaml::from_str(yaml).expect("parses");
         assert_eq!(c.storage.vector_backend, "lancedb");
         assert_eq!(c.sources_global.max_parallel_sources, 3);
+    }
+}
+
+#[cfg(test)]
+mod backend_config_tests {
+    use super::*;
+
+    #[test]
+    fn default_is_ollama_qwen3() {
+        let cfg = BackendConfig::default();
+        assert_eq!(cfg.provider, "ollama");
+        assert_eq!(cfg.model, "qwen3:14b");
+        assert_eq!(cfg.endpoint, None);
+        assert_eq!(cfg.api_key_env, None);
+        assert_eq!(cfg.timeout_secs, None);
+    }
+
+    #[test]
+    fn deserializes_anthropic_full() {
+        let yaml = "\
+provider: anthropic
+model: claude-haiku-4-5
+api_key_env: ANTHROPIC_API_KEY
+timeout_secs: 60
+";
+        let cfg: BackendConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.provider, "anthropic");
+        assert_eq!(cfg.model, "claude-haiku-4-5");
+        assert_eq!(cfg.api_key_env, Some("ANTHROPIC_API_KEY".into()));
+        assert_eq!(cfg.timeout_secs, Some(60));
+        assert_eq!(cfg.endpoint, None);
+    }
+
+    #[test]
+    fn deserializes_partial_fills_defaults() {
+        let yaml = "provider: anthropic\nmodel: claude-sonnet-4-6\n";
+        let cfg: BackendConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.provider, "anthropic");
+        assert_eq!(cfg.model, "claude-sonnet-4-6");
+        assert_eq!(cfg.api_key_env, None);
+        assert_eq!(cfg.timeout_secs, None);
+    }
+
+    #[test]
+    fn round_trips_through_yaml() {
+        let original = BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: Some("https://api.anthropic.com".into()),
+            api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            timeout_secs: Some(60),
+        };
+        let yaml = serde_yaml::to_string(&original).unwrap();
+        let parsed: BackendConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed, original);
     }
 }
