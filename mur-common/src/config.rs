@@ -395,8 +395,8 @@ pub struct AskConfig {
     #[serde(default)]
     pub backend: Option<BackendConfig>,
     /// Per-stage backend override for the query rewriter.
-    /// None = falls back to `synthesize_backend()` (rewriter shares the
-    /// answer model in the legacy path).
+    /// None = synthesize an Ollama BackendConfig over the legacy `model` +
+    /// `ollama_endpoint` with `rewriter_timeout_secs` baked in.
     #[serde(default)]
     pub rewriter_backend: Option<BackendConfig>,
 }
@@ -1271,6 +1271,27 @@ backend:
             b.timeout_secs,
             Some(8),
             "rewriter synthesis must use rewriter_timeout_secs (not the answer-call timeout)"
+        );
+    }
+
+    #[test]
+    fn ask_synthesize_rewriter_backend_does_not_override_explicit_per_stage_timeout() {
+        let mut cfg = AskConfig {
+            rewriter_timeout_secs: 8,
+            ..AskConfig::default()
+        };
+        cfg.rewriter_backend = Some(BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: None,
+            api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            timeout_secs: Some(30),
+        });
+        let b = cfg.synthesize_rewriter_backend();
+        assert_eq!(
+            b.timeout_secs,
+            Some(30),
+            "explicit per-stage rewriter timeout_secs must NOT be overridden by ask.rewriter_timeout_secs"
         );
     }
 
