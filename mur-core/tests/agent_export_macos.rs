@@ -39,3 +39,14 @@ fn staple_args_targets_the_app_bundle() {
     assert_eq!(args[1], "staple");
     assert_eq!(args[2], "/tmp/MurAgent.app");
 }
+
+#[test]
+fn assess_args_uses_spctl_with_verbose_output() {
+    use mur_core::cmd::agent_export_gui::assess_args;
+    let args = assess_args(Path::new("/tmp/MurAgent.app"));
+    assert_eq!(args[0], "--assess");
+    assert_eq!(args[1], "--type");
+    assert_eq!(args[2], "execute");
+    assert!(args.contains(&"--verbose=4".to_string()));
+    assert!(args.contains(&"/tmp/MurAgent.app".to_string()));
+}
