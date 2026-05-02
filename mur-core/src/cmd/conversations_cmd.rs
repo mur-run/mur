@@ -1280,6 +1280,13 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         ask_cfg.summarize_hits_enabled,
         ask_cfg.summarize_model.as_deref(),
     );
+    // Build the answer-streaming backend via factory, honoring the per-stage
+    // `ask.backend` override. Without an override, synthesize_backend()
+    // returns an ollama BackendConfig over `ask_cfg.model` + `ollama_endpoint`,
+    // which factory::build maps to OllamaBackend wrapped in RetryingBackend
+    // — byte-identical to the pre-trait OllamaClient construction.
+    let answer_cfg = ask_cfg.synthesize_backend();
+    let answer_backend = crate::conversations::backend::factory::build(&answer_cfg)?;
     let req = ask::AskRequest {
         question: question.clone(),
         filters,
@@ -1306,6 +1313,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         compress_enabled: ask_cfg.compress_hits_enabled,
         summarize_enabled: effective_summarize_enabled,
         summarize_model: effective_summarize_model,
+        answer_backend: Some(answer_backend),
     };
 
     // Generate + collect response
