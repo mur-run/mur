@@ -1,13 +1,13 @@
 //! Detection + recommendation flow for the "All local" path in `mur init`.
 //!
-//! Detects which local LLM runtimes are present on the host
-//! (Ollama everywhere; oMLX on Apple Silicon) and presents the user with
-//! a curated, multilingual-friendly model menu for whichever backend
-//! they pick.
+//! Detects which local LLM runtimes are present on the host and presents
+//! the user with a curated, multilingual-friendly model menu for whichever
+//! backend wins the priority order:
 //!
-//! oMLX (https://omlx.ai) is a native macOS inference server built on
-//! Apple's MLX framework. It serves an OpenAI-compatible HTTP API on
-//! `http://localhost:8000/v1` by default.
+//!   oMLX.app (Apple Silicon)  >  mlx-lm CLI (Apple Silicon)  >  Ollama
+//!
+//! Both MLX backends serve an OpenAI-compatible HTTP API; they only
+//! differ in launch flow and default port (oMLX → :8000, mlx-lm → :8080).
 
 use anyhow::Result;
 use std::io::{self, Write};
@@ -18,6 +18,7 @@ pub struct LocalRuntimes {
     pub ollama_installed: bool,
     pub ollama_running: bool,
     pub omlx_installed: bool,
+    pub mlx_lm_installed: bool,
     pub apple_silicon: bool,
 }
 
@@ -76,7 +77,22 @@ pub const MLX_RECS: &[ModelRec] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalBackend {
     Ollama,
+    /// Native macOS app (https://omlx.ai), serves on :8000.
     OMlx,
+    /// `pip install mlx-lm`, user runs `mlx_lm.server` on :8080.
+    MlxLm,
+}
+
+impl LocalBackend {
+    /// Default OpenAI-compatible base URL for MLX-family backends; `None`
+    /// for Ollama (uses its own provider plumbing).
+    pub fn openai_base_url(self) -> Option<&'static str> {
+        match self {
+            LocalBackend::Ollama => None,
+            LocalBackend::OMlx => Some("http://localhost:8000/v1"),
+            LocalBackend::MlxLm => Some("http://localhost:8080/v1"),
+        }
+    }
 }
 
 pub fn detect_local_runtimes() -> LocalRuntimes {
@@ -85,6 +101,7 @@ pub fn detect_local_runtimes() -> LocalRuntimes {
         ollama_installed: which_exists("ollama"),
         ollama_running: ollama_running(),
         omlx_installed: apple_silicon && omlx_installed(),
+        mlx_lm_installed: apple_silicon && mlx_lm_installed(),
         apple_silicon,
     }
 }
@@ -119,6 +136,19 @@ fn omlx_installed() -> bool {
     false
 }
 
+/// `mlx-lm` Python package — installed via `pip install mlx-lm`. Either
+/// its CLI shims are on PATH or the module imports cleanly.
+fn mlx_lm_installed() -> bool {
+    if which_exists("mlx_lm.generate") || which_exists("mlx_lm.server") {
+        return true;
+    }
+    std::process::Command::new("python3")
+        .args(["-c", "import mlx_lm"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 pub fn print_runtime_summary(rt: &LocalRuntimes) {
     println!();
     if rt.ollama_running {
@@ -132,7 +162,12 @@ pub fn print_runtime_summary(rt: &LocalRuntimes) {
         if rt.omlx_installed {
             println!("  ✓ oMLX.app detected (Apple Silicon native)");
         } else {
-            println!("  ✗ oMLX.app not installed (Apple Silicon supports it — https://omlx.ai)");
+            println!("  ✗ oMLX.app not installed (https://omlx.ai)");
+        }
+        if rt.mlx_lm_installed {
+            println!("  ✓ mlx-lm CLI detected");
+        } else {
+            println!("  ✗ mlx-lm CLI not installed (`pip install mlx-lm`)");
         }
     }
 }
@@ -141,34 +176,40 @@ pub fn print_install_help(apple_silicon: bool) {
     println!();
     println!("  ⚠ No local LLM runtime detected.");
     if apple_silicon {
-        println!("    • oMLX:   https://omlx.ai  (Apple Silicon native, ~15-30% faster)");
-        println!("    • Ollama: https://ollama.com");
+        println!("    • oMLX.app: https://omlx.ai  (Apple Silicon native, GUI, recommended)");
+        println!("    • mlx-lm:   pip install mlx-lm  (Apple Silicon native, CLI)");
+        println!("    • Ollama:   https://ollama.com");
     } else {
         println!("    • Ollama: https://ollama.com");
     }
     println!("    Re-run `mur init` after installing.");
 }
 
-/// Pick the local backend. On Apple Silicon, oMLX always wins when present
-/// (~15-30% faster, lower memory) — we don't waste a prompt on it. Returns
-/// `None` only when no runtime is installed.
+/// Pick the local backend. Priority on Apple Silicon: oMLX > mlx-lm >
+/// Ollama (MLX is ~15-30% faster, lower memory; oMLX has the friendlier
+/// admin UX so we prefer it over the CLI when both are present).
+/// Returns `None` only when no runtime is installed.
 pub fn prompt_backend(rt: &LocalRuntimes) -> Result<Option<LocalBackend>> {
     print_runtime_summary(rt);
 
-    match (rt.ollama_installed, rt.omlx_installed) {
-        (false, false) => {
-            print_install_help(rt.apple_silicon);
-            Ok(None)
-        }
-        (_, true) => {
-            // oMLX available → always prefer it on Apple Silicon. To override,
-            // edit ~/.mur/config.yaml after init.
-            println!();
-            println!("  → Using oMLX (Apple Silicon native).");
-            Ok(Some(LocalBackend::OMlx))
-        }
-        (true, false) => Ok(Some(LocalBackend::Ollama)),
+    if !rt.ollama_installed && !rt.omlx_installed && !rt.mlx_lm_installed {
+        print_install_help(rt.apple_silicon);
+        return Ok(None);
     }
+
+    if rt.omlx_installed {
+        println!();
+        println!("  → Using oMLX (Apple Silicon native).");
+        return Ok(Some(LocalBackend::OMlx));
+    }
+
+    if rt.mlx_lm_installed {
+        println!();
+        println!("  → Using mlx-lm (Apple Silicon native).");
+        return Ok(Some(LocalBackend::MlxLm));
+    }
+
+    Ok(Some(LocalBackend::Ollama))
 }
 
 /// Render a numbered model menu and read the user's choice. Returns the
@@ -236,5 +277,18 @@ mod tests {
                 r.id
             );
         }
+    }
+
+    #[test]
+    fn backend_base_urls() {
+        assert_eq!(LocalBackend::Ollama.openai_base_url(), None);
+        assert_eq!(
+            LocalBackend::OMlx.openai_base_url(),
+            Some("http://localhost:8000/v1")
+        );
+        assert_eq!(
+            LocalBackend::MlxLm.openai_base_url(),
+            Some("http://localhost:8080/v1")
+        );
     }
 }
