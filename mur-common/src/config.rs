@@ -395,8 +395,8 @@ pub struct AskConfig {
     #[serde(default)]
     pub backend: Option<BackendConfig>,
     /// Per-stage backend override for the query rewriter.
-    /// None = falls back to `synthesize_backend()` (rewriter shares the
-    /// answer model in the legacy path).
+    /// None = synthesize an Ollama BackendConfig over the legacy `model` +
+    /// `ollama_endpoint` with `rewriter_timeout_secs` baked in.
     #[serde(default)]
     pub rewriter_backend: Option<BackendConfig>,
 }
@@ -405,22 +405,41 @@ impl AskConfig {
     /// Returns the effective backend for the answer-generation model.
     /// Per-stage `backend` override wins; otherwise synthesize from legacy
     /// fields (`model`, `ollama_endpoint`) into an Ollama BackendConfig.
+    ///
+    /// `timeout_secs` is baked from `self.timeout_secs` so the answer call
+    /// inherits the user's per-call budget (rather than factory's 120s
+    /// default). When the user supplied an explicit `backend` override
+    /// with its own `timeout_secs`, that wins — we only synthesize when
+    /// `self.backend` is None.
     pub fn synthesize_backend(&self) -> BackendConfig {
         self.backend.clone().unwrap_or_else(|| BackendConfig {
             provider: "ollama".into(),
             model: self.model.clone(),
             endpoint: Some(self.ollama_endpoint.clone()),
             api_key_env: None,
-            timeout_secs: None,
+            timeout_secs: Some(self.timeout_secs as u64),
         })
     }
 
     /// Returns the effective backend for the query rewriter.
-    /// Falls back to `synthesize_backend()` if no rewriter override.
+    ///
+    /// When `self.rewriter_backend` is None, this synthesizes its OWN
+    /// Ollama BackendConfig with `self.rewriter_timeout_secs` baked in —
+    /// it does NOT fall through to `synthesize_backend()`. The rewriter
+    /// has a much tighter latency budget than the answer call (rewriter
+    /// output is small and falling back to the raw question on timeout
+    /// is non-fatal), so we don't want a slow Ollama burning the full
+    /// `timeout_secs` budget before the user sees any response.
     pub fn synthesize_rewriter_backend(&self) -> BackendConfig {
         self.rewriter_backend
             .clone()
-            .unwrap_or_else(|| self.synthesize_backend())
+            .unwrap_or_else(|| BackendConfig {
+                provider: "ollama".into(),
+                model: self.model.clone(),
+                endpoint: Some(self.ollama_endpoint.clone()),
+                api_key_env: None,
+                timeout_secs: Some(self.rewriter_timeout_secs as u64),
+            })
     }
 }
 
@@ -580,6 +599,11 @@ impl CompactConfig {
     /// Returns the effective backend for the extractive stage.
     /// Per-stage `extractive_backend` override wins; otherwise synthesize
     /// from legacy fields into an Ollama BackendConfig.
+    ///
+    /// CompactConfig has no per-stage timeout field, so synthesis bakes
+    /// the conservative 120s default — matching the previously-hardcoded
+    /// `Duration::from_secs(120)` at the call sites (byte-identical to
+    /// the pre-trait OllamaClient construction).
     pub fn synthesize_extractive_backend(&self) -> BackendConfig {
         self.extractive_backend
             .clone()
@@ -588,11 +612,12 @@ impl CompactConfig {
                 model: self.extractive_model.clone(),
                 endpoint: Some(self.ollama_endpoint.clone()),
                 api_key_env: None,
-                timeout_secs: None,
+                timeout_secs: Some(120),
             })
     }
 
     /// Returns the effective backend for the abstractive stage.
+    /// See `synthesize_extractive_backend` for the timeout rationale.
     pub fn synthesize_abstractive_backend(&self) -> BackendConfig {
         self.abstractive_backend
             .clone()
@@ -601,7 +626,7 @@ impl CompactConfig {
                 model: self.abstractive_model.clone(),
                 endpoint: Some(self.ollama_endpoint.clone()),
                 api_key_env: None,
-                timeout_secs: None,
+                timeout_secs: Some(120),
             })
     }
 }
@@ -1174,7 +1199,15 @@ ollama_endpoint: http://192.168.1.10:11434
     }
 
     #[test]
-    fn synthesize_rewriter_falls_back_to_answer_backend_when_unset() {
+    fn synthesize_rewriter_uses_legacy_ollama_when_no_rewriter_override() {
+        // Rewriter no longer falls through to synthesize_backend() when
+        // `rewriter_backend` is unset (see I2 fix in P3 task 1). It now
+        // always synthesizes its own ollama BackendConfig over the legacy
+        // model + endpoint with `rewriter_timeout_secs` baked in, so a
+        // slow rewriter call doesn't burn the full ask budget. The
+        // per-stage `ask.backend` override therefore does NOT propagate to
+        // the rewriter — set `ask.rewriter_backend` explicitly if you want
+        // a non-Ollama rewriter.
         let yaml = "\
 backend:
   provider: anthropic
@@ -1183,7 +1216,102 @@ backend:
 ";
         let cfg: AskConfig = serde_yaml::from_str(yaml).unwrap();
         let rewriter = cfg.synthesize_rewriter_backend();
-        assert_eq!(rewriter.provider, "anthropic");
-        assert_eq!(rewriter.model, "claude-sonnet-4-6");
+        assert_eq!(rewriter.provider, "ollama");
+        assert_eq!(rewriter.model, ask_default_model());
+        assert_eq!(
+            rewriter.timeout_secs,
+            Some(ask_default_rewriter_timeout() as u64)
+        );
+    }
+
+    #[test]
+    fn ask_synthesize_backend_inherits_timeout_secs_from_legacy_field() {
+        let cfg = AskConfig {
+            timeout_secs: 45,
+            ..AskConfig::default()
+        };
+        let b = cfg.synthesize_backend();
+        assert_eq!(
+            b.timeout_secs,
+            Some(45),
+            "synthesize_backend() must propagate ask.timeout_secs into the synthesized BackendConfig"
+        );
+    }
+
+    #[test]
+    fn ask_synthesize_backend_does_not_override_explicit_per_stage_timeout() {
+        let mut cfg = AskConfig {
+            timeout_secs: 45,
+            ..AskConfig::default()
+        };
+        cfg.backend = Some(BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: None,
+            api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            timeout_secs: Some(10),
+        });
+        let b = cfg.synthesize_backend();
+        assert_eq!(
+            b.timeout_secs,
+            Some(10),
+            "explicit per-stage timeout_secs must NOT be overridden by ask.timeout_secs"
+        );
+    }
+
+    #[test]
+    fn ask_synthesize_rewriter_backend_uses_rewriter_timeout_secs_when_synthesizing() {
+        let cfg = AskConfig {
+            timeout_secs: 120,
+            rewriter_timeout_secs: 8,
+            ..AskConfig::default()
+        };
+        let b = cfg.synthesize_rewriter_backend();
+        assert_eq!(
+            b.timeout_secs,
+            Some(8),
+            "rewriter synthesis must use rewriter_timeout_secs (not the answer-call timeout)"
+        );
+    }
+
+    #[test]
+    fn ask_synthesize_rewriter_backend_does_not_override_explicit_per_stage_timeout() {
+        let mut cfg = AskConfig {
+            rewriter_timeout_secs: 8,
+            ..AskConfig::default()
+        };
+        cfg.rewriter_backend = Some(BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: None,
+            api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            timeout_secs: Some(30),
+        });
+        let b = cfg.synthesize_rewriter_backend();
+        assert_eq!(
+            b.timeout_secs,
+            Some(30),
+            "explicit per-stage rewriter timeout_secs must NOT be overridden by ask.rewriter_timeout_secs"
+        );
+    }
+
+    #[test]
+    fn compact_synthesize_extractive_backend_inherits_default_timeout_when_no_override() {
+        // CompactConfig has no per-stage timeout field — extractive synthesis
+        // should fall back to the conservative 120s default.
+        let cfg = CompactConfig::default();
+        let b = cfg.synthesize_extractive_backend();
+        assert_eq!(
+            b.timeout_secs,
+            Some(120),
+            "compact synthesis without per-stage override must produce 120s timeout"
+        );
+    }
+
+    #[test]
+    fn compact_synthesize_abstractive_backend_inherits_default_timeout_when_no_override() {
+        let cfg = CompactConfig::default();
+        let b = cfg.synthesize_abstractive_backend();
+        assert_eq!(b.timeout_secs, Some(120));
     }
 }

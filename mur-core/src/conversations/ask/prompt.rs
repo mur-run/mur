@@ -519,19 +519,14 @@ mod tests {
         );
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn render_fires_stage_1b_when_compression_alone_insufficient() {
-        use crate::conversations::ENV_LOCK;
         use crate::conversations::ask::abstractive::AbstractiveCtx;
-        use crate::conversations::ollama::OllamaClient;
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        let client = OllamaClient::new("http://unused", std::time::Duration::from_secs(1));
+        use crate::conversations::backend::mock::MockBackend;
+        let backend = MockBackend::new();
         let tmp = tempfile::tempdir().unwrap();
         let ctx = AbstractiveCtx {
-            client: &client,
+            backend: &backend,
             model: "qwen3:14b",
             timeout: std::time::Duration::from_secs(1),
             root_override: Some(tmp.path().to_str().unwrap()),
@@ -578,7 +573,6 @@ mod tests {
                 .all(|h| h.compressed == Some(super::super::Compression::Heuristic)),
             "every final hit should retain Compression::Heuristic"
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
     /// M2 (phase 3.3 review follow-up): render must terminate with a sane

@@ -102,6 +102,24 @@ pub struct GenerateResponse {
     pub eval_count: u64,
 }
 
+/// One chunk yielded by `OllamaClient::generate_stream`. `delta` is the
+/// incremental text payload (may be empty on the final chunk). `usage` is
+/// `Some` ONLY on the final chunk that Ollama emits with `done:true` and
+/// non-zero eval counts.
+#[derive(Debug, Clone)]
+pub struct OllamaStreamChunk {
+    pub delta: String,
+    /// Some on the final chunk only (when Ollama emits done:true with eval counts).
+    pub usage: Option<OllamaUsage>,
+}
+
+/// Token-counting fields surfaced from Ollama's final NDJSON line.
+#[derive(Debug, Clone, Copy)]
+pub struct OllamaUsage {
+    pub prompt_eval_count: u64,
+    pub eval_count: u64,
+}
+
 pub struct OllamaClient {
     endpoint: String,
     timeout: Duration,
@@ -161,10 +179,19 @@ impl OllamaClient {
     pub async fn generate_stream(
         &self,
         req: GenerateRequest<'_>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<OllamaStreamChunk>> + Send>>> {
         if Self::mock_from_env() {
+            // Mock-mode streams emit no Usage — the canned response doesn't
+            // synthesize token counts. Real HTTP responses surface usage on
+            // the final chunk.
             let full = mock_generate(&req).response;
-            let tokens: Vec<String> = full.split_inclusive(' ').map(|s| s.to_string()).collect();
+            let tokens: Vec<OllamaStreamChunk> = full
+                .split_inclusive(' ')
+                .map(|s| OllamaStreamChunk {
+                    delta: s.to_string(),
+                    usage: None,
+                })
+                .collect();
             let stream = futures::stream::iter(tokens.into_iter().map(Ok));
             return Ok(Box::pin(stream));
         }
@@ -200,10 +227,31 @@ impl OllamaClient {
                         }
                         match serde_json::from_str::<GenerateResponse>(trimmed) {
                             Ok(v) => {
-                                if !v.response.is_empty() {
-                                    return Some((Ok(v.response), (inner, buf, false)));
+                                // Final line with eval counts → emit one
+                                // usage-bearing chunk and end the stream.
+                                if v.done && (v.prompt_eval_count > 0 || v.eval_count > 0) {
+                                    let usage = OllamaUsage {
+                                        prompt_eval_count: v.prompt_eval_count,
+                                        eval_count: v.eval_count,
+                                    };
+                                    return Some((
+                                        Ok(OllamaStreamChunk {
+                                            delta: v.response,
+                                            usage: Some(usage),
+                                        }),
+                                        (inner, buf, true),
+                                    ));
                                 }
-                                // Empty response — keep draining.
+                                if !v.response.is_empty() {
+                                    return Some((
+                                        Ok(OllamaStreamChunk {
+                                            delta: v.response,
+                                            usage: None,
+                                        }),
+                                        (inner, buf, false),
+                                    ));
+                                }
+                                // Empty response, no usage — keep draining.
                                 continue;
                             }
                             Err(e) => {
@@ -228,11 +276,28 @@ impl OllamaClient {
                             if trimmed.is_empty() {
                                 return None;
                             }
-                            let result = match serde_json::from_str::<GenerateResponse>(trimmed) {
-                                Ok(v) if !v.response.is_empty() => Ok(v.response),
-                                Ok(_) => return None,
-                                Err(e) => Err(e.into()),
-                            };
+                            let result: Result<OllamaStreamChunk> =
+                                match serde_json::from_str::<GenerateResponse>(trimmed) {
+                                    Ok(v) => {
+                                        if v.done && (v.prompt_eval_count > 0 || v.eval_count > 0) {
+                                            Ok(OllamaStreamChunk {
+                                                delta: v.response,
+                                                usage: Some(OllamaUsage {
+                                                    prompt_eval_count: v.prompt_eval_count,
+                                                    eval_count: v.eval_count,
+                                                }),
+                                            })
+                                        } else if !v.response.is_empty() {
+                                            Ok(OllamaStreamChunk {
+                                                delta: v.response,
+                                                usage: None,
+                                            })
+                                        } else {
+                                            return None;
+                                        }
+                                    }
+                                    Err(e) => Err(e.into()),
+                                };
                             return Some((result, (inner, String::new(), true)));
                         }
                     }
@@ -291,10 +356,19 @@ pub(crate) fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
     } else if req
         .prompt
         .contains("Extract the 1-3 most informative spans")
+        || req
+            .system
+            .map(|s| s.contains("Extract the 1-3 most informative spans"))
+            .unwrap_or(false)
     {
         r#"[{"role":"user","conv_id":"mock","line_hint":1,"text":"mock extractive span"}]"#
             .to_string()
-    } else if req.prompt.contains("narrative paragraph") {
+    } else if req.prompt.contains("narrative paragraph")
+        || req
+            .system
+            .map(|s| s.contains("narrative paragraph"))
+            .unwrap_or(false)
+    {
         if req.prompt.contains("one week") || req.prompt.contains("one-week") {
             "Mock narrative: this week the developer shipped several fixes and refactors."
                 .to_string()
@@ -398,7 +472,7 @@ mod tests {
         ];
         let byte_stream = futures::stream::iter(chunks);
         // Replicate the unfold logic from generate_stream.
-        let token_stream: Pin<Box<dyn Stream<Item = Result<String>> + Send>> =
+        let token_stream: Pin<Box<dyn Stream<Item = Result<OllamaStreamChunk>> + Send>> =
             Box::pin(futures::stream::unfold(
                 (byte_stream, String::new(), false),
                 |(mut inner, mut buf, done)| async move {
@@ -415,7 +489,13 @@ mod tests {
                             match serde_json::from_str::<GenerateResponse>(trimmed) {
                                 Ok(v) => {
                                     if !v.response.is_empty() {
-                                        return Some((Ok(v.response), (inner, buf, false)));
+                                        return Some((
+                                            Ok(OllamaStreamChunk {
+                                                delta: v.response,
+                                                usage: None,
+                                            }),
+                                            (inner, buf, false),
+                                        ));
                                     }
                                     continue;
                                 }
@@ -439,9 +519,12 @@ mod tests {
                                 if trimmed.is_empty() {
                                     return None;
                                 }
-                                let result: Result<String> =
+                                let result: Result<OllamaStreamChunk> =
                                     match serde_json::from_str::<GenerateResponse>(trimmed) {
-                                        Ok(v) if !v.response.is_empty() => Ok(v.response),
+                                        Ok(v) if !v.response.is_empty() => Ok(OllamaStreamChunk {
+                                            delta: v.response,
+                                            usage: None,
+                                        }),
                                         Ok(_) => return None,
                                         Err(e) => Err(anyhow::anyhow!(e)),
                                     };
@@ -458,7 +541,7 @@ mod tests {
         futures::pin_mut!(token_stream);
         while let Some(result) = token_stream.next().await {
             match result {
-                Ok(token) => tokens.push(token),
+                Ok(chunk) => tokens.push(chunk.delta),
                 Err(e) => panic!("unexpected error: {}", e),
             }
         }
@@ -585,6 +668,68 @@ mod tests {
         assert_eq!(resp.response, "");
         unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn generate_stream_emits_final_usage_chunk() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        // Lock the env to prevent other tests' MUR_OLLAMA_MOCK from leaking
+        // into ours and short-circuiting the wiremock path.
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        let server = MockServer::start().await;
+        let body = "\
+{\"model\":\"qwen3:14b\",\"response\":\"hello\",\"done\":false}
+{\"model\":\"qwen3:14b\",\"response\":\" world\",\"done\":false}
+{\"model\":\"qwen3:14b\",\"response\":\"\",\"done\":true,\"prompt_eval_count\":7,\"eval_count\":3}
+";
+        Mock::given(method("POST"))
+            .and(path("/api/generate"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/x-ndjson")
+                    .set_body_string(body),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OllamaClient::new(&server.uri(), Duration::from_secs(5));
+        use futures::StreamExt;
+        let mut stream = client
+            .generate_stream(GenerateRequest {
+                model: "qwen3:14b",
+                prompt: "hi",
+                system: None,
+                stream: true,
+                options: GenerateOptions {
+                    temperature: None,
+                    top_p: None,
+                    num_predict: None,
+                    stop: vec![],
+                },
+            })
+            .await
+            .unwrap();
+
+        let mut text = String::new();
+        let mut final_usage = None;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.unwrap();
+            text.push_str(&chunk.delta);
+            if let Some(u) = chunk.usage {
+                assert!(
+                    final_usage.is_none(),
+                    "usage should appear on exactly one chunk"
+                );
+                final_usage = Some(u);
+            }
+        }
+        assert_eq!(text, "hello world");
+        let u = final_usage.expect("expected final usage chunk from done:true line");
+        assert_eq!(u.prompt_eval_count, 7);
+        assert_eq!(u.eval_count, 3);
     }
 
     #[allow(clippy::await_holding_lock)]
