@@ -955,7 +955,8 @@ Run `mur learn` to extract new patterns from recent sessions.
                     config.llm.provider = "openai".to_string();
                     config.llm.model = m.id.to_string();
                     config.llm.api_key_env = Some("OMLX_API_KEY".to_string());
-                    config.llm.openai_url = Some("http://localhost:8000/v1".to_string());
+                    config.llm.openai_url =
+                        Some(LocalBackend::OMlx.openai_base_url().unwrap().to_string());
 
                     select_ollama_embedding(&mut config)?;
                     crate::store::config::save_config(&config)?;
@@ -968,6 +969,29 @@ Run `mur learn` to extract new patterns from recent sessions.
                     println!("      the model via its admin dashboard:  {}", m.id);
                     println!(
                         "      export OMLX_API_KEY=local   # any non-empty value; oMLX skips auth on localhost"
+                    );
+                }
+                Some(LocalBackend::MlxLm) => {
+                    let m = select_model(MLX_RECS)?;
+                    // mlx-lm CLI: user runs `mlx_lm.server` themselves on
+                    // :8080. Same OpenAI-compat plumbing as oMLX.
+                    config.llm.provider = "openai".to_string();
+                    config.llm.model = m.id.to_string();
+                    config.llm.api_key_env = Some("MLX_API_KEY".to_string());
+                    config.llm.openai_url =
+                        Some(LocalBackend::MlxLm.openai_base_url().unwrap().to_string());
+
+                    select_ollama_embedding(&mut config)?;
+                    crate::store::config::save_config(&config)?;
+                    println!(
+                        "  ✓ Config: mlx-lm/{} (LLM) + ollama/{} (search)",
+                        m.id, config.embedding.model
+                    );
+                    println!();
+                    println!("  ⚠ Start the mlx-lm server in a separate terminal:");
+                    println!("      mlx_lm.server --model {} --port 8080", m.id);
+                    println!(
+                        "      export MLX_API_KEY=local   # any non-empty value; mlx_lm.server ignores it"
                     );
                 }
             }
