@@ -1240,8 +1240,10 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     // the full ask_cfg.timeout_secs budget (plumbed via ask_stream).
     let prior_slice = session.last_n(history_turns);
     let model = args.model.clone().unwrap_or_else(|| ask_cfg.model.clone());
-    let rewriter_backend =
-        crate::conversations::backend::factory::build(&ask_cfg.synthesize_rewriter_backend())?;
+    let rewriter_backend = crate::conversations::backend::factory::build_for_stage(
+        &ask_cfg.synthesize_rewriter_backend(),
+        "rewriter",
+    )?;
     let rewrite = ask::rewriter::rewrite(
         rewriter_backend.as_ref(),
         &model,
@@ -1280,8 +1282,15 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
     // `ask.backend` override. synthesize_backend() now bakes ask.timeout_secs
     // into the synthesized BackendConfig (see I2 fix in P3 task 1) so factory's
     // 120s default doesn't override the user's per-call budget.
+    //
+    // P3 task 8: build TWO backends (Stage 1b + answer stream) from the same
+    // BackendConfig but tag them differently for telemetry — cost-report
+    // breaks down spend by stage.
+    let backend_cfg = ask_cfg.synthesize_backend();
+    let stage1b_backend =
+        crate::conversations::backend::factory::build_for_stage(&backend_cfg, "ask.compress_hit")?;
     let answer_backend =
-        crate::conversations::backend::factory::build(&ask_cfg.synthesize_backend())?;
+        crate::conversations::backend::factory::build_for_stage(&backend_cfg, "ask.generate")?;
     let req = ask::AskRequest {
         question: question.clone(),
         filters,
@@ -1309,6 +1318,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         summarize_enabled: effective_summarize_enabled,
         summarize_model: effective_summarize_model,
         answer_backend: Some(answer_backend),
+        stage1b_backend: Some(stage1b_backend),
     };
 
     // Generate + collect response

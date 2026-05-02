@@ -8,6 +8,7 @@ pub mod factory;
 pub mod mock;
 pub mod ollama;
 pub mod retry;
+pub mod telemetry;
 
 use anyhow::Result;
 use futures::stream::Stream;

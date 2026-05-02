@@ -59,9 +59,17 @@ pub struct AskRequest {
     pub summarize_model: Option<String>,
     /// Optional pre-built backend for the answer-generation streaming call.
     /// `None` = synthesize an Ollama backend from `endpoint` + `model` (the
-    /// legacy path). Construct via `factory::build(&ask_cfg.synthesize_backend())`
-    /// at the CLI/API call site to honor the per-stage `ask.backend` override.
+    /// legacy path). Construct via
+    /// `factory::build_for_stage(&ask_cfg.synthesize_backend(), "ask.generate")`
+    /// at the CLI/API call site to honor the per-stage `ask.backend` override
+    /// AND emit per-call cost telemetry.
     pub answer_backend: Option<Arc<dyn ChatBackend>>,
+    /// Optional pre-built backend for the Phase 3.5 Stage 1b per-hit
+    /// abstractive compression. Built separately from `answer_backend` so
+    /// telemetry can attribute Stage 1b spend ("ask.compress_hit")
+    /// distinctly from the answer stream ("ask.generate"). `None` =
+    /// synthesize from `endpoint` + `model`.
+    pub stage1b_backend: Option<Arc<dyn ChatBackend>>,
 }
 
 /// Provenance marker for hit snippets that have been reduced before going
@@ -202,25 +210,28 @@ pub async fn ask_stream(
 
     // 3. Build prompt (incl. Phase 3.5 Stage 1b when enabled).
     //
-    // Stage 1b backend (P3 Task 4 migration): re-use the answer backend if
-    // already built — Stage 1b's per-call budget is enforced separately via
-    // ctx.timeout (`tokio::time::timeout` wrapper inside compress_hit), so
-    // we don't need a new backend with a different connect-level timeout.
-    // When req.answer_backend is None (legacy callers / tests), synthesize
-    // ollama from req.endpoint / req.timeout the same way the answer-stream
-    // block below does — keeps behavior byte-identical to pre-trait code.
-    let stage1b_backend: Arc<dyn ChatBackend> = match req.answer_backend.clone() {
-        Some(b) => b,
-        None => {
-            let cfg = mur_common::config::BackendConfig {
-                provider: "ollama".into(),
-                model: req.model.clone(),
-                endpoint: Some(req.endpoint.clone()),
-                api_key_env: None,
-                timeout_secs: Some(req.timeout.as_secs()),
-            };
-            crate::conversations::backend::factory::build(&cfg)?
+    // Stage 1b backend: P3 task 8 reverses the Task 4 dedup so per-call
+    // telemetry can attribute Stage 1b spend ("ask.compress_hit") separately
+    // from the answer stream ("ask.generate"). When the caller pre-built
+    // backends (req.{stage1b,answer}_backend = Some(_)), use them as-is —
+    // cmd_ask wraps both in TelemetryBackend with their own stage tag.
+    // When None (legacy callers / tests), synthesize two backends from
+    // req.endpoint / req.timeout, each tagged with its own stage.
+    let synthesize = || -> mur_common::config::BackendConfig {
+        mur_common::config::BackendConfig {
+            provider: "ollama".into(),
+            model: req.model.clone(),
+            endpoint: Some(req.endpoint.clone()),
+            api_key_env: None,
+            timeout_secs: Some(req.timeout.as_secs()),
         }
+    };
+    let stage1b_backend: Arc<dyn ChatBackend> = match req.stage1b_backend.clone() {
+        Some(b) => b,
+        None => crate::conversations::backend::factory::build_for_stage(
+            &synthesize(),
+            "ask.compress_hit",
+        )?,
     };
 
     let summarize_model_owned: Option<String> = req
@@ -260,14 +271,18 @@ pub async fn ask_stream(
 
     // 4. Generate (streaming) with grounding filter.
     //
-    // The answer backend is built via `factory::build` at the call site
-    // (cmd_ask) so per-stage `ask.backend` overrides reach us through
-    // `req.answer_backend`. When None (legacy callers / tests), the
-    // `stage1b_backend` block above already synthesized an Ollama backend
-    // from req.endpoint / req.timeout — re-use it here so we never build
-    // two backends per ask invocation.
+    // The answer backend is built via `factory::build_for_stage` at the call
+    // site (cmd_ask) so per-stage `ask.backend` overrides reach us through
+    // `req.answer_backend`. When None (legacy callers / tests), synthesize
+    // a fresh Ollama backend tagged with the "ask.generate" stage so
+    // telemetry distinguishes it from the Stage 1b backend above.
     let model = req.model.clone();
-    let answer_backend = stage1b_backend.clone();
+    let answer_backend: Arc<dyn ChatBackend> = match req.answer_backend.clone() {
+        Some(b) => b,
+        None => {
+            crate::conversations::backend::factory::build_for_stage(&synthesize(), "ask.generate")?
+        }
+    };
     let filter = if req.strict_citations {
         cite::GroundingFilter::new_strict(prompt.valid_citations.clone())
     } else {
@@ -608,6 +623,7 @@ mod tests {
             summarize_enabled: true,
             summarize_model: None,
             answer_backend: None,
+            stage1b_backend: None,
         };
         // Empty index → should yield the "don't cover that" fallback.
         let resp = ask(req, Some(root)).await.unwrap();

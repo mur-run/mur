@@ -95,7 +95,8 @@ pub async fn compact_day(
     // so users can override `compact.extractive_backend` in config.yaml to
     // route extractive summarization through Anthropic instead of local Ollama.
     let extractive_cfg = cfg.synthesize_extractive_backend();
-    let extractive_backend = crate::conversations::backend::factory::build(&extractive_cfg)?;
+    let extractive_backend =
+        crate::conversations::backend::factory::build_for_stage(&extractive_cfg, "extractive")?;
     let chunks = chunker::chunk_day(&msgs, cfg.chunk_tokens as usize);
     let mut all_spans = Vec::new();
     for chunk in &chunks {
@@ -127,7 +128,8 @@ pub async fn compact_day(
     // now flows through factory::build, so users can override
     // `compact.abstractive_backend` to route through Anthropic.
     let abstractive_cfg = cfg.synthesize_abstractive_backend();
-    let abstractive_backend = crate::conversations::backend::factory::build(&abstractive_cfg)?;
+    let abstractive_backend =
+        crate::conversations::backend::factory::build_for_stage(&abstractive_cfg, "abstractive")?;
     let abstractive_result = abstractive::summarize(
         abstractive_backend.as_ref(),
         &abstractive_cfg.model,

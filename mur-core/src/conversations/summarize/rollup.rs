@@ -179,7 +179,8 @@ pub async fn rollup_week(
         api_key_env: None,
         timeout_secs: Some(120),
     };
-    let abstractive_backend = crate::conversations::backend::factory::build(&abstractive_cfg)?;
+    let abstractive_backend =
+        crate::conversations::backend::factory::build_for_stage(&abstractive_cfg, "rollup")?;
     let abstractive = super::abstractive::rollup_narrative(
         abstractive_backend.as_ref(),
         &cfg.abstractive_model,
@@ -426,7 +427,8 @@ pub async fn rollup_month(
         api_key_env: None,
         timeout_secs: Some(120),
     };
-    let abstractive_backend = crate::conversations::backend::factory::build(&abstractive_cfg)?;
+    let abstractive_backend =
+        crate::conversations::backend::factory::build_for_stage(&abstractive_cfg, "rollup")?;
     let abstractive = super::abstractive::rollup_narrative(
         abstractive_backend.as_ref(),
         &cfg.abstractive_model,

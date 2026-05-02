@@ -20,7 +20,26 @@ use super::{ChatBackend, mock::MockBackend, ollama::OllamaBackend};
 /// Real providers (ollama, anthropic) are wrapped in
 /// `RetryingBackend::with_default_policy` so all callers inherit retries
 /// on `BackendError::{Timeout, ServerError(5xx), RateLimited}`.
+///
+/// **Backwards-compatible: builds without telemetry.** Used by tests and any
+/// caller that doesn't have a stage tag. Production call sites should use
+/// `build_for_stage` so per-call cost telemetry is recorded.
 pub fn build(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
+    build_raw(cfg)
+}
+
+/// Build a backend wrapped in `TelemetryBackend` so every call writes a
+/// JSONL record under `~/.mur/telemetry/llm-calls-<YYYY-MM-DD>.jsonl`.
+/// `stage` is the call-site tag (e.g. `"extractive"`, `"ask.generate"`)
+/// used by the cost-report aggregator. See plan task 8.
+pub fn build_for_stage(cfg: &BackendConfig, stage: &'static str) -> Result<Arc<dyn ChatBackend>> {
+    let raw = build_raw(cfg)?;
+    Ok(Arc::new(super::telemetry::TelemetryBackend::new(
+        raw, stage,
+    )))
+}
+
+fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
     if std::env::var("MUR_LLM_MOCK").is_ok() || std::env::var("MUR_OLLAMA_MOCK").is_ok() {
         tracing::debug!(provider = %cfg.provider, "MUR_LLM_MOCK active — using MockBackend");
         return Ok(Arc::new(MockBackend::new()));
