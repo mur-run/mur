@@ -5,6 +5,7 @@
 //! `_inner` helpers exist so unit tests don't need a Tauri runtime.
 
 use anyhow::{Context, Result};
+use mur_agent_runtime::durable::ledger::Ledger;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -199,4 +200,76 @@ pub fn companion_ack_inner(home: &Path, agent: &str, msg_id: &str, signal: &str)
 pub async fn companion_ack(agent: String, msg_id: String, signal: String) -> Result<(), String> {
     let home = mur_core::paths::mur_root(None);
     companion_ack_inner(&home, &agent, &msg_id, &signal).map_err(|e| format!("{e:#}"))
+}
+
+// ── Why-did-you-message ──────────────────────────────────────────────────────
+
+/// Inner helper — testable. Reads `<home>/agents/<agent>/companion/outbox-ledger`,
+/// which in production is a **directory** of per-day `<YYYY-MM-DD>.jsonl` files
+/// written by `mur-agent-runtime::durable::ledger::Ledger`. Walks the most
+/// recent 7 days (chronological, oldest first) via `Ledger::scan_days`, then
+/// filters by `id == <msg_id>`. Order: chronological — same as append order
+/// across days.
+///
+/// We deserialize to `serde_json::Value` (not `OutboxEvent`) so the GUI
+/// stays loosely coupled to the runtime's telemetry enum and tolerates
+/// ledger-format extensions gracefully — every event variant carries the
+/// `id` at top level under `#[serde(tag = "event")]`. Malformed lines are
+/// already skipped by `scan_days` (logged via `tracing::warn!`).
+///
+/// `#[allow(dead_code)]`: this is exercised by `tests/bridge_why.rs`
+/// (a separate test crate) but the bin/lib targets see it as unused
+/// (the production path goes through the `companion_why` Tauri command).
+#[allow(dead_code)]
+pub fn companion_why_inner(
+    home: &Path,
+    agent: &str,
+    msg_id: &str,
+) -> Result<Vec<serde_json::Value>> {
+    let ledger_dir = home
+        .join("agents")
+        .join(agent)
+        .join("companion/outbox-ledger");
+    if !ledger_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let out: Vec<serde_json::Value> = Ledger::scan_days::<serde_json::Value>(&ledger_dir, 7)
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .filter(|v| v.get("id").and_then(|s| s.as_str()) == Some(msg_id))
+        .collect();
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn companion_why(
+    agent: String,
+    msg_id: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    let home = mur_core::paths::mur_root(None);
+    companion_why_inner(&home, &agent, &msg_id).map_err(|e| format!("{e:#}"))
+}
+
+// ── Quiet / proactive toggles ────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn companion_proactive(agent: String, enabled: bool) -> Result<(), String> {
+    mur_core::cmd::agent_companion::proactive::set_enabled(&agent, enabled)
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Quiet-hours toggle. The GUI passes `for_seconds` (a literal seconds
+/// count); the underlying CLI helper accepts the `<n>{s,m,h,d}` shorthand,
+/// so we stringify as `<N>s`.
+#[tauri::command]
+pub async fn companion_quiet(
+    agent: String,
+    for_seconds: Option<i64>,
+    until: Option<String>,
+    off: bool,
+) -> Result<(), String> {
+    let for_str = for_seconds.map(|n| format!("{n}s"));
+    mur_core::cmd::agent_companion::quiet::set(&agent, for_str.as_deref(), until.as_deref(), off)
+        .await
+        .map_err(|e| format!("{e:#}"))
 }

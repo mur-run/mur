@@ -26,7 +26,25 @@ pub struct QuietArgs {
 }
 
 pub async fn run(args: QuietArgs) -> Result<()> {
-    let count = [args.for_.is_some(), args.until.is_some(), args.off]
+    set(
+        &args.name,
+        args.for_.as_deref(),
+        args.until.as_deref(),
+        args.off,
+    )
+    .await
+}
+
+/// Public helper used by the GUI bridge (D5 / M5.6.2). Same semantics
+/// as `run(QuietArgs)`, but takes individual fields so Tauri callers
+/// don't need to construct a clap-derived struct. Exactly one of
+/// `for_seconds_or_string` / `until` / `off=true` must be set.
+///
+/// `for_` accepts the same `<n>{s,m,h,d}` shorthand as the CLI flag
+/// (e.g. "1h", "30m", "2d"). The GUI passes a literal seconds count
+/// stringified as `<N>s` to keep the surface uniform.
+pub async fn set(name: &str, for_: Option<&str>, until: Option<&str>, off: bool) -> Result<()> {
+    let count = [for_.is_some(), until.is_some(), off]
         .iter()
         .filter(|x| **x)
         .count();
@@ -34,16 +52,16 @@ pub async fn run(args: QuietArgs) -> Result<()> {
         anyhow::bail!("exactly one of --for, --until, --off is required");
     }
 
-    let agent_home = agent_home_for(&args.name)?;
+    let agent_home = agent_home_for(name)?;
     let profile_path = agent_home.join("profile.yaml");
     let now = chrono::Utc::now();
 
-    let new_paused_until: Option<chrono::DateTime<chrono::Utc>> = if args.off {
+    let new_paused_until: Option<chrono::DateTime<chrono::Utc>> = if off {
         None
-    } else if let Some(s) = args.for_.as_deref() {
+    } else if let Some(s) = for_ {
         Some(now + parse_relative_duration(s)?)
     } else {
-        let s = args.until.as_deref().unwrap();
+        let s = until.unwrap();
         let parsed = chrono::DateTime::parse_from_rfc3339(s)
             .with_context(|| format!("parse --until '{s}' as RFC 3339"))?;
         Some(parsed.with_timezone(&chrono::Utc))
@@ -55,12 +73,9 @@ pub async fn run(args: QuietArgs) -> Result<()> {
         Some(until) => println!(
             "companion.proactive.paused_until = {} (agent: {})",
             until.to_rfc3339(),
-            args.name
+            name
         ),
-        None => println!(
-            "companion.proactive.paused_until = cleared (agent: {})",
-            args.name
-        ),
+        None => println!("companion.proactive.paused_until = cleared (agent: {name})"),
     }
 
     Ok(())
