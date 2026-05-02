@@ -3,9 +3,11 @@
 
 #![allow(dead_code)] // wired progressively across P0 tasks.
 
+pub mod anthropic;
 pub mod factory;
 pub mod mock;
 pub mod ollama;
+pub mod retry;
 
 use anyhow::Result;
 use futures::stream::Stream;
