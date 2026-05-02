@@ -1280,6 +1280,22 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         ask_cfg.summarize_hits_enabled,
         ask_cfg.summarize_model.as_deref(),
     );
+    // Build the answer-streaming backend via factory, honoring the per-stage
+    // `ask.backend` override. Without an override, synthesize_backend()
+    // returns an ollama BackendConfig over `ask_cfg.model` + `ollama_endpoint`,
+    // which factory::build maps to OllamaBackend wrapped in RetryingBackend
+    // — byte-identical to the pre-trait OllamaClient construction.
+    //
+    // The synthesized cfg leaves `timeout_secs` unset; force it to
+    // `ask_cfg.timeout_secs` so the answer call inherits the same per-call
+    // timeout it had before this migration (rather than factory's 120s
+    // default). When the user has set `ask.backend` explicitly with their
+    // own `timeout_secs`, we respect that.
+    let mut answer_cfg = ask_cfg.synthesize_backend();
+    if answer_cfg.timeout_secs.is_none() {
+        answer_cfg.timeout_secs = Some(ask_cfg.timeout_secs as u64);
+    }
+    let answer_backend = crate::conversations::backend::factory::build(&answer_cfg)?;
     let req = ask::AskRequest {
         question: question.clone(),
         filters,
@@ -1306,6 +1322,7 @@ pub async fn cmd_ask(args: AskArgs) -> Result<()> {
         compress_enabled: ask_cfg.compress_hits_enabled,
         summarize_enabled: effective_summarize_enabled,
         summarize_model: effective_summarize_model,
+        answer_backend: Some(answer_backend),
     };
 
     // Generate + collect response
