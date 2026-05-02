@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ack } from "./api";
 import type { BridgeEvent, Signal } from "./types";
+import { WhyAccordion } from "./WhyAccordion";
 
 export function MessageRow({
   agent,
@@ -59,6 +60,7 @@ export function MessageRow({
           <span className="text-xs text-neutral-500">acked: {acked}</span>
         )}
       </div>
+      <WhyAccordion agent={agent} msgId={msg.id} />
     </div>
   );
 }

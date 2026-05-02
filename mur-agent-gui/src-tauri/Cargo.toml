@@ -46,6 +46,11 @@ tauri-plugin-process = "2"
 # Reuse the upstream library so admin commands and types match the CLI.
 mur-core = { path = "../../mur-core" }
 mur-common = { path = "../../mur-common" }
+# `mur-agent-runtime` is needed for `durable::ledger::Ledger::scan_days`,
+# the per-day JSONL scanner used by `companion_why_inner`. Schema-tolerant
+# path: we deserialize as `serde_json::Value` so the GUI doesn't depend on
+# the runtime's `OutboxEvent` enum surface.
+mur-agent-runtime = { path = "../../mur-agent-runtime" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
