@@ -197,4 +197,165 @@ mod tests {
         let err = r.err().unwrap();
         assert!(format!("{err:#}").contains("unsupported"));
     }
+
+    // ── I3 — RetryingBackend::generate_stream connect-retry through the
+    // real AnthropicBackend SSE parser. Earlier unit tests used a
+    // hand-rolled inner backend; this verifies the SSE parser actually
+    // survives the retry-on-connect path end-to-end (closes I3).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn factory_retries_anthropic_503_then_streams_via_real_sse_parser() {
+        use crate::conversations::backend::ChatRequest;
+        use futures::StreamExt;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TEST_ANTHROPIC_KEY_I3", "k") };
+
+        let server = MockServer::start().await;
+
+        // First two attempts: 503. Third: real SSE stream.
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+
+        let sse = "\
+event: content_block_delta
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"OK\"}}
+
+event: message_delta
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}
+
+event: message_stop
+data: {\"type\":\"message_stop\"}
+
+";
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: Some(server.uri()),
+            api_key_env: Some("MUR_TEST_ANTHROPIC_KEY_I3".into()),
+            timeout_secs: Some(5),
+        };
+        let b = build(&cfg).unwrap();
+        let req = ChatRequest {
+            model: "claude-haiku-4-5",
+            user: "hi",
+            system: None,
+            max_tokens: 16,
+            temperature: None,
+            stop: vec![],
+            cache_system: false,
+            cache_user_prefix: None,
+        };
+        let mut stream = b.generate_stream(req).await.unwrap();
+        let mut text = String::new();
+        let mut final_usage = None;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.unwrap();
+            text.push_str(&chunk.delta);
+            if let Some(u) = chunk.usage {
+                final_usage = Some(u);
+            }
+        }
+        assert_eq!(text, "OK");
+        let u = final_usage.expect("usage from final chunk");
+        assert_eq!(u.input_tokens, 3);
+        assert_eq!(u.output_tokens, 1);
+        unsafe { std::env::remove_var("MUR_TEST_ANTHROPIC_KEY_I3") };
+    }
+
+    // ── I4 — factory composes TelemetryBackend → RetryingBackend →
+    // AnthropicBackend in the right order. After 1× 503 + 1× 200,
+    // telemetry must record exactly ONE line for the final retry success
+    // (not one per attempt). Closes I4.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn factory_for_stage_records_one_telemetry_line_after_retry_succeeds() {
+        use crate::conversations::backend::ChatRequest;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TEST_ANTHROPIC_KEY_I4", "k") };
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(
+                        r#"{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":3,"output_tokens":1}}"#,
+                    ),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: Some(server.uri()),
+            api_key_env: Some("MUR_TEST_ANTHROPIC_KEY_I4".into()),
+            timeout_secs: Some(5),
+        };
+
+        // Use build (returns the retry+anthropic stack), then wrap in
+        // TelemetryBackend manually with a path override so the test's
+        // assertions can read the JSONL without polluting ~/.mur.
+        let raw = build(&cfg).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let log_path = tmp.path().join("test-telemetry.jsonl");
+        let tb = super::super::telemetry::TelemetryBackend::new(raw, "extractive")
+            .with_path_override(log_path.clone());
+
+        let req = ChatRequest {
+            model: "claude-haiku-4-5",
+            user: "hi",
+            system: None,
+            max_tokens: 16,
+            temperature: None,
+            stop: vec![],
+            cache_system: false,
+            cache_user_prefix: None,
+        };
+        let _ = tb.generate(req).await.unwrap();
+
+        let body = std::fs::read_to_string(&log_path).unwrap();
+        assert_eq!(
+            body.lines().count(),
+            1,
+            "telemetry should record exactly ONE line for the final retry success, not one per attempt"
+        );
+        let rec: super::super::telemetry::LlmCallRecord =
+            serde_json::from_str(body.lines().next().unwrap()).unwrap();
+        assert!(rec.success);
+        assert_eq!(rec.input_tokens, 3);
+        assert_eq!(rec.output_tokens, 1);
+        unsafe { std::env::remove_var("MUR_TEST_ANTHROPIC_KEY_I4") };
+    }
 }
