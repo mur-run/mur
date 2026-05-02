@@ -30,3 +30,12 @@ fn notarize_args_uses_app_specific_password() {
     assert!(args.contains(&"--output-format".to_string()));
     assert!(args.contains(&"json".to_string()));
 }
+
+#[test]
+fn staple_args_targets_the_app_bundle() {
+    use mur_core::cmd::agent_export_gui::staple_args;
+    let args = staple_args(Path::new("/tmp/MurAgent.app"));
+    assert_eq!(args[0], "stapler");
+    assert_eq!(args[1], "staple");
+    assert_eq!(args[2], "/tmp/MurAgent.app");
+}

@@ -79,6 +79,16 @@ pub fn notarize_args(zip_path: &Path, creds: &NotarizeCreds) -> Vec<String> {
     ]
 }
 
+/// Build the argv vector for `xcrun stapler staple <bundle>`. Pure
+/// function — no IO.
+pub fn staple_args(bundle: &Path) -> Vec<String> {
+    vec![
+        "stapler".to_string(),
+        "staple".to_string(),
+        bundle.to_string_lossy().into_owned(),
+    ]
+}
+
 // BundleMode + EmbeddedMetadata moved to mur_common::bundle so the
 // reader (mur-agent-gui's bootstrap module) can never drift from
 // the writer (this file).
@@ -705,10 +715,25 @@ fn phase_9_notarize(opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
 
 // ─── phase 10/11 — staple + assess ────────────────────────────────
 
-fn phase_10_staple(_opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
-    if cfg!(not(target_os = "macos")) {
+fn phase_10_staple(opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
+    if cfg!(not(target_os = "macos")) || opts.skip_notarize {
         return Ok(());
     }
+    // Skip cleanly when notarize was skipped for missing creds —
+    // there's nothing for stapler to attach.
+    if std::env::var("MUR_APPLE_NOTARY_KEY").is_err() {
+        return Ok(());
+    }
+    let bundle = locate_bundle()?;
+    let args = staple_args(&bundle);
+    let status = Command::new("xcrun")
+        .args(&args)
+        .status()
+        .context("spawn xcrun stapler staple")?;
+    if !status.success() {
+        bail!("stapler staple failed (exit={status})");
+    }
+    info!("phase 10 (staple) ok");
     Ok(())
 }
 
