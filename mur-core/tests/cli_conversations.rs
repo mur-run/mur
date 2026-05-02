@@ -1407,3 +1407,71 @@ fn mur_conversations_compact_force_unconditionally_archives() {
         String::from_utf8_lossy(&out2.stdout)
     );
 }
+
+// ── I5 — ask::generate::stream_answer end-to-end against a wiremocked
+// Anthropic SSE response. Hits the full path: factory builds a real
+// AnthropicBackend (wrapped in RetryingBackend), stream_answer wires a
+// ChatRequest, the SSE parser yields ChatChunk items, and the adapter
+// surfaces them to the caller as text deltas. Closes I5.
+//
+// Note: stream_answer's contract is `Stream<Item = Result<String>>` —
+// it intentionally drops the trailing usage chunk (token accounting is
+// estimated downstream from the forwarded text). Usage propagation
+// through the SSE parser itself is verified at the lower layer by I3
+// (`factory_retries_anthropic_503_then_streams_via_real_sse_parser`).
+#[tokio::test]
+async fn ask_generate_against_wiremocked_anthropic_sse_streams_text() {
+    use futures::StreamExt;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // ENV_LOCK is internal to mur-core; skip locking in the integration
+    // crate. We use a unique env-var name so this test doesn't collide
+    // with other integration tests if they ever land.
+    unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+    unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+    unsafe { std::env::set_var("MUR_TEST_ANTHROPIC_KEY_I5", "k") };
+
+    let server = MockServer::start().await;
+    let sse = "event: content_block_delta\n\
+        data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello \"}}\n\n\
+        event: content_block_delta\n\
+        data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"world\"}}\n\n\
+        event: message_delta\n\
+        data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}\n\n\
+        event: message_stop\n\
+        data: {\"type\":\"message_stop\"}\n\n";
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse),
+        )
+        .mount(&server)
+        .await;
+
+    let cfg = mur_common::config::BackendConfig {
+        provider: "anthropic".into(),
+        model: "claude-haiku-4-5".into(),
+        endpoint: Some(server.uri()),
+        api_key_env: Some("MUR_TEST_ANTHROPIC_KEY_I5".into()),
+        timeout_secs: Some(5),
+    };
+    let backend = mur_core::conversations::backend::factory::build(&cfg).unwrap();
+    let mut stream = mur_core::conversations::ask::generate::stream_answer(
+        backend.as_ref(),
+        "claude-haiku-4-5",
+        "you are a tester",
+        "say hello world",
+        16,
+    )
+    .await
+    .unwrap();
+    let mut text = String::new();
+    while let Some(chunk) = stream.next().await {
+        text.push_str(&chunk.unwrap());
+    }
+    assert_eq!(text, "hello world");
+    unsafe { std::env::remove_var("MUR_TEST_ANTHROPIC_KEY_I5") };
+}

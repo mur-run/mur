@@ -138,6 +138,13 @@ pub fn user_dir(user_id: &str, override_path: Option<&str>) -> PathBuf {
         .join(user_id)
 }
 
+/// Root directory for per-call LLM telemetry JSONL logs (`~/.mur/telemetry/`).
+/// Lives directly under `mur_root`, NOT under `conversations/` — telemetry
+/// scope is broader than the conversations archive.
+pub fn telemetry_root(root_override: Option<&str>) -> PathBuf {
+    mur_root(root_override).join("telemetry")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

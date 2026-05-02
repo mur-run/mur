@@ -56,6 +56,10 @@ impl ChatBackend for OllamaBackend {
     async fn generate_stream(&self, req: ChatRequest<'_>) -> Result<ChatStream> {
         use crate::conversations::ollama::{GenerateOptions, GenerateRequest};
         use futures::StreamExt;
+        // Capture the model name as an owned String so the per-chunk closure
+        // (which lives as long as the stream) can stamp it into Usage without
+        // borrowing from the consumed `req`.
+        let model_owned = req.model.to_string();
         let g_req = GenerateRequest {
             model: req.model,
             prompt: req.user,
@@ -69,12 +73,24 @@ impl ChatBackend for OllamaBackend {
             },
         };
         let inner_stream = self.client.generate_stream(g_req).await?;
-        // Adapt the existing OllamaClient::generate_stream `Stream<Item = Result<String>>`
-        // to ChatStream `Stream<Item = Result<ChatChunk>>`. Ollama doesn't surface usage
-        // in its NDJSON stream (the final `done: true` line carries it but the existing
-        // client discards it), so usage stays None for streamed Ollama responses in P2.
-        // P3 may revisit if cost telemetry needs per-chunk usage from Ollama.
-        let chunks = inner_stream.map(|item| item.map(|delta| ChatChunk { delta, usage: None }));
+        // Adapt OllamaClient::generate_stream `Stream<Item = Result<OllamaStreamChunk>>`
+        // to ChatStream `Stream<Item = Result<ChatChunk>>`. The final NDJSON line
+        // (done:true) carries prompt_eval_count + eval_count; OllamaClient surfaces
+        // those as `Some(OllamaUsage)` on the final chunk only, which we map into
+        // the trait-level `Usage` here (cache fields stay 0 — Ollama has no caching).
+        let chunks = inner_stream.map(move |item| {
+            item.map(|chunk| ChatChunk {
+                delta: chunk.delta,
+                usage: chunk.usage.map(|u| Usage {
+                    input_tokens: u.prompt_eval_count,
+                    output_tokens: u.eval_count,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    provider: "ollama",
+                    model: model_owned.clone(),
+                }),
+            })
+        });
         Ok(Box::pin(chunks))
     }
 

@@ -40,16 +40,16 @@ pub async fn extract_chunk(
     chunk: &Chunk,
     day_msgs: &[Message],
 ) -> Result<Vec<ExtractiveSpan>> {
-    let prompt = render_prompt(chunk);
+    let (system, user) = render_prompt_split(chunk);
     let resp = backend
         .generate(ChatRequest {
             model,
-            user: &prompt,
-            system: None,
+            user: &user,
+            system: Some(&system),
             max_tokens: 1024,
             temperature: Some(0.0),
             stop: vec![],
-            cache_system: false,
+            cache_system: true,
             cache_user_prefix: None,
         })
         .await;
@@ -75,10 +75,13 @@ pub async fn extract_chunk(
         .collect())
 }
 
-fn render_prompt(chunk: &Chunk) -> String {
-    let mut body = String::new();
-    let (start_line, end_line) = chunk.span_range;
-    body.push_str(
+/// Split the extractive prompt into a fixed system instruction (cacheable
+/// across calls within a day) and a per-chunk user message (volatile).
+/// See P3 task 6 — caching wired even though the system prompt today is
+/// well below the 2048-token Haiku-4.5 minimum (spec §5.2). The hint is
+/// silently ignored by non-Anthropic backends.
+fn render_prompt_split(chunk: &Chunk) -> (String, String) {
+    let system =
         "You are reviewing one conversation day for a technical developer's personal archive. \
          Extract the 1-3 most informative spans from this excerpt.\n\n\
          A span is quote-worthy if it:\n\
@@ -95,9 +98,12 @@ fn render_prompt(chunk: &Chunk) -> String {
            - conv_id: the conv value from the source message\n\
            - line_hint: integer line number within the day's raw JSONL\n\
            - text: verbatim quote, 20-400 chars\n\n\
-         If the excerpt has nothing quote-worthy, return [].\n\n",
-    );
-    body.push_str(&format!(
+         If the excerpt has nothing quote-worthy, return []."
+            .to_string();
+
+    let mut user = String::new();
+    let (start_line, end_line) = chunk.span_range;
+    user.push_str(&format!(
         "Excerpt ({} messages, lines {}..{}):\n",
         chunk.messages.len(),
         start_line,
@@ -107,7 +113,7 @@ fn render_prompt(chunk: &Chunk) -> String {
         let line_no = start_line + i;
         let role = format!("{:?}", m.role).to_lowercase();
         let text = content_preview(m);
-        body.push_str(&format!(
+        user.push_str(&format!(
             "L{} [{}] {}/{} ({}): {}\n",
             line_no,
             m.ts.format("%H:%M:%S"),
@@ -117,7 +123,7 @@ fn render_prompt(chunk: &Chunk) -> String {
             text,
         ));
     }
-    body
+    (system, user)
 }
 
 fn content_preview(m: &Message) -> String {
@@ -265,6 +271,29 @@ mod tests {
             meta: serde_json::Value::Null,
             refs: vec![],
         }
+    }
+
+    #[test]
+    fn render_prompt_emits_system_and_user_separately() {
+        let msgs = vec![mk(0, "c1", "hello", Role::User)];
+        let chunk = Chunk {
+            messages: msgs.clone(),
+            token_count: 10,
+            span_range: (1, 1),
+        };
+        let (system, user) = render_prompt_split(&chunk);
+        assert!(
+            system.contains("quote-worthy"),
+            "system prompt should contain the fixed instruction prefix; got: {system:?}"
+        );
+        assert!(
+            !system.contains("Excerpt"),
+            "system prompt should NOT contain the per-chunk excerpt header; got: {system:?}"
+        );
+        assert!(
+            user.starts_with("Excerpt ("),
+            "user prompt should start with the per-chunk Excerpt header; got: {user:?}"
+        );
     }
 
     #[test]

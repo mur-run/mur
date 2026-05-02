@@ -853,6 +853,15 @@ enum ConversationsAction {
         #[arg(long)]
         max_months: Option<u32>,
     },
+    /// Aggregate LLM call telemetry into per-stage cost report.
+    CostReport {
+        /// Time range relative to now (e.g. `7d`, `30d`, `1h`) or RFC3339 timestamp.
+        #[arg(long, default_value = "7d")]
+        since: String,
+        /// Emit JSON instead of pretty table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1758,6 +1767,9 @@ async fn async_main() -> Result<()> {
                     },
                 )
                 .await?
+            }
+            ConversationsAction::CostReport { since, json } => {
+                cmd::conversations_cost_report::cmd_cost_report(&since, json, None).await?
             }
         },
         Commands::Deploy { action } => match action {

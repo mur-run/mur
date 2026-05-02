@@ -44,6 +44,20 @@ impl ChatBackend for MockBackend {
                 stop: req.stop.clone(),
             },
         };
+        // Mirror the legacy OllamaClient::generate fail-injection: when
+        // MUR_ABSTRACTIVE_MOCK_FAIL=timeout AND the request is the Stage 1b
+        // abstractive prompt, sleep long enough that the caller's
+        // tokio::time::timeout fires. Keeps the
+        // `mur_ask_stage_1b_soft_fails_gracefully` end-to-end test working
+        // after Stage 1b moved off OllamaClient onto ChatBackend.
+        let is_abstractive = req
+            .system
+            .map(|s| s.contains("You compress text for retrieval context"))
+            .unwrap_or(false);
+        if is_abstractive && std::env::var("MUR_ABSTRACTIVE_MOCK_FAIL").as_deref() == Ok("timeout")
+        {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        }
         let g_resp = crate::conversations::ollama::mock_generate(&g_req);
         Ok(ChatResponse {
             text: g_resp.response,

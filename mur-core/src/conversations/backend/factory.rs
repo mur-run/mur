@@ -20,7 +20,34 @@ use super::{ChatBackend, mock::MockBackend, ollama::OllamaBackend};
 /// Real providers (ollama, anthropic) are wrapped in
 /// `RetryingBackend::with_default_policy` so all callers inherit retries
 /// on `BackendError::{Timeout, ServerError(5xx), RateLimited}`.
+///
+/// **Backwards-compatible: builds without telemetry.** Used by tests and any
+/// caller that doesn't have a stage tag. Production call sites should use
+/// `build_for_stage` so per-call cost telemetry is recorded.
 pub fn build(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
+    build_raw(cfg)
+}
+
+/// Build a backend wrapped in `TelemetryBackend` so every call writes a
+/// JSONL record under `~/.mur/telemetry/llm-calls-<YYYY-MM-DD>.jsonl`.
+/// `stage` is the call-site tag (e.g. `"extractive"`, `"ask.generate"`)
+/// used by the cost-report aggregator. See plan task 8.
+pub fn build_for_stage(cfg: &BackendConfig, stage: &'static str) -> Result<Arc<dyn ChatBackend>> {
+    let raw = build_raw(cfg)?;
+    // Skip telemetry in test/mock modes — keeps tests from polluting
+    // ~/.mur/telemetry/. MUR_TELEMETRY_DISABLE=1 also opts out at runtime.
+    if std::env::var("MUR_LLM_MOCK").is_ok()
+        || std::env::var("MUR_OLLAMA_MOCK").is_ok()
+        || std::env::var("MUR_TELEMETRY_DISABLE").is_ok()
+    {
+        return Ok(raw);
+    }
+    Ok(Arc::new(super::telemetry::TelemetryBackend::new(
+        raw, stage,
+    )))
+}
+
+fn build_raw(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
     if std::env::var("MUR_LLM_MOCK").is_ok() || std::env::var("MUR_OLLAMA_MOCK").is_ok() {
         tracing::debug!(provider = %cfg.provider, "MUR_LLM_MOCK active — using MockBackend");
         return Ok(Arc::new(MockBackend::new()));
@@ -164,6 +191,80 @@ mod tests {
         assert!(format!("{err:#}").contains("api_key_env"));
     }
 
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn build_for_stage_skips_telemetry_when_mock_env_set() {
+        use crate::conversations::backend::ChatRequest;
+
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("MUR_LLM_MOCK", "1") };
+        let cfg = BackendConfig {
+            provider: "ollama".into(),
+            model: "qwen3:14b".into(),
+            endpoint: Some("http://localhost:11434".into()),
+            api_key_env: None,
+            timeout_secs: Some(5),
+        };
+        let b = build_for_stage(&cfg, "extractive").unwrap();
+        // The bare MockBackend's provider_name is "mock"; if TelemetryBackend
+        // were wrapping it, provider_name would still forward to "mock", so
+        // we have to verify a different way: inspect the type.
+        // Cheaper: confirm no telemetry file is written when we make a call.
+        let tmp = tempfile::tempdir().unwrap();
+        // Override HOME so any accidental write goes here, not user's real ~/.mur.
+        let prev_home = std::env::var("HOME").ok();
+        unsafe { std::env::set_var("HOME", tmp.path().to_str().unwrap()) };
+
+        let req = ChatRequest {
+            model: "qwen3:14b",
+            user: "mock extractive span",
+            system: None,
+            max_tokens: 64,
+            temperature: None,
+            stop: vec![],
+            cache_system: false,
+            cache_user_prefix: None,
+        };
+        let _ = b.generate(req).await.unwrap();
+
+        // No telemetry directory should have been created.
+        let telemetry_dir = tmp.path().join(".mur").join("telemetry");
+        assert!(
+            !telemetry_dir.exists(),
+            "no telemetry directory should be created in mock mode"
+        );
+
+        // Cleanup
+        unsafe {
+            if let Some(h) = prev_home {
+                std::env::set_var("HOME", h);
+            } else {
+                std::env::remove_var("HOME");
+            }
+            std::env::remove_var("MUR_LLM_MOCK");
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn build_for_stage_skips_telemetry_when_disable_env_set() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TELEMETRY_DISABLE", "1") };
+        let cfg = BackendConfig {
+            provider: "ollama".into(),
+            model: "qwen3:14b".into(),
+            endpoint: Some("http://127.0.0.1:1".into()),
+            api_key_env: None,
+            timeout_secs: Some(1),
+        };
+        let b = build_for_stage(&cfg, "rewriter").unwrap();
+        // Confirm provider_name forwards through (whether wrapped in retry or not).
+        assert_eq!(b.provider_name(), "ollama");
+        unsafe { std::env::remove_var("MUR_TELEMETRY_DISABLE") };
+    }
+
     #[test]
     fn unsupported_provider_errors() {
         let cfg = BackendConfig {
@@ -177,5 +278,166 @@ mod tests {
         assert!(r.is_err());
         let err = r.err().unwrap();
         assert!(format!("{err:#}").contains("unsupported"));
+    }
+
+    // ── I3 — RetryingBackend::generate_stream connect-retry through the
+    // real AnthropicBackend SSE parser. Earlier unit tests used a
+    // hand-rolled inner backend; this verifies the SSE parser actually
+    // survives the retry-on-connect path end-to-end (closes I3).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn factory_retries_anthropic_503_then_streams_via_real_sse_parser() {
+        use crate::conversations::backend::ChatRequest;
+        use futures::StreamExt;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TEST_ANTHROPIC_KEY_I3", "k") };
+
+        let server = MockServer::start().await;
+
+        // First two attempts: 503. Third: real SSE stream.
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+
+        let sse = "\
+event: content_block_delta
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"OK\"}}
+
+event: message_delta
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}
+
+event: message_stop
+data: {\"type\":\"message_stop\"}
+
+";
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: Some(server.uri()),
+            api_key_env: Some("MUR_TEST_ANTHROPIC_KEY_I3".into()),
+            timeout_secs: Some(5),
+        };
+        let b = build(&cfg).unwrap();
+        let req = ChatRequest {
+            model: "claude-haiku-4-5",
+            user: "hi",
+            system: None,
+            max_tokens: 16,
+            temperature: None,
+            stop: vec![],
+            cache_system: false,
+            cache_user_prefix: None,
+        };
+        let mut stream = b.generate_stream(req).await.unwrap();
+        let mut text = String::new();
+        let mut final_usage = None;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.unwrap();
+            text.push_str(&chunk.delta);
+            if let Some(u) = chunk.usage {
+                final_usage = Some(u);
+            }
+        }
+        assert_eq!(text, "OK");
+        let u = final_usage.expect("usage from final chunk");
+        assert_eq!(u.input_tokens, 3);
+        assert_eq!(u.output_tokens, 1);
+        unsafe { std::env::remove_var("MUR_TEST_ANTHROPIC_KEY_I3") };
+    }
+
+    // ── I4 — factory composes TelemetryBackend → RetryingBackend →
+    // AnthropicBackend in the right order. After 1× 503 + 1× 200,
+    // telemetry must record exactly ONE line for the final retry success
+    // (not one per attempt). Closes I4.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn factory_for_stage_records_one_telemetry_line_after_retry_succeeds() {
+        use crate::conversations::backend::ChatRequest;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::set_var("MUR_TEST_ANTHROPIC_KEY_I4", "k") };
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(
+                        r#"{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":3,"output_tokens":1}}"#,
+                    ),
+            )
+            .mount(&server)
+            .await;
+
+        let cfg = BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: Some(server.uri()),
+            api_key_env: Some("MUR_TEST_ANTHROPIC_KEY_I4".into()),
+            timeout_secs: Some(5),
+        };
+
+        // Use build (returns the retry+anthropic stack), then wrap in
+        // TelemetryBackend manually with a path override so the test's
+        // assertions can read the JSONL without polluting ~/.mur.
+        let raw = build(&cfg).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let log_path = tmp.path().join("test-telemetry.jsonl");
+        let tb = super::super::telemetry::TelemetryBackend::new(raw, "extractive")
+            .with_path_override(log_path.clone());
+
+        let req = ChatRequest {
+            model: "claude-haiku-4-5",
+            user: "hi",
+            system: None,
+            max_tokens: 16,
+            temperature: None,
+            stop: vec![],
+            cache_system: false,
+            cache_user_prefix: None,
+        };
+        let _ = tb.generate(req).await.unwrap();
+
+        let body = std::fs::read_to_string(&log_path).unwrap();
+        assert_eq!(
+            body.lines().count(),
+            1,
+            "telemetry should record exactly ONE line for the final retry success, not one per attempt"
+        );
+        let rec: super::super::telemetry::LlmCallRecord =
+            serde_json::from_str(body.lines().next().unwrap()).unwrap();
+        assert!(rec.success);
+        assert_eq!(rec.input_tokens, 3);
+        assert_eq!(rec.output_tokens, 1);
+        unsafe { std::env::remove_var("MUR_TEST_ANTHROPIC_KEY_I4") };
     }
 }

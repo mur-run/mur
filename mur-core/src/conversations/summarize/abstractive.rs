@@ -3,7 +3,7 @@
 
 use tracing::warn;
 
-use super::super::ollama::{GenerateOptions, GenerateRequest, OllamaClient};
+use super::super::backend::{ChatBackend, ChatRequest};
 use super::extractive::ExtractiveSpan;
 
 pub struct AbstractiveResult {
@@ -12,7 +12,7 @@ pub struct AbstractiveResult {
 }
 
 pub async fn summarize(
-    client: &OllamaClient,
+    backend: &dyn ChatBackend,
     model: &str,
     spans: &[ExtractiveSpan],
     date: chrono::NaiveDate,
@@ -24,24 +24,22 @@ pub async fn summarize(
             word_count: 6,
         };
     }
-    let prompt = render_prompt(spans, date, max_words);
-    let resp = client
-        .generate(GenerateRequest {
+    let (system, user) = render_prompt_split(spans, date, max_words);
+    let resp = backend
+        .generate(ChatRequest {
             model,
-            prompt: &prompt,
-            system: None,
-            stream: false,
-            options: GenerateOptions {
-                temperature: Some(0.2),
-                top_p: Some(0.9),
-                num_predict: Some(max_words * 2), // tokens > words; headroom
-                stop: vec![],
-            },
+            user: &user,
+            system: Some(&system),
+            max_tokens: max_words * 2, // tokens > words; headroom
+            temperature: Some(0.2),
+            stop: vec![],
+            cache_system: true,
+            cache_user_prefix: None,
         })
         .await;
     match resp {
         Ok(r) => {
-            let narrative = clean_output(&r.response);
+            let narrative = clean_output(&r.text);
             let word_count = narrative.split_whitespace().count();
             AbstractiveResult {
                 narrative: Some(narrative),
@@ -58,19 +56,28 @@ pub async fn summarize(
     }
 }
 
-fn render_prompt(spans: &[ExtractiveSpan], date: chrono::NaiveDate, max_words: u32) -> String {
+/// Split the day-narrative prompt into a fixed system instruction (cacheable
+/// across calls within a day) and a per-day user message (volatile).
+/// See P3 task 7 — caching wired even though the system prompt today is
+/// well below the 2048-token Haiku-4.5 minimum (spec §5.2). The hint is
+/// silently ignored by non-Anthropic backends.
+fn render_prompt_split(
+    spans: &[ExtractiveSpan],
+    date: chrono::NaiveDate,
+    max_words: u32,
+) -> (String, String) {
     let min_words = 150.min(max_words / 2);
-    let mut body = format!(
-        "You are summarizing one day ({}) of a developer's AI-assistant conversations into a \
-         narrative paragraph. Use ONLY information present in the spans below.\n\n\
+    let system = format!(
+        "You are summarizing one day of a developer's AI-assistant conversations into a \
+         narrative paragraph. Use ONLY information present in the spans provided.\n\n\
          Output: {}-{} words, first-person or neutral third-person, no bullet lists. \
          Reference each key point by its span index [N]. Do NOT invent details not in the spans. \
-         If spans conflict, note the conflict.\n\n\
-         Spans:\n",
-        date, min_words, max_words
+         If spans conflict, note the conflict.",
+        min_words, max_words
     );
+    let mut user = String::from("Spans:\n");
     for (i, s) in spans.iter().enumerate() {
-        body.push_str(&format!(
+        user.push_str(&format!(
             "[{}] {{{} {}/{} L{}}}: {}\n",
             i + 1,
             date,
@@ -80,8 +87,8 @@ fn render_prompt(spans: &[ExtractiveSpan], date: chrono::NaiveDate, max_words: u
             s.text,
         ));
     }
-    body.push_str("\nWrite the narrative.\n");
-    body
+    user.push_str("\nWrite the narrative.\n");
+    (system, user)
 }
 
 /// Rollup granularity for Phase 3.2.
@@ -112,29 +119,27 @@ pub struct RollupAbstractiveInput<'a> {
 }
 
 pub async fn rollup_narrative(
-    client: &crate::conversations::ollama::OllamaClient,
+    backend: &dyn ChatBackend,
     model: &str,
     input: &RollupAbstractiveInput<'_>,
     max_words: u32,
 ) -> AbstractiveResult {
     let prompt = render_rollup_prompt(input, max_words);
-    let resp = client
-        .generate(crate::conversations::ollama::GenerateRequest {
+    let resp = backend
+        .generate(ChatRequest {
             model,
-            prompt: &prompt,
+            user: &prompt,
             system: None,
-            stream: false,
-            options: crate::conversations::ollama::GenerateOptions {
-                temperature: Some(0.2),
-                top_p: Some(0.9),
-                num_predict: Some(max_words * 2),
-                stop: vec![],
-            },
+            max_tokens: max_words * 2,
+            temperature: Some(0.2),
+            stop: vec![],
+            cache_system: false,
+            cache_user_prefix: None,
         })
         .await;
     match resp {
         Ok(r) => {
-            let narrative = clean_output(&r.response);
+            let narrative = clean_output(&r.text);
             let word_count = narrative.split_whitespace().count();
             AbstractiveResult {
                 narrative: Some(narrative),
@@ -217,13 +222,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
     async fn empty_spans_emit_placeholder() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        let client = OllamaClient::new("http://unused", std::time::Duration::from_secs(1));
+        use crate::conversations::backend::mock::MockBackend;
+        let backend = MockBackend::new();
         let r = summarize(
-            &client,
+            &backend,
             "qwen3:14b",
             &[],
             chrono::NaiveDate::from_ymd_opt(2026, 4, 19).unwrap(),
@@ -231,18 +234,15 @@ mod tests {
         )
         .await;
         assert!(r.narrative.as_deref().unwrap().contains("No significant"));
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
     async fn mock_narrative_happy_path() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        let client = OllamaClient::new("http://unused", std::time::Duration::from_secs(1));
+        use crate::conversations::backend::mock::MockBackend;
+        let backend = MockBackend::new();
         let spans = vec![span(1, "hello world"), span(2, "compression works")];
         let r = summarize(
-            &client,
+            &backend,
             "qwen3:14b",
             &spans,
             chrono::NaiveDate::from_ymd_opt(2026, 4, 19).unwrap(),
@@ -256,7 +256,68 @@ mod tests {
                 .starts_with("Mock narrative")
         );
         assert!(r.word_count > 0);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn summarize_via_chat_backend_mock_returns_prose() {
+        use crate::conversations::backend::mock::MockBackend;
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        // MockBackend reuses ollama::mock_generate; we don't need MUR_OLLAMA_MOCK
+        // (it's a direct trait impl). Clear it to make sure we're hitting the
+        // backend path, not the legacy env-var fallback.
         unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        let backend = MockBackend::new();
+        let spans = vec![span(1, "hello world"), span(2, "compression works")];
+        let r = summarize(
+            &backend,
+            "qwen3:14b",
+            &spans,
+            chrono::NaiveDate::from_ymd_opt(2026, 4, 19).unwrap(),
+            400,
+        )
+        .await;
+        assert!(
+            r.narrative
+                .as_deref()
+                .unwrap()
+                .starts_with("Mock narrative")
+        );
+        assert!(r.word_count > 0);
+    }
+
+    #[tokio::test]
+    async fn rollup_narrative_via_chat_backend_mock_returns_prose() {
+        use crate::conversations::ask::HitInfo;
+        use crate::conversations::ask::retrieve::ResolvedHit;
+        use crate::conversations::backend::mock::MockBackend;
+        let backend = MockBackend::new();
+        let hits = vec![ResolvedHit {
+            layer: 0,
+            info: HitInfo {
+                layer: 0,
+                source: "cc".into(),
+                conv_id: "c1".into(),
+                date: chrono::NaiveDate::from_ymd_opt(2026, 4, 22).unwrap(),
+                score: 0.9,
+            },
+            snippet: "rollup test span".into(),
+            line_hint: Some(1),
+            span_index_in_summary: None,
+            vector: None,
+            compressed: None,
+        }];
+        let input = RollupAbstractiveInput {
+            kind: RollupKind::Week,
+            window_label: "2026-W17",
+            selected_spans: &hits,
+            prior_narratives: &[],
+        };
+        let r = rollup_narrative(&backend, "qwen3:14b", &input, 400).await;
+        // Mock returns "Mock narrative ..." for the rollup-style prompt.
+        assert!(r.narrative.is_some());
+        assert!(r.word_count > 0);
     }
 
     #[test]
@@ -265,17 +326,15 @@ mod tests {
         assert_eq!(clean_output(raw), "This is the narrative.");
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn placeholder_word_count_matches_string() {
         // Guard: the empty-day placeholder word_count must match its actual
         // whitespace split. Prior version hardcoded 5 vs the 6-word string
         // "No significant activity on this day."
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        let client = OllamaClient::new("http://unused", std::time::Duration::from_secs(1));
+        use crate::conversations::backend::mock::MockBackend;
+        let backend = MockBackend::new();
         let r = summarize(
-            &client,
+            &backend,
             "qwen3:14b",
             &[],
             chrono::NaiveDate::from_ymd_opt(2026, 4, 19).unwrap(),
@@ -288,49 +347,50 @@ mod tests {
             "word_count ({}) should equal split_whitespace count ({})",
             r.word_count, actual
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn rollup_narrative_week_returns_week_mock() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        let client = crate::conversations::ollama::OllamaClient::new(
-            "http://unused",
-            std::time::Duration::from_secs(1),
-        );
+        use crate::conversations::backend::mock::MockBackend;
+        let backend = MockBackend::new();
         let input = RollupAbstractiveInput {
             kind: RollupKind::Week,
             window_label: "2026-W16",
             selected_spans: &[],
             prior_narratives: &[],
         };
-        let r = rollup_narrative(&client, "qwen3:14b", &input, 500).await;
+        let r = rollup_narrative(&backend, "qwen3:14b", &input, 500).await;
         let n = r.narrative.expect("should have narrative");
         assert!(n.to_lowercase().contains("this week"), "got: {n}");
         assert!(r.word_count > 0);
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 
-    #[allow(clippy::await_holding_lock)]
+    #[test]
+    fn summarize_render_prompt_split_separates_system_and_user() {
+        let spans = vec![span(1, "hello world")];
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
+        let (system, user) = render_prompt_split(&spans, date, 400);
+        assert!(system.contains("summarizing one day"));
+        assert!(
+            !system.contains("Spans:"),
+            "system should not contain the per-day Spans block"
+        );
+        assert!(user.starts_with("Spans:"));
+        assert!(user.contains("hello world"));
+    }
+
     #[tokio::test]
     async fn rollup_narrative_month_returns_month_mock() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        let client = crate::conversations::ollama::OllamaClient::new(
-            "http://unused",
-            std::time::Duration::from_secs(1),
-        );
+        use crate::conversations::backend::mock::MockBackend;
+        let backend = MockBackend::new();
         let input = RollupAbstractiveInput {
             kind: RollupKind::Month,
             window_label: "2026-04",
             selected_spans: &[],
             prior_narratives: &[],
         };
-        let r = rollup_narrative(&client, "qwen3:14b", &input, 700).await;
+        let r = rollup_narrative(&backend, "qwen3:14b", &input, 700).await;
         let n = r.narrative.expect("should have narrative");
         assert!(n.to_lowercase().contains("this month"), "got: {n}");
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }
