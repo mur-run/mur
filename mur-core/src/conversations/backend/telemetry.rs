@@ -1,8 +1,6 @@
 //! Per-call cost telemetry: writes one JSONL record per LLM call to
 //! `~/.mur/telemetry/llm-calls-<YYYY-MM-DD>.jsonl`. See spec §11 + plan task 8.
 
-#![allow(dead_code)] // wired into call sites in the same task.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -46,16 +44,12 @@ impl TelemetryBackend {
         }
     }
 
+    /// Test-only path override; integration tests redirect telemetry writes
+    /// to a tempdir. Lib build sees no in-tree caller hence the allow.
+    #[allow(dead_code)]
     pub fn with_path_override(mut self, path: PathBuf) -> Self {
         self.log_path_override = Some(path);
         self
-    }
-
-    fn log_path(&self) -> PathBuf {
-        if let Some(p) = &self.log_path_override {
-            return p.clone();
-        }
-        default_log_path()
     }
 
     fn write_record(&self, rec: &LlmCallRecord) {
