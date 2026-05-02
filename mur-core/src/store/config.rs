@@ -55,8 +55,8 @@ pub fn save_config(config: &Config) -> Result<()> {
 #     Best value:    google/gemini-2.5-flash       ($0.15/$0.60 per 1M tokens)
 #
 #   Ollama (provider: ollama):
-#     Best quality:  qwen3:32b                     (free, needs 20GB+ RAM)
-#     Best value:    llama3.2:3b                    (free, needs 4GB RAM)
+#     Best quality:  gemma4:31b                    (free, needs 24GB+ RAM)
+#     Best value:    qwen3.5:4b                    (free, needs 4GB RAM)
 #
 #   Copy the exact model name into llm.model below.
 #
