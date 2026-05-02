@@ -89,6 +89,18 @@ pub fn staple_args(bundle: &Path) -> Vec<String> {
     ]
 }
 
+/// Build the argv vector for `spctl --assess --type execute --verbose=4 <bundle>`.
+/// Pure function — no IO.
+pub fn assess_args(bundle: &Path) -> Vec<String> {
+    vec![
+        "--assess".to_string(),
+        "--type".to_string(),
+        "execute".to_string(),
+        "--verbose=4".to_string(),
+        bundle.to_string_lossy().into_owned(),
+    ]
+}
+
 // BundleMode + EmbeddedMetadata moved to mur_common::bundle so the
 // reader (mur-agent-gui's bootstrap module) can never drift from
 // the writer (this file).
@@ -737,10 +749,30 @@ fn phase_10_staple(opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
     Ok(())
 }
 
-fn phase_11_assess(_opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
-    if cfg!(not(target_os = "macos")) {
+fn phase_11_assess(opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
+    if cfg!(not(target_os = "macos")) || opts.skip_notarize {
         return Ok(());
     }
+    // Skip when codesign was skipped — there's nothing for spctl
+    // to assess.
+    if std::env::var("MUR_APPLE_DEVELOPER_ID").is_err() {
+        return Ok(());
+    }
+    let bundle = locate_bundle()?;
+    let args = assess_args(&bundle);
+    let status = Command::new("spctl")
+        .args(&args)
+        .status()
+        .context("spawn spctl --assess")?;
+    if !status.success() {
+        bail!(
+            "spctl --assess rejected the bundle (exit={status}).\n\
+             Run manually for details: spctl --assess --type execute \
+             --verbose=4 {}",
+            bundle.display()
+        );
+    }
+    info!("phase 11 (assess) ok");
     Ok(())
 }
 
