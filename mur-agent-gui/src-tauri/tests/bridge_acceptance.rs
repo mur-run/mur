@@ -28,11 +28,7 @@ async fn watcher_to_event_latency_under_1s() {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let started = Instant::now();
-    std::fs::write(
-        dir.path().join("01HACCEPTANCE_001.md"),
-        FIXTURE,
-    )
-    .unwrap();
+    std::fs::write(dir.path().join("01HACCEPTANCE_001.md"), FIXTURE).unwrap();
     let _ev = tokio::time::timeout(Duration::from_millis(1000), rx.recv())
         .await
         .expect("must arrive within 1s")
