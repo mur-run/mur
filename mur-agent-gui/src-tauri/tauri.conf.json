@@ -46,7 +46,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "themes/**/*"
+      "themes/**/*",
+      "Resources/PrivacyInfo.xcprivacy"
     ],
     "macOS": {
       "minimumSystemVersion": "12.0",
