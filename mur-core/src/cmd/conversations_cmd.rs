@@ -431,6 +431,23 @@ pub async fn cmd_conversations_reindex(args: ReindexArgs) -> Result<()> {
     Ok(())
 }
 
+/// Collect the unique BackendConfigs across the four conversations call sites
+/// (compact.{extractive, abstractive}, ask.{backend, rewriter_backend}),
+/// dedup by (provider, model) so the same provider+model isn't probed twice.
+fn collect_backend_configs(
+    cfg: &mur_common::config::Config,
+) -> Vec<mur_common::config::BackendConfig> {
+    let mut backends = vec![
+        cfg.conversations.compact.synthesize_extractive_backend(),
+        cfg.conversations.compact.synthesize_abstractive_backend(),
+        cfg.conversations.ask.synthesize_backend(),
+        cfg.conversations.ask.synthesize_rewriter_backend(),
+    ];
+    backends.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
+    backends.dedup_by(|a, b| a.provider == b.provider && a.model == b.model);
+    backends
+}
+
 pub async fn cmd_conversations_doctor() -> Result<()> {
     println!("conversations doctor");
     let dirs = conversations::store::list_raw_dirs(None).unwrap_or_default();
@@ -506,6 +523,73 @@ pub async fn cmd_conversations_doctor() -> Result<()> {
         println!("  ✓ Ollama reachable at {endpoint}");
     } else {
         println!("  · Ollama not reachable at {endpoint} (compact + ask will degrade)");
+    }
+
+    // P1: Cloud provider probes (anthropic only for P1)
+    let backends = collect_backend_configs(&cfg);
+    let cloud_backends: Vec<_> = backends
+        .iter()
+        .filter(|b| b.provider == "anthropic")
+        .collect();
+    if cloud_backends.is_empty() {
+        println!("  · no cloud providers in active config (skipping cloud probes)");
+    } else {
+        for b in cloud_backends {
+            // Env-var check first
+            let key_env = match b.api_key_env.as_deref() {
+                Some(e) => e,
+                None => {
+                    println!(
+                        "  ✗ anthropic backend for {} has no api_key_env in config",
+                        b.model
+                    );
+                    continue;
+                }
+            };
+            let key = match std::env::var(key_env) {
+                Ok(v) if !v.is_empty() => {
+                    println!("  ✓ anthropic api_key_env {key_env} is set");
+                    v
+                }
+                _ => {
+                    println!("  ✗ anthropic api_key_env {key_env} is unset or empty");
+                    continue;
+                }
+            };
+            // Reachability + model-existence probe (2s timeout, non-fatal)
+            let endpoint = b.endpoint.as_deref().unwrap_or("https://api.anthropic.com");
+            let url = format!("{}/v1/models/{}", endpoint.trim_end_matches('/'), b.model);
+            let probe = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                reqwest::Client::new()
+                    .get(&url)
+                    .header("x-api-key", &key)
+                    .header("anthropic-version", "2023-06-01")
+                    .send(),
+            )
+            .await;
+            match probe {
+                Ok(Ok(r)) if r.status().is_success() => {
+                    println!("  ✓ anthropic model {} reachable at {endpoint}", b.model);
+                }
+                Ok(Ok(r)) => {
+                    println!(
+                        "  ✗ anthropic model {} returned {} at {endpoint}",
+                        b.model,
+                        r.status()
+                    );
+                }
+                Ok(Err(e)) => {
+                    println!("  ✗ anthropic probe for {} failed: {e}", b.model);
+                }
+                Err(_) => {
+                    println!(
+                        "  · anthropic probe for {} timed out at {endpoint} (2s)",
+                        b.model
+                    );
+                }
+            }
+        }
     }
 
     // Phase 2C: .history/ coverage — how many archived summary revisions + total bytes.
