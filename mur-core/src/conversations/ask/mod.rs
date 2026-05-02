@@ -2,7 +2,10 @@
 #![allow(dead_code)] // filled progressively across Tasks 19-25
 
 use mur_common::Source;
+use std::sync::Arc;
 use std::time::Duration;
+
+use crate::conversations::backend::ChatBackend;
 
 pub mod abstractive;
 pub mod cache;
@@ -29,7 +32,7 @@ pub struct Filters {
     pub min_score: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AskRequest {
     pub question: String,
     pub filters: Filters,
@@ -54,6 +57,11 @@ pub struct AskRequest {
     pub compress_enabled: bool,
     pub summarize_enabled: bool,
     pub summarize_model: Option<String>,
+    /// Optional pre-built backend for the answer-generation streaming call.
+    /// `None` = synthesize an Ollama backend from `endpoint` + `model` (the
+    /// legacy path). Construct via `factory::build(&ask_cfg.synthesize_backend())`
+    /// at the CLI/API call site to honor the per-stage `ask.backend` override.
+    pub answer_backend: Option<Arc<dyn ChatBackend>>,
 }
 
 /// Provenance marker for hit snippets that have been reduced before going
@@ -229,9 +237,27 @@ pub async fn ask_stream(
 
     let stage_1b_stats = prompt.stage_1b.as_ref().map(|s| s.to_stats());
 
-    // 4. Generate (streaming) with grounding filter
-    let endpoint = req.endpoint.clone();
+    // 4. Generate (streaming) with grounding filter.
+    //
+    // The answer backend is built via `factory::build` at the call site
+    // (cmd_ask) so per-stage `ask.backend` overrides reach us through
+    // `req.answer_backend`. When None (legacy callers / tests), synthesize
+    // an Ollama backend from `req.endpoint` + `req.timeout` — byte-identical
+    // to the pre-trait OllamaClient::new(&endpoint, timeout) behavior.
     let model = req.model.clone();
+    let answer_backend: Arc<dyn ChatBackend> = match req.answer_backend.clone() {
+        Some(b) => b,
+        None => {
+            let cfg = mur_common::config::BackendConfig {
+                provider: "ollama".into(),
+                model: model.clone(),
+                endpoint: Some(req.endpoint.clone()),
+                api_key_env: None,
+                timeout_secs: Some(req.timeout.as_secs()),
+            };
+            crate::conversations::backend::factory::build(&cfg)?
+        }
+    };
     let filter = if req.strict_citations {
         cite::GroundingFilter::new_strict(prompt.valid_citations.clone())
     } else {
@@ -240,12 +266,11 @@ pub async fn ask_stream(
     let tokens_in = prompt.tokens_est;
 
     let stream = match generate::stream_answer(
-        &endpoint,
+        answer_backend.as_ref(),
         &model,
         &prompt.system,
         &prompt.user,
         req.response_tokens as u32,
-        req.timeout,
     )
     .await
     {
@@ -572,6 +597,7 @@ mod tests {
             compress_enabled: true,
             summarize_enabled: true,
             summarize_model: None,
+            answer_backend: None,
         };
         // Empty index → should yield the "don't cover that" fallback.
         let resp = ask(req, Some(root)).await.unwrap();

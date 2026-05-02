@@ -10,7 +10,7 @@ use async_trait::async_trait;
 
 use crate::conversations::ollama::{GenerateOptions, GenerateRequest, OllamaClient};
 
-use super::{ChatBackend, ChatRequest, ChatResponse, ChatStream, Usage};
+use super::{ChatBackend, ChatChunk, ChatRequest, ChatResponse, ChatStream, Usage};
 
 pub struct OllamaBackend {
     client: OllamaClient,
@@ -53,11 +53,29 @@ impl ChatBackend for OllamaBackend {
         })
     }
 
-    async fn generate_stream(&self, _req: ChatRequest<'_>) -> Result<ChatStream> {
-        // P0: streaming through the trait is not yet wired. The existing
-        // OllamaClient::generate_stream is still used directly by ask::generate.
-        // This becomes real in P2 when ask::generate migrates onto the trait.
-        anyhow::bail!("OllamaBackend::generate_stream not wired in P0")
+    async fn generate_stream(&self, req: ChatRequest<'_>) -> Result<ChatStream> {
+        use crate::conversations::ollama::{GenerateOptions, GenerateRequest};
+        use futures::StreamExt;
+        let g_req = GenerateRequest {
+            model: req.model,
+            prompt: req.user,
+            system: req.system,
+            stream: true,
+            options: GenerateOptions {
+                temperature: req.temperature,
+                top_p: None,
+                num_predict: Some(req.max_tokens),
+                stop: req.stop.clone(),
+            },
+        };
+        let inner_stream = self.client.generate_stream(g_req).await?;
+        // Adapt the existing OllamaClient::generate_stream `Stream<Item = Result<String>>`
+        // to ChatStream `Stream<Item = Result<ChatChunk>>`. Ollama doesn't surface usage
+        // in its NDJSON stream (the final `done: true` line carries it but the existing
+        // client discards it), so usage stays None for streamed Ollama responses in P2.
+        // P3 may revisit if cost telemetry needs per-chunk usage from Ollama.
+        let chunks = inner_stream.map(|item| item.map(|delta| ChatChunk { delta, usage: None }));
+        Ok(Box::pin(chunks))
     }
 
     fn provider_name(&self) -> &'static str {
@@ -98,8 +116,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_stream_returns_unimplemented_error_in_p0() {
-        let b = OllamaBackend::new("http://127.0.0.1:1", Duration::from_millis(100));
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_stream_propagates_connection_failure() {
+        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        let b = OllamaBackend::new("http://127.0.0.1:1", Duration::from_millis(200));
         let req = ChatRequest {
             model: "qwen3:14b",
             system: None,
@@ -110,9 +132,19 @@ mod tests {
             cache_system: false,
             cache_user_prefix: None,
         };
-        let r = b.generate_stream(req).await;
-        assert!(r.is_err());
-        let err = r.err().unwrap();
-        assert!(format!("{err:#}").contains("not wired in P0"));
+        // generate_stream may return Err immediately OR return a stream that errors on first poll.
+        // Either is acceptable — the "unreachable endpoint" path doesn't have to fail at the
+        // same layer for both backends, just somewhere in the stream lifecycle.
+        match b.generate_stream(req).await {
+            Err(_) => { /* failed at connect — fine */ }
+            Ok(mut s) => {
+                use futures::StreamExt;
+                let first = s.next().await.expect("expected at least one stream item");
+                assert!(
+                    first.is_err(),
+                    "stream should yield an Err for unreachable endpoint"
+                );
+            }
+        }
     }
 }
