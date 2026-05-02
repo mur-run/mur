@@ -34,7 +34,10 @@ pub async fn run(args: ProactiveArgs) -> Result<()> {
     }
 }
 
-fn set_enabled(name: &str, enabled: bool) -> Result<()> {
+/// Public helper used by the GUI bridge (D5 / M5.6.2). Mirrors what
+/// `mur agent companion proactive {enable|disable}` does, minus the
+/// `println!` (callers that need a CLI-style notification can wrap).
+pub fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     let agent_home = agent_home_for(name)?;
     set_enabled_at(&agent_home.join("profile.yaml"), enabled)?;
     println!("companion.proactive.enabled = {enabled} (agent: {name})");
