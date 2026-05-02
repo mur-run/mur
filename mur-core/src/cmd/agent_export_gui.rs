@@ -51,6 +51,34 @@ pub struct ExportGuiOptions {
     pub skip_notarize: bool,
 }
 
+/// Apple notarytool credentials. Read from environment by
+/// `phase_9_notarize`; passed into the pure `notarize_args` helper
+/// so the helper itself is unit-testable without real creds.
+pub struct NotarizeCreds {
+    pub apple_id: String,
+    pub team_id: String,
+    pub password: String,
+}
+
+/// Build the argv vector for `xcrun notarytool submit ...`. Pure
+/// function — no IO. Tested in `mur-core/tests/agent_export_macos.rs`.
+pub fn notarize_args(zip_path: &Path, creds: &NotarizeCreds) -> Vec<String> {
+    vec![
+        "notarytool".to_string(),
+        "submit".to_string(),
+        zip_path.to_string_lossy().into_owned(),
+        "--apple-id".to_string(),
+        creds.apple_id.clone(),
+        "--team-id".to_string(),
+        creds.team_id.clone(),
+        "--password".to_string(),
+        creds.password.clone(),
+        "--wait".to_string(),
+        "--output-format".to_string(),
+        "json".to_string(),
+    ]
+}
+
 // BundleMode + EmbeddedMetadata moved to mur_common::bundle so the
 // reader (mur-agent-gui's bootstrap module) can never drift from
 // the writer (this file).
@@ -625,10 +653,53 @@ fn phase_9_notarize(opts: &ExportGuiOptions, _staging: &Path) -> Result<()> {
     if cfg!(not(target_os = "macos")) || opts.skip_notarize {
         return Ok(());
     }
-    if std::env::var("MUR_APPLE_NOTARY_KEY").is_err() {
+    // Triple-env contract: same skip-on-missing rule as phase_8.
+    // The notarize step needs the Apple ID, the team ID, and an
+    // app-specific password (Apple does not accept the user's
+    // primary password).  We expect:
+    //   MUR_APPLE_NOTARY_KEY    — app-specific password
+    //   MUR_APPLE_NOTARY_USER   — apple ID email
+    //   MUR_APPLE_TEAM_ID       — 10-char team ID
+    let Ok(password) = std::env::var("MUR_APPLE_NOTARY_KEY") else {
+        warn!("phase 9 (notarize) skipped: MUR_APPLE_NOTARY_KEY not set");
         return Ok(());
+    };
+    let apple_id = std::env::var("MUR_APPLE_NOTARY_USER")
+        .context("MUR_APPLE_NOTARY_USER (Apple ID email) required for notarization")?;
+    let team_id = std::env::var("MUR_APPLE_TEAM_ID")
+        .context("MUR_APPLE_TEAM_ID required for notarization")?;
+
+    let bundle = locate_bundle()?;
+    // notarytool wants a flat zip, not the .app directly.
+    let zip_path = bundle.with_extension("zip");
+    let zip_status = Command::new("ditto")
+        .args([
+            "-c",
+            "-k",
+            "--keepParent",
+            &bundle.to_string_lossy(),
+            &zip_path.to_string_lossy(),
+        ])
+        .status()
+        .context("spawn ditto for notarize zip")?;
+    if !zip_status.success() {
+        bail!("ditto zip failed (exit={zip_status})");
     }
-    warn!("phase 9 (notarize) recipe is stubbed for v1");
+
+    let creds = NotarizeCreds {
+        apple_id,
+        team_id,
+        password,
+    };
+    let args = notarize_args(&zip_path, &creds);
+    let status = Command::new("xcrun")
+        .args(&args)
+        .status()
+        .context("spawn xcrun notarytool submit")?;
+    if !status.success() {
+        bail!("notarytool submit failed (exit={status})");
+    }
+    info!("phase 9 (notarize) ok");
     Ok(())
 }
 

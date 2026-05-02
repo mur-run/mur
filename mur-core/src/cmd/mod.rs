@@ -1,7 +1,7 @@
 pub(crate) mod agent;
 pub mod agent_companion;
 pub mod agent_export;
-pub(crate) mod agent_export_gui;
+pub mod agent_export_gui;
 pub(crate) mod agent_rekey;
 pub(crate) mod community_cmd;
 pub(crate) mod context;
