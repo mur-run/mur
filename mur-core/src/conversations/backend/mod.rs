@@ -1,8 +1,6 @@
 //! ChatBackend trait and supporting types. See spec
 //! `docs/superpowers/specs/2026-05-01-cloud-llm-backend-design.md` §4.
 
-#![allow(dead_code)] // wired progressively across P0 tasks.
-
 pub mod anthropic;
 pub mod factory;
 pub mod gemini;
@@ -86,6 +84,7 @@ pub trait ChatBackend: Send + Sync {
     /// True when the backend honors `cache_system` / `cache_user_prefix`
     /// hints. False = hints are silently ignored. Default: false.
     /// AnthropicBackend overrides to true (P3+).
+    #[allow(dead_code)] // future-API contract; no caller queries it today
     fn supports_caching(&self) -> bool {
         false
     }
@@ -117,6 +116,8 @@ pub enum BackendError {
     },
 
     #[error("provider {provider} timed out after {seconds}s")]
+    #[allow(dead_code)]
+    // typed contract — reqwest timeouts currently land in Network{is_timeout()}
     Timeout {
         provider: &'static str,
         seconds: u64,

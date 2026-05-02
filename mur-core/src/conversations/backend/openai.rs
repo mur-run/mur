@@ -2,8 +2,6 @@
 //! providers (OpenRouter, Together, Fireworks, etc.) via `endpoint` override.
 //! Non-streaming only — see spec §5.x, plan task 2.
 
-#![allow(dead_code)] // wired into factory in P4 task 4.
-
 use std::time::Duration;
 
 use anyhow::Result;
@@ -13,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use super::{BackendError, ChatBackend, ChatRequest, ChatResponse, ChatStream, Usage};
 
 const DEFAULT_MAX_TOKENS: u32 = 4096;
-const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1";
 
 pub struct OpenAIBackend {
     endpoint: String,

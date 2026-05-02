@@ -3,8 +3,6 @@
 //! system_instruction + contents wire shape, usageMetadata for tokens.
 //! See P4 plan task 3.
 
-#![allow(dead_code)] // wired into factory in P4 task 4.
-
 use std::time::Duration;
 
 use anyhow::Result;
@@ -12,8 +10,6 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{BackendError, ChatBackend, ChatRequest, ChatResponse, ChatStream, Usage};
-
-const DEFAULT_ENDPOINT: &str = "https://generativelanguage.googleapis.com";
 
 pub struct GeminiBackend {
     endpoint: String,

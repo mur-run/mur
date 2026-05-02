@@ -3,8 +3,6 @@
 //!
 //! See spec §5.4 + §8.1.
 
-#![allow(dead_code)] // wired into more call sites across P1.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,6 +22,7 @@ use super::{ChatBackend, mock::MockBackend, ollama::OllamaBackend};
 /// **Backwards-compatible: builds without telemetry.** Used by tests and any
 /// caller that doesn't have a stage tag. Production call sites should use
 /// `build_for_stage` so per-call cost telemetry is recorded.
+#[allow(dead_code)] // used by tests/cli_conversations.rs (separate compilation unit)
 pub fn build(cfg: &BackendConfig) -> Result<Arc<dyn ChatBackend>> {
     build_raw(cfg)
 }

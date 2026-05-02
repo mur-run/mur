@@ -4,8 +4,6 @@
 //!
 //! See spec §5.3.
 
-#![allow(dead_code)] // wired by factory in Task 5.
-
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream;
