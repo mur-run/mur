@@ -123,10 +123,40 @@ impl ChatBackend for RetryingBackend {
         &self,
         req: ChatRequest<'_>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatChunk>> + Send>>> {
-        // P1: streaming is not used by any wired call site. Pass through.
-        // P2 will revisit retry semantics for streamed responses (mid-stream
-        // retry is a different beast — likely just propagate the error).
-        self.inner.generate_stream(req).await
+        // Retry the connect attempt only — mid-stream failures propagate.
+        // Mid-stream retry would re-send the prompt and silently waste tokens
+        // on a duplicate request. P3+ may revisit if telemetry shows this is
+        // a real problem.
+        let mut attempt: u32 = 0;
+        loop {
+            let req_clone = ChatRequest {
+                model: req.model,
+                system: req.system,
+                user: req.user,
+                max_tokens: req.max_tokens,
+                temperature: req.temperature,
+                stop: req.stop.clone(),
+                cache_system: req.cache_system,
+                cache_user_prefix: req.cache_user_prefix,
+            };
+            match self.inner.generate_stream(req_clone).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => match Self::should_retry(&e, attempt, &self.policy) {
+                    Some(delay) => {
+                        tracing::warn!(
+                            provider = self.inner.provider_name(),
+                            attempt = attempt + 1,
+                            max_attempts = self.policy.max_attempts,
+                            delay_secs = delay.as_secs(),
+                            "backend stream connect transient error: {e:#}, retrying"
+                        );
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                    }
+                    None => return Err(e),
+                },
+            }
+        }
     }
 
     fn provider_name(&self) -> &'static str {
@@ -292,5 +322,85 @@ mod tests {
         let backend = RetryingBackend::new(inner, policy);
         let _ = backend.generate(req()).await.unwrap();
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn generate_stream_retries_connect_then_succeeds() {
+        // Inner backend: fails generate_stream twice with ServerError(503),
+        // then succeeds with a single-chunk stream.
+        struct StreamFailNTimes {
+            fail_n: u32,
+            attempts: Arc<AtomicU32>,
+        }
+        #[async_trait]
+        impl ChatBackend for StreamFailNTimes {
+            async fn generate(&self, _: ChatRequest<'_>) -> Result<ChatResponse> {
+                anyhow::bail!("not used")
+            }
+            async fn generate_stream(&self, req: ChatRequest<'_>) -> Result<ChatStream> {
+                let n = self.attempts.fetch_add(1, Ordering::SeqCst);
+                if n < self.fail_n {
+                    return Err(BackendError::ServerError {
+                        provider: "test",
+                        status: 503,
+                    }
+                    .into());
+                }
+                let chunk = ChatChunk {
+                    delta: "hi".into(),
+                    usage: Some(Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_creation_input_tokens: 0,
+                        cache_read_input_tokens: 0,
+                        provider: "test",
+                        model: req.model.into(),
+                    }),
+                };
+                Ok(Box::pin(futures::stream::iter(vec![Ok(chunk)])))
+            }
+            fn provider_name(&self) -> &'static str {
+                "test"
+            }
+        }
+        let inner = Arc::new(StreamFailNTimes {
+            fail_n: 2,
+            attempts: Arc::new(AtomicU32::new(0)),
+        });
+        let attempts = inner.attempts.clone();
+        let backend = RetryingBackend::new(inner, fast_policy());
+        use futures::StreamExt;
+        let mut stream = backend.generate_stream(req()).await.unwrap();
+        let chunk = stream.next().await.unwrap().unwrap();
+        assert_eq!(chunk.delta, "hi");
+        assert_eq!(attempts.load(Ordering::SeqCst), 3); // 1 + 2 retries
+    }
+
+    #[tokio::test]
+    async fn generate_stream_does_not_retry_on_unauthorized_at_connect() {
+        struct AlwaysUnauthorized {
+            attempts: Arc<AtomicU32>,
+        }
+        #[async_trait]
+        impl ChatBackend for AlwaysUnauthorized {
+            async fn generate(&self, _: ChatRequest<'_>) -> Result<ChatResponse> {
+                anyhow::bail!("not used")
+            }
+            async fn generate_stream(&self, _: ChatRequest<'_>) -> Result<ChatStream> {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
+                Err(BackendError::Unauthorized { provider: "test" }.into())
+            }
+            fn provider_name(&self) -> &'static str {
+                "test"
+            }
+        }
+        let inner = Arc::new(AlwaysUnauthorized {
+            attempts: Arc::new(AtomicU32::new(0)),
+        });
+        let attempts = inner.attempts.clone();
+        let backend = RetryingBackend::new(inner, fast_policy());
+        let r = backend.generate_stream(req()).await;
+        assert!(r.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1); // No retries
     }
 }
