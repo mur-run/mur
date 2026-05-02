@@ -277,7 +277,7 @@ impl ChatBackend for AnthropicBackend {
                     }
                     match inner.next().await {
                         Some(Ok(bytes)) => match std::str::from_utf8(&bytes) {
-                            Ok(s) => buf.push_str(s),
+                            Ok(s) => buf.push_str(&s.replace("\r\n", "\n")),
                             Err(e) => {
                                 return Some((
                                     Err(BackendError::BadResponse {
@@ -300,6 +300,16 @@ impl ChatBackend for AnthropicBackend {
                             ));
                         }
                         None => {
+                            // EOF without `message_stop`. Salvage: parse any partial trailing
+                            // block to see if it carries a FinalUsage we'd otherwise lose.
+                            if !buf.trim().is_empty() {
+                                if let SseEvent::FinalUsage(u) = parse_sse_block(&buf, &model) {
+                                    final_usage = Some(u);
+                                }
+                                buf.clear();
+                            }
+                            // Emit final usage if we have it (from earlier message_delta or
+                            // the salvage above), else end cleanly.
                             if let Some(u) = final_usage.take() {
                                 return Some((
                                     Ok(ChatChunk {
@@ -785,6 +795,89 @@ data: {\"type\":\"message_stop\"}\n\
         assert_eq!(received.len(), 1);
         let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
         assert_eq!(body.get("stream").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[tokio::test]
+    async fn streaming_handles_crlf_block_separators() {
+        use futures::StreamExt;
+        let server = MockServer::start().await;
+        // Same body as happy-path but with \r\n line endings (some proxies emit CRLF).
+        let sse_body = "\
+event: content_block_delta\r\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\r\n\
+\r\n\
+event: message_delta\r\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}\r\n\
+\r\n\
+event: message_stop\r\n\
+data: {\"type\":\"message_stop\"}\r\n\
+\r\n";
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse_body),
+            )
+            .mount(&server)
+            .await;
+        let b = AnthropicBackend::new(&server.uri(), "k", Duration::from_secs(5));
+        let mut stream = b
+            .generate_stream(req("claude-haiku-4-5", "hi"))
+            .await
+            .unwrap();
+        let mut text = String::new();
+        let mut got_usage = false;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.unwrap();
+            text.push_str(&chunk.delta);
+            if chunk.usage.is_some() {
+                got_usage = true;
+            }
+        }
+        assert_eq!(text, "hi");
+        assert!(
+            got_usage,
+            "expected final usage chunk despite CRLF separators"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_salvages_final_usage_on_truncated_eof() {
+        use futures::StreamExt;
+        let server = MockServer::start().await;
+        // message_delta arrives but the closing \n\n and message_stop are missing
+        // (server cut connection mid-stream). The salvage path should still emit usage.
+        let sse_body = "\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"x\"}}\n\
+\n\
+event: message_delta\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":7,\"output_tokens\":2}}\n";
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse_body),
+            )
+            .mount(&server)
+            .await;
+        let b = AnthropicBackend::new(&server.uri(), "k", Duration::from_secs(5));
+        let mut stream = b
+            .generate_stream(req("claude-haiku-4-5", "hi"))
+            .await
+            .unwrap();
+        let mut final_usage = None;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.unwrap();
+            if let Some(u) = chunk.usage {
+                final_usage = Some(u);
+            }
+        }
+        let u = final_usage.expect("expected usage salvaged from truncated stream");
+        assert_eq!(u.input_tokens, 7);
+        assert_eq!(u.output_tokens, 2);
     }
 
     /// One real-API integration test gated on ANTHROPIC_API_KEY.
