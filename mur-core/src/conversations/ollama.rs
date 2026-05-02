@@ -291,6 +291,10 @@ pub(crate) fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
     } else if req
         .prompt
         .contains("Extract the 1-3 most informative spans")
+        || req
+            .system
+            .map(|s| s.contains("Extract the 1-3 most informative spans"))
+            .unwrap_or(false)
     {
         r#"[{"role":"user","conv_id":"mock","line_hint":1,"text":"mock extractive span"}]"#
             .to_string()
