@@ -1,18 +1,23 @@
 //! Detection + recommendation flow for the "All local" path in `mur init`.
 //!
 //! Detects which local LLM runtimes are present on the host
-//! (Ollama everywhere; MLX on Apple Silicon) and presents the user with
+//! (Ollama everywhere; oMLX on Apple Silicon) and presents the user with
 //! a curated, multilingual-friendly model menu for whichever backend
 //! they pick.
+//!
+//! oMLX (https://omlx.ai) is a native macOS inference server built on
+//! Apple's MLX framework. It serves an OpenAI-compatible HTTP API on
+//! `http://localhost:8000/v1` by default.
 
 use anyhow::Result;
 use std::io::{self, Write};
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalRuntimes {
     pub ollama_installed: bool,
     pub ollama_running: bool,
-    pub mlx_installed: bool,
+    pub omlx_installed: bool,
     pub apple_silicon: bool,
 }
 
@@ -71,7 +76,7 @@ pub const MLX_RECS: &[ModelRec] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalBackend {
     Ollama,
-    Mlx,
+    OMlx,
 }
 
 pub fn detect_local_runtimes() -> LocalRuntimes {
@@ -79,7 +84,7 @@ pub fn detect_local_runtimes() -> LocalRuntimes {
     LocalRuntimes {
         ollama_installed: which_exists("ollama"),
         ollama_running: ollama_running(),
-        mlx_installed: apple_silicon && mlx_installed(),
+        omlx_installed: apple_silicon && omlx_installed(),
         apple_silicon,
     }
 }
@@ -100,15 +105,18 @@ fn ollama_running() -> bool {
         .unwrap_or(false)
 }
 
-fn mlx_installed() -> bool {
-    if which_exists("mlx_lm.generate") || which_exists("mlx_lm.server") {
+/// oMLX is a native macOS app (https://omlx.ai). Look for the bundle in
+/// either the system or user Applications folder.
+fn omlx_installed() -> bool {
+    if Path::new("/Applications/oMLX.app").exists() {
         return true;
     }
-    std::process::Command::new("python3")
-        .args(["-c", "import mlx_lm"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    if let Some(home) = dirs::home_dir() {
+        if home.join("Applications/oMLX.app").exists() {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn print_runtime_summary(rt: &LocalRuntimes) {
@@ -121,10 +129,10 @@ pub fn print_runtime_summary(rt: &LocalRuntimes) {
         println!("  ✗ Ollama not installed");
     }
     if rt.apple_silicon {
-        if rt.mlx_installed {
-            println!("  ✓ MLX detected (Apple Silicon native)");
+        if rt.omlx_installed {
+            println!("  ✓ oMLX.app detected (Apple Silicon native)");
         } else {
-            println!("  ✗ MLX not installed (Apple Silicon supports it — `pip install mlx-lm`)");
+            println!("  ✗ oMLX.app not installed (Apple Silicon supports it — https://omlx.ai)");
         }
     }
 }
@@ -133,31 +141,31 @@ pub fn print_install_help(apple_silicon: bool) {
     println!();
     println!("  ⚠ No local LLM runtime detected.");
     if apple_silicon {
+        println!("    • oMLX:   https://omlx.ai  (Apple Silicon native, ~15-30% faster)");
         println!("    • Ollama: https://ollama.com");
-        println!("    • MLX:    pip install mlx-lm  (Apple Silicon native, ~15-30% faster)");
     } else {
         println!("    • Ollama: https://ollama.com");
     }
     println!("    Re-run `mur init` after installing.");
 }
 
-/// Pick the local backend. On Apple Silicon, MLX always wins when present
+/// Pick the local backend. On Apple Silicon, oMLX always wins when present
 /// (~15-30% faster, lower memory) — we don't waste a prompt on it. Returns
 /// `None` only when no runtime is installed.
 pub fn prompt_backend(rt: &LocalRuntimes) -> Result<Option<LocalBackend>> {
     print_runtime_summary(rt);
 
-    match (rt.ollama_installed, rt.mlx_installed) {
+    match (rt.ollama_installed, rt.omlx_installed) {
         (false, false) => {
             print_install_help(rt.apple_silicon);
             Ok(None)
         }
         (_, true) => {
-            // MLX available → always prefer it on Apple Silicon. To override,
-            // uninstall MLX or edit ~/.mur/config.yaml after init.
+            // oMLX available → always prefer it on Apple Silicon. To override,
+            // edit ~/.mur/config.yaml after init.
             println!();
-            println!("  → Using MLX (Apple Silicon native).");
-            Ok(Some(LocalBackend::Mlx))
+            println!("  → Using oMLX (Apple Silicon native).");
+            Ok(Some(LocalBackend::OMlx))
         }
         (true, false) => Ok(Some(LocalBackend::Ollama)),
     }
