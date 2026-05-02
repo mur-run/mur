@@ -14,6 +14,7 @@ import { DropOverlay } from "./multimodal/DropOverlay";
 import { Thumbnails } from "./multimodal/Thumbnails";
 import { multimodalDrop, multimodalPaste } from "./multimodal/api";
 import type { MultimodalArtifact } from "./multimodal/types";
+import { CompanionSidebar } from "./companion/CompanionSidebar";
 import {
   setTheme as setThemeApi,
   getDefaultTheme,
@@ -199,6 +200,7 @@ export default function App() {
         {tab === "permissions" && <PermissionsTab />}
         {tab === "identity" && <IdentityTab />}
       </main>
+      <CompanionSidebar agent={agent} />
       <DropOverlay />
       <PttButton
         onTranscript={(text) => {
