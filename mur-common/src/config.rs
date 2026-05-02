@@ -146,6 +146,44 @@ impl Default for LlmConfig {
     }
 }
 
+/// Backend selection for a single chat-completion call site.
+///
+/// Per spec §6 of cloud-LLM-backend design. Used by `CompactConfig`
+/// (per-stage) and `AskConfig` (per-stage) to override the legacy
+/// Ollama-only path. None of the `Option` fields are required;
+/// resolution falls back to provider defaults
+/// (ollama: http://localhost:11434, anthropic: https://api.anthropic.com).
+///
+/// Stays in mur-common (not mur-core) because it is pure data and
+/// will be reused by mur-agent-runtime in a future phase.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct BackendConfig {
+    /// "ollama" | "anthropic". Defaults to "ollama" for backward compat.
+    pub provider: String,
+    /// Model name as the provider sees it ("claude-haiku-4-5", "qwen3:14b", …).
+    pub model: String,
+    /// Provider endpoint. None = provider default
+    /// (ollama: http://localhost:11434, anthropic: https://api.anthropic.com).
+    pub endpoint: Option<String>,
+    /// Env var holding the API key. None = no auth (ollama).
+    pub api_key_env: Option<String>,
+    /// Per-call timeout in seconds. None = 120s.
+    pub timeout_secs: Option<u64>,
+}
+
+impl Default for BackendConfig {
+    fn default() -> Self {
+        Self {
+            provider: "ollama".into(),
+            model: "qwen3:14b".into(),
+            endpoint: None,
+            api_key_env: None,
+            timeout_secs: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetrievalConfig {
     /// Max patterns to inject per query
@@ -352,6 +390,38 @@ pub struct AskConfig {
     pub summarize_hits_enabled: bool,
     #[serde(default)]
     pub summarize_model: Option<String>,
+    /// Per-stage backend override for the answer-generation model.
+    /// None = synthesize from legacy `model` + `ollama_endpoint`.
+    #[serde(default)]
+    pub backend: Option<BackendConfig>,
+    /// Per-stage backend override for the query rewriter.
+    /// None = falls back to `synthesize_backend()` (rewriter shares the
+    /// answer model in the legacy path).
+    #[serde(default)]
+    pub rewriter_backend: Option<BackendConfig>,
+}
+
+impl AskConfig {
+    /// Returns the effective backend for the answer-generation model.
+    /// Per-stage `backend` override wins; otherwise synthesize from legacy
+    /// fields (`model`, `ollama_endpoint`) into an Ollama BackendConfig.
+    pub fn synthesize_backend(&self) -> BackendConfig {
+        self.backend.clone().unwrap_or_else(|| BackendConfig {
+            provider: "ollama".into(),
+            model: self.model.clone(),
+            endpoint: Some(self.ollama_endpoint.clone()),
+            api_key_env: None,
+            timeout_secs: None,
+        })
+    }
+
+    /// Returns the effective backend for the query rewriter.
+    /// Falls back to `synthesize_backend()` if no rewriter override.
+    pub fn synthesize_rewriter_backend(&self) -> BackendConfig {
+        self.rewriter_backend
+            .clone()
+            .unwrap_or_else(|| self.synthesize_backend())
+    }
 }
 
 impl Default for AskConfig {
@@ -372,6 +442,8 @@ impl Default for AskConfig {
             compress_hits_enabled: ask_default_compress_hits_enabled(),
             summarize_hits_enabled: ask_default_summarize_hits_enabled(),
             summarize_model: None,
+            backend: None,
+            rewriter_backend: None,
         }
     }
 }
@@ -494,6 +566,44 @@ pub struct CompactConfig {
     pub history_retain: u32,
     #[serde(default = "compact_default_cron")]
     pub daemon_cron: String,
+    /// Per-stage backend override for extractive summarization.
+    /// None = synthesize from legacy `extractive_model` + `ollama_endpoint`.
+    #[serde(default)]
+    pub extractive_backend: Option<BackendConfig>,
+    /// Per-stage backend override for abstractive summarization.
+    /// None = synthesize from legacy `abstractive_model` + `ollama_endpoint`.
+    #[serde(default)]
+    pub abstractive_backend: Option<BackendConfig>,
+}
+
+impl CompactConfig {
+    /// Returns the effective backend for the extractive stage.
+    /// Per-stage `extractive_backend` override wins; otherwise synthesize
+    /// from legacy fields into an Ollama BackendConfig.
+    pub fn synthesize_extractive_backend(&self) -> BackendConfig {
+        self.extractive_backend
+            .clone()
+            .unwrap_or_else(|| BackendConfig {
+                provider: "ollama".into(),
+                model: self.extractive_model.clone(),
+                endpoint: Some(self.ollama_endpoint.clone()),
+                api_key_env: None,
+                timeout_secs: None,
+            })
+    }
+
+    /// Returns the effective backend for the abstractive stage.
+    pub fn synthesize_abstractive_backend(&self) -> BackendConfig {
+        self.abstractive_backend
+            .clone()
+            .unwrap_or_else(|| BackendConfig {
+                provider: "ollama".into(),
+                model: self.abstractive_model.clone(),
+                endpoint: Some(self.ollama_endpoint.clone()),
+                api_key_env: None,
+                timeout_secs: None,
+            })
+    }
 }
 
 impl Default for CompactConfig {
@@ -509,6 +619,8 @@ impl Default for CompactConfig {
             chunk_tokens: compact_default_chunk_tokens(),
             history_retain: compact_default_history_retain(),
             daemon_cron: compact_default_cron(),
+            extractive_backend: None,
+            abstractive_backend: None,
         }
     }
 }
@@ -916,5 +1028,162 @@ embedding:
         let c: Config = serde_yaml::from_str(yaml).expect("parses");
         assert_eq!(c.storage.vector_backend, "lancedb");
         assert_eq!(c.sources_global.max_parallel_sources, 3);
+    }
+}
+
+#[cfg(test)]
+mod backend_config_tests {
+    use super::*;
+
+    #[test]
+    fn default_is_ollama_qwen3() {
+        let cfg = BackendConfig::default();
+        assert_eq!(cfg.provider, "ollama");
+        assert_eq!(cfg.model, "qwen3:14b");
+        assert_eq!(cfg.endpoint, None);
+        assert_eq!(cfg.api_key_env, None);
+        assert_eq!(cfg.timeout_secs, None);
+    }
+
+    #[test]
+    fn deserializes_anthropic_full() {
+        let yaml = "\
+provider: anthropic
+model: claude-haiku-4-5
+api_key_env: ANTHROPIC_API_KEY
+timeout_secs: 60
+";
+        let cfg: BackendConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.provider, "anthropic");
+        assert_eq!(cfg.model, "claude-haiku-4-5");
+        assert_eq!(cfg.api_key_env, Some("ANTHROPIC_API_KEY".into()));
+        assert_eq!(cfg.timeout_secs, Some(60));
+        assert_eq!(cfg.endpoint, None);
+    }
+
+    #[test]
+    fn deserializes_partial_fills_defaults() {
+        let yaml = "provider: anthropic\nmodel: claude-sonnet-4-6\n";
+        let cfg: BackendConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.provider, "anthropic");
+        assert_eq!(cfg.model, "claude-sonnet-4-6");
+        assert_eq!(cfg.api_key_env, None);
+        assert_eq!(cfg.timeout_secs, None);
+    }
+
+    #[test]
+    fn round_trips_through_yaml() {
+        let original = BackendConfig {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            endpoint: Some("https://api.anthropic.com".into()),
+            api_key_env: Some("ANTHROPIC_API_KEY".into()),
+            timeout_secs: Some(60),
+        };
+        let yaml = serde_yaml::to_string(&original).unwrap();
+        let parsed: BackendConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed, original);
+    }
+}
+
+#[cfg(test)]
+mod per_stage_backend_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_compact_config_has_no_per_stage_overrides() {
+        let yaml = "\
+extractive_model: qwen3:14b
+abstractive_model: qwen3:14b
+ollama_endpoint: http://localhost:11434
+";
+        let cfg: CompactConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.extractive_backend.is_none());
+        assert!(cfg.abstractive_backend.is_none());
+        assert_eq!(cfg.extractive_model, "qwen3:14b");
+        assert_eq!(cfg.abstractive_model, "qwen3:14b");
+        assert_eq!(cfg.ollama_endpoint, "http://localhost:11434");
+    }
+
+    #[test]
+    fn legacy_ask_config_has_no_per_stage_overrides() {
+        let yaml = "model: qwen3:14b\nollama_endpoint: http://localhost:11434\n";
+        let cfg: AskConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.backend.is_none());
+        assert!(cfg.rewriter_backend.is_none());
+        assert_eq!(cfg.model, "qwen3:14b");
+    }
+
+    #[test]
+    fn compact_extractive_backend_override_parses() {
+        let yaml = "\
+extractive_backend:
+  provider: anthropic
+  model: claude-haiku-4-5
+  api_key_env: ANTHROPIC_API_KEY
+abstractive_model: qwen3:14b
+";
+        let cfg: CompactConfig = serde_yaml::from_str(yaml).unwrap();
+        let extractive = cfg
+            .extractive_backend
+            .as_ref()
+            .expect("override should parse");
+        assert_eq!(extractive.provider, "anthropic");
+        assert_eq!(extractive.model, "claude-haiku-4-5");
+        assert!(cfg.abstractive_backend.is_none());
+    }
+
+    #[test]
+    fn ask_rewriter_backend_can_override_to_local_while_answer_is_cloud() {
+        let yaml = "\
+backend:
+  provider: anthropic
+  model: claude-sonnet-4-6
+  api_key_env: ANTHROPIC_API_KEY
+rewriter_backend:
+  provider: ollama
+  model: llama3.2:3b
+";
+        let cfg: AskConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.backend.as_ref().unwrap().provider, "anthropic");
+        assert_eq!(cfg.rewriter_backend.as_ref().unwrap().provider, "ollama");
+    }
+
+    #[test]
+    fn synthesize_legacy_to_backend_config_for_compact_extractive() {
+        let yaml = "\
+extractive_model: qwen3:14b
+ollama_endpoint: http://192.168.1.10:11434
+";
+        let cfg: CompactConfig = serde_yaml::from_str(yaml).unwrap();
+        let synth = cfg.synthesize_extractive_backend();
+        assert_eq!(synth.provider, "ollama");
+        assert_eq!(synth.model, "qwen3:14b");
+        assert_eq!(synth.endpoint.as_deref(), Some("http://192.168.1.10:11434"));
+        assert_eq!(synth.api_key_env, None);
+    }
+
+    #[test]
+    fn synthesize_legacy_to_backend_config_for_ask() {
+        let yaml = "model: qwen3:14b\nollama_endpoint: http://localhost:11434\n";
+        let cfg: AskConfig = serde_yaml::from_str(yaml).unwrap();
+        let synth = cfg.synthesize_backend();
+        assert_eq!(synth.provider, "ollama");
+        assert_eq!(synth.model, "qwen3:14b");
+        assert_eq!(synth.endpoint.as_deref(), Some("http://localhost:11434"));
+    }
+
+    #[test]
+    fn synthesize_rewriter_falls_back_to_answer_backend_when_unset() {
+        let yaml = "\
+backend:
+  provider: anthropic
+  model: claude-sonnet-4-6
+  api_key_env: ANTHROPIC_API_KEY
+";
+        let cfg: AskConfig = serde_yaml::from_str(yaml).unwrap();
+        let rewriter = cfg.synthesize_rewriter_backend();
+        assert_eq!(rewriter.provider, "anthropic");
+        assert_eq!(rewriter.model, "claude-sonnet-4-6");
     }
 }

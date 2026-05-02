@@ -90,12 +90,25 @@ pub async fn compact_day(
         });
     }
 
-    // Chunk + extract per chunk
+    // Chunk + extract per chunk.
+    //
+    // P1 canary: extractive uses the new ChatBackend trait via factory::build,
+    // so users can override `compact.extractive_backend` in config.yaml to
+    // route extractive summarization through Anthropic instead of local Ollama.
+    // Abstractive (below) stays on OllamaClient until P2 migrates it.
+    let extractive_cfg = cfg.synthesize_extractive_backend();
+    let extractive_backend = crate::conversations::backend::factory::build(&extractive_cfg)?;
     let client = OllamaClient::new(&cfg.ollama_endpoint, std::time::Duration::from_secs(120));
     let chunks = chunker::chunk_day(&msgs, cfg.chunk_tokens as usize);
     let mut all_spans = Vec::new();
     for chunk in &chunks {
-        let spans = extractive::extract_chunk(&client, &cfg.extractive_model, chunk, &msgs).await?;
+        let spans = extractive::extract_chunk(
+            extractive_backend.as_ref(),
+            &extractive_cfg.model,
+            chunk,
+            &msgs,
+        )
+        .await?;
         all_spans.extend(spans);
     }
 
