@@ -68,6 +68,7 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
     }
 }
 
+pub mod card;
 mod content;
 mod inbox;
 pub mod init;
