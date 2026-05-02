@@ -4,7 +4,7 @@
 //! via `mur_root() / agents / <name> / companion / inbox`. The
 //! `_inner` helpers exist so unit tests don't need a Tauri runtime.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -158,4 +158,45 @@ pub async fn set_unread_badge(app: tauri::AppHandle, count: u32) -> Result<(), S
     };
     window.set_badge_count(value).map_err(|e| format!("{e}"))?;
     Ok(())
+}
+
+// ── Ack ──────────────────────────────────────────────────────────────────────
+
+/// Inner helper — testable. Rewrites the trailing
+/// `>>> response: <unset>` line to `>>> response: <signal>` atomically
+/// (write to .tmp + rename). The runtime's outbox loop picks the new
+/// value up next time it scans the inbox dir.
+///
+/// Atomicity: the .tmp + rename pattern guarantees that a reader
+/// either sees the old file or the new file — never a partially-written
+/// state. This matters because the watcher's parse_inbox_md runs on
+/// every Modify event and would error out on a torn write.
+///
+/// `#[allow(dead_code)]`: this is exercised by `tests/bridge_ack.rs`
+/// (a separate test crate) but the bin/lib targets see it as unused
+/// (the production path goes through the `companion_ack` Tauri
+/// command directly).
+#[allow(dead_code)]
+pub fn companion_ack_inner(home: &Path, agent: &str, msg_id: &str, signal: &str) -> Result<()> {
+    if !matches!(signal, "good" | "bad" | "dismiss") {
+        anyhow::bail!("unknown signal `{signal}` (must be good|bad|dismiss)");
+    }
+    let path = agent_inbox(home, agent).join(format!("{msg_id}.md"));
+    let body = std::fs::read_to_string(&path)
+        .with_context(|| format!("read {} (msg_id={msg_id})", path.display()))?;
+    let marker = ">>> response:";
+    let (head, _) = body
+        .rsplit_once(marker)
+        .ok_or_else(|| anyhow::anyhow!("missing response marker in {}", path.display()))?;
+    let new = format!("{head}{marker} {signal}");
+    let tmp = path.with_extension("md.tmp");
+    std::fs::write(&tmp, new).context("write .tmp")?;
+    std::fs::rename(&tmp, &path).context("rename .tmp -> .md")?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn companion_ack(agent: String, msg_id: String, signal: String) -> Result<(), String> {
+    let home = mur_core::paths::mur_root(None);
+    companion_ack_inner(&home, &agent, &msg_id, &signal).map_err(|e| format!("{e:#}"))
 }
