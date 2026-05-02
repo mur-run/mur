@@ -13,7 +13,7 @@ use mur_common::{Content, Message, Role, Source};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::super::ollama::{GenerateOptions, GenerateRequest, OllamaClient};
+use super::super::backend::{ChatBackend, ChatRequest};
 use super::chunker::Chunk;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -35,28 +35,26 @@ struct LlmSpan {
 }
 
 pub async fn extract_chunk(
-    client: &OllamaClient,
+    backend: &dyn ChatBackend,
     model: &str,
     chunk: &Chunk,
     day_msgs: &[Message],
 ) -> Result<Vec<ExtractiveSpan>> {
     let prompt = render_prompt(chunk);
-    let resp = client
-        .generate(GenerateRequest {
+    let resp = backend
+        .generate(ChatRequest {
             model,
-            prompt: &prompt,
+            user: &prompt,
             system: None,
-            stream: false,
-            options: GenerateOptions {
-                temperature: Some(0.0),
-                top_p: Some(0.9),
-                num_predict: Some(1024),
-                stop: vec![],
-            },
+            max_tokens: 1024,
+            temperature: Some(0.0),
+            stop: vec![],
+            cache_system: false,
+            cache_user_prefix: None,
         })
         .await;
     let body = match resp {
-        Ok(r) => r.response,
+        Ok(r) => r.text,
         Err(e) => {
             warn!("extractive LLM call failed: {e:#}");
             return Ok(Vec::new());
@@ -363,21 +361,22 @@ That's all."#;
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn mock_ollama_extracts_one_span() {
+    async fn mock_backend_extracts_one_span() {
+        use crate::conversations::backend::mock::MockBackend;
         let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        let client = OllamaClient::new("http://unused", std::time::Duration::from_secs(1));
+        // MockBackend reuses ollama::mock_generate's pattern dispatch;
+        // the legacy MUR_OLLAMA_MOCK env var still selects it via factory.
+        let backend = MockBackend::new();
         let msgs = vec![mk(0, "mock", "mock extractive span", Role::User)];
         let chunk = Chunk {
             messages: msgs.clone(),
             token_count: 10,
             span_range: (1, 1),
         };
-        let spans = extract_chunk(&client, "qwen3:14b", &chunk, &msgs)
+        let spans = extract_chunk(&backend, "qwen3:14b", &chunk, &msgs)
             .await
             .unwrap();
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].text, "mock extractive span");
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
     }
 }
