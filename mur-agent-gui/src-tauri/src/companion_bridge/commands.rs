@@ -200,3 +200,55 @@ pub async fn companion_ack(agent: String, msg_id: String, signal: String) -> Res
     let home = mur_core::paths::mur_root(None);
     companion_ack_inner(&home, &agent, &msg_id, &signal).map_err(|e| format!("{e:#}"))
 }
+
+// ── Why-did-you-message ──────────────────────────────────────────────────────
+
+/// Inner helper — testable. Reads `<home>/agents/<agent>/companion/outbox-ledger`
+/// (a JSONL file) and returns every line whose JSON contains
+/// `"id":"<msg_id>"`. Order: append order (== chronological).
+///
+/// We intentionally do a substring match (not full JSON parse + filter)
+/// because the ledger uses `#[serde(tag = "event")]` adjacent encoding —
+/// every event variant carries the `id` at top level. A future schema
+/// change would need to revisit this. The cheap-substring path keeps
+/// the GUI from depending on the runtime's `OutboxEvent` enum and
+/// tolerates ledger-format extensions gracefully.
+///
+/// `#[allow(dead_code)]`: this is exercised by `tests/bridge_why.rs`
+/// (a separate test crate) but the bin/lib targets see it as unused
+/// (the production path goes through the `companion_why` Tauri command).
+#[allow(dead_code)]
+pub fn companion_why_inner(
+    home: &Path,
+    agent: &str,
+    msg_id: &str,
+) -> Result<Vec<serde_json::Value>> {
+    let ledger = home
+        .join("agents")
+        .join(agent)
+        .join("companion/outbox-ledger");
+    if !ledger.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    let body =
+        std::fs::read_to_string(&ledger).with_context(|| format!("read {}", ledger.display()))?;
+    let needle = format!("\"id\":\"{msg_id}\"");
+    for line in body.lines() {
+        if line.contains(&needle)
+            && let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
+        {
+            out.push(v);
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn companion_why(
+    agent: String,
+    msg_id: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    let home = mur_core::paths::mur_root(None);
+    companion_why_inner(&home, &agent, &msg_id).map_err(|e| format!("{e:#}"))
+}
