@@ -75,6 +75,7 @@ serde_jcs = "0.2"
 ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8"] }
 bs58 = "0.5"
 base64 = "0.22"          # cmd::agent_companion::card::png chara/ccv3 chunk decode
+ulid = { workspace = true }  # cmd::agent_companion::card::import inbox id
 
 [features]
 default = ["cli", "server", "sources"]
