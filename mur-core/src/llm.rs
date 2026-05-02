@@ -3,6 +3,12 @@
 //! Reads [`LlmConfig`] from `~/.mur/config.yaml` and dispatches completion
 //! requests to the configured provider: Anthropic, OpenAI, Gemini, Ollama,
 //! or any OpenAI-compatible endpoint (e.g. OpenRouter via `openai_url`).
+//!
+//! NOTE (P4 Task 8 → Task 9): all callers have migrated to the
+//! `conversations::backend::ChatBackend` trait. This entire module is
+//! orphaned and is deleted in Task 9. The `dead_code` allow below silences
+//! the transitional warning between commits.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use mur_common::config::LlmConfig;
