@@ -168,13 +168,20 @@ pub async fn rollup_week(
         selected.truncate(cfg.max_extractive_spans_per_week as usize);
     }
 
-    // Abstractive
-    let client = crate::conversations::ollama::OllamaClient::new(
-        &cfg.ollama_endpoint,
-        std::time::Duration::from_secs(120),
-    );
+    // Abstractive (P3 migration: trait-based). RollupConfig has no per-stage
+    // backend override field today, so we synthesize the legacy ollama config
+    // inline. Adding rollup-specific routing is a defensible follow-up but
+    // explicitly out of scope for P3.
+    let abstractive_cfg = mur_common::config::BackendConfig {
+        provider: "ollama".into(),
+        model: cfg.abstractive_model.clone(),
+        endpoint: Some(cfg.ollama_endpoint.clone()),
+        api_key_env: None,
+        timeout_secs: Some(120),
+    };
+    let abstractive_backend = crate::conversations::backend::factory::build(&abstractive_cfg)?;
     let abstractive = super::abstractive::rollup_narrative(
-        &client,
+        abstractive_backend.as_ref(),
         &cfg.abstractive_model,
         &RollupAbstractiveInput {
             kind: RollupKind::Week,
@@ -410,12 +417,18 @@ pub async fn rollup_month(
         selected.truncate(cfg.max_extractive_spans_per_month as usize);
     }
 
-    let client = crate::conversations::ollama::OllamaClient::new(
-        &cfg.ollama_endpoint,
-        std::time::Duration::from_secs(120),
-    );
+    // Abstractive (P3 migration: trait-based). See week-rollup site above for
+    // why we synthesize the BackendConfig inline.
+    let abstractive_cfg = mur_common::config::BackendConfig {
+        provider: "ollama".into(),
+        model: cfg.abstractive_model.clone(),
+        endpoint: Some(cfg.ollama_endpoint.clone()),
+        api_key_env: None,
+        timeout_secs: Some(120),
+    };
+    let abstractive_backend = crate::conversations::backend::factory::build(&abstractive_cfg)?;
     let abstractive = super::abstractive::rollup_narrative(
-        &client,
+        abstractive_backend.as_ref(),
         &cfg.abstractive_model,
         &RollupAbstractiveInput {
             kind: RollupKind::Month,
