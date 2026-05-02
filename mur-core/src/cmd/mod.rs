@@ -6,6 +6,7 @@ pub(crate) mod agent_rekey;
 pub(crate) mod community_cmd;
 pub(crate) mod context;
 pub(crate) mod conversations_cmd;
+pub mod conversations_cost_report;
 pub(crate) mod deploy;
 pub(crate) mod doctor;
 pub(crate) mod drafts;
