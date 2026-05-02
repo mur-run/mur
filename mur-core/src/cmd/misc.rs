@@ -101,7 +101,7 @@ pub(crate) fn cmd_stats() -> Result<()> {
 }
 
 pub(crate) fn cmd_doctor() -> Result<()> {
-    use crate::llm::is_reasoning_model;
+    use mur_common::llm::is_reasoning_model;
 
     println!("🩺 MUR Doctor\n");
 
