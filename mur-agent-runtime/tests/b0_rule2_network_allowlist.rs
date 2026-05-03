@@ -37,6 +37,7 @@ fn ent_with_outbound(mode: NetworkOutboundMode, allow: Vec<String>) -> Entitleme
         },
         syscalls: SyscallsEntitlement::default(),
         limits: LimitsEntitlement::default(),
+        llm: Default::default(),
     }
 }
 
