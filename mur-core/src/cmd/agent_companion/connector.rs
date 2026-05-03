@@ -46,11 +46,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
 
     let mur_home = std::env::var_os("MUR_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .expect("home dir resolvable")
-                .join(".mur")
-        });
+        .unwrap_or_else(|| dirs::home_dir().expect("home dir resolvable").join(".mur"));
     let dir = mur_home.join("agents").join(name);
     if dir.exists() {
         bail!("agent dir already exists: {}", dir.display());

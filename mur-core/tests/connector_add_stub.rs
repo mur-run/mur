@@ -55,3 +55,72 @@ fn stub_bridge_creates_expected_layout() {
         "routes.yaml missing default_route: coach"
     );
 }
+
+#[test]
+fn unknown_platform_errors() {
+    let tmp = TempDir::new().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    std::fs::create_dir_all(&mur_home).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .args([
+            "agent",
+            "companion",
+            "connector",
+            "add",
+            "tg_bridge",
+            "--platform",
+            "telegram",
+            "--default-route",
+            "coach",
+        ])
+        .env("MUR_HOME", &mur_home)
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "expected failure for unknown platform"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not supported in Track C1"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn duplicate_add_errors() {
+    let tmp = TempDir::new().unwrap();
+    let mur_home = tmp.path().join(".mur");
+    std::fs::create_dir_all(&mur_home).unwrap();
+    let exe = env!("CARGO_BIN_EXE_mur");
+    let go = || {
+        Command::new(exe)
+            .args([
+                "agent",
+                "companion",
+                "connector",
+                "add",
+                "stub_bridge",
+                "--platform",
+                "stub",
+                "--default-route",
+                "coach",
+            ])
+            .env("MUR_HOME", &mur_home)
+            .output()
+            .unwrap()
+    };
+    let first = go();
+    assert!(
+        first.status.success(),
+        "first add failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let dup = go();
+    assert!(
+        !dup.status.success(),
+        "expected duplicate-add failure but got success"
+    );
+    let stderr = String::from_utf8_lossy(&dup.stderr);
+    assert!(stderr.contains("already exists"), "stderr was: {stderr}");
+}
