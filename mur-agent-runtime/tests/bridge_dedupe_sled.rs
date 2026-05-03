@@ -29,3 +29,20 @@ fn different_bridges_independent() {
     let b = DedupeStore::open(&b_dir, "b").unwrap();
     assert!(!b.is_seen("msg-1").unwrap());
 }
+
+#[test]
+fn ttl_eviction_removes_old_entries() {
+    let tmp = TempDir::new().unwrap();
+    let mut s = DedupeStore::open(tmp.path(), "bridge").unwrap();
+    let stale_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        - (8 * 24 * 60 * 60);
+    s.insert_at_for_test("stale", stale_ts).unwrap();
+    s.mark_seen("fresh").unwrap();
+    let evicted = s.sweep_expired().unwrap();
+    assert_eq!(evicted, 1);
+    assert!(!s.is_seen("stale").unwrap());
+    assert!(s.is_seen("fresh").unwrap());
+}

@@ -52,14 +52,38 @@ impl DedupeStore {
     pub fn is_seen(&self, msg_id: &str) -> Result<bool, DedupeError> {
         let key = self.make_key(msg_id);
         let hit = self.tree.get(&key)?.is_some();
-        let n = self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if n.wrapping_add(1) % SWEEP_EVERY == 0 {
+        let n = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n.wrapping_add(1).is_multiple_of(SWEEP_EVERY) {
             let _ = self.sweep_expired();
         }
         Ok(hit)
     }
 
-    pub(crate) fn sweep_expired(&self) -> Result<usize, DedupeError> {
-        Ok(0) // implemented in M-c1.2.3
+    pub fn sweep_expired(&self) -> Result<usize, DedupeError> {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let cutoff = now.saturating_sub(TTL.as_secs());
+        let mut evicted = 0;
+        for kv in self.tree.iter() {
+            let (key, value) = kv?;
+            if value.len() != 8 {
+                continue;
+            }
+            let mut ts = [0u8; 8];
+            ts.copy_from_slice(&value);
+            if u64::from_le_bytes(ts) < cutoff {
+                self.tree.remove(&key)?;
+                evicted += 1;
+            }
+        }
+        Ok(evicted)
+    }
+
+    #[doc(hidden)]
+    pub fn insert_at_for_test(&mut self, msg_id: &str, ts_secs: u64) -> Result<(), DedupeError> {
+        let key = self.make_key(msg_id);
+        self.tree.insert(&key, &ts_secs.to_le_bytes())?;
+        Ok(())
     }
 }
