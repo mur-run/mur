@@ -60,6 +60,11 @@ dirs = "5"
 tempfile = "3"
 whatlang = { workspace = true }
 rand = { workspace = true }
+# B0 rule 2 (M7.3) parses `url` field from network tool inputs to derive the
+# host before consulting the entitlement allowlist + GrantStore. Already
+# pulled in transitively by reqwest; declare it explicitly here so the
+# import surface is documented.
+url = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
