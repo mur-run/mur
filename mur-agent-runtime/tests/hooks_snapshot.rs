@@ -9,11 +9,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use mur_agent_runtime::companion::clock::SystemClock;
 use mur_agent_runtime::hooks::{
     A2AEnvelopeView, Decision, Hook, HookChain, HookCtx, HookError, MessagePatch, OutboundView,
-    Phase, PromptPatch, PromptView, ShutdownReason, Step, TelemetryEmitter, ToolCall, ToolResult,
-    TriggerKind, TriggerPayload,
+    Phase, PromptPatch, PromptView, ShutdownReason, Step, ToolCall, ToolResult, TriggerKind,
+    TriggerPayload,
 };
 use mur_common::AgentProfile;
 
@@ -139,24 +138,10 @@ impl Hook for RecordHook {
     }
 }
 
-struct NoopTel;
-
-#[async_trait::async_trait]
-impl TelemetryEmitter for NoopTel {
-    async fn emit_span_event(&self, _: &str, _: serde_json::Value) {}
-}
-
 fn ctx() -> HookCtx {
-    HookCtx {
-        agent_name: "test".into(),
-        agent_uuid: "00000000-0000-0000-0000-000000000000".into(),
-        run_id: "01HQ".into(),
-        clock: Arc::new(SystemClock),
-        telemetry: Arc::new(NoopTel),
-        agent_home: std::path::PathBuf::new(),
-        turn_id: 0,
-        turn_flags: Vec::new(),
-    }
+    // The struct fields (agent_name, run_id, etc.) aren't asserted on in
+    // this test — it only checks fire sequence — so the helper is fine.
+    HookCtx::for_test_with_home(std::path::PathBuf::new(), 0)
 }
 
 #[tokio::test]
