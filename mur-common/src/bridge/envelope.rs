@@ -67,8 +67,7 @@ pub fn verify_envelope_with_pubkey(
         return Err(EnvelopeError::BadSigLen(env.sig.len()));
     }
     let pub_bytes = crate::identity::decode_pubkey(expected_pubkey)?;
-    let vk =
-        VerifyingKey::from_bytes(&pub_bytes).map_err(|_| EnvelopeError::SignatureMismatch)?;
+    let vk = VerifyingKey::from_bytes(&pub_bytes).map_err(|_| EnvelopeError::SignatureMismatch)?;
     let sig_arr: [u8; 64] = env.sig.as_slice().try_into().unwrap();
     let sig = Signature::from_bytes(&sig_arr);
     vk.verify_strict(&env.payload, &sig)
