@@ -11,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use mur_agent_runtime::hooks::{
     A2AEnvelopeView, Decision, Hook, HookChain, HookCtx, HookError, MessagePatch, OutboundView,
-    Phase, PromptPatch, PromptView, ShutdownReason, Step, ToolCall, ToolResult, TriggerKind,
-    TriggerPayload,
+    Phase, PostToolUsePatch, PromptPatch, PromptView, ShutdownReason, Step, ToolCall, ToolResult,
+    TriggerKind, TriggerPayload,
 };
 use mur_common::AgentProfile;
 
@@ -94,10 +94,10 @@ impl Hook for RecordHook {
         c: &ToolCall,
         _: &ToolResult,
         _: &CancellationToken,
-    ) -> Result<(), HookError> {
+    ) -> Result<PostToolUsePatch, HookError> {
         self.rec
             .push(format!("{}:post_tool:{}", self.name, c.tool_name));
-        Ok(())
+        Ok(PostToolUsePatch::default())
     }
     async fn on_step_finish(
         &self,
@@ -205,7 +205,7 @@ async fn hook_fire_sequence_telegram_inbound_to_outbound() {
         input: serde_json::json!({}),
     };
     let _ = chain.pre_tool_use(&c, &call, &tok).await.unwrap();
-    chain
+    let _ = chain
         .post_tool_use(
             &c,
             &call,

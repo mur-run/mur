@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio_util::sync::CancellationToken;
 
 use mur_agent_runtime::hooks::{
-    Decision, Hook, HookChain, HookCtx, HookError, MessagePatch, OutboundView, PromptPatch,
-    PromptView, ToolCall, ToolResult, UntrustedWrapper,
+    Decision, Hook, HookChain, HookCtx, HookError, MessagePatch, OutboundView, PostToolUsePatch,
+    PromptPatch, PromptView, ToolCall, ToolResult, UntrustedWrapper,
 };
 
 fn ctx() -> HookCtx {
@@ -144,9 +144,9 @@ impl Hook for CountObserve {
         _: &ToolCall,
         _: &ToolResult,
         _: &CancellationToken,
-    ) -> Result<(), HookError> {
+    ) -> Result<PostToolUsePatch, HookError> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+        Ok(PostToolUsePatch::default())
     }
 }
 
@@ -171,7 +171,7 @@ async fn observe_runs_all_hooks_in_parallel() {
         output: serde_json::json!({}),
         duration_ms: 5,
     };
-    chain.post_tool_use(&ctx(), &call, &result, &tok).await;
+    let _patch = chain.post_tool_use(&ctx(), &call, &result, &tok).await;
     assert_eq!(counter.load(Ordering::SeqCst), 3);
 }
 

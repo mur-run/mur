@@ -13,8 +13,9 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use crate::hooks::{
-    A2AEnvelopeView, Hook, HookCtx, HookError, MessagePatch, OutboundView, Phase, PromptPatch,
-    PromptView, ShutdownReason, Step, ToolCall, ToolResult, TriggerKind, TriggerPayload,
+    A2AEnvelopeView, Hook, HookCtx, HookError, MessagePatch, OutboundView, Phase, PostToolUsePatch,
+    PromptPatch, PromptView, ShutdownReason, Step, ToolCall, ToolResult, TriggerKind,
+    TriggerPayload,
 };
 
 pub struct TelemetryHook;
@@ -146,7 +147,7 @@ impl Hook for TelemetryHook {
         call: &ToolCall,
         result: &ToolResult,
         _: &CancellationToken,
-    ) -> Result<(), HookError> {
+    ) -> Result<PostToolUsePatch, HookError> {
         self.emit(
             ctx,
             Phase::PostToolUse,
@@ -160,7 +161,7 @@ impl Hook for TelemetryHook {
             }),
         )
         .await;
-        Ok(())
+        Ok(PostToolUsePatch::default())
     }
 
     async fn on_step_finish(
