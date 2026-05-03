@@ -209,9 +209,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // declares `entitlements.llm.mode = off` — i.e. the agent is a bridge.
     // Bridges relay chat-platform traffic to/from the A2A bus and must not
     // dial a provider. The gate fails closed.
-    if let Err(e) = crate::llm::build_client(&profile.inner) {
-        return Err(anyhow::anyhow!("supervisor refusing LLM construction: {e}"));
-    }
+    crate::llm::build_client(&profile.inner)
+        .map_err(|e| anyhow::anyhow!("supervisor refusing LLM construction: {e}"))?;
     // `llm_for_companion` carries the real LLM client (None when echo/stub) so
     // the companion subsystem can share the same provider without a second dial.
     let (runner, llm_for_companion): (_, Option<Arc<dyn LlmClient>>) = if force_echo {
