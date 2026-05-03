@@ -457,6 +457,17 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
 
+    // 8.5 — bridge agents (LLM disabled by entitlement) emit a 30 s
+    //       heartbeat so peers can classify them via
+    //       `bridge::beacon::bridge_status_for_peer` (running.lock mtime
+    //       refreshes whenever the writer task appends a JSONL line).
+    if profile.inner.entitlements.llm.mode == mur_common::LlmMode::Off {
+        let beacon =
+            crate::bridge::beacon::BridgeBeacon::new(profile.inner.name.clone(), writer.sender());
+        transport_tasks.push(beacon.spawn());
+        info!(name = %profile.inner.name, "spawned BridgeBeacon (30 s heartbeat)");
+    }
+
     // 8b. Companion subsystem (Phase 1.1 M5.7).
     //     Returns None when profile.companion.enabled is false — zero-cost path.
     let companion_clock =

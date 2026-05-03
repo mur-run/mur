@@ -7,6 +7,7 @@
 //! green `mur agent doctor --format gui` predicts a successful export.
 
 use anyhow::Result;
+use mur_agent_runtime::bridge::beacon::{BridgePeerStatus, bridge_status_for_peer};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
@@ -64,11 +65,107 @@ pub fn run(format: &str, json: bool) -> Result<()> {
     } else {
         print_human(&results);
     }
+
+    // M-c1.4.4 — `bridges:` section. Only emitted in `all` / unset
+    // mode (export-format-specific runs aren't interested in
+    // bridge liveness diagnostics).
+    if matches!(format, "all" | "") {
+        let mur_home = std::env::var("MUR_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                dirs::home_dir()
+                    .expect("home directory required to locate ~/.mur")
+                    .join(".mur")
+            });
+        let bridges = collect_bridge_statuses(&mur_home);
+        if !bridges.is_empty() {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "bridges": bridges
+                            .iter()
+                            .map(|b| serde_json::json!({
+                                "name": b.name,
+                                "status": bridge_status_label(b.status),
+                            }))
+                            .collect::<Vec<_>>(),
+                    }))?
+                );
+            } else {
+                println!("\nbridges:");
+                for b in &bridges {
+                    println!("  {}: {}", b.name, bridge_status_label(b.status));
+                }
+            }
+        }
+    }
+
     let any_missing = results.iter().any(|r| r.status == CheckStatus::Missing);
     if any_missing {
         anyhow::bail!("doctor found missing prerequisites");
     }
     Ok(())
+}
+
+fn bridge_status_label(s: BridgePeerStatus) -> &'static str {
+    match s {
+        BridgePeerStatus::Running => "running",
+        BridgePeerStatus::Degraded => "degraded",
+        BridgePeerStatus::Offline => "offline",
+    }
+}
+
+/// Per-agent liveness summary surfaced in the `bridges:` section of
+/// `mur agent doctor`. Returned by [`collect_bridge_statuses`] and
+/// rendered by [`run`].
+#[derive(Debug)]
+pub struct BridgeSummary {
+    /// Agent directory name under `~/.mur/agents/`. Used as the key
+    /// because the on-disk directory is the stable identifier; the
+    /// profile's own `name:` field can drift.
+    pub name: String,
+    /// Coarse liveness derived from `running.lock` mtime.
+    pub status: BridgePeerStatus,
+}
+
+/// Walk `<mur_home>/agents/*/profile.yaml` and emit a [`BridgeSummary`]
+/// for every agent with `entitlements.llm.mode = off`. Sorted by name
+/// for stable rendering. Silent on parse / IO failures so a single
+/// malformed agent dir doesn't blank out the doctor report.
+pub fn collect_bridge_statuses(mur_home: &std::path::Path) -> Vec<BridgeSummary> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(mur_home.join("agents")) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let yaml = match std::fs::read_to_string(dir.join("profile.yaml")) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let profile: mur_common::AgentProfile = match serde_yaml_ng::from_str(&yaml) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if profile.entitlements.llm.mode != mur_common::LlmMode::Off {
+            continue;
+        }
+        let name = match dir.file_name().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        out.push(BridgeSummary {
+            name,
+            status: bridge_status_for_peer(&dir),
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// Return the check list applicable to the given export format.
