@@ -216,6 +216,10 @@ pub struct Entitlements {
     pub syscalls: SyscallsEntitlement,
     #[serde(default)]
     pub limits: LimitsEntitlement,
+    /// LLM call permission. Default = Allowed (back-compat). Bridges set to Off
+    /// so the supervisor refuses to construct an LLM client.
+    #[serde(default)]
+    pub llm: crate::bridge::llm_entitlement::LlmEntitlement,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

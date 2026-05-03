@@ -304,6 +304,7 @@ fn default_entitlements_custom() -> Entitlements {
             file_descriptors: 1024,
             processes: 32,
         },
+        llm: Default::default(),
     }
 }
 

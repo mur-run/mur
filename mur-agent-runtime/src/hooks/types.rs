@@ -160,6 +160,7 @@ fn test_default_entitlements() -> Entitlements {
         },
         syscalls: SyscallsEntitlement::default(),
         limits: LimitsEntitlement::default(),
+        llm: Default::default(),
     }
 }
 
