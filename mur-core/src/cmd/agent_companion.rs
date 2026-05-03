@@ -48,6 +48,26 @@ pub enum CompanionCmd {
     Rhythm(RhythmArgs),
     /// Manage character cards (export / import / list / accept).
     Card(card::cli::CardArgs),
+    /// Manage cross-platform connectors (bridge agents). Track C1+.
+    Connector {
+        #[command(subcommand)]
+        action: ConnectorAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConnectorAction {
+    /// Scaffold a new bridge agent for a given platform.
+    Add {
+        /// Bridge agent name (distinct from any user agent).
+        name: String,
+        /// Platform — only "stub" is supported in C1.
+        #[arg(long, default_value = "stub")]
+        platform: String,
+        /// Recipient agent for the default route. Required.
+        #[arg(long)]
+        default_route: String,
+    },
 }
 
 pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
@@ -68,10 +88,18 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
         CompanionCmd::WhyDidYouMessage(args) => why::run(args).await,
         CompanionCmd::Rhythm(args) => rhythm::run(args).await,
         CompanionCmd::Card(args) => card::cli::run(args).await,
+        CompanionCmd::Connector { action } => match action {
+            ConnectorAction::Add {
+                name,
+                platform,
+                default_route,
+            } => connector::add(name, &platform, &default_route).await,
+        },
     }
 }
 
 pub mod card;
+pub mod connector;
 mod content;
 mod inbox;
 pub mod init;
