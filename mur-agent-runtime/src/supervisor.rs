@@ -205,6 +205,13 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // implemented) fall through to echo. Setting MUR_AGENT_FORCE_ECHO=1
     // forces echo regardless of profile (useful for tests).
     let force_echo = std::env::var_os("MUR_AGENT_FORCE_ECHO").is_some();
+    // Track C1 (M-c1.0.2): refuse to construct an LLM client when the profile
+    // declares `entitlements.llm.mode = off` — i.e. the agent is a bridge.
+    // Bridges relay chat-platform traffic to/from the A2A bus and must not
+    // dial a provider. The gate fails closed.
+    if let Err(e) = crate::llm::build_client(&profile.inner) {
+        return Err(anyhow::anyhow!("supervisor refusing LLM construction: {e}"));
+    }
     // `llm_for_companion` carries the real LLM client (None when echo/stub) so
     // the companion subsystem can share the same provider without a second dial.
     let (runner, llm_for_companion): (_, Option<Arc<dyn LlmClient>>) = if force_echo {
