@@ -40,7 +40,7 @@ async fn unsigned_mcp_binary_fails_startup() {
     );
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn linux_signature_check_is_a_noop() {
     let dir = TempDir::new().unwrap();
@@ -53,4 +53,27 @@ async fn linux_signature_check_is_a_noop() {
     let cancel = CancellationToken::new();
     let result = hook.on_startup(&ctx, &profile, &cancel).await;
     assert!(result.is_ok(), "linux signature check should be noop");
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn windows_unsigned_binary_fails_startup() {
+    let dir = TempDir::new().unwrap();
+    let bin = dir.path().join("fake-mcp.exe");
+    std::fs::write(&bin, b"MZ\0\0").unwrap();
+    let hook = B0SafetyHook::new();
+    let ctx =
+        HookCtx::for_test_with_mcp_servers(dir.path().to_path_buf(), 1, vec![bin.to_path_buf()]);
+    let profile = minimal_profile();
+    let cancel = CancellationToken::new();
+    let result = hook.on_startup(&ctx, &profile, &cancel).await;
+    assert!(
+        result.is_err(),
+        "unsigned windows binary should fail on_startup"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.to_lowercase().contains("not signed") || msg.contains("signtool"),
+        "got {msg}"
+    );
 }
