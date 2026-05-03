@@ -6,3 +6,4 @@
 //! peer's identity, not authorization to claim the bridge role).
 
 pub mod dedupe;
+pub mod verify;
