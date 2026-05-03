@@ -10,7 +10,8 @@ use tempfile::TempDir;
 fn write_lock_with_age(dir: &std::path::Path, age: Duration) {
     let lock = dir.join("running.lock");
     std::fs::write(&lock, b"{}").unwrap();
-    let f = std::fs::File::open(&lock).unwrap();
+    // Windows requires write access to set mtime; std::fs::File::open is read-only.
+    let f = std::fs::OpenOptions::new().write(true).open(&lock).unwrap();
     f.set_modified(SystemTime::now() - age).unwrap();
 }
 

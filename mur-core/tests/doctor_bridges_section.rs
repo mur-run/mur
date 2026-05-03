@@ -35,7 +35,10 @@ fn lists_running_and_degraded() {
     std::fs::write(a.join("running.lock"), b"{}").unwrap();
     let stale = b.join("running.lock");
     std::fs::write(&stale, b"{}").unwrap();
-    std::fs::File::open(&stale)
+    // Windows requires write access to set mtime; std::fs::File::open is read-only.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&stale)
         .unwrap()
         .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(120))
         .unwrap();
