@@ -34,6 +34,70 @@ pub struct RouteMatch {
     pub chat_id: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct InboundMessage {
+    pub platform: String,
+    pub chat_id: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolution {
+    primary: String,
+    fanout: Vec<String>,
+}
+
+impl Resolution {
+    pub fn recipients(&self) -> Vec<String> {
+        if self.fanout.is_empty() {
+            vec![self.primary.clone()]
+        } else {
+            self.fanout.clone()
+        }
+    }
+}
+
+impl BridgeRouteConfig {
+    pub fn resolve(&self, inbound: &InboundMessage) -> Resolution {
+        // Pass 1: mention (highest priority)
+        for entry in &self.routes {
+            if entry.match_.platform != inbound.platform {
+                continue;
+            }
+            if let Some(m) = &entry.match_.mention
+                && inbound.body.contains(m.as_str())
+            {
+                return Resolution {
+                    primary: entry.agent.clone(),
+                    fanout: entry.fanout.clone(),
+                };
+            }
+        }
+        // Pass 2: platform + chat_id (skip mention-routes; they only match in pass 1)
+        for entry in &self.routes {
+            if entry.match_.platform != inbound.platform {
+                continue;
+            }
+            if entry.match_.mention.is_some() {
+                continue;
+            }
+            if let Some(c) = &entry.match_.chat_id
+                && c == &inbound.chat_id
+            {
+                return Resolution {
+                    primary: entry.agent.clone(),
+                    fanout: entry.fanout.clone(),
+                };
+            }
+        }
+        // Pass 3: default
+        Resolution {
+            primary: self.default_route.clone(),
+            fanout: vec![],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,5 +123,16 @@ routes:
         let cfg: BridgeRouteConfig = serde_yaml_ng::from_str(SAMPLE).unwrap();
         let s = serde_yaml_ng::to_string(&cfg).unwrap();
         assert_eq!(serde_yaml_ng::from_str::<BridgeRouteConfig>(&s).unwrap(), cfg);
+    }
+
+    #[test]
+    fn resolve_falls_back_to_default() {
+        let cfg: BridgeRouteConfig = serde_yaml_ng::from_str(SAMPLE).unwrap();
+        let r = cfg.resolve(&InboundMessage {
+            platform: "telegram".into(),
+            chat_id: "99999".into(),
+            body: "hello".into(),
+        });
+        assert_eq!(r.recipients(), vec!["coach"]);
     }
 }

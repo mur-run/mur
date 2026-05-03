@@ -8,4 +8,4 @@
 pub mod llm_entitlement;
 pub mod routes;
 pub use llm_entitlement::{LlmEntitlement, LlmMode};
-pub use routes::{BridgeRouteConfig, RouteEntry, RouteMatch};
+pub use routes::{BridgeRouteConfig, InboundMessage, Resolution, RouteEntry, RouteMatch};
