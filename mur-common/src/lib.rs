@@ -2,6 +2,7 @@ pub mod a2a;
 pub mod actor;
 pub mod agent;
 pub mod agent_name;
+pub mod bridge;
 pub mod bundle;
 pub mod companion;
 pub mod config;
@@ -35,6 +36,7 @@ pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};
 
 pub use a2a::Message as A2aMessage;
 pub use a2a::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Task, TaskState};
+pub use bridge::{LlmEntitlement, LlmMode};
 pub use agent::{
     AgentProfile, DeploymentConfig, DeploymentType, Entitlements, ExecutionMode,
     FileTransferConfig, IdentityConfig, LockFile, Persona, PersonaCategory, RetryPolicy,
