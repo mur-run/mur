@@ -94,20 +94,48 @@ impl Hook for B0SafetyHook {
     async fn on_prompt_submit(
         &self,
         ctx: &HookCtx,
-        _view: &PromptView,
+        view: &PromptView,
         _tok: &CancellationToken,
     ) -> Result<PromptPatch, HookError> {
+        // ── Rule 3 (M7.4): spotlight every prior tool-result message. ────
+        // We do NOT modify view.messages here (the trait surface returns
+        // PromptPatch.wrap_untrusted; the runtime injects the wrappers
+        // into the model's input). Each tool message becomes a separate
+        // UntrustedWrapper tagged with `tool_result:<tool_name>`.
+        let mut wrappers: Vec<UntrustedWrapper> = Vec::new();
+        for msg in view.messages.iter() {
+            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            if role != "tool" {
+                continue;
+            }
+            let tool_name = msg
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let content = msg
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            wrappers.push(UntrustedWrapper {
+                tag: "untrusted_tool_result".into(),
+                source: format!("tool_result:{tool_name}"),
+                content,
+            });
+        }
+
+        // ── M3.8: multimodal provenance ledger. ──────────────────────────
+        // Read this turn's ledger entries. Even if no entries are present,
+        // we may still have tool wrappers from Rule 3 above — the
+        // turn-flag is only raised when multimodal artifacts exist.
         let agent_home = ctx.agent_home();
         let turn_id = ctx.turn_id();
         let ledger = ProvenanceLedger::new(agent_home.join("telemetry/inputs.jsonl"));
         let entries = ledger
             .read_turn(turn_id)
             .map_err(|e| HookError::Runtime(format!("read_turn: {e}")))?;
-        if entries.is_empty() {
-            return Ok(PromptPatch::noop());
-        }
+        let has_multimodal = !entries.is_empty();
 
-        let mut wrappers = Vec::with_capacity(entries.len());
         for e in entries {
             let txt_path = agent_home
                 .join("telemetry/inputs")
@@ -144,9 +172,23 @@ impl Hook for B0SafetyHook {
             });
         }
 
+        // Nothing to wrap and no flag to raise → noop. Note the
+        // turn-flag is gated on `has_multimodal` (NOT `wrappers`) so
+        // tool-result-only turns don't trigger Rule 4's
+        // after-untrusted-input gate.
+        if wrappers.is_empty() && !has_multimodal {
+            return Ok(PromptPatch::noop());
+        }
+
+        let turn_flags = if has_multimodal {
+            vec![TURN_FLAG_AFTER_UNTRUSTED.into()]
+        } else {
+            Vec::new()
+        };
+
         Ok(PromptPatch {
             wrap_untrusted: wrappers,
-            turn_flags: vec![TURN_FLAG_AFTER_UNTRUSTED.into()],
+            turn_flags,
             ..PromptPatch::noop()
         })
     }
