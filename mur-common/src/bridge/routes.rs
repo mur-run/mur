@@ -135,4 +135,48 @@ routes:
         });
         assert_eq!(r.recipients(), vec!["coach"]);
     }
+
+    #[test]
+    fn mention_wins_over_chat_id() {
+        let cfg: BridgeRouteConfig = serde_yaml_ng::from_str(SAMPLE).unwrap();
+        let r = cfg.resolve(&InboundMessage {
+            platform: "telegram".into(),
+            chat_id: "12345".into(), // would route to therapist
+            body: "hey @coach help".into(), // mention wins
+        });
+        assert_eq!(r.recipients(), vec!["coach"]);
+    }
+
+    #[test]
+    fn chat_id_when_no_mention() {
+        let cfg: BridgeRouteConfig = serde_yaml_ng::from_str(SAMPLE).unwrap();
+        let r = cfg.resolve(&InboundMessage {
+            platform: "telegram".into(),
+            chat_id: "12345".into(),
+            body: "no mentions".into(),
+        });
+        assert_eq!(r.recipients(), vec!["therapist"]);
+    }
+
+    #[test]
+    fn fanout_returns_full_list() {
+        let cfg: BridgeRouteConfig = serde_yaml_ng::from_str(SAMPLE).unwrap();
+        let r = cfg.resolve(&InboundMessage {
+            platform: "telegram".into(),
+            chat_id: "67890".into(),
+            body: "ping".into(),
+        });
+        assert_eq!(r.recipients(), vec!["coach", "journal_agent"]);
+    }
+
+    #[test]
+    fn platform_mismatch_falls_through() {
+        let cfg: BridgeRouteConfig = serde_yaml_ng::from_str(SAMPLE).unwrap();
+        let r = cfg.resolve(&InboundMessage {
+            platform: "slack".into(),
+            chat_id: "12345".into(),
+            body: "ping".into(),
+        });
+        assert_eq!(r.recipients(), vec!["coach"]);
+    }
 }
