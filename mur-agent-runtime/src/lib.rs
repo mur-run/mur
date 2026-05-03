@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+pub mod bridge;
 pub mod communication_policy;
 pub mod companion;
 pub mod durable;
