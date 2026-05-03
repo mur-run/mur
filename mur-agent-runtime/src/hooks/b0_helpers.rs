@@ -247,3 +247,66 @@ mod secret_tests {
         assert_eq!(scan_for_secrets("this is a normal message"), None);
     }
 }
+
+/// Redact common PII patterns in `body`. Returns the redacted text;
+/// the redaction is permissive (catches obvious patterns; defers to
+/// the user for ambiguous cases).
+///
+/// Replaces matched spans with `<REDACTED:label>`.
+pub fn redact_pii(body: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+    let patterns = PATTERNS.get_or_init(|| {
+        vec![
+            // Email
+            (Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap(), "email"),
+            // US SSN
+            (Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(), "ssn"),
+            // Credit card (very loose: 13-19 digits in groups)
+            (Regex::new(r"\b(?:\d{4}[- ]?){3,4}\d{1,4}\b").unwrap(), "cc"),
+            // Phone (international or US-style)
+            (Regex::new(r"\b\+?\d{1,3}[- ]?\(?\d{3}\)?[- ]?\d{3}[- ]?\d{4}\b").unwrap(), "phone"),
+        ]
+    });
+
+    let mut out = body.to_string();
+    for (rx, label) in patterns {
+        out = rx.replace_all(&out, format!("<REDACTED:{label}>")).to_string();
+    }
+    out
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::*;
+
+    #[test]
+    fn redacts_email() {
+        assert_eq!(redact_pii("contact alex@example.com"), "contact <REDACTED:email>");
+    }
+
+    #[test]
+    fn redacts_ssn() {
+        assert_eq!(redact_pii("ssn 123-45-6789"), "ssn <REDACTED:ssn>");
+    }
+
+    #[test]
+    fn redacts_credit_card() {
+        let red = redact_pii("card 4111-1111-1111-1111");
+        assert!(red.contains("<REDACTED:cc>"), "got {red}");
+    }
+
+    #[test]
+    fn redacts_phone() {
+        let red = redact_pii("call +1-555-123-4567");
+        assert!(red.contains("<REDACTED:phone>"), "got {red}");
+    }
+
+    #[test]
+    fn clean_text_unchanged() {
+        let clean = "the project will ship next week.";
+        assert_eq!(redact_pii(clean), clean);
+    }
+}
