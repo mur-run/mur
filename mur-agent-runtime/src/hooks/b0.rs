@@ -119,34 +119,66 @@ impl Hook for B0SafetyHook {
         call: &ToolCall,
         _tok: &CancellationToken,
     ) -> Result<Decision, HookError> {
-        if !ctx
+        // ── Rule 4 (M3.8): no same-turn side-effect after fresh untrusted input. ─
+        // Fires FIRST so the most-specific gate wins: if the runtime
+        // already saw a multimodal/card-import wrapper this turn AND the
+        // tool is a known side-effect, we ask before doing anything else.
+        if ctx
             .turn_flags()
             .iter()
             .any(|f| f == TURN_FLAG_AFTER_UNTRUSTED)
+            && is_side_effect_tool(call.name())
         {
-            return Ok(Decision::Allow);
+            // M3.8.2 only needs the scope key as a stable identifier for
+            // the user-facing prompt; the per-input schema-hash dimension
+            // belongs to the M8 GrantStore lookup. Tag the key with the
+            // rule name so future grants are scoped to
+            // "after-untrusted-input + this tool" rather than the tool
+            // alone.
+            let scope_key = ScopeKey {
+                agent_id: ctx.agent_uuid.clone(),
+                tool_name: format!("{}::{}", TURN_FLAG_AFTER_UNTRUSTED, call.name()),
+                input_schema_hash: String::new(),
+            };
+            return Ok(Decision::AskUser {
+                scope_key,
+                prompt: format!(
+                    "An attached image or PDF may contain instructions. Allow `{}` to run anyway?",
+                    call.name()
+                ),
+                default: AskDefault::Deny,
+            });
         }
-        if !is_side_effect_tool(call.name()) {
-            return Ok(Decision::Allow);
+        // ── Rule 1: FS confinement (advisory). ───────────────────────────
+        // For fs.write / fs.delete / fs.append / fs.create on a path
+        // outside <agent_home>, ask the user. Read-only access is the
+        // OS picker's job (granted via tauri-plugin-fs's runtime open
+        // dialog), so we don't gate fs.read here.
+        if matches!(
+            call.name(),
+            "fs.write" | "fs.delete" | "fs.append" | "fs.create"
+        ) && let Some(path) = call.input.get("path").and_then(|v| v.as_str())
+        {
+            let candidate = std::path::Path::new(path);
+            if !crate::hooks::b0_helpers::path_confined_to(candidate, ctx.agent_home()) {
+                let scope_key = ScopeKey {
+                    agent_id: ctx.agent_uuid.clone(),
+                    tool_name: format!("fs_outside_home::{}", call.name()),
+                    input_schema_hash: String::new(),
+                };
+                return Ok(Decision::AskUser {
+                    scope_key,
+                    prompt: format!(
+                        "`{}` is about to write at `{}`, which is outside the agent's \
+                         home directory. Allow this once?",
+                        call.name(),
+                        path,
+                    ),
+                    default: AskDefault::Deny,
+                });
+            }
         }
-        // M3.8.2 only needs the scope key as a stable identifier for the
-        // user-facing prompt; the per-input schema-hash dimension belongs
-        // to the M8 GrantStore lookup. Tag the key with the rule name so
-        // future grants are scoped to "after-untrusted-input + this tool"
-        // rather than the tool alone.
-        let scope_key = ScopeKey {
-            agent_id: ctx.agent_uuid.clone(),
-            tool_name: format!("{}::{}", TURN_FLAG_AFTER_UNTRUSTED, call.name()),
-            input_schema_hash: String::new(),
-        };
-        Ok(Decision::AskUser {
-            scope_key,
-            prompt: format!(
-                "An attached image or PDF may contain instructions. Allow `{}` to run anyway?",
-                call.name()
-            ),
-            default: AskDefault::Deny,
-        })
+        Ok(Decision::Allow)
     }
 }
 
