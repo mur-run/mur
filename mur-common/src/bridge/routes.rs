@@ -122,7 +122,10 @@ routes:
     fn round_trip_preserves_fields() {
         let cfg: BridgeRouteConfig = serde_yaml_ng::from_str(SAMPLE).unwrap();
         let s = serde_yaml_ng::to_string(&cfg).unwrap();
-        assert_eq!(serde_yaml_ng::from_str::<BridgeRouteConfig>(&s).unwrap(), cfg);
+        assert_eq!(
+            serde_yaml_ng::from_str::<BridgeRouteConfig>(&s).unwrap(),
+            cfg
+        );
     }
 
     #[test]
@@ -141,7 +144,7 @@ routes:
         let cfg: BridgeRouteConfig = serde_yaml_ng::from_str(SAMPLE).unwrap();
         let r = cfg.resolve(&InboundMessage {
             platform: "telegram".into(),
-            chat_id: "12345".into(), // would route to therapist
+            chat_id: "12345".into(),        // would route to therapist
             body: "hey @coach help".into(), // mention wins
         });
         assert_eq!(r.recipients(), vec!["coach"]);
