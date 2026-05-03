@@ -541,6 +541,20 @@ Precedence: explicit mention > platform-specific match > `default_route`. **No L
 | Platform identity treatment | `envelope.metadata.platform = {kind, user_id, chat_id}` is informational; never used in authorization decisions |
 | Quiet hours / proactive policy | Enforced in user agent (`companion::earned_permission`); bridge stays content-neutral |
 
+#### Acceptance status
+
+- §5.1 — bridge-as-mur-agent pattern  ✅ landed (track-c1 PR cascade; see `docs/cookbook/c1-a2a-bridge.md`)
+- §5.2 — `routes.yaml` + precedence  ✅ landed (`mur_common::bridge::routes::BridgeRouteConfig::resolve`)
+- §5.3 — dedupe / heartbeat / signing / trust  ✅ landed:
+  - dedupe → `mur_agent_runtime::bridge::dedupe::DedupeStore` (sled, 7-day TTL)
+  - heartbeat → `BridgeBeacon` (30 s) + `bridge_status_for_peer` (90 s degraded threshold)
+  - ACK → `mur_agent_runtime::bridge::ack::AckTracker`
+  - signing → `mur_common::bridge::envelope::SignedEnvelope` + `verify_inbound_envelope`
+  - trust → `AgentProfile.trusted_peers: Vec<TrustedPeer>`
+  - llm-block → `entitlements.llm.mode = off`
+
+E2E: `scripts/e2e/c1-bridge-roundtrip.sh`. Concrete platforms ship in C2 / C3.
+
 ### 5.4 C2 — Telegram Reference Bridge (v1)
 
 Telegram chosen over Slack because: consumer global; 5-minute setup via `@BotFather`; native bot API supports inbound (long-poll or webhook), outbound, multimedia; no OAuth-scope sprawl.
