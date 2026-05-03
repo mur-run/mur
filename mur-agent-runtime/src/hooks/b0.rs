@@ -1,23 +1,36 @@
-//! `B0SafetyHook` — multimodal rules implementation (M3.8).
+//! `B0SafetyHook` — consumer-safe baseline (roadmap §6.1).
 //!
-//! Currently implements rules 13-22 from roadmap §6.1 (the multimodal
-//! consumer-safe baseline). The text-only rules (1-12) wait for M8
-//! per the roadmap timeline.
+//! Implements text rules 1, 2, 3, 4, 5, 7, 8, 11 (M7) plus multimodal
+//! rules 13-22 (M3 / M4). Rules 6, 9, 10, 12 ship outside this hook
+//! (MCP-install CLI, telemetry redaction, UX docs, companion subsystem
+//! respectively). See `docs/cookbook/b0-text-rules.md` for the full
+//! map and the §6.1 acceptance footer for ship status.
 //!
 //! Wiring:
-//! * `on_prompt_submit` (M3.8.1) reads
-//!   `<agent_home>/telemetry/inputs.jsonl` for the current turn, looks
-//!   up each entry's `<agent_home>/telemetry/inputs/{sha256}.txt`
-//!   sidecar, and builds a `PromptPatch` with one `wrap_untrusted` per
-//!   entry plus the `after_untrusted_input` turn-flag.
-//! * `pre_tool_use` (M3.8.2) checks for the `after_untrusted_input`
-//!   turn-flag and denies side-effect tools (delete / spawn / send /
-//!   egress / network / .write / .publish) via `Decision::AskUser`,
-//!   per roadmap §4.3 step 9.
-//!
-//! The remaining roadmap rules (sandbox attestation, GrantStore
-//! lookup, post_tool_use redaction, on_message_received untrusted
-//! flag) land with the M8 text-only baseline.
+//! * `on_startup` — Rule 11 (M7.7): codesign / signtool every entry
+//!   in `ctx.mcp_server_binaries()`; refuse startup if any unsigned
+//!   on macOS / Windows. Linux is a no-op.
+//! * `on_prompt_submit` — Rule 3 (M7.4) wraps every prior `role:tool`
+//!   message with `<untrusted_tool_result source="tool_result:<name>">`
+//!   AND M3.8 reads the multimodal provenance ledger to wrap PDF/OCR
+//!   text into `<untrusted_pdf_text>` / `<untrusted_image_text>` plus
+//!   the `after_untrusted_input` turn-flag.
+//! * `pre_tool_use` — most-specific gate first, then situational:
+//!   1. Rule 4 (M3.8) — turn-flag set + side-effect tool → AskUser.
+//!   2. Rule 1 (M7.1) — fs.write/delete/append/create outside
+//!      `agent_home` → AskUser.
+//!   3. Rule 5 (M7.2) — process.spawn / shell with
+//!      `entitlements.processes.spawn.mode != Any` → Deny if argv[0]
+//!      not in allowed[].
+//!   4. Rule 2 (M7.3) — network.* with `outbound.mode == Off` → Deny;
+//!      `Restricted` + host not in allow_hosts → GrantStore lookup,
+//!      then AskUser on first use.
+//! * `on_message_send` — Rule 7 (M7.5) scans `view.body` for ~11
+//!   credential regex patterns; on hit returns
+//!   `MessagePatch::drop_with(reason)` naming the matched class.
+//! * `post_tool_use` — Rule 8 (M7.6) for `memory.*` tools redacts
+//!   email / SSN / credit-card / phone in the result before
+//!   persistence (returns `PostToolUsePatch.replace_output`).
 
 use std::path::PathBuf;
 use std::sync::Mutex;

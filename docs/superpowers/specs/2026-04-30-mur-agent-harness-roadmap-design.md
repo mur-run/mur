@@ -630,6 +630,13 @@ All 22 rules are implemented inside `B0SafetyHook` (Track A built-in handler) an
 - AgentDojo-50 indirect-injection success rate ≤ 5% (research baseline of unprotected agents: 30-60%).
 - HarmBench-50 jailbreak success rate ≤ baseline minus 50%.
 - End-to-end demo: dropping an "invisible text PDF" with ASCII smuggling does not trigger any side-effect tool in the same turn.
+- v1 ship status (2026-05-03):
+  - Rules 1, 2, 3, 4, 5, 7, 8, 11: shipped (M7.1-M7.7).
+  - Rule 6: deferred to MCP install CLI work (separate plan).
+  - Rule 9: deferred to telemetry redaction work (separate plan).
+  - Rule 10: documented; mechanism implemented across M0/M3.8/M7.3.
+  - Rule 12: M2.x companion subsystem already enforces; audit pending.
+  - Rules 13-22: shipped in M3 (drag-drop) + M4 (cards).
 
 ### 6.2 v1 Threat Model Document (16 sections)
 
