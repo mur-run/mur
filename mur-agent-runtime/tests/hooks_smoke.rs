@@ -8,32 +8,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio_util::sync::CancellationToken;
 
-use mur_agent_runtime::companion::clock::SystemClock;
 use mur_agent_runtime::hooks::{
     Decision, Hook, HookChain, HookCtx, HookError, MessagePatch, OutboundView, PromptPatch,
-    PromptView, TelemetryEmitter, ToolCall, ToolResult, UntrustedWrapper,
+    PromptView, ToolCall, ToolResult, UntrustedWrapper,
 };
 
-struct CountingTelemetry(AtomicUsize);
-
-#[async_trait::async_trait]
-impl TelemetryEmitter for CountingTelemetry {
-    async fn emit_span_event(&self, _name: &str, _attrs: serde_json::Value) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
 fn ctx() -> HookCtx {
-    HookCtx {
-        agent_name: "test".into(),
-        agent_uuid: "00000000-0000-0000-0000-000000000000".into(),
-        run_id: "01HQ".into(),
-        clock: Arc::new(SystemClock),
-        telemetry: Arc::new(CountingTelemetry(AtomicUsize::new(0))),
-        agent_home: std::path::PathBuf::new(),
-        turn_id: 0,
-        turn_flags: Vec::new(),
-    }
+    // The custom CountingTelemetry that lived here was never asserted on
+    // (its counter was never read), so the standard test helper covers
+    // every case in this file.
+    HookCtx::for_test_with_home(std::path::PathBuf::new(), 0)
 }
 
 struct DenyOnceHook(AtomicUsize);

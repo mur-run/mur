@@ -149,6 +149,60 @@ impl Hook for B0SafetyHook {
                 default: AskDefault::Deny,
             });
         }
+        // ── Rule 5: process.spawn / eval / shell deny by default. ────────
+        // Per-agent toggle via entitlements.processes.spawn.mode:
+        //   - Allowlist (default) + empty allowed[]  → deny everything
+        //   - Allowlist + allowed[]                  → only those programs allow
+        //   - Any                                    → unrestricted (user opted in)
+        //
+        // We match the family of tool names — anything that ultimately
+        // exec()s a child process. Every match enters the gate; only
+        // `Any` mode falls through to subsequent rules.
+        const SPAWN_TOOLS: &[&str] = &[
+            "process.spawn",
+            "process.exec",
+            "shell.exec",
+            "shell.run",
+            "eval.run",
+            "command.run",
+        ];
+        if SPAWN_TOOLS.contains(&call.name()) {
+            let spawn = &ctx.entitlements().processes.spawn;
+            match spawn.mode {
+                mur_common::agent::SpawnMode::Any => {
+                    // user opted in; fall through to Rule 1 / default Allow
+                }
+                mur_common::agent::SpawnMode::None => {
+                    return Ok(Decision::Deny {
+                        reason: format!(
+                            "process spawn is disabled by entitlements (mode=none); \
+                             enable with `mur agent perm allow-spawn <name>` (or set \
+                             spawn.mode to `allowlist` / `any`). Tool: `{}`",
+                            call.name()
+                        ),
+                    });
+                }
+                mur_common::agent::SpawnMode::Allowlist => {
+                    let argv0 = call
+                        .input
+                        .get("argv")
+                        .and_then(|v| v.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !spawn.allowed.iter().any(|p| p == argv0) {
+                        return Ok(Decision::Deny {
+                            reason: format!(
+                                "process spawn `{}` is not in the agent's allowlist; \
+                                 enable with `mur agent perm allow-spawn <name> \"{}\"` \
+                                 (or set spawn.mode to `any` for unrestricted)",
+                                argv0, argv0,
+                            ),
+                        });
+                    }
+                }
+            }
+        }
         // ── Rule 1: FS confinement (advisory). ───────────────────────────
         // For fs.write / fs.delete / fs.append / fs.create on a path
         // outside <agent_home>, ask the user. Read-only access is the
