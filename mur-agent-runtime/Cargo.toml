@@ -69,6 +69,10 @@ url = "2"
 # patterns once via OnceLock and matches each outbound message body before
 # delivery. Pattern set deliberately favors false-positives.
 regex = "1"
+# Track C1 — bridge dedupe store. Sled gives us an embedded transactional
+# K/V tree. We store `(bridge_id, platform_msg_id) -> u64 LE timestamp` and
+# sweep entries older than 7 days.
+sled = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

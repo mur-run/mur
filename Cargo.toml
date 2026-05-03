@@ -47,3 +47,4 @@ ulid = { version = "1", features = ["serde"] }
 fs2 = "0.4"
 chrono-tz = "0.8"
 insta = { version = "1", features = ["yaml"] }
+sled = "0.34"
