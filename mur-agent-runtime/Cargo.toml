@@ -65,6 +65,10 @@ rand = { workspace = true }
 # pulled in transitively by reqwest; declare it explicitly here so the
 # import surface is documented.
 url = "2"
+# B0 rule 7 (M7.5) outbound secret pre-filter compiles ~11 credential
+# patterns once via OnceLock and matches each outbound message body before
+# delivery. Pattern set deliberately favors false-positives.
+regex = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
