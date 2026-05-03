@@ -12,12 +12,19 @@
 //! See plan task M-c1.4 in
 //! `docs/superpowers/plans/2026-05-03-mur-agent-track-c1-a2a-bridge.md`.
 
-use std::time::Duration;
+use std::path::Path;
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc::Sender;
 
 use crate::telemetry_writer::Event;
 
 pub use mur_common::telemetry::METHOD_BRIDGE_ALIVE;
+
+/// Maximum age of a bridge's `running.lock` mtime before peers should
+/// treat the bridge as `Degraded`. The bridge supervisor emits a
+/// `telemetry/bridge_alive` notification every 30 s, so a 90 s window
+/// tolerates two missed beats.
+pub const DEGRADED_AFTER_SECS: u64 = 90;
 
 /// Build the JSON-RPC notification body emitted by [`BridgeBeacon`].
 ///
@@ -77,6 +84,44 @@ impl BridgeBeacon {
                 }
             }
         })
+    }
+}
+
+/// Coarse liveness classification for a bridge peer.
+///
+/// Returned by [`bridge_status_for_peer`]; consumed by `mur agent
+/// doctor`'s `bridges:` section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgePeerStatus {
+    /// `running.lock` exists and was modified within the last
+    /// [`DEGRADED_AFTER_SECS`] seconds.
+    Running,
+    /// `running.lock` exists but its mtime is older than
+    /// [`DEGRADED_AFTER_SECS`] seconds (heartbeat stalled).
+    Degraded,
+    /// `running.lock` is missing or unreadable.
+    Offline,
+}
+
+/// Classify a bridge peer by inspecting `running.lock` mtime in
+/// `agent_dir` (typically `~/.mur/agents/<name>/`).
+pub fn bridge_status_for_peer(agent_dir: &Path) -> BridgePeerStatus {
+    let meta = match std::fs::metadata(agent_dir.join("running.lock")) {
+        Ok(m) => m,
+        Err(_) => return BridgePeerStatus::Offline,
+    };
+    let mtime = match meta.modified() {
+        Ok(t) => t,
+        Err(_) => return BridgePeerStatus::Offline,
+    };
+    let age = SystemTime::now()
+        .duration_since(mtime)
+        .unwrap_or_default()
+        .as_secs();
+    if age > DEGRADED_AFTER_SECS {
+        BridgePeerStatus::Degraded
+    } else {
+        BridgePeerStatus::Running
     }
 }
 
