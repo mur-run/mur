@@ -25,8 +25,8 @@ use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::hooks::{
-    AskDefault, Decision, Hook, HookCtx, HookError, MessagePatch, OutboundView, PromptPatch,
-    PromptView, ToolCall, UntrustedWrapper,
+    AskDefault, Decision, Hook, HookCtx, HookError, MessagePatch, OutboundView, PostToolUsePatch,
+    PromptPatch, PromptView, ToolCall, ToolResult, UntrustedWrapper,
 };
 use mur_common::multimodal::ProvenanceLedger;
 use mur_common::permissions::{GrantDecision, GrantStore, ScopeKey};
@@ -423,6 +423,39 @@ impl Hook for B0SafetyHook {
             )));
         }
         Ok(MessagePatch::noop())
+    }
+
+    async fn post_tool_use(
+        &self,
+        _ctx: &HookCtx,
+        call: &ToolCall,
+        result: &ToolResult,
+        _tok: &CancellationToken,
+    ) -> Result<PostToolUsePatch, HookError> {
+        // ── Rule 8 (M7.6): redact PII in memory.* tool outputs. ──────────
+        // Only memory.* tools get the redaction pass; everything else
+        // is unchanged. The redactor is permissive (catches obvious
+        // email/SSN/cc/phone patterns) and the patch is consumed by
+        // the supervisor to rewrite `ToolResult.output` before the
+        // value lands in the persisted memory store.
+        //
+        // NOTE: this hook returns the patch; wiring `chain.post_tool_use`'s
+        // returned `PostToolUsePatch` into the persistence path is
+        // tracked separately. M7.6 only covers the hook + chain folding;
+        // the supervisor caller does not yet act on `replace_output`.
+        if !call.name().starts_with("memory.") {
+            return Ok(PostToolUsePatch::default());
+        }
+        let Some(text) = result.output.as_str() else {
+            return Ok(PostToolUsePatch::default());
+        };
+        let redacted = crate::hooks::b0_helpers::redact_pii(text);
+        if redacted == text {
+            return Ok(PostToolUsePatch::default());
+        }
+        Ok(PostToolUsePatch {
+            replace_output: Some(serde_json::Value::String(redacted)),
+        })
     }
 }
 

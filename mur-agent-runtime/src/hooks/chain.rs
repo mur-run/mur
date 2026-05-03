@@ -14,8 +14,8 @@ use tracing::warn;
 
 use crate::hooks::{
     A2AEnvelopeView, Decision, Hook, HookCtx, HookError, MessagePatch, OutboundView, Phase,
-    PromptPatch, PromptView, ShutdownReason, Step, ToolCall, ToolResult, TriggerKind,
-    TriggerPayload,
+    PostToolUsePatch, PromptPatch, PromptView, ShutdownReason, Step, ToolCall, ToolResult,
+    TriggerKind, TriggerPayload,
 };
 use mur_common::AgentProfile;
 
@@ -166,27 +166,39 @@ impl HookChain {
         }
     }
 
+    /// `post_tool_use` is observe-with-mutate-hatch (HOOK_SCHEMA_VERSION
+    /// 2). Hooks run in parallel via `join_all`; errors are logged and
+    /// not propagated. Successful patches are folded in chain order
+    /// using `PostToolUsePatch::merge` (last-write-wins for
+    /// `replace_output`) and the merged patch is returned to the
+    /// supervisor, which decides whether to rewrite
+    /// `ToolResult.output` before persisting.
     pub async fn post_tool_use(
         &self,
         ctx: &HookCtx,
         call: &ToolCall,
         result: &ToolResult,
         tok: &CancellationToken,
-    ) {
+    ) -> PostToolUsePatch {
         let futs = self
             .hooks
             .iter()
             .map(|h| h.post_tool_use(ctx, call, result, tok))
             .collect::<Vec<_>>();
+        let mut acc = PostToolUsePatch::noop();
         for (i, res) in futures::future::join_all(futs)
             .await
             .into_iter()
             .enumerate()
         {
-            if let Err(e) = res {
-                warn!(handler = self.hooks[i].name(), error = %e, "post_tool_use failed");
+            match res {
+                Ok(p) => acc = acc.merge(p),
+                Err(e) => {
+                    warn!(handler = self.hooks[i].name(), error = %e, "post_tool_use failed");
+                }
             }
         }
+        acc
     }
 
     pub async fn on_step_finish(&self, ctx: &HookCtx, step: &Step, tok: &CancellationToken) {
