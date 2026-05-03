@@ -7,7 +7,9 @@
 
 pub mod envelope;
 pub mod llm_entitlement;
+pub mod peer;
 pub mod routes;
 pub use envelope::SignedEnvelope;
 pub use llm_entitlement::{LlmEntitlement, LlmMode};
+pub use peer::TrustedPeer;
 pub use routes::{BridgeRouteConfig, InboundMessage, Resolution, RouteEntry, RouteMatch};

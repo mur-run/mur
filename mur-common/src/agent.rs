@@ -44,6 +44,10 @@ pub struct AgentProfile {
     /// continue to load without this block).
     #[serde(default)]
     pub companion: CompanionConfig,
+    /// Pubkeys of bridges (and other LLM-less peers) this agent will accept
+    /// signed envelopes from. Empty = accept no bridge traffic. Default = empty.
+    #[serde(default)]
+    pub trusted_peers: Vec<crate::bridge::peer::TrustedPeer>,
     pub created_at: String,
     pub updated_at: String,
 }
