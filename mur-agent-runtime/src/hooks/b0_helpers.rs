@@ -143,3 +143,107 @@ mod allowlist_tests {
         assert!(!host_is_allowlisted("api.openai.com", &[]));
     }
 }
+
+/// Scan body for known credential/secret patterns. Returns the FIRST
+/// match's classification (or `None` if clean). Patterns deliberately
+/// favor false-positives over false-negatives — accidentally dropping
+/// a benign message is fine; leaking a key is not.
+pub fn scan_for_secrets(body: &str) -> Option<&'static str> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    // Compile once; share across calls.
+    static PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+    let patterns = PATTERNS.get_or_init(|| {
+        vec![
+            // OpenAI / Anthropic API keys
+            (Regex::new(r"\bsk-[a-zA-Z0-9]{20,}\b").unwrap(), "openai_key"),
+            (Regex::new(r"\bsk-ant-[a-zA-Z0-9-]{20,}\b").unwrap(), "anthropic_key"),
+            // AWS access keys
+            (Regex::new(r"\bAKIA[0-9A-Z]{16}\b").unwrap(), "aws_access_key"),
+            (Regex::new(r"\baws_secret_access_key\s*[:=]\s*[A-Za-z0-9/+=]{40}\b").unwrap(), "aws_secret_key"),
+            // GitHub PAT
+            (Regex::new(r"\bghp_[A-Za-z0-9]{36}\b").unwrap(), "github_pat"),
+            (Regex::new(r"\bghs_[A-Za-z0-9]{36}\b").unwrap(), "github_app_token"),
+            // GCP service account / API key
+            (Regex::new(r"\bAIza[0-9A-Za-z_-]{35}\b").unwrap(), "gcp_api_key"),
+            // JWT (3 base64url segments separated by dots)
+            (Regex::new(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b").unwrap(), "jwt"),
+            // PEM private key
+            (Regex::new(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----").unwrap(), "pem_private_key"),
+            // Slack webhook
+            (Regex::new(r"\bhooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+\b").unwrap(), "slack_webhook"),
+            // Generic .env-style assignment with high-entropy value
+            (Regex::new(r"(?i)\b(api_key|api_secret|secret_key|access_token|password|token)\s*[:=]\s*[A-Za-z0-9_\-./+=]{20,}\b").unwrap(), "env_assignment"),
+        ]
+    });
+
+    for (rx, label) in patterns {
+        if rx.is_match(body) {
+            return Some(label);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::*;
+
+    #[test]
+    fn detects_openai_key() {
+        assert_eq!(
+            scan_for_secrets("here is my key: sk-abcd1234567890efghij1234"),
+            Some("openai_key"),
+        );
+    }
+
+    #[test]
+    fn detects_anthropic_key() {
+        assert!(scan_for_secrets("sk-ant-abcdefghijklmnopqrst-1234").is_some());
+    }
+
+    #[test]
+    fn detects_aws_access_key() {
+        assert_eq!(
+            scan_for_secrets("AKIAIOSFODNN7EXAMPLE"),
+            Some("aws_access_key"),
+        );
+    }
+
+    #[test]
+    fn detects_github_pat() {
+        assert_eq!(
+            scan_for_secrets("ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            Some("github_pat"),
+        );
+    }
+
+    #[test]
+    fn detects_jwt() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+        assert_eq!(scan_for_secrets(jwt), Some("jwt"));
+    }
+
+    #[test]
+    fn detects_pem() {
+        assert_eq!(
+            scan_for_secrets("-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END..."),
+            Some("pem_private_key"),
+        );
+    }
+
+    #[test]
+    fn detects_env_assignment() {
+        assert_eq!(
+            scan_for_secrets("api_key=abcdefghij1234567890"),
+            Some("env_assignment"),
+        );
+    }
+
+    #[test]
+    fn clean_text_returns_none() {
+        assert_eq!(scan_for_secrets("the model is gpt-4o today"), None);
+        assert_eq!(scan_for_secrets("this is a normal message"), None);
+    }
+}

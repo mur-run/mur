@@ -25,8 +25,8 @@ use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::hooks::{
-    AskDefault, Decision, Hook, HookCtx, HookError, PromptPatch, PromptView, ToolCall,
-    UntrustedWrapper,
+    AskDefault, Decision, Hook, HookCtx, HookError, MessagePatch, OutboundView, PromptPatch,
+    PromptView, ToolCall, UntrustedWrapper,
 };
 use mur_common::multimodal::ProvenanceLedger;
 use mur_common::permissions::{GrantDecision, GrantStore, ScopeKey};
@@ -401,6 +401,28 @@ impl Hook for B0SafetyHook {
             }
         }
         Ok(Decision::Allow)
+    }
+
+    async fn on_message_send(
+        &self,
+        _ctx: &HookCtx,
+        view: &OutboundView,
+        _tok: &CancellationToken,
+    ) -> Result<MessagePatch, HookError> {
+        // ── Rule 7 (M7.5): outbound credential pre-filter. ───────────────
+        // Match the body against ~11 well-known credential patterns
+        // (OpenAI / Anthropic / AWS / GitHub / GCP / JWT / PEM /
+        // Slack-webhook / .env-style assignment). On hit, drop the
+        // message entirely with a reason that names the matched class
+        // so the agent can self-correct.
+        if let Some(label) = crate::hooks::b0_helpers::scan_for_secrets(&view.body) {
+            tracing::warn!("B0SafetyHook: dropping outbound — secret detected ({label})");
+            return Ok(MessagePatch::drop_with(&format!(
+                "outbound message blocked: contains credential pattern ({label}). \
+                 Strip the secret and retry. (B0 rule 7)"
+            )));
+        }
+        Ok(MessagePatch::noop())
     }
 }
 
