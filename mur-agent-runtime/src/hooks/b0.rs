@@ -119,6 +119,35 @@ impl Hook for B0SafetyHook {
         call: &ToolCall,
         _tok: &CancellationToken,
     ) -> Result<Decision, HookError> {
+        // ── Rule 1: FS confinement (advisory). ───────────────────────────
+        // For fs.write / fs.delete / fs.append / fs.create on a path
+        // outside <agent_home>, ask the user. Read-only access is the
+        // OS picker's job (granted via tauri-plugin-fs's runtime open
+        // dialog), so we don't gate fs.read here.
+        if matches!(
+            call.name(),
+            "fs.write" | "fs.delete" | "fs.append" | "fs.create"
+        ) && let Some(path) = call.input.get("path").and_then(|v| v.as_str())
+        {
+            let candidate = std::path::Path::new(path);
+            if !crate::hooks::b0_helpers::path_confined_to(candidate, ctx.agent_home()) {
+                let scope_key = ScopeKey {
+                    agent_id: ctx.agent_uuid.clone(),
+                    tool_name: format!("fs_outside_home::{}", call.name()),
+                    input_schema_hash: String::new(),
+                };
+                return Ok(Decision::AskUser {
+                    scope_key,
+                    prompt: format!(
+                        "`{}` is about to write at `{}`, which is outside the agent's \
+                         home directory. Allow this once?",
+                        call.name(),
+                        path,
+                    ),
+                    default: AskDefault::Deny,
+                });
+            }
+        }
         if !ctx
             .turn_flags()
             .iter()
