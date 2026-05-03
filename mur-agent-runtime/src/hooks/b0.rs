@@ -19,6 +19,9 @@
 //! lookup, post_tool_use redaction, on_message_received untrusted
 //! flag) land with the M8 text-only baseline.
 
+use std::path::PathBuf;
+use std::sync::Mutex;
+
 use tokio_util::sync::CancellationToken;
 
 use crate::hooks::{
@@ -26,18 +29,53 @@ use crate::hooks::{
     UntrustedWrapper,
 };
 use mur_common::multimodal::ProvenanceLedger;
-use mur_common::permissions::ScopeKey;
+use mur_common::permissions::{GrantDecision, GrantStore, ScopeKey};
 
 /// Turn-flag raised by `on_prompt_submit` when at least one untrusted
 /// multimodal artifact was attached to the current turn. Read by
 /// `pre_tool_use` to decide whether to gate side-effect tools.
 const TURN_FLAG_AFTER_UNTRUSTED: &str = "after_untrusted_input";
 
-pub struct B0SafetyHook;
+pub struct B0SafetyHook {
+    /// Loaded lazily on first use per `HookCtx::agent_home()` so tests
+    /// can construct the hook with `B0SafetyHook::new()` and the real
+    /// runtime gets it initialized on first tool call. The cached
+    /// `(PathBuf, GrantStore)` pair lets us detect agent_home swaps
+    /// (e.g. test fixtures sharing a hook) and reload accordingly.
+    grant_store: Mutex<Option<(PathBuf, GrantStore)>>,
+}
 
 impl B0SafetyHook {
     pub fn new() -> Self {
-        Self
+        Self {
+            grant_store: Mutex::new(None),
+        }
+    }
+
+    /// Load (or return cached) GrantStore for this `agent_home`.
+    fn ensure_store(&self, agent_home: &std::path::Path) -> std::io::Result<()> {
+        let mut guard = self.grant_store.lock().unwrap();
+        let needs_reload = match &*guard {
+            Some((cached_home, _)) => cached_home != agent_home,
+            None => true,
+        };
+        if needs_reload {
+            let mut store = GrantStore::new(agent_home);
+            store.load()?;
+            *guard = Some((agent_home.to_path_buf(), store));
+        }
+        Ok(())
+    }
+
+    /// Lookup a grant. Returns `None` if no grant or the grant is
+    /// expired. The `now` clock comes from `chrono::Utc::now()` rather
+    /// than `HookCtx::clock` because `GrantStore` consumes
+    /// `chrono::DateTime<Utc>` directly.
+    fn lookup_grant(&self, scope: &ScopeKey) -> Option<GrantDecision> {
+        let guard = self.grant_store.lock().unwrap();
+        guard
+            .as_ref()
+            .and_then(|(_, store)| store.lookup(scope, chrono::Utc::now()))
     }
 }
 
@@ -230,6 +268,94 @@ impl Hook for B0SafetyHook {
                     ),
                     default: AskDefault::Deny,
                 });
+            }
+        }
+        // ── Rule 2 (M7.3): outbound network allowlist + GrantStore. ──────
+        // Per-agent toggle via entitlements.network.outbound.mode:
+        //   - Unrestricted   → fall through (Allow)
+        //   - Off            → deny everything
+        //   - Restricted (default) + host on allow_hosts → fall through
+        //   - Restricted + host NOT on allow_hosts:
+        //       * GrantStore Allow → fall through silently
+        //       * GrantStore Deny  → bail with revoke instructions
+        //       * no grant         → AskUser (default Deny)
+        //
+        // We extract the host from the tool input's `url` field — the
+        // common shape across the network tool family. Adapt per-tool
+        // if a future tool surfaces a different field name.
+        const NET_TOOLS: &[&str] = &[
+            "network.http_get",
+            "network.http_post",
+            "network.tcp_connect",
+            "network.udp_send",
+            "network.dns_resolve",
+            "fetch", // common alias
+        ];
+        if NET_TOOLS.contains(&call.name()) {
+            let outbound = &ctx.entitlements().network.outbound;
+            let host = call
+                .input
+                .get("url")
+                .and_then(|v| v.as_str())
+                .and_then(|u| {
+                    url::Url::parse(u)
+                        .ok()
+                        .and_then(|p| p.host_str().map(|s| s.to_string()))
+                });
+
+            match outbound.mode {
+                mur_common::agent::NetworkOutboundMode::Unrestricted => {
+                    // user opted in; fall through to default Allow
+                }
+                mur_common::agent::NetworkOutboundMode::Off => {
+                    return Ok(Decision::Deny {
+                        reason: "outbound network is disabled by entitlements (mode=off)".into(),
+                    });
+                }
+                mur_common::agent::NetworkOutboundMode::Restricted => {
+                    let host = host.unwrap_or_default();
+                    if !crate::hooks::b0_helpers::host_is_allowlisted(&host, &outbound.allow_hosts)
+                    {
+                        // Lazy-load the GrantStore for this agent. A load
+                        // failure (e.g. corrupt YAML) shouldn't crash
+                        // execution — fall through to AskUser so the user
+                        // can re-grant.
+                        if self.ensure_store(ctx.agent_home()).is_err() {
+                            tracing::warn!(
+                                "B0SafetyHook: GrantStore load failed; falling back to AskUser"
+                            );
+                        }
+                        let scope_key = ScopeKey {
+                            agent_id: ctx.agent_uuid.clone(),
+                            tool_name: format!("network_outbound::{host}"),
+                            input_schema_hash: String::new(),
+                        };
+                        match self.lookup_grant(&scope_key) {
+                            Some(GrantDecision::Allow) => {
+                                // fall through silently
+                            }
+                            Some(GrantDecision::Deny) => {
+                                return Ok(Decision::Deny {
+                                    reason: format!(
+                                        "outbound to `{host}` was previously denied; \
+                                         revoke via `mur agent perm revoke …` to re-prompt"
+                                    ),
+                                });
+                            }
+                            None => {
+                                return Ok(Decision::AskUser {
+                                    scope_key,
+                                    prompt: format!(
+                                        "Agent wants to make an outbound request to \
+                                         `{host}`. This host isn't on the agent's \
+                                         allowlist. Allow once?"
+                                    ),
+                                    default: AskDefault::Deny,
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
         Ok(Decision::Allow)

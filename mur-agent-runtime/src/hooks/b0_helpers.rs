@@ -85,3 +85,61 @@ mod tests {
         assert!(!path_confined_to(&link, confine.path()));
     }
 }
+
+/// Match a host string against an allowlist that supports leading-dot
+/// wildcards (`.example.com` matches `api.example.com` and
+/// `example.com`). Exact match also passes.
+pub fn host_is_allowlisted(host: &str, allow: &[String]) -> bool {
+    let host = host.to_ascii_lowercase();
+    for pattern in allow {
+        let pattern = pattern.to_ascii_lowercase();
+        if let Some(suffix) = pattern.strip_prefix('.') {
+            if host == suffix || host.ends_with(&format!(".{suffix}")) {
+                return true;
+            }
+        } else if host == pattern {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    use super::*;
+
+    #[test]
+    fn exact_match_allowed() {
+        assert!(host_is_allowlisted(
+            "api.openai.com",
+            &["api.openai.com".into()]
+        ));
+    }
+
+    #[test]
+    fn case_insensitive() {
+        assert!(host_is_allowlisted(
+            "API.OpenAI.com",
+            &["api.openai.com".into()]
+        ));
+    }
+
+    #[test]
+    fn dot_prefix_matches_subdomain() {
+        let allow = vec![".openai.com".into()];
+        assert!(host_is_allowlisted("api.openai.com", &allow));
+        assert!(host_is_allowlisted("openai.com", &allow));
+    }
+
+    #[test]
+    fn unrelated_host_rejected() {
+        let allow = vec![".openai.com".into()];
+        assert!(!host_is_allowlisted("evil.com", &allow));
+        assert!(!host_is_allowlisted("notopenai.com", &allow));
+    }
+
+    #[test]
+    fn empty_allowlist_rejects_everything() {
+        assert!(!host_is_allowlisted("api.openai.com", &[]));
+    }
+}
