@@ -166,6 +166,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         // lands with the gate-hook integration in a follow-up milestone.
         turn_id: 0,
         turn_flags: Vec::new(),
+        // Snapshot of the agent's entitlements at supervisor start.
+        // M7.2 (B0 rule 5) reads this from `pre_tool_use` to gate
+        // process-spawn calls. Mutating entitlements at runtime is out
+        // of scope: the supervisor restarts on profile.yaml change.
+        entitlements: profile.inner.entitlements.clone(),
     };
     let hook_cancel = tokio_util::sync::CancellationToken::new();
     hook_chain
