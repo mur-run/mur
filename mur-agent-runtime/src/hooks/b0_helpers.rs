@@ -321,3 +321,46 @@ mod redact_tests {
         assert_eq!(redact_pii(clean), clean);
     }
 }
+
+/// Returns Ok(()) if the binary at `path` is signed (or sig-checks
+/// don't apply on this platform). Returns Err with a user-actionable
+/// reason on macOS/Windows when the signature is missing or invalid.
+pub fn verify_signed(path: &std::path::Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!("binary missing: {}", path.display()));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("/usr/bin/codesign")
+            .args(["-dv", "--verbose=4"])
+            .arg(path)
+            .output()
+            .map_err(|e| format!("codesign spawn: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "macOS binary not signed: {} (run `codesign -dv --verbose=4 {0}` for details)",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let out = std::process::Command::new("signtool")
+            .args(["verify", "/pa", "/q"])
+            .arg(path)
+            .output()
+            .map_err(|e| format!("signtool spawn: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("Windows binary not signed: {}", path.display()));
+        }
+        Ok(())
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        // Linux: signing is not standard for native binaries.
+        // Spec calls this out as macOS/Windows only.
+        let _ = path;
+        Ok(())
+    }
+}

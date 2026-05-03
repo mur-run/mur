@@ -28,6 +28,7 @@ use crate::hooks::{
     AskDefault, Decision, Hook, HookCtx, HookError, MessagePatch, OutboundView, PostToolUsePatch,
     PromptPatch, PromptView, ToolCall, ToolResult, UntrustedWrapper,
 };
+use mur_common::AgentProfile;
 use mur_common::multimodal::ProvenanceLedger;
 use mur_common::permissions::{GrantDecision, GrantStore, ScopeKey};
 
@@ -89,6 +90,27 @@ impl Default for B0SafetyHook {
 impl Hook for B0SafetyHook {
     fn name(&self) -> &str {
         "B0SafetyHook"
+    }
+
+    async fn on_startup(
+        &self,
+        ctx: &HookCtx,
+        _profile: &AgentProfile,
+        _tok: &CancellationToken,
+    ) -> Result<(), HookError> {
+        // ── Rule 11 (M7.7): MCP binary signature check. ──────────────────
+        // Iterate every MCP server binary the supervisor resolved from
+        // `profile.mcp_servers[*].command` and refuse startup if any
+        // are unsigned. macOS/Windows only; Linux's `verify_signed`
+        // helper is a noop per spec §6.1 row 11.
+        for path in ctx.mcp_server_binaries() {
+            if let Err(reason) = crate::hooks::b0_helpers::verify_signed(path) {
+                return Err(HookError::Runtime(format!(
+                    "B0 rule 11: MCP binary signature check failed: {reason}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     async fn on_prompt_submit(

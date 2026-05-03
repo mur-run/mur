@@ -42,6 +42,11 @@ pub struct HookCtx {
     /// (e.g. `B0SafetyHook` rule 5) to decide whether the agent is
     /// permitted to spawn a process, open a network connection, etc.
     pub entitlements: Entitlements,
+    /// Resolved binary paths for every entry in `profile.mcp_servers`.
+    /// Populated by the supervisor from each `McpServerEntry.command`'s
+    /// first whitespace-separated token. Read by `B0SafetyHook::on_startup`
+    /// (rule 11) to verify code signatures on macOS/Windows.
+    pub mcp_server_binaries: Vec<PathBuf>,
 }
 
 impl HookCtx {
@@ -61,6 +66,13 @@ impl HookCtx {
         &self.entitlements
     }
 
+    /// Resolved MCP server binary paths (one per `profile.mcp_servers` entry).
+    /// Read by `B0SafetyHook::on_startup` (rule 11) for the codesign /
+    /// signtool checks on macOS / Windows.
+    pub fn mcp_server_binaries(&self) -> &[PathBuf] {
+        &self.mcp_server_binaries
+    }
+
     /// Test helper: build a HookCtx pinned to an `agent_home` + `turn_id`.
     /// Used by integration tests that need a real on-disk ledger to read.
     pub fn for_test_with_home(home: PathBuf, turn_id: u64) -> Self {
@@ -74,6 +86,7 @@ impl HookCtx {
             turn_id,
             turn_flags: Vec::new(),
             entitlements: test_default_entitlements(),
+            mcp_server_binaries: Vec::new(),
         }
     }
 
@@ -90,6 +103,7 @@ impl HookCtx {
             turn_id: 0,
             turn_flags,
             entitlements: test_default_entitlements(),
+            mcp_server_binaries: Vec::new(),
         }
     }
 
@@ -104,6 +118,20 @@ impl HookCtx {
     ) -> Self {
         let mut ctx = Self::for_test_with_home(home, turn_id);
         ctx.entitlements = entitlements;
+        ctx
+    }
+
+    /// Test helper: build a HookCtx pinned to an `agent_home` + `turn_id`
+    /// with an explicit list of MCP server binary paths. Used by
+    /// `B0SafetyHook::on_startup` rule-11 tests that exercise the
+    /// codesign / signtool path without spinning up a full profile.
+    pub fn for_test_with_mcp_servers(
+        home: PathBuf,
+        turn_id: u64,
+        mcp_server_binaries: Vec<PathBuf>,
+    ) -> Self {
+        let mut ctx = Self::for_test_with_home(home, turn_id);
+        ctx.mcp_server_binaries = mcp_server_binaries;
         ctx
     }
 }

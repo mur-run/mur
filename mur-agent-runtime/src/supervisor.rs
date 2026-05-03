@@ -154,6 +154,21 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         Arc::new(B0SafetyHook::new()),
         Arc::new(LedgerHook::new()),
     ]);
+    // Resolve MCP server binary paths from `profile.mcp_servers[*].command`.
+    // Each `command` is a shell command line; the first whitespace-separated
+    // token is treated as the binary path. M7.7 (rule 11) reads these in
+    // `B0SafetyHook::on_startup` to verify codesign / signtool signatures.
+    let mcp_server_binaries: Vec<std::path::PathBuf> = profile
+        .inner
+        .mcp_servers
+        .iter()
+        .filter_map(|s| {
+            s.command
+                .split_whitespace()
+                .next()
+                .map(std::path::PathBuf::from)
+        })
+        .collect();
     let hook_ctx = HookCtx {
         agent_name: profile.inner.name.clone(),
         agent_uuid: profile.inner.id.clone(),
@@ -171,6 +186,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         // process-spawn calls. Mutating entitlements at runtime is out
         // of scope: the supervisor restarts on profile.yaml change.
         entitlements: profile.inner.entitlements.clone(),
+        mcp_server_binaries,
     };
     let hook_cancel = tokio_util::sync::CancellationToken::new();
     hook_chain
