@@ -462,10 +462,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     //       `bridge::beacon::bridge_status_for_peer` (running.lock mtime
     //       refreshes whenever the writer task appends a JSONL line).
     if profile.inner.entitlements.llm.mode == mur_common::LlmMode::Off {
-        let beacon = crate::bridge::beacon::BridgeBeacon::new(
-            profile.inner.name.clone(),
-            writer.sender(),
-        );
+        let beacon =
+            crate::bridge::beacon::BridgeBeacon::new(profile.inner.name.clone(), writer.sender());
         transport_tasks.push(beacon.spawn());
         info!(name = %profile.inner.name, "spawned BridgeBeacon (30 s heartbeat)");
     }
