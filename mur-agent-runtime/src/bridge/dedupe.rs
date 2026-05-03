@@ -33,4 +33,33 @@ impl DedupeStore {
             counter: 0.into(),
         })
     }
+
+    fn make_key(&self, msg_id: &str) -> Vec<u8> {
+        let mut k = Vec::with_capacity(self.bridge_id.len() + 1 + msg_id.len());
+        k.extend_from_slice(self.bridge_id.as_bytes());
+        k.push(0);
+        k.extend_from_slice(msg_id.as_bytes());
+        k
+    }
+
+    pub fn mark_seen(&mut self, msg_id: &str) -> Result<(), DedupeError> {
+        let key = self.make_key(msg_id);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        self.tree.insert(&key, &now.to_le_bytes())?;
+        Ok(())
+    }
+
+    pub fn is_seen(&self, msg_id: &str) -> Result<bool, DedupeError> {
+        let key = self.make_key(msg_id);
+        let hit = self.tree.get(&key)?.is_some();
+        let n = self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n.wrapping_add(1) % SWEEP_EVERY == 0 {
+            let _ = self.sweep_expired();
+        }
+        Ok(hit)
+    }
+
+    pub(crate) fn sweep_expired(&self) -> Result<usize, DedupeError> {
+        Ok(0) // implemented in M-c1.2.3
+    }
 }
