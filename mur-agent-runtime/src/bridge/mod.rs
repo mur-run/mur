@@ -14,8 +14,10 @@
 //!
 //! ## Sub-modules
 //!
+//! - [`beacon`] — 30 s `telemetry/bridge_alive` heartbeat + degraded classifier
 //! - [`dedupe`] — sled-backed `(bridge_id, platform_msg_id)`, 7-day TTL
 //! - [`verify`] — envelope verification against a trust list
 
+pub mod beacon;
 pub mod dedupe;
 pub mod verify;
