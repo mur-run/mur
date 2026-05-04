@@ -56,6 +56,14 @@
       "themes/**/*",
       "Resources/PrivacyInfo.xcprivacy"
     ],
+    "fileAssociations": [
+      { "name": "text", "ext": ["txt", "md"], "role": "Viewer" },
+      { "name": "url", "ext": ["webloc"], "role": "Viewer" },
+      { "name": "image", "ext": ["png", "jpg", "jpeg", "gif", "webp"], "role": "Viewer" },
+      { "name": "png", "ext": ["png"], "role": "Viewer" },
+      { "name": "jpeg", "ext": ["jpg", "jpeg"], "role": "Viewer" },
+      { "name": "pdf", "ext": ["pdf"], "role": "Viewer" }
+    ],
     "macOS": {
       "minimumSystemVersion": "12.0",
       "entitlements": "entitlements.plist",
