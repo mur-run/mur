@@ -21,7 +21,7 @@ use tauri::{AppHandle, Emitter};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-use super::hotkey::{Clipboard, default_combo_for, resolve_combo, synthesize_from_clipboard};
+use super::hotkey::{Clipboard, resolve_combo, synthesize_from_clipboard};
 use super::{DefaultIngestor, SendIngestor, ShareEmitter, SharePayload};
 
 /// Live emitter that pushes `share:received` events into the webview
@@ -223,17 +223,10 @@ pub fn register_share_hotkey(
     Ok(combo)
 }
 
-/// Default combo string for tests / introspection. Just exposes
-/// `default_combo_for` from `super::hotkey` so callers don't need a
-/// second `use`.
-#[cfg(test)]
-fn default_combo(slug: &str) -> String {
-    default_combo_for(slug)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::hotkey::default_combo_for;
     use std::sync::Mutex;
 
     // Tests in this module mutate process-wide env vars (MUR_HOME,
@@ -344,6 +337,6 @@ mod tests {
 
     #[test]
     fn default_combo_helper_matches_underlying() {
-        assert_eq!(default_combo("coach"), "CommandOrControl+Shift+M+C");
+        assert_eq!(default_combo_for("coach"), "CommandOrControl+Shift+M+C");
     }
 }
