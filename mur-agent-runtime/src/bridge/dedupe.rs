@@ -86,4 +86,21 @@ impl DedupeStore {
         self.tree.insert(&key, &ts_secs.to_le_bytes())?;
         Ok(())
     }
+
+    /// Open an ephemeral, in-memory dedupe store backed by a `sled`
+    /// temporary database. The DB is auto-deleted when the process
+    /// exits (or earlier — sled cleans temporary instances on drop).
+    /// Intended for tests / fixtures only; production code should
+    /// always use [`DedupeStore::open`] so the store survives a
+    /// supervisor restart.
+    pub fn in_memory() -> Result<Self, DedupeError> {
+        let db = sled::Config::new().temporary(true).open()?;
+        let tree = db.open_tree(TREE_NAME)?;
+        Ok(Self {
+            _db: db,
+            tree,
+            bridge_id: "test".into(),
+            counter: 0.into(),
+        })
+    }
 }

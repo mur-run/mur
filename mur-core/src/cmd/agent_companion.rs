@@ -61,12 +61,32 @@ pub enum ConnectorAction {
     Add {
         /// Bridge agent name (distinct from any user agent).
         name: String,
-        /// Platform — only "stub" is supported in C1.
+        /// Platform — "stub" (C1) or "telegram" (C2).
         #[arg(long, default_value = "stub")]
         platform: String,
         /// Recipient agent for the default route. Required.
         #[arg(long)]
         default_route: String,
+        /// (Telegram) Bot token from BotFather. Triggers the non-interactive
+        /// path when provided alongside `--bot-username`, `--chat-id`, and
+        /// `--ack`. Otherwise the interactive 5-step BotFather flow runs.
+        #[arg(long)]
+        bot_token: Option<String>,
+        /// (Telegram) Public bot username (without leading `@`).
+        #[arg(long)]
+        bot_username: Option<String>,
+        /// (Telegram) Primary chat ID for DMs.
+        #[arg(long)]
+        chat_id: Option<i64>,
+        /// (Telegram) Acknowledge the E2E disclosure non-interactively. Must
+        /// be set alongside the other `--bot-*` flags for the non-interactive
+        /// path; without it the scaffold refuses to write any state.
+        #[arg(long)]
+        ack: bool,
+        /// (Telegram) Group chat IDs to allow alongside the primary DM. When
+        /// non-empty the resulting profile has `privacy_mode: allow_groups`.
+        #[arg(long, value_delimiter = ',')]
+        allow_group: Vec<i64>,
     },
 }
 
@@ -93,7 +113,24 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
                 name,
                 platform,
                 default_route,
-            } => connector::add(name, &platform, &default_route).await,
+                bot_token,
+                bot_username,
+                chat_id,
+                ack,
+                allow_group,
+            } => {
+                connector::add(
+                    name,
+                    &platform,
+                    &default_route,
+                    bot_token,
+                    bot_username,
+                    chat_id,
+                    ack,
+                    allow_group,
+                )
+                .await
+            }
         },
     }
 }
