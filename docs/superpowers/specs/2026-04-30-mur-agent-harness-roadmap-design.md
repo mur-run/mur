@@ -603,6 +603,8 @@ All four channels feed received content into the same B0 multimodal pipeline (D3
 
 **Acceptance**: select text in Safari → right-click Services → Send to Coach → Coach.app opens, content appears in composer wrapped in `<untrusted_share>`; same flow via drag-to-dock on a screenshot file applies the full multimodal pipeline.
 
+**Status: shipped 2026-05-04** — harness coverage for all four channels + the React composer integration cascade-merged across PRs M-c3.0 → M-c3.6. `lib.rs::setup` production wiring (the actual `tauri-plugin-deep-link` / `global-shortcut` mounts, `NSApplication.servicesProvider` registration, `RunEvent::Opened` callback, and `App.tsx` mount of `startShareListener`) lands in a stacked follow-up PR with its own manual native-channel QA matrix; the cookbook at `docs/cookbook/c3-send-from-any-app.md` is authoritative for both layers. Acceptance gate: `bash scripts/e2e/c3-send-from-any-app.sh`.
+
 ### 5.6 C4-C9 (v2 Boundary)
 
 Deferred to v2 / v3 with their own specs:
