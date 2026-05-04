@@ -20,7 +20,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::send::{SendIngestor, SharePayload, ShareEmitter, url_scheme};
+use crate::send::hotkey::{FakeClipboard, synthesize_from_clipboard};
+use crate::send::{SendIngestor, ShareEmitter, SharePayload, url_scheme};
 
 /// Counts emit-received calls and stores the payloads. Callers swap
 /// this in for the production `tauri::AppHandle`-backed emitter.
@@ -77,6 +78,10 @@ pub struct MockApp {
     /// want to assert downstream artifacts in stacked harnesses.
     pub agent_home: PathBuf,
     pub ingestor: Arc<RecordingIngestor>,
+    /// Stand-in for the system clipboard. Hotkey channel tests load
+    /// content via [`set_clipboard_text`] / [`set_clipboard_image`]
+    /// before calling [`trigger_shortcut`].
+    pub clipboard: Arc<FakeClipboard>,
 }
 
 impl MockApp {
@@ -85,6 +90,7 @@ impl MockApp {
             slug: slug.into(),
             agent_home: agent_home.as_ref().to_path_buf(),
             ingestor: Arc::new(RecordingIngestor::default()),
+            clipboard: Arc::new(FakeClipboard::empty()),
         }
     }
 
@@ -94,6 +100,22 @@ impl MockApp {
     /// invalid URLs; the harness surfaces them).
     pub async fn simulate_open_url(&self, url: &str) -> anyhow::Result<()> {
         let payload = url_scheme::parse_share_url(url, &self.slug)?;
+        self.ingestor.ingest(payload).await
+    }
+
+    /// Pre-load text into the harness clipboard so the next
+    /// [`trigger_shortcut`] call yields a [`crate::send::ShareKind::Text`]
+    /// (or `Url` if the value starts with `http(s)://`).
+    pub fn set_clipboard_text(&self, text: impl Into<String>) {
+        self.clipboard.set_text(text);
+    }
+
+    /// Drive the hotkey path: read from [`Self::clipboard`] via
+    /// `synthesize_from_clipboard`, then ingest. Same seam the
+    /// production `tauri-plugin-global-shortcut` callback will use
+    /// once `lib.rs::setup` wires it up.
+    pub async fn trigger_shortcut(&self) -> anyhow::Result<()> {
+        let payload = synthesize_from_clipboard(self.clipboard.as_ref()).await?;
         self.ingestor.ingest(payload).await
     }
 
