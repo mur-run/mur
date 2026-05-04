@@ -8,5 +8,6 @@ pub mod companion_bridge;
 pub mod multimodal;
 pub mod send;
 pub mod sidecar;
+pub mod test_harness;
 pub mod theme;
 pub mod voice;

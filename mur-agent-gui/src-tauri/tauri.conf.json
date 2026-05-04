@@ -32,6 +32,13 @@
       "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["muragent-{{AGENT_SLUG}}"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["app"],

@@ -448,6 +448,12 @@ fn phase_4_rewrite_tauri_conf(
         }
     }
 
+    // Track C3 / M-c3.1.4 — substitute the per-agent slug into the
+    // `muragent-{{AGENT_SLUG}}` placeholder under
+    // `plugins.deep-link.desktop.schemes`. The shared helper is
+    // re-used by `rewrite_url_scheme` for hermetic unit testing.
+    apply_url_scheme_substitution(&mut conf, &safe_name);
+
     std::fs::write(&conf_path, serde_json::to_string_pretty(&conf)?)?;
 
     // Copy staged payload + metadata next to tauri.conf.json so the
@@ -467,6 +473,49 @@ fn phase_4_rewrite_tauri_conf(
         opts.agent_name,
         span.elapsed()
     );
+    Ok(())
+}
+
+/// Walk a parsed `tauri.conf.json` value and replace every
+/// `{{AGENT_SLUG}}` token under `plugins.deep-link.desktop.schemes`
+/// with `slug`. Idempotent — running it twice is a no-op once the
+/// substitution has happened. Tolerates a missing `plugins` block so
+/// older configs (or future ones that drop deep-link) don't error.
+fn apply_url_scheme_substitution(conf: &mut serde_json::Value, slug: &str) {
+    let Some(schemes) = conf
+        .get_mut("plugins")
+        .and_then(|p| p.get_mut("deep-link"))
+        .and_then(|d| d.get_mut("desktop"))
+        .and_then(|d| d.get_mut("schemes"))
+        .and_then(|s| s.as_array_mut())
+    else {
+        return;
+    };
+    for entry in schemes.iter_mut() {
+        if let Some(s) = entry.as_str() {
+            let replaced = s.replace("{{AGENT_SLUG}}", slug);
+            *entry = serde_json::Value::String(replaced);
+        }
+    }
+}
+
+/// Stand-alone hermetic entry point that the integration test calls
+/// without spinning up the full export pipeline. Reads
+/// `tauri_conf_dir/tauri.conf.json`, applies the slug substitution,
+/// writes back. Production callers route through
+/// `phase_4_rewrite_tauri_conf`, which calls
+/// `apply_url_scheme_substitution` directly to avoid the disk
+/// round-trip; this wrapper exists so the unit test can verify the
+/// disk-side semantics in isolation.
+#[allow(dead_code)] // Reached only by `tests/agent_export_gui_url_scheme.rs`.
+pub fn rewrite_url_scheme(tauri_conf_dir: &Path, slug: &str) -> Result<()> {
+    let path = tauri_conf_dir.join("tauri.conf.json");
+    let raw = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let mut conf: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+    apply_url_scheme_substitution(&mut conf, slug);
+    std::fs::write(&path, serde_json::to_string_pretty(&conf)?)
+        .with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
