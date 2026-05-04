@@ -18,7 +18,6 @@ pub struct CapabilityIndex {
 /// `budget_chars` is the character budget (≈ tokens × 4). Returns empty string
 /// if there are no entries. Truncates entry list when adding the next entry
 /// would exceed the budget.
-#[allow(dead_code)]
 pub fn format_l0(index: &CapabilityIndex, budget_chars: usize) -> String {
     if index.entries.is_empty() {
         return String::new();
@@ -61,18 +60,17 @@ pub fn save_to(index: &CapabilityIndex, path: &std::path::Path) -> anyhow::Resul
 
 /// Load index from an explicit path; returns empty index if file is missing.
 pub fn load_from(path: &std::path::Path) -> anyhow::Result<CapabilityIndex> {
-    if !path.exists() {
-        return Ok(CapabilityIndex {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(serde_json::from_str(&content)?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(CapabilityIndex {
             entries: vec![],
             project: None,
-        });
+        }),
+        Err(e) => Err(e.into()),
     }
-    let content = std::fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&content)?)
 }
 
 /// Save capability index to `~/.mur/index/capabilities.json`.
-#[allow(dead_code)]
 pub fn save(index: &CapabilityIndex) -> anyhow::Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
     let path = home.join(".mur").join("index").join("capabilities.json");
@@ -87,7 +85,6 @@ pub fn load() -> anyhow::Result<CapabilityIndex> {
     load_from(&path)
 }
 
-#[allow(dead_code)]
 pub fn build(patterns: &[Pattern], project: Option<&str>) -> CapabilityIndex {
     let mut entries: Vec<(f64, CapabilityEntry)> = patterns
         .iter()
@@ -243,6 +240,22 @@ mod tests {
         assert!(idx.entries.is_empty());
     }
 
+    #[test]
+    fn build_includes_deprecated_patterns() {
+        let mut p = make_pattern(
+            "deprecated-but-visible",
+            "Still in index until archived",
+            0.7,
+        );
+        p.base.lifecycle.status = LifecycleStatus::Deprecated;
+        let idx = build(&[p], None);
+        assert_eq!(
+            idx.entries.len(),
+            1,
+            "Deprecated patterns should appear in the index (only Archived is excluded)"
+        );
+    }
+
     // ── Task 2: format_l0 ──────────────────────────────────────────────────────
 
     #[test]
@@ -327,8 +340,9 @@ mod tests {
             project: Some("myproject".into()),
         };
         let out = format_l0(&idx, 2400);
+        // budget 2400 + ~60 footer chars (header already within budget)
         assert!(
-            out.len() <= 2400 + 200,
+            out.len() <= 2400 + 120,
             "output must fit within token budget (with footer), got {} chars",
             out.len()
         );
