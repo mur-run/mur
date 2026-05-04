@@ -270,7 +270,65 @@ fn write_bridge_profile(bridge_id: &str, cfg: &TelegramConfig) -> Result<PathBuf
     let path = dir.join("telegram.yaml");
     std::fs::write(&path, serde_yaml_ng::to_string(cfg)?)
         .with_context(|| format!("write {}", path.display()))?;
+    // M-c2.5.3: register the bridge's outbound `chat.send_message` MCP tool
+    // so user-agents can discover and spawn it via the standard
+    // `profile.mcp_servers[]` surface. If `profile.yaml` already exists
+    // (the normal flow goes through `scaffold_stub_bridge` first), we
+    // round-trip the typed `AgentProfile` and append. If it doesn't exist
+    // (test path / repair flows), we write a minimal partial YAML — that's
+    // enough for the schema-tolerant loader to pick the entry up.
+    upsert_telegram_chat_mcp_entry(&dir, bridge_id)?;
     Ok(path)
+}
+
+/// Add (or upsert by name) a `telegram_chat` entry into the bridge's
+/// `profile.yaml#mcp_servers[]`. Idempotent — re-running the scaffold
+/// won't create duplicate entries.
+fn upsert_telegram_chat_mcp_entry(dir: &std::path::Path, bridge_id: &str) -> Result<()> {
+    use mur_common::agent::McpServerEntry;
+
+    let profile_path = dir.join("profile.yaml");
+    let entry = McpServerEntry {
+        name: "telegram_chat".into(),
+        // The bridge runtime binary is symlinked as `mur_agent_<bridge_id>`
+        // by the supervisor; user-agents resolve it by name on PATH (or
+        // MUR_AGENT_BIN_DIR). Pass `mcp` to enter the stdio MCP server
+        // mode added in M-c2.5.1.
+        command: format!("mur_agent_{bridge_id}"),
+        args: vec!["mcp".into()],
+    };
+
+    if profile_path.exists() {
+        // Round-trip the typed profile so we don't drift other fields.
+        let yaml = std::fs::read_to_string(&profile_path)
+            .with_context(|| format!("read {}", profile_path.display()))?;
+        let mut profile: mur_common::AgentProfile = serde_yaml_ng::from_str(&yaml)
+            .with_context(|| format!("parse {}", profile_path.display()))?;
+        if let Some(existing) = profile
+            .mcp_servers
+            .iter_mut()
+            .find(|e| e.name == entry.name)
+        {
+            *existing = entry;
+        } else {
+            profile.mcp_servers.push(entry);
+        }
+        std::fs::write(&profile_path, serde_yaml_ng::to_string(&profile)?)
+            .with_context(|| format!("write {}", profile_path.display()))?;
+    } else {
+        // Test / repair path — no full profile yet. Write a minimal
+        // partial YAML containing just the mcp_servers entry. Production
+        // always reaches here through `scaffold_stub_bridge` first, so
+        // this branch is only exercised by tests that drive
+        // `scaffold_telegram_bridge` directly.
+        let partial = serde_yaml_ng::to_string(&serde_yaml_ng::mapping::Mapping::from_iter([(
+            serde_yaml_ng::Value::from("mcp_servers"),
+            serde_yaml_ng::to_value(vec![entry])?,
+        )]))?;
+        std::fs::write(&profile_path, partial)
+            .with_context(|| format!("write {}", profile_path.display()))?;
+    }
+    Ok(())
 }
 
 /// Literal-match gate for the Telegram E2E disclosure (M-c2.1.3). The user
