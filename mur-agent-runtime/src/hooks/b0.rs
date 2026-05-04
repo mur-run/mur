@@ -13,8 +13,9 @@
 //! * `on_prompt_submit` — Rule 3 (M7.4) wraps every prior `role:tool`
 //!   message with `<untrusted_tool_result source="tool_result:<name>">`
 //!   AND M3.8 reads the multimodal provenance ledger to wrap PDF/OCR
-//!   text into `<untrusted_pdf_text>` / `<untrusted_image_text>` plus
-//!   the `after_untrusted_input` turn-flag.
+//!   text into `<untrusted_pdf_text>` / `<untrusted_image_text>` /
+//!   `<untrusted_share>` (Track C3 send-from-any-app) plus the
+//!   `after_untrusted_input` turn-flag.
 //! * `pre_tool_use` — most-specific gate first, then situational:
 //!   1. Rule 4 (M3.8) — turn-flag set + side-effect tool → AskUser.
 //!   2. Rule 1 (M7.1) — fs.write/delete/append/create outside
@@ -191,12 +192,16 @@ impl Hook for B0SafetyHook {
                     String::new()
                 }
             };
-            // Heuristic: PDF entries START with the "--- page" marker that
-            // the pipeline (M3.4.2) prepends per page. Anchor with
-            // `starts_with` so an OCR'd image whose body happens to
-            // include that substring isn't misclassified as a PDF.
+            // Heuristic: PDF entries START with the "--- page" marker
+            // (M3.4.2 prepends per page). Track C3 share-channel entries
+            // START with "--- share" (M-c3.0.2's `process_share_text`
+            // prefixes that marker). Anchor with `starts_with` so an
+            // OCR'd image whose body happens to include either substring
+            // isn't misclassified.
             let tag = if content.starts_with("--- page") {
                 "untrusted_pdf_text"
+            } else if content.starts_with("--- share") {
+                "untrusted_share"
             } else {
                 "untrusted_image_text"
             };
