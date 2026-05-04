@@ -1,6 +1,8 @@
 pub mod gate;
 pub mod scoring;
 
+pub use gate::{evaluate_query, evaluate_query_v2, GateInputs, GateOutcome, Tier};
+
 // ---------- P1.3: sources retrieve (gated behind "sources" feature) ----------
 
 #[cfg(feature = "sources")]
