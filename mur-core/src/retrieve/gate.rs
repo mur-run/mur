@@ -260,6 +260,16 @@ impl Default for GateInputs {
 
 pub fn evaluate_query_v2(query: &str, inputs: &GateInputs) -> GateOutcome {
     let intent = intent_score(query);
+
+    // Intent=0 means definitively noise/ack/meta — no other signal overrides this.
+    if intent == 0.0 {
+        return GateOutcome {
+            tier: Tier::Skip,
+            score: 0.0,
+            reasons: vec!["intent: noise/ack/meta"],
+        };
+    }
+
     let tool = tool_signal_score(&inputs.tool_history);
     let quality = query_quality_score(query);
     let session = session_state_score(&inputs.session_state);
@@ -278,7 +288,6 @@ pub fn evaluate_query_v2(query: &str, inputs: &GateInputs) -> GateOutcome {
     };
 
     let mut reasons = Vec::new();
-    if intent == 0.0 { reasons.push("intent: noise/ack/meta"); }
     if quality == 0.0 { reasons.push("quality: noise filter rejected"); }
     if tool >= 0.8 { reasons.push("tool: edit/build active"); }
 
