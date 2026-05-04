@@ -1,0 +1,21 @@
+[package]
+name = "mur-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "murmurd"
+path = "src/main.rs"
+
+[dependencies]
+mur-core = { path = "../mur-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"
