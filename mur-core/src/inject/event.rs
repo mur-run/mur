@@ -1,8 +1,7 @@
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
@@ -12,6 +11,7 @@ pub enum EventKind {
     SessionStart,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizedEvent {
     pub kind: EventKind,
@@ -23,6 +23,7 @@ pub struct NormalizedEvent {
     pub session_id: Option<String>,
 }
 
+#[allow(dead_code)]
 pub fn parse_event(raw: Value, kind: EventKind, provider: &str) -> NormalizedEvent {
     match provider {
         "gemini" => parse_gemini(raw, kind),
@@ -66,6 +67,9 @@ fn parse_gemini(raw: Value, kind: EventKind) -> NormalizedEvent {
             .and_then(|v| v.as_str())
             .map(str::to_owned),
         tool_called: raw.get("tool").and_then(|v| v.as_str()).map(str::to_owned),
+        // Gemini's `result` is the post-tool output, not input args.
+        // We store it in tool_input for queue serialisation; daemon should check tool_provider
+        // when interpreting this field.
         tool_input: raw.get("result").cloned(),
         stop_reason: raw
             .get("status")
@@ -86,16 +90,17 @@ fn parse_cursor(raw: Value, kind: EventKind) -> NormalizedEvent {
             .get("prompt")
             .and_then(|v| v.as_str())
             .map(str::to_owned),
+        // Prefix shell commands with "shell:" to distinguish from named tool functions
         tool_called: raw
             .get("command")
             .and_then(|v| v.as_str())
             .map(|s| format!("shell:{s}")),
-        tool_input: None,
+        tool_input: None, // Cursor hook schema carries no structured tool args
         stop_reason: raw
             .get("stop_reason")
             .and_then(|v| v.as_str())
             .map(str::to_owned),
-        session_id: None,
+        session_id: None, // Cursor hooks do not expose a session identifier
     }
 }
 
@@ -113,8 +118,8 @@ fn parse_copilot(raw: Value, kind: EventKind) -> NormalizedEvent {
             .map(str::to_owned),
         tool_called: raw.get("tool").and_then(|v| v.as_str()).map(str::to_owned),
         tool_input,
-        stop_reason: None,
-        session_id: None,
+        stop_reason: None, // Copilot stop events arrive as separate sessionEnd hooks
+        session_id: None,  // Copilot does not surface session ID in hook payloads
     }
 }
 
@@ -190,6 +195,10 @@ mod tests {
         let raw = json!({"tool": "bash", "result": "cargo build succeeded"});
         let ev = parse_event(raw, EventKind::Tool, "gemini");
         assert_eq!(ev.tool_called.as_deref(), Some("bash"));
+        assert!(
+            ev.tool_input.is_some(),
+            "gemini result should map to tool_input"
+        );
     }
 
     #[test]
@@ -211,6 +220,15 @@ mod tests {
         let raw = json!({"tool": "bash", "input": {"command": "npm test"}});
         let ev = parse_event(raw, EventKind::Tool, "copilot");
         assert_eq!(ev.tool_called.as_deref(), Some("bash"));
+        assert!(ev.tool_input.is_some());
+    }
+
+    #[test]
+    fn parse_copilot_tool_input_fallback() {
+        // When "input" is absent, falls back to "tool_input" key
+        let raw = json!({"tool": "edit", "tool_input": {"path": "src/lib.rs"}});
+        let ev = parse_event(raw, EventKind::Tool, "copilot");
+        assert_eq!(ev.tool_called.as_deref(), Some("edit"));
         assert!(ev.tool_input.is_some());
     }
 
