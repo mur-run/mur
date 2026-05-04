@@ -106,7 +106,23 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
     let raw = read_stdin_json();
     let event = parse_event(raw, EventKind::SessionStart, tool);
     let _ = enqueue(&event);
-    // L0 capability index injection implemented in M2; stub here
+
+    let yaml_store = YamlStore::default_store()?;
+    let patterns = yaml_store.list_all()?;
+
+    let project = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
+
+    let index = crate::inject::index::build(&patterns, project.as_deref());
+    let _ = crate::inject::index::save(&index);
+
+    const L0_BUDGET_CHARS: usize = 2400;
+    let output = crate::inject::index::format_l0(&index, L0_BUDGET_CHARS);
+
+    if !output.is_empty() {
+        print!("{output}");
+    }
     Ok(())
 }
 
