@@ -41,7 +41,7 @@ pub(crate) fn should_skip(query: Option<&str>) -> bool {
 pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
     let raw = read_stdin_json();
     let event = parse_event(raw.clone(), EventKind::Prompt, tool);
-    let _ = enqueue(&event); // best-effort; never fail the hook on queue write error
+    let _ = enqueue(&event);
 
     let query = extract_query(&raw).unwrap_or_default();
     if query.trim().is_empty() {
@@ -54,7 +54,16 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Keyword-only quick-path retrieval (no embedding in M1 hot path)
+    // Inbox-first path: serve pre-computed context from murmurd if fresh
+    if let Some(session_id) = event.session_id.as_deref() {
+        let inbox = crate::daemon::inbox_path(session_id);
+        if let Some(content) = crate::daemon::read_inbox(&inbox, 300) {
+            print!("{content}");
+            return Ok(());
+        }
+    }
+
+    // Degraded-mode / cold-start fallback: synchronous retrieval
     let yaml_store = YamlStore::default_store()?;
     let patterns = yaml_store.list_all()?;
     let workflow_store = WorkflowYamlStore::default_store()?;
