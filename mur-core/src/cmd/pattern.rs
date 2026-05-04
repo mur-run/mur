@@ -190,19 +190,14 @@ pub(crate) fn cmd_new(diagram_path: Option<String>) -> Result<()> {
 
 #[allow(dead_code)] // called via unified search path in P1.4; currently superseded by cmd/search.rs
 pub(crate) fn cmd_search(query: &str) -> Result<()> {
-    use crate::retrieve::gate::{GateDecision, evaluate_query};
+    use crate::retrieve::gate::{Tier as GateTier, evaluate_query};
     use crate::retrieve::scoring::score_and_rank;
 
     // Adaptive gate
-    match evaluate_query(query) {
-        GateDecision::Skip(reason) => {
-            println!("⏭️  Query skipped by gate: {}", reason);
-            return Ok(());
-        }
-        GateDecision::Force => {
-            println!("⚡ Force retrieval triggered");
-        }
-        GateDecision::Pass => {}
+    let outcome = evaluate_query(query);
+    if outcome.tier == GateTier::Skip {
+        println!("# Gate skipped: {} (score={:.2})", outcome.reasons.join(", "), outcome.score);
+        return Ok(());
     }
 
     let store = YamlStore::default_store()?;

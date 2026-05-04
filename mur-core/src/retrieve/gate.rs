@@ -3,71 +3,30 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-#[derive(Debug, PartialEq)]
-pub enum GateDecision {
-    /// Skip retrieval — query is noise
-    Skip(String),
-    /// Force retrieval — high-value query
-    Force,
-    /// Normal retrieval
-    Pass,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Tier {
+    /// 0 tokens — pure ack / greeting / noise
+    Skip,
+    /// Capability index only (~150-300 tokens, SessionStart layer)
+    L0,
+    /// 1-3 pattern snippets (~500 tokens)
+    L1,
+    /// Full body + linked workflows (~1500-2000 tokens)
+    L2,
 }
 
-static SKIP_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        Regex::new(r"(?i)^(hi|hello|hey|yo|sup|thanks|thank you|ok|okay|sure|yes|no|bye|quit|exit)[\s!.]*$").unwrap(),
-        Regex::new(r"^[\p{Emoji}\s]+$").unwrap(),
-        Regex::new(r"(?i)^(cd|ls|pwd|cat|mkdir|rm|cp|mv|git\s+(status|log|diff|add|commit|push|pull))\b").unwrap(),
-    ]
-});
-
-static FORCE_KEYWORDS: LazyLock<Vec<&str>> = LazyLock::new(|| {
-    vec![
-        "error",
-        "fail",
-        "bug",
-        "fix",
-        "crash",
-        "exception",
-        "panic",
-        "remember",
-        "上次",
-        "之前",
-        "以前",
-        "怎麼",
-        "how to",
-        "how do",
-        "best practice",
-        "convention",
-        "pattern",
-    ]
-});
+#[derive(Debug, Clone, PartialEq)]
+pub struct GateOutcome {
+    pub tier: Tier,
+    pub score: f32,
+    pub reasons: Vec<&'static str>,
+}
 
 /// Evaluate whether a query should trigger pattern retrieval.
-pub fn evaluate_query(query: &str) -> GateDecision {
-    let trimmed = query.trim();
-
-    // Too short
-    if trimmed.chars().count() < 3 {
-        return GateDecision::Skip("too short".into());
-    }
-
-    // Check skip patterns
-    for pat in SKIP_PATTERNS.iter() {
-        if pat.is_match(trimmed) {
-            return GateDecision::Skip("noise pattern".into());
-        }
-    }
-
-    // Check force keywords
-    let lower = trimmed.to_lowercase();
-    for kw in FORCE_KEYWORDS.iter() {
-        if lower.contains(kw) {
-            return GateDecision::Force;
-        }
-    }
-
-    GateDecision::Pass
+/// Stub implementation — replaced in Task 7 with composite scoring.
+pub fn evaluate_query(query: &str) -> GateOutcome {
+    let _ = query;
+    GateOutcome { tier: Tier::L1, score: 0.5, reasons: vec![] }
 }
 
 #[cfg(test)]
@@ -75,143 +34,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_skip_greetings() {
-        assert_eq!(evaluate_query("hi"), GateDecision::Skip("too short".into()));
-        assert!(matches!(evaluate_query("hello!"), GateDecision::Skip(_)));
-        assert!(matches!(evaluate_query("thanks"), GateDecision::Skip(_)));
+    fn test_tier_ordering() {
+        // Tier should support ordering: Skip < L0 < L1 < L2
+        assert!(Tier::Skip < Tier::L0);
+        assert!(Tier::L0 < Tier::L1);
+        assert!(Tier::L1 < Tier::L2);
     }
 
     #[test]
-    fn test_skip_emoji() {
-        assert!(matches!(evaluate_query("👍"), GateDecision::Skip(_)));
-        assert!(matches!(evaluate_query("🎉 🚀"), GateDecision::Skip(_)));
-    }
-
-    #[test]
-    fn test_skip_commands() {
-        assert!(matches!(
-            evaluate_query("git status"),
-            GateDecision::Skip(_)
-        ));
-        assert!(matches!(evaluate_query("ls -la"), GateDecision::Skip(_)));
-    }
-
-    #[test]
-    fn test_force_error() {
-        assert_eq!(
-            evaluate_query("I got an error with swift build"),
-            GateDecision::Force
-        );
-        assert_eq!(evaluate_query("how to fix this crash"), GateDecision::Force);
-    }
-
-    #[test]
-    fn test_force_cjk() {
-        assert_eq!(evaluate_query("上次怎麼解決的"), GateDecision::Force);
-        assert_eq!(evaluate_query("之前的做法是什麼"), GateDecision::Force);
-    }
-
-    #[test]
-    fn test_pass_normal() {
-        assert_eq!(
-            evaluate_query("implement a REST API for users"),
-            GateDecision::Pass
-        );
-        assert_eq!(
-            evaluate_query("refactor the auth module"),
-            GateDecision::Pass
-        );
-    }
-
-    #[test]
-    fn test_too_short() {
-        assert!(matches!(evaluate_query("ab"), GateDecision::Skip(_)));
-        assert!(matches!(evaluate_query(""), GateDecision::Skip(_)));
-    }
-
-    #[test]
-    fn test_skip_whitespace_only() {
-        assert!(matches!(evaluate_query("   "), GateDecision::Skip(_)));
-    }
-
-    #[test]
-    fn test_force_best_practice() {
-        assert_eq!(
-            evaluate_query("what is the best practice for error handling"),
-            GateDecision::Force
-        );
-    }
-
-    #[test]
-    fn test_force_remember() {
-        assert_eq!(
-            evaluate_query("do you remember how we solved this before"),
-            GateDecision::Force
-        );
-    }
-
-    #[test]
-    fn test_force_how_to() {
-        assert_eq!(
-            evaluate_query("how to implement authentication"),
-            GateDecision::Force
-        );
-    }
-
-    #[test]
-    fn test_force_bug_keyword() {
-        assert_eq!(
-            evaluate_query("there is a bug in the login page"),
-            GateDecision::Force
-        );
-    }
-
-    #[test]
-    fn test_pass_normal_long_query() {
-        assert_eq!(
-            evaluate_query("create a new component for user profiles"),
-            GateDecision::Pass
-        );
-    }
-
-    #[test]
-    fn test_skip_git_commands() {
-        assert!(matches!(
-            evaluate_query("git commit -m \"fix\""),
-            GateDecision::Skip(_)
-        ));
-        assert!(matches!(
-            evaluate_query("git push origin main"),
-            GateDecision::Skip(_)
-        ));
-    }
-
-    #[test]
-    fn test_skip_various_greetings() {
-        assert!(matches!(evaluate_query("hey!"), GateDecision::Skip(_)));
-        assert!(matches!(evaluate_query("thank you"), GateDecision::Skip(_)));
-        assert!(matches!(evaluate_query("ok."), GateDecision::Skip(_)));
-        assert!(matches!(evaluate_query("bye"), GateDecision::Skip(_)));
-    }
-
-    #[test]
-    fn test_force_chinese_previously() {
-        assert_eq!(evaluate_query("以前的方法是什麼"), GateDecision::Force);
-    }
-
-    #[test]
-    fn test_force_exception_keyword() {
-        assert_eq!(
-            evaluate_query("there is an exception thrown here"),
-            GateDecision::Force
-        );
-    }
-
-    #[test]
-    fn test_force_convention_keyword() {
-        assert_eq!(
-            evaluate_query("what is the naming convention"),
-            GateDecision::Force
-        );
+    fn test_outcome_construction() {
+        let o = GateOutcome { tier: Tier::L1, score: 0.62, reasons: vec!["intent: action verb"] };
+        assert_eq!(o.tier, Tier::L1);
+        assert!((o.score - 0.62).abs() < 1e-6);
+        assert_eq!(o.reasons.len(), 1);
     }
 }
