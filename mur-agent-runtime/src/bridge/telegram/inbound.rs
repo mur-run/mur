@@ -13,6 +13,8 @@
 //! `RealBot = Throttle<CacheMe<Bot>>` is the production wiring; the
 //! [`crate::bridge::telegram::mock::MockBot`] is the test double.
 
+use std::path::PathBuf;
+
 use teloxide::Bot;
 use teloxide::adaptors::throttle::Limits;
 use teloxide::adaptors::{CacheMe, Throttle};
@@ -20,6 +22,7 @@ use teloxide::adaptors::{CacheMe, Throttle};
 use crate::bridge::ack::AckTracker;
 use crate::bridge::dedupe::DedupeStore;
 use crate::bridge::telegram::mock::{MockBot, MockUpdate, MockUserAgentHandle};
+use crate::bridge::telegram::voice::{ForwardPayload, VoiceDeps, handle_voice_update};
 use mur_common::bridge::{PrivacyMode, TelegramConfig};
 use mur_common::identity::AgentIdentity;
 
@@ -103,6 +106,15 @@ pub struct InboundDeps {
     /// Optional in-process user agent for routing tests (M-c2.2.4).
     /// Production code substitutes the real local A2A client.
     pub user_agent: Option<MockUserAgentHandle>,
+    /// Where the voice handler stages downloaded audio. Defaults to a
+    /// per-process tempdir in [`TelegramInboundLoop::default_test_deps`];
+    /// production code points it at the agent's `~/.mur/agents/<name>`.
+    pub agent_home: PathBuf,
+    /// Test-only short-circuit forwarded to
+    /// [`crate::bridge::telegram::voice::VoiceDeps::whisper_stub`].
+    /// Production wires `None` and lets the voice handler invoke the
+    /// real whisper backend.
+    pub whisper_stub: Option<String>,
 }
 
 impl TelegramInboundLoop<MockBot> {
@@ -118,9 +130,38 @@ impl TelegramInboundLoop<MockBot> {
         }
     }
 
+    /// Default test [`InboundDeps`] — DM-only, in-memory dedupe, fresh
+    /// identity, no user agent, voice staged into a per-process
+    /// tempdir. Tests typically mutate one or two fields after
+    /// construction.
+    pub fn default_test_deps() -> InboundDeps {
+        InboundDeps {
+            config: TelegramConfig {
+                bot_username: "B".into(),
+                bot_token_keychain_account: "x".into(),
+                chat_id: 100,
+                privacy_mode: PrivacyMode::DmOnly,
+                allow_groups: vec![],
+                e2e_disclosure_acked_at: None,
+            },
+            dedupe: DedupeStore::in_memory().expect("in-memory dedupe"),
+            ack: AckTracker::<i64>::new(0),
+            identity: AgentIdentity::generate(),
+            key_version: 0,
+            always_5xx: false,
+            user_agent: None,
+            // Per-process scratch dir; the OS reaps it when the
+            // process exits. Tests that care about the on-disk audit
+            // trail can override this.
+            agent_home: std::env::temp_dir().join(format!("mur-c2-test-{}", std::process::id())),
+            whisper_stub: None,
+        }
+    }
+
     /// Drain queued mock updates and run them through the full
-    /// inbound pipeline: dedupe → privacy gate → sign → forward → ACK.
-    /// Returns the number of updates that were successfully delivered.
+    /// inbound pipeline: dedupe → privacy gate → voice transcribe (if
+    /// applicable) → sign → forward → ACK. Returns the number of
+    /// updates that were successfully delivered.
     pub async fn tick_once(&mut self) -> anyhow::Result<usize> {
         let updates: Vec<MockUpdate> =
             std::mem::take(&mut *self.bot.queued_updates.lock().unwrap());
@@ -159,17 +200,42 @@ impl TelegramInboundLoop<MockBot> {
                 continue;
             }
 
-            // (4) mark seen BEFORE we try to deliver — we'd rather
+            // (4) Voice transcription path (M-c2.3). When the update is
+            // a voice message, download + transcribe BEFORE we sign the
+            // outbound envelope so the canonical payload contains the
+            // already-resolved transcript text. Voice errors abort
+            // delivery for this update (cursor stays pinned, dedupe is
+            // not yet marked) so the bridge can retry on the next poll.
+            let body: String = if u.voice_file_id.is_some() {
+                let voice_deps = VoiceDeps {
+                    agent_home: deps.agent_home.clone(),
+                    whisper_stub: deps.whisper_stub.clone(),
+                };
+                match handle_voice_update(&self.bot, &u, &voice_deps).await {
+                    Ok(ForwardPayload::Text { transcript, .. }) => transcript,
+                    Ok(ForwardPayload::Skip) => continue,
+                    Err(_) => {
+                        // Drop this update without marking-seen so the
+                        // next poll can retry. We deliberately do NOT
+                        // advance the offset.
+                        continue;
+                    }
+                }
+            } else {
+                u.text.clone().unwrap_or_default()
+            };
+
+            // (5) mark seen BEFORE we try to deliver — we'd rather
             // double-drop a duplicate than double-deliver a real
             // message on retry.
             deps.dedupe.mark_seen(&dedupe_key)?;
 
-            // (5) hand off to the user agent + ACK. If the configured
+            // (6) hand off to the user agent + ACK. If the configured
             // mock-user-agent returned a 2xx we advance the cursor;
             // 5xx leaves it pinned so the next poll re-fetches.
             deps.ack.start_pending(u.id);
 
-            let outcome = deliver_to_user_agent(deps, &u).await;
+            let outcome = deliver_to_user_agent(deps, &u, &body).await;
             match outcome {
                 Ok(()) => {
                     deps.ack.confirm();
@@ -191,8 +257,14 @@ impl TelegramInboundLoop<MockBot> {
 
 /// Build, sign, and forward an envelope to the configured user agent.
 /// Returns `Err` for any non-2xx response; the inbound loop interprets
-/// `Err` as "do NOT advance the cursor".
-async fn deliver_to_user_agent(deps: &InboundDeps, u: &MockUpdate) -> anyhow::Result<()> {
+/// `Err` as "do NOT advance the cursor". The `body` is computed by the
+/// caller — text updates use `update.text`; voice updates substitute
+/// the whisper transcript (M-c2.3).
+async fn deliver_to_user_agent(
+    deps: &InboundDeps,
+    u: &MockUpdate,
+    body: &str,
+) -> anyhow::Result<()> {
     if deps.always_5xx {
         anyhow::bail!("user-agent returned 5xx (simulated)");
     }
@@ -201,7 +273,6 @@ async fn deliver_to_user_agent(deps: &InboundDeps, u: &MockUpdate) -> anyhow::Re
     // expects. Field order is fixed by `canonicalize_json` (sorted
     // keys); the byte sequence we sign is the byte sequence the
     // verifier reproduces.
-    let body = u.text.clone().unwrap_or_default();
     let payload = serde_json::json!({
         "id": u.id,
         "jsonrpc": "2.0",
