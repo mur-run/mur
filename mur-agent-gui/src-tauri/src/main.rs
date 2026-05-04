@@ -221,6 +221,32 @@ fn main() -> Result<()> {
                 // `App::run` callback site so platform glue stays
                 // co-located with `tauri::RunEvent`.
                 app.manage::<std::sync::Arc<dyn send::SendIngestor>>(ingestor.clone());
+
+                // Channel C — macOS Services menu. The `NSServices`
+                // Info.plist entries (rendered per-agent by
+                // `agent_export_gui::rewrite_nsservices` in M-w3)
+                // advertise the menu items; this call wires the
+                // `serviceShare:` selector body. Dropping the
+                // `Retained` provider would deregister us (Cocoa
+                // holds a weak ref), so we stash it in app state
+                // (wrapped in `SharedServicesProvider` so the
+                // `Send + Sync` bound on `manage` is satisfied —
+                // see the wrapper docs for why a raw `Retained`
+                // doesn't qualify) to keep it alive for the app's
+                // lifetime.
+                #[cfg(target_os = "macos")]
+                match send::services_provider::register_services_provider(ingestor.clone()) {
+                    Ok(provider) => {
+                        app.manage::<send::services_provider::SharedServicesProvider>(
+                            send::services_provider::SharedServicesProvider::new(provider),
+                        );
+                        tracing::info!("services-menu provider registered");
+                    }
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "services-menu provider not registered"
+                    ),
+                }
             }
 
             // Tray menu — primary UX for the menubar launcher.
