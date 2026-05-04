@@ -448,6 +448,24 @@ fn phase_4_rewrite_tauri_conf(
         }
     }
 
+    // Track C3 / M-c3.1.4 — substitute the per-agent slug into the
+    // `muragent-{{AGENT_SLUG}}` placeholder under
+    // `plugins.deep-link.desktop.schemes`. The shared helper is
+    // re-used by `rewrite_url_scheme` for hermetic unit testing.
+    apply_url_scheme_substitution(&mut conf, &safe_name);
+
+    // Track C3 / M-w3 — render Info.plist from Info.plist.template
+    // with the per-agent display name and point
+    // `bundle.macOS.infoPlist` at the rendered file so Tauri merges
+    // the `NSServices` entries into the final
+    // `MyAgent.app/Contents/Info.plist`. macOS-only at runtime, but
+    // the rewrite is harmless on Linux/Windows export targets — the
+    // bundler simply ignores `bundle.macOS.*` there.
+    if src_tauri.join("Info.plist.template").exists() {
+        apply_nsservices_substitution(&mut conf);
+        rewrite_nsservices(&src_tauri, &safe_name, &opts.agent_name)?;
+    }
+
     std::fs::write(&conf_path, serde_json::to_string_pretty(&conf)?)?;
 
     // Copy staged payload + metadata next to tauri.conf.json so the
@@ -470,6 +488,96 @@ fn phase_4_rewrite_tauri_conf(
     Ok(())
 }
 
+/// Walk a parsed `tauri.conf.json` value and replace every
+/// `{{AGENT_SLUG}}` token under `plugins.deep-link.desktop.schemes`
+/// with `slug`. Idempotent — running it twice is a no-op once the
+/// substitution has happened. Tolerates a missing `plugins` block so
+/// older configs (or future ones that drop deep-link) don't error.
+fn apply_url_scheme_substitution(conf: &mut serde_json::Value, slug: &str) {
+    let Some(schemes) = conf
+        .get_mut("plugins")
+        .and_then(|p| p.get_mut("deep-link"))
+        .and_then(|d| d.get_mut("desktop"))
+        .and_then(|d| d.get_mut("schemes"))
+        .and_then(|s| s.as_array_mut())
+    else {
+        return;
+    };
+    for entry in schemes.iter_mut() {
+        if let Some(s) = entry.as_str() {
+            let replaced = s.replace("{{AGENT_SLUG}}", slug);
+            *entry = serde_json::Value::String(replaced);
+        }
+    }
+}
+
+/// Stand-alone hermetic entry point that the integration test calls
+/// without spinning up the full export pipeline. Reads
+/// `tauri_conf_dir/tauri.conf.json`, applies the slug substitution,
+/// writes back. Production callers route through
+/// `phase_4_rewrite_tauri_conf`, which calls
+/// `apply_url_scheme_substitution` directly to avoid the disk
+/// round-trip; this wrapper exists so the unit test can verify the
+/// disk-side semantics in isolation.
+/// Track C3 / M-w3 — point `bundle.macOS.infoPlist` at the rendered
+/// `Info.plist` so the Tauri bundler merges its `NSServices` array
+/// into the final `MyAgent.app/Contents/Info.plist`.
+///
+/// Idempotent — running it twice yields the same conf. Tolerates a
+/// missing `bundle.macOS` block (creates it) so future template
+/// refactors that drop the macOS section don't break export.
+fn apply_nsservices_substitution(conf: &mut serde_json::Value) {
+    let bundle = conf.get_mut("bundle").and_then(|b| b.as_object_mut());
+    let Some(bundle) = bundle else {
+        return;
+    };
+    let macos = bundle
+        .entry("macOS".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(obj) = macos.as_object_mut() {
+        obj.insert(
+            "infoPlist".to_string(),
+            serde_json::Value::String("Info.plist".to_string()),
+        );
+    }
+}
+
+#[allow(dead_code)] // Reached only by `tests/agent_export_gui_url_scheme.rs`.
+pub fn rewrite_url_scheme(tauri_conf_dir: &Path, slug: &str) -> Result<()> {
+    let path = tauri_conf_dir.join("tauri.conf.json");
+    let raw = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let mut conf: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+    apply_url_scheme_substitution(&mut conf, slug);
+    std::fs::write(&path, serde_json::to_string_pretty(&conf)?)
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+/// Track C3 / M-c3.3.3 — substitute `{{AGENT_DISPLAY}}` in
+/// `Info.plist.template` and write the result back to `Info.plist`
+/// in the same directory.
+///
+/// `slug` is currently unused (Apple's `NSServices` array doesn't carry
+/// the kebab-case slug; menu titles + `NSPortName` use the human display
+/// name). It's wired through anyway so callers can match the
+/// `rewrite_url_scheme(slug)` signature and so future template fields
+/// (e.g. dock-drop UTI suffixes) can opt in without a signature break.
+///
+/// The output filename intentionally drops the `.template` suffix —
+/// `bundle.macOS.infoPlist` in `tauri.conf.json` is expected to point
+/// at `Info.plist` (the rendered file), not `Info.plist.template`.
+#[allow(dead_code)] // Reached only by `tests/agent_export_gui_nsservices.rs`.
+pub fn rewrite_nsservices(tauri_conf_dir: &Path, _slug: &str, display: &str) -> Result<()> {
+    let template = tauri_conf_dir.join("Info.plist.template");
+    let raw = std::fs::read_to_string(&template)
+        .with_context(|| format!("read {}", template.display()))?;
+    let rendered = raw.replace("{{AGENT_DISPLAY}}", display);
+    let out = tauri_conf_dir.join("Info.plist");
+    std::fs::write(&out, rendered).with_context(|| format!("write {}", out.display()))?;
+    Ok(())
+}
+
 /// Restore the pristine tauri.conf.json after the build (called from
 /// phase_13 success path AND from any failure; idempotent).
 fn restore_tauri_conf() -> Result<()> {
@@ -482,6 +590,11 @@ fn restore_tauri_conf() -> Result<()> {
     // Clean up the per-export drop-ins.
     let _ = std::fs::remove_file(gui_root.join("src-tauri/agent-payload.tar.gz"));
     let _ = std::fs::remove_file(gui_root.join("src-tauri/metadata.json"));
+    // Track C3 / M-w3 — the rendered Info.plist is per-agent build
+    // output (the .template stays); drop it so a follow-up export
+    // for a different agent doesn't accidentally bundle the prior
+    // agent's NSServices entries.
+    let _ = std::fs::remove_file(gui_root.join("src-tauri/Info.plist"));
     Ok(())
 }
 

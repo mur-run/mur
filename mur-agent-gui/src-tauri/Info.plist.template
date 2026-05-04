@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Track C3 / M-c3.3.3 — NSServices template merged into the bundled
+  Info.plist by `mur-core::cmd::agent_export_gui::rewrite_nsservices`
+  during the GUI export pipeline.
+
+  The `{{AGENT_DISPLAY}}` token is substituted with the per-agent
+  display name (e.g. "Coach"). Three menu items are exposed in the
+  Services menu — text selection, link, image — all dispatching to the
+  same `serviceShare:` selector registered on `NSApplication`. The
+  Rust handler decides what to do based on the pasteboard contents.
+
+  Apple guidance: keep these menu items short ("verb + noun + agent")
+  so they fit the Services submenu without truncation.
+-->
+<plist version="1.0">
+<dict>
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key>
+                <string>Send Selection to {{AGENT_DISPLAY}}</string>
+            </dict>
+            <key>NSMessage</key>
+            <string>serviceShare</string>
+            <key>NSPortName</key>
+            <string>{{AGENT_DISPLAY}}</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>public.utf8-plain-text</string>
+                <string>NSStringPboardType</string>
+            </array>
+        </dict>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key>
+                <string>Send Link to {{AGENT_DISPLAY}}</string>
+            </dict>
+            <key>NSMessage</key>
+            <string>serviceShare</string>
+            <key>NSPortName</key>
+            <string>{{AGENT_DISPLAY}}</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>public.url</string>
+            </array>
+        </dict>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key>
+                <string>Send Image to {{AGENT_DISPLAY}}</string>
+            </dict>
+            <key>NSMessage</key>
+            <string>serviceShare</string>
+            <key>NSPortName</key>
+            <string>{{AGENT_DISPLAY}}</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>public.image</string>
+                <string>public.png</string>
+                <string>public.jpeg</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

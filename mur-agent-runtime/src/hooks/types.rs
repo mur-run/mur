@@ -1,6 +1,11 @@
 //! Hook-trait shared value types. All `Send + Sync + 'static` so they can
 //! cross `Arc<dyn Hook>` boundaries.
 
+use mur_common::agent::{
+    Entitlements, FilesystemEntitlement, InboundNetwork, LimitsEntitlement, NetworkEntitlement,
+    NetworkOutboundMode, OutboundNetwork, ProcessesEntitlement, ResolveDnsConfig, SpawnEntitlement,
+    SpawnMode, SyscallsEntitlement,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,6 +38,15 @@ pub struct HookCtx {
     /// Turn-scoped flags raised by mutate hooks (e.g.
     /// `"after_untrusted_input"`) and consumed by gate hooks.
     pub turn_flags: Vec<String>,
+    /// Snapshot of the agent profile's entitlements. Read by gate hooks
+    /// (e.g. `B0SafetyHook` rule 5) to decide whether the agent is
+    /// permitted to spawn a process, open a network connection, etc.
+    pub entitlements: Entitlements,
+    /// Resolved binary paths for every entry in `profile.mcp_servers`.
+    /// Populated by the supervisor from each `McpServerEntry.command`'s
+    /// first whitespace-separated token. Read by `B0SafetyHook::on_startup`
+    /// (rule 11) to verify code signatures on macOS/Windows.
+    pub mcp_server_binaries: Vec<PathBuf>,
 }
 
 impl HookCtx {
@@ -48,6 +62,17 @@ impl HookCtx {
         &self.turn_flags
     }
 
+    pub fn entitlements(&self) -> &Entitlements {
+        &self.entitlements
+    }
+
+    /// Resolved MCP server binary paths (one per `profile.mcp_servers` entry).
+    /// Read by `B0SafetyHook::on_startup` (rule 11) for the codesign /
+    /// signtool checks on macOS / Windows.
+    pub fn mcp_server_binaries(&self) -> &[PathBuf] {
+        &self.mcp_server_binaries
+    }
+
     /// Test helper: build a HookCtx pinned to an `agent_home` + `turn_id`.
     /// Used by integration tests that need a real on-disk ledger to read.
     pub fn for_test_with_home(home: PathBuf, turn_id: u64) -> Self {
@@ -60,6 +85,8 @@ impl HookCtx {
             agent_home: home,
             turn_id,
             turn_flags: Vec::new(),
+            entitlements: test_default_entitlements(),
+            mcp_server_binaries: Vec::new(),
         }
     }
 
@@ -75,7 +102,65 @@ impl HookCtx {
             agent_home: PathBuf::new(),
             turn_id: 0,
             turn_flags,
+            entitlements: test_default_entitlements(),
+            mcp_server_binaries: Vec::new(),
         }
+    }
+
+    /// Test helper: build a HookCtx pinned to an `agent_home` + `turn_id`
+    /// with an explicit `Entitlements` snapshot. Used by gate-hook tests
+    /// that exercise rules keyed off the entitlement (e.g. rule 5
+    /// process-spawn allowlist).
+    pub fn for_test_with_entitlements(
+        home: PathBuf,
+        turn_id: u64,
+        entitlements: Entitlements,
+    ) -> Self {
+        let mut ctx = Self::for_test_with_home(home, turn_id);
+        ctx.entitlements = entitlements;
+        ctx
+    }
+
+    /// Test helper: build a HookCtx pinned to an `agent_home` + `turn_id`
+    /// with an explicit list of MCP server binary paths. Used by
+    /// `B0SafetyHook::on_startup` rule-11 tests that exercise the
+    /// codesign / signtool path without spinning up a full profile.
+    pub fn for_test_with_mcp_servers(
+        home: PathBuf,
+        turn_id: u64,
+        mcp_server_binaries: Vec<PathBuf>,
+    ) -> Self {
+        let mut ctx = Self::for_test_with_home(home, turn_id);
+        ctx.mcp_server_binaries = mcp_server_binaries;
+        ctx
+    }
+}
+
+/// Test-only Entitlements default. Mirrors `default_entitlements_custom`
+/// in `mur-core::cmd::agent` so test contexts behave like a freshly
+/// created agent: `Restricted` outbound network, empty allow lists,
+/// `SpawnMode::Allowlist` with no allowed programs (deny-by-default).
+fn test_default_entitlements() -> Entitlements {
+    Entitlements {
+        network: NetworkEntitlement {
+            inbound: InboundNetwork { ports: vec![] },
+            outbound: OutboundNetwork {
+                mode: NetworkOutboundMode::Restricted,
+                allow_hosts: vec![],
+                protocols: vec!["tcp".into()],
+                resolve_dns: ResolveDnsConfig::default(),
+            },
+        },
+        filesystem: FilesystemEntitlement::default(),
+        processes: ProcessesEntitlement {
+            spawn: SpawnEntitlement {
+                mode: SpawnMode::Allowlist,
+                allowed: vec![],
+            },
+        },
+        syscalls: SyscallsEntitlement::default(),
+        limits: LimitsEntitlement::default(),
+        llm: Default::default(),
     }
 }
 

@@ -44,6 +44,10 @@ pub struct AgentProfile {
     /// continue to load without this block).
     #[serde(default)]
     pub companion: CompanionConfig,
+    /// Pubkeys of bridges (and other LLM-less peers) this agent will accept
+    /// signed envelopes from. Empty = accept no bridge traffic. Default = empty.
+    #[serde(default)]
+    pub trusted_peers: Vec<crate::bridge::peer::TrustedPeer>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -216,6 +220,10 @@ pub struct Entitlements {
     pub syscalls: SyscallsEntitlement,
     #[serde(default)]
     pub limits: LimitsEntitlement,
+    /// LLM call permission. Default = Allowed (back-compat). Bridges set to Off
+    /// so the supervisor refuses to construct an LLM client.
+    #[serde(default)]
+    pub llm: crate::bridge::llm_entitlement::LlmEntitlement,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

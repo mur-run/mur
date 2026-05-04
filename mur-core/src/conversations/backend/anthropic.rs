@@ -3,8 +3,6 @@
 //!
 //! See spec §5.2.
 
-#![allow(dead_code)] // wired by factory + compact.extractive in Tasks 6 & 7.
-
 use std::time::Duration;
 
 use anyhow::Result;

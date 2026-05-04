@@ -1,11 +1,32 @@
 //! LLM client abstraction.
 
 use async_trait::async_trait;
+use mur_common::{AgentProfile, LlmMode};
 
 pub mod anthropic;
 pub mod ollama;
 pub mod openai;
 pub mod stub;
+
+/// Gate function that the supervisor calls before constructing any concrete
+/// LLM client. Returns `Err` when `entitlements.llm.mode = off`, which
+/// declares the agent a "bridge" — an LLM-less mur agent that relays chat
+/// traffic to/from the A2A bus. Bridges have no model, no API key, and the
+/// supervisor must not dial a provider on their behalf.
+///
+/// Default `mode = Allowed` (back-compat), so this is a no-op for every
+/// existing agent profile.
+///
+/// See `mur-common::bridge::LlmEntitlement` and Track C1 task M-c1.0.
+pub fn build_client(profile: &AgentProfile) -> anyhow::Result<()> {
+    if profile.entitlements.llm.mode == LlmMode::Off {
+        anyhow::bail!(
+            "llm.mode = off — agent '{}' is a bridge and may not call an LLM",
+            profile.name
+        );
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 pub struct LlmMessage {

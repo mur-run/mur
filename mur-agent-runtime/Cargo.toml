@@ -60,6 +60,24 @@ dirs = "5"
 tempfile = "3"
 whatlang = { workspace = true }
 rand = { workspace = true }
+# B0 rule 2 (M7.3) parses `url` field from network tool inputs to derive the
+# host before consulting the entitlement allowlist + GrantStore. Already
+# pulled in transitively by reqwest; declare it explicitly here so the
+# import surface is documented.
+url = "2"
+# B0 rule 7 (M7.5) outbound secret pre-filter compiles ~11 credential
+# patterns once via OnceLock and matches each outbound message body before
+# delivery. Pattern set deliberately favors false-positives.
+regex = "1"
+# Track C1 — bridge dedupe store. Sled gives us an embedded transactional
+# K/V tree. We store `(bridge_id, platform_msg_id) -> u64 LE timestamp` and
+# sweep entries older than 7 days.
+sled = { workspace = true }
+# Track C2 — Telegram bridge. teloxide drives long-poll updates with built-in
+# Throttle (FloodControl) + CacheMe (User profile cache) adaptors. We disable
+# default-features so we don't pull native-tls; rustls keeps the dep tree
+# consistent with reqwest.
+teloxide = { version = "0.13", default-features = false, features = ["rustls", "throttle", "cache-me"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

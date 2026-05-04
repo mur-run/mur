@@ -48,6 +48,46 @@ pub enum CompanionCmd {
     Rhythm(RhythmArgs),
     /// Manage character cards (export / import / list / accept).
     Card(card::cli::CardArgs),
+    /// Manage cross-platform connectors (bridge agents). Track C1+.
+    Connector {
+        #[command(subcommand)]
+        action: ConnectorAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConnectorAction {
+    /// Scaffold a new bridge agent for a given platform.
+    Add {
+        /// Bridge agent name (distinct from any user agent).
+        name: String,
+        /// Platform — "stub" (C1) or "telegram" (C2).
+        #[arg(long, default_value = "stub")]
+        platform: String,
+        /// Recipient agent for the default route. Required.
+        #[arg(long)]
+        default_route: String,
+        /// (Telegram) Bot token from BotFather. Triggers the non-interactive
+        /// path when provided alongside `--bot-username`, `--chat-id`, and
+        /// `--ack`. Otherwise the interactive 5-step BotFather flow runs.
+        #[arg(long)]
+        bot_token: Option<String>,
+        /// (Telegram) Public bot username (without leading `@`).
+        #[arg(long)]
+        bot_username: Option<String>,
+        /// (Telegram) Primary chat ID for DMs.
+        #[arg(long)]
+        chat_id: Option<i64>,
+        /// (Telegram) Acknowledge the E2E disclosure non-interactively. Must
+        /// be set alongside the other `--bot-*` flags for the non-interactive
+        /// path; without it the scaffold refuses to write any state.
+        #[arg(long)]
+        ack: bool,
+        /// (Telegram) Group chat IDs to allow alongside the primary DM. When
+        /// non-empty the resulting profile has `privacy_mode: allow_groups`.
+        #[arg(long, value_delimiter = ',')]
+        allow_group: Vec<i64>,
+    },
 }
 
 pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
@@ -68,10 +108,35 @@ pub async fn run(args: CompanionArgs) -> anyhow::Result<()> {
         CompanionCmd::WhyDidYouMessage(args) => why::run(args).await,
         CompanionCmd::Rhythm(args) => rhythm::run(args).await,
         CompanionCmd::Card(args) => card::cli::run(args).await,
+        CompanionCmd::Connector { action } => match action {
+            ConnectorAction::Add {
+                name,
+                platform,
+                default_route,
+                bot_token,
+                bot_username,
+                chat_id,
+                ack,
+                allow_group,
+            } => {
+                connector::add(
+                    name,
+                    &platform,
+                    &default_route,
+                    bot_token,
+                    bot_username,
+                    chat_id,
+                    ack,
+                    allow_group,
+                )
+                .await
+            }
+        },
     }
 }
 
 pub mod card;
+pub mod connector;
 mod content;
 mod inbox;
 pub mod init;

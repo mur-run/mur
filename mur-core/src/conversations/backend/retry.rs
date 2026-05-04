@@ -8,8 +8,6 @@
 //!
 //! See spec §8.1.
 
-#![allow(dead_code)] // wired into factory in Task 6.
-
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;

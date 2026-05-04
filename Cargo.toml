@@ -16,7 +16,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "2.4.1"
+version = "2.5.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/mur-run/mur"
@@ -48,3 +48,4 @@ ulid = { version = "1", features = ["serde"] }
 fs2 = "0.4"
 chrono-tz = "0.8"
 insta = { version = "1", features = ["yaml"] }
+sled = "0.34"

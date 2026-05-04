@@ -1,6 +1,6 @@
 [package]
 name = "mur-agent-gui"
-version = "2.4.1"
+version = "2.5.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/mur-run/mur"
@@ -83,9 +83,18 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures = "0.3"
 async-trait = "0.1"
+# Track C3 — sniff mime type for shared file/image paths so the
+# ingestor can route binary kinds through `process_artifact`.
+mime_guess = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
+# Track C3 / M-c3.1 — `muragent-<slug>://share?...` URL scheme channel.
+# `tauri-plugin-deep-link` provides the runtime handler; `base64` and
+# `url` decode the inbound payload (URL_SAFE_NO_PAD, RFC 3986).
+tauri-plugin-deep-link = "2"
+base64 = "0.22"
+url = "2"
 
 # ───── multimodal decoder (D3 / M3) ─────
 # `image` is consumed by `mur-agent-decoder` for PNG/JPEG/WebP decode.
@@ -104,6 +113,23 @@ libc = "0.2"
 # whisper.cpp Metal backend — Apple-only; enabling on Linux/Windows breaks
 # CMake (it looks for the Foundation framework which only exists on macOS).
 whisper-rs = { version = "0.14", default-features = false, features = ["metal"] }
+# Track C3 / M-c3.3 — Services menu channel. `objc2` exposes the
+# Objective-C runtime; `objc2-app-kit` and `objc2-foundation` give us
+# NSPasteboard / NSApplication / NSString bindings used by the
+# `NSServiceProviderProtocol` bridge in `src/send/services.rs`.
+# Pinned to 0.3.x / 0.6.x to match the versions already pulled in
+# transitively by `tauri` 2 (via `arboard`, `muda`, `global-hotkey`)
+# — mixing major versions yields confusing trait-bound errors.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSPasteboard",
+] }
+objc2-foundation = { version = "0.3", features = [
+    "NSArray",
+    "NSData",
+    "NSString",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa = "0.9"
