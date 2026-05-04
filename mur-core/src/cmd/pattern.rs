@@ -196,7 +196,11 @@ pub(crate) fn cmd_search(query: &str) -> Result<()> {
     // Adaptive gate
     let outcome = evaluate_query(query);
     if outcome.tier == GateTier::Skip {
-        println!("# Gate skipped: {} (score={:.2})", outcome.reasons.join(", "), outcome.score);
+        println!(
+            "# Gate skipped: {} (score={:.2})",
+            outcome.reasons.join(", "),
+            outcome.score
+        );
         return Ok(());
     }
 

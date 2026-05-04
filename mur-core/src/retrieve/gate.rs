@@ -32,13 +32,11 @@ static META_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^/(help|status|model|clear|usage|exit|quit|effort|fast|review|init|config|mcp|cost|memory|hooks?|permissions?|agents?|todos?)\b").unwrap()
 });
 
-static QUESTION_EN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(why|what is|what's|how does|explain)\b").unwrap()
-});
+static QUESTION_EN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^(why|what is|what's|how does|explain)\b").unwrap());
 
-static QUESTION_ZH_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(為什麼|是什麼|解釋一下|怎麼回事)").unwrap()
-});
+static QUESTION_ZH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(為什麼|是什麼|解釋一下|怎麼回事)").unwrap());
 
 static CODE_IDENT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(\w+\.[a-zA-Z]{1,5}\b|\bfn\s+\w+|\w+::\w+|\b[a-z]+_[a-z_]+\b)").unwrap()
@@ -54,19 +52,80 @@ static ACTION_VERB_ZH_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 const TECH_TERMS: &[&str] = &[
-    "tokio", "async", "await", "spawn", "select", "trait", "struct", "enum", "impl",
-    "test", "build", "debug", "deploy", "lint", "format", "refactor", "migrate",
-    "error", "panic", "result", "option", "vec", "hashmap", "btreemap",
-    "api", "endpoint", "request", "response", "header", "json", "yaml",
-    "database", "schema", "table", "column", "index", "query", "transaction",
-    "worker", "queue", "daemon", "thread", "lock", "channel", "future",
-    "tcp", "http", "https", "ssl", "tls", "noise", "websocket",
-    "docker", "kubernetes", "ci", "cd", "pipeline", "hook", "skill", "agent",
-    "vector", "embedding", "retrieval", "rag", "llm", "prompt", "pattern",
+    "tokio",
+    "async",
+    "await",
+    "spawn",
+    "select",
+    "trait",
+    "struct",
+    "enum",
+    "impl",
+    "test",
+    "build",
+    "debug",
+    "deploy",
+    "lint",
+    "format",
+    "refactor",
+    "migrate",
+    "error",
+    "panic",
+    "result",
+    "option",
+    "vec",
+    "hashmap",
+    "btreemap",
+    "api",
+    "endpoint",
+    "request",
+    "response",
+    "header",
+    "json",
+    "yaml",
+    "database",
+    "schema",
+    "table",
+    "column",
+    "index",
+    "query",
+    "transaction",
+    "worker",
+    "queue",
+    "daemon",
+    "thread",
+    "lock",
+    "channel",
+    "future",
+    "tcp",
+    "http",
+    "https",
+    "ssl",
+    "tls",
+    "noise",
+    "websocket",
+    "docker",
+    "kubernetes",
+    "ci",
+    "cd",
+    "pipeline",
+    "hook",
+    "skill",
+    "agent",
+    "vector",
+    "embedding",
+    "retrieval",
+    "rag",
+    "llm",
+    "prompt",
+    "pattern",
 ];
 
 fn count_tech_terms(query_lower: &str) -> usize {
-    TECH_TERMS.iter().filter(|t| query_lower.contains(*t)).count()
+    TECH_TERMS
+        .iter()
+        .filter(|t| query_lower.contains(*t))
+        .count()
 }
 
 pub(crate) fn intent_score(query: &str) -> f32 {
@@ -106,8 +165,22 @@ pub struct ToolSignalInput {
 }
 
 const BUILD_TEST_RUNNERS: &[&str] = &[
-    "cargo", "npm", "yarn", "pnpm", "bun", "pytest", "go", "make", "docker",
-    "rustc", "gcc", "clang", "mvn", "gradle", "swift", "xcodebuild",
+    "cargo",
+    "npm",
+    "yarn",
+    "pnpm",
+    "bun",
+    "pytest",
+    "go",
+    "make",
+    "docker",
+    "rustc",
+    "gcc",
+    "clang",
+    "mvn",
+    "gradle",
+    "swift",
+    "xcodebuild",
 ];
 
 pub(crate) fn tool_signal_score(history: &[ToolSignalInput]) -> f32 {
@@ -131,7 +204,7 @@ pub(crate) fn tool_signal_score(history: &[ToolSignalInput]) -> f32 {
                 only_read = false;
                 if let Some(cmd) = &entry.bash_command {
                     let first_word = cmd.split_whitespace().next().unwrap_or("");
-                    if BUILD_TEST_RUNNERS.iter().any(|r| first_word == *r) {
+                    if BUILD_TEST_RUNNERS.contains(&first_word) {
                         has_build = true;
                     }
                 }
@@ -146,10 +219,18 @@ pub(crate) fn tool_signal_score(history: &[ToolSignalInput]) -> f32 {
         }
     }
 
-    if has_edit { return 0.9; }
-    if has_build { return 0.8; }
-    if has_mcp { return 0.7; }
-    if only_read { return 0.4; }
+    if has_edit {
+        return 0.9;
+    }
+    if has_build {
+        return 0.8;
+    }
+    if has_mcp {
+        return 0.7;
+    }
+    if only_read {
+        return 0.4;
+    }
     0.5
 }
 
@@ -164,10 +245,8 @@ pub struct SessionStateInput {
 }
 
 pub(crate) fn session_state_score(input: &SessionStateInput) -> f32 {
-    if let Some(s) = input.seconds_since_last_edit {
-        if s < 60 {
-            return 0.9;
-        }
+    if input.seconds_since_last_edit.is_some_and(|s| s < 60) {
+        return 0.9;
     }
     if input.age < Duration::seconds(30) {
         return 0.7;
@@ -180,7 +259,7 @@ pub(crate) fn session_state_score(input: &SessionStateInput) -> f32 {
 
 // ─── Query quality score ──────────────────────────────────────────────────────
 
-use crate::capture::noise_filter::{filter, FilterResult};
+use crate::capture::noise_filter::{FilterResult, filter};
 
 pub(crate) fn query_quality_score(query: &str) -> f32 {
     match filter(query) {
@@ -209,7 +288,9 @@ pub(crate) fn read_recent_tool_history(mur_dir: &Path, n: usize) -> Vec<ToolSign
         return Vec::new();
     };
 
-    let recording = mur_dir.join("session/recordings").join(format!("{session_id}.jsonl"));
+    let recording = mur_dir
+        .join("session/recordings")
+        .join(format!("{session_id}.jsonl"));
     let Ok(content) = std::fs::read_to_string(&recording) else {
         return Vec::new();
     };
@@ -288,17 +369,29 @@ pub fn evaluate_query_v2(query: &str, inputs: &GateInputs) -> GateOutcome {
     };
 
     let mut reasons = Vec::new();
-    if quality == 0.0 { reasons.push("quality: noise filter rejected"); }
-    if tool >= 0.8 { reasons.push("tool: edit/build active"); }
+    if quality == 0.0 {
+        reasons.push("quality: noise filter rejected");
+    }
+    if tool >= 0.8 {
+        reasons.push("tool: edit/build active");
+    }
 
-    GateOutcome { tier, score, reasons }
+    GateOutcome {
+        tier,
+        score,
+        reasons,
+    }
 }
 
 /// Evaluate whether a query should trigger pattern retrieval.
 /// Reads tool history from disk; degrades gracefully if unavailable.
 pub fn evaluate_query(query: &str) -> GateOutcome {
     let Some(home) = dirs::home_dir() else {
-        return GateOutcome { tier: Tier::Skip, score: 0.0, reasons: vec!["no home dir"] };
+        return GateOutcome {
+            tier: Tier::Skip,
+            score: 0.0,
+            reasons: vec!["no home dir"],
+        };
     };
     let mur_dir = home.join(".mur");
     let inputs = GateInputs {
@@ -324,7 +417,11 @@ mod tests {
 
     #[test]
     fn test_outcome_construction() {
-        let o = GateOutcome { tier: Tier::L1, score: 0.62, reasons: vec!["intent: action verb"] };
+        let o = GateOutcome {
+            tier: Tier::L1,
+            score: 0.62,
+            reasons: vec!["intent: action verb"],
+        };
         assert_eq!(o.tier, Tier::L1);
         assert!((o.score - 0.62).abs() < 1e-6);
         assert_eq!(o.reasons.len(), 1);
@@ -377,7 +474,10 @@ mod tests {
     }
 
     fn ts(tool: &str, cmd: Option<&str>) -> ToolSignalInput {
-        ToolSignalInput { tool: tool.into(), bash_command: cmd.map(String::from) }
+        ToolSignalInput {
+            tool: tool.into(),
+            bash_command: cmd.map(String::from),
+        }
     }
 
     #[test]
@@ -422,7 +522,10 @@ mod tests {
     fn empty_inputs() -> GateInputs {
         GateInputs {
             tool_history: Vec::new(),
-            session_state: SessionStateInput { age: Duration::minutes(5), seconds_since_last_edit: None },
+            session_state: SessionStateInput {
+                age: Duration::minutes(5),
+                seconds_since_last_edit: None,
+            },
         }
     }
 
@@ -448,8 +551,14 @@ mod tests {
     fn end_to_end_l2_on_coding_with_edit_history() {
         let mut i = empty_inputs();
         i.tool_history = vec![
-            ToolSignalInput { tool: "Read".into(), bash_command: None },
-            ToolSignalInput { tool: "Edit".into(), bash_command: None },
+            ToolSignalInput {
+                tool: "Read".into(),
+                bash_command: None,
+            },
+            ToolSignalInput {
+                tool: "Edit".into(),
+                bash_command: None,
+            },
         ];
         i.session_state.seconds_since_last_edit = Some(20);
         let o = evaluate_query_v2(
@@ -461,37 +570,55 @@ mod tests {
 
     #[test]
     fn end_to_end_workflow_keyword_forces_l1() {
-        let o = evaluate_query_v2("agent-browser去pchome-24h找airpods-pro的價格", &empty_inputs());
+        let o = evaluate_query_v2(
+            "agent-browser去pchome-24h找airpods-pro的價格",
+            &empty_inputs(),
+        );
         assert!(o.tier >= Tier::L1);
     }
 
     #[test]
     fn session_fresh_high() {
-        let s = SessionStateInput { age: Duration::seconds(10), seconds_since_last_edit: None };
+        let s = SessionStateInput {
+            age: Duration::seconds(10),
+            seconds_since_last_edit: None,
+        };
         assert!((session_state_score(&s) - 0.7).abs() < 1e-6);
     }
 
     #[test]
     fn session_active_edit_max() {
-        let s = SessionStateInput { age: Duration::minutes(5), seconds_since_last_edit: Some(30) };
+        let s = SessionStateInput {
+            age: Duration::minutes(5),
+            seconds_since_last_edit: Some(30),
+        };
         assert!((session_state_score(&s) - 0.9).abs() < 1e-6);
     }
 
     #[test]
     fn session_idle_low() {
-        let s = SessionStateInput { age: Duration::minutes(45), seconds_since_last_edit: None };
+        let s = SessionStateInput {
+            age: Duration::minutes(45),
+            seconds_since_last_edit: None,
+        };
         assert!((session_state_score(&s) - 0.3).abs() < 1e-6);
     }
 
     #[test]
     fn session_default_mid() {
-        let s = SessionStateInput { age: Duration::minutes(5), seconds_since_last_edit: Some(600) };
+        let s = SessionStateInput {
+            age: Duration::minutes(5),
+            seconds_since_last_edit: Some(600),
+        };
         assert!((session_state_score(&s) - 0.5).abs() < 1e-6);
     }
 
     #[test]
     fn quality_pass_full() {
-        assert!((query_quality_score("Refactor the gate module to support tier scoring") - 1.0).abs() < 1e-6);
+        assert!(
+            (query_quality_score("Refactor the gate module to support tier scoring") - 1.0).abs()
+                < 1e-6
+        );
     }
 
     #[test]
@@ -509,13 +636,24 @@ mod tests {
         std::fs::create_dir_all(&session_dir).unwrap();
 
         let active = serde_json::json!({"session_id": "test-sess"});
-        std::fs::write(tmp.path().join("session/active.json"),
-            serde_json::to_string(&active).unwrap()).unwrap();
+        std::fs::write(
+            tmp.path().join("session/active.json"),
+            serde_json::to_string(&active).unwrap(),
+        )
+        .unwrap();
 
         let mut f = std::fs::File::create(session_dir.join("test-sess.jsonl")).unwrap();
-        writeln!(f, r#"{{"event_type":"tool_call","tool":"Read","content":"{{}}"}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"event_type":"tool_call","tool":"Read","content":"{{}}"}}"#
+        )
+        .unwrap();
         writeln!(f, r#"{{"event_type":"tool_call","tool":"Bash","content":"{{\"command\":\"cargo test\"}}"}}"#).unwrap();
-        writeln!(f, r#"{{"event_type":"tool_call","tool":"Edit","content":"{{}}"}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"event_type":"tool_call","tool":"Edit","content":"{{}}"}}"#
+        )
+        .unwrap();
 
         let h = read_recent_tool_history(tmp.path(), 5);
         assert_eq!(h.len(), 3);

@@ -16,7 +16,10 @@ pub(crate) async fn cmd_inject(query: &str) -> Result<()> {
 
     let outcome = evaluate_query(query);
     if outcome.tier == GateTier::Skip {
-        eprintln!("# No patterns (gate: skip, score={:.2}, reasons={:?})", outcome.score, outcome.reasons);
+        eprintln!(
+            "# No patterns (gate: skip, score={:.2}, reasons={:?})",
+            outcome.score, outcome.reasons
+        );
         return Ok(());
     }
 
