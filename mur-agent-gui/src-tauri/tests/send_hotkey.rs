@@ -14,6 +14,7 @@ use mur_agent_gui_lib::send::ShareKind;
 use mur_agent_gui_lib::send::hotkey::{
     FakeClipboard, default_combo_for, resolve_combo, synthesize_from_clipboard,
 };
+use mur_agent_gui_lib::test_harness::MockApp;
 
 #[test]
 fn default_hotkey_combo_for_slug() {
@@ -89,5 +90,52 @@ async fn empty_clipboard_returns_err() {
     assert!(
         err.to_string().contains("nothing to share"),
         "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn hotkey_event_reaches_ingestor() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = MockApp::new(tmp.path(), "coach");
+
+    app.set_clipboard_text("snippet from any app");
+    app.trigger_shortcut().await.unwrap();
+
+    let captured = app.captured_payloads();
+    assert_eq!(captured.len(), 1, "exactly one payload should be ingested");
+    let p = &captured[0];
+    assert_eq!(p.source, "hotkey");
+    match &p.kind {
+        ShareKind::Text(t) => assert_eq!(t, "snippet from any app"),
+        other => panic!("expected ShareKind::Text, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn hotkey_event_classifies_url_clipboard() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = MockApp::new(tmp.path(), "coach");
+
+    app.set_clipboard_text("https://example.com/post/42");
+    app.trigger_shortcut().await.unwrap();
+
+    let captured = app.captured_payloads();
+    assert_eq!(captured.len(), 1);
+    match &captured[0].kind {
+        ShareKind::Url(u) => assert_eq!(u, "https://example.com/post/42"),
+        other => panic!("expected ShareKind::Url, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn hotkey_with_empty_clipboard_does_not_record() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = MockApp::new(tmp.path(), "coach");
+
+    let res = app.trigger_shortcut().await;
+    assert!(res.is_err(), "trigger on empty clipboard must error");
+    assert!(
+        app.captured_payloads().is_empty(),
+        "ingestor must not record anything when synthesis fails"
     );
 }
