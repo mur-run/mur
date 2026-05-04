@@ -32,7 +32,12 @@ fn rewrite_substitutes_display_name_in_port_name() {
     std::fs::write(tmp.path().join("Info.plist.template"), TEMPLATE).unwrap();
     rewrite_nsservices(tmp.path(), "draft-bot", "Draft Bot").unwrap();
 
-    let raw = std::fs::read_to_string(tmp.path().join("Info.plist")).unwrap();
+    // Normalise CRLF → LF so the substring match below is robust on
+    // Windows runners where git's `core.autocrlf` may have converted
+    // the checked-in Info.plist.template line endings on checkout.
+    let raw = std::fs::read_to_string(tmp.path().join("Info.plist"))
+        .unwrap()
+        .replace("\r\n", "\n");
     // NSPortName must carry the display name verbatim — AppKit looks
     // it up to address the running provider.
     assert!(
