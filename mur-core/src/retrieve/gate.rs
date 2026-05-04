@@ -148,6 +148,55 @@ pub(crate) fn tool_signal_score(history: &[ToolSignalInput]) -> f32 {
     0.5
 }
 
+// ─── Session recording reader ─────────────────────────────────────────────────
+
+use std::path::Path;
+
+/// Read the last `n` tool calls from the active session recording.
+///
+/// Returns oldest-first. Returns empty Vec on any error — gate degrades
+/// gracefully to "no history" signal.
+pub(crate) fn read_recent_tool_history(mur_dir: &Path, n: usize) -> Vec<ToolSignalInput> {
+    let active_path = mur_dir.join("session/active.json");
+    let Ok(active_raw) = std::fs::read_to_string(&active_path) else {
+        return Vec::new();
+    };
+    let Ok(active_json): Result<serde_json::Value, _> = serde_json::from_str(&active_raw) else {
+        return Vec::new();
+    };
+    let Some(session_id) = active_json.get("session_id").and_then(|v| v.as_str()) else {
+        return Vec::new();
+    };
+
+    let recording = mur_dir.join("session/recordings").join(format!("{session_id}.jsonl"));
+    let Ok(content) = std::fs::read_to_string(&recording) else {
+        return Vec::new();
+    };
+
+    let mut tool_events: Vec<ToolSignalInput> = content
+        .lines()
+        .filter_map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            if v.get("event_type")?.as_str()? != "tool_call" {
+                return None;
+            }
+            let tool = v.get("tool")?.as_str()?.to_string();
+            let bash_command = v
+                .get("content")
+                .and_then(|c| c.as_str())
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .and_then(|cv| cv.get("command")?.as_str().map(String::from));
+            Some(ToolSignalInput { tool, bash_command })
+        })
+        .collect();
+
+    let total = tool_events.len();
+    if total > n {
+        tool_events.drain(..total - n);
+    }
+    tool_events
+}
+
 /// Evaluate whether a query should trigger pattern retrieval.
 /// Stub implementation — replaced in Task 7 with composite scoring.
 pub fn evaluate_query(query: &str) -> GateOutcome {
@@ -261,5 +310,35 @@ mod tests {
     fn tool_signal_edit_wins_over_read() {
         let h = vec![ts("Read", None), ts("Bash", Some("ls")), ts("Edit", None)];
         assert!((tool_signal_score(&h) - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn read_history_from_recordings() {
+        use std::io::Write as _;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let session_dir = tmp.path().join("session/recordings");
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        let active = serde_json::json!({"session_id": "test-sess"});
+        std::fs::write(tmp.path().join("session/active.json"),
+            serde_json::to_string(&active).unwrap()).unwrap();
+
+        let mut f = std::fs::File::create(session_dir.join("test-sess.jsonl")).unwrap();
+        writeln!(f, r#"{{"event_type":"tool_call","tool":"Read","content":"{{}}"}}"#).unwrap();
+        writeln!(f, r#"{{"event_type":"tool_call","tool":"Bash","content":"{{\"command\":\"cargo test\"}}"}}"#).unwrap();
+        writeln!(f, r#"{{"event_type":"tool_call","tool":"Edit","content":"{{}}"}}"#).unwrap();
+
+        let h = read_recent_tool_history(tmp.path(), 5);
+        assert_eq!(h.len(), 3);
+        assert_eq!(h[2].tool, "Edit");
+        assert_eq!(h[1].tool, "Bash");
+        assert_eq!(h[1].bash_command.as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn read_history_missing_active_returns_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let h = read_recent_tool_history(tmp.path(), 5);
+        assert!(h.is_empty());
     }
 }
