@@ -10,4 +10,8 @@ ui/node_modules/
 src-tauri/binaries/
 src-tauri/agent-payload.tar.gz
 src-tauri/metadata.json
+# Track C3 / M-w3 — rendered Info.plist (substituted from Info.plist.template
+# at export time by `agent_export_gui::phase_4_rewrite_tauri_conf`). The
+# .template is checked in; the rendered output is per-agent build output.
+src-tauri/Info.plist
 ui/tsconfig.tsbuildinfo

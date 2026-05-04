@@ -454,6 +454,18 @@ fn phase_4_rewrite_tauri_conf(
     // re-used by `rewrite_url_scheme` for hermetic unit testing.
     apply_url_scheme_substitution(&mut conf, &safe_name);
 
+    // Track C3 / M-w3 — render Info.plist from Info.plist.template
+    // with the per-agent display name and point
+    // `bundle.macOS.infoPlist` at the rendered file so Tauri merges
+    // the `NSServices` entries into the final
+    // `MyAgent.app/Contents/Info.plist`. macOS-only at runtime, but
+    // the rewrite is harmless on Linux/Windows export targets — the
+    // bundler simply ignores `bundle.macOS.*` there.
+    if src_tauri.join("Info.plist.template").exists() {
+        apply_nsservices_substitution(&mut conf);
+        rewrite_nsservices(&src_tauri, &safe_name, &opts.agent_name)?;
+    }
+
     std::fs::write(&conf_path, serde_json::to_string_pretty(&conf)?)?;
 
     // Copy staged payload + metadata next to tauri.conf.json so the
@@ -507,6 +519,31 @@ fn apply_url_scheme_substitution(conf: &mut serde_json::Value, slug: &str) {
 /// `apply_url_scheme_substitution` directly to avoid the disk
 /// round-trip; this wrapper exists so the unit test can verify the
 /// disk-side semantics in isolation.
+/// Track C3 / M-w3 — point `bundle.macOS.infoPlist` at the rendered
+/// `Info.plist` so the Tauri bundler merges its `NSServices` array
+/// into the final `MyAgent.app/Contents/Info.plist`.
+///
+/// Idempotent — running it twice yields the same conf. Tolerates a
+/// missing `bundle.macOS` block (creates it) so future template
+/// refactors that drop the macOS section don't break export.
+fn apply_nsservices_substitution(conf: &mut serde_json::Value) {
+    let bundle = conf
+        .get_mut("bundle")
+        .and_then(|b| b.as_object_mut());
+    let Some(bundle) = bundle else {
+        return;
+    };
+    let macos = bundle
+        .entry("macOS".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(obj) = macos.as_object_mut() {
+        obj.insert(
+            "infoPlist".to_string(),
+            serde_json::Value::String("Info.plist".to_string()),
+        );
+    }
+}
+
 #[allow(dead_code)] // Reached only by `tests/agent_export_gui_url_scheme.rs`.
 pub fn rewrite_url_scheme(tauri_conf_dir: &Path, slug: &str) -> Result<()> {
     let path = tauri_conf_dir.join("tauri.conf.json");
@@ -555,6 +592,11 @@ fn restore_tauri_conf() -> Result<()> {
     // Clean up the per-export drop-ins.
     let _ = std::fs::remove_file(gui_root.join("src-tauri/agent-payload.tar.gz"));
     let _ = std::fs::remove_file(gui_root.join("src-tauri/metadata.json"));
+    // Track C3 / M-w3 — the rendered Info.plist is per-agent build
+    // output (the .template stays); drop it so a follow-up export
+    // for a different agent doesn't accidentally bundle the prior
+    // agent's NSServices entries.
+    let _ = std::fs::remove_file(gui_root.join("src-tauri/Info.plist"));
     Ok(())
 }
 
