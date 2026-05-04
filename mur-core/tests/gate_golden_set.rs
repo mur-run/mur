@@ -1,6 +1,6 @@
 //! Golden set accuracy test: ≥ 85% must hit the expected tier.
 
-use mur_core::retrieve::gate::{evaluate_query_v2, GateInputs, Tier};
+use mur_core::retrieve::gate::{GateInputs, Tier, evaluate_query_v2};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -21,8 +21,8 @@ fn parse_tier(s: &str) -> Tier {
 
 #[test]
 fn golden_set_accuracy_at_least_85_percent() {
-    let raw = std::fs::read_to_string("tests/fixtures/gate_golden_set.jsonl")
-        .expect("missing fixture");
+    let raw =
+        std::fs::read_to_string("tests/fixtures/gate_golden_set.jsonl").expect("missing fixture");
     let rows: Vec<Row> = raw
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -50,7 +50,12 @@ fn golden_set_accuracy_at_least_85_percent() {
         for (q, want, got) in &misses {
             eprintln!("MISS: {q:?} want={want:?} got={got:?}");
         }
-        panic!("golden set accuracy {:.2} < 0.85 ({} hits / {} total)", accuracy, hits, rows.len());
+        panic!(
+            "golden set accuracy {:.2} < 0.85 ({} hits / {} total)",
+            accuracy,
+            hits,
+            rows.len()
+        );
     }
 }
 
@@ -67,7 +72,13 @@ fn golden_set_skip_recall_perfect() {
     for row in &rows {
         if row.expected_tier == "Skip" {
             let actual = evaluate_query_v2(&row.query, &inputs).tier;
-            assert_eq!(actual, Tier::Skip, "row {:?} must skip but got {:?}", row.query, actual);
+            assert_eq!(
+                actual,
+                Tier::Skip,
+                "row {:?} must skip but got {:?}",
+                row.query,
+                actual
+            );
         }
     }
 }
