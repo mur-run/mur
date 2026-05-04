@@ -119,6 +119,21 @@ impl MockApp {
         self.ingestor.ingest(payload).await
     }
 
+    /// Drive the macOS Services menu path. Bypasses the
+    /// `NSApplication.servicesProvider` round-trip by calling the
+    /// pasteboard decoder directly — same seam the production
+    /// `serviceShare:userData:error:` selector body will use once
+    /// `lib.rs::setup` wires it up. Available only on macOS because
+    /// `NSPasteboard` is Cocoa-only.
+    #[cfg(target_os = "macos")]
+    pub async fn invoke_services_selector(
+        &self,
+        pb: &objc2_app_kit::NSPasteboard,
+    ) -> anyhow::Result<()> {
+        let payload = crate::send::services::extract_payload_from_pasteboard(pb)?;
+        self.ingestor.ingest(payload).await
+    }
+
     /// Snapshot the recorded payloads. Returns an owned clone so
     /// callers can iterate without holding the mutex.
     pub fn captured_payloads(&self) -> Vec<SharePayload> {

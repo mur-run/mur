@@ -519,6 +519,30 @@ pub fn rewrite_url_scheme(tauri_conf_dir: &Path, slug: &str) -> Result<()> {
     Ok(())
 }
 
+/// Track C3 / M-c3.3.3 — substitute `{{AGENT_DISPLAY}}` in
+/// `Info.plist.template` and write the result back to `Info.plist`
+/// in the same directory.
+///
+/// `slug` is currently unused (Apple's `NSServices` array doesn't carry
+/// the kebab-case slug; menu titles + `NSPortName` use the human display
+/// name). It's wired through anyway so callers can match the
+/// `rewrite_url_scheme(slug)` signature and so future template fields
+/// (e.g. dock-drop UTI suffixes) can opt in without a signature break.
+///
+/// The output filename intentionally drops the `.template` suffix —
+/// `bundle.macOS.infoPlist` in `tauri.conf.json` is expected to point
+/// at `Info.plist` (the rendered file), not `Info.plist.template`.
+#[allow(dead_code)] // Reached only by `tests/agent_export_gui_nsservices.rs`.
+pub fn rewrite_nsservices(tauri_conf_dir: &Path, _slug: &str, display: &str) -> Result<()> {
+    let template = tauri_conf_dir.join("Info.plist.template");
+    let raw = std::fs::read_to_string(&template)
+        .with_context(|| format!("read {}", template.display()))?;
+    let rendered = raw.replace("{{AGENT_DISPLAY}}", display);
+    let out = tauri_conf_dir.join("Info.plist");
+    std::fs::write(&out, rendered).with_context(|| format!("write {}", out.display()))?;
+    Ok(())
+}
+
 /// Restore the pristine tauri.conf.json after the build (called from
 /// phase_13 success path AND from any failure; idempotent).
 fn restore_tauri_conf() -> Result<()> {
