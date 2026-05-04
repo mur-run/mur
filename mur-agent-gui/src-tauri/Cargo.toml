@@ -89,6 +89,12 @@ mime_guess = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
+# Track C3 / M-c3.1 — `muragent-<slug>://share?...` URL scheme channel.
+# `tauri-plugin-deep-link` provides the runtime handler; `base64` and
+# `url` decode the inbound payload (URL_SAFE_NO_PAD, RFC 3986).
+tauri-plugin-deep-link = "2"
+base64 = "0.22"
+url = "2"
 
 # ───── multimodal decoder (D3 / M3) ─────
 # `image` is consumed by `mur-agent-decoder` for PNG/JPEG/WebP decode.
