@@ -84,6 +84,69 @@ pub fn process_artifact(bytes: &[u8], mime: &str, agent_home: &Path) -> Result<P
     })
 }
 
+/// Track C3 (send-from-any-app) text/url path.
+///
+/// Stages a share-channel-delivered text or URL body alongside the
+/// same `telemetry/inputs.jsonl` ledger that [`process_artifact`]
+/// uses, but with a `--- share\n` marker prefix so
+/// [`crate::hooks::b0::B0SafetyHook::on_prompt_submit`] tags it as
+/// `<untrusted_share>` (as opposed to `<untrusted_pdf_text>` /
+/// `<untrusted_image_text>`).
+///
+/// `channel_source` is the raw channel tag (e.g. `"url_scheme"`,
+/// `"hotkey"`); the ledger entry's `source` field becomes
+/// `format!("share:{channel_source}")` so forensic readers can
+/// distinguish share-channel artifacts from photo/document drops.
+///
+/// Adaptation note (Track C3 plan): the original M-c3.0.2 plan called
+/// for a separate `share.jsonl` ledger with a top-level
+/// `mur_agent_runtime::ledger::append_share_entry` helper. We collapsed
+/// that down to a single ledger + sidecar dispatch site so the B0 hook
+/// only has one place to read provenance entries from.
+pub fn process_share_text(
+    body: &str,
+    channel_source: &str,
+    agent_home: &Path,
+) -> Result<ProcessResult> {
+    let content = format!("--- share\n{body}");
+    let bytes = content.as_bytes();
+
+    let sha = {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        format!("{:x}", hasher.finalize())
+    };
+
+    let inputs_dir = agent_home.join("telemetry/inputs");
+    std::fs::create_dir_all(&inputs_dir)
+        .with_context(|| format!("create {}", inputs_dir.display()))?;
+
+    let sidecar_path = inputs_dir.join(format!("{sha}.txt"));
+    std::fs::write(&sidecar_path, &content)
+        .with_context(|| format!("write share sidecar {}", sidecar_path.display()))?;
+
+    let ledger_path = agent_home.join("telemetry/inputs.jsonl");
+    let entry = ProvenanceEntry {
+        sha256: sha.clone(),
+        source: format!("share:{channel_source}"),
+        decoder_version: "share/v0".into(),
+        ocr_engine_version: None,
+        // Same out-of-turn convention as `process_artifact`: the user
+        // agent's B0 hook promotes this entry into the current turn.
+        turn_id: 0,
+        recorded_at: Utc::now(),
+    };
+    ProvenanceLedger::new(&ledger_path)
+        .append(&entry)
+        .with_context(|| format!("append ledger {}", ledger_path.display()))?;
+
+    Ok(ProcessResult {
+        sha256: sha,
+        ledger_path,
+        sidecar_path,
+    })
+}
+
 /// Per-mime sidecar projection. We deliberately keep this small:
 ///
 /// - `text/*` → the bytes interpreted as UTF-8 (lossy fallback).
@@ -159,5 +222,22 @@ mod tests {
         process_artifact(b"b", "text/plain", tmp.path()).unwrap();
         let body = std::fs::read_to_string(tmp.path().join("telemetry/inputs.jsonl")).unwrap();
         assert_eq!(body.lines().count(), 2);
+    }
+
+    #[test]
+    fn share_sidecar_starts_with_share_marker() {
+        let tmp = TempDir::new().unwrap();
+        let r = process_share_text("hello world", "url_scheme", tmp.path()).unwrap();
+        assert_eq!(r.sha256.len(), 64);
+        assert!(r.ledger_path.exists());
+        assert!(r.sidecar_path.exists());
+        let body = std::fs::read_to_string(&r.sidecar_path).unwrap();
+        assert!(body.starts_with("--- share\n"));
+        assert!(body.contains("hello world"));
+        // Ledger entry is tagged `share:<channel>` so B0 + forensic
+        // readers can distinguish from photo/PDF drops.
+        let ledger_body = std::fs::read_to_string(&r.ledger_path).unwrap();
+        assert!(ledger_body.contains("\"source\":\"share:url_scheme\""));
+        assert!(ledger_body.contains("\"decoder_version\":\"share/v0\""));
     }
 }

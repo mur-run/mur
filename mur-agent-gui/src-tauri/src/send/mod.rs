@@ -59,6 +59,78 @@ pub struct SharePayload {
     pub metadata: serde_json::Value,
 }
 
+/// Async surface every channel calls into.
+///
+/// Channel front-ends own the platform glue (URL scheme parser, hotkey
+/// listener, NSServices handler, dock-drop AppleEvent) and translate
+/// the platform event into a [`SharePayload`]. Anything past that point
+/// — staging on disk, B0 wrapping, UI notification — is the ingestor's
+/// job.
+#[async_trait::async_trait]
+pub trait SendIngestor: Send + Sync {
+    async fn ingest(&self, payload: SharePayload) -> anyhow::Result<()>;
+}
+
+/// Side-channel for emitting a `share:received` UI event so the front
+/// end can flash the dock badge / show a toast / focus the window.
+///
+/// Kept as a trait (rather than holding `tauri::AppHandle` directly)
+/// so the ingestor unit-tests can swap in a fake counter without
+/// pulling the Tauri runtime into `cargo test --test`.
+pub trait ShareEmitter: Send + Sync {
+    fn emit_received(&self, payload: &SharePayload) -> anyhow::Result<()>;
+}
+
+/// Default ingestor.
+///
+/// Routing rules:
+/// - `Image`/`File` → read bytes, sniff mime via `mime_guess`, hand off
+///   to [`mur_agent_runtime::multimodal::pipeline::process_artifact`].
+///   The B0 hook subsequently tags the entry as `<untrusted_image_text>`
+///   or `<untrusted_pdf_text>`.
+/// - `Text`/`Url` → hand off to
+///   [`mur_agent_runtime::multimodal::pipeline::process_share_text`],
+///   which prefixes a `--- share\n` marker so B0 tags the entry as
+///   `<untrusted_share>`.
+///
+/// `process_artifact` and `process_share_text` are both synchronous;
+/// the ingestor surface stays async because channels invoke it from
+/// Tauri command handlers (which are async).
+pub struct DefaultIngestor {
+    pub agent_home: PathBuf,
+    /// Used to emit `share:received` to the front end.
+    pub emitter: std::sync::Arc<dyn ShareEmitter>,
+}
+
+#[async_trait::async_trait]
+impl SendIngestor for DefaultIngestor {
+    async fn ingest(&self, payload: SharePayload) -> anyhow::Result<()> {
+        match &payload.kind {
+            ShareKind::Image(path) | ShareKind::File(path) => {
+                let bytes = std::fs::read(path)?;
+                let mime = mime_guess::from_path(path)
+                    .first_or_octet_stream()
+                    .essence_str()
+                    .to_string();
+                mur_agent_runtime::multimodal::pipeline::process_artifact(
+                    &bytes,
+                    &mime,
+                    &self.agent_home,
+                )?;
+            }
+            ShareKind::Text(body) | ShareKind::Url(body) => {
+                mur_agent_runtime::multimodal::pipeline::process_share_text(
+                    body,
+                    &payload.source,
+                    &self.agent_home,
+                )?;
+            }
+        }
+        self.emitter.emit_received(&payload)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
