@@ -1,30 +1,46 @@
-//! `mur agent companion connector ...` — bridge agent scaffolding (Track C1).
+//! `mur agent companion connector ...` — bridge agent scaffolding.
 //!
-//! In Track C1 only `--platform stub` is supported. The stub is a fully
-//! functional A2A bridge agent (LLM disabled, identity keypair, default
-//! route) that downstream tracks (C2 Telegram, C3 send-from-any-app)
-//! specialise.
+//! Track C1 introduced `--platform stub` (a fully functional A2A bridge with
+//! LLM disabled). Track C2 wires `--platform telegram`: the BotFather 5-step
+//! setup UX (M-c2.1) plus a non-interactive flag path used by the integration
+//! tests and CI.
 
 use anyhow::{Context, Result, bail};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use mur_common::bridge::{PrivacyMode, TelegramConfig};
+
+use crate::bridge_keychain::{Keychain, MockKeychain, SystemKeychain};
 
 /// Scaffold a new bridge agent.
 ///
 /// Track C1 supports `--platform stub`. Track C2 wires `--platform telegram`
-/// as a recognised platform; the BotFather setup UX itself lands in M-c2.1,
-/// so for now the telegram arm returns a typed "not yet wired" error. Other
-/// platform names continue to error out as unsupported.
-pub async fn add(name: String, platform: &str, default_route: &str) -> Result<()> {
+/// with both the interactive 5-step BotFather flow (DEFAULT, when no
+/// `--bot-token` is given) and a non-interactive flag path used by tests and
+/// CI: `--bot-token`, `--bot-username`, `--chat-id`, `--ack`.
+#[allow(clippy::too_many_arguments)]
+pub async fn add(
+    name: String,
+    platform: &str,
+    default_route: &str,
+    bot_token: Option<String>,
+    bot_username: Option<String>,
+    chat_id: Option<i64>,
+    ack: bool,
+    allow_groups: Vec<i64>,
+) -> Result<()> {
     if default_route.trim().is_empty() {
         bail!("--default-route must be non-empty");
     }
     match platform {
         "stub" => scaffold_stub_bridge(&name, default_route).await,
         "telegram" => {
-            bail!(
-                "BotFather setup not yet wired (M-c2.1). The Telegram bridge arm is \
-                 reserved on main to lock in the schema; the 5-step BotFather \
-                 nonce-pairing UX lands in milestone M-c2.1."
-            )
+            // First scaffold the underlying stub bridge directory (identity,
+            // profile.yaml, routes.yaml, sys_prompt.md). The Telegram-specific
+            // `telegram.yaml` is then written alongside.
+            scaffold_stub_bridge(&name, default_route).await?;
+            run_telegram_setup(&name, bot_token, bot_username, chat_id, ack, allow_groups).await
         }
         other => bail!(
             "platform '{other}' not supported in Track C1/C2 — recognised: 'stub', 'telegram'. \
@@ -32,6 +48,244 @@ pub async fn add(name: String, platform: &str, default_route: &str) -> Result<()
         ),
     }
 }
+
+/// Telegram setup driver. Picks between the non-interactive flag path
+/// (full `--bot-token` + `--bot-username` + `--chat-id` + `--ack`) and the
+/// interactive 5-step BotFather flow.
+async fn run_telegram_setup(
+    bridge_id: &str,
+    bot_token: Option<String>,
+    bot_username: Option<String>,
+    chat_id: Option<i64>,
+    ack: bool,
+    allow_groups: Vec<i64>,
+) -> Result<()> {
+    let kc: Box<dyn Keychain> = if std::env::var("MUR_TELEGRAM_KEYCHAIN_BACKEND")
+        .ok()
+        .as_deref()
+        == Some("mock")
+    {
+        Box::new(MockKeychain::default())
+    } else {
+        Box::new(SystemKeychain)
+    };
+
+    // Non-interactive path — all flags supplied.
+    if let (Some(token), Some(username), Some(cid)) =
+        (bot_token.as_deref(), bot_username.as_deref(), chat_id)
+    {
+        let args = ScaffoldArgs {
+            bridge_id: bridge_id.into(),
+            bot_token: token.into(),
+            bot_username: username.into(),
+            chat_id: cid,
+            ack,
+            allow_groups,
+        };
+        let outcome = scaffold_telegram_bridge(args, kc.as_ref())?;
+        let ScaffoldOutcome::Ok { profile_path, .. } = outcome;
+        println!(
+            "telegram bridge scaffolded; config: {}",
+            profile_path.display()
+        );
+        return Ok(());
+    }
+
+    // Interactive path — drive BotFather 5-step UX. We only run this when at
+    // least one of the non-interactive flags is missing. On a non-tty test
+    // harness `dialoguer::Input` will fail with an io error which propagates
+    // up — that's why the integration test for the no-flags branch only
+    // asserts non-zero exit, not specific output.
+    interactive_botfather_flow(bridge_id, kc.as_ref(), allow_groups).await
+}
+
+/// Five-step BotFather UX (Spec §M-c2.1):
+///   1. Print BotFather URL + prompt for bot token.
+///   2. Read token from stdin → write to keychain.
+///   3. Generate nonce, print `t.me/<bot_username>?start=<nonce>`.
+///   4. Wait for `/start <nonce>` from user's Telegram (30s timeout).
+///   5. Write `telegram.yaml` + show E2E disclosure (typed-confirm).
+///
+/// Step 4 in M-c2.1 uses a stub: we do not poll Telegram getUpdates yet
+/// (that lands in M-c2.2). Instead we prompt the user for the chat_id they
+/// see logged on their side after sending `/start <nonce>`. The real polling
+/// loop replaces this prompt in M-c2.2.
+async fn interactive_botfather_flow(
+    bridge_id: &str,
+    kc: &dyn Keychain,
+    allow_groups: Vec<i64>,
+) -> Result<()> {
+    use dialoguer::Input;
+
+    // Step 1: BotFather URL + token prompt.
+    println!(
+        "Step 1/5 — open BotFather and create a new bot:\n  https://t.me/BotFather\n\
+         Send /newbot and follow the prompts. When you receive your bot token, paste it below."
+    );
+    let bot_token: String = Input::new()
+        .with_prompt("Bot token")
+        .interact_text()
+        .context("read bot token")?;
+
+    // Step 2: persist token to keychain.
+    let account = format!("{bridge_id}/telegram_bot_token");
+    kc.put(&account, bot_token.trim())
+        .context("write bot token to keychain")?;
+    println!("Step 2/5 — token stored in keychain ({account}).");
+
+    // Step 3: generate nonce + print pairing URL.
+    let bot_username: String = Input::new()
+        .with_prompt("Bot username (without leading @)")
+        .interact_text()
+        .context("read bot username")?;
+    let nonce = generate_nonce();
+    println!(
+        "Step 3/5 — open this URL on the device with the user account that should pair with the bot:\n  \
+         https://t.me/{bot_username}?start={nonce}"
+    );
+
+    // Step 4: wait for /start <nonce>. M-c2.1 stub: prompt for chat_id rather
+    // than polling getUpdates. The real polling lands in M-c2.2.
+    println!(
+        "Step 4/5 — waiting up to 30s for the chat_id to be supplied (M-c2.1 stub: paste the chat_id manually for now)."
+    );
+    let chat_id_str: String = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(|| {
+            Input::<String>::new()
+                .with_prompt("chat_id (numeric, from your /start <nonce> message)")
+                .interact_text()
+        }),
+    )
+    .await
+    .context("timed out waiting for /start <nonce> reply (30s)")?
+    .context("blocking-thread join failed")?
+    .context("read chat_id")?;
+    let chat_id: i64 = chat_id_str
+        .trim()
+        .parse()
+        .context("chat_id must be an integer")?;
+
+    // Step 5: E2E disclosure + final scaffold.
+    println!("Step 5/5 — Telegram E2E disclosure:\n{E2E_DISCLOSURE_TEXT}");
+    let typed: String = Input::new()
+        .with_prompt("Type 'I understand' to proceed")
+        .interact_text()
+        .context("read E2E disclosure ack")?;
+    if !confirm_e2e_disclosure(typed.trim_end_matches('\n')) {
+        bail!("telegram bridge requires E2E disclosure ack");
+    }
+
+    let outcome = scaffold_telegram_bridge(
+        ScaffoldArgs {
+            bridge_id: bridge_id.into(),
+            bot_token: bot_token.trim().into(),
+            bot_username,
+            chat_id,
+            ack: true,
+            allow_groups,
+        },
+        kc,
+    )?;
+    let ScaffoldOutcome::Ok { profile_path, .. } = outcome;
+    println!(
+        "telegram bridge scaffolded; config: {}",
+        profile_path.display()
+    );
+    Ok(())
+}
+
+fn generate_nonce() -> String {
+    use rand::Rng;
+    use rand::distributions::Alphanumeric;
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(16)
+        .map(char::from)
+        .collect()
+}
+
+/// Inputs to `scaffold_telegram_bridge`. Constructed by both the interactive
+/// CLI flow and the non-interactive flag path; the integration tests build
+/// these directly.
+pub struct ScaffoldArgs {
+    pub bridge_id: String,
+    pub bot_token: String,
+    pub bot_username: String,
+    pub chat_id: i64,
+    pub ack: bool,
+    pub allow_groups: Vec<i64>,
+}
+
+/// Outcome from `scaffold_telegram_bridge`. Currently a single `Ok` variant —
+/// the enum shape exists so future scaffold modes (rekey, repair) can extend
+/// it without breaking call sites.
+///
+/// `config` is exposed for tests / callers that want to inspect the resulting
+/// `TelegramConfig` without re-reading the YAML; the bin target's CLI flow
+/// only uses `profile_path`, hence the allow.
+pub enum ScaffoldOutcome {
+    Ok {
+        #[allow(dead_code)]
+        config: TelegramConfig,
+        profile_path: PathBuf,
+    },
+}
+
+/// Library-level entry point for Telegram bridge scaffolding. Persists the bot
+/// token to `kc` (the keychain), writes `telegram.yaml` under
+/// `$MUR_HOME/agents/<bridge_id>/`, and returns the resolved `TelegramConfig`.
+///
+/// Hard-gated on `args.ack == true` (M-c2.1.3) — refuses to write anything
+/// without an explicit E2E disclosure ack.
+pub fn scaffold_telegram_bridge(args: ScaffoldArgs, kc: &dyn Keychain) -> Result<ScaffoldOutcome> {
+    if !args.ack {
+        bail!("telegram bridge requires E2E disclosure ack");
+    }
+    let account = format!("{}/telegram_bot_token", args.bridge_id);
+    kc.put(&account, &args.bot_token)
+        .context("write bot token to keychain")?;
+    let cfg = TelegramConfig {
+        bot_username: args.bot_username,
+        bot_token_keychain_account: account,
+        chat_id: args.chat_id,
+        privacy_mode: if args.allow_groups.is_empty() {
+            PrivacyMode::DmOnly
+        } else {
+            PrivacyMode::AllowGroups
+        },
+        allow_groups: args.allow_groups,
+        e2e_disclosure_acked_at: Some(chrono::Utc::now()),
+    };
+    let profile_path = write_bridge_profile(&args.bridge_id, &cfg)?;
+    Ok(ScaffoldOutcome::Ok {
+        config: cfg,
+        profile_path,
+    })
+}
+
+fn write_bridge_profile(bridge_id: &str, cfg: &TelegramConfig) -> Result<PathBuf> {
+    let dir = crate::paths::mur_root(None).join("agents").join(bridge_id);
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let path = dir.join("telegram.yaml");
+    std::fs::write(&path, serde_yaml_ng::to_string(cfg)?)
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
+/// Literal-match gate for the Telegram E2E disclosure (M-c2.1.3). The user
+/// must type the string `I understand` — case- and whitespace-sensitive.
+pub fn confirm_e2e_disclosure(input: &str) -> bool {
+    input == "I understand"
+}
+
+/// Disclosure text shown to the user before the literal-match prompt. Kept as
+/// a module constant so doc and CLI surfaces share the same wording.
+pub const E2E_DISCLOSURE_TEXT: &str = "\
+Telegram chats are NOT end-to-end encrypted unless using Secret Chats. \
+Bot messages traverse Telegram's servers in plaintext. \
+The bot token has full read/send access to messages addressed to the bot. \
+Type exactly 'I understand' to proceed.";
 
 /// Build a fresh stub-bridge agent directory under `$MUR_HOME/agents/<name>/`
 /// containing `profile.yaml`, `routes.yaml`, `identity.{key,pub}`, and a
@@ -51,7 +305,6 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
     use mur_common::bridge::routes::BridgeRouteConfig;
     use mur_common::identity::AgentIdentity;
     use mur_common::{AgentProfile, LlmEntitlement, LlmMode};
-    use std::path::PathBuf;
 
     mur_common::validate_agent_name(name)
         .with_context(|| format!("invalid bridge agent name {name:?}"))?;

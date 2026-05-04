@@ -18,6 +18,9 @@ use std::sync::Mutex;
 /// `SystemKeychain` (real backend) and `MockKeychain` (test double).
 pub trait Keychain: Send + Sync {
     fn put(&self, account: &str, secret: &str) -> anyhow::Result<()>;
+    /// Read a secret. Used by tests and by the runtime poller (M-c2.2+);
+    /// the bin target's CLI flow only uses `put`, hence the allow.
+    #[allow(dead_code)]
     fn get(&self, account: &str) -> anyhow::Result<String>;
 }
 
@@ -68,7 +71,8 @@ mod tests {
     #[test]
     fn mock_keychain_round_trip() {
         let kc = MockKeychain::default();
-        kc.put("agent-1/telegram_bot_token", "secret-token").unwrap();
+        kc.put("agent-1/telegram_bot_token", "secret-token")
+            .unwrap();
         assert_eq!(
             kc.get("agent-1/telegram_bot_token").unwrap(),
             "secret-token"
