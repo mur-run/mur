@@ -10,10 +10,9 @@ fn make_tool_event(tool_name: &str, with_response: bool) -> serde_json::Value {
         "session_id": "sess_e2e_m4"
     });
     if with_response {
-        v.as_object_mut().unwrap().insert(
-            "tool_response".into(),
-            json!({"output": "ok"}),
-        );
+        v.as_object_mut()
+            .unwrap()
+            .insert("tool_response".into(), json!({"output": "ok"}));
     }
     v
 }
