@@ -73,6 +73,11 @@ regex = "1"
 # K/V tree. We store `(bridge_id, platform_msg_id) -> u64 LE timestamp` and
 # sweep entries older than 7 days.
 sled = { workspace = true }
+# Track C2 — Telegram bridge. teloxide drives long-poll updates with built-in
+# Throttle (FloodControl) + CacheMe (User profile cache) adaptors. We disable
+# default-features so we don't pull native-tls; rustls keeps the dep tree
+# consistent with reqwest.
+teloxide = { version = "0.13", default-features = false, features = ["rustls", "throttle", "cache-me"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
