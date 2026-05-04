@@ -23,6 +23,8 @@ pub mod wiring;
 pub mod dock;
 #[cfg(target_os = "macos")]
 pub mod services;
+#[cfg(target_os = "macos")]
+pub mod services_provider;
 
 /// Discriminated payload kind.
 ///
