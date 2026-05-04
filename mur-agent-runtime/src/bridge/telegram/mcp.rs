@@ -72,12 +72,13 @@ pub async fn handle_jsonrpc(req: Value, deps: &McpDeps) -> anyhow::Result<Value>
             let args = &req["params"]["arguments"];
             let chat_id = args["chat_id"].as_i64().unwrap_or(0);
             let body = args["body"].as_str().unwrap_or("").to_string();
-            // MockBot stand-in for M-c2.5: append to `sent_messages`. When
-            // the real teloxide bot lands we'll call
+            // M-c2.6: route through `MockBot::send_message` so the bot
+            // applies its [`ThrottlePolicy`] (none / global 30 / per-chat
+            // 1 per second). When the real teloxide bot lands this becomes
             // `bot.send_message(ChatId(chat_id), body).await?`; the
-            // Throttle<CacheMe<Bot>> wrapper from M-c2.2 enforces the
-            // 30/sec global cap.
-            deps.bot.sent_messages.lock().unwrap().push((chat_id, body));
+            // `Throttle<CacheMe<Bot>>` wrapper from M-c2.2 enforces the
+            // same caps natively.
+            deps.bot.send_message(chat_id, body).await;
             Ok(json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}))
         }
         _ => anyhow::bail!("unknown method {}", method),
