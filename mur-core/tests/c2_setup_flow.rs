@@ -129,6 +129,42 @@ fn ack_text_must_match_literal() {
 }
 
 #[test]
+fn scaffold_registers_mcp_telegram_chat() {
+    // M-c2.5.3: scaffold_telegram_bridge must emit a profile.yaml snippet
+    // (or update an existing one) containing an `mcp_servers[]` entry named
+    // `telegram_chat`. The user-agent picks this up via the standard
+    // profile.mcp_servers[] surface and spawns the bridge as an MCP child.
+    let tmp = TempDir::new().unwrap();
+    unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+
+    let kc = MockKeychain::default();
+    let args = ScaffoldArgs {
+        bridge_id: "tgX".into(),
+        bot_token: "t".into(),
+        bot_username: "BX".into(),
+        chat_id: 1,
+        ack: true,
+        allow_groups: vec![],
+    };
+    let outcome = scaffold_telegram_bridge(args, &kc).unwrap();
+    let outcome_path = match outcome {
+        ScaffoldOutcome::Ok { profile_path, .. } => profile_path,
+    };
+    let profile_dir = outcome_path.parent().unwrap();
+    let profile_yaml = std::fs::read_to_string(profile_dir.join("profile.yaml")).unwrap();
+    assert!(
+        profile_yaml.contains("name: telegram_chat"),
+        "profile.yaml missing telegram_chat mcp entry: {profile_yaml}"
+    );
+    assert!(
+        profile_yaml.contains("mcp"),
+        "profile.yaml missing mcp_servers section: {profile_yaml}"
+    );
+
+    unsafe { std::env::remove_var("MUR_HOME") };
+}
+
+#[test]
 fn cli_scaffold_via_stdin_script() {
     let tmp = TempDir::new().unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_mur"))

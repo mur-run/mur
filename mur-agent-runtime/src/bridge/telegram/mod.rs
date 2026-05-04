@@ -13,7 +13,7 @@
 //! - [`mock`] — `MockBot` test double + `MockUserAgent` for routing tests
 //! - [`voice`] — voice-message handler (M-c2.3, stub)
 //! - [`files`] — document/photo handler (M-c2.4)
-//! - [`mcp`] — Telegram-specific MCP tool surface (M-c2.5, stub)
+//! - [`mcp`] — Telegram-specific MCP tool surface (M-c2.5)
 
 pub mod files;
 pub mod inbound;
