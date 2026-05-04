@@ -230,13 +230,14 @@ pub fn register_share_hotkey(
 mod tests {
     use super::super::hotkey::default_combo_for;
     use super::*;
-    use std::sync::Mutex;
 
     // Tests in this module mutate process-wide env vars (MUR_HOME,
     // MUR_GUI_AGENT_NAME). Vitest-style parallel test execution
     // causes spurious failures when one test clears MUR_HOME mid-
-    // assertion in another. A single mutex serialises them.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // assertion in another. The crate-wide `TEST_ENV_LOCK`
+    // (defined in `lib.rs`) is shared with `bootstrap::tests` so
+    // env-touching tests across both modules serialise globally.
+    use crate::TEST_ENV_LOCK as ENV_LOCK;
 
     #[test]
     fn agent_home_honors_mur_home_override() {
