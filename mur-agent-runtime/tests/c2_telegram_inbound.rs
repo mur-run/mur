@@ -167,5 +167,7 @@ fn test_deps() -> InboundDeps {
         key_version: 0,
         always_5xx: false,
         user_agent: None,
+        agent_home: std::env::temp_dir().join(format!("mur-c2-test-{}", std::process::id())),
+        whisper_stub: None,
     }
 }

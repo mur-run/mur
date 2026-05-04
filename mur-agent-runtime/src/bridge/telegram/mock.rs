@@ -9,6 +9,7 @@
 //!   envelopes so M-c2.2.4 can assert "the user agent received a
 //!   verifiable signed payload".
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use mur_common::bridge::envelope::{SignedEnvelope, verify_envelope_with_pubkey};
@@ -28,6 +29,33 @@ pub struct MockBot {
     /// outbound. Currently unused by the inbound loop, but exposed so
     /// future outbound milestones can assert side effects.
     pub sent_messages: Mutex<Vec<(i64, String)>>,
+    /// Stubbed file-bytes returned by [`MockBot::fetch_file`]. Tests
+    /// register `(file_id, bytes)` pairs ahead of time; the voice and
+    /// document handlers (M-c2.3 / M-c2.4) look them up by `file_id`.
+    /// We use a `HashMap` so the same bot can serve multiple files.
+    pub file_blobs: Mutex<HashMap<String, Vec<u8>>>,
+}
+
+impl MockBot {
+    /// Register a file payload that subsequent [`MockBot::fetch_file`]
+    /// calls will return verbatim. Mirrors a successful
+    /// `getFile` + binary download against the real Bot API.
+    pub fn stub_file_bytes(&self, file_id: String, bytes: Vec<u8>) {
+        self.file_blobs.lock().unwrap().insert(file_id, bytes);
+    }
+
+    /// Synchronous file fetch. Returns the bytes registered via
+    /// [`MockBot::stub_file_bytes`], or an error if no stub matches —
+    /// matching the production semantics of `getFile` + GET on the
+    /// returned URL.
+    pub fn fetch_file(&self, file_id: &str) -> anyhow::Result<Vec<u8>> {
+        self.file_blobs
+            .lock()
+            .unwrap()
+            .get(file_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no stubbed file for id={file_id}"))
+    }
 }
 
 impl TgBotLike for MockBot {}
