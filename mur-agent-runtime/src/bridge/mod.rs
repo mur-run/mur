@@ -17,9 +17,11 @@
 //! - [`ack`] — cursor-advancement helper (advance iff user agent 2xx)
 //! - [`beacon`] — 30 s `telemetry/bridge_alive` heartbeat + degraded classifier
 //! - [`dedupe`] — sled-backed `(bridge_id, platform_msg_id)`, 7-day TTL
+//! - [`telegram`] — Track C2 Telegram bridge (long-poll inbound loop, mocks)
 //! - [`verify`] — envelope verification against a trust list
 
 pub mod ack;
 pub mod beacon;
 pub mod dedupe;
+pub mod telegram;
 pub mod verify;
