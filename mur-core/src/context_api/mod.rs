@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::evolve::feedback;
 use crate::inject::hook;
-use crate::retrieve::gate::{GateDecision, evaluate_query};
+use crate::retrieve::gate::{Tier as GateTier, evaluate_query};
 use crate::retrieve::scoring::{score_and_rank_hybrid_with_config, score_and_rank_with_config};
 use crate::store::config::load_config;
 use crate::store::yaml::YamlStore;
@@ -137,7 +137,7 @@ pub fn retrieve(
     vector_scores: Option<&std::collections::HashMap<String, f64>>,
 ) -> Result<ContextResponse> {
     // Apply query gate
-    if let GateDecision::Skip(_) = evaluate_query(&req.query) {
+    if evaluate_query(&req.query).tier == GateTier::Skip {
         return Ok(ContextResponse {
             patterns: vec![],
             tokens_used: 0,
