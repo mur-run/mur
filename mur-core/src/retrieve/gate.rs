@@ -92,6 +92,62 @@ pub(crate) fn intent_score(query: &str) -> f32 {
     0.5
 }
 
+// ─── Tool signal score ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct ToolSignalInput {
+    pub tool: String,
+    pub bash_command: Option<String>,
+}
+
+const BUILD_TEST_RUNNERS: &[&str] = &[
+    "cargo", "npm", "yarn", "pnpm", "bun", "pytest", "go", "make", "docker",
+    "rustc", "gcc", "clang", "mvn", "gradle", "swift", "xcodebuild",
+];
+
+pub(crate) fn tool_signal_score(history: &[ToolSignalInput]) -> f32 {
+    if history.is_empty() {
+        return 0.1;
+    }
+
+    let mut has_edit = false;
+    let mut has_build = false;
+    let mut has_mcp = false;
+    let mut only_read = true;
+
+    for entry in history {
+        match entry.tool.as_str() {
+            "Edit" | "Write" | "NotebookEdit" => {
+                has_edit = true;
+                only_read = false;
+            }
+            "Read" | "Glob" | "Grep" => {}
+            "Bash" => {
+                only_read = false;
+                if let Some(cmd) = &entry.bash_command {
+                    let first_word = cmd.split_whitespace().next().unwrap_or("");
+                    if BUILD_TEST_RUNNERS.iter().any(|r| first_word == *r) {
+                        has_build = true;
+                    }
+                }
+            }
+            t if t.starts_with("mcp__") => {
+                has_mcp = true;
+                only_read = false;
+            }
+            _ => {
+                only_read = false;
+            }
+        }
+    }
+
+    if has_edit { return 0.9; }
+    if has_build { return 0.8; }
+    if has_mcp { return 0.7; }
+    if only_read { return 0.4; }
+    0.5
+}
+
 /// Evaluate whether a query should trigger pattern retrieval.
 /// Stub implementation — replaced in Task 7 with composite scoring.
 pub fn evaluate_query(query: &str) -> GateOutcome {
@@ -162,5 +218,48 @@ mod tests {
     #[test]
     fn intent_fallback_mid() {
         assert!((intent_score("can you help me with this thing") - 0.5).abs() < 1e-6);
+    }
+
+    fn ts(tool: &str, cmd: Option<&str>) -> ToolSignalInput {
+        ToolSignalInput { tool: tool.into(), bash_command: cmd.map(String::from) }
+    }
+
+    #[test]
+    fn tool_signal_no_history_low() {
+        assert!((tool_signal_score(&[]) - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tool_signal_only_read_only() {
+        let h = vec![ts("Read", None), ts("Glob", None), ts("Grep", None)];
+        assert!((tool_signal_score(&h) - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tool_signal_edit_present_high() {
+        let h = vec![ts("Read", None), ts("Edit", None)];
+        assert!((tool_signal_score(&h) - 0.9).abs() < 1e-6);
+        let h2 = vec![ts("Write", None)];
+        assert!((tool_signal_score(&h2) - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tool_signal_build_command_high() {
+        let h = vec![ts("Bash", Some("cargo test --workspace"))];
+        assert!((tool_signal_score(&h) - 0.8).abs() < 1e-6);
+        let h2 = vec![ts("Bash", Some("npm run build"))];
+        assert!((tool_signal_score(&h2) - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tool_signal_mcp_mid() {
+        let h = vec![ts("mcp__chrome-devtools__navigate_page", None)];
+        assert!((tool_signal_score(&h) - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tool_signal_edit_wins_over_read() {
+        let h = vec![ts("Read", None), ts("Bash", Some("ls")), ts("Edit", None)];
+        assert!((tool_signal_score(&h) - 0.9).abs() < 1e-6);
     }
 }
