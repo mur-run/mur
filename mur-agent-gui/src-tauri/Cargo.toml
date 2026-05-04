@@ -113,6 +113,23 @@ libc = "0.2"
 # whisper.cpp Metal backend — Apple-only; enabling on Linux/Windows breaks
 # CMake (it looks for the Foundation framework which only exists on macOS).
 whisper-rs = { version = "0.14", default-features = false, features = ["metal"] }
+# Track C3 / M-c3.3 — Services menu channel. `objc2` exposes the
+# Objective-C runtime; `objc2-app-kit` and `objc2-foundation` give us
+# NSPasteboard / NSApplication / NSString bindings used by the
+# `NSServiceProviderProtocol` bridge in `src/send/services.rs`.
+# Pinned to 0.3.x / 0.6.x to match the versions already pulled in
+# transitively by `tauri` 2 (via `arboard`, `muda`, `global-hotkey`)
+# — mixing major versions yields confusing trait-bound errors.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSPasteboard",
+] }
+objc2-foundation = { version = "0.3", features = [
+    "NSArray",
+    "NSData",
+    "NSString",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa = "0.9"
