@@ -209,6 +209,18 @@ fn main() -> Result<()> {
                     Ok(combo) => tracing::info!(combo = %combo, "share hotkey registered"),
                     Err(e) => tracing::warn!(error = %e, "share hotkey not registered"),
                 }
+
+                // Channel D — drag-to-dock. Stash the ingestor in
+                // app state so the `RunEvent::Opened { urls }`
+                // callback (registered on `App::run` below; outside
+                // `setup`) can reach it without capturing it across
+                // the setup boundary. `Arc<dyn SendIngestor>` is
+                // `Send + Sync` (the trait bounds it that way).
+                //
+                // The actual classify-and-ingest loop lives at the
+                // `App::run` callback site so platform glue stays
+                // co-located with `tauri::RunEvent`.
+                app.manage::<std::sync::Arc<dyn send::SendIngestor>>(ingestor.clone());
             }
 
             // Tray menu — primary UX for the menubar launcher.
@@ -432,8 +444,62 @@ fn main() -> Result<()> {
             companion_bridge::commands::companion_proactive,
             companion_bridge::commands::companion_quiet,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // ── Track C3 / channel D — drag-to-dock ──────────────────
+            //
+            // macOS delivers `application:openFiles:` when the user
+            // drops a file onto the dock icon; Tauri 2 surfaces it
+            // as `RunEvent::Opened { urls: Vec<url::Url> }`. Each
+            // URL is `file://`; classify by extension and dispatch
+            // through the shared ingestor on the async runtime.
+            //
+            // Linux/Windows never receive this event from the OS
+            // (no dock concept), so the arm is a no-op there at
+            // runtime. The `dock` module itself is `cfg(macos)`-
+            // gated so the import below is too.
+            if let tauri::RunEvent::Opened { urls } = &event {
+                use tauri::Manager;
+                let Some(ingestor) =
+                    app_handle.try_state::<std::sync::Arc<dyn send::SendIngestor>>()
+                else {
+                    tracing::warn!(
+                        "RunEvent::Opened fired before share ingestor was registered — dropping"
+                    );
+                    return;
+                };
+                for url in urls {
+                    let Ok(path) = url.to_file_path() else {
+                        tracing::warn!(url = %url, "RunEvent::Opened: not a file:// URL");
+                        continue;
+                    };
+                    #[cfg(target_os = "macos")]
+                    let kind = send::dock::classify_path(&path);
+                    // Linux/Windows: `dock` module is macOS-only.
+                    // The OS doesn't deliver `RunEvent::Opened`
+                    // from a dock-drop on those platforms, but
+                    // `Opened` may still fire from other launch
+                    // paths (e.g. file-association openings on
+                    // Windows); route as File so the ingestor
+                    // handles it the same way `process_artifact`
+                    // does for any other binary input.
+                    #[cfg(not(target_os = "macos"))]
+                    let kind = send::ShareKind::File(path.clone());
+                    let payload = send::SharePayload {
+                        source: "dock".into(),
+                        kind,
+                        metadata: serde_json::json!({}),
+                    };
+                    let ing = std::sync::Arc::clone(ingestor.inner());
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = ing.ingest(payload).await {
+                            tracing::warn!(error = %e, "dock-drop ingest failed");
+                        }
+                    });
+                }
+            }
+        });
 
     Ok(())
 }
