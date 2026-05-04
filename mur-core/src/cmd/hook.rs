@@ -38,6 +38,21 @@ fn is_l2_tool(tool_name: &str) -> bool {
     )
 }
 
+fn workflow_name_matches_query(query: &str, workflow_names: &[String]) -> bool {
+    let query_words: Vec<String> = query
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 4)
+        .map(str::to_owned)
+        .collect();
+    workflow_names.iter().any(|name| {
+        name.to_ascii_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() >= 4)
+            .any(|word| query_words.iter().any(|qw| qw == word))
+    })
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn should_skip(query: Option<&str>) -> bool {
     let q = match query {
@@ -66,6 +81,23 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
         return Ok(());
     }
 
+    // Bump to L1 when query overlaps a workflow name — workflow triggers bypass L0 cap
+    let effective_tier = if outcome.tier < GateTier::L1 {
+        let workflow_names: Vec<String> = WorkflowYamlStore::default_store()
+            .and_then(|s| s.list_all())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|w| w.name.clone())
+            .collect();
+        if workflow_name_matches_query(&query, &workflow_names) {
+            GateTier::L1
+        } else {
+            outcome.tier
+        }
+    } else {
+        outcome.tier
+    };
+
     // Inbox-first path: serve pre-computed context from murmurd if fresh
     if let Some(session_id) = event.session_id.as_deref() {
         let inbox = crate::daemon::inbox_path(session_id);
@@ -87,7 +119,7 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
         .map(|sp| sp.pattern)
         .collect();
 
-    let budget = match outcome.tier {
+    let budget = match effective_tier {
         GateTier::L0 => 300,
         GateTier::L1 => 500,
         GateTier::L2 => 2000,
@@ -235,6 +267,50 @@ fn spawn_background_pipeline() {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod workflow_trigger_tests {
+    use super::*;
+
+    #[test]
+    fn exact_workflow_name_matches() {
+        let names = vec!["deploy-production".to_owned()];
+        assert!(workflow_name_matches_query(
+            "deploy the production service",
+            &names
+        ));
+    }
+
+    #[test]
+    fn partial_workflow_name_matches() {
+        let names = vec!["search-bookstore".to_owned()];
+        assert!(workflow_name_matches_query(
+            "search for latest books",
+            &names
+        ));
+    }
+
+    #[test]
+    fn unrelated_query_does_not_match() {
+        let names = vec!["deploy-production".to_owned()];
+        assert!(!workflow_name_matches_query("fix the lint error", &names));
+    }
+
+    #[test]
+    fn short_words_are_ignored() {
+        let names = vec!["run-ci".to_owned()];
+        // "run" (3 chars) and "ci" (2 chars) — both < 4 chars, no match
+        assert!(!workflow_name_matches_query("run ci now", &names));
+    }
+
+    #[test]
+    fn empty_workflow_list_never_matches() {
+        assert!(!workflow_name_matches_query(
+            "deploy production service",
+            &[]
+        ));
+    }
+}
 
 #[cfg(test)]
 mod tests {
