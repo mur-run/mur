@@ -26,6 +26,17 @@ pub(crate) fn extract_query(raw: &serde_json::Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn is_pre_tool_use(raw: &serde_json::Value) -> bool {
+    raw.get("tool_response").is_none()
+}
+
+fn is_l2_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name.to_ascii_lowercase().as_str(),
+        "edit" | "write" | "bash" | "multiedit"
+    )
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn should_skip(query: Option<&str>) -> bool {
     let q = match query {
@@ -98,8 +109,63 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
 
 pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
     let raw = read_stdin_json();
-    let event = parse_event(raw, EventKind::Tool, tool);
+    let event = parse_event(raw.clone(), EventKind::Tool, tool);
     let _ = enqueue(&event);
+
+    // Emit L2 only on PreToolUse for code-editing tools
+    if !is_pre_tool_use(&raw) {
+        return Ok(());
+    }
+    let tool_called = event.tool_called.as_deref().unwrap_or("");
+    if !is_l2_tool(tool_called) {
+        return Ok(());
+    }
+
+    // Use tool_input as the query hint (file path / bash command gives keyword signals)
+    let query_owned: String = event
+        .tool_input
+        .as_ref()
+        .and_then(|v| {
+            // Try common string keys in order of specificity
+            v.get("file_path")
+                .or_else(|| v.get("path"))
+                .or_else(|| v.get("command"))
+                .and_then(|s| s.as_str())
+                .map(str::to_owned)
+                .or_else(|| {
+                    // Fall back to the whole JSON stringified (gives BM25 tokens)
+                    serde_json::to_string(v).ok()
+                })
+        })
+        .unwrap_or_else(|| tool_called.to_owned());
+    let query = query_owned.as_str();
+    if query.trim().is_empty() {
+        return Ok(());
+    }
+
+    let yaml_store = YamlStore::default_store()?;
+    let patterns = yaml_store.list_all()?;
+    let workflow_store = WorkflowYamlStore::default_store()?;
+    let workflows = workflow_store.list_all()?;
+
+    use mur_common::pattern::LifecycleStatus;
+    let injected: Vec<_> = score_and_rank(query, patterns)
+        .into_iter()
+        .filter(|sp| sp.pattern.lifecycle.status != LifecycleStatus::Archived)
+        .map(|sp| sp.pattern)
+        .collect();
+
+    const L2_BUDGET: usize = 2000;
+    let output = crate::inject::hook::format_unified_injection_with_store(
+        &injected,
+        &workflows,
+        L2_BUDGET,
+        Some(&yaml_store),
+    );
+
+    if !output.is_empty() {
+        print!("{output}");
+    }
     Ok(())
 }
 

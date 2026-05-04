@@ -83,3 +83,74 @@ fn all_tools_parse_empty_json_without_panic() {
         );
     }
 }
+
+mod tool_l2_injection {
+    use mur_core::inject::event::{EventKind, parse_event};
+    use serde_json::json;
+
+    fn tool_event(tool_name: &str, with_response: bool) -> serde_json::Value {
+        let mut v = json!({
+            "tool_name": tool_name,
+            "tool_input": {"file_path": "mur-core/src/cmd/hook.rs"},
+            "session_id": "sess_m4_test"
+        });
+        if with_response {
+            v.as_object_mut()
+                .unwrap()
+                .insert("tool_response".to_string(), json!({"output": "done"}));
+        }
+        v
+    }
+
+    #[test]
+    fn pre_tool_use_detected_by_missing_response_field() {
+        let raw = tool_event("Edit", false);
+        assert!(
+            raw.get("tool_response").is_none(),
+            "PreToolUse has no tool_response"
+        );
+    }
+
+    #[test]
+    fn post_tool_use_detected_by_presence_of_response_field() {
+        let raw = tool_event("Edit", true);
+        assert!(
+            raw.get("tool_response").is_some(),
+            "PostToolUse has tool_response"
+        );
+    }
+
+    #[test]
+    fn l2_tool_names_are_recognised() {
+        let l2_tools = [
+            "edit",
+            "Edit",
+            "EDIT",
+            "write",
+            "Write",
+            "bash",
+            "Bash",
+            "multiedit",
+        ];
+        for t in &l2_tools {
+            let ev = parse_event(tool_event(t, false), EventKind::Tool, "claude");
+            let called = ev.tool_called.as_deref().unwrap_or("").to_ascii_lowercase();
+            assert!(
+                ["edit", "write", "bash", "multiedit"].contains(&called.as_str()),
+                "Expected {t} to be an L2 tool, got {called}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_l2_tool_names_are_not_recognised() {
+        let non_l2 = ["Read", "Grep", "Glob", "WebFetch"];
+        for t in &non_l2 {
+            let called = t.to_ascii_lowercase();
+            assert!(
+                !["edit", "write", "bash", "multiedit"].contains(&called.as_str()),
+                "Expected {t} to NOT be an L2 tool"
+            );
+        }
+    }
+}
