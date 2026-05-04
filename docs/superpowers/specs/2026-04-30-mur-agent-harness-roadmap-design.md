@@ -571,6 +571,21 @@ Telegram chosen over Slack because: consumer global; 5-minute setup via `@BotFat
 | Premium Business mode | **Deferred to v2** (Premium-gated, but high-value as a quiet-hours auto-reply substrate) |
 | Mini App (TWA) | **Deferred to v2** (would require hosting, breaking the local-only invariant) |
 
+**Status:** SHIPPED 2026-05-04 (PR #c2-telegram-bridge).
+
+- M-c2.0 — schema + enum: shipped
+- M-c2.1 — BotFather UX: shipped
+- M-c2.2 — long-poll inbound: shipped
+- M-c2.3 — voice via whisper: shipped
+- M-c2.4 — files/photos via multimodal pipeline: shipped
+- M-c2.5 — outbound MCP: shipped
+- M-c2.6 — rate-limit + heartbeat: shipped
+- M-c2.7 — E2E + cookbook: shipped
+
+E2E: `scripts/e2e/c2-telegram-bridge.sh`. Cookbook: `docs/cookbook/c2-telegram-bridge.md`.
+
+**Out of scope (v2):** Premium Business chat, Mini App / TWA, inline-mode bots, multi-bot single-chat, group admin reactions.
+
 ### 5.5 C3 — Send-From-Any-App (v1, four lightweight channels)
 
 The user's "chat from Claude APP / ChatGPT" is not chat-platform inbound — it is "send selected content from any app to my agent." Tauri 2 has no native scaffolding for `.appex` Share Extensions; production paths require post-build Xcode merge (Notion / Linear pattern). v1 uses **four lightweight channels** that together cover ~90% of Things 3 / Bear / Drafts coverage with zero new build infrastructure:
