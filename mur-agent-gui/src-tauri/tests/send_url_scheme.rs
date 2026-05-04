@@ -8,6 +8,83 @@
 //! - End-to-end: deep-link event reaches the ingestor via the
 //!   pure-Rust `MockApp` test harness (M-c3.1.3)
 
+use base64::Engine;
+use mur_agent_gui_lib::send::ShareKind;
+use mur_agent_gui_lib::send::url_scheme::parse_share_url;
+
+fn b64(body: &str) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(body)
+}
+
+#[test]
+fn parse_text_share() {
+    let body = "hello world";
+    let url = format!("muragent-coach://share?text={}&type=text", b64(body));
+    let p = parse_share_url(&url, "coach").unwrap();
+    assert_eq!(p.source, "url_scheme");
+    match p.kind {
+        ShareKind::Text(t) => assert_eq!(t, body),
+        other => panic!("expected ShareKind::Text, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_url_share() {
+    let body = "https://example.com/post/42";
+    let url = format!("muragent-coach://share?text={}&type=url", b64(body));
+    let p = parse_share_url(&url, "coach").unwrap();
+    match p.kind {
+        ShareKind::Url(u) => assert_eq!(u, body),
+        other => panic!("expected ShareKind::Url, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_defaults_type_to_text() {
+    let body = "no type query";
+    let url = format!("muragent-coach://share?text={}", b64(body));
+    let p = parse_share_url(&url, "coach").unwrap();
+    assert!(matches!(p.kind, ShareKind::Text(ref t) if t == body));
+}
+
+#[test]
+fn rejects_wrong_slug() {
+    let body = "hello";
+    let url = format!("muragent-other://share?text={}&type=text", b64(body));
+    assert!(
+        parse_share_url(&url, "coach").is_err(),
+        "must reject scheme that targets a different agent"
+    );
+}
+
+#[test]
+fn rejects_wrong_host() {
+    let body = "hello";
+    let url = format!("muragent-coach://exec?text={}", b64(body));
+    assert!(
+        parse_share_url(&url, "coach").is_err(),
+        "must reject hosts other than `share`"
+    );
+}
+
+#[test]
+fn rejects_missing_text_param() {
+    let url = "muragent-coach://share?type=text";
+    assert!(
+        parse_share_url(url, "coach").is_err(),
+        "must reject URLs missing the `text=` query parameter"
+    );
+}
+
+#[test]
+fn rejects_invalid_base64() {
+    let url = "muragent-coach://share?text=%21%21not-base64%21%21&type=text";
+    assert!(
+        parse_share_url(url, "coach").is_err(),
+        "must reject `text=` payloads that aren't URL_SAFE_NO_PAD base64"
+    );
+}
+
 #[test]
 fn url_schemes_present_in_tauri_conf() {
     // Tauri 2 rejects a top-level `bundle.macOS.urlSchemes` key, and
