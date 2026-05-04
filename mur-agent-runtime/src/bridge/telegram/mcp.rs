@@ -77,11 +77,7 @@ pub async fn handle_jsonrpc(req: Value, deps: &McpDeps) -> anyhow::Result<Value>
             // `bot.send_message(ChatId(chat_id), body).await?`; the
             // Throttle<CacheMe<Bot>> wrapper from M-c2.2 enforces the
             // 30/sec global cap.
-            deps.bot
-                .sent_messages
-                .lock()
-                .unwrap()
-                .push((chat_id, body));
+            deps.bot.sent_messages.lock().unwrap().push((chat_id, body));
             Ok(json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}}))
         }
         _ => anyhow::bail!("unknown method {}", method),
