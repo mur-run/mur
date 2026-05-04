@@ -13,7 +13,7 @@
 use anyhow::{Context, anyhow, ensure};
 use base64::Engine;
 
-use crate::send::{SharePayload, ShareKind};
+use crate::send::{ShareKind, SharePayload};
 
 /// Parse a `muragent-<expected_slug>://share?text=<base64>&type=<kind>`
 /// URL into a [`SharePayload`].

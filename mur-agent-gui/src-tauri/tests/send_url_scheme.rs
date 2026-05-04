@@ -111,7 +111,10 @@ async fn deep_link_invalid_url_propagates_error() {
         b64("attacker payload")
     );
     let res = app.simulate_open_url(&url).await;
-    assert!(res.is_err(), "wrong-slug URLs must error, not silently route");
+    assert!(
+        res.is_err(),
+        "wrong-slug URLs must error, not silently route"
+    );
     assert!(
         app.captured_payloads().is_empty(),
         "ingestor must not record anything on parse failure"

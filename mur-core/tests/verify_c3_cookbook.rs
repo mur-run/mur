@@ -9,7 +9,12 @@ const COOKBOOK: &str = include_str!("../../docs/cookbook/c3-send-from-any-app.md
 
 #[test]
 fn cookbook_documents_all_four_channels() {
-    for section in ["URL scheme", "Global hotkey", "Services menu", "Drag-to-dock"] {
+    for section in [
+        "URL scheme",
+        "Global hotkey",
+        "Services menu",
+        "Drag-to-dock",
+    ] {
         assert!(
             COOKBOOK.contains(section),
             "cookbook missing section: {section}"
