@@ -8,6 +8,7 @@ pub mod agent_admin;
 pub mod auth;
 pub mod capture;
 pub mod character_card;
+pub mod daemon;
 // `cmd` is shared with the binary (`main.rs`). When compiled as part of the
 // library, most CLI dispatch fns are unreachable — they're only invoked by
 // the binary's clap parser — so `dead_code` warnings here are expected.
