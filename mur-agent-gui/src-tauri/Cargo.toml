@@ -83,6 +83,9 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures = "0.3"
 async-trait = "0.1"
+# Track C3 — sniff mime type for shared file/image paths so the
+# ingestor can route binary kinds through `process_artifact`.
+mime_guess = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
