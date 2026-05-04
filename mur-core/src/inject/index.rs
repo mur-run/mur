@@ -48,17 +48,23 @@ pub fn format_l0(index: &CapabilityIndex, budget_chars: usize) -> String {
     format!("{header}{body}{footer}")
 }
 
+/// Default character budget for L0 index injection (≈ 600 tokens × 4).
+pub const L0_BUDGET_CHARS: usize = 2400;
+
 /// Save index to an explicit path (testable with tempdir).
 pub fn save_to(index: &CapabilityIndex, path: &std::path::Path) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_string_pretty(index)?;
-    std::fs::write(path, json)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &json)?;
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 
 /// Load index from an explicit path; returns empty index if file is missing.
+#[allow(dead_code)]
 pub fn load_from(path: &std::path::Path) -> anyhow::Result<CapabilityIndex> {
     match std::fs::read_to_string(path) {
         Ok(content) => Ok(serde_json::from_str(&content)?),

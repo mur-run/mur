@@ -124,10 +124,11 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
     let index = crate::inject::index::build(&patterns, project.as_deref());
-    let _ = crate::inject::index::save(&index);
+    if let Err(e) = crate::inject::index::save(&index) {
+        tracing::warn!("capability index save failed (non-fatal): {e}");
+    }
 
-    const L0_BUDGET_CHARS: usize = 2400;
-    let output = crate::inject::index::format_l0(&index, L0_BUDGET_CHARS);
+    let output = crate::inject::index::format_l0(&index, crate::inject::index::L0_BUDGET_CHARS);
 
     if !output.is_empty() {
         print!("{output}");
