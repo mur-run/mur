@@ -85,6 +85,39 @@ fn rejects_invalid_base64() {
     );
 }
 
+#[tokio::test]
+async fn deep_link_event_reaches_ingestor() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = mur_agent_gui_lib::test_harness::mock_app(tmp.path(), "coach").await;
+    let body = "hello";
+    let url = format!("muragent-coach://share?text={}&type=text", b64(body));
+    app.simulate_open_url(&url).await.unwrap();
+    let payloads = app.captured_payloads();
+    assert_eq!(payloads.len(), 1, "exactly one payload should be recorded");
+    assert_eq!(payloads[0].source, "url_scheme");
+    match &payloads[0].kind {
+        ShareKind::Text(t) => assert_eq!(t, body),
+        other => panic!("expected ShareKind::Text, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn deep_link_invalid_url_propagates_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = mur_agent_gui_lib::test_harness::mock_app(tmp.path(), "coach").await;
+    // Wrong slug — must NOT reach the ingestor.
+    let url = format!(
+        "muragent-other://share?text={}&type=text",
+        b64("attacker payload")
+    );
+    let res = app.simulate_open_url(&url).await;
+    assert!(res.is_err(), "wrong-slug URLs must error, not silently route");
+    assert!(
+        app.captured_payloads().is_empty(),
+        "ingestor must not record anything on parse failure"
+    );
+}
+
 #[test]
 fn url_schemes_present_in_tauri_conf() {
     // Tauri 2 rejects a top-level `bundle.macOS.urlSchemes` key, and
