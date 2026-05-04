@@ -21,6 +21,7 @@ use teloxide::adaptors::{CacheMe, Throttle};
 
 use crate::bridge::ack::AckTracker;
 use crate::bridge::dedupe::DedupeStore;
+use crate::bridge::telegram::files::{FilesDeps, handle_document_update, handle_photo_update};
 use crate::bridge::telegram::mock::{MockBot, MockUpdate, MockUserAgentHandle};
 use crate::bridge::telegram::voice::{ForwardPayload, VoiceDeps, handle_voice_update};
 use mur_common::bridge::{PrivacyMode, TelegramConfig};
@@ -200,12 +201,14 @@ impl TelegramInboundLoop<MockBot> {
                 continue;
             }
 
-            // (4) Voice transcription path (M-c2.3). When the update is
-            // a voice message, download + transcribe BEFORE we sign the
-            // outbound envelope so the canonical payload contains the
-            // already-resolved transcript text. Voice errors abort
-            // delivery for this update (cursor stays pinned, dedupe is
-            // not yet marked) so the bridge can retry on the next poll.
+            // (4) Inbound payload resolution. Order matters: voice
+            // updates arrive with `voice_file_id` only; documents have
+            // `document_file_id`; photos have `photo_file_id`. Each
+            // path may stage an on-disk artifact and surface a sha256
+            // for the outbound envelope. Errors here abort delivery
+            // (cursor stays pinned, dedupe not yet marked) so the
+            // bridge can retry on the next poll.
+            let mut artifact_sha256: Option<String> = None;
             let body: String = if u.voice_file_id.is_some() {
                 let voice_deps = VoiceDeps {
                     agent_home: deps.agent_home.clone(),
@@ -221,6 +224,39 @@ impl TelegramInboundLoop<MockBot> {
                         continue;
                     }
                 }
+            } else if u.document_file_id.is_some() {
+                let fdeps = FilesDeps {
+                    agent_home: deps.agent_home.clone(),
+                    // Real wiring derives this from
+                    // `update.document.mime_type`; the synthetic
+                    // MockUpdate doesn't carry it, so we conservatively
+                    // tag every document `application/pdf` (the
+                    // dominant case in the M-c2.4 acceptance).
+                    mime: "application/pdf".into(),
+                };
+                match handle_document_update(&self.bot, &u, &fdeps).await {
+                    Ok(res) => {
+                        artifact_sha256 = Some(res.sha256);
+                        u.caption.clone().unwrap_or_default()
+                    }
+                    Err(_) => continue,
+                }
+            } else if u.photo_file_id.is_some() {
+                let fdeps = FilesDeps {
+                    agent_home: deps.agent_home.clone(),
+                    // Telegram normalises uploaded photos to JPEG
+                    // regardless of source format; PNG is sent as a
+                    // document. Pin the mime here so OCR plumbing
+                    // downstream (D-track) doesn't have to guess.
+                    mime: "image/jpeg".into(),
+                };
+                match handle_photo_update(&self.bot, &u, &fdeps).await {
+                    Ok(res) => {
+                        artifact_sha256 = Some(res.sha256);
+                        u.caption.clone().unwrap_or_default()
+                    }
+                    Err(_) => continue,
+                }
             } else {
                 u.text.clone().unwrap_or_default()
             };
@@ -235,7 +271,7 @@ impl TelegramInboundLoop<MockBot> {
             // 5xx leaves it pinned so the next poll re-fetches.
             deps.ack.start_pending(u.id);
 
-            let outcome = deliver_to_user_agent(deps, &u, &body).await;
+            let outcome = deliver_to_user_agent(deps, &u, &body, artifact_sha256.as_deref()).await;
             match outcome {
                 Ok(()) => {
                     deps.ack.confirm();
@@ -259,11 +295,14 @@ impl TelegramInboundLoop<MockBot> {
 /// Returns `Err` for any non-2xx response; the inbound loop interprets
 /// `Err` as "do NOT advance the cursor". The `body` is computed by the
 /// caller — text updates use `update.text`; voice updates substitute
-/// the whisper transcript (M-c2.3).
+/// the whisper transcript (M-c2.3); document/photo updates substitute
+/// the caption (M-c2.4) and pass the sha256 of the staged artifact via
+/// `artifact_sha256`.
 async fn deliver_to_user_agent(
     deps: &InboundDeps,
     u: &MockUpdate,
     body: &str,
+    artifact_sha256: Option<&str>,
 ) -> anyhow::Result<()> {
     if deps.always_5xx {
         anyhow::bail!("user-agent returned 5xx (simulated)");
@@ -272,12 +311,19 @@ async fn deliver_to_user_agent(
     // Construct the JSON-RPC `message/send` request the user agent
     // expects. Field order is fixed by `canonicalize_json` (sorted
     // keys); the byte sequence we sign is the byte sequence the
-    // verifier reproduces.
+    // verifier reproduces. We always emit `artifact_sha256` (empty
+    // string for non-multimodal turns) so the canonical schema is
+    // stable across update types — the user-agent side keys off
+    // `is_empty()` to decide whether to look up a ledger entry.
     let payload = serde_json::json!({
         "id": u.id,
         "jsonrpc": "2.0",
         "method": "message/send",
-        "params": { "agent": deps.config.bot_username, "body": body },
+        "params": {
+            "agent": deps.config.bot_username,
+            "artifact_sha256": artifact_sha256.unwrap_or(""),
+            "body": body,
+        },
     });
     let canonical = canonicalize_json(&payload);
     let envelope =
