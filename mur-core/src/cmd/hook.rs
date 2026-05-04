@@ -7,6 +7,7 @@ use crate::retrieve::gate::{GateInputs, Tier as GateTier, evaluate_query_v2};
 use crate::retrieve::scoring::score_and_rank;
 use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
+use mur_common::pattern::LifecycleStatus;
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -27,7 +28,7 @@ pub(crate) fn extract_query(raw: &serde_json::Value) -> Option<String> {
 }
 
 fn is_pre_tool_use(raw: &serde_json::Value) -> bool {
-    raw.get("tool_response").is_none()
+    !matches!(raw.get("tool_response"), Some(v) if !v.is_null())
 }
 
 fn is_l2_tool(tool_name: &str) -> bool {
@@ -80,7 +81,6 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
-    use mur_common::pattern::LifecycleStatus;
     let injected: Vec<_> = score_and_rank(&query, patterns)
         .into_iter()
         .filter(|sp| sp.pattern.lifecycle.status != LifecycleStatus::Archived)
@@ -148,7 +148,6 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
-    use mur_common::pattern::LifecycleStatus;
     let injected: Vec<_> = score_and_rank(query, patterns)
         .into_iter()
         .filter(|sp| sp.pattern.lifecycle.status != LifecycleStatus::Archived)
