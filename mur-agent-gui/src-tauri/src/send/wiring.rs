@@ -79,7 +79,12 @@ impl Clipboard for TauriClipboard {
         // slot (vs. a slot containing an empty string). Both are
         // "nothing to share"; collapsing them keeps the synthesizer
         // contract uniform with `FakeClipboard`.
-        Ok(self.app.clipboard().read_text().ok().filter(|s| !s.is_empty()))
+        Ok(self
+            .app
+            .clipboard()
+            .read_text()
+            .ok()
+            .filter(|s| !s.is_empty()))
     }
 
     async fn read_image(&self) -> Result<Option<Vec<u8>>> {
@@ -154,9 +159,7 @@ pub fn current_agent_slug() -> String {
 /// operators can correlate against `RUST_LOG=mur_agent_gui_lib=debug`
 /// if something looks off.
 pub fn read_user_hotkey_override(slug: &str) -> Option<String> {
-    let path = agent_home_for(slug)
-        .join("companion")
-        .join("state.yaml");
+    let path = agent_home_for(slug).join("companion").join("state.yaml");
     let raw = std::fs::read_to_string(&path).ok()?;
     let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw)
         .map_err(|e| {
@@ -225,8 +228,8 @@ pub fn register_share_hotkey(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::hotkey::default_combo_for;
+    use super::*;
     use std::sync::Mutex;
 
     // Tests in this module mutate process-wide env vars (MUR_HOME,
