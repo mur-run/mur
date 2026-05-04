@@ -10,6 +10,31 @@
 //!   `RunEvent::Opened { urls }` reaches the ingestor as a sequence of
 //!   `SharePayload`s with `source = "dock"`.
 
+#[cfg(target_os = "macos")]
+#[test]
+fn classify_path_routes_extensions_correctly() {
+    use mur_agent_gui_lib::send::ShareKind;
+    use mur_agent_gui_lib::send::dock::classify_path;
+    use std::path::PathBuf;
+
+    assert!(matches!(
+        classify_path(&PathBuf::from("/tmp/a.png")),
+        ShareKind::Image(_)
+    ));
+    assert!(matches!(
+        classify_path(&PathBuf::from("/tmp/a.txt")),
+        ShareKind::File(_)
+    ));
+    assert!(matches!(
+        classify_path(&PathBuf::from("/tmp/a.pdf")),
+        ShareKind::File(_)
+    ));
+    assert!(matches!(
+        classify_path(&PathBuf::from("/tmp/Photo.HEIC")),
+        ShareKind::Image(_)
+    ));
+}
+
 #[test]
 fn file_associations_cover_text_url_image_pdf() {
     let raw = std::fs::read_to_string(
