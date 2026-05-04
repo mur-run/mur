@@ -6,8 +6,7 @@
 
 use mur_core::cmd::agent_export_gui::rewrite_nsservices;
 
-const TEMPLATE: &str =
-    include_str!("../../mur-agent-gui/src-tauri/Info.plist.template");
+const TEMPLATE: &str = include_str!("../../mur-agent-gui/src-tauri/Info.plist.template");
 
 #[test]
 fn rewrite_injects_three_nsservices_entries() {
@@ -33,7 +32,12 @@ fn rewrite_substitutes_display_name_in_port_name() {
     std::fs::write(tmp.path().join("Info.plist.template"), TEMPLATE).unwrap();
     rewrite_nsservices(tmp.path(), "draft-bot", "Draft Bot").unwrap();
 
-    let raw = std::fs::read_to_string(tmp.path().join("Info.plist")).unwrap();
+    // Normalise CRLF → LF so the substring match below is robust on
+    // Windows runners where git's `core.autocrlf` may have converted
+    // the checked-in Info.plist.template line endings on checkout.
+    let raw = std::fs::read_to_string(tmp.path().join("Info.plist"))
+        .unwrap()
+        .replace("\r\n", "\n");
     // NSPortName must carry the display name verbatim — AppKit looks
     // it up to address the running provider.
     assert!(
@@ -57,9 +61,7 @@ fn phase_4_pipeline_renders_info_plist_and_points_conf_at_it() {
     // helper composition is enough to gate against drift: each
     // public helper runs in turn and the resulting conf carries the
     // expected fields.
-    use mur_core::cmd::agent_export_gui::{
-        rewrite_nsservices, rewrite_url_scheme,
-    };
+    use mur_core::cmd::agent_export_gui::{rewrite_nsservices, rewrite_url_scheme};
 
     let tmp = tempfile::tempdir().unwrap();
     // Drop a tauri.conf.json that mirrors the production template
@@ -89,10 +91,9 @@ fn phase_4_pipeline_renders_info_plist_and_points_conf_at_it() {
     rewrite_url_scheme(tmp.path(), "draftbot").unwrap();
     rewrite_nsservices(tmp.path(), "draftbot", "Draft Bot").unwrap();
 
-    let conf: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(tmp.path().join("tauri.conf.json")).unwrap(),
-    )
-    .unwrap();
+    let conf: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(tmp.path().join("tauri.conf.json")).unwrap())
+            .unwrap();
     assert_eq!(
         conf.pointer("/plugins/deep-link/desktop/schemes/0")
             .and_then(|v| v.as_str()),
