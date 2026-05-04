@@ -44,8 +44,13 @@ static CODE_IDENT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(\w+\.[a-zA-Z]{1,5}\b|\bfn\s+\w+|\w+::\w+|\b[a-z]+_[a-z_]+\b)").unwrap()
 });
 
-static ACTION_VERB_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(實作|實現|修|改|加|建立|刪除|測試|refactor|implement|build|fix|add|remove|delete|create|test|debug|deploy|migrate|rewrite|integrate|wire|hook|extract)\b").unwrap()
+static ACTION_VERB_EN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(refactor|implement|build|fix|add|remove|delete|create|test|debug|deploy|migrate|rewrite|integrate|wire|hook|extract|search|find|run|check)\b").unwrap()
+});
+
+static ACTION_VERB_ZH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // No \b — CJK chars are \w in Unicode mode so word boundaries don't work at ASCII/CJK edges
+    Regex::new(r"(實作|實現|修|改|加|建立|刪除|測試|找|搜|查|做|寫|跑)").unwrap()
 });
 
 const TECH_TERMS: &[&str] = &[
@@ -83,7 +88,7 @@ pub(crate) fn intent_score(query: &str) -> f32 {
     if char_count > 80 && tech_count >= 2 {
         return 0.9;
     }
-    if ACTION_VERB_RE.is_match(trimmed) {
+    if ACTION_VERB_EN_RE.is_match(trimmed) || ACTION_VERB_ZH_RE.is_match(trimmed) {
         return 0.8;
     }
     if CODE_IDENT_RE.is_match(trimmed) {
@@ -233,11 +238,68 @@ pub(crate) fn read_recent_tool_history(mur_dir: &Path, n: usize) -> Vec<ToolSign
     tool_events
 }
 
+// ─── Composite gate ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct GateInputs {
+    pub tool_history: Vec<ToolSignalInput>,
+    pub session_state: SessionStateInput,
+}
+
+impl Default for GateInputs {
+    fn default() -> Self {
+        Self {
+            tool_history: Vec::new(),
+            session_state: SessionStateInput {
+                age: Duration::seconds(0),
+                seconds_since_last_edit: None,
+            },
+        }
+    }
+}
+
+pub fn evaluate_query_v2(query: &str, inputs: &GateInputs) -> GateOutcome {
+    let intent = intent_score(query);
+    let tool = tool_signal_score(&inputs.tool_history);
+    let quality = query_quality_score(query);
+    let session = session_state_score(&inputs.session_state);
+    let prefetch = 0.0_f32; // M3 will fill this in
+
+    let score = 0.30 * intent + 0.25 * tool + 0.20 * quality + 0.15 * session + 0.10 * prefetch;
+
+    let tier = if score < 0.30 {
+        Tier::Skip
+    } else if score < 0.50 {
+        Tier::L0
+    } else if score < 0.80 {
+        Tier::L1
+    } else {
+        Tier::L2
+    };
+
+    let mut reasons = Vec::new();
+    if intent == 0.0 { reasons.push("intent: noise/ack/meta"); }
+    if quality == 0.0 { reasons.push("quality: noise filter rejected"); }
+    if tool >= 0.8 { reasons.push("tool: edit/build active"); }
+
+    GateOutcome { tier, score, reasons }
+}
+
 /// Evaluate whether a query should trigger pattern retrieval.
-/// Stub implementation — replaced in Task 7 with composite scoring.
+/// Reads tool history from disk; degrades gracefully if unavailable.
 pub fn evaluate_query(query: &str) -> GateOutcome {
-    let _ = query;
-    GateOutcome { tier: Tier::L1, score: 0.5, reasons: vec![] }
+    let Some(home) = dirs::home_dir() else {
+        return GateOutcome { tier: Tier::Skip, score: 0.0, reasons: vec!["no home dir"] };
+    };
+    let mur_dir = home.join(".mur");
+    let inputs = GateInputs {
+        tool_history: read_recent_tool_history(&mur_dir, 5),
+        session_state: SessionStateInput {
+            age: Duration::seconds(0),
+            seconds_since_last_edit: None,
+        },
+    };
+    evaluate_query_v2(query, &inputs)
 }
 
 #[cfg(test)]
@@ -346,6 +408,52 @@ mod tests {
     fn tool_signal_edit_wins_over_read() {
         let h = vec![ts("Read", None), ts("Bash", Some("ls")), ts("Edit", None)];
         assert!((tool_signal_score(&h) - 0.9).abs() < 1e-6);
+    }
+
+    fn empty_inputs() -> GateInputs {
+        GateInputs {
+            tool_history: Vec::new(),
+            session_state: SessionStateInput { age: Duration::minutes(5), seconds_since_last_edit: None },
+        }
+    }
+
+    #[test]
+    fn end_to_end_skip_on_ack() {
+        let o = evaluate_query_v2("ok", &empty_inputs());
+        assert_eq!(o.tier, Tier::Skip);
+    }
+
+    #[test]
+    fn end_to_end_skip_on_符合() {
+        let o = evaluate_query_v2("符合", &empty_inputs());
+        assert_eq!(o.tier, Tier::Skip);
+    }
+
+    #[test]
+    fn end_to_end_l0_on_short_question() {
+        let o = evaluate_query_v2("what is RAG", &empty_inputs());
+        assert!(matches!(o.tier, Tier::L0 | Tier::L1));
+    }
+
+    #[test]
+    fn end_to_end_l2_on_coding_with_edit_history() {
+        let mut i = empty_inputs();
+        i.tool_history = vec![
+            ToolSignalInput { tool: "Read".into(), bash_command: None },
+            ToolSignalInput { tool: "Edit".into(), bash_command: None },
+        ];
+        i.session_state.seconds_since_last_edit = Some(20);
+        let o = evaluate_query_v2(
+            "implement the adaptive gate composite scoring with tokio worker pool",
+            &i,
+        );
+        assert_eq!(o.tier, Tier::L2);
+    }
+
+    #[test]
+    fn end_to_end_workflow_keyword_forces_l1() {
+        let o = evaluate_query_v2("agent-browser去pchome-24h找airpods-pro的價格", &empty_inputs());
+        assert!(o.tier >= Tier::L1);
     }
 
     #[test]
