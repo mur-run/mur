@@ -541,6 +541,20 @@ Precedence: explicit mention > platform-specific match > `default_route`. **No L
 | Platform identity treatment | `envelope.metadata.platform = {kind, user_id, chat_id}` is informational; never used in authorization decisions |
 | Quiet hours / proactive policy | Enforced in user agent (`companion::earned_permission`); bridge stays content-neutral |
 
+#### Acceptance status
+
+- §5.1 — bridge-as-mur-agent pattern  ✅ landed (track-c1 PR cascade; see `docs/cookbook/c1-a2a-bridge.md`)
+- §5.2 — `routes.yaml` + precedence  ✅ landed (`mur_common::bridge::routes::BridgeRouteConfig::resolve`)
+- §5.3 — dedupe / heartbeat / signing / trust  ✅ landed:
+  - dedupe → `mur_agent_runtime::bridge::dedupe::DedupeStore` (sled, 7-day TTL)
+  - heartbeat → `BridgeBeacon` (30 s) + `bridge_status_for_peer` (90 s degraded threshold)
+  - ACK → `mur_agent_runtime::bridge::ack::AckTracker`
+  - signing → `mur_common::bridge::envelope::SignedEnvelope` + `verify_inbound_envelope`
+  - trust → `AgentProfile.trusted_peers: Vec<TrustedPeer>`
+  - llm-block → `entitlements.llm.mode = off`
+
+E2E: `scripts/e2e/c1-bridge-roundtrip.sh`. Concrete platforms ship in C2 / C3.
+
 ### 5.4 C2 — Telegram Reference Bridge (v1)
 
 Telegram chosen over Slack because: consumer global; 5-minute setup via `@BotFather`; native bot API supports inbound (long-poll or webhook), outbound, multimedia; no OAuth-scope sprawl.
@@ -556,6 +570,21 @@ Telegram chosen over Slack because: consumer global; 5-minute setup via `@BotFat
 | Setup UX (5 steps) | 1) `mur agent companion connector add telegram --agent <name>` opens BotFather URL + copies prompt. 2) User pastes token back. 3) Bridge generates nonce, prints `t.me/<bot_username>?start=<nonce>`. 4) User taps link on phone, hits Start. 5) Bridge binds `chat_id` and writes `~/.mur/agents/<name>/connectors/telegram.yaml`; shows E2E disclosure. |
 | Premium Business mode | **Deferred to v2** (Premium-gated, but high-value as a quiet-hours auto-reply substrate) |
 | Mini App (TWA) | **Deferred to v2** (would require hosting, breaking the local-only invariant) |
+
+**Status:** SHIPPED 2026-05-04 (PR #c2-telegram-bridge).
+
+- M-c2.0 — schema + enum: shipped
+- M-c2.1 — BotFather UX: shipped
+- M-c2.2 — long-poll inbound: shipped
+- M-c2.3 — voice via whisper: shipped
+- M-c2.4 — files/photos via multimodal pipeline: shipped
+- M-c2.5 — outbound MCP: shipped
+- M-c2.6 — rate-limit + heartbeat: shipped
+- M-c2.7 — E2E + cookbook: shipped
+
+E2E: `scripts/e2e/c2-telegram-bridge.sh`. Cookbook: `docs/cookbook/c2-telegram-bridge.md`.
+
+**Out of scope (v2):** Premium Business chat, Mini App / TWA, inline-mode bots, multi-bot single-chat, group admin reactions.
 
 ### 5.5 C3 — Send-From-Any-App (v1, four lightweight channels)
 
@@ -573,6 +602,8 @@ Multi-agent: each `.app` registers its own `muragent-<slug>://` scheme in v1; "u
 All four channels feed received content into the same B0 multimodal pipeline (D3) before reaching the LLM, with a `<untrusted_share>` wrapper and a one-turn tool-cooldown.
 
 **Acceptance**: select text in Safari → right-click Services → Send to Coach → Coach.app opens, content appears in composer wrapped in `<untrusted_share>`; same flow via drag-to-dock on a screenshot file applies the full multimodal pipeline.
+
+**Status: shipped 2026-05-04** — harness coverage for all four channels + the React composer integration cascade-merged across PRs M-c3.0 → M-c3.6. `lib.rs::setup` production wiring (the actual `tauri-plugin-deep-link` / `global-shortcut` mounts, `NSApplication.servicesProvider` registration, `RunEvent::Opened` callback, and `App.tsx` mount of `startShareListener`) lands in a stacked follow-up PR with its own manual native-channel QA matrix; the cookbook at `docs/cookbook/c3-send-from-any-app.md` is authoritative for both layers. Acceptance gate: `bash scripts/e2e/c3-send-from-any-app.sh`.
 
 ### 5.6 C4-C9 (v2 Boundary)
 
@@ -630,6 +661,13 @@ All 22 rules are implemented inside `B0SafetyHook` (Track A built-in handler) an
 - AgentDojo-50 indirect-injection success rate ≤ 5% (research baseline of unprotected agents: 30-60%).
 - HarmBench-50 jailbreak success rate ≤ baseline minus 50%.
 - End-to-end demo: dropping an "invisible text PDF" with ASCII smuggling does not trigger any side-effect tool in the same turn.
+- v1 ship status (2026-05-03):
+  - Rules 1, 2, 3, 4, 5, 7, 8, 11: shipped (M7.1-M7.7).
+  - Rule 6: deferred to MCP install CLI work (separate plan).
+  - Rule 9: deferred to telemetry redaction work (separate plan).
+  - Rule 10: documented; mechanism implemented across M0/M3.8/M7.3.
+  - Rule 12: M2.x companion subsystem already enforces; audit pending.
+  - Rules 13-22: shipped in M3 (drag-drop) + M4 (cards).
 
 ### 6.2 v1 Threat Model Document (16 sections)
 

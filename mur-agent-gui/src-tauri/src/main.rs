@@ -5,6 +5,7 @@ mod bootstrap;
 mod commands;
 mod companion_bridge;
 mod multimodal;
+mod send;
 mod sidecar;
 mod theme;
 mod voice;
@@ -151,6 +152,77 @@ fn main() -> Result<()> {
                 }
             });
 
+            // ── Track C3 — channel callbacks ─────────────────────────
+            //
+            // `bootstrap::bootstrap_if_needed` ran above and exported
+            // `MUR_GUI_AGENT_NAME`; `current_agent_slug` reads it (or
+            // falls back to "template" so dev builds still work).
+            //
+            // One ingestor instance is shared across channels so
+            // provenance + B0 cooldown state stay consistent.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let slug = send::wiring::current_agent_slug();
+                let ingestor = send::wiring::build_ingestor(app.handle().clone(), &slug);
+
+                // Channel A — `muragent-<slug>://share?...` deep-link.
+                // The `on_open_url` callback fires once per invocation.
+                // `parse_share_url` is pure; malformed URLs (wrong
+                // host, wrong slug, bad base64) get logged and dropped.
+                let cb_slug = slug.clone();
+                let cb_ing = ingestor.clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        let url_str = url.to_string();
+                        match send::url_scheme::parse_share_url(&url_str, &cb_slug) {
+                            Ok(payload) => {
+                                let ing = cb_ing.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(e) = ing.ingest(payload).await {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "deep-link ingest failed",
+                                        );
+                                    }
+                                });
+                            }
+                            Err(e) => tracing::warn!(
+                                url = %url_str,
+                                error = %e,
+                                "rejected deep-link URL",
+                            ),
+                        }
+                    }
+                });
+
+                // Channel B — global hotkey + clipboard. The combo
+                // is per-agent (Cmd+Shift+M+<X>) with a user override
+                // honoured from `companion/state.yaml`. Failure to
+                // register (e.g. another app owns the combo) logs
+                // and continues — the agent stays usable via the
+                // other three channels.
+                match send::wiring::register_share_hotkey(
+                    app.handle(),
+                    &slug,
+                    ingestor.clone(),
+                ) {
+                    Ok(combo) => tracing::info!(combo = %combo, "share hotkey registered"),
+                    Err(e) => tracing::warn!(error = %e, "share hotkey not registered"),
+                }
+
+                // Channel D — drag-to-dock. Stash the ingestor in
+                // app state so the `RunEvent::Opened { urls }`
+                // callback (registered on `App::run` below; outside
+                // `setup`) can reach it without capturing it across
+                // the setup boundary. `Arc<dyn SendIngestor>` is
+                // `Send + Sync` (the trait bounds it that way).
+                //
+                // The actual classify-and-ingest loop lives at the
+                // `App::run` callback site so platform glue stays
+                // co-located with `tauri::RunEvent`.
+                app.manage::<std::sync::Arc<dyn send::SendIngestor>>(ingestor.clone());
+            }
+
             // Tray menu — primary UX for the menubar launcher.
             let show_settings =
                 MenuItem::with_id(app, "show-settings", "Show Settings…", true, None::<&str>)?;
@@ -255,6 +327,16 @@ fn main() -> Result<()> {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        // ── Track C3 / channel A — `muragent-<slug>://share?...` ─────
+        //
+        // Deep-link delivery: macOS routes through Launch Services
+        // (which speaks LSOpenURL); Linux through xdg-open + a per-
+        // user .desktop file the plugin manages; Windows through
+        // the registry. The on_open_url callback runs on the main
+        // thread; we hand the URL to `parse_share_url` (pure) and
+        // dispatch the resulting payload through the production
+        // `DefaultIngestor` constructed in `setup`.
+        .plugin(tauri_plugin_deep_link::init())
         // ── D3 / M3.6.3 — drag-drop event → React ──────────────────
         //
         // Tauri 2 delivers drag-drop through `WindowEvent::DragDrop`.
@@ -362,8 +444,55 @@ fn main() -> Result<()> {
             companion_bridge::commands::companion_proactive,
             companion_bridge::commands::companion_quiet,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, _event| {
+            // ── Track C3 / channel D — drag-to-dock ──────────────────
+            //
+            // macOS delivers `application:openFiles:` when the user
+            // drops a file onto the dock icon; Tauri 2 surfaces it as
+            // `RunEvent::Opened { urls: Vec<url::Url> }`. The variant
+            // itself is `#[cfg(any(target_os = "macos", target_os =
+            // "ios"))]` upstream, so referencing it on Linux/Windows
+            // is a hard compile error — the whole arm has to be
+            // cfg-gated to match. Linux/Windows never receive this
+            // event from the OS anyway (no dock concept), so the
+            // outer cfg leaves the closure as a no-op there.
+            #[cfg(target_os = "macos")]
+            {
+                let app_handle = _app_handle;
+                let event = _event;
+                if let tauri::RunEvent::Opened { urls } = &event {
+                    use tauri::Manager;
+                    let Some(ingestor) =
+                        app_handle.try_state::<std::sync::Arc<dyn send::SendIngestor>>()
+                    else {
+                        tracing::warn!(
+                            "RunEvent::Opened fired before share ingestor was registered — dropping"
+                        );
+                        return;
+                    };
+                    for url in urls {
+                        let Ok(path) = url.to_file_path() else {
+                            tracing::warn!(url = %url, "RunEvent::Opened: not a file:// URL");
+                            continue;
+                        };
+                        let kind = send::dock::classify_path(&path);
+                        let payload = send::SharePayload {
+                            source: "dock".into(),
+                            kind,
+                            metadata: serde_json::json!({}),
+                        };
+                        let ing = std::sync::Arc::clone(ingestor.inner());
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = ing.ingest(payload).await {
+                                tracing::warn!(error = %e, "dock-drop ingest failed");
+                            }
+                        });
+                    }
+                }
+            }
+        });
 
     Ok(())
 }

@@ -262,6 +262,13 @@ mod tests {
 
     #[test]
     fn bootstrap_extracts_template_payload() {
+        // Acquire the crate-wide env-var lock so we don't race with
+        // other tests that mutate `MUR_HOME` / `MUR_AGENT_BIN_DIR`
+        // (notably `send::wiring::tests`). `unwrap_or_else(into_inner)`
+        // tolerates a poisoned lock from a panic in another test.
+        let _g = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let tmp = tempdir_for_test();
         // Write a fake metadata + payload.
         let meta = EmbeddedMetadata {

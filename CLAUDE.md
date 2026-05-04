@@ -150,6 +150,8 @@ The per-agent supervisor lives in `mur-agent-runtime/`. Each agent has a directo
 - **Crate README:** `mur-agent-runtime/README.md`
 - **E2E runner:** `scripts/e2e/run-all.sh`
 
+`entitlements.llm.mode` is `allowed` by default; bridges set it to `off` so the supervisor refuses to construct an LLM client. See `docs/cookbook/c1-a2a-bridge.md`.
+
 ### P0a.5 additions (identity + TCP Noise + commander integration)
 
 - **`mur-common` schema** — `AgentProfile.identity` (Ed25519 pubkey + owner), `transport.tcp` (Noise XK bind + pattern, default off), `lifecycle.{execution,schedule}` (daemon vs on-demand + cron), `file_transfer` caps, `deployment` (laptop / vm / docker / k8s / lambda).

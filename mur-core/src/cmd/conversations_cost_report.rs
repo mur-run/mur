@@ -84,6 +84,17 @@ fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
         m if m.starts_with("claude-sonnet-4-6") => Some((3.00, 15.00, 3.75, 0.30)),
         m if m.starts_with("claude-opus-4-7") => Some((15.00, 75.00, 18.75, 1.50)),
         m if m.starts_with("claude-opus-4-6") => Some((15.00, 75.00, 18.75, 1.50)),
+        m if m.starts_with("gpt-4o-mini") => Some((0.15, 0.60, 0.0, 0.0)),
+        m if m.starts_with("gpt-4o") => Some((2.50, 10.00, 0.0, 0.0)),
+        m if m.starts_with("gpt-4.1-mini") => Some((0.40, 1.60, 0.0, 0.0)),
+        m if m.starts_with("gpt-4.1") => Some((2.00, 8.00, 0.0, 0.0)),
+        m if m.starts_with("gpt-5-mini") => Some((0.25, 2.00, 0.0, 0.0)),
+        m if m.starts_with("gpt-5") => Some((1.25, 10.00, 0.0, 0.0)),
+        m if m.starts_with("o3-mini") => Some((1.10, 4.40, 0.0, 0.0)),
+        m if m.starts_with("o3") => Some((2.00, 8.00, 0.0, 0.0)),
+        m if m.starts_with("gemini-2.5-flash") => Some((0.30, 2.50, 0.0, 0.0)),
+        m if m.starts_with("gemini-2.5-pro") => Some((1.25, 10.00, 0.0, 0.0)),
+        m if m.starts_with("gemini-pro-3") => Some((1.25, 10.00, 0.0, 0.0)),
         _ => None,
     }
 }
@@ -305,6 +316,25 @@ mod tests {
     fn estimate_cost_haiku_matches_table() {
         let cost = estimate_cost("claude-haiku-4-5", 1_000_000, 1_000_000, 0, 0).unwrap();
         assert!((cost - 6.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn estimate_cost_openai_gpt4o_mini_matches_table() {
+        // 1M in @ $0.15 + 1M out @ $0.60 = $0.75
+        let cost = estimate_cost("gpt-4o-mini", 1_000_000, 1_000_000, 0, 0).unwrap();
+        assert!((cost - 0.75).abs() < 0.001);
+    }
+
+    #[test]
+    fn estimate_cost_gemini_25_flash_matches_table() {
+        // 1M in @ $0.30 + 1M out @ $2.50 = $2.80
+        let cost = estimate_cost("gemini-2.5-flash", 1_000_000, 1_000_000, 0, 0).unwrap();
+        assert!((cost - 2.80).abs() < 0.001);
+    }
+
+    #[test]
+    fn estimate_cost_unknown_model_returns_none() {
+        assert!(estimate_cost("some-unknown-model-vNext", 1, 1, 0, 0).is_none());
     }
 
     #[test]

@@ -1,8 +1,6 @@
 //! Adapter wrapping the existing OllamaClient as a ChatBackend.
 //! See spec §5.1.
 
-#![allow(dead_code)] // wired by factory in Task 5.
-
 use std::time::Duration;
 
 use anyhow::Result;

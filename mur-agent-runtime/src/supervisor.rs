@@ -154,6 +154,21 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         Arc::new(B0SafetyHook::new()),
         Arc::new(LedgerHook::new()),
     ]);
+    // Resolve MCP server binary paths from `profile.mcp_servers[*].command`.
+    // Each `command` is a shell command line; the first whitespace-separated
+    // token is treated as the binary path. M7.7 (rule 11) reads these in
+    // `B0SafetyHook::on_startup` to verify codesign / signtool signatures.
+    let mcp_server_binaries: Vec<std::path::PathBuf> = profile
+        .inner
+        .mcp_servers
+        .iter()
+        .filter_map(|s| {
+            s.command
+                .split_whitespace()
+                .next()
+                .map(std::path::PathBuf::from)
+        })
+        .collect();
     let hook_ctx = HookCtx {
         agent_name: profile.inner.name.clone(),
         agent_uuid: profile.inner.id.clone(),
@@ -166,6 +181,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         // lands with the gate-hook integration in a follow-up milestone.
         turn_id: 0,
         turn_flags: Vec::new(),
+        // Snapshot of the agent's entitlements at supervisor start.
+        // M7.2 (B0 rule 5) reads this from `pre_tool_use` to gate
+        // process-spawn calls. Mutating entitlements at runtime is out
+        // of scope: the supervisor restarts on profile.yaml change.
+        entitlements: profile.inner.entitlements.clone(),
+        mcp_server_binaries,
     };
     let hook_cancel = tokio_util::sync::CancellationToken::new();
     hook_chain
@@ -184,6 +205,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // implemented) fall through to echo. Setting MUR_AGENT_FORCE_ECHO=1
     // forces echo regardless of profile (useful for tests).
     let force_echo = std::env::var_os("MUR_AGENT_FORCE_ECHO").is_some();
+    // Track C1 (M-c1.0.2): refuse to construct an LLM client when the profile
+    // declares `entitlements.llm.mode = off` — i.e. the agent is a bridge.
+    // Bridges relay chat-platform traffic to/from the A2A bus and must not
+    // dial a provider. The gate fails closed.
+    crate::llm::build_client(&profile.inner)
+        .map_err(|e| anyhow::anyhow!("supervisor refusing LLM construction: {e}"))?;
     // `llm_for_companion` carries the real LLM client (None when echo/stub) so
     // the companion subsystem can share the same provider without a second dial.
     let (runner, llm_for_companion): (_, Option<Arc<dyn LlmClient>>) = if force_echo {
@@ -430,6 +457,17 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
 
+    // 8.5 — bridge agents (LLM disabled by entitlement) emit a 30 s
+    //       heartbeat so peers can classify them via
+    //       `bridge::beacon::bridge_status_for_peer` (running.lock mtime
+    //       refreshes whenever the writer task appends a JSONL line).
+    if profile.inner.entitlements.llm.mode == mur_common::LlmMode::Off {
+        let beacon =
+            crate::bridge::beacon::BridgeBeacon::new(profile.inner.name.clone(), writer.sender());
+        transport_tasks.push(beacon.spawn());
+        info!(name = %profile.inner.name, "spawned BridgeBeacon (30 s heartbeat)");
+    }
+
     // 8b. Companion subsystem (Phase 1.1 M5.7).
     //     Returns None when profile.companion.enabled is false — zero-cost path.
     let companion_clock =
@@ -541,6 +579,83 @@ fn parent_pid() -> u32 {
     #[cfg(not(unix))]
     {
         0
+    }
+}
+
+/// Test-only helper: spawn just the bridge-side of the supervisor for a
+/// telegram bridge agent rooted at `agent_dir`.
+///
+/// Drives the same code path the real supervisor takes when
+/// `entitlements.llm.mode = off` — instantiates a [`TelemetryWriter`]
+/// pointed at `agent_dir/telemetry/`, spawns a [`crate::bridge::beacon::BridgeBeacon`]
+/// keyed on `bridge_id` (defaults to `"tg"`), and writes a fresh
+/// `running.lock` so peers' `bridge_status_for_peer` classifies the
+/// agent as `Running` immediately.
+///
+/// Used by M-c2.6.3 and downstream `mur agent doctor` integration tests
+/// to verify the heartbeat path is wired without spinning up a full
+/// runtime (no telegram bot token, no MCP child, no transport listener).
+///
+/// Returns a [`BridgeTestHandle`]; call `.shutdown().await` to abort
+/// the beacon task and remove `running.lock`.
+pub async fn spawn_telegram_bridge_for_test(
+    agent_dir: &std::path::Path,
+) -> std::io::Result<BridgeTestHandle> {
+    spawn_bridge_for_test_with_id(agent_dir, "tg").await
+}
+
+/// Lower-level form of [`spawn_telegram_bridge_for_test`] that lets
+/// callers pick a custom `bridge_id` (the value embedded in
+/// `telemetry/bridge_alive` payloads).
+pub async fn spawn_bridge_for_test_with_id(
+    agent_dir: &std::path::Path,
+    bridge_id: &str,
+) -> std::io::Result<BridgeTestHandle> {
+    std::fs::create_dir_all(agent_dir)?;
+    let lock_path = agent_dir.join("running.lock");
+    std::fs::write(&lock_path, b"{}")?;
+
+    let telemetry_dir = agent_dir.join("telemetry");
+    let (writer, _notif_rx) = TelemetryWriter::new(
+        telemetry_dir,
+        bridge_id.to_string(),
+        format!("test-{bridge_id}"),
+    )
+    .await?;
+
+    let beacon = crate::bridge::beacon::BridgeBeacon::new(bridge_id.to_string(), writer.sender());
+    let join = beacon.spawn();
+
+    Ok(BridgeTestHandle {
+        beacon: Some(join),
+        lock_path,
+    })
+}
+
+/// Handle returned by [`spawn_telegram_bridge_for_test`]. Aborts the
+/// background heartbeat task and tidies `running.lock` on
+/// [`BridgeTestHandle::shutdown`] (or on drop).
+pub struct BridgeTestHandle {
+    beacon: Option<tokio::task::JoinHandle<()>>,
+    lock_path: PathBuf,
+}
+
+impl BridgeTestHandle {
+    /// Abort the heartbeat task and remove `running.lock`. Idempotent.
+    pub async fn shutdown(mut self) {
+        if let Some(j) = self.beacon.take() {
+            j.abort();
+        }
+        let _ = std::fs::remove_file(&self.lock_path);
+    }
+}
+
+impl Drop for BridgeTestHandle {
+    fn drop(&mut self) {
+        if let Some(j) = self.beacon.take() {
+            j.abort();
+        }
+        let _ = std::fs::remove_file(&self.lock_path);
     }
 }
 

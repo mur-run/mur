@@ -60,6 +60,16 @@ pub enum Event {
         method: String,
         attrs: Value,
     },
+    /// 30 s liveness beat emitted by `BridgeBeacon` on bridge agents
+    /// (`entitlements.llm.mode = off`). Routed to peers via the same
+    /// notification side-channel as `Heartbeat`; consumed by
+    /// `mur agent doctor`'s `bridges:` section through
+    /// `bridge::beacon::bridge_status_for_peer` (which inspects
+    /// `running.lock` mtime — refreshed each time the writer task
+    /// appends a JSONL line).
+    BridgeAlive {
+        bridge_id: String,
+    },
 }
 
 pub struct TelemetryWriter {
@@ -214,6 +224,10 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
                 }
             }
             return json!({"jsonrpc": "2.0", "method": method, "params": params});
+        }
+        Event::BridgeAlive { bridge_id } => {
+            params["bridge_id"] = json!(bridge_id);
+            METHOD_BRIDGE_ALIVE
         }
     };
     json!({"jsonrpc": "2.0", "method": method, "params": params})

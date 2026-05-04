@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+pub mod bridge;
 pub mod communication_policy;
 pub mod companion;
 pub mod durable;
@@ -15,6 +16,7 @@ pub mod import;
 pub mod llm;
 pub mod lock_file;
 pub mod multi_call;
+pub mod multimodal;
 pub mod profile;
 pub mod protocol;
 pub mod retry;

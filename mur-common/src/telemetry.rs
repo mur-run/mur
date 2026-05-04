@@ -53,3 +53,4 @@ pub const METHOD_HEARTBEAT: &str = "telemetry/heartbeat";
 pub const METHOD_WARNING: &str = "telemetry/warning";
 pub const METHOD_TASK_PROGRESS: &str = "task/progress";
 pub const METHOD_HOOK_FIRED: &str = "telemetry/hook_fired";
+pub const METHOD_BRIDGE_ALIVE: &str = "telemetry/bridge_alive";

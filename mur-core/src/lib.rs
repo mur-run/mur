@@ -6,6 +6,7 @@
 
 pub mod agent_admin;
 pub mod auth;
+pub mod bridge_keychain;
 pub mod capture;
 pub mod character_card;
 pub mod daemon;
