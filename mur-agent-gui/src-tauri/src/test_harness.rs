@@ -134,6 +134,29 @@ impl MockApp {
         self.ingestor.ingest(payload).await
     }
 
+    /// Drive the dock-drop path. Synthesizes the same per-URL
+    /// classification + ingest loop the production
+    /// `tauri::RunEvent::Opened { urls }` callback will use once
+    /// `lib.rs::setup` wires it up. Available only on macOS because
+    /// the dock-icon drop event is Cocoa-only.
+    ///
+    /// Each path goes through `dock::classify_path` independently so
+    /// dragging a multi-selection (e.g. `["screenshot.png",
+    /// "notes.pdf"]`) lands two separate payloads in the ingestor.
+    #[cfg(target_os = "macos")]
+    pub async fn simulate_opened(&self, paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
+        for path in paths {
+            let kind = crate::send::dock::classify_path(path);
+            let payload = SharePayload {
+                source: "dock".into(),
+                kind,
+                metadata: serde_json::json!({}),
+            };
+            self.ingestor.ingest(payload).await?;
+        }
+        Ok(())
+    }
+
     /// Snapshot the recorded payloads. Returns an owned clone so
     /// callers can iterate without holding the mutex.
     pub fn captured_payloads(&self) -> Vec<SharePayload> {
