@@ -3,6 +3,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod auth;
+mod bridge_keychain;
 mod capture;
 // `--format card` is a D4 milestone; M2.7 only ships the schema + helper
 // (callable from the library), so the bin target sees the types as unused.

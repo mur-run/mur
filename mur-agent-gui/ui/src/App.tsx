@@ -15,6 +15,11 @@ import { Thumbnails } from "./multimodal/Thumbnails";
 import { multimodalDrop, multimodalPaste } from "./multimodal/api";
 import type { MultimodalArtifact } from "./multimodal/types";
 import { CompanionSidebar } from "./companion/CompanionSidebar";
+import { startShareListener, type ComposerHandle } from "./lib/share";
+import {
+  ShareComposerView,
+  type ShareDraft,
+} from "./components/ShareComposerView";
 import {
   setTheme as setThemeApi,
   getDefaultTheme,
@@ -68,6 +73,16 @@ export default function App() {
   const [artifacts, setArtifacts] = useState<MultimodalArtifact[]>([]);
   const [turnId] = useState<number>(1);
 
+  // Track C3 — latest share payload for the "Shared with you" banner
+  // at the top of the window. The Rust ingestor (`DefaultIngestor`)
+  // emits `share:received` after the multimodal pipeline has
+  // wrapped the bytes in `<untrusted_share>`; the listener stashes
+  // the payload here so the user gets a visible confirmation that
+  // the share actually landed. Dismissing the banner clears it;
+  // the chat tab integration that consumes this draft directly
+  // lands in a follow-up.
+  const [shareDraft, setShareDraft] = useState<ShareDraft | null>(null);
+
   useEffect(() => {
     const u = listen<string[]>("multimodal://drop", async (e) => {
       const paths = e.payload;
@@ -82,6 +97,44 @@ export default function App() {
       u.then((un) => un()).catch(() => {});
     };
   }, [agent, turnId]);
+
+  // Track C3 — mount `share:received` listener.
+  //
+  // The composer handle is a lightweight `useState`-backed view: the
+  // first share creates a draft (badge + body or attachment); each
+  // subsequent share replaces it (the banner only ever shows the
+  // most recent share so the user sees the confirmation that just
+  // arrived, not a backlog). This mirrors the `ShareDraft` shape
+  // the unit-test harness exercises (`ShareComposerView.test.tsx`).
+  useEffect(() => {
+    const composer: ComposerHandle = {
+      insert: (text) => {
+        setShareDraft((prev) => ({
+          badge: prev?.badge ?? null,
+          body: text,
+          attachment: prev?.attachment,
+        }));
+      },
+      addBadge: (b) => {
+        setShareDraft((prev) => ({
+          badge: { ...b },
+          body: prev?.body ?? "",
+          attachment: prev?.attachment,
+        }));
+      },
+      attachFile: (path, kindLabel) => {
+        setShareDraft((prev) => ({
+          badge: prev?.badge ?? null,
+          body: prev?.body ?? "",
+          attachment: { path, kindLabel },
+        }));
+      },
+    };
+    const u = startShareListener(composer);
+    return () => {
+      u.then((un) => un()).catch(() => {});
+    };
+  }, []);
 
   useEffect(() => {
     const onPaste = async (e: ClipboardEvent) => {
@@ -185,6 +238,30 @@ export default function App() {
         </ul>
       </nav>
       <main className="flex-1 overflow-auto p-6">
+        {/* Track C3 — "Shared with you" banner. Renders the most
+            recent share landed via any of the four channels (URL
+            scheme / hotkey / Services menu / dock-drop). The chat
+            tab integration that picks up `shareDraft` directly
+            lands in a follow-up; until then the banner is a visible
+            confirmation that the share actually reached the agent.
+            Dismiss button clears it locally — the underlying
+            `<untrusted_share>`-wrapped artifact is already on disk
+            and visible to the next agent turn. */}
+        {shareDraft && (
+          <div className="mb-4 flex items-start gap-2">
+            <div className="flex-1">
+              <ShareComposerView draft={shareDraft} />
+            </div>
+            <button
+              className="self-start rounded border px-2 py-1 text-xs"
+              style={{ borderColor: "var(--color-border)" }}
+              onClick={() => setShareDraft(null)}
+              aria-label="dismiss-share"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         <Thumbnails
           artifacts={artifacts}
           onRemove={(sha) =>

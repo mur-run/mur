@@ -22,8 +22,6 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use super::hotkey::{Clipboard, resolve_combo, synthesize_from_clipboard};
-#[cfg(test)]
-use super::hotkey::default_combo_for;
 use super::{DefaultIngestor, SendIngestor, ShareEmitter, SharePayload};
 
 /// Live emitter that pushes `share:received` events into the webview
@@ -81,7 +79,12 @@ impl Clipboard for TauriClipboard {
         // slot (vs. a slot containing an empty string). Both are
         // "nothing to share"; collapsing them keeps the synthesizer
         // contract uniform with `FakeClipboard`.
-        Ok(self.app.clipboard().read_text().ok().filter(|s| !s.is_empty()))
+        Ok(self
+            .app
+            .clipboard()
+            .read_text()
+            .ok()
+            .filter(|s| !s.is_empty()))
     }
 
     async fn read_image(&self) -> Result<Option<Vec<u8>>> {
@@ -156,9 +159,7 @@ pub fn current_agent_slug() -> String {
 /// operators can correlate against `RUST_LOG=mur_agent_gui_lib=debug`
 /// if something looks off.
 pub fn read_user_hotkey_override(slug: &str) -> Option<String> {
-    let path = agent_home_for(slug)
-        .join("companion")
-        .join("state.yaml");
+    let path = agent_home_for(slug).join("companion").join("state.yaml");
     let raw = std::fs::read_to_string(&path).ok()?;
     let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw)
         .map_err(|e| {
@@ -225,24 +226,18 @@ pub fn register_share_hotkey(
     Ok(combo)
 }
 
-/// Default combo string for tests / introspection. Just exposes
-/// `default_combo_for` from `super::hotkey` so callers don't need a
-/// second `use`.
-#[cfg(test)]
-fn default_combo(slug: &str) -> String {
-    default_combo_for(slug)
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::hotkey::default_combo_for;
     use super::*;
-    use std::sync::Mutex;
 
     // Tests in this module mutate process-wide env vars (MUR_HOME,
     // MUR_GUI_AGENT_NAME). Vitest-style parallel test execution
     // causes spurious failures when one test clears MUR_HOME mid-
-    // assertion in another. A single mutex serialises them.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // assertion in another. The crate-wide `TEST_ENV_LOCK`
+    // (defined in `lib.rs`) is shared with `bootstrap::tests` so
+    // env-touching tests across both modules serialise globally.
+    use crate::TEST_ENV_LOCK as ENV_LOCK;
 
     #[test]
     fn agent_home_honors_mur_home_override() {
@@ -346,6 +341,6 @@ mod tests {
 
     #[test]
     fn default_combo_helper_matches_underlying() {
-        assert_eq!(default_combo("coach"), "CommandOrControl+Shift+M+C");
+        assert_eq!(default_combo_for("coach"), "CommandOrControl+Shift+M+C");
     }
 }

@@ -55,6 +55,40 @@ impl PromptPatch {
     }
 }
 
+/// Returned from `post_tool_use`. Default = pass-through (no mutation
+/// of the `ToolResult` before persistence).
+///
+/// Currently the only field is `replace_output`, written by B0 rule 8
+/// (PII redaction in `memory.*` tool results). Hooks that don't need
+/// to mutate the output return `PostToolUsePatch::default()`.
+///
+/// Fold semantics in the chain runner: last-write-wins. If multiple
+/// hooks return non-`None` `replace_output`, the last hook in chain
+/// order takes effect. This keeps the dispatcher simple while M7.6
+/// only has one redactor (B0SafetyHook); more elaborate merging can
+/// land later if a second post-tool mutator ships.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PostToolUsePatch {
+    /// Replace `ToolResult.output` with this value before persisting
+    /// or returning to the model. `None` = no change.
+    pub replace_output: Option<serde_json::Value>,
+}
+
+impl PostToolUsePatch {
+    pub fn noop() -> Self {
+        Self::default()
+    }
+
+    /// Deterministic fold. `other` runs after `self` (last-write-wins
+    /// for `replace_output`).
+    pub fn merge(mut self, other: PostToolUsePatch) -> Self {
+        if let Some(o) = other.replace_output {
+            self.replace_output = Some(o);
+        }
+        self
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MessagePatch {
     /// Replace body (e.g., translation by i18n).

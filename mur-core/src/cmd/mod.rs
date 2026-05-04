@@ -8,7 +8,7 @@ pub(crate) mod context;
 pub(crate) mod conversations_cmd;
 pub mod conversations_cost_report;
 pub(crate) mod deploy;
-pub(crate) mod doctor;
+pub mod doctor;
 pub(crate) mod drafts;
 pub(crate) mod evolve_cmd;
 pub(crate) mod hook;

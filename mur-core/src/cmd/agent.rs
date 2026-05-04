@@ -150,6 +150,7 @@ pub fn cmd_create(
         file_transfer: FileTransferConfig::default(),
         deployment: DeploymentConfig::default(),
         companion: CompanionConfig::default(),
+        trusted_peers: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -304,6 +305,7 @@ fn default_entitlements_custom() -> Entitlements {
             file_descriptors: 1024,
             processes: 32,
         },
+        llm: Default::default(),
     }
 }
 
