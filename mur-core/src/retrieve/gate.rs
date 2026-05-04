@@ -148,6 +148,17 @@ pub(crate) fn tool_signal_score(history: &[ToolSignalInput]) -> f32 {
     0.5
 }
 
+// ─── Query quality score ──────────────────────────────────────────────────────
+
+use crate::capture::noise_filter::{filter, FilterResult};
+
+pub(crate) fn query_quality_score(query: &str) -> f32 {
+    match filter(query) {
+        FilterResult::Pass => 1.0,
+        FilterResult::Noise(_) => 0.0,
+    }
+}
+
 // ─── Session recording reader ─────────────────────────────────────────────────
 
 use std::path::Path;
@@ -310,6 +321,18 @@ mod tests {
     fn tool_signal_edit_wins_over_read() {
         let h = vec![ts("Read", None), ts("Bash", Some("ls")), ts("Edit", None)];
         assert!((tool_signal_score(&h) - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn quality_pass_full() {
+        assert!((query_quality_score("Refactor the gate module to support tier scoring") - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn quality_noise_zero() {
+        assert!((query_quality_score("ok") - 0.0).abs() < 1e-6);
+        assert!((query_quality_score("👍") - 0.0).abs() < 1e-6);
+        assert!((query_quality_score("") - 0.0).abs() < 1e-6);
     }
 
     #[test]
