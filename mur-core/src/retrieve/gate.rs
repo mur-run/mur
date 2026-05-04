@@ -148,6 +148,31 @@ pub(crate) fn tool_signal_score(history: &[ToolSignalInput]) -> f32 {
     0.5
 }
 
+// ─── Session state score ──────────────────────────────────────────────────────
+
+use chrono::Duration;
+
+#[derive(Debug, Clone)]
+pub struct SessionStateInput {
+    pub age: Duration,
+    pub seconds_since_last_edit: Option<i64>,
+}
+
+pub(crate) fn session_state_score(input: &SessionStateInput) -> f32 {
+    if let Some(s) = input.seconds_since_last_edit {
+        if s < 60 {
+            return 0.9;
+        }
+    }
+    if input.age < Duration::seconds(30) {
+        return 0.7;
+    }
+    if input.age > Duration::minutes(30) && input.seconds_since_last_edit.is_none() {
+        return 0.3;
+    }
+    0.5
+}
+
 // ─── Query quality score ──────────────────────────────────────────────────────
 
 use crate::capture::noise_filter::{filter, FilterResult};
@@ -321,6 +346,30 @@ mod tests {
     fn tool_signal_edit_wins_over_read() {
         let h = vec![ts("Read", None), ts("Bash", Some("ls")), ts("Edit", None)];
         assert!((tool_signal_score(&h) - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn session_fresh_high() {
+        let s = SessionStateInput { age: Duration::seconds(10), seconds_since_last_edit: None };
+        assert!((session_state_score(&s) - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn session_active_edit_max() {
+        let s = SessionStateInput { age: Duration::minutes(5), seconds_since_last_edit: Some(30) };
+        assert!((session_state_score(&s) - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn session_idle_low() {
+        let s = SessionStateInput { age: Duration::minutes(45), seconds_since_last_edit: None };
+        assert!((session_state_score(&s) - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn session_default_mid() {
+        let s = SessionStateInput { age: Duration::minutes(5), seconds_since_last_edit: Some(600) };
+        assert!((session_state_score(&s) - 0.5).abs() < 1e-6);
     }
 
     #[test]
