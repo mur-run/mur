@@ -12,7 +12,7 @@
 
 use mur_agent_gui_lib::send::ShareKind;
 use mur_agent_gui_lib::send::hotkey::{
-    FakeClipboard, default_combo_for, synthesize_from_clipboard,
+    FakeClipboard, default_combo_for, resolve_combo, synthesize_from_clipboard,
 };
 
 #[test]
@@ -65,6 +65,21 @@ async fn hotkey_handler_reads_image() {
         }
         other => panic!("expected ShareKind::Image, got {other:?}"),
     }
+}
+
+#[test]
+fn user_override_takes_precedence_over_default() {
+    // Companion settings (`share.hotkey`) win when set; the per-agent
+    // default only applies when no override is configured.
+    assert_eq!(
+        resolve_combo("coach", Some("CommandOrControl+Alt+K")),
+        "CommandOrControl+Alt+K"
+    );
+    assert_eq!(
+        resolve_combo("coach", None),
+        default_combo_for("coach"),
+        "None must defer to default_combo_for"
+    );
 }
 
 #[tokio::test]
