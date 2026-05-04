@@ -8,25 +8,15 @@ use crate::store::yaml::YamlStore;
 
 pub(crate) async fn cmd_inject(query: &str) -> Result<()> {
     crate::auth::heartbeat();
-    use crate::retrieve::gate::{GateDecision, evaluate_query};
+    use crate::retrieve::gate::{Tier as GateTier, evaluate_query};
     use crate::retrieve::scoring::{score_and_rank, score_and_rank_hybrid};
     use crate::store::embedding::{EmbeddingConfig, embed};
     use crate::store::vector::LanceDbStore as VectorStore;
-    use inject::hook::{HookTrigger, detect_trigger};
     use std::collections::HashMap;
 
-    // Detect trigger type
-    let trigger = detect_trigger(query);
-    match &trigger {
-        HookTrigger::OnError => {
-            eprintln!("# Trigger: OnError — searching for error-related patterns")
-        }
-        HookTrigger::OnRetry => eprintln!("# Trigger: OnRetry — searching for previous solutions"),
-        _ => {}
-    }
-
-    if let GateDecision::Skip(reason) = evaluate_query(query) {
-        eprintln!("# No patterns (gate: {})", reason);
+    let outcome = evaluate_query(query);
+    if outcome.tier == GateTier::Skip {
+        eprintln!("# No patterns (gate: skip, score={:.2}, reasons={:?})", outcome.score, outcome.reasons);
         return Ok(());
     }
 
