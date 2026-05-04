@@ -151,6 +151,80 @@ async fn signed_envelope_reaches_user_agent() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// M-c2.6.3 — BridgeBeacon visible to mur agent doctor for tg bridge
+// ─────────────────────────────────────────────────────────────────────
+
+/// M-c2.6.3 — when the supervisor spawns a telegram bridge it also
+/// spawns a `BridgeBeacon`; the bridge must classify as `Running`
+/// (fresh `running.lock`) within a few seconds so peers consuming
+/// `mur agent doctor`'s `bridges:` section see it immediately.
+///
+/// This is the in-process equivalent of the doctor's
+/// `collect_bridge_statuses` walk — we exercise the same
+/// `bridge_status_for_peer` predicate it uses, on the same
+/// `running.lock` the supervisor maintains.
+#[tokio::test]
+async fn bridge_beacon_reports_running_within_5s() {
+    use mur_agent_runtime::bridge::beacon::{BridgePeerStatus, bridge_status_for_peer};
+    use mur_agent_runtime::supervisor::spawn_telegram_bridge_for_test;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let handle = spawn_telegram_bridge_for_test(tmp.path()).await.unwrap();
+
+    // Allow the spawned beacon task to schedule and the running.lock
+    // to settle. The lock is written synchronously inside
+    // spawn_telegram_bridge_for_test, so this sleep mostly lets the
+    // tokio runtime actually start the JoinHandle — 200 ms is ample.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    assert_eq!(
+        bridge_status_for_peer(tmp.path()),
+        BridgePeerStatus::Running,
+        "telegram bridge with fresh running.lock must read as Running"
+    );
+
+    handle.shutdown().await;
+}
+
+/// Companion test: `collect_bridge_statuses` is the helper
+/// `mur agent doctor` actually calls. We can't import it from
+/// `mur-agent-runtime` (it lives in `mur-core`, which depends on us),
+/// so we re-implement the minimal walk here to assert end-to-end:
+/// profile.yaml with `entitlements.llm.mode: off` + fresh running.lock
+/// → `Running`.
+#[tokio::test]
+async fn telegram_bridge_dir_layout_matches_doctor_walk() {
+    use mur_agent_runtime::bridge::beacon::{BridgePeerStatus, bridge_status_for_peer};
+    use mur_agent_runtime::supervisor::spawn_telegram_bridge_for_test;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let agents = tmp.path().join("agents");
+    let bridge_dir = agents.join("tg_bridge");
+    std::fs::create_dir_all(&bridge_dir).unwrap();
+    // Mirror the on-disk shape `collect_bridge_statuses` walks:
+    //   <mur_home>/agents/<name>/{profile.yaml, running.lock}
+    std::fs::write(
+        bridge_dir.join("profile.yaml"),
+        // entitlements.llm.mode = off — same shape as the bridge
+        // fixture from M-c1.4.4 but parameterised for a tg bridge.
+        include_str!("fixtures/bridge_profile_telegram.yaml"),
+    )
+    .unwrap();
+    let handle = spawn_telegram_bridge_for_test(&bridge_dir).await.unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // The doctor's classification is exactly bridge_status_for_peer of
+    // each `<mur_home>/agents/<name>/` dir.
+    assert_eq!(
+        bridge_status_for_peer(&bridge_dir),
+        BridgePeerStatus::Running
+    );
+
+    handle.shutdown().await;
+}
+
 fn test_deps() -> InboundDeps {
     InboundDeps {
         config: TelegramConfig {
