@@ -131,6 +131,7 @@ mod tool_l2_injection {
             "bash",
             "Bash",
             "multiedit",
+            "MultiEdit",
         ];
         for t in &l2_tools {
             let ev = parse_event(tool_event(t, false), EventKind::Tool, "claude");
