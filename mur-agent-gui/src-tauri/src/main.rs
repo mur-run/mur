@@ -5,6 +5,7 @@ mod bootstrap;
 mod commands;
 mod companion_bridge;
 mod multimodal;
+mod send;
 mod sidecar;
 mod theme;
 mod voice;
@@ -151,6 +152,47 @@ fn main() -> Result<()> {
                 }
             });
 
+            // ── Track C3 / channel A — deep-link → ingestor ──────────
+            //
+            // `bootstrap::bootstrap_if_needed` ran above and exported
+            // `MUR_GUI_AGENT_NAME`; `current_agent_slug` reads it (or
+            // falls back to "template" so dev builds still work).
+            //
+            // The `on_open_url` callback fires once per
+            // `muragent-<slug>://share?...` invocation. `parse_share_url`
+            // is pure — anything malformed (wrong host, wrong slug,
+            // bad base64) returns Err. Production silently logs and
+            // drops; the harness surfaces.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let slug = send::wiring::current_agent_slug();
+                let ingestor = send::wiring::build_ingestor(app.handle().clone(), &slug);
+                let cb_slug = slug.clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        let url_str = url.to_string();
+                        match send::url_scheme::parse_share_url(&url_str, &cb_slug) {
+                            Ok(payload) => {
+                                let ing = ingestor.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(e) = ing.ingest(payload).await {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "deep-link ingest failed",
+                                        );
+                                    }
+                                });
+                            }
+                            Err(e) => tracing::warn!(
+                                url = %url_str,
+                                error = %e,
+                                "rejected deep-link URL",
+                            ),
+                        }
+                    }
+                });
+            }
+
             // Tray menu — primary UX for the menubar launcher.
             let show_settings =
                 MenuItem::with_id(app, "show-settings", "Show Settings…", true, None::<&str>)?;
@@ -255,6 +297,16 @@ fn main() -> Result<()> {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        // ── Track C3 / channel A — `muragent-<slug>://share?...` ─────
+        //
+        // Deep-link delivery: macOS routes through Launch Services
+        // (which speaks LSOpenURL); Linux through xdg-open + a per-
+        // user .desktop file the plugin manages; Windows through
+        // the registry. The on_open_url callback runs on the main
+        // thread; we hand the URL to `parse_share_url` (pure) and
+        // dispatch the resulting payload through the production
+        // `DefaultIngestor` constructed in `setup`.
+        .plugin(tauri_plugin_deep_link::init())
         // ── D3 / M3.6.3 — drag-drop event → React ──────────────────
         //
         // Tauri 2 delivers drag-drop through `WindowEvent::DragDrop`.
