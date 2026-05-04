@@ -58,6 +58,9 @@ fn stub_bridge_creates_expected_layout() {
 
 #[test]
 fn unknown_platform_errors() {
+    // M-c2.0.2: `telegram` is now a recognised platform (returns a typed
+    // "BotFather setup not yet wired" error). Use a still-unrecognised
+    // platform name to assert the unknown-platform branch.
     let tmp = TempDir::new().unwrap();
     let mur_home = tmp.path().join(".mur");
     std::fs::create_dir_all(&mur_home).unwrap();
@@ -67,9 +70,9 @@ fn unknown_platform_errors() {
             "companion",
             "connector",
             "add",
-            "tg_bridge",
+            "discord_bridge",
             "--platform",
-            "telegram",
+            "discord",
             "--default-route",
             "coach",
         ])
@@ -82,7 +85,7 @@ fn unknown_platform_errors() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("not supported in Track C1"),
+        stderr.contains("not supported in Track C1/C2"),
         "stderr was: {stderr}"
     );
 }
