@@ -152,28 +152,31 @@ fn main() -> Result<()> {
                 }
             });
 
-            // ── Track C3 / channel A — deep-link → ingestor ──────────
+            // ── Track C3 — channel callbacks ─────────────────────────
             //
             // `bootstrap::bootstrap_if_needed` ran above and exported
             // `MUR_GUI_AGENT_NAME`; `current_agent_slug` reads it (or
             // falls back to "template" so dev builds still work).
             //
-            // The `on_open_url` callback fires once per
-            // `muragent-<slug>://share?...` invocation. `parse_share_url`
-            // is pure — anything malformed (wrong host, wrong slug,
-            // bad base64) returns Err. Production silently logs and
-            // drops; the harness surfaces.
+            // One ingestor instance is shared across channels so
+            // provenance + B0 cooldown state stay consistent.
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let slug = send::wiring::current_agent_slug();
                 let ingestor = send::wiring::build_ingestor(app.handle().clone(), &slug);
+
+                // Channel A — `muragent-<slug>://share?...` deep-link.
+                // The `on_open_url` callback fires once per invocation.
+                // `parse_share_url` is pure; malformed URLs (wrong
+                // host, wrong slug, bad base64) get logged and dropped.
                 let cb_slug = slug.clone();
+                let cb_ing = ingestor.clone();
                 app.deep_link().on_open_url(move |event| {
                     for url in event.urls() {
                         let url_str = url.to_string();
                         match send::url_scheme::parse_share_url(&url_str, &cb_slug) {
                             Ok(payload) => {
-                                let ing = ingestor.clone();
+                                let ing = cb_ing.clone();
                                 tauri::async_runtime::spawn(async move {
                                     if let Err(e) = ing.ingest(payload).await {
                                         tracing::warn!(
@@ -191,6 +194,21 @@ fn main() -> Result<()> {
                         }
                     }
                 });
+
+                // Channel B — global hotkey + clipboard. The combo
+                // is per-agent (Cmd+Shift+M+<X>) with a user override
+                // honoured from `companion/state.yaml`. Failure to
+                // register (e.g. another app owns the combo) logs
+                // and continues — the agent stays usable via the
+                // other three channels.
+                match send::wiring::register_share_hotkey(
+                    app.handle(),
+                    &slug,
+                    ingestor.clone(),
+                ) {
+                    Ok(combo) => tracing::info!(combo = %combo, "share hotkey registered"),
+                    Err(e) => tracing::warn!(error = %e, "share hotkey not registered"),
+                }
             }
 
             // Tray menu — primary UX for the menubar launcher.
