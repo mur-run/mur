@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod hotkey;
 pub mod url_scheme;
+pub mod wiring;
 
 #[cfg(target_os = "macos")]
 pub mod dock;
