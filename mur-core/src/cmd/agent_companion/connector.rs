@@ -7,18 +7,30 @@
 
 use anyhow::{Context, Result, bail};
 
-/// Scaffold a new bridge agent. Currently only `--platform stub` is supported.
+/// Scaffold a new bridge agent.
+///
+/// Track C1 supports `--platform stub`. Track C2 wires `--platform telegram`
+/// as a recognised platform; the BotFather setup UX itself lands in M-c2.1,
+/// so for now the telegram arm returns a typed "not yet wired" error. Other
+/// platform names continue to error out as unsupported.
 pub async fn add(name: String, platform: &str, default_route: &str) -> Result<()> {
-    if platform != "stub" {
-        bail!(
-            "platform '{platform}' not supported in Track C1 — only 'stub' is available. \
-             Telegram lands in C2; send-from-any-app in C3."
-        );
-    }
     if default_route.trim().is_empty() {
         bail!("--default-route must be non-empty");
     }
-    scaffold_stub_bridge(&name, default_route).await
+    match platform {
+        "stub" => scaffold_stub_bridge(&name, default_route).await,
+        "telegram" => {
+            bail!(
+                "BotFather setup not yet wired (M-c2.1). The Telegram bridge arm is \
+                 reserved on main to lock in the schema; the 5-step BotFather \
+                 nonce-pairing UX lands in milestone M-c2.1."
+            )
+        }
+        other => bail!(
+            "platform '{other}' not supported in Track C1/C2 — recognised: 'stub', 'telegram'. \
+             Send-from-any-app lands in C3."
+        ),
+    }
 }
 
 /// Build a fresh stub-bridge agent directory under `$MUR_HOME/agents/<name>/`
