@@ -104,6 +104,11 @@ enum Commands {
         #[command(subcommand)]
         event: HookEvent,
     },
+    /// Manage the murmurd background daemon
+    Murmurd {
+        #[command(subcommand)]
+        action: MurmurdAction,
+    },
     /// Run a workflow by name or semantic query
     Run {
         /// Workflow name or search query
@@ -455,6 +460,20 @@ enum HookEvent {
     },
     /// Show hook statistics (skip rate, tier distribution, latency)
     Stats,
+}
+
+#[derive(Subcommand)]
+enum MurmurdAction {
+    /// Start the murmurd daemon
+    Start {
+        /// Run in background (detach from terminal)
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Stop the murmurd daemon
+    Stop,
+    /// Show murmurd daemon status
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -1398,6 +1417,11 @@ async fn async_main() -> Result<()> {
             HookEvent::Stop { tool } => cmd::hook::cmd_hook_stop(&tool).await?,
             HookEvent::SessionStart { tool } => cmd::hook::cmd_hook_session_start(&tool).await?,
             HookEvent::Stats => cmd::hook::cmd_hook_stats()?,
+        },
+        Commands::Murmurd { action } => match action {
+            MurmurdAction::Start { detach } => cmd::murmurd::cmd_murmurd_start(detach)?,
+            MurmurdAction::Stop => cmd::murmurd::cmd_murmurd_stop()?,
+            MurmurdAction::Status => cmd::murmurd::cmd_murmurd_status()?,
         },
         Commands::Run {
             query,
