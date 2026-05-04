@@ -26,7 +26,7 @@ use objc2::runtime::NSObject;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString};
 use objc2_foundation::NSString;
 
-use super::{SharePayload, ShareKind};
+use super::{ShareKind, SharePayload};
 
 /// Owns the boxed Objective-C subclass instance registered with
 /// `NSApplication.servicesProvider`. The selector body lives in the
@@ -131,5 +131,4 @@ pub mod test_helpers {
         }
         pb
     }
-
 }

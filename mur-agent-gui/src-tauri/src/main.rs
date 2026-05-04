@@ -209,6 +209,18 @@ fn main() -> Result<()> {
                     Ok(combo) => tracing::info!(combo = %combo, "share hotkey registered"),
                     Err(e) => tracing::warn!(error = %e, "share hotkey not registered"),
                 }
+
+                // Channel D — drag-to-dock. Stash the ingestor in
+                // app state so the `RunEvent::Opened { urls }`
+                // callback (registered on `App::run` below; outside
+                // `setup`) can reach it without capturing it across
+                // the setup boundary. `Arc<dyn SendIngestor>` is
+                // `Send + Sync` (the trait bounds it that way).
+                //
+                // The actual classify-and-ingest loop lives at the
+                // `App::run` callback site so platform glue stays
+                // co-located with `tauri::RunEvent`.
+                app.manage::<std::sync::Arc<dyn send::SendIngestor>>(ingestor.clone());
             }
 
             // Tray menu — primary UX for the menubar launcher.
@@ -432,8 +444,55 @@ fn main() -> Result<()> {
             companion_bridge::commands::companion_proactive,
             companion_bridge::commands::companion_quiet,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, _event| {
+            // ── Track C3 / channel D — drag-to-dock ──────────────────
+            //
+            // macOS delivers `application:openFiles:` when the user
+            // drops a file onto the dock icon; Tauri 2 surfaces it as
+            // `RunEvent::Opened { urls: Vec<url::Url> }`. The variant
+            // itself is `#[cfg(any(target_os = "macos", target_os =
+            // "ios"))]` upstream, so referencing it on Linux/Windows
+            // is a hard compile error — the whole arm has to be
+            // cfg-gated to match. Linux/Windows never receive this
+            // event from the OS anyway (no dock concept), so the
+            // outer cfg leaves the closure as a no-op there.
+            #[cfg(target_os = "macos")]
+            {
+                let app_handle = _app_handle;
+                let event = _event;
+                if let tauri::RunEvent::Opened { urls } = &event {
+                    use tauri::Manager;
+                    let Some(ingestor) =
+                        app_handle.try_state::<std::sync::Arc<dyn send::SendIngestor>>()
+                    else {
+                        tracing::warn!(
+                            "RunEvent::Opened fired before share ingestor was registered — dropping"
+                        );
+                        return;
+                    };
+                    for url in urls {
+                        let Ok(path) = url.to_file_path() else {
+                            tracing::warn!(url = %url, "RunEvent::Opened: not a file:// URL");
+                            continue;
+                        };
+                        let kind = send::dock::classify_path(&path);
+                        let payload = send::SharePayload {
+                            source: "dock".into(),
+                            kind,
+                            metadata: serde_json::json!({}),
+                        };
+                        let ing = std::sync::Arc::clone(ingestor.inner());
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = ing.ingest(payload).await {
+                                tracing::warn!(error = %e, "dock-drop ingest failed");
+                            }
+                        });
+                    }
+                }
+            }
+        });
 
     Ok(())
 }
