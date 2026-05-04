@@ -128,13 +128,16 @@ fn spawn_background_pipeline() {
         .stderr(std::process::Stdio::null())
         .spawn();
 
-    // evolve + emerge are slow; run sequentially in a detached shell
-    let _ = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "{mur} evolve 2>/dev/null; {mur} emerge 2>/dev/null",
-            mur = mur_bin.display()
-        ))
+    // evolve + emerge are slow; spawn them sequentially-in-background via a detached child
+    // Use separate spawn() calls instead of sh -c to avoid path-with-spaces issues
+    let _ = std::process::Command::new(&mur_bin)
+        .arg("evolve")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    let _ = std::process::Command::new(&mur_bin)
+        .arg("emerge")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
