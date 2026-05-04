@@ -41,6 +41,7 @@ pub enum HookTrigger {
 }
 
 /// Detect what kind of hook trigger a message represents.
+#[allow(dead_code)] // M4 will reintroduce per-tier trigger behavior
 pub fn detect_trigger(message: &str) -> HookTrigger {
     let lower = message.to_lowercase();
 

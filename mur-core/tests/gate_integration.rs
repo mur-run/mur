@@ -1,6 +1,6 @@
 //! Integration: ack-style queries must skip injection entirely.
 
-use mur_core::retrieve::gate::{evaluate_query_v2, GateInputs, Tier};
+use mur_core::retrieve::gate::{GateInputs, Tier, evaluate_query_v2};
 
 #[test]
 fn ack_short_words_skip_in_default_inputs() {
