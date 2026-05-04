@@ -527,9 +527,7 @@ fn apply_url_scheme_substitution(conf: &mut serde_json::Value, slug: &str) {
 /// missing `bundle.macOS` block (creates it) so future template
 /// refactors that drop the macOS section don't break export.
 fn apply_nsservices_substitution(conf: &mut serde_json::Value) {
-    let bundle = conf
-        .get_mut("bundle")
-        .and_then(|b| b.as_object_mut());
+    let bundle = conf.get_mut("bundle").and_then(|b| b.as_object_mut());
     let Some(bundle) = bundle else {
         return;
     };

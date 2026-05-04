@@ -3,9 +3,8 @@
 //! gate (verify_c2_spec_tick.rs) — same shape so a spec drift check
 //! catches both Track C2 and Track C3 the same way.
 
-const SPEC: &str = include_str!(
-    "../../docs/superpowers/specs/2026-04-30-mur-agent-harness-roadmap-design.md"
-);
+const SPEC: &str =
+    include_str!("../../docs/superpowers/specs/2026-04-30-mur-agent-harness-roadmap-design.md");
 
 /// Extract the body of §5.5 — from `### 5.5` up to the next `### `
 /// header. Anchoring on the section header (not the changelog
