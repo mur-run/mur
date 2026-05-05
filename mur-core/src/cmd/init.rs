@@ -3,6 +3,194 @@ use std::io::{self, Write};
 
 use crate::store::yaml::YamlStore;
 
+/// Drive an async future from a sync caller that's already inside the
+/// `mur-main` multi-threaded tokio runtime (see `main.rs::main`).
+///
+/// `tokio::task::block_in_place` releases the current worker thread so we
+/// can synchronously block on `Handle::current().block_on(future)`. We
+/// cannot use `Runtime::new(...).block_on(...)` here because constructing a
+/// new runtime inside an existing runtime panics ("Cannot start a runtime
+/// from within a runtime").
+fn block_on_in_runtime<F: std::future::Future>(future: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
+}
+
+/// Run embedding + LLM discovery against all detected local runtimes,
+/// blocking the caller's thread. When `refresh` is true, the on-disk cache
+/// is deleted first.
+fn discover_blocking(refresh: bool) -> Result<Vec<crate::discovery::DiscoveredModel>> {
+    if refresh {
+        let cache_path = crate::discovery::cache::DiscoveryCache::default_path();
+        let _ = std::fs::remove_file(&cache_path);
+    }
+    block_on_in_runtime(crate::discovery::run_all())
+}
+
+/// Best-effort hardcoded dims for known model ids when the `/v1/embeddings`
+/// or `/api/embed` probe fails. Returns `None` for unknown ids.
+fn fallback_dims_for(id: &str) -> Option<usize> {
+    if id.contains("Qwen3-Embedding-0.6B") || id.contains("qwen3-embedding:0.6b") {
+        Some(1024)
+    } else if id.contains("Qwen3-Embedding-4B") || id.contains("qwen3-embedding:4b") {
+        Some(2560)
+    } else if id.contains("Qwen3-Embedding-8B") || id.contains("qwen3-embedding:8b") {
+        Some(4096)
+    } else if id.contains("bge-m3") {
+        Some(1024)
+    } else if id.contains("nomic-embed-text") || id.contains("embeddinggemma") {
+        Some(768)
+    } else {
+        None
+    }
+}
+
+/// Select a local embedding model via discovery.
+///
+/// `available` is the merged list of discovered models from
+/// `discover_blocking()`. Returns `Ok(true)` if config was written,
+/// `Ok(false)` if the user picked Skip (or a [pull] row).
+fn select_local_embedding(
+    config: &mut mur_common::config::Config,
+    available: &[crate::discovery::DiscoveredModel],
+) -> Result<bool> {
+    use crate::discovery::Backend;
+    use crate::discovery::aggregate::{MenuRowKind, build_embedding_menu};
+
+    let rows = build_embedding_menu(available);
+
+    println!();
+    println!("Embedding model — local discovery:");
+    for (i, r) in rows.iter().enumerate() {
+        println!("  {}) {}", i + 1, r.label);
+    }
+    print!("Choose [1-{}] (default: 1): ", rows.len());
+    io::stdout().flush()?;
+    let mut s = String::new();
+    io::stdin().read_line(&mut s)?;
+    let idx = s
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n >= 1 && n <= rows.len())
+        .map(|n| n - 1)
+        .unwrap_or(0);
+    let row = &rows[idx];
+
+    match row.kind {
+        MenuRowKind::Auto | MenuRowKind::Pulled => {
+            let m = row
+                .model
+                .as_ref()
+                .expect("auto/pulled rows always carry a model");
+            // If dims weren't populated at discovery time (oMLX entries before
+            // probe), issue a 1-token /v1/embeddings call to learn them now.
+            let dims = match m.dims {
+                Some(d) => d,
+                None => {
+                    use crate::discovery::Discovery as _;
+                    let probe = match m.backend {
+                        Backend::Ollama => {
+                            let d = crate::discovery::ollama::OllamaDiscovery::new(
+                                "http://localhost:11434",
+                            );
+                            block_on_in_runtime(d.probe_embedding(&m.id))
+                        }
+                        Backend::OMlx => {
+                            let d = crate::discovery::omlx::OMlxDiscovery::with_api_key(
+                                "http://localhost:8000/v1",
+                                crate::discovery::resolve_omlx_api_key(),
+                            );
+                            block_on_in_runtime(d.probe_embedding(&m.id))
+                        }
+                    };
+                    match probe {
+                        Ok(p) => p.dims,
+                        Err(e) => {
+                            println!(
+                                "  \u{26a0} Probe failed: {e}; using preference-table fallback"
+                            );
+                            fallback_dims_for(&m.id).unwrap_or(1024)
+                        }
+                    }
+                }
+            };
+            match m.backend {
+                Backend::Ollama => {
+                    config.embedding.provider = "ollama".into();
+                    config.embedding.model = m.id.clone();
+                    config.embedding.dimensions = dims;
+                    config.embedding.api_key_env = None;
+                    config.embedding.openai_url = None;
+                }
+                Backend::OMlx => {
+                    config.embedding.provider = "omlx".into();
+                    config.embedding.model = m.id.clone();
+                    config.embedding.dimensions = dims;
+                    config.embedding.api_key_env = Some("OMLX_API_KEY".into());
+                    config.embedding.openai_url = Some("http://localhost:8000/v1".into());
+                    println!();
+                    println!(
+                        "  \u{26a0} Set OMLX_API_KEY before first use (any non-empty value works on localhost):"
+                    );
+                    println!("      export OMLX_API_KEY=local");
+                }
+            }
+            Ok(true)
+        }
+        MenuRowKind::Pull => {
+            let pull_id = row.pull_id.as_ref().expect("pull rows always carry an id");
+            // Heuristic: Ollama-style tags contain ':' or are short known IDs;
+            // HF ids contain '/' and are routed to oMLX (no CLI pull).
+            let is_ollama_style = !pull_id.contains('/')
+                && (pull_id.contains(':')
+                    || matches!(
+                        pull_id.as_str(),
+                        "bge-m3" | "nomic-embed-text" | "all-minilm" | "embeddinggemma"
+                    ));
+            if is_ollama_style {
+                println!();
+                println!("  Pulling {} via Ollama...", pull_id);
+                let st = std::process::Command::new("ollama")
+                    .arg("pull")
+                    .arg(pull_id)
+                    .status();
+                match st {
+                    Ok(s) if s.success() => {
+                        println!("  \u{2713} Pulled. Re-run `mur init` to select it.");
+                    }
+                    Ok(s) => {
+                        println!(
+                            "  \u{26a0} ollama pull exited with {}; embedding not configured.",
+                            s
+                        );
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        println!("  \u{26a0} Pull interrupted; re-run `mur init` to retry.");
+                    }
+                    Err(e) => {
+                        println!(
+                            "  \u{26a0} Could not invoke ollama: {e}; install from https://ollama.com"
+                        );
+                    }
+                }
+            } else {
+                // HF id form — oMLX path; oMLX has no CLI pull mechanism.
+                println!();
+                println!(
+                    "  Open oMLX.app \u{2192} Models \u{2192} search '{}' \u{2192} Pull",
+                    pull_id
+                );
+                println!("  Then re-run `mur init`.");
+            }
+            Ok(false)
+        }
+        MenuRowKind::Skip => {
+            println!("  Keeping current embedding config.");
+            Ok(false)
+        }
+    }
+}
+
 pub(crate) const HOOK_SCRIPT_PROMPT: &str = "#!/bin/bash
 # mur-managed-hook v7 — generated by `mur init --hooks`
 exec mur hook prompt --tool \"${MUR_TOOL:-claude}\"
@@ -23,7 +211,7 @@ pub(crate) const HOOK_SCRIPT_SESSION_START: &str = "#!/bin/bash
 exec mur hook session-start --tool \"${MUR_TOOL:-claude}\"
 ";
 
-pub(crate) fn cmd_init(hooks_flag: bool) -> Result<()> {
+pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let mur_dir = home.join(".mur");
@@ -765,35 +953,8 @@ Run `mur learn` to extract new patterns from recent sessions.
             Ok((provider, env_var, llm_model, is_openrouter))
         };
 
-    // Helper: select local Ollama embedding model
-    let select_ollama_embedding = |config: &mut mur_common::config::Config| -> Result<()> {
-        println!();
-        println!("Embedding model (Ollama):");
-        println!("  1) qwen3-embedding:0.6b — fast, ~1.5GB RAM (recommended)");
-        println!("  2) qwen3-embedding:4b  — better multilingual, ~8GB RAM");
-        println!("  3) qwen3-embedding:8b  — best quality (MTEB #1), ~16GB RAM");
-        println!("  4) nomic-embed-text    — lightweight alternative, ~300MB RAM");
-        print!("Choose [1/2/3/4] (default: 1): ");
-        io::stdout().flush()?;
-        let mut choice = String::new();
-        io::stdin().read_line(&mut choice)?;
-
-        let (model, dims) = match choice.trim() {
-            "2" => ("qwen3-embedding:4b", 2560),
-            "3" => ("qwen3-embedding:8b", 4096),
-            "4" => ("nomic-embed-text", 768),
-            _ => ("qwen3-embedding:0.6b", 1024),
-        };
-
-        config.embedding.provider = "ollama".to_string();
-        config.embedding.model = model.to_string();
-        config.embedding.dimensions = dims;
-        config.embedding.api_key_env = None;
-        config.embedding.openai_url = None;
-        Ok(())
-    };
-
-    // Helper: select cloud embedding provider
+    // Helper: select cloud embedding provider (cloud LLM path).
+    // When the user picks "Local", delegates to `select_local_embedding`.
     let select_cloud_embedding = |config: &mut mur_common::config::Config,
                                   llm_provider: &str,
                                   llm_env_var: &str|
@@ -801,21 +962,22 @@ Run `mur learn` to extract new patterns from recent sessions.
         println!();
         println!("Embedding provider:");
         let cloud_label = match llm_provider {
-            "openai" => "OpenAI — text-embedding-3-small (same API key)",
-            "gemini" => "Gemini — text-embedding-004 (same API key)",
-            "anthropic" => "Voyage — voyage-3-lite (same API key)",
+            "openai" => "OpenAI \u{2014} text-embedding-3-small (same API key)",
+            "gemini" => "Gemini \u{2014} text-embedding-004 (same API key)",
+            "anthropic" => "Voyage \u{2014} voyage-3-lite (same API key)",
             _ => "Cloud embedding",
         };
         println!("  1) {} (recommended)", cloud_label);
-        println!("  2) Local Ollama — free, no API dependency");
+        println!("  2) Local (Ollama / oMLX) \u{2014} free, no API dependency");
         print!("Choose [1/2] (default: 1): ");
         io::stdout().flush()?;
         let mut choice = String::new();
         io::stdin().read_line(&mut choice)?;
 
         if choice.trim() == "2" {
-            // Delegate to Ollama selection
-            select_ollama_embedding(config)?;
+            // Delegate to discovery-based local embedding selection
+            let available = discover_blocking(refresh_discovery)?;
+            select_local_embedding(config, &available)?;
         } else {
             let (provider, model, dims) = match llm_provider {
                 "openai" => ("openai", "text-embedding-3-small", 1536),
@@ -836,7 +998,8 @@ Run `mur learn` to extract new patterns from recent sessions.
         "1" => {
             // Cloud LLM + local embedding (recommended)
             let (_provider, _env_var, llm_model, is_openrouter) = select_cloud_llm(&mut config)?;
-            select_ollama_embedding(&mut config)?;
+            let available = discover_blocking(refresh_discovery)?;
+            select_local_embedding(&mut config, &available)?;
 
             crate::store::config::save_config(&config)?;
             let llm_display = if is_openrouter {
@@ -845,8 +1008,8 @@ Run `mur learn` to extract new patterns from recent sessions.
                 _provider
             };
             println!(
-                "  ✓ Config: {} (LLM) + ollama/{} (search) / {}",
-                llm_display, config.embedding.model, llm_model
+                "  \u{2713} Config: {} (LLM) + {}/{} (search) / {}",
+                llm_display, config.embedding.provider, config.embedding.model, llm_model
             );
         }
         "2" => {
@@ -854,19 +1017,20 @@ Run `mur learn` to extract new patterns from recent sessions.
             let (provider, env_var, llm_model, is_openrouter) = select_cloud_llm(&mut config)?;
 
             if is_openrouter {
-                // OpenRouter doesn't offer embeddings, use cloud or ollama
+                // OpenRouter doesn't offer embeddings, use cloud or local discovery
                 println!();
-                println!("  ℹ OpenRouter doesn't provide embedding APIs.");
+                println!("  \u{2139} OpenRouter doesn't provide embedding APIs.");
                 println!("    Pick a separate embedding provider:");
-                println!("  1) OpenAI — text-embedding-3-small (requires OPENAI_API_KEY)");
-                println!("  2) Local Ollama — free");
+                println!("  1) OpenAI \u{2014} text-embedding-3-small (requires OPENAI_API_KEY)");
+                println!("  2) Local (Ollama / oMLX) \u{2014} free");
                 print!("Choose [1/2] (default: 1): ");
                 io::stdout().flush()?;
                 let mut choice = String::new();
                 io::stdin().read_line(&mut choice)?;
 
                 if choice.trim() == "2" {
-                    select_ollama_embedding(&mut config)?;
+                    let available = discover_blocking(refresh_discovery)?;
+                    select_local_embedding(&mut config, &available)?;
                 } else {
                     config.embedding.provider = "openai".to_string();
                     config.embedding.model = "text-embedding-3-small".to_string();
@@ -874,7 +1038,9 @@ Run `mur learn` to extract new patterns from recent sessions.
                     config.embedding.api_key_env = Some("OPENAI_API_KEY".to_string());
                     config.embedding.openai_url = None;
                     if std::env::var("OPENAI_API_KEY").is_err() {
-                        println!("  ⚠ OPENAI_API_KEY not set — set it for embedding to work");
+                        println!(
+                            "  \u{26a0} OPENAI_API_KEY not set \u{2014} set it for embedding to work"
+                        );
                     }
                 }
             } else {
@@ -913,11 +1079,12 @@ Run `mur learn` to extract new patterns from recent sessions.
                     config.llm.api_key_env = None;
                     config.llm.openai_url = None;
 
-                    select_ollama_embedding(&mut config)?;
+                    let available = discover_blocking(refresh_discovery)?;
+                    select_local_embedding(&mut config, &available)?;
                     crate::store::config::save_config(&config)?;
                     println!(
-                        "  ✓ Config: ollama/{} (LLM) + ollama/{} (search)",
-                        m.id, config.embedding.model
+                        "  \u{2713} Config: ollama/{} (LLM) + {}/{} (search)",
+                        m.id, config.embedding.provider, config.embedding.model
                     );
                 }
                 Some(LocalBackend::OMlx) => {
@@ -931,14 +1098,17 @@ Run `mur learn` to extract new patterns from recent sessions.
                     config.llm.openai_url =
                         Some(LocalBackend::OMlx.openai_base_url().unwrap().to_string());
 
-                    select_ollama_embedding(&mut config)?;
+                    let available = discover_blocking(refresh_discovery)?;
+                    select_local_embedding(&mut config, &available)?;
                     crate::store::config::save_config(&config)?;
                     println!(
-                        "  ✓ Config: oMLX/{} (LLM) + ollama/{} (search)",
-                        m.id, config.embedding.model
+                        "  \u{2713} Config: oMLX/{} (LLM) + {}/{} (search)",
+                        m.id, config.embedding.provider, config.embedding.model
                     );
                     println!();
-                    println!("  ⚠ Launch oMLX.app (menu bar → Start Server) and pull");
+                    println!(
+                        "  \u{26a0} Launch oMLX.app (menu bar \u{2192} Start Server) and pull"
+                    );
                     println!("      the model via its admin dashboard:  {}", m.id);
                     println!(
                         "      export OMLX_API_KEY=local   # any non-empty value; oMLX skips auth on localhost"
@@ -954,14 +1124,15 @@ Run `mur learn` to extract new patterns from recent sessions.
                     config.llm.openai_url =
                         Some(LocalBackend::MlxLm.openai_base_url().unwrap().to_string());
 
-                    select_ollama_embedding(&mut config)?;
+                    let available = discover_blocking(refresh_discovery)?;
+                    select_local_embedding(&mut config, &available)?;
                     crate::store::config::save_config(&config)?;
                     println!(
-                        "  ✓ Config: mlx-lm/{} (LLM) + ollama/{} (search)",
-                        m.id, config.embedding.model
+                        "  \u{2713} Config: mlx-lm/{} (LLM) + {}/{} (search)",
+                        m.id, config.embedding.provider, config.embedding.model
                     );
                     println!();
-                    println!("  ⚠ Start the mlx-lm server in a separate terminal:");
+                    println!("  \u{26a0} Start the mlx-lm server in a separate terminal:");
                     println!("      mlx_lm.server --model {} --port 8080", m.id);
                     println!(
                         "      export MLX_API_KEY=local   # any non-empty value; mlx_lm.server ignores it"
@@ -1225,6 +1396,45 @@ mod tests {
 }
 
 #[cfg(test)]
+mod select_local_embedding_tests {
+    use crate::discovery::aggregate::{MenuRowKind, build_embedding_menu};
+    use crate::discovery::{Backend, DiscoveredModel, ModelKind};
+
+    fn ollama_qwen() -> DiscoveredModel {
+        DiscoveredModel {
+            id: "qwen3-embedding:0.6b".into(),
+            backend: Backend::Ollama,
+            kind: ModelKind::Embedding,
+            dims: Some(1024),
+            family: Some("bert".into()),
+            size_bytes: None,
+            probed_at: None,
+        }
+    }
+
+    /// Auto row, when chosen, must carry enough info to write
+    /// `cfg.embedding.{provider, model, dimensions, ollama_endpoint}`.
+    #[test]
+    fn auto_row_carries_full_model_info() {
+        let rows = build_embedding_menu(&[ollama_qwen()]);
+        let auto = rows.iter().find(|r| r.kind == MenuRowKind::Auto).unwrap();
+        let m = auto.model.as_ref().unwrap();
+        assert_eq!(m.backend, Backend::Ollama);
+        assert_eq!(m.id, "qwen3-embedding:0.6b");
+        assert_eq!(m.dims, Some(1024));
+    }
+}
+
+#[cfg(test)]
+mod refresh_flag_tests {
+    /// Compile-time check that `cmd_init` accepts the new `refresh_discovery` flag.
+    #[test]
+    fn cmd_init_accepts_refresh_discovery() {
+        let _ = super::cmd_init as fn(bool, bool) -> anyhow::Result<()>;
+    }
+}
+
+#[cfg(test)]
 mod cloud_embedding_tests {
     use crate::store::embedding::{EmbeddingConfig, EmbeddingProvider};
     use mur_common::config::Config;
@@ -1252,5 +1462,45 @@ mod cloud_embedding_tests {
             }
             _ => panic!("expected OpenAI variant"),
         }
+    }
+}
+
+#[cfg(test)]
+mod runtime_regression_tests {
+    //! Regression: `discover_blocking` and the dims-probe path are called
+    //! synchronously from `cmd_init`, which itself runs inside the
+    //! mur-main multi-threaded tokio runtime (see `main.rs::main`).
+    //!
+    //! Earlier M5 code constructed a NEW `tokio::runtime::Runtime` and
+    //! called `.block_on(...)` on it — that panics with "Cannot start a
+    //! runtime from within a runtime" because runtime construction inside
+    //! an existing runtime is forbidden. The fix uses
+    //! `tokio::task::block_in_place` + `Handle::current().block_on`.
+    //!
+    //! These tests reproduce the original panic conditions to make sure
+    //! the bug doesn't return.
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn block_on_in_runtime_does_not_panic_inside_existing_runtime() {
+        // The bug: building a new Runtime here would panic.
+        // The fix: block_on_in_runtime uses Handle::current().block_on
+        // via block_in_place, which is safe.
+        let result = block_on_in_runtime(async { 42 });
+        assert_eq!(result, 42);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn discover_blocking_does_not_panic_inside_existing_runtime() {
+        // discover_blocking calls block_on_in_runtime; this is the exact
+        // path cmd_init runs through. Either no local runtimes are detected
+        // (returns empty Vec) or some are present (returns their models) —
+        // either way it must not panic.
+        let result = discover_blocking(false);
+        assert!(
+            result.is_ok(),
+            "discover_blocking should not error inside a tokio runtime: {:?}",
+            result.err()
+        );
     }
 }
