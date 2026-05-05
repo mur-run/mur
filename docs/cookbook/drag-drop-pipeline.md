@@ -8,7 +8,7 @@ Every dropped or pasted image / PDF passes through a 9-step sandboxed pipeline b
 2. **iCloud lazy-load fallback** — Apple Photos delivers iCloud images via the clipboard buffer with empty `paths`. `ClipboardSource` trait abstracts the read.
 3. **HEIC normalization** — `sips` on macOS converts HEIC → PNG; the PNG goes through an `image-rs` re-encode pass to actually strip EXIF/XMP/iCCP/thumbnails (sips alone preserves those chunks). Linux/Windows stub returns a clear error directing the user to `libheif-dev`.
 4. **Sandboxed decode** — `mur-agent-decoder` subprocess (process-isolated; full macOS SBPL + Landlock sandbox lands in B1). Image-rs decode + PNG sRGB re-encode strips container metadata. PDFium decode runs with JS disabled.
-5. **Local OCR** — `OcrEngine` trait. `NoopOcr` is the universal fallback today (returns empty text). macOS Vision.framework + tesseract backends are deferred follow-ups (Tasks #56, #57).
+5. **Local OCR** — `OcrEngine` trait. macOS uses `VisionOcr` (`VNRecognizeTextRequest` via `objc2-vision`); Linux/Windows shell out to the system `tesseract` CLI. Both are on-device + zero-network, satisfying B0 rule 14's privacy posture. If `tesseract` isn't on PATH, the engine falls back to `NoopOcr` (empty text) so a fresh install boots cleanly — see "OCR install" below.
 6. **Unicode tag-character scrubber** — strips U+E0000-U+E007F (full tag block), ZWJ U+200D, bidi overrides U+202A-U+202E, bidi isolates U+2066-U+2069. Returns `(scrubbed, dropped_count)` for telemetry.
 7. **Wrap text** — runtime `B0SafetyHook` injects `<untrusted_image_text source="user_drop">` (or `<untrusted_pdf_text>`) wrappers into the prompt on `on_prompt_submit`.
 8. **Provenance entry** — appended to `<agent_dir>/telemetry/inputs.jsonl` (atomic via flock). Sibling `inputs/{sha256}.txt` carries the full extracted text so the runtime can reconstruct it.
@@ -39,8 +39,35 @@ The script enforces:
 - **Max 10 files per drop, 30 MB total** — enforced in the Tauri command BEFORE pipeline invocation.
 - **Decoder timeout: 10 s per file** — `tokio::time::timeout` around the subprocess read; child is killed on timeout via `start_kill()` + `kill_on_drop(true)`.
 - **HEIC**: macOS-only today (sips fallback). Linux/Windows requires `libheif-dev` + re-enabling the `libheif-rs` crate dep.
-- **OCR**: NoopOcr today. Vision.framework + tesseract are tracked as follow-up tasks.
+- **OCR**: macOS uses Vision.framework (always available, no install). Linux/Windows require the `tesseract` CLI on PATH; missing tesseract degrades to `NoopOcr` rather than failing the pipeline. See "OCR install" below.
 - **PDFium runtime**: requires `libpdfium` discoverable. Either drop a prebuilt binary in `.pdfium-bin/lib/` (gitignored), set `PDFIUM_DYNAMIC_LIB_PATH`, or have the lib on the system loader path. CI runners must `apt install libpdfium` (Linux) or `brew install pdfium` (community formula on macOS).
+
+## OCR install
+
+| Platform | Engine | Install |
+|---|---|---|
+| **macOS** | Vision.framework (`VNRecognizeTextRequest`) | nothing — built into the OS |
+| **Linux** | `tesseract` CLI | `sudo apt install tesseract-ocr tesseract-ocr-eng` (Debian/Ubuntu) / `sudo dnf install tesseract` (Fedora) |
+| **Windows** | `tesseract` CLI | `winget install UB-Mannheim.TesseractOCR` — make sure the install dir is on `PATH` |
+
+Verify the install:
+
+```bash
+tesseract --version
+```
+
+A bundled agent boots fine without OCR — `TesseractOcr::try_new()` probes the binary at startup and falls back to `NoopOcr` (returns empty text). If you see image artifacts shipping with `ocr_text: ""` on Linux/Windows, the binary isn't on PATH for the agent process.
+
+### Other languages
+
+Default recognition is English. To add more (e.g. Chinese):
+
+```bash
+sudo apt install tesseract-ocr-chi-sim   # zh-Hans
+sudo apt install tesseract-ocr-chi-tra   # zh-Hant
+```
+
+Override at agent launch via `TESSERACT_LANG` env var, e.g. `TESSERACT_LANG=eng+chi_sim` for mixed content. macOS uses Vision's automatic language detection so no env var is needed there.
 
 ## What's NOT yet hooked
 
