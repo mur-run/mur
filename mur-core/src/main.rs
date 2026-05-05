@@ -15,6 +15,10 @@ mod context_api;
 mod conversations;
 mod daemon;
 mod dashboard;
+// Discovery items (cache constants, LLM preference table, test-only fns) are
+// defined for library consumers and tests; the binary only uses a subset.
+#[allow(dead_code)]
+mod discovery;
 mod evolve;
 mod executor;
 mod extract;
@@ -268,6 +272,9 @@ enum Commands {
         /// Install hooks for detected AI tools
         #[arg(long)]
         hooks: bool,
+        /// Bust the discovery cache and re-probe runtimes before init
+        #[arg(long)]
+        refresh_discovery: bool,
     },
     /// Start local API server for web dashboard
     Serve {
@@ -1594,7 +1601,7 @@ async fn async_main() -> Result<()> {
         },
         Commands::Login => cmd::misc::cmd_login().await?,
         Commands::Logout => cmd::misc::cmd_logout()?,
-        Commands::Init { hooks } => cmd::init::cmd_init(hooks)?,
+        Commands::Init { hooks, refresh_discovery } => cmd::init::cmd_init(hooks, refresh_discovery)?,
         Commands::Serve {
             port,
             open,
