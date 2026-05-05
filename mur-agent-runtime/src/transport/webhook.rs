@@ -12,7 +12,9 @@
 //! lets tests drive synthetic Axum requests against the pure
 //! verifier and decoder without spinning up the runtime.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::{
     Json, Router,
@@ -69,13 +71,17 @@ pub struct WebhookAck {
 pub struct WebhookState {
     pub agent_slug: String,
     pub hmac_secret: Arc<[u8]>,
-    /// Maximum body size in bytes. M5.5 wires this from config; M5.2
-    /// hard-codes 10 MiB so the handler returns 413 instead of
-    /// blowing up on a malicious sender.
+    /// Maximum body size in bytes. Hard-coded 10 MiB; the handler
+    /// returns 413 before HMAC check so giant signed bodies can't
+    /// stall the verifier.
     pub max_body_bytes: usize,
     /// Agent home (`~/.mur/agents/<slug>/`). The pipeline writes
     /// `telemetry/inputs.jsonl` + `inputs/<sha256>.txt` under here.
     pub agent_home: std::path::PathBuf,
+    /// M5.5 — per-source token-bucket rate limit. Keyed by remote
+    /// IP (or `X-Mur-Source` header when present). Defaults to
+    /// 60 requests / 60 s per source.
+    pub limiter: Arc<TokenBucketLimiter>,
 }
 
 impl WebhookState {
@@ -89,7 +95,83 @@ impl WebhookState {
             hmac_secret: Arc::from(hmac_secret.as_ref().to_vec()),
             max_body_bytes: 10 * 1024 * 1024,
             agent_home: agent_home.into(),
+            limiter: Arc::new(TokenBucketLimiter::default()),
         }
+    }
+}
+
+/// Per-source token-bucket rate limit.
+///
+/// Each source key gets `capacity` tokens that refill at
+/// `refill_per_sec`. A request consumes one token; if the bucket is
+/// empty, the handler returns 429.
+///
+/// Source key precedence: `X-Mur-Source` header (sender-supplied
+/// identifier — useful when many CI runs share an egress IP) →
+/// `ConnectInfo::<SocketAddr>` peer IP → fallback `"unknown"`.
+///
+/// Buckets are kept in a process-local `Mutex<HashMap>` — fine for
+/// the single-agent listener M5.3 wires; if multi-agent listeners
+/// ever share a port, the limiter would need an outer key for the
+/// agent slug too.
+pub struct TokenBucketLimiter {
+    capacity: f64,
+    refill_per_sec: f64,
+    buckets: Mutex<HashMap<String, Bucket>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Bucket {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+impl TokenBucketLimiter {
+    /// `capacity` tokens, refilled `capacity / window` per second.
+    pub fn new(capacity: u32, window: Duration) -> Self {
+        let cap_f = capacity as f64;
+        let secs = window.as_secs_f64().max(0.001);
+        Self {
+            capacity: cap_f,
+            refill_per_sec: cap_f / secs,
+            buckets: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Try to consume one token for `key`. Returns `true` if the
+    /// request is allowed, `false` if the bucket was empty.
+    pub fn try_acquire(&self, key: &str) -> bool {
+        self.try_acquire_at(key, Instant::now())
+    }
+
+    /// Test seam — same logic but with an injected `now` so unit
+    /// tests can advance time deterministically.
+    pub fn try_acquire_at(&self, key: &str, now: Instant) -> bool {
+        let mut buckets = self.buckets.lock().unwrap_or_else(|p| p.into_inner());
+        let bucket = buckets.entry(key.to_string()).or_insert(Bucket {
+            tokens: self.capacity,
+            last_refill: now,
+        });
+        // Refill: tokens accrue linearly since last check.
+        let elapsed = now
+            .saturating_duration_since(bucket.last_refill)
+            .as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.refill_per_sec).min(self.capacity);
+        bucket.last_refill = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Default for TokenBucketLimiter {
+    /// 60 requests per minute per source. Plenty for real CI
+    /// senders; comfortably below "obvious flood".
+    fn default() -> Self {
+        Self::new(60, Duration::from_secs(60))
     }
 }
 
@@ -99,6 +181,25 @@ pub fn router(state: WebhookState) -> Router {
     Router::new()
         .route("/agents/{slug}/webhook", post(handle_webhook))
         .with_state(state)
+}
+
+/// Resolve the rate-limit source key for a request.
+///
+/// Senders supply `X-Mur-Source: <identifier>` to scope buckets to
+/// their CI job / pipeline / app. Anonymous requests share the
+/// `"default"` bucket — coarse but enough to throttle a misbehaving
+/// caller. Per-IP scoping needs Axum's `ConnectInfo` extractor +
+/// `into_make_service_with_connect_info`; the listener wires that up
+/// already, but extracting in the handler currently runs into a
+/// trait-bound issue we'll revisit when we bring a typed
+/// `WebhookExtractors` struct online.
+fn rate_limit_key(headers: &HeaderMap) -> String {
+    headers
+        .get("x-mur-source")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "default".to_string())
 }
 
 /// `POST /agents/<slug>/webhook` handler.
@@ -120,6 +221,12 @@ async fn handle_webhook(
     }
     if body.len() > state.max_body_bytes {
         return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
+    }
+    // Rate limit BEFORE HMAC check so a flood of unsigned junk
+    // can't burn CPU on signature verifies.
+    let key = rate_limit_key(&headers);
+    if !state.limiter.try_acquire(&key) {
+        return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
     }
     let signature_header = match headers.get("x-mur-signature").and_then(|v| v.to_str().ok()) {
         Some(s) => s,
@@ -285,8 +392,13 @@ pub async fn spawn_webhook_listener(
         .with_context(|| format!("bind webhook listener at {addr}"))?;
     let local_addr = listener.local_addr().context("read local_addr")?;
     let app = router(state);
+    // `into_make_service_with_connect_info::<SocketAddr>()` lets
+    // the handler extract the peer IP via `ConnectInfo` for the
+    // M5.5 rate limiter. Without it, `ConnectInfo` extraction
+    // would always 500.
+    let make_service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     let join = tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
+        if let Err(e) = axum::serve(listener, make_service).await {
             tracing::warn!(error = %e, "webhook listener exited with error");
         }
     });
@@ -464,6 +576,87 @@ mod tests {
         dispatch_to_pipeline(&payload, tmp.path()).unwrap();
         let ledger = tmp.path().join("telemetry").join("inputs.jsonl");
         assert!(ledger.exists());
+    }
+
+    #[test]
+    fn token_bucket_consumes_then_blocks() {
+        let limiter = TokenBucketLimiter::new(3, Duration::from_secs(60));
+        let now = Instant::now();
+        // First 3 acquires succeed (full bucket).
+        assert!(limiter.try_acquire_at("k", now));
+        assert!(limiter.try_acquire_at("k", now));
+        assert!(limiter.try_acquire_at("k", now));
+        // 4th hits the floor.
+        assert!(!limiter.try_acquire_at("k", now));
+    }
+
+    #[test]
+    fn token_bucket_refills_after_window() {
+        let limiter = TokenBucketLimiter::new(2, Duration::from_secs(2));
+        let t0 = Instant::now();
+        assert!(limiter.try_acquire_at("k", t0));
+        assert!(limiter.try_acquire_at("k", t0));
+        assert!(!limiter.try_acquire_at("k", t0));
+        // 1 s later: refill rate = 2 tokens / 2 s = 1 token/sec, so
+        // we get 1 token back.
+        let t1 = t0 + Duration::from_secs(1);
+        assert!(limiter.try_acquire_at("k", t1));
+        assert!(!limiter.try_acquire_at("k", t1));
+    }
+
+    #[test]
+    fn token_bucket_isolates_keys() {
+        let limiter = TokenBucketLimiter::new(1, Duration::from_secs(60));
+        let now = Instant::now();
+        assert!(limiter.try_acquire_at("alpha", now));
+        // beta starts with its own full bucket.
+        assert!(limiter.try_acquire_at("beta", now));
+        assert!(!limiter.try_acquire_at("alpha", now));
+        assert!(!limiter.try_acquire_at("beta", now));
+    }
+
+    #[test]
+    fn rate_limit_key_uses_x_mur_source_when_present() {
+        use axum::http::HeaderValue;
+        let mut h = HeaderMap::new();
+        h.insert(
+            "x-mur-source",
+            HeaderValue::from_static("github-actions/myrepo"),
+        );
+        assert_eq!(rate_limit_key(&h), "github-actions/myrepo");
+    }
+
+    #[test]
+    fn rate_limit_key_falls_back_to_default() {
+        let h = HeaderMap::new();
+        assert_eq!(rate_limit_key(&h), "default");
+    }
+
+    #[tokio::test]
+    async fn handler_returns_429_when_limiter_exhausted() {
+        let secret = b"x";
+        // Capacity = 1, large window so the second request can't
+        // refill before the assertion.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = WebhookState::new("coach", secret, tmp.keep());
+        state.limiter = Arc::new(TokenBucketLimiter::new(1, Duration::from_secs(3600)));
+        let app = router(state);
+
+        let body = br#"{"kind":"text","value":"hi"}"#;
+        let header = sign(secret, body);
+        let make_req = || {
+            Request::builder()
+                .method("POST")
+                .uri("/agents/coach/webhook")
+                .header("x-mur-signature", &header)
+                .header("x-mur-source", "test-burst")
+                .body(Body::from(&body[..]))
+                .unwrap()
+        };
+        let r1 = app.clone().oneshot(make_req()).await.unwrap();
+        assert_eq!(r1.status(), StatusCode::ACCEPTED);
+        let r2 = app.oneshot(make_req()).await.unwrap();
+        assert_eq!(r2.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[test]
