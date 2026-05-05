@@ -128,7 +128,13 @@ impl TelemetryWriter {
     }
 
     pub async fn flush(&self) {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // 250 ms (was 50 ms) — Windows file-system operations are
+        // measurably slower than Linux/macOS; the M8.1 redactor pass
+        // adds a small amount of CPU work per event that pushed the
+        // 50 ms budget over on Windows CI. 250 ms is still inside the
+        // worst-case test timeout and keeps the integration tests
+        // deterministic.
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
 }
 
