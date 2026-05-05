@@ -6,6 +6,7 @@ pub mod bootstrap;
 pub mod commands;
 pub mod companion_bridge;
 pub mod multimodal;
+pub mod self_test;
 pub mod send;
 pub mod sidecar;
 pub mod test_harness;
