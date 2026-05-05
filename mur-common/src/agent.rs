@@ -612,6 +612,12 @@ pub struct LockTransports {
     pub unix_socket: Option<String>,
     #[serde(default)]
     pub tcp: Option<String>,
+    /// C5 / M5.3 — webhook listener URL (e.g. `http://127.0.0.1:6789`).
+    /// Populated by the supervisor when `transport.webhook.enabled =
+    /// true` so peers and the commander can discover the live
+    /// endpoint without re-reading `profile.yaml`.
+    #[serde(default)]
+    pub webhook: Option<String>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────
