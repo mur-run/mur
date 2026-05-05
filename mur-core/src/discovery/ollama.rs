@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 use super::{Backend, Discovery, DiscoveredModel, EmbeddingProbe, ModelKind};
 
+const OLLAMA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Clone)]
 pub struct OllamaDiscovery {
     endpoint: String,
@@ -73,6 +75,9 @@ fn classify(family: Option<&str>, name: &str, capabilities: &[String]) -> ModelK
     // Fallback heuristic when /api/show fails or returns no capabilities.
     match family {
         Some("bert" | "nomic-bert" | "jina-bert") => ModelKind::Embedding,
+        // Ollama's qwen3-embedding GGUFs currently report family="bert" (BERT-style
+        // pooling). This arm is a forward-compat guard for future Ollama versions
+        // that may report family="qwen3" for embedding variants.
         Some("qwen3") if name.contains("embedding") => ModelKind::Embedding,
         Some("qwen3" | "llama" | "gemma") => ModelKind::Llm,
         _ => ModelKind::Unknown,
@@ -107,7 +112,13 @@ impl Discovery for OllamaDiscovery {
                 Ok(r) if r.status().is_success() => {
                     r.json::<ShowResp>().await.unwrap_or_default().capabilities
                 }
-                _ => Vec::new(),
+                _ => {
+                    tracing::debug!(
+                        model = %entry.name,
+                        "POST /api/show failed; falling back to family heuristic"
+                    );
+                    Vec::new()
+                }
             };
             let kind = classify(entry.details.family.as_deref(), &entry.name, &caps);
             out.push(DiscoveredModel {
@@ -129,13 +140,13 @@ impl Discovery for OllamaDiscovery {
             .client
             .post(self.url("/api/embed"))
             .json(&serde_json::json!({ "model": model_id, "input": "." }))
-            .timeout(Duration::from_secs(5))
+            .timeout(OLLAMA_PROBE_TIMEOUT)
             .send()
             .await
             .context("POST /api/embed probe")?;
 
         if !resp.status().is_success() {
-            anyhow::bail!("/api/embed returned {}", resp.status());
+            anyhow::bail!("/api/embed returned {} for model {:?}", resp.status(), model_id);
         }
 
         #[derive(Deserialize)]
@@ -146,11 +157,51 @@ impl Discovery for OllamaDiscovery {
         let er: EmbedResp = resp.json().await.context("parse /api/embed response")?;
         let dims = er.embeddings.first().map(Vec::len).unwrap_or(0);
         if dims == 0 {
-            anyhow::bail!("/api/embed returned empty embeddings");
+            anyhow::bail!("/api/embed returned empty embeddings for model {:?}", model_id);
         }
         Ok(EmbeddingProbe {
             dims,
             latency_ms: started.elapsed().as_millis() as u64,
         })
+    }
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::{ModelKind, classify};
+
+    #[test]
+    fn capabilities_take_precedence_over_family() {
+        // family says "qwen3" (would otherwise be Llm), but capabilities says embedding.
+        let caps = vec!["embedding".to_string()];
+        assert_eq!(classify(Some("qwen3"), "qwen3.5:4b", &caps), ModelKind::Embedding);
+    }
+
+    #[test]
+    fn qwen3_with_embedding_in_name_is_embedding_when_capabilities_absent() {
+        // Forward-compat guard: future Ollama may report family="qwen3" for
+        // qwen3-embedding GGUFs. We rely on the name to disambiguate.
+        assert_eq!(
+            classify(Some("qwen3"), "qwen3-embedding:0.6b", &[]),
+            ModelKind::Embedding
+        );
+    }
+
+    #[test]
+    fn qwen3_without_embedding_in_name_is_llm() {
+        assert_eq!(classify(Some("qwen3"), "qwen3.5:4b", &[]), ModelKind::Llm);
+    }
+
+    #[test]
+    fn bert_family_is_embedding() {
+        assert_eq!(classify(Some("bert"), "anything", &[]), ModelKind::Embedding);
+        assert_eq!(classify(Some("nomic-bert"), "anything", &[]), ModelKind::Embedding);
+        assert_eq!(classify(Some("jina-bert"), "anything", &[]), ModelKind::Embedding);
+    }
+
+    #[test]
+    fn unknown_family_is_unknown() {
+        assert_eq!(classify(Some("weird-family"), "x", &[]), ModelKind::Unknown);
+        assert_eq!(classify(None, "x", &[]), ModelKind::Unknown);
     }
 }
