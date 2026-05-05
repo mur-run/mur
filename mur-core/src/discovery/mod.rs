@@ -69,6 +69,51 @@ pub trait Discovery: Send + Sync {
     async fn probe_embedding(&self, model_id: &str) -> Result<EmbeddingProbe>;
 }
 
+use crate::discovery::ollama::OllamaDiscovery;
+use crate::discovery::omlx::OMlxDiscovery;
+
+/// Run discovery against every endpoint that resolves; merge results.
+/// Backend-level failures are logged and dropped (non-fatal).
+async fn run_all_inner(
+    ollama_endpoint: Option<String>,
+    omlx_base_url: Option<String>,
+) -> anyhow::Result<Vec<DiscoveredModel>> {
+    let mut out = Vec::new();
+    if let Some(ep) = ollama_endpoint {
+        let d = OllamaDiscovery::new(ep);
+        match d.list_models().await {
+            Ok(mut v) => out.append(&mut v),
+            Err(e) => tracing::warn!(?e, "Ollama discovery failed"),
+        }
+    }
+    if let Some(ep) = omlx_base_url {
+        let d = OMlxDiscovery::new(ep);
+        match d.list_models().await {
+            Ok(mut v) => out.append(&mut v),
+            Err(e) => tracing::warn!(?e, "oMLX discovery failed"),
+        }
+    }
+    Ok(out)
+}
+
+/// Public entry point for production use. Wires runtime detection from
+/// `cmd/init_local.rs` to discovery endpoints.
+pub async fn run_all() -> anyhow::Result<Vec<DiscoveredModel>> {
+    let runtimes = crate::cmd::init_local::detect_local_runtimes();
+    let ollama = runtimes.ollama_running.then(|| "http://localhost:11434".to_string());
+    let omlx = runtimes.omlx_installed.then(|| "http://localhost:8000/v1".to_string());
+    run_all_inner(ollama, omlx).await
+}
+
+/// Test-only entry: caller passes endpoints directly.
+#[doc(hidden)]
+pub async fn run_all_for_test(
+    ollama_endpoint: Option<String>,
+    omlx_base_url: Option<String>,
+) -> anyhow::Result<Vec<DiscoveredModel>> {
+    run_all_inner(ollama_endpoint, omlx_base_url).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
