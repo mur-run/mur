@@ -4,6 +4,7 @@ pub mod agent;
 pub mod agent_name;
 pub mod bridge;
 pub mod bundle;
+pub mod canonical;
 pub mod companion;
 pub mod config;
 pub mod conversation;
