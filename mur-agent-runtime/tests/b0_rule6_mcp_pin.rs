@@ -119,7 +119,15 @@ async fn missing_binary_soft_fails_does_not_block_startup() {
     });
 
     let hook = B0SafetyHook::new();
-    let ctx = HookCtx::for_test_with_mcp_servers(dir.path().to_path_buf(), 1, vec![phantom]);
+    // Rule 11 reads `ctx.mcp_server_binaries()` (resolved by the
+    // supervisor — production already filters out unresolvable paths
+    // before the hook runs). Rule 6 reads `profile.mcp_servers`. To
+    // exercise rule 6's soft-fail path in isolation, we pass an
+    // empty mcp_server_binaries list — rule 11 then has nothing to
+    // verify, and rule 6 alone sees the phantom entry from the
+    // profile.
+    let _ = phantom;
+    let ctx = HookCtx::for_test_with_mcp_servers(dir.path().to_path_buf(), 1, vec![]);
     let cancel = CancellationToken::new();
     let result = hook.on_startup(&ctx, &profile, &cancel).await;
     assert!(
