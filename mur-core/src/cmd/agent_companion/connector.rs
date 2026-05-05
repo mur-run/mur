@@ -433,6 +433,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
                 auth: None,
             },
             tcp: TcpTransportConfig::default(),
+            webhook: mur_common::agent::WebhookTransportConfig::default(),
         },
         communication: CommunicationConfig {
             accepts_from: vec!["*".into()],
