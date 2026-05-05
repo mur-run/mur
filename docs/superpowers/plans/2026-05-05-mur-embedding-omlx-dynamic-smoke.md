@@ -94,6 +94,36 @@ RUST_LOG=debug ./target/release/mur init --refresh-discovery
 Expect `[DEBUG mur_core::discovery::ollama]` or `[DEBUG mur_core::discovery::omlx]`
 lines confirming fresh discovery.
 
+## Cache file schema reference
+
+`~/.mur/cache/discovery.json` written by M5 has the following shape:
+
+```json
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "endpoint": "http://localhost:11434",
+      "backend": "Ollama",
+      "captured_at": "2026-05-05T03:30:00Z",
+      "models": [
+        {
+          "id": "qwen3-embedding:0.6b",
+          "backend": "Ollama",
+          "kind": "Embedding",
+          "dims": 1024,
+          "family": "bert",
+          "size_bytes": 700000000
+        }
+      ]
+    }
+  ]
+}
+```
+
+Schema version mismatches (any value other than `1`) cause the cache to be
+silently discarded and rebuilt from a fresh probe.
+
 ## Case 6 — Mode 3 (all local) with oMLX LLM + oMLX embedding
 
 **Setup:** oMLX running with both a chat model (e.g. `Qwen3-4B`) and an
