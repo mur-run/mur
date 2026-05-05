@@ -144,17 +144,16 @@ mod allowlist_tests {
     }
 }
 
-/// Scan body for known credential/secret patterns. Returns the FIRST
-/// match's classification (or `None` if clean). Patterns deliberately
-/// favor false-positives over false-negatives — accidentally dropping
-/// a benign message is fine; leaking a key is not.
-pub fn scan_for_secrets(body: &str) -> Option<&'static str> {
+/// Shared credential pattern set used by both `scan_for_secrets`
+/// (drop semantics, B0 rule 7 / M7.5) and `redact_secrets` (replace
+/// semantics, B0 rule 9 / M8.1). Single source of truth so the two
+/// rules can never drift.
+fn secret_patterns() -> &'static [(regex::Regex, &'static str)] {
     use regex::Regex;
     use std::sync::OnceLock;
 
-    // Compile once; share across calls.
     static PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
-    let patterns = PATTERNS.get_or_init(|| {
+    PATTERNS.get_or_init(|| {
         vec![
             // OpenAI / Anthropic API keys
             (Regex::new(r"\bsk-[a-zA-Z0-9]{20,}\b").unwrap(), "openai_key"),
@@ -176,14 +175,70 @@ pub fn scan_for_secrets(body: &str) -> Option<&'static str> {
             // Generic .env-style assignment with high-entropy value
             (Regex::new(r"(?i)\b(api_key|api_secret|secret_key|access_token|password|token)\s*[:=]\s*[A-Za-z0-9_\-./+=]{20,}\b").unwrap(), "env_assignment"),
         ]
-    });
+    })
+}
 
-    for (rx, label) in patterns {
+/// Scan body for known credential/secret patterns. Returns the FIRST
+/// match's classification (or `None` if clean). Patterns deliberately
+/// favor false-positives over false-negatives — accidentally dropping
+/// a benign message is fine; leaking a key is not.
+pub fn scan_for_secrets(body: &str) -> Option<&'static str> {
+    for (rx, label) in secret_patterns() {
         if rx.is_match(body) {
             return Some(label);
         }
     }
     None
+}
+
+/// Replace every match of the credential pattern set with
+/// `[REDACTED:<label>]`. Used at the telemetry write boundary
+/// (B0 rule 9 / M8.1) to scrub free-form strings before they
+/// land on disk in `~/.mur/agents/<name>/telemetry/<date>.jsonl`.
+///
+/// Returns `Cow::Borrowed` when nothing matched so the common
+/// hot path (no secrets present) avoids any allocation.
+pub fn redact_secrets(input: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    let mut out: Cow<'_, str> = Cow::Borrowed(input);
+    for (rx, label) in secret_patterns() {
+        if rx.is_match(&out) {
+            let replacement = format!("[REDACTED:{label}]");
+            out = Cow::Owned(rx.replace_all(&out, replacement.as_str()).into_owned());
+        }
+    }
+    out
+}
+
+/// Replace home-directory-style absolute paths with `~/`. Catches
+/// macOS `/Users/<user>/`, Linux `/home/<user>/`, and Windows
+/// `C:\Users\<user>\` so error messages don't leak the OS user
+/// account name in telemetry. Conservative: only the username
+/// portion is collapsed; the trailing path is preserved so
+/// debugging context survives.
+pub fn redact_home_path(input: &str) -> std::borrow::Cow<'_, str> {
+    use regex::Regex;
+    use std::borrow::Cow;
+    use std::sync::OnceLock;
+
+    static RE_UNIX: OnceLock<Regex> = OnceLock::new();
+    static RE_MAC: OnceLock<Regex> = OnceLock::new();
+    static RE_WIN: OnceLock<Regex> = OnceLock::new();
+
+    let unix = RE_UNIX.get_or_init(|| Regex::new(r"/home/[^/\s]+/").unwrap());
+    let mac = RE_MAC.get_or_init(|| Regex::new(r"/Users/[^/\s]+/").unwrap());
+    let win = RE_WIN.get_or_init(|| Regex::new(r"(?i)[A-Z]:\\Users\\[^\\\s]+\\").unwrap());
+
+    let mut out: Cow<'_, str> = Cow::Borrowed(input);
+    for rx in [unix, mac] {
+        if rx.is_match(&out) {
+            out = Cow::Owned(rx.replace_all(&out, "~/").into_owned());
+        }
+    }
+    if win.is_match(&out) {
+        out = Cow::Owned(win.replace_all(&out, "~\\").into_owned());
+    }
+    out
 }
 
 #[cfg(test)]
@@ -245,6 +300,65 @@ mod secret_tests {
     fn clean_text_returns_none() {
         assert_eq!(scan_for_secrets("the model is gpt-4o today"), None);
         assert_eq!(scan_for_secrets("this is a normal message"), None);
+    }
+}
+
+#[cfg(test)]
+mod telemetry_redact_tests {
+    use super::*;
+
+    #[test]
+    fn redact_secrets_replaces_openai_key() {
+        let out = redact_secrets("oops sk-abcd1234567890efghij1234 leaked");
+        assert!(out.contains("[REDACTED:openai_key]"), "got {out:?}");
+        assert!(!out.contains("sk-abcd"));
+    }
+
+    #[test]
+    fn redact_secrets_replaces_anthropic_and_aws_in_one_string() {
+        let s = "key1 sk-ant-abcdefghijklmnop-9999 and aws AKIAIOSFODNN7EXAMPL2";
+        let out = redact_secrets(s);
+        assert!(out.contains("[REDACTED:anthropic_key]"));
+        assert!(out.contains("[REDACTED:aws_access_key]"));
+    }
+
+    #[test]
+    fn redact_secrets_clean_text_borrows() {
+        // No allocation when input is clean.
+        let s = "all good here, no secrets";
+        let out = redact_secrets(s);
+        assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn redact_home_path_collapses_macos() {
+        let out = redact_home_path("failed to read /Users/alice/secret.txt: nope");
+        assert_eq!(out, "failed to read ~/secret.txt: nope");
+    }
+
+    #[test]
+    fn redact_home_path_collapses_linux() {
+        let out = redact_home_path("ENOENT at /home/bob/.ssh/id_rsa");
+        assert_eq!(out, "ENOENT at ~/.ssh/id_rsa");
+    }
+
+    #[test]
+    fn redact_home_path_collapses_windows() {
+        let out = redact_home_path(r"open C:\Users\Carol\Desktop\notes.md failed");
+        assert!(out.contains(r"~\Desktop\notes.md"), "got {out:?}");
+    }
+
+    #[test]
+    fn redact_home_path_clean_text_borrows() {
+        let s = "no path here";
+        let out = redact_home_path(s);
+        assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn redact_secrets_handles_pem_block() {
+        let out = redact_secrets("-----BEGIN RSA PRIVATE KEY-----\nMIIE...");
+        assert!(out.contains("[REDACTED:pem_private_key]"), "got {out:?}");
     }
 }
 
