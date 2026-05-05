@@ -15,6 +15,9 @@
 
 pub mod platform;
 
+#[cfg(target_os = "macos")]
+pub mod vision;
+
 pub struct OcrResult {
     pub text: String,
     pub engine_version: String,
