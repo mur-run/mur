@@ -1226,6 +1226,21 @@ enum AgentMcpAction {
         command: String,
         #[arg(long = "arg")]
         args: Vec<String>,
+        /// Skip the y/N install confirmation prompt (B0 rule 6 / M9.2).
+        /// Use for scripted / non-interactive installs.
+        #[arg(long)]
+        force: bool,
+        /// Publisher name shown in the install prompt and pinned into
+        /// the profile for audit (e.g. "Anthropic" or "@alice").
+        #[arg(long = "publisher-name")]
+        publisher_name: Option<String>,
+        /// Publisher homepage URL (display-only).
+        #[arg(long = "publisher-homepage")]
+        publisher_homepage: Option<String>,
+        /// Publisher registry coordinate (display-only,
+        /// e.g. "@anthropic-mcp/weather@1.2.3").
+        #[arg(long = "publisher-registry-id")]
+        publisher_registry_id: Option<String>,
     },
     /// Remove an MCP server entry by id
     Remove { name: String, server_id: String },
@@ -1658,7 +1673,22 @@ async fn async_main() -> Result<()> {
                     server_id,
                     command,
                     args,
-                } => cmd::agent::cmd_mcp_add(&name, &server_id, &command, &args)?,
+                    force,
+                    publisher_name,
+                    publisher_homepage,
+                    publisher_registry_id,
+                } => cmd::agent::cmd_mcp_add(
+                    &name,
+                    &server_id,
+                    &command,
+                    &args,
+                    cmd::agent::McpAddPin {
+                        force,
+                        publisher_name,
+                        publisher_homepage,
+                        publisher_registry_id,
+                    },
+                )?,
                 AgentMcpAction::Remove { name, server_id } => {
                     cmd::agent::cmd_mcp_remove(&name, &server_id)?
                 }

@@ -54,6 +54,9 @@ fn mcp_add_syncs_profile_and_spawn_allowlist() {
             "/bin/echo",
             "--arg",
             "hello",
+            // B0 rule 6 / M9.2 — install confirm prompt blocks the
+            // (non-TTY) test runner without --force.
+            "--force",
         ],
     );
     assert!(
@@ -93,6 +96,7 @@ fn mcp_list_prints_server_ids() {
             "srv1",
             "--command",
             "/bin/echo",
+            "--force",
         ],
     );
 
@@ -122,6 +126,7 @@ fn mcp_remove_and_rename() {
             "srv1",
             "--command",
             "/bin/echo",
+            "--force",
         ],
     );
     let _ = run(

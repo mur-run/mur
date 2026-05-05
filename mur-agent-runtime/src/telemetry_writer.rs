@@ -6,9 +6,18 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 const CHANNEL_BUF: usize = 256;
+
+/// Internal sequencer message — writer task receives this enum so
+/// `Event` and `Flush` requests share a single FIFO channel. Using
+/// the same channel guarantees a `Flush` ack only fires AFTER every
+/// `Event` queued before it has been written and forwarded.
+enum WriterMessage {
+    Event(Event),
+    Flush(oneshot::Sender<()>),
+}
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -73,7 +82,11 @@ pub enum Event {
 }
 
 pub struct TelemetryWriter {
-    tx: mpsc::Sender<Event>,
+    tx: mpsc::Sender<WriterMessage>,
+    /// Cloned-out `Event`-only sender for callers (hook chain) that
+    /// don't need to drive `flush`. Built once by `sender()` so the
+    /// adapter task is shared across all clones.
+    event_tx: mpsc::Sender<Event>,
 }
 
 impl TelemetryWriter {
@@ -86,55 +99,95 @@ impl TelemetryWriter {
         agent_uuid: String,
     ) -> std::io::Result<(Self, mpsc::Receiver<Value>)> {
         fs::create_dir_all(&dir).await?;
-        let (in_tx, mut in_rx) = mpsc::channel::<Event>(CHANNEL_BUF);
+        let (in_tx, mut in_rx) = mpsc::channel::<WriterMessage>(CHANNEL_BUF);
         let (out_tx, out_rx) = mpsc::channel::<Value>(CHANNEL_BUF);
         tokio::spawn(async move {
-            while let Some(ev) = in_rx.recv().await {
-                let mut notif = event_to_notification(&ev, &agent_name, &agent_uuid);
-                // ── B0 rule 9 (M8.1): redact every string leaf in the
-                // notification envelope before it lands on disk OR is
-                // forwarded to a transport subscriber. Single chokepoint:
-                // any new Event variant or hook attribute inherits this
-                // automatically.
-                redact_envelope(&mut notif);
-                let today = chrono::Utc::now().format("%Y-%m-%d");
-                let path = dir.join(format!("{today}.jsonl"));
-                if let Ok(mut f) = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .await
-                {
-                    let line = format!(
-                        "{}\n",
-                        serde_json::to_string(&notif["params"]).unwrap_or_default()
-                    );
-                    let _ = f.write_all(line.as_bytes()).await;
+            while let Some(msg) = in_rx.recv().await {
+                match msg {
+                    WriterMessage::Event(ev) => {
+                        let mut notif = event_to_notification(&ev, &agent_name, &agent_uuid);
+                        // ── B0 rule 9 (M8.1): redact every string leaf in the
+                        // notification envelope before it lands on disk OR is
+                        // forwarded to a transport subscriber. Single chokepoint:
+                        // any new Event variant or hook attribute inherits this
+                        // automatically.
+                        redact_envelope(&mut notif);
+                        let today = chrono::Utc::now().format("%Y-%m-%d");
+                        let path = dir.join(format!("{today}.jsonl"));
+                        if let Ok(mut f) = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&path)
+                            .await
+                        {
+                            let line = format!(
+                                "{}\n",
+                                serde_json::to_string(&notif["params"]).unwrap_or_default()
+                            );
+                            let _ = f.write_all(line.as_bytes()).await;
+                        }
+                        let _ = out_tx.send(notif).await;
+                    }
+                    WriterMessage::Flush(ack) => {
+                        // FIFO-ordered: every Event queued before this
+                        // Flush has finished its write+send by the time
+                        // we get here. Ack the caller; ignore drop on
+                        // the rx side (caller went away mid-flush).
+                        let _ = ack.send(());
+                    }
                 }
-                let _ = out_tx.send(notif).await;
             }
         });
-        Ok((Self { tx: in_tx }, out_rx))
+
+        // Adapter so `sender()` can hand out an `mpsc::Sender<Event>`
+        // for callers that don't need flush semantics. Forwarding
+        // task stays alive as long as the inner channel does.
+        let (ev_tx, mut ev_rx) = mpsc::channel::<Event>(CHANNEL_BUF);
+        let in_tx_for_adapter = in_tx.clone();
+        tokio::spawn(async move {
+            while let Some(ev) = ev_rx.recv().await {
+                if in_tx_for_adapter
+                    .send(WriterMessage::Event(ev))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        Ok((
+            Self {
+                tx: in_tx,
+                event_tx: ev_tx,
+            },
+            out_rx,
+        ))
     }
 
     pub async fn emit(&self, ev: Event) {
-        let _ = self.tx.send(ev).await;
+        let _ = self.tx.send(WriterMessage::Event(ev)).await;
     }
 
     /// Returns a clonable sender for use as a `TelemetryEmitter` (hook
     /// chain). Sending fails silently if the writer task has stopped.
     pub fn sender(&self) -> mpsc::Sender<Event> {
-        self.tx.clone()
+        self.event_tx.clone()
     }
 
+    /// Wait for every prior event to be written + forwarded. Sends a
+    /// FIFO-ordered marker through the same channel events flow on,
+    /// then awaits the writer task's ack — guarantees every preceding
+    /// `emit()` has finished its disk write by the time `flush()`
+    /// returns. (Was a 250 ms `sleep`; flaked under macOS / Windows
+    /// CI fs latency, so we drain instead.)
     pub async fn flush(&self) {
-        // 250 ms (was 50 ms) — Windows file-system operations are
-        // measurably slower than Linux/macOS; the M8.1 redactor pass
-        // adds a small amount of CPU work per event that pushed the
-        // 50 ms budget over on Windows CI. 250 ms is still inside the
-        // worst-case test timeout and keeps the integration tests
-        // deterministic.
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self.tx.send(WriterMessage::Flush(ack_tx)).await.is_err() {
+            // Writer task has exited — nothing left to flush.
+            return;
+        }
+        let _ = ack_rx.await;
     }
 }
 
