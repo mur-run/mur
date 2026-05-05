@@ -10,12 +10,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Linux + macOS — single-shard nextest. These OSes are already fast
+  # (~10 min on ubuntu, ~16 min on macos) so sharding overhead doesn't pay
+  # off; a single-shard run wins on simplicity.
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -32,15 +36,35 @@ jobs:
       - name: Install protobuf (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - run: cargo check --all
+      - run: cargo nextest run --workspace --profile ci
+
+  # Windows — build the test archive once, then run it in 4 parallel shards.
+  # Pattern: https://github.com/nextest-rs/reuse-build-partition-example
+  # Used by tokio, clap, sqlx for the same reason we need it: Windows MSVC
+  # `cargo test --all` was ~45 min for mur even after PR-B's nextest swap
+  # (estimated ~25-28 min). Sharding 4-way targets ~10-13 min.
+  #
+  # The archive contains compiled test binaries + their cargo metadata. Each
+  # shard downloads the archive, picks its partition via stable hash
+  # (deterministic across re-runs and across new test additions), and runs
+  # only that subset.
+  test-windows-build:
+    name: Test (windows-latest, build archive)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Install protobuf (Windows)
-        if: runner.os == 'Windows'
         run: choco install protoc -y
-      - name: Defender exclusions (Windows)
-        # Cuts ~5-15% off Windows wall-clock when Defender real-time scan
-        # is active on the runner. Harmless no-op if the runner image already
-        # disabled it. continue-on-error so a Defender API change won't
-        # break CI.
-        if: runner.os == 'Windows'
+      - name: Defender exclusions
+        # Cuts ~5-15% when Defender real-time scan is active. Harmless
+        # no-op otherwise. continue-on-error so a Defender API change
+        # won't break CI.
         shell: pwsh
         continue-on-error: true
         run: |
@@ -53,12 +77,50 @@ jobs:
         with:
           tool: nextest
       - run: cargo check --all
-      # nextest replaces `cargo test --all`. ~40% faster on Windows per
-      # nextest docs + corrode 2025 benchmarks; same behavior on success.
-      # `--profile ci` (in .config/nextest.toml) sets timeouts + caps
-      # heavy-test (lance/qdrant/tantivy) concurrency to avoid OOM on 16GB
-      # Windows runners.
-      - run: cargo nextest run --workspace --profile ci
+      - name: Build test archive
+        run: cargo nextest archive --workspace --archive-file nextest.tar.zst
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive-windows
+          path: nextest.tar.zst
+          retention-days: 1
+
+  test-windows-shard:
+    name: Test (windows-latest, shard ${{ matrix.partition }}/4)
+    needs: test-windows-build
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4]
+    steps:
+      # The archive contains compiled binaries, but some integration tests
+      # in this repo read source-tree relative paths at runtime (e.g.
+      # `tests/data/...`); checkout is needed for those. Cost is ~10s per
+      # shard, well-amortized.
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install protobuf (Windows)
+        run: choco install protoc -y
+      - name: Defender exclusions
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}\target"
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Download archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-windows
+      - name: Run shard ${{ matrix.partition }}/4
+        # `hash:m/n` is deterministic — the same test always lands on the
+        # same shard regardless of new tests being added. This makes
+        # shard-failure reproductions reliable on re-run.
+        run: cargo nextest run --archive-file nextest.tar.zst --partition hash:${{ matrix.partition }}/4 --profile ci
 
   clippy:
     name: Clippy
