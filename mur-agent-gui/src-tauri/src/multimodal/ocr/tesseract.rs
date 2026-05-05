@@ -58,9 +58,8 @@ impl TesseractOcr {
 
 fn parse_version(text: &str) -> Option<String> {
     text.lines()
-        .next()
         .map(str::trim)
-        .filter(|line| !line.is_empty())
+        .find(|line| !line.is_empty())
         .map(str::to_string)
 }
 
