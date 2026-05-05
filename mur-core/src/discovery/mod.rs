@@ -5,6 +5,7 @@
 
 pub mod cache;
 pub mod ollama;
+pub mod omlx;
 pub mod preference;
 
 use anyhow::Result;
