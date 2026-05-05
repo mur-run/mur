@@ -49,3 +49,44 @@ fs2 = "0.4"
 chrono-tz = "0.8"
 insta = { version = "1", features = ["yaml"] }
 sled = "0.34"
+
+# ── Compile-time tweaks for CI throughput ────────────────────────────────────
+#
+# Empirically validated wins for the dev/test build path. References:
+# - Kobzol May 2025: "Disable debuginfo to improve Rust compile times"
+#   https://kobzol.github.io/rust/rustc/2025/05/20/disable-debuginfo-to-improve-rust-compile-times.html
+# - corrode 2026: "Tips for Faster Rust Compile Times"
+#   https://corrode.dev/blog/tips-for-faster-rust-compile-times/
+#
+# Local devs who want fast incremental rebuilds with full backtraces can set
+# `CARGO_PROFILE_DEV_DEBUG=line-tables-only` in their shell — it overrides
+# the workspace setting and keeps stack traces for ~25% of full debuginfo cost.
+
+[profile.dev]
+# debug=0 removes ALL debuginfo from non-build artifacts. 30-40% faster
+# incremental compile per Kobzol; on a from-scratch CI build the win is
+# smaller (~10%) but the cache is also ~3x smaller, which matters more
+# on Windows where rust-cache's tar+restore is the slow part.
+debug = 0
+# Disable incremental in CI builds — incremental's metadata graph defeats
+# Swatinem/rust-cache and adds ~15-20% to from-scratch builds. Devs who
+# want incremental locally should override via CARGO_PROFILE_DEV_INCREMENTAL=true.
+incremental = false
+
+[profile.dev.build-override]
+# Build dependencies (proc-macros: serde_derive, async-trait,
+# tracing-attributes, tokio-macros, etc.) RUN during compilation. Dev
+# default is opt-level=0, which makes them slow per-invocation. Bumping
+# build-override — does NOT affect runtime perf or final binary —
+# saves 5-12% on heavy-derive workspaces (mur uses serde_derive on
+# hundreds of types). corrode + cargo#10481 reference this win.
+opt-level = 3
+
+[profile.test]
+# Inherit from dev so the test profile picks up the same tweaks. Without
+# this, test builds use cargo's default (debug=2, incremental=true on dev).
+debug = 0
+incremental = false
+
+[profile.test.build-override]
+opt-level = 3
