@@ -33,6 +33,8 @@ async fn embed_openai_posts_to_custom_base_url() {
     }
 
     let ec = mur_core::store::embedding::EmbeddingConfig::from_config(&cfg);
-    let v = mur_core::store::embedding::embed("hello", &ec).await.unwrap();
+    let v = mur_core::store::embedding::embed("hello", &ec)
+        .await
+        .unwrap();
     assert_eq!(v.len(), 1024);
 }

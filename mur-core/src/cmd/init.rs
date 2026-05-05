@@ -1226,8 +1226,8 @@ mod tests {
 
 #[cfg(test)]
 mod cloud_embedding_tests {
-    use mur_common::config::Config;
     use crate::store::embedding::{EmbeddingConfig, EmbeddingProvider};
+    use mur_common::config::Config;
 
     /// When user picks Anthropic as cloud LLM and Voyage as embedding,
     /// embedding.openai_url must be None (Voyage uses its own canonical

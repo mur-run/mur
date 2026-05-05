@@ -181,7 +181,11 @@ mod tests {
 
     #[test]
     fn omlx_provider_uses_custom_base_url() {
-        let cfg = cfg_with("omlx", Some("http://localhost:8000/v1"), Some("OMLX_API_KEY"));
+        let cfg = cfg_with(
+            "omlx",
+            Some("http://localhost:8000/v1"),
+            Some("OMLX_API_KEY"),
+        );
         let ec = EmbeddingConfig::from_config(&cfg);
         match ec.provider {
             EmbeddingProvider::OpenAI { base_url, .. } => {
