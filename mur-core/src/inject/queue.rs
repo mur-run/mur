@@ -22,6 +22,21 @@ fn enqueue_to(event: &NormalizedEvent, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Read all events from the queue file. Returns an empty Vec if the file
+/// does not exist or cannot be read. Malformed JSON lines are silently skipped
+/// so a corrupt line never crashes the stats command.
+#[allow(dead_code)] // called from cmd::hook_stats in Task 3
+pub fn read_all_events(path: &Path) -> Vec<NormalizedEvent> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +96,37 @@ mod tests {
         assert_eq!(lines.len(), 2, "both events must be present (append mode)");
         let ev0: NormalizedEvent = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(ev0.query.as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn read_all_events_returns_empty_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.jsonl");
+        let events = read_all_events(&path);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn read_all_events_parses_written_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        enqueue_to(&make_event("first"), &path).unwrap();
+        enqueue_to(&make_event("second"), &path).unwrap();
+        let events = read_all_events(&path);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].query.as_deref(), Some("first"));
+        assert_eq!(events[1].query.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn read_all_events_skips_malformed_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(&path, "not-json\n{\"bad\":true}\n").unwrap();
+        let events = read_all_events(&path);
+        assert!(
+            events.is_empty(),
+            "malformed lines must be silently skipped"
+        );
     }
 }
