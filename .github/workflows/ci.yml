@@ -10,10 +10,57 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Decide what changed; downstream jobs gate on these outputs to skip
+  # irrelevant work on docs-only / GUI-only / etc PRs. `push:main` always
+  # runs everything (set 'true' below) so post-merge runs catch any
+  # cross-cutting break.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      gui:  ${{ steps.filter.outputs.gui }}
+      e2e:  ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          # On push:main, paths-filter sees no diff context — force
+          # everything to true via predicate-quantifier so we never
+          # accidentally skip a job after merge.
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.cargo/**'
+              - '.config/**'
+              - '.github/workflows/ci.yml'
+              - 'scripts/**'
+              - 'rust-toolchain.toml'
+            gui:
+              - 'mur-agent-gui/**'
+              - 'mur-agent-runtime/**'
+              - 'mur-core/**'
+              - 'mur-common/**'
+              - '.github/workflows/ci.yml'
+            e2e:
+              - 'mur-agent-gui/**'
+              - 'mur-agent-runtime/**'
+              - 'scripts/e2e/**'
+              - '.github/workflows/ci.yml'
+
   test:
     name: Test (${{ matrix.os }})
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
@@ -63,6 +110,8 @@ jobs:
 
   clippy:
     name: Clippy
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -85,6 +134,7 @@ jobs:
 
   fmt:
     name: Format
+    # Always run — fmt is 17s and catches commit-hook bypasses.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -97,6 +147,8 @@ jobs:
 
   gui:
     name: GUI crate (mur-agent-gui)
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.gui == 'true'
     runs-on: ubuntu-22.04   # widest glibc compat for AppImage downstream
     steps:
       - uses: actions/checkout@v6
@@ -150,6 +202,8 @@ jobs:
 
   e2e_quick:
     name: E2E orchestration smoke (quick mode)
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.e2e == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
@@ -162,9 +216,50 @@ jobs:
 
   required-reason-apis:
     name: Required Reason API gate
+    # Always run — 5s, runs against any source change so safe to keep.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Run gate
         run: scripts/check-required-reason-apis.sh
 
+  # Aggregator job — single required check for branch protection.
+  # Resolves the GitHub Actions oddity where job-level `if:` skips show as
+  # "skipped" instead of "passed", which can break required-status-check
+  # rules. Configure branch protection to require ONLY this `ci-pass` check;
+  # the underlying jobs become advisory.
+  ci-pass:
+    name: CI pass
+    if: always()
+    needs: [changes, test, clippy, fmt, gui, e2e_quick, required-reason-apis]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all required jobs succeeded or were skipped
+        run: |
+          # Echo the status of each upstream job so failures are obvious in logs.
+          # `cancelled` propagates as failure; `skipped` is acceptable (means
+          # paths-filter excluded it). Anything else (failure, neutral) fails.
+          for job in test clippy fmt gui e2e_quick required-reason-apis; do
+            result="${{ toJson(needs) }}"
+            echo "$result"
+            break  # printed once is enough; per-job check below is the real gate
+          done
+          if [[ "${{ needs.test.result }}" != "success" && "${{ needs.test.result }}" != "skipped" ]]; then
+            echo "::error::test job failed: ${{ needs.test.result }}"; exit 1
+          fi
+          if [[ "${{ needs.clippy.result }}" != "success" && "${{ needs.clippy.result }}" != "skipped" ]]; then
+            echo "::error::clippy job failed: ${{ needs.clippy.result }}"; exit 1
+          fi
+          if [[ "${{ needs.fmt.result }}" != "success" ]]; then
+            echo "::error::fmt job failed: ${{ needs.fmt.result }}"; exit 1
+          fi
+          if [[ "${{ needs.gui.result }}" != "success" && "${{ needs.gui.result }}" != "skipped" ]]; then
+            echo "::error::gui job failed: ${{ needs.gui.result }}"; exit 1
+          fi
+          if [[ "${{ needs.e2e_quick.result }}" != "success" && "${{ needs.e2e_quick.result }}" != "skipped" ]]; then
+            echo "::error::e2e_quick job failed: ${{ needs.e2e_quick.result }}"; exit 1
+          fi
+          if [[ "${{ needs.required-reason-apis.result }}" != "success" ]]; then
+            echo "::error::required-reason-apis job failed: ${{ needs.required-reason-apis.result }}"; exit 1
+          fi
+          echo "All upstream jobs succeeded or were correctly skipped."
