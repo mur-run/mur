@@ -62,9 +62,9 @@ pub struct WebhookAck {
     pub queued_at: String,
 }
 
-/// Per-listener state. Holds the HMAC secret + the agent slug we
-/// answer for; the slug guards against `POST /agents/<other>/webhook`
-/// leaking onto our port.
+/// Per-listener state. Holds the HMAC secret, the agent slug we
+/// answer for, and the agent home dir the multimodal pipeline writes
+/// provenance into.
 #[derive(Clone)]
 pub struct WebhookState {
     pub agent_slug: String,
@@ -73,14 +73,22 @@ pub struct WebhookState {
     /// hard-codes 10 MiB so the handler returns 413 instead of
     /// blowing up on a malicious sender.
     pub max_body_bytes: usize,
+    /// Agent home (`~/.mur/agents/<slug>/`). The pipeline writes
+    /// `telemetry/inputs.jsonl` + `inputs/<sha256>.txt` under here.
+    pub agent_home: std::path::PathBuf,
 }
 
 impl WebhookState {
-    pub fn new(agent_slug: impl Into<String>, hmac_secret: impl AsRef<[u8]>) -> Self {
+    pub fn new(
+        agent_slug: impl Into<String>,
+        hmac_secret: impl AsRef<[u8]>,
+        agent_home: impl Into<std::path::PathBuf>,
+    ) -> Self {
         Self {
             agent_slug: agent_slug.into(),
             hmac_secret: Arc::from(hmac_secret.as_ref().to_vec()),
             max_body_bytes: 10 * 1024 * 1024,
+            agent_home: agent_home.into(),
         }
     }
 }
@@ -132,12 +140,80 @@ async fn handle_webhook(
     };
     let id = body_sha256(&body);
     let queued_at = chrono::Utc::now().to_rfc3339();
-    // M5.4 will hand `payload` to the multimodal pipeline here.
-    // For M5.2 we acknowledge and drop — the unit tests assert the
-    // verifier + parser surface; the pipeline path gets covered in
-    // its own milestone.
-    tracing::info!(slug = %slug, kind = ?payload.kind, id = %id, "webhook received (M5.4 will route)");
+    // M5.4 — route the validated payload through the multimodal
+    // pipeline. Pipeline calls block on disk I/O; offload to the
+    // blocking pool so the Axum task doesn't stall.
+    let agent_home = state.agent_home.clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || dispatch_to_pipeline(&payload, &agent_home))
+        .await
+        .map_err(|e| anyhow::anyhow!("webhook dispatch task panicked: {e}"))
+        .and_then(|inner| inner)
+    {
+        tracing::warn!(slug = %slug, id = %id, error = %e, "webhook pipeline dispatch failed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("pipeline dispatch failed: {e}"),
+        )
+            .into_response();
+    }
+    tracing::info!(slug = %slug, id = %id, "webhook ingested");
     (StatusCode::ACCEPTED, Json(WebhookAck { id, queued_at })).into_response()
+}
+
+/// Hand a verified [`WebhookPayload`] to the same pipeline entry
+/// points the local channels (Track C3) call:
+///
+/// - `text` / `url` → `process_share_text` (prepends `--- share\n`
+///   marker so B0 wraps the body as `<untrusted_share>` on the
+///   next prompt-submit).
+/// - `image` / `file` → decode base64, write to a temp file, hand
+///   bytes to `process_artifact` with a mime sniffed from the
+///   metadata or filename hint.
+///
+/// All work happens synchronously here; the caller wraps with
+/// `spawn_blocking` to keep the async runtime responsive.
+pub fn dispatch_to_pipeline(
+    payload: &WebhookPayload,
+    agent_home: &std::path::Path,
+) -> anyhow::Result<()> {
+    use crate::multimodal::pipeline::{process_artifact, process_share_text};
+    use base64::Engine;
+
+    match payload.kind {
+        WebhookKind::Text | WebhookKind::Url => {
+            process_share_text(&payload.value, "webhook", agent_home)?;
+            Ok(())
+        }
+        WebhookKind::Image | WebhookKind::File => {
+            let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(payload.value.as_bytes())
+                .or_else(|_| {
+                    base64::engine::general_purpose::STANDARD.decode(payload.value.as_bytes())
+                })
+                .map_err(|e| anyhow::anyhow!("invalid base64 for {:?} kind: {e}", payload.kind))?;
+            // Senders may include a `metadata.filename` hint we can
+            // mime-sniff against; falling back to the kind tag's
+            // generic mime keeps `process_artifact`'s router happy.
+            let filename_hint = payload
+                .metadata
+                .get("filename")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let mime = if !filename_hint.is_empty() {
+                mime_guess::from_path(filename_hint)
+                    .first_or_octet_stream()
+                    .essence_str()
+                    .to_string()
+            } else {
+                match payload.kind {
+                    WebhookKind::Image => "image/png".to_string(),
+                    _ => "application/octet-stream".to_string(),
+                }
+            };
+            process_artifact(&bytes, &mime, agent_home)?;
+            Ok(())
+        }
+    }
 }
 
 /// Constant-time HMAC-SHA256 verify. `header` is in the form
@@ -231,7 +307,13 @@ mod tests {
     }
 
     fn router_for(secret: &[u8]) -> Router {
-        router(WebhookState::new("coach", secret))
+        // Tests don't exercise the pipeline arm — handler-level
+        // assertions stop at 202 / 401 / 404 / 413 / 422; tempdir
+        // gives us a valid `agent_home` so the dispatcher's
+        // disk-IO path succeeds when reached (covered by
+        // `dispatch_to_pipeline` tests below).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        router(WebhookState::new("coach", secret, tmp.keep()))
     }
 
     #[test]
@@ -350,6 +432,50 @@ mod tests {
             .unwrap();
         let resp = router_for(secret).oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn dispatch_text_writes_inputs_jsonl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = WebhookPayload {
+            kind: WebhookKind::Text,
+            value: "hello from CI".into(),
+            metadata: serde_json::json!({}),
+        };
+        dispatch_to_pipeline(&payload, tmp.path()).unwrap();
+        let ledger = tmp.path().join("telemetry").join("inputs.jsonl");
+        assert!(ledger.exists(), "inputs.jsonl should be written");
+        let body = std::fs::read_to_string(&ledger).unwrap();
+        assert!(body.contains("share:webhook") || body.contains("\"webhook\""));
+    }
+
+    #[test]
+    fn dispatch_image_decodes_base64() {
+        use base64::Engine;
+        let tmp = tempfile::tempdir().unwrap();
+        // Tiny PNG (8 bytes of header — pipeline only sniffs mime).
+        let png = b"\x89PNG\r\n\x1a\n";
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(png);
+        let payload = WebhookPayload {
+            kind: WebhookKind::Image,
+            value: b64,
+            metadata: serde_json::json!({"filename": "screenshot.png"}),
+        };
+        dispatch_to_pipeline(&payload, tmp.path()).unwrap();
+        let ledger = tmp.path().join("telemetry").join("inputs.jsonl");
+        assert!(ledger.exists());
+    }
+
+    #[test]
+    fn dispatch_image_rejects_invalid_base64() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = WebhookPayload {
+            kind: WebhookKind::Image,
+            value: "this is not base64!!!".into(),
+            metadata: serde_json::json!({}),
+        };
+        let err = dispatch_to_pipeline(&payload, tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("invalid base64"));
     }
 
     #[tokio::test]

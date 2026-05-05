@@ -468,8 +468,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 profile.inner.name,
             ))?;
         use secrecy::ExposeSecret;
-        let state =
-            webhook::WebhookState::new(&profile.inner.name, secret.expose_secret().as_bytes());
+        let state = webhook::WebhookState::new(
+            &profile.inner.name,
+            secret.expose_secret().as_bytes(),
+            agent_home.clone(),
+        );
         let handle = webhook::spawn_webhook_listener(&cfg.bind, cfg.port, state).await?;
         info!(
             "webhook listener at http://{} (slug: {})",
