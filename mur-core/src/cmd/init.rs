@@ -93,8 +93,9 @@ fn select_local_embedding(
                             block_on_in_runtime(d.probe_embedding(&m.id))
                         }
                         Backend::OMlx => {
-                            let d = crate::discovery::omlx::OMlxDiscovery::new(
+                            let d = crate::discovery::omlx::OMlxDiscovery::with_api_key(
                                 "http://localhost:8000/v1",
+                                crate::discovery::resolve_omlx_api_key(),
                             );
                             block_on_in_runtime(d.probe_embedding(&m.id))
                         }

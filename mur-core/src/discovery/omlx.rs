@@ -18,17 +18,39 @@ pub(crate) const OMLX_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone)]
 pub struct OMlxDiscovery {
     base_url: String,
+    /// Bearer token for the `Authorization` header. Empty string means no
+    /// header is sent. oMLX in recent versions enforces auth even on
+    /// localhost (returns 401 with `{"error":{"message":"API key required",...}}`),
+    /// so this is required in practice — the env-var resolution lives in
+    /// `discovery::run_all` and `init.rs::select_local_embedding`.
+    api_key: String,
     client: reqwest::Client,
 }
 
 impl OMlxDiscovery {
     pub fn new(base_url: impl Into<String>) -> Self {
+        Self::with_api_key(base_url, String::new())
+    }
+
+    pub fn with_api_key(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
+            api_key: api_key.into(),
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(15))
                 .build()
                 .expect("reqwest client"),
+        }
+    }
+
+    /// Apply the `Authorization: Bearer <key>` header to a request builder
+    /// when the api_key is non-empty. Helper to keep auth wiring DRY across
+    /// `list_models` and `probe_embedding`.
+    fn with_auth(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if self.api_key.is_empty() {
+            rb
+        } else {
+            rb.header("Authorization", format!("Bearer {}", self.api_key))
         }
     }
 
@@ -77,13 +99,31 @@ fn family_from_id(id: &str) -> Option<String> {
 // ── Wire types ──────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
-struct ModelsResp {
-    data: Vec<ModelEntry>,
-}
-
-#[derive(Deserialize)]
 struct ModelEntry {
     id: String,
+}
+
+/// `/v1/models` response shape. oMLX has shipped multiple shapes across
+/// versions, so we accept several and pick the first that parses.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ModelsResp {
+    /// Strict OpenAI envelope: `{ "object": "list", "data": [{"id": ...}] }`.
+    OpenAi { data: Vec<ModelEntry> },
+    /// Ollama-style: `{ "models": [{"id": ...}] }`.
+    Ollama { models: Vec<ModelEntry> },
+    /// Bare array: `[{"id": ...}, ...]`.
+    Bare(Vec<ModelEntry>),
+}
+
+impl ModelsResp {
+    fn into_entries(self) -> Vec<ModelEntry> {
+        match self {
+            ModelsResp::OpenAi { data } => data,
+            ModelsResp::Ollama { models } => models,
+            ModelsResp::Bare(v) => v,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -111,15 +151,36 @@ impl Discovery for OMlxDiscovery {
     /// user selects a model (or to populate the discovery menu).
     async fn list_models(&self) -> Result<Vec<DiscoveredModel>> {
         let resp = self
-            .client
-            .get(self.url("/v1/models"))
+            .with_auth(self.client.get(self.url("/v1/models")))
             .send()
             .await
             .context("GET /v1/models")?;
-        let mr: ModelsResp = resp.json().await.context("parse /v1/models")?;
+        let status = resp.status();
+        // Read the body once into a String so the multi-shape parse below
+        // can give a useful error message that includes the actual payload.
+        let body = resp.text().await.context("read /v1/models body")?;
+        if !status.is_success() {
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                anyhow::bail!(
+                    "GET /v1/models returned 401 — set OMLX_API_KEY to your oMLX API key (export OMLX_API_KEY=<key>). Body: {}",
+                    body.chars().take(200).collect::<String>()
+                );
+            }
+            anyhow::bail!(
+                "GET /v1/models returned {}: {}",
+                status,
+                body.chars().take(300).collect::<String>()
+            );
+        }
+        let mr: ModelsResp = serde_json::from_str(&body).with_context(|| {
+            format!(
+                "parse /v1/models — none of {{data:[]}} / {{models:[]}} / [{{}}] matched. Body: {}",
+                body.chars().take(300).collect::<String>()
+            )
+        })?;
 
         Ok(mr
-            .data
+            .into_entries()
             .into_iter()
             .map(|e| DiscoveredModel {
                 family: family_from_id(&e.id),
@@ -142,8 +203,7 @@ impl Discovery for OMlxDiscovery {
     async fn probe_embedding(&self, model_id: &str) -> Result<EmbeddingProbe> {
         let started = Instant::now();
         let resp = self
-            .client
-            .post(self.url("/v1/embeddings"))
+            .with_auth(self.client.post(self.url("/v1/embeddings")))
             .json(&serde_json::json!({ "model": model_id, "input": "." }))
             .timeout(OMLX_PROBE_TIMEOUT)
             .send()

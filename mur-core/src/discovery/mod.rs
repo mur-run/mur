@@ -72,11 +72,20 @@ pub trait Discovery: Send + Sync {
 use crate::discovery::ollama::OllamaDiscovery;
 use crate::discovery::omlx::OMlxDiscovery;
 
+/// Resolve the oMLX API key from the environment. Recent oMLX versions
+/// require auth even on localhost (returns 401 with `{error: "API key
+/// required"}`). The convention is `OMLX_API_KEY` — anything from a real
+/// secret to "local" works depending on user's oMLX config.
+pub fn resolve_omlx_api_key() -> String {
+    std::env::var("OMLX_API_KEY").unwrap_or_default()
+}
+
 /// Run discovery against every endpoint that resolves; merge results.
 /// Backend-level failures are logged and dropped (non-fatal).
 async fn run_all_inner(
     ollama_endpoint: Option<String>,
     omlx_base_url: Option<String>,
+    omlx_api_key: String,
 ) -> anyhow::Result<Vec<DiscoveredModel>> {
     let mut out = Vec::new();
     if let Some(ep) = ollama_endpoint {
@@ -87,7 +96,7 @@ async fn run_all_inner(
         }
     }
     if let Some(ep) = omlx_base_url {
-        let d = OMlxDiscovery::new(ep);
+        let d = OMlxDiscovery::with_api_key(ep, omlx_api_key);
         match d.list_models().await {
             Ok(mut v) => out.append(&mut v),
             Err(e) => tracing::warn!(?e, "oMLX discovery failed"),
@@ -97,21 +106,23 @@ async fn run_all_inner(
 }
 
 /// Public entry point for production use. Wires runtime detection from
-/// `cmd/init_local.rs` to discovery endpoints.
+/// `cmd/init_local.rs` to discovery endpoints. Reads `OMLX_API_KEY` from
+/// the environment.
 pub async fn run_all() -> anyhow::Result<Vec<DiscoveredModel>> {
     let runtimes = crate::cmd::init_local::detect_local_runtimes();
     let ollama = runtimes.ollama_running.then(|| "http://localhost:11434".to_string());
     let omlx = runtimes.omlx_installed.then(|| "http://localhost:8000/v1".to_string());
-    run_all_inner(ollama, omlx).await
+    run_all_inner(ollama, omlx, resolve_omlx_api_key()).await
 }
 
-/// Test-only entry: caller passes endpoints directly.
+/// Test-only entry: caller passes endpoints directly. Defaults the oMLX
+/// API key to empty (no auth header sent — wiremock tests don't enforce auth).
 #[doc(hidden)]
 pub async fn run_all_for_test(
     ollama_endpoint: Option<String>,
     omlx_base_url: Option<String>,
 ) -> anyhow::Result<Vec<DiscoveredModel>> {
-    run_all_inner(ollama_endpoint, omlx_base_url).await
+    run_all_inner(ollama_endpoint, omlx_base_url, String::new()).await
 }
 
 #[cfg(test)]

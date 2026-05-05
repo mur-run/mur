@@ -39,6 +39,97 @@ async fn list_models_returns_unknown_kind_pre_probe() {
     );
 }
 
+/// Regression: oMLX has shipped multiple `/v1/models` response shapes
+/// across versions. The parser must accept the OpenAI envelope, the
+/// Ollama-style `{models:[]}`, and a bare array. This test caught a real
+/// failure where a user's oMLX returned a non-`data` shape and the
+/// parser bailed with "missing field `data`".
+#[tokio::test]
+async fn list_models_accepts_ollama_style_models_envelope() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": [
+                {"id": "mlx-community/Qwen3-Embedding-0.6B-8bit"}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let d = OMlxDiscovery::new(server.uri());
+    let models = d.list_models().await.unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].id, "mlx-community/Qwen3-Embedding-0.6B-8bit");
+}
+
+#[tokio::test]
+async fn list_models_accepts_bare_array() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": "foo"},
+            {"id": "bar"}
+        ])))
+        .mount(&server)
+        .await;
+
+    let d = OMlxDiscovery::new(server.uri());
+    let models = d.list_models().await.unwrap();
+    assert_eq!(models.len(), 2);
+}
+
+/// Regression: real-world oMLX returns 401 on `/v1/models` when an API key
+/// isn't sent. `OMlxDiscovery::with_api_key` must include
+/// `Authorization: Bearer <key>` on requests, and the 401 path must surface
+/// a helpful "set OMLX_API_KEY" message.
+#[tokio::test]
+async fn list_models_sends_authorization_header() {
+    use wiremock::matchers::header;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .and(header("Authorization", "Bearer secret-key-david"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [{"id": "mlx-community/Qwen3-Embedding-0.6B-8bit"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let d = OMlxDiscovery::with_api_key(server.uri(), "secret-key-david");
+    let models = d.list_models().await.unwrap();
+    assert_eq!(models.len(), 1);
+}
+
+#[tokio::test]
+async fn list_models_401_surfaces_omlx_api_key_hint() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {
+                "message": "API key required",
+                "type": "authentication_error",
+                "param": null,
+                "code": null
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let d = OMlxDiscovery::new(server.uri()); // no api key
+    let r = d.list_models().await;
+    assert!(r.is_err());
+    let err_str = format!("{:#}", r.unwrap_err());
+    assert!(
+        err_str.contains("OMLX_API_KEY"),
+        "401 error must hint at OMLX_API_KEY env var; got: {}",
+        err_str
+    );
+}
+
 // ── 4.2 tests ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
