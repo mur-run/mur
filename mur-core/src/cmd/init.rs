@@ -1,28 +1,29 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::io::{self, Write};
 
 use crate::store::yaml::YamlStore;
 
-/// Build a single-threaded Tokio runtime for one-shot async work from sync
-/// callers. Both `discover_blocking` and the dims-probe path use this; both
-/// are short-lived, single-shot, and never nested.
-fn one_shot_rt() -> Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("building tokio runtime")
+/// Drive an async future from a sync caller that's already inside the
+/// `mur-main` multi-threaded tokio runtime (see `main.rs::main`).
+///
+/// `tokio::task::block_in_place` releases the current worker thread so we
+/// can synchronously block on `Handle::current().block_on(future)`. We
+/// cannot use `Runtime::new(...).block_on(...)` here because constructing a
+/// new runtime inside an existing runtime panics ("Cannot start a runtime
+/// from within a runtime").
+fn block_on_in_runtime<F: std::future::Future>(future: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
 }
 
 /// Run embedding + LLM discovery against all detected local runtimes,
-/// blocking the caller's thread. Uses a single-threaded Tokio runtime.
-/// When `refresh` is true, the on-disk cache is deleted first.
+/// blocking the caller's thread. When `refresh` is true, the on-disk cache
+/// is deleted first.
 fn discover_blocking(refresh: bool) -> Result<Vec<crate::discovery::DiscoveredModel>> {
     if refresh {
         let cache_path = crate::discovery::cache::DiscoveryCache::default_path();
         let _ = std::fs::remove_file(&cache_path);
     }
-    let rt = one_shot_rt()?;
-    rt.block_on(crate::discovery::run_all())
+    block_on_in_runtime(crate::discovery::run_all())
 }
 
 /// Best-effort hardcoded dims for known model ids when the `/v1/embeddings`
@@ -84,19 +85,18 @@ fn select_local_embedding(
                 Some(d) => d,
                 None => {
                     use crate::discovery::Discovery as _;
-                    let rt = one_shot_rt()?;
                     let probe = match m.backend {
                         Backend::Ollama => {
                             let d = crate::discovery::ollama::OllamaDiscovery::new(
                                 "http://localhost:11434",
                             );
-                            rt.block_on(d.probe_embedding(&m.id))
+                            block_on_in_runtime(d.probe_embedding(&m.id))
                         }
                         Backend::OMlx => {
                             let d = crate::discovery::omlx::OMlxDiscovery::new(
                                 "http://localhost:8000/v1",
                             );
-                            rt.block_on(d.probe_embedding(&m.id))
+                            block_on_in_runtime(d.probe_embedding(&m.id))
                         }
                     };
                     match probe {
@@ -1444,5 +1444,45 @@ mod cloud_embedding_tests {
             }
             _ => panic!("expected OpenAI variant"),
         }
+    }
+}
+
+#[cfg(test)]
+mod runtime_regression_tests {
+    //! Regression: `discover_blocking` and the dims-probe path are called
+    //! synchronously from `cmd_init`, which itself runs inside the
+    //! mur-main multi-threaded tokio runtime (see `main.rs::main`).
+    //!
+    //! Earlier M5 code constructed a NEW `tokio::runtime::Runtime` and
+    //! called `.block_on(...)` on it — that panics with "Cannot start a
+    //! runtime from within a runtime" because runtime construction inside
+    //! an existing runtime is forbidden. The fix uses
+    //! `tokio::task::block_in_place` + `Handle::current().block_on`.
+    //!
+    //! These tests reproduce the original panic conditions to make sure
+    //! the bug doesn't return.
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn block_on_in_runtime_does_not_panic_inside_existing_runtime() {
+        // The bug: building a new Runtime here would panic.
+        // The fix: block_on_in_runtime uses Handle::current().block_on
+        // via block_in_place, which is safe.
+        let result = block_on_in_runtime(async { 42 });
+        assert_eq!(result, 42);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn discover_blocking_does_not_panic_inside_existing_runtime() {
+        // discover_blocking calls block_on_in_runtime; this is the exact
+        // path cmd_init runs through. Either no local runtimes are detected
+        // (returns empty Vec) or some are present (returns their models) —
+        // either way it must not panic.
+        let result = discover_blocking(false);
+        assert!(
+            result.is_ok(),
+            "discover_blocking should not error inside a tokio runtime: {:?}",
+            result.err()
+        );
     }
 }
