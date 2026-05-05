@@ -129,6 +129,21 @@ objc2-foundation = { version = "0.3", features = [
     "NSArray",
     "NSData",
     "NSString",
+    "NSError",
+    "NSDictionary",
+    "NSValue",
+] }
+# M3.5.2 — macOS Vision.framework OCR backend. `VNRecognizeTextRequest`
+# + `VNImageRequestHandler` extract text from arbitrary PNG bytes via
+# Apple's on-device OCR. The image-data variant of the request
+# handler (`initWithData:options:`) accepts the PNG bytes directly,
+# so we don't need a CGImage intermediate (and don't pull in
+# `objc2-core-graphics`).
+objc2-vision = { version = "0.3", features = [
+    "VNRequest",
+    "VNRecognizeTextRequest",
+    "VNRequestHandler",
+    "VNObservation",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
