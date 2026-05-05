@@ -7,8 +7,8 @@
 #[cfg(target_os = "macos")]
 mod imp {
     pub fn default_engine() -> Box<dyn super::super::OcrEngine> {
-        // TODO(M3.5.2): replace with `Box::new(super::super::vision::VisionOcr::new())`.
-        Box::new(super::super::NoopOcr)
+        // M3.5.2 — Vision.framework backend, on-device + zero-network.
+        Box::new(super::super::vision::VisionOcr::new())
     }
 }
 
