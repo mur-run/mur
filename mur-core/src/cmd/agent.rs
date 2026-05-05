@@ -108,6 +108,7 @@ pub fn cmd_create(
                 auth: None,
             },
             tcp: TcpTransportConfig::default(),
+            webhook: mur_common::agent::WebhookTransportConfig::default(),
         },
         communication: CommunicationConfig {
             accepts_from: vec!["*".into()],
