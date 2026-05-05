@@ -34,18 +34,19 @@ async fn run_all_merges_ollama_and_omlx() {
         .mount(&omlx_server)
         .await;
 
-    let merged = mur_core::discovery::run_all_for_test(
-        Some(ollama_server.uri()),
-        Some(omlx_server.uri()),
-    )
-    .await
-    .unwrap();
+    let merged =
+        mur_core::discovery::run_all_for_test(Some(ollama_server.uri()), Some(omlx_server.uri()))
+            .await
+            .unwrap();
 
     assert_eq!(merged.len(), 2);
     let backends: Vec<Backend> = merged.iter().map(|m| m.backend).collect();
     assert!(backends.contains(&Backend::Ollama));
     assert!(backends.contains(&Backend::OMlx));
-    let ollama_model = merged.iter().find(|m| m.backend == Backend::Ollama).unwrap();
+    let ollama_model = merged
+        .iter()
+        .find(|m| m.backend == Backend::Ollama)
+        .unwrap();
     assert_eq!(ollama_model.kind, ModelKind::Embedding);
     let omlx_model = merged.iter().find(|m| m.backend == Backend::OMlx).unwrap();
     assert_eq!(omlx_model.kind, ModelKind::Unknown); // not yet probed

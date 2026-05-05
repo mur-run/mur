@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 
-use super::{Backend, Discovery, DiscoveredModel, EmbeddingProbe, ModelKind};
+use super::{Backend, DiscoveredModel, Discovery, EmbeddingProbe, ModelKind};
 
 const OLLAMA_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -146,7 +146,11 @@ impl Discovery for OllamaDiscovery {
             .context("POST /api/embed probe")?;
 
         if !resp.status().is_success() {
-            anyhow::bail!("/api/embed returned {} for model {:?}", resp.status(), model_id);
+            anyhow::bail!(
+                "/api/embed returned {} for model {:?}",
+                resp.status(),
+                model_id
+            );
         }
 
         #[derive(Deserialize)]
@@ -157,7 +161,10 @@ impl Discovery for OllamaDiscovery {
         let er: EmbedResp = resp.json().await.context("parse /api/embed response")?;
         let dims = er.embeddings.first().map(Vec::len).unwrap_or(0);
         if dims == 0 {
-            anyhow::bail!("/api/embed returned empty embeddings for model {:?}", model_id);
+            anyhow::bail!(
+                "/api/embed returned empty embeddings for model {:?}",
+                model_id
+            );
         }
         Ok(EmbeddingProbe {
             dims,
@@ -174,7 +181,10 @@ mod classify_tests {
     fn capabilities_take_precedence_over_family() {
         // family says "qwen3" (would otherwise be Llm), but capabilities says embedding.
         let caps = vec!["embedding".to_string()];
-        assert_eq!(classify(Some("qwen3"), "qwen3.5:4b", &caps), ModelKind::Embedding);
+        assert_eq!(
+            classify(Some("qwen3"), "qwen3.5:4b", &caps),
+            ModelKind::Embedding
+        );
     }
 
     #[test]
@@ -194,9 +204,18 @@ mod classify_tests {
 
     #[test]
     fn bert_family_is_embedding() {
-        assert_eq!(classify(Some("bert"), "anything", &[]), ModelKind::Embedding);
-        assert_eq!(classify(Some("nomic-bert"), "anything", &[]), ModelKind::Embedding);
-        assert_eq!(classify(Some("jina-bert"), "anything", &[]), ModelKind::Embedding);
+        assert_eq!(
+            classify(Some("bert"), "anything", &[]),
+            ModelKind::Embedding
+        );
+        assert_eq!(
+            classify(Some("nomic-bert"), "anything", &[]),
+            ModelKind::Embedding
+        );
+        assert_eq!(
+            classify(Some("jina-bert"), "anything", &[]),
+            ModelKind::Embedding
+        );
     }
 
     #[test]

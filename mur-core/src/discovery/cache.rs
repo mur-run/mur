@@ -28,12 +28,17 @@ pub struct CacheEntry {
 
 impl DiscoveryCache {
     pub fn empty() -> Self {
-        Self { schema_version: CACHE_SCHEMA_VERSION, entries: Vec::new() }
+        Self {
+            schema_version: CACHE_SCHEMA_VERSION,
+            entries: Vec::new(),
+        }
     }
 
     /// Default cache path under the active mur root.
     pub fn default_path() -> PathBuf {
-        crate::paths::mur_root(None).join("cache").join("discovery.json")
+        crate::paths::mur_root(None)
+            .join("cache")
+            .join("discovery.json")
     }
 
     /// Load cache from disk. Returns `empty()` on missing file, corrupt
@@ -82,7 +87,8 @@ impl DiscoveryCache {
 
     /// Insert or replace the entry for (endpoint, backend).
     pub fn upsert(&mut self, endpoint: String, backend: Backend, models: Vec<DiscoveredModel>) {
-        self.entries.retain(|e| !(e.endpoint == endpoint && e.backend == backend));
+        self.entries
+            .retain(|e| !(e.endpoint == endpoint && e.backend == backend));
         self.entries.push(CacheEntry {
             endpoint,
             backend,
@@ -151,10 +157,7 @@ mod tests {
     fn schema_mismatch_returns_empty() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("oldschema.json");
-        std::fs::write(
-            &path,
-            r#"{"schema_version": 999, "entries": []}"#,
-        ).unwrap();
+        std::fs::write(&path, r#"{"schema_version": 999, "entries": []}"#).unwrap();
         let c = DiscoveryCache::load(&path);
         assert_eq!(c.entries.len(), 0);
     }

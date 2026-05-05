@@ -159,16 +159,13 @@ async fn probe_embedding_4xx_errors() {
     Mock::given(method("POST"))
         .and(path("/v1/embeddings"))
         .respond_with(
-            ResponseTemplate::new(400)
-                .set_body_string("model does not support embeddings"),
+            ResponseTemplate::new(400).set_body_string("model does not support embeddings"),
         )
         .mount(&server)
         .await;
 
     let d = OMlxDiscovery::new(server.uri());
-    let r = d
-        .probe_embedding("mlx-community/Qwen3.5-4B-4bit")
-        .await;
+    let r = d.probe_embedding("mlx-community/Qwen3.5-4B-4bit").await;
     assert!(r.is_err());
     assert!(r.unwrap_err().to_string().contains("400"));
 }

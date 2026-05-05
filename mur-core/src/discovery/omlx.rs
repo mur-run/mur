@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 
-use super::{Backend, Discovery, DiscoveredModel, EmbeddingProbe, ModelKind};
+use super::{Backend, DiscoveredModel, Discovery, EmbeddingProbe, ModelKind};
 
 /// oMLX issue #266: graph recompiles on first call after >3s idle. Budget
 /// 10s for the probe; subsequent probes settle to <500ms.

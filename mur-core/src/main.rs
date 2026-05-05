@@ -1601,7 +1601,10 @@ async fn async_main() -> Result<()> {
         },
         Commands::Login => cmd::misc::cmd_login().await?,
         Commands::Logout => cmd::misc::cmd_logout()?,
-        Commands::Init { hooks, refresh_discovery } => cmd::init::cmd_init(hooks, refresh_discovery)?,
+        Commands::Init {
+            hooks,
+            refresh_discovery,
+        } => cmd::init::cmd_init(hooks, refresh_discovery)?,
         Commands::Serve {
             port,
             open,

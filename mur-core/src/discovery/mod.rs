@@ -110,8 +110,12 @@ async fn run_all_inner(
 /// the environment.
 pub async fn run_all() -> anyhow::Result<Vec<DiscoveredModel>> {
     let runtimes = crate::cmd::init_local::detect_local_runtimes();
-    let ollama = runtimes.ollama_running.then(|| "http://localhost:11434".to_string());
-    let omlx = runtimes.omlx_installed.then(|| "http://localhost:8000/v1".to_string());
+    let ollama = runtimes
+        .ollama_running
+        .then(|| "http://localhost:11434".to_string());
+    let omlx = runtimes
+        .omlx_installed
+        .then(|| "http://localhost:8000/v1".to_string());
     run_all_inner(ollama, omlx, resolve_omlx_api_key()).await
 }
 
@@ -156,7 +160,10 @@ mod tests {
 
     #[test]
     fn embedding_probe_has_dims_and_latency() {
-        let p = EmbeddingProbe { dims: 1024, latency_ms: 120 };
+        let p = EmbeddingProbe {
+            dims: 1024,
+            latency_ms: 120,
+        };
         assert_eq!(p.dims, 1024);
         assert_eq!(p.latency_ms, 120);
     }

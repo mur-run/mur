@@ -21,8 +21,8 @@ async fn probe_populates_dims_for_unprobed_omlx_pick() {
         .mount(&server)
         .await;
 
-    use mur_core::discovery::omlx::OMlxDiscovery;
     use mur_core::discovery::Discovery;
+    use mur_core::discovery::omlx::OMlxDiscovery;
     let d = OMlxDiscovery::new(server.uri());
     let probe = d
         .probe_embedding("mlx-community/Qwen3-Embedding-0.6B-8bit")

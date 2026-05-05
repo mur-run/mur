@@ -4,7 +4,7 @@
 use std::cmp::Reverse;
 use std::collections::HashSet;
 
-use super::preference::{rank, EMBEDDING_PREFERENCE, LLM_PREFERENCE};
+use super::preference::{EMBEDDING_PREFERENCE, LLM_PREFERENCE, rank};
 use super::{DiscoveredModel, ModelKind};
 
 /// One menu row, in display order.
@@ -147,11 +147,19 @@ mod tests {
 
     #[test]
     fn single_pulled_becomes_auto() {
-        let avail =
-            vec![dm("qwen3-embedding:0.6b", Backend::Ollama, ModelKind::Embedding, Some(1024))];
+        let avail = vec![dm(
+            "qwen3-embedding:0.6b",
+            Backend::Ollama,
+            ModelKind::Embedding,
+            Some(1024),
+        )];
         let rows = build_embedding_menu(&avail);
         assert_eq!(rows[0].kind, MenuRowKind::Auto);
-        assert!(rows[0].label.starts_with("[auto] Ollama/qwen3-embedding:0.6b"));
+        assert!(
+            rows[0]
+                .label
+                .starts_with("[auto] Ollama/qwen3-embedding:0.6b")
+        );
         assert!(rows[0].label.contains("(1024d)"));
     }
 
@@ -159,7 +167,12 @@ mod tests {
     fn omlx_and_ollama_both_present_one_is_auto() {
         // Both have rank 70; we just assert one of them is [auto], the other [Pulled].
         let avail = vec![
-            dm("qwen3-embedding:0.6b", Backend::Ollama, ModelKind::Embedding, Some(1024)),
+            dm(
+                "qwen3-embedding:0.6b",
+                Backend::Ollama,
+                ModelKind::Embedding,
+                Some(1024),
+            ),
             dm(
                 "mlx-community/Qwen3-Embedding-0.6B-8bit",
                 Backend::OMlx,
@@ -174,8 +187,12 @@ mod tests {
 
     #[test]
     fn pull_suggestion_excludes_already_pulled() {
-        let avail =
-            vec![dm("qwen3-embedding:0.6b", Backend::Ollama, ModelKind::Embedding, Some(1024))];
+        let avail = vec![dm(
+            "qwen3-embedding:0.6b",
+            Backend::Ollama,
+            ModelKind::Embedding,
+            Some(1024),
+        )];
         let rows = build_embedding_menu(&avail);
         for r in &rows {
             if let Some(pid) = &r.pull_id {
@@ -197,8 +214,9 @@ mod tests {
         let avail = vec![dm("qwen3.5:4b", Backend::Ollama, ModelKind::Llm, None)];
         let rows = build_embedding_menu(&avail);
         // llm-only entries must NOT appear as pulled/auto
-        assert!(rows
-            .iter()
-            .all(|r| r.model.as_ref().map(|m| m.kind) != Some(ModelKind::Llm)));
+        assert!(
+            rows.iter()
+                .all(|r| r.model.as_ref().map(|m| m.kind) != Some(ModelKind::Llm))
+        );
     }
 }

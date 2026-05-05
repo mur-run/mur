@@ -21,10 +21,12 @@ async fn list_models_marks_capabilities_embedding_as_embedding_kind() {
 
     Mock::given(method("GET"))
         .and(path("/api/tags"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(tags_response_with(vec![
-            ("qwen3-embedding:0.6b", "bert", 700_000_000),
-            ("qwen3.5:4b", "qwen3", 4_000_000_000),
-        ])))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(tags_response_with(vec![
+                ("qwen3-embedding:0.6b", "bert", 700_000_000),
+                ("qwen3.5:4b", "qwen3", 4_000_000_000),
+            ])),
+        )
         .mount(&server)
         .await;
 
@@ -50,7 +52,10 @@ async fn list_models_marks_capabilities_embedding_as_embedding_kind() {
     let models = d.list_models().await.unwrap();
 
     assert_eq!(models.len(), 2);
-    let emb = models.iter().find(|m| m.id == "qwen3-embedding:0.6b").unwrap();
+    let emb = models
+        .iter()
+        .find(|m| m.id == "qwen3-embedding:0.6b")
+        .unwrap();
     assert_eq!(emb.kind, ModelKind::Embedding);
     assert_eq!(emb.family.as_deref(), Some("bert"));
 
@@ -64,9 +69,13 @@ async fn list_models_falls_back_to_family_when_capabilities_absent() {
 
     Mock::given(method("GET"))
         .and(path("/api/tags"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(tags_response_with(vec![
-            ("nomic-embed-text:latest", "nomic-bert", 300_000_000),
-        ])))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(tags_response_with(vec![(
+                "nomic-embed-text:latest",
+                "nomic-bert",
+                300_000_000,
+            )])),
+        )
         .mount(&server)
         .await;
 
@@ -88,9 +97,13 @@ async fn list_models_marks_unreachable_show_as_unknown() {
 
     Mock::given(method("GET"))
         .and(path("/api/tags"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(tags_response_with(vec![
-            ("foo:bar", "weird-family", 100),
-        ])))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(tags_response_with(vec![(
+                "foo:bar",
+                "weird-family",
+                100,
+            )])),
+        )
         .mount(&server)
         .await;
 

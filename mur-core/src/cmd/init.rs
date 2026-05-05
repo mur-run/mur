@@ -53,8 +53,8 @@ fn select_local_embedding(
     config: &mut mur_common::config::Config,
     available: &[crate::discovery::DiscoveredModel],
 ) -> Result<bool> {
-    use crate::discovery::aggregate::{build_embedding_menu, MenuRowKind};
     use crate::discovery::Backend;
+    use crate::discovery::aggregate::{MenuRowKind, build_embedding_menu};
 
     let rows = build_embedding_menu(available);
 
@@ -78,7 +78,10 @@ fn select_local_embedding(
 
     match row.kind {
         MenuRowKind::Auto | MenuRowKind::Pulled => {
-            let m = row.model.as_ref().expect("auto/pulled rows always carry a model");
+            let m = row
+                .model
+                .as_ref()
+                .expect("auto/pulled rows always carry a model");
             // If dims weren't populated at discovery time (oMLX entries before
             // probe), issue a 1-token /v1/embeddings call to learn them now.
             let dims = match m.dims {
@@ -103,7 +106,9 @@ fn select_local_embedding(
                     match probe {
                         Ok(p) => p.dims,
                         Err(e) => {
-                            println!("  \u{26a0} Probe failed: {e}; using preference-table fallback");
+                            println!(
+                                "  \u{26a0} Probe failed: {e}; using preference-table fallback"
+                            );
                             fallback_dims_for(&m.id).unwrap_or(1024)
                         }
                     }
@@ -145,7 +150,10 @@ fn select_local_embedding(
             if is_ollama_style {
                 println!();
                 println!("  Pulling {} via Ollama...", pull_id);
-                let st = std::process::Command::new("ollama").arg("pull").arg(pull_id).status();
+                let st = std::process::Command::new("ollama")
+                    .arg("pull")
+                    .arg(pull_id)
+                    .status();
                 match st {
                     Ok(s) if s.success() => {
                         println!("  \u{2713} Pulled. Re-run `mur init` to select it.");
@@ -157,9 +165,7 @@ fn select_local_embedding(
                         );
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
-                        println!(
-                            "  \u{26a0} Pull interrupted; re-run `mur init` to retry."
-                        );
+                        println!("  \u{26a0} Pull interrupted; re-run `mur init` to retry.");
                     }
                     Err(e) => {
                         println!(
@@ -170,7 +176,10 @@ fn select_local_embedding(
             } else {
                 // HF id form — oMLX path; oMLX has no CLI pull mechanism.
                 println!();
-                println!("  Open oMLX.app \u{2192} Models \u{2192} search '{}' \u{2192} Pull", pull_id);
+                println!(
+                    "  Open oMLX.app \u{2192} Models \u{2192} search '{}' \u{2192} Pull",
+                    pull_id
+                );
                 println!("  Then re-run `mur init`.");
             }
             Ok(false)
@@ -993,7 +1002,11 @@ Run `mur learn` to extract new patterns from recent sessions.
             select_local_embedding(&mut config, &available)?;
 
             crate::store::config::save_config(&config)?;
-            let llm_display = if is_openrouter { "openrouter" } else { _provider };
+            let llm_display = if is_openrouter {
+                "openrouter"
+            } else {
+                _provider
+            };
             println!(
                 "  \u{2713} Config: {} (LLM) + {}/{} (search) / {}",
                 llm_display, config.embedding.provider, config.embedding.model, llm_model
@@ -1025,7 +1038,9 @@ Run `mur learn` to extract new patterns from recent sessions.
                     config.embedding.api_key_env = Some("OPENAI_API_KEY".to_string());
                     config.embedding.openai_url = None;
                     if std::env::var("OPENAI_API_KEY").is_err() {
-                        println!("  \u{26a0} OPENAI_API_KEY not set \u{2014} set it for embedding to work");
+                        println!(
+                            "  \u{26a0} OPENAI_API_KEY not set \u{2014} set it for embedding to work"
+                        );
                     }
                 }
             } else {
@@ -1091,7 +1106,9 @@ Run `mur learn` to extract new patterns from recent sessions.
                         m.id, config.embedding.provider, config.embedding.model
                     );
                     println!();
-                    println!("  \u{26a0} Launch oMLX.app (menu bar \u{2192} Start Server) and pull");
+                    println!(
+                        "  \u{26a0} Launch oMLX.app (menu bar \u{2192} Start Server) and pull"
+                    );
                     println!("      the model via its admin dashboard:  {}", m.id);
                     println!(
                         "      export OMLX_API_KEY=local   # any non-empty value; oMLX skips auth on localhost"
@@ -1380,7 +1397,7 @@ mod tests {
 
 #[cfg(test)]
 mod select_local_embedding_tests {
-    use crate::discovery::aggregate::{build_embedding_menu, MenuRowKind};
+    use crate::discovery::aggregate::{MenuRowKind, build_embedding_menu};
     use crate::discovery::{Backend, DiscoveredModel, ModelKind};
 
     fn ollama_qwen() -> DiscoveredModel {
