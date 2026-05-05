@@ -8,6 +8,7 @@ async fn initialize_and_tools_list() {
         name: "mock".into(),
         command: bin.into(),
         args: vec![],
+        ..Default::default()
     };
     let mut client = McpClient::spawn(&entry).await.expect("spawn");
     let info = client.initialize().await.expect("init");
