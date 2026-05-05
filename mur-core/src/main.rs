@@ -1093,6 +1093,40 @@ enum AgentAction {
         #[command(subcommand)]
         action: AgentSecretAction,
     },
+    /// Manage the C5 webhook receiver for an agent (enable/disable/show/secret).
+    Webhook {
+        /// Agent name
+        agent: String,
+        #[command(subcommand)]
+        action: AgentWebhookAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AgentWebhookAction {
+    /// Turn on the receiver. Writes `transport.webhook` into
+    /// `profile.yaml`. The HMAC secret must be set first via
+    /// `secret-set` — startup will refuse to bind otherwise.
+    Enable {
+        /// Override default bind address (`127.0.0.1`).
+        #[arg(long)]
+        bind: Option<String>,
+        /// Override default port (`6789`).
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    /// Turn off the receiver. Leaves `hmac_secret_ref` in place so
+    /// re-enabling doesn't need to re-set the secret.
+    Disable,
+    /// Print the current `transport.webhook` block in YAML.
+    Show,
+    /// Write the HMAC secret to the OS keychain
+    /// (`service=mur-agent`, `account=<agent>/WEBHOOK_HMAC`). Reads
+    /// from a hidden prompt when no inline VALUE is given.
+    SecretSet {
+        /// Optional value; omit to read from a hidden prompt.
+        value: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1708,6 +1742,16 @@ async fn async_main() -> Result<()> {
                 AgentSecretAction::List => cmd::agent::cmd_secret_list(&agent).await?,
                 AgentSecretAction::Delete { key } => {
                     cmd::agent::cmd_secret_delete(&agent, &key).await?
+                }
+            },
+            AgentAction::Webhook { agent, action } => match action {
+                AgentWebhookAction::Enable { bind, port } => {
+                    cmd::agent_webhook::cmd_webhook_enable(&agent, bind, port)?
+                }
+                AgentWebhookAction::Disable => cmd::agent_webhook::cmd_webhook_disable(&agent)?,
+                AgentWebhookAction::Show => cmd::agent_webhook::cmd_webhook_show(&agent)?,
+                AgentWebhookAction::SecretSet { value } => {
+                    cmd::agent_webhook::cmd_webhook_secret_set(&agent, value.as_deref()).await?
                 }
             },
         },
