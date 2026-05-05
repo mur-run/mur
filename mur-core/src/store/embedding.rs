@@ -207,6 +207,9 @@ mod tests {
     fn ollama_provider_unchanged_by_openai_url() {
         let cfg = cfg_with("ollama", Some("http://example.com"), None);
         let ec = EmbeddingConfig::from_config(&cfg);
-        matches!(ec.provider, EmbeddingProvider::Ollama { .. });
+        assert!(
+            matches!(ec.provider, EmbeddingProvider::Ollama { .. }),
+            "ollama provider must produce Ollama variant regardless of openai_url"
+        );
     }
 }
