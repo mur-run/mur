@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::io::Read;
 
 use crate::inject::event::{EventKind, parse_event};
@@ -234,7 +234,12 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
 }
 
 pub(crate) fn cmd_hook_stats() -> Result<()> {
-    println!("hook stats: not yet implemented (M5)");
+    let home = dirs::home_dir().context("could not determine home directory")?;
+    let queue_path = home.join(".mur").join("queue").join("events.jsonl");
+    let events = crate::inject::queue::read_all_events(&queue_path);
+    let stats = crate::inject::stats::compute(&events);
+    let output = crate::inject::stats::format_stats(&stats, &queue_path.display().to_string());
+    print!("{output}");
     Ok(())
 }
 
