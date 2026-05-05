@@ -15,14 +15,14 @@ pub struct EmbeddingConfig {
 #[derive(Debug, Clone)]
 pub enum EmbeddingProvider {
     Ollama { base_url: String },
-    OpenAI { api_key: String },
+    OpenAI { api_key: String, base_url: String },
 }
 
 impl EmbeddingConfig {
     /// Create from the global mur config.
     pub fn from_config(cfg: &mur_common::config::Config) -> Self {
         let provider = match cfg.embedding.provider.as_str() {
-            "openai" | "gemini" | "anthropic" => {
+            "openai" | "gemini" | "anthropic" | "voyage" | "omlx" | "mlx" => {
                 // Resolve API key from api_key_env or fall back to OPENAI_API_KEY
                 let api_key = cfg
                     .embedding
@@ -30,7 +30,12 @@ impl EmbeddingConfig {
                     .as_deref()
                     .and_then(|env| std::env::var(env).ok())
                     .unwrap_or_else(|| std::env::var("OPENAI_API_KEY").unwrap_or_default());
-                EmbeddingProvider::OpenAI { api_key }
+                let base_url = cfg
+                    .embedding
+                    .openai_url
+                    .clone()
+                    .unwrap_or_else(|| "https://api.openai.com/v1".into());
+                EmbeddingProvider::OpenAI { api_key, base_url }
             }
             _ => EmbeddingProvider::Ollama {
                 base_url: cfg.embedding.ollama_endpoint.clone(),
@@ -60,7 +65,9 @@ impl Default for EmbeddingConfig {
 pub async fn embed(text: &str, config: &EmbeddingConfig) -> Result<Vec<f32>> {
     match &config.provider {
         EmbeddingProvider::Ollama { base_url } => embed_ollama(text, base_url, &config.model).await,
-        EmbeddingProvider::OpenAI { api_key } => embed_openai(text, api_key, &config.model).await,
+        EmbeddingProvider::OpenAI { api_key, base_url } => {
+            embed_openai(text, base_url, api_key, &config.model).await
+        }
     }
 }
 
@@ -131,10 +138,11 @@ struct OpenAIEmbedData {
     embedding: Vec<f32>,
 }
 
-async fn embed_openai(text: &str, api_key: &str, model: &str) -> Result<Vec<f32>> {
+async fn embed_openai(text: &str, base_url: &str, api_key: &str, model: &str) -> Result<Vec<f32>> {
     let client = reqwest::Client::new();
+    let url = format!("{}/embeddings", base_url.trim_end_matches('/'));
     let resp = client
-        .post("https://api.openai.com/v1/embeddings")
+        .post(&url)
         .header("Authorization", format!("Bearer {}", api_key))
         .json(&OpenAIEmbedRequest {
             model: model.into(),
@@ -142,18 +150,70 @@ async fn embed_openai(text: &str, api_key: &str, model: &str) -> Result<Vec<f32>
         })
         .send()
         .await
-        .context("calling OpenAI embed API")?;
+        .with_context(|| format!("calling embed API at {}", url))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("OpenAI API error {}: {}", status, body);
+        anyhow::bail!("Embed API error {} at {}: {}", status, url, body);
     }
 
-    let data: OpenAIEmbedResponse = resp.json().await.context("parsing OpenAI response")?;
+    let data: OpenAIEmbedResponse = resp.json().await.context("parsing embed response")?;
     data.data
         .into_iter()
         .next()
         .map(|d| d.embedding)
         .context("no embedding returned")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mur_common::config::Config;
+
+    fn cfg_with(provider: &str, url: Option<&str>, env: Option<&str>) -> Config {
+        let mut cfg = Config::default();
+        cfg.embedding.provider = provider.into();
+        cfg.embedding.openai_url = url.map(str::to_string);
+        cfg.embedding.api_key_env = env.map(str::to_string);
+        cfg
+    }
+
+    #[test]
+    fn omlx_provider_uses_custom_base_url() {
+        let cfg = cfg_with(
+            "omlx",
+            Some("http://localhost:8000/v1"),
+            Some("OMLX_API_KEY"),
+        );
+        let ec = EmbeddingConfig::from_config(&cfg);
+        match ec.provider {
+            EmbeddingProvider::OpenAI { base_url, .. } => {
+                assert_eq!(base_url, "http://localhost:8000/v1");
+            }
+            _ => panic!("expected OpenAI variant for provider=omlx"),
+        }
+    }
+
+    #[test]
+    fn openai_provider_defaults_to_canonical_base_url() {
+        let cfg = cfg_with("openai", None, Some("OPENAI_API_KEY"));
+        let ec = EmbeddingConfig::from_config(&cfg);
+        match ec.provider {
+            EmbeddingProvider::OpenAI { base_url, .. } => {
+                assert_eq!(base_url, "https://api.openai.com/v1");
+            }
+            _ => panic!("expected OpenAI variant"),
+        }
+    }
+
+    #[test]
+    fn ollama_provider_unchanged_by_openai_url() {
+        let cfg = cfg_with("ollama", Some("http://example.com"), None);
+        let ec = EmbeddingConfig::from_config(&cfg);
+        assert!(
+            matches!(ec.provider, EmbeddingProvider::Ollama { .. }),
+            "ollama provider must produce Ollama variant regardless of openai_url"
+        );
+    }
 }
