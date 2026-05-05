@@ -5,6 +5,7 @@ mod bootstrap;
 mod commands;
 mod companion_bridge;
 mod multimodal;
+mod self_test;
 mod send;
 mod sidecar;
 mod theme;
@@ -15,6 +16,26 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
+    // ── Track C3 / M-w6 — `--self-test=<mode>` short-circuit ──────
+    //
+    // The e2e script (`scripts/e2e/c3-send-from-any-app.sh`) builds
+    // a real bundle and invokes it directly to verify each channel's
+    // parser/decoder/classifier survives bundling + signing. Bail
+    // out before the Tauri runtime starts so the binary just
+    // exercises the pure seam and exits.
+    if let Some(mode) = self_test::parse_self_test_arg() {
+        match self_test::run(&mode) {
+            Ok(()) => {
+                println!("OK {mode}");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("FAIL {mode}: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     init_tracing();
 
     info!("starting mur-agent-gui");
