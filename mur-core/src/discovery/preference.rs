@@ -40,7 +40,7 @@ pub const LLM_PREFERENCE: &[(&str, u32)] = &[
 /// Highest-scoring prefix that is a substring of `id`. Returns 0 when no
 /// prefix matches. Case-sensitive — both Ollama (`qwen3-embedding:0.6b`)
 /// and HF (`Qwen3-Embedding-0.6B`) forms must appear in the table.
-pub fn rank(id: &str, table: &[(&'static str, u32)]) -> u32 {
+pub fn rank(id: &str, table: &[(&str, u32)]) -> u32 {
     table
         .iter()
         .filter(|(prefix, _)| id.contains(prefix))

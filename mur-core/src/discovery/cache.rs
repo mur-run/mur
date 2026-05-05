@@ -39,6 +39,7 @@ impl DiscoveryCache {
     /// Load cache from disk. Returns `empty()` on missing file, corrupt
     /// JSON, or schema mismatch. Never errors — discovery just re-runs.
     pub fn load(path: &Path) -> Self {
+        // Missing file is the normal first-run state; no log needed.
         let Ok(bytes) = std::fs::read(path) else {
             return Self::empty();
         };
