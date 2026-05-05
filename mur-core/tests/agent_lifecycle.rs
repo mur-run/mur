@@ -41,6 +41,7 @@ fn write_lock_with_pid(mur_home: &std::path::Path, name: &str, pid: u32) {
             stdio: true,
             unix_socket: None,
             tcp: None,
+            webhook: None,
         },
         card_digest: "sha256:x".into(),
         capabilities: vec![],

@@ -130,6 +130,7 @@ mod tests {
                 stdio: false,
                 unix_socket: Some("/tmp/x.sock".into()),
                 tcp: None,
+                webhook: None,
             },
             card_digest: "sha256:abc".into(),
             capabilities: vec!["a2a.message.send".into()],

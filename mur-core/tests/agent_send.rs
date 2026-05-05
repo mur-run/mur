@@ -38,6 +38,7 @@ fn write_running_lock(mur_home: &Path, name: &str, sock: &str) {
             stdio: false,
             unix_socket: Some(sock.into()),
             tcp: None,
+            webhook: None,
         },
         card_digest: "sha256:mock".into(),
         capabilities: vec!["a2a.message.send".into()],
