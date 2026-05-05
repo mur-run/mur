@@ -15,9 +15,20 @@ mod imp {
 #[cfg(not(target_os = "macos"))]
 mod imp {
     pub fn default_engine() -> Box<dyn super::super::OcrEngine> {
-        // TODO(M3.5.3): try TesseractOcr::new() and fall back to NoopOcr
-        // if the tesseract binary isn't on PATH.
-        Box::new(super::super::NoopOcr)
+        // M3.5.3 — try the system `tesseract` binary; fall back to
+        // `NoopOcr` when it isn't on PATH so a fresh install boots
+        // cleanly. The cookbook documents the install step
+        // (`apt install tesseract-ocr` / `winget install
+        // UB-Mannheim.TesseractOCR`).
+        match super::super::tesseract::TesseractOcr::try_new() {
+            Some(t) => Box::new(t),
+            None => {
+                tracing::info!(
+                    "tesseract not on PATH; OCR disabled until installed (using NoopOcr)"
+                );
+                Box::new(super::super::NoopOcr)
+            }
+        }
     }
 }
 

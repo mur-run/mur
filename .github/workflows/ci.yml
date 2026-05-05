@@ -85,7 +85,7 @@ jobs:
           node-version-file: 'mur-agent-gui/ui/.nvmrc'
           cache: 'npm'
           cache-dependency-path: 'mur-agent-gui/ui/package-lock.json'
-      - name: Install Linux system libraries (Tauri 2 + voice)
+      - name: Install Linux system libraries (Tauri 2 + voice + OCR)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -96,7 +96,9 @@ jobs:
             libasound2-dev \
             pkg-config \
             protobuf-compiler \
-            libprotobuf-dev
+            libprotobuf-dev \
+            tesseract-ocr \
+            tesseract-ocr-eng
       - name: Install npm deps
         run: cd mur-agent-gui/ui && npm ci
       - name: Frontend build (populates dist/ for cargo check)
