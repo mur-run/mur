@@ -241,9 +241,20 @@ After tagging a new release:
 When making changes to this repo, check whether the following need to be updated:
 
 1. **`README.md`** — `/Volumes/Firecuda4tb/Projects/mur/README.md`
-2. **文件網站 (Docs)** — `https://app.mur.run/docs/core`
+2. **Documents page** — `https://app.mur.run/docs/core`
    - Source: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/docs-content/` (Markdown files)
    - Page component: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/src/app/docs/core/[[...slug]]/page.tsx`
    - Navigation: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/src/components/docs/coreNavigation.tsx`
-3. **產品網站 (Product page)** — `https://app.mur.run/products/core`
+3. **Product page** — `https://app.mur.run/products/core`
    - Source: `/Volumes/Firecuda4tb/Projects/mur-server/dashboard/src/app/products/core/page.tsx`
+
+## Mandatory Rules
+
+1. **No hardcoded values**: Never hardcode strings, paths, magic numbers, or
+   config values in design or implementation. Use constants, config files, or
+   environment variables. When unsure of best practice, research before
+   implementing.
+2. **Ask, don't guess**: If requirements, file paths, API contracts, or
+   intended behavior are ambiguous, ask for clarification before coding.
+   Exception: in auto mode, make reasonable assumptions for low-risk decisions
+   and flag them in the response.
