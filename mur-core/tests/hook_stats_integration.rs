@@ -1,9 +1,7 @@
 //! Integration: write real events, then compute + format through the full pipeline.
 
-use std::io::Write;
-
 use mur_core::inject::event::{EventKind, NormalizedEvent};
-use mur_core::inject::queue::read_all_events;
+use mur_core::inject::queue::{enqueue_to, read_all_events};
 use mur_core::inject::stats::{compute, format_stats};
 
 fn make_event(kind: EventKind, tool: Option<&str>, session: Option<&str>) -> NormalizedEvent {
@@ -34,14 +32,7 @@ fn stats_from_real_queue_file() {
         make_event(EventKind::Stop, None, Some("sess_2")),
     ];
     for ev in &events_to_write {
-        let line = serde_json::to_string(ev).unwrap() + "\n";
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .unwrap()
-            .write_all(line.as_bytes())
-            .unwrap();
+        enqueue_to(ev, &path).unwrap();
     }
 
     let events = read_all_events(&path);

@@ -12,7 +12,7 @@ pub fn enqueue(event: &NormalizedEvent) -> Result<()> {
     enqueue_to(event, &queue_dir.join("events.jsonl"))
 }
 
-fn enqueue_to(event: &NormalizedEvent, path: &Path) -> Result<()> {
+pub fn enqueue_to(event: &NormalizedEvent, path: &Path) -> Result<()> {
     let line = serde_json::to_string(event)? + "\n";
     let mut f = std::fs::OpenOptions::new()
         .create(true)
