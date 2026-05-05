@@ -13,7 +13,7 @@ use super::{Backend, Discovery, DiscoveredModel, EmbeddingProbe, ModelKind};
 
 /// oMLX issue #266: graph recompiles on first call after >3s idle. Budget
 /// 10s for the probe; subsequent probes settle to <500ms.
-pub const OMLX_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const OMLX_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct OMlxDiscovery {
@@ -39,13 +39,14 @@ impl OMlxDiscovery {
     /// path. Trailing slashes on `base_url` are stripped first.
     fn url(&self, suffix: &str) -> String {
         let trimmed = self.base_url.trim_end_matches('/');
-        // If base_url already ends in "/v1" and suffix starts with "/v1",
-        // strip the leading "/v1" from suffix to avoid duplication.
-        if trimmed.ends_with("/v1") && suffix.starts_with("/v1") {
-            format!("{}{}", trimmed, &suffix[3..])
+        // If base_url already ends in "/v1", strip the leading "/v1" from
+        // suffix so we don't produce a doubled "/v1/v1/...".
+        let suffix = if trimmed.ends_with("/v1") {
+            suffix.strip_prefix("/v1").unwrap_or(suffix)
         } else {
-            format!("{}{}", trimmed, suffix)
-        }
+            suffix
+        };
+        format!("{}{}", trimmed, suffix)
     }
 }
 
@@ -187,5 +188,65 @@ impl Discovery for OMlxDiscovery {
             dims,
             latency_ms: started.elapsed().as_millis() as u64,
         })
+    }
+}
+
+#[cfg(test)]
+mod family_tests {
+    use super::family_from_id;
+
+    #[test]
+    fn qwen3_variants() {
+        assert_eq!(
+            family_from_id("mlx-community/Qwen3-Embedding-0.6B-8bit"),
+            Some("qwen3".into())
+        );
+        assert_eq!(
+            family_from_id("Qwen3-Embedding-8B-4bit-DWQ"),
+            Some("qwen3".into())
+        );
+    }
+
+    #[test]
+    fn bge_dash_or_underscore() {
+        assert_eq!(family_from_id("mlx-community/bge-m3"), Some("bge".into()));
+        assert_eq!(family_from_id("BAAI/bge_large"), Some("bge".into()));
+    }
+
+    #[test]
+    fn modernbert_family() {
+        assert_eq!(
+            family_from_id("lightonai/modernbert-embed-large"),
+            Some("modernbert".into())
+        );
+    }
+
+    #[test]
+    fn nomic_family() {
+        assert_eq!(
+            family_from_id("nomic-ai/nomic-embed-text-v1.5"),
+            Some("nomic-bert".into())
+        );
+    }
+
+    #[test]
+    fn jina_family() {
+        assert_eq!(
+            family_from_id("jinaai/jina-embeddings-v3"),
+            Some("jina-bert".into())
+        );
+    }
+
+    #[test]
+    fn unknown_id_returns_none() {
+        assert_eq!(family_from_id("unknown/foo"), None);
+        assert_eq!(family_from_id(""), None);
+    }
+
+    #[test]
+    fn case_insensitive_via_lowercase() {
+        // family_from_id calls to_ascii_lowercase first, so capitalized
+        // tags like "Qwen3" still match.
+        assert_eq!(family_from_id("Some/QWEN3-Whatever"), Some("qwen3".into()));
     }
 }
