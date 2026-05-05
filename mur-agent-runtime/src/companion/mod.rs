@@ -14,6 +14,11 @@ pub mod situations;
 pub mod telemetry;
 pub mod voice;
 
+// B0 rule 12 / M8.3 — compile-time audit that no companion file
+// imports a direct network client. Test-only; no runtime cost.
+#[cfg(test)]
+mod network_audit;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
