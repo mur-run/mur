@@ -52,12 +52,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
-      - run: cargo check --all
-      # nextest replaces `cargo test --all`. ~40% faster on Windows per
-      # nextest docs + corrode 2025 benchmarks; same behavior on success.
-      # `--profile ci` (in .config/nextest.toml) sets timeouts + caps
-      # heavy-test (lance/qdrant/tantivy) concurrency to avoid OOM on 16GB
-      # Windows runners.
+      # `cargo nextest run` builds + runs in one cargo invocation; `cargo
+      # check --all` was a redundant pre-check whose .rmeta artifacts don't
+      # help nextest's downstream test-binary build (different codegen
+      # path). Dropping it saves ~66s on ubuntu, ~50s on macOS, ~200s on
+      # Windows. `--profile ci` (in .config/nextest.toml) sets timeouts +
+      # caps heavy-test (lance/qdrant/tantivy) concurrency to avoid OOM on
+      # 16 GB Windows runners.
       - run: cargo nextest run --workspace --profile ci
 
   clippy:
