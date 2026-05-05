@@ -610,7 +610,7 @@ All four channels feed received content into the same B0 multimodal pipeline (D3
 Deferred to v2 / v3 with their own specs:
 
 - **C4** Cron + `lifecycle.schedule` (already designed in fleet-architecture; v2 implements).
-- **C5** Webhook receiver (reuse `mur-core/src/server.rs` Axum; per-agent endpoint + HMAC).
+- **C5** Webhook receiver (per-agent Axum endpoint + HMAC). **Status: shipped 2026-05-05** — design at `docs/superpowers/specs/2026-05-05-mur-agent-c5-webhook-design.md`, cookbook at `docs/cookbook/c5-webhook.md`. Listener lives in `mur-agent-runtime/src/transport/webhook.rs`; supervisor wiring conditional on `transport.webhook.enabled`. Acceptance gate: `bash scripts/e2e/c5-webhook.sh`.
 - **C6** Heartbeat / idle triggers (reuse companion `schedule.rs` `should_send_now`).
 - **C7** Slack / Discord / LINE / iMessage bridges (third-party may fork the Telegram bridge against the C1 protocol, or we ship official ones).
 - **C8** macOS `.appex` Share Extension via post-build Xcode merge — adds Phase 14 to `agent_export_gui.rs`; uses App Group for IPC.
