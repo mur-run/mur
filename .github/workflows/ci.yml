@@ -8,6 +8,15 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Disable incremental compilation across all CI jobs. Incremental adds a
+  # dependency-graph metadata layer that defeats Swatinem/rust-cache and
+  # bloats the cache key. From-scratch builds (which CI always is) are
+  # ~15-20% faster without it.
+  CARGO_INCREMENTAL: 0
+  # Belt-and-suspenders for the test profile: even if a downstream PR
+  # adds a [profile.test] override that re-enables debug, this env wins.
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 jobs:
   test:
