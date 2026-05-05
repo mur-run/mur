@@ -1,0 +1,100 @@
+{"query": "ok", "expected_tier": "Skip"}
+{"query": "好", "expected_tier": "Skip"}
+{"query": "thanks", "expected_tier": "Skip"}
+{"query": "符合", "expected_tier": "Skip"}
+{"query": "嗯", "expected_tier": "Skip"}
+{"query": "/help", "expected_tier": "Skip"}
+{"query": "/status", "expected_tier": "Skip"}
+{"query": "👍", "expected_tier": "Skip"}
+{"query": "🎉🚀", "expected_tier": "Skip"}
+{"query": "no", "expected_tier": "Skip"}
+{"query": "OK!", "expected_tier": "Skip"}
+{"query": "好的", "expected_tier": "Skip"}
+{"query": "了解", "expected_tier": "Skip"}
+{"query": "收到", "expected_tier": "Skip"}
+{"query": "對", "expected_tier": "Skip"}
+{"query": "不對", "expected_tier": "Skip"}
+{"query": "沒問題", "expected_tier": "Skip"}
+{"query": "got it", "expected_tier": "Skip"}
+{"query": "sure", "expected_tier": "Skip"}
+{"query": "yes", "expected_tier": "Skip"}
+{"query": "okay", "expected_tier": "Skip"}
+{"query": "fine", "expected_tier": "Skip"}
+{"query": "cool", "expected_tier": "Skip"}
+{"query": "thx", "expected_tier": "Skip"}
+{"query": "nope", "expected_tier": "Skip"}
+{"query": "/model gpt-4", "expected_tier": "Skip"}
+{"query": "/clear", "expected_tier": "Skip"}
+{"query": "/memory", "expected_tier": "Skip"}
+{"query": "/hooks", "expected_tier": "Skip"}
+{"query": "/agents", "expected_tier": "Skip"}
+{"query": "what is RAG", "expected_tier": "L0"}
+{"query": "what is a vector store", "expected_tier": "L0"}
+{"query": "why does this fail", "expected_tier": "L0"}
+{"query": "what's the difference", "expected_tier": "L0"}
+{"query": "為什麼會這樣", "expected_tier": "L0"}
+{"query": "explain this approach", "expected_tier": "L0"}
+{"query": "how does LanceDB work", "expected_tier": "L0"}
+{"query": "what is the purpose of this module", "expected_tier": "L0"}
+{"query": "是什麼意思 這個錯誤訊息", "expected_tier": "L0"}
+{"query": "解釋一下 gate 的設計", "expected_tier": "L0"}
+{"query": "why does the score drop on idle sessions", "expected_tier": "L0"}
+{"query": "what's the scoring formula", "expected_tier": "L0"}
+{"query": "how does noise_filter work", "expected_tier": "L0"}
+{"query": "怎麼回事 為什麼沒有注入", "expected_tier": "L0"}
+{"query": "what is tiered injection", "expected_tier": "L0"}
+{"query": "explain the prefetch_hit signal", "expected_tier": "L0"}
+{"query": "what are the four tiers", "expected_tier": "L0"}
+{"query": "why use composite scoring", "expected_tier": "L0"}
+{"query": "what does L2 mean", "expected_tier": "L0"}
+{"query": "how does session_state_score behave", "expected_tier": "L0"}
+{"query": "implement adaptive gate composite scoring", "expected_tier": "L1"}
+{"query": "refactor the auth module", "expected_tier": "L1"}
+{"query": "fix the build error", "expected_tier": "L1"}
+{"query": "add a new endpoint to the API", "expected_tier": "L1"}
+{"query": "create a unit test for gate.rs", "expected_tier": "L1"}
+{"query": "look at mod.rs and check the imports", "expected_tier": "L1"}
+{"query": "the fn handle_event() is broken", "expected_tier": "L1"}
+{"query": "debug the failing test in scoring.rs", "expected_tier": "L1"}
+{"query": "實作 session_state_score 函式", "expected_tier": "L1"}
+{"query": "建立一個新的 agent profile", "expected_tier": "L1"}
+{"query": "修復 gate 的 Skip 邏輯", "expected_tier": "L1"}
+{"query": "remove unused imports from inject_cmd.rs", "expected_tier": "L1"}
+{"query": "migrate the old GateDecision callers", "expected_tier": "L1"}
+{"query": "wire the context_api to use Tier::Skip", "expected_tier": "L1"}
+{"query": "test the end-to-end injection flow", "expected_tier": "L1"}
+{"query": "deploy the updated gate module", "expected_tier": "L1"}
+{"query": "rewrite the noise filter regex", "expected_tier": "L1"}
+{"query": "integrate the tool_signal_score into evaluate_query", "expected_tier": "L1"}
+{"query": "測試 evaluate_query_v2 的結果", "expected_tier": "L1"}
+{"query": "改一下 ACK_RE 讓它也能 match 英文縮寫", "expected_tier": "L1"}
+{"query": "add serde derive to GateOutcome", "expected_tier": "L1"}
+{"query": "extract the scoring weights into a config struct", "expected_tier": "L1"}
+{"query": "find the bug in the tool signal parser", "expected_tier": "L1"}
+{"query": "run cargo clippy and fix all warnings", "expected_tier": "L1"}
+{"query": "hook the gate into the context_api retrieve path", "expected_tier": "L1"}
+{"query": "check why gate_integration.rs fails on CI", "expected_tier": "L1"}
+{"query": "delete the old GateDecision references", "expected_tier": "L1"}
+{"query": "搜尋所有用到 GateDecision 的地方", "expected_tier": "L1"}
+{"query": "implement a new tokio worker that subscribes to events.jsonl and runs LLM extraction in the background pool", "expected_tier": "L1"}
+{"query": "refactor the entire gate module to support async prefetch_hit scoring from the LanceDB vector store", "expected_tier": "L1"}
+{"query": "build a composite scoring pipeline that combines intent regex, tool history, session state, and vector similarity", "expected_tier": "L1"}
+{"query": "implement the M1 mur hook unified entry binary with tier-aware formatting and telemetry emission", "expected_tier": "L1"}
+{"query": "migrate all existing agent profiles to use the new model registry with secret refs and keychain integration", "expected_tier": "L1"}
+{"query": "add a murmurd daemon that watches session recordings and emits MurEvent to the LanceDB vector store", "expected_tier": "L1"}
+{"query": "實作 TCP Noise handshake transport layer 讓 agent 可以透過 noise_xk 加密通訊", "expected_tier": "L1"}
+{"query": "design and implement the companion outbox tick loop with bandit picker, linter, i18n, and inbox delivery", "expected_tier": "L1"}
+{"query": "write integration tests for the full inject pipeline including gate, scoring, and format_unified_injection", "expected_tier": "L1"}
+{"query": "implement the per-tier injection formatter: L0 returns capability index, L1 returns 1-3 snippets, L2 returns full body with linked workflows", "expected_tier": "L1"}
+{"query": "build a Tauri 2 GUI export pipeline with 13 phases including codesign, notarize, staple, and assess steps", "expected_tier": "L1"}
+{"query": "implement the agent rekey rotation flow with RotationAttestation signing, grace window, and commander approval gate", "expected_tier": "L1"}
+{"query": "設計一個 adaptive gate 的 telemetry 系統，把每次 evaluate_query 的結果寫入 JSONL 並在 mur hook stats 顯示", "expected_tier": "L1"}
+{"query": "add vector similarity prefetch_hit signal to evaluate_query by spawning a background LanceDB query and caching the result", "expected_tier": "L1"}
+{"query": "implement the openspec verify step that checks all claims in a change spec against the actual code and reports mismatches", "expected_tier": "L1"}
+{"query": "build the mur sources integration pipeline for Obsidian, Notion, and Joplin with --watch mode and install-schedule support", "expected_tier": "L1"}
+{"query": "write a comprehensive test suite for the companion subsystem covering clock, voice, picker, schedule, outbox, and inbox modules", "expected_tier": "L1"}
+{"query": "implement Ed25519 key generation, signing, and verification for the agent identity bootstrap and rotation attestation flow", "expected_tier": "L1"}
+{"query": "重構整個 retrieve pipeline 讓 L0/L1/L2 分別注入不同數量的 pattern，並加入 token budget 限制", "expected_tier": "L1"}
+{"query": "add a new mur agent export --format bin pipeline that cross-compiles the agent runtime for linux-aarch64 and packages it as a tarball", "expected_tier": "L1"}
+{"query": "implement async retry logic with exponential backoff for the embedding API calls in the vector store pipeline", "expected_tier": "L1"}
+{"query": "fix the race condition in the LanceDB index rebuild when multiple mur reindex processes run concurrently", "expected_tier": "L1"}
