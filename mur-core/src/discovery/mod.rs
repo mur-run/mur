@@ -4,6 +4,7 @@
 //! See `docs/superpowers/specs/2026-05-05-mur-embedding-omlx-dynamic-design.md`.
 
 pub mod cache;
+pub mod ollama;
 pub mod preference;
 
 use anyhow::Result;
