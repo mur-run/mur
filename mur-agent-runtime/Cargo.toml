@@ -47,6 +47,11 @@ sha2 = "0.10"
 # timing-side-channel-vulnerable.
 hmac = "0.12"
 subtle = "2"
+# C5 / M5.4 — webhook payload bridge: image/file kinds carry
+# base64 (URL-safe, no padding) so we can decode them without a
+# multipart parser.
+base64 = "0.22"
+mime_guess = "2"
 snow = { version = "0.9", default-features = false, features = ["default-resolver"] }
 hex = "0.4"
 glob = "0.3"
