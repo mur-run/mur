@@ -109,7 +109,7 @@ impl Hook for B0SafetyHook {
     async fn on_startup(
         &self,
         ctx: &HookCtx,
-        _profile: &AgentProfile,
+        profile: &AgentProfile,
         _tok: &CancellationToken,
     ) -> Result<(), HookError> {
         // ── Rule 11 (M7.7): MCP binary signature check. ──────────────────
@@ -122,6 +122,61 @@ impl Hook for B0SafetyHook {
                 return Err(HookError::Runtime(format!(
                     "B0 rule 11: MCP binary signature check failed: {reason}"
                 )));
+            }
+        }
+
+        // ── Rule 6 (M9.3): MCP install-time pin verification. ────────────
+        // For every entry pinned at install time (via M9.2), re-hash
+        // the binary on disk and compare. On hard drift, refuse to
+        // start so the user is forced to run `mur agent mcp inspect
+        // <name>` and re-approve. On soft fails (binary missing or
+        // unreadable) we log a warning and continue — rule 11 above
+        // already caught real tampering, and a missing binary is more
+        // likely "user uninstalled the MCP without removing the
+        // profile entry" than an attack.
+        //
+        // Description-hash verification happens lazily at first MCP
+        // call (M9.3.5) rather than here; spawning every pinned MCP
+        // at startup just to read `tools/list` would N×-bloat boot
+        // time without user-visible benefit.
+        for entry in &profile.mcp_servers {
+            let Some(expected) = &entry.binary_sha256 else {
+                // Pre-M9 entry — skip silently; the cookbook documents
+                // `mur agent mcp pin <name>` as the migration verb.
+                continue;
+            };
+            // Same resolution as M9.2 install: the runtime's already-
+            // resolved `mcp_server_binaries` are paths derived from
+            // `command.split_whitespace().next()`. We mirror that here
+            // so install-side and verify-side hash the same bytes.
+            let path = std::path::PathBuf::from(
+                entry
+                    .command
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or(&entry.command),
+            );
+            match crate::hooks::b0_helpers::verify_mcp_binary_hash(expected, &path) {
+                Ok(()) => {
+                    tracing::debug!(mcp = %entry.name, "B0 rule 6: pin verified");
+                }
+                Err(crate::hooks::b0_helpers::PinDriftReason::BinaryDrift { .. }) => {
+                    return Err(HookError::Runtime(format!(
+                        "B0 rule 6: MCP `{}` changed since install — \
+                         run `mur agent mcp inspect {}` to review the \
+                         drift and `mur agent mcp pin {}` to re-approve, \
+                         or `mur agent mcp remove {}` to uninstall.",
+                        entry.name, entry.name, entry.name, entry.name,
+                    )));
+                }
+                Err(soft @ crate::hooks::b0_helpers::PinDriftReason::BinaryMissing { .. })
+                | Err(soft @ crate::hooks::b0_helpers::PinDriftReason::BinaryReadError { .. }) => {
+                    tracing::warn!(
+                        mcp = %entry.name,
+                        reason = %soft,
+                        "B0 rule 6: pin verify soft-failed; continuing",
+                    );
+                }
             }
         }
         Ok(())
