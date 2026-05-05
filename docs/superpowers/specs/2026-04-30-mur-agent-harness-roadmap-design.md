@@ -661,12 +661,12 @@ All 22 rules are implemented inside `B0SafetyHook` (Track A built-in handler) an
 - AgentDojo-50 indirect-injection success rate ≤ 5% (research baseline of unprotected agents: 30-60%).
 - HarmBench-50 jailbreak success rate ≤ baseline minus 50%.
 - End-to-end demo: dropping an "invisible text PDF" with ASCII smuggling does not trigger any side-effect tool in the same turn.
-- v1 ship status (2026-05-03):
+- v1 ship status (2026-05-05):
   - Rules 1, 2, 3, 4, 5, 7, 8, 11: shipped (M7.1-M7.7).
   - Rule 6: deferred to MCP install CLI work (separate plan).
-  - Rule 9: deferred to telemetry redaction work (separate plan).
+  - **Rule 9: shipped (M8.1)** — `redact_secrets` + `redact_home_path` + `redact_envelope` chokepoint in `telemetry_writer`. Cookbook: `docs/cookbook/b0-telemetry-redaction.md`. Acceptance: `bash scripts/e2e/b0-m8-telemetry-redaction.sh`.
   - Rule 10: documented; mechanism implemented across M0/M3.8/M7.3.
-  - Rule 12: M2.x companion subsystem already enforces; audit pending.
+  - **Rule 12: shipped (M8.3)** — companion zero-network audit at `mur-agent-runtime/src/companion/network_audit.rs` (compile-time enforcement via `include_str!`). Wording refined to acknowledge LlmClient as the only allowed outbound indirection.
   - Rules 13-22: shipped in M3 (drag-drop) + M4 (cards).
 
 ### 6.2 v1 Threat Model Document (16 sections)
