@@ -639,7 +639,7 @@ All 22 rules are implemented inside `B0SafetyHook` (Track A built-in handler) an
 | 9 | Crashlogs / telemetry redact tool-result body + user-file content by default | telemetry sink |
 | 10 | Three-tier permission UX: silent (model call, picker reads) / first-use-remember (new MCP, new host, FS write outside agent dir) / always-prompt (delete, exfil, payments) | A0 AskUser path |
 | 11 | Code-signed + notarized binary; macOS / Windows refuse to load unsigned MCP server binaries | `on_startup` |
-| 12 | Companion proactive default-quiet; outbox respects active window + quiet hours; companion subsystem has no network egress | companion `earned_permission` |
+| 12 | Companion proactive default-quiet; outbox respects active window + quiet hours; companion subsystem has no direct network egress — the only outbound code path is the agent's already-opted-in model provider via `crate::llm::LlmClient`. M8.3 audit enforces this via an `include_str!` regression test in `companion::network_audit` that fails the build if any companion file imports `reqwest` / `tokio::net` / `hyper` / `surf` / `ureq` / `isahc` directly. | companion `earned_permission` |
 
 **Multimodal / input rules (10)**:
 
