@@ -296,6 +296,10 @@ fn upsert_telegram_chat_mcp_entry(dir: &std::path::Path, bridge_id: &str) -> Res
         // mode added in M-c2.5.1.
         command: format!("mur_agent_{bridge_id}"),
         args: vec!["mcp".into()],
+        // The bridge MCP is internal mur infrastructure and ships
+        // alongside the runtime — pinning happens out-of-band via
+        // codesign (rule 11) rather than user-driven `mur agent mcp pin`.
+        ..Default::default()
     };
 
     if profile_path.exists() {

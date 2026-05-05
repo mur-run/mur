@@ -147,12 +147,63 @@ pub struct ModelConfig {
     pub params: BTreeMap<String, serde_yaml_ng::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct McpServerEntry {
     pub name: String,
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+
+    /// SHA-256 (hex, lowercase) of the binary at `command`'s resolved
+    /// path, captured at install time. `None` means the entry was
+    /// added before B0 M9.1 (back-compat) and rule-6 enforcement is
+    /// not applied — the supervisor will warn but not block.
+    /// (B0 rule 6 / M9.1)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary_sha256: Option<String>,
+
+    /// SHA-256 (hex, lowercase) of the canonical-JSON of the MCP's
+    /// `tools/list` response, captured at install time. `None` means
+    /// the install path skipped the description probe (e.g. the MCP
+    /// uses a non-stdio transport or the binary couldn't be reached)
+    /// or the entry pre-dates M9. (B0 rule 6 / M9.1)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_hash: Option<String>,
+
+    /// Display-only publisher metadata captured at install time so
+    /// the user can recall what they consented to. `None` for older
+    /// entries. (B0 rule 6 / M9.1)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<McpPublisherInfo>,
+
+    /// RFC3339 timestamp of when the entry was added or last
+    /// re-approved by the user via `mur agent mcp pin`. Used by the
+    /// rug-pull dialog UX. `None` for older entries. (B0 rule 6 / M9.1)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Display-only publisher metadata captured at install time. None of
+/// the fields are validated against any external authority — they're
+/// shown to the user during the install confirm prompt and reproduced
+/// in `mur agent mcp inspect` output so the user can audit who they
+/// thought they were trusting. (B0 rule 6 / M9.1)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct McpPublisherInfo {
+    /// Free-form publisher identifier — e.g. `"Anthropic"`,
+    /// `"@github-user-alice"`, or whatever `serverInfo.name` returned.
+    pub name: String,
+
+    /// Optional homepage / docs URL. Best-effort: extracted from the
+    /// MCP's `serverInfo.metadata.homepage` or registry entry when
+    /// available; otherwise left unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+
+    /// Optional registry coordinate — e.g. `"@anthropic-mcp/weather@1.2.3"`.
+    /// Used purely for display; not consumed by any verification path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -869,5 +920,123 @@ impl ProactiveTier {
                 c.proactive.enabled = true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod mcp_pin_tests {
+    use super::*;
+
+    /// Pre-M9 profiles must continue to deserialize with the new
+    /// optional fields absent. Round-trip: serialize back out and
+    /// confirm the optional fields don't leak into the YAML.
+    #[test]
+    fn pre_m9_entry_roundtrips_without_pin_fields() {
+        let yaml = r#"
+name: weather
+command: /opt/mcp/weather
+args: ["--port", "0"]
+"#;
+        let entry: McpServerEntry = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(entry.name, "weather");
+        assert_eq!(entry.binary_sha256, None);
+        assert_eq!(entry.description_hash, None);
+        assert_eq!(entry.publisher, None);
+        assert_eq!(entry.installed_at, None);
+
+        // skip_serializing_if = "Option::is_none" must keep the YAML
+        // free of empty pin fields when the entry is pre-M9.
+        let out = serde_yaml_ng::to_string(&entry).unwrap();
+        assert!(!out.contains("binary_sha256"), "got {out}");
+        assert!(!out.contains("description_hash"), "got {out}");
+        assert!(!out.contains("publisher"), "got {out}");
+        assert!(!out.contains("installed_at"), "got {out}");
+    }
+
+    /// Full M9 entry with all fields set round-trips losslessly.
+    #[test]
+    fn full_m9_entry_roundtrips_all_fields() {
+        let yaml = r#"
+name: weather
+command: /opt/mcp/weather
+args: []
+binary_sha256: "3f4abca8b0e6e2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b81c"
+description_hash: "9a01b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9c7e2"
+publisher:
+  name: "@anthropic-mcp/weather"
+  homepage: "https://github.com/anthropic-mcp/weather"
+  registry_id: "@anthropic-mcp/weather@1.2.3"
+installed_at: "2026-05-06T08:00:00Z"
+"#;
+        let entry: McpServerEntry = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(
+            entry
+                .binary_sha256
+                .as_deref()
+                .unwrap()
+                .starts_with("3f4abca8")
+        );
+        assert!(
+            entry
+                .description_hash
+                .as_deref()
+                .unwrap()
+                .starts_with("9a01b2c3")
+        );
+        let pub_info = entry.publisher.clone().unwrap();
+        assert_eq!(pub_info.name, "@anthropic-mcp/weather");
+        assert_eq!(
+            pub_info.homepage.as_deref(),
+            Some("https://github.com/anthropic-mcp/weather"),
+        );
+        assert_eq!(
+            pub_info.registry_id.as_deref(),
+            Some("@anthropic-mcp/weather@1.2.3"),
+        );
+        let installed = entry.installed_at.unwrap();
+        assert_eq!(installed.to_rfc3339(), "2026-05-06T08:00:00+00:00");
+    }
+
+    /// Partial — only the binary hash is set (e.g. probe failed but
+    /// install proceeded). The supervisor still needs to be able to
+    /// deserialize this without panicking.
+    #[test]
+    fn partial_pin_only_binary_sha_roundtrips() {
+        let yaml = r#"
+name: weather
+command: /opt/mcp/weather
+args: []
+binary_sha256: "deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb"
+"#;
+        let entry: McpServerEntry = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(
+            entry.binary_sha256.as_deref(),
+            Some("deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb"),
+        );
+        assert_eq!(entry.description_hash, None);
+        assert_eq!(entry.publisher, None);
+    }
+
+    /// Publisher with only the required `name` field — homepage and
+    /// registry_id are optional.
+    #[test]
+    fn publisher_minimal_just_name() {
+        let yaml = r#"
+name: weather
+command: /opt/mcp/weather
+args: []
+publisher:
+  name: "alice"
+"#;
+        let entry: McpServerEntry = serde_yaml_ng::from_str(yaml).unwrap();
+        let p = entry.publisher.as_ref().unwrap();
+        assert_eq!(p.name, "alice");
+        assert_eq!(p.homepage, None);
+        assert_eq!(p.registry_id, None);
+
+        // skip_serializing_if must omit the optional sub-fields too.
+        let out = serde_yaml_ng::to_string(&entry).unwrap();
+        assert!(!out.contains("homepage:"), "got {out}");
+        assert!(!out.contains("registry_id:"), "got {out}");
     }
 }

@@ -62,6 +62,7 @@ fn import_with_as_renames_and_detects_missing_mcp() {
         name: "ghost".into(),
         command: "/absolutely/not/a/real/binary-xyz123".into(),
         args: vec![],
+        ..Default::default()
     });
     std::fs::write(
         src_agent.join("profile.yaml"),

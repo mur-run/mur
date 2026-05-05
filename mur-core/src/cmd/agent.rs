@@ -874,6 +874,12 @@ pub fn cmd_mcp_add(name: &str, server_id: &str, command: &str, args: &[String]) 
         name: server_id.to_string(),
         command: command.to_string(),
         args: args.to_vec(),
+        // B0 rule 6 hash + publisher fields are populated by
+        // `mur agent mcp pin` (M9.2). Leaving them `None` here keeps
+        // the back-compat path (warn but don't block on startup);
+        // v1 callers wanting strict pinning run `mur agent mcp pin
+        // <name>` immediately after add.
+        ..Default::default()
     });
     // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
     if !profile
