@@ -72,9 +72,9 @@ fn classify(family: Option<&str>, name: &str, capabilities: &[String]) -> ModelK
     }
     // Fallback heuristic when /api/show fails or returns no capabilities.
     match family {
-        Some(f) if matches!(f, "bert" | "nomic-bert" | "jina-bert") => ModelKind::Embedding,
+        Some("bert" | "nomic-bert" | "jina-bert") => ModelKind::Embedding,
         Some("qwen3") if name.contains("embedding") => ModelKind::Embedding,
-        Some(f) if matches!(f, "qwen3" | "llama" | "gemma") => ModelKind::Llm,
+        Some("qwen3" | "llama" | "gemma") => ModelKind::Llm,
         _ => ModelKind::Unknown,
     }
 }

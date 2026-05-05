@@ -104,3 +104,35 @@ async fn list_models_marks_unreachable_show_as_unknown() {
     let models = d.list_models().await.unwrap();
     assert_eq!(models[0].kind, ModelKind::Unknown);
 }
+
+#[tokio::test]
+async fn probe_embedding_returns_dims_and_latency() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/embed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "embeddings": [vec![0.0f32; 1024]]
+        })))
+        .mount(&server)
+        .await;
+
+    let d = OllamaDiscovery::new(server.uri());
+    let probe = d.probe_embedding("qwen3-embedding:0.6b").await.unwrap();
+    assert_eq!(probe.dims, 1024);
+}
+
+#[tokio::test]
+async fn probe_embedding_errors_on_4xx() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/embed"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let d = OllamaDiscovery::new(server.uri());
+    let r = d.probe_embedding("missing").await;
+    assert!(r.is_err());
+}
