@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::Path;
 
 use super::event::NormalizedEvent;
@@ -27,13 +27,20 @@ fn enqueue_to(event: &NormalizedEvent, path: &Path) -> Result<()> {
 /// so a corrupt line never crashes the stats command.
 #[allow(dead_code)] // called from cmd::hook_stats in Task 3
 pub fn read_all_events(path: &Path) -> Vec<NormalizedEvent> {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return Vec::new();
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
     };
-    content
+    std::io::BufReader::new(file)
         .lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter_map(|line| {
+            let l = line.ok()?;
+            let trimmed = l.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            serde_json::from_str(trimmed).ok()
+        })
         .collect()
 }
 
@@ -128,5 +135,21 @@ mod tests {
             events.is_empty(),
             "malformed lines must be silently skipped"
         );
+    }
+
+    #[test]
+    fn read_all_events_returns_empty_for_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(&path, "").unwrap();
+        assert!(read_all_events(&path).is_empty());
+    }
+
+    #[test]
+    fn read_all_events_skips_blank_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(&path, "\n\n  \n").unwrap();
+        assert!(read_all_events(&path).is_empty());
     }
 }
