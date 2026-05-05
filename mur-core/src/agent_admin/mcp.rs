@@ -8,7 +8,19 @@ use crate::cmd::agent;
 // ─── mutators ─────────────────────────────────────────────────────
 
 pub fn add(name: &str, server_id: &str, command: &str, args: &[String]) -> Result<()> {
-    agent::cmd_mcp_add(name, server_id, command, args)
+    // GUI / library callers default to non-interactive (force = true)
+    // since they show their own confirmation UX. CLI dispatch in
+    // main.rs threads through `--force` + `--publisher-*` flags.
+    agent::cmd_mcp_add(
+        name,
+        server_id,
+        command,
+        args,
+        agent::McpAddPin {
+            force: true,
+            ..Default::default()
+        },
+    )
 }
 
 pub fn remove(name: &str, server_id: &str) -> Result<()> {
