@@ -90,7 +90,13 @@ impl TelemetryWriter {
         let (out_tx, out_rx) = mpsc::channel::<Value>(CHANNEL_BUF);
         tokio::spawn(async move {
             while let Some(ev) = in_rx.recv().await {
-                let notif = event_to_notification(&ev, &agent_name, &agent_uuid);
+                let mut notif = event_to_notification(&ev, &agent_name, &agent_uuid);
+                // ── B0 rule 9 (M8.1): redact every string leaf in the
+                // notification envelope before it lands on disk OR is
+                // forwarded to a transport subscriber. Single chokepoint:
+                // any new Event variant or hook attribute inherits this
+                // automatically.
+                redact_envelope(&mut notif);
                 let today = chrono::Utc::now().format("%Y-%m-%d");
                 let path = dir.join(format!("{today}.jsonl"));
                 if let Ok(mut f) = OpenOptions::new()
@@ -258,5 +264,108 @@ impl crate::hooks::TelemetryEmitter for WriterTelemetryEmitter {
                 attrs,
             })
             .await;
+    }
+}
+
+/// B0 rule 9 (M8.1): walk the JSON envelope and redact every string
+/// leaf in place. Applies the secret + home-path redactors in
+/// sequence; structural fields (numbers, bools, arrays of numbers)
+/// are untouched.
+///
+/// This is the single chokepoint between the in-memory `Event` and
+/// the on-disk JSONL / forwarded notification. Adding a new event
+/// variant or new hook attribute inherits this automatically.
+pub(crate) fn redact_envelope(value: &mut Value) {
+    match value {
+        Value::String(s) => {
+            let stage1 = crate::hooks::b0_helpers::redact_secrets(s);
+            let stage2 = crate::hooks::b0_helpers::redact_home_path(&stage1);
+            // Only allocate-and-replace if something actually changed.
+            if stage2 != *s {
+                *s = stage2.into_owned();
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_envelope(item);
+            }
+        }
+        Value::Object(map) => {
+            for v in map.values_mut() {
+                redact_envelope(v);
+            }
+        }
+        Value::Bool(_) | Value::Number(_) | Value::Null => {}
+    }
+}
+
+#[cfg(test)]
+mod redact_envelope_tests {
+    use super::*;
+
+    #[test]
+    fn redacts_string_leaf() {
+        let mut v = json!("oops sk-abcd1234567890efghij1234 leaked");
+        redact_envelope(&mut v);
+        assert!(v.as_str().unwrap().contains("[REDACTED:openai_key]"));
+    }
+
+    #[test]
+    fn redacts_nested_object() {
+        let mut v = json!({
+            "tool_input": {"key": "sk-ant-abcdefghijklmnop-9999"},
+            "ok": true,
+            "tokens": 42,
+        });
+        redact_envelope(&mut v);
+        let s = v["tool_input"]["key"].as_str().unwrap();
+        assert!(s.contains("[REDACTED:anthropic_key]"));
+        // Numbers + bools untouched.
+        assert_eq!(v["ok"], json!(true));
+        assert_eq!(v["tokens"], json!(42));
+    }
+
+    #[test]
+    fn redacts_inside_array() {
+        let mut v = json!(["clean", "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ok"]);
+        redact_envelope(&mut v);
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr[0].as_str().unwrap(), "clean");
+        assert!(arr[1].as_str().unwrap().contains("[REDACTED:github_pat]"));
+        assert_eq!(arr[2].as_str().unwrap(), "ok");
+    }
+
+    #[test]
+    fn redacts_home_paths_in_error_message() {
+        let mut v = json!({
+            "kind": "io_error",
+            "message": "failed to read /Users/alice/.ssh/id_rsa",
+        });
+        redact_envelope(&mut v);
+        let m = v["message"].as_str().unwrap();
+        assert!(m.contains("~/.ssh/id_rsa"), "got {m:?}");
+        assert!(!m.contains("alice"), "got {m:?}");
+    }
+
+    #[test]
+    fn clean_envelope_unchanged() {
+        let mut v = json!({
+            "trace_id": "t1",
+            "model": "claude-opus-4-7",
+            "input_tokens": 100,
+            "ok": true,
+        });
+        let before = v.clone();
+        redact_envelope(&mut v);
+        assert_eq!(v, before);
+    }
+
+    #[test]
+    fn redacts_both_secret_and_home_path_in_one_string() {
+        let mut v = json!("api_key=abcdefghij1234567890 saved to /home/bob/.env");
+        redact_envelope(&mut v);
+        let s = v.as_str().unwrap();
+        assert!(s.contains("[REDACTED:env_assignment]"), "got {s:?}");
+        assert!(s.contains("~/.env"), "got {s:?}");
     }
 }
