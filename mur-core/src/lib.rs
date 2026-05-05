@@ -22,6 +22,7 @@ pub mod community;
 pub mod context_api;
 pub mod conversations;
 pub mod dashboard;
+pub mod discovery;
 pub mod evolve;
 pub mod executor;
 pub mod extract;
