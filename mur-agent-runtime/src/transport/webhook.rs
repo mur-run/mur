@@ -166,6 +166,57 @@ fn body_sha256(body: &[u8]) -> String {
     hex::encode(h)
 }
 
+/// Listener handle returned by [`spawn_webhook_listener`].
+///
+/// Holds the resolved `local_addr` (helpful when the user binds
+/// `0.0.0.0:0` for ephemeral testing) and a `JoinHandle` so the
+/// supervisor can `.abort()` the task during graceful shutdown.
+pub struct WebhookHandle {
+    pub local_addr: std::net::SocketAddr,
+    join: tokio::task::JoinHandle<()>,
+}
+
+impl WebhookHandle {
+    /// Block until the listener task exits. Mirrors the TCP
+    /// listener's `await_shutdown` so supervisor wiring can use the
+    /// same pattern across transports.
+    pub async fn await_shutdown(self) {
+        let _ = self.join.await;
+    }
+
+    /// Force-stop the listener immediately. Used by the supervisor
+    /// on SIGTERM where we don't want to wait for in-flight requests.
+    pub fn abort(&self) {
+        self.join.abort();
+    }
+}
+
+/// Bind the Axum router to `bind:port` and start serving.
+///
+/// Synchronous up to the bind step so the supervisor can surface
+/// "address already in use" before the agent claims to be ready;
+/// once the listener is bound the actual `axum::serve` future moves
+/// onto a tokio task.
+pub async fn spawn_webhook_listener(
+    bind: &str,
+    port: u16,
+    state: WebhookState,
+) -> anyhow::Result<WebhookHandle> {
+    use anyhow::Context;
+    let addr = format!("{bind}:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .with_context(|| format!("bind webhook listener at {addr}"))?;
+    let local_addr = listener.local_addr().context("read local_addr")?;
+    let app = router(state);
+    let join = tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            tracing::warn!(error = %e, "webhook listener exited with error");
+        }
+    });
+    Ok(WebhookHandle { local_addr, join })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

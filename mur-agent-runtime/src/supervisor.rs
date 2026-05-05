@@ -1,6 +1,8 @@
 //! Agent runtime entrypoint — assembles profile, dispatcher, telemetry, and
 //! drives the stdio (and optionally Unix-socket) transports until SIGTERM.
 
+use anyhow::Context;
+
 use crate::companion::clock::SystemClock;
 use crate::entitlements::detect_warnings;
 use crate::hooks::{
@@ -27,6 +29,7 @@ use crate::transport::stdio::serve_stdio;
 use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
 use crate::transport::unix_socket::serve_unix;
+use crate::transport::webhook;
 use mur_common::identity::AgentIdentity;
 use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
 use std::path::PathBuf;
@@ -327,6 +330,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         stdio: profile.inner.transport.stdio,
         unix_socket: None,
         tcp: None,
+        webhook: None,
     };
 
     // Decide how to route telemetry notifications. Socket (if present) gets
@@ -438,6 +442,45 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         transport_tasks.push(tokio::spawn(async move {
             let _keep_tx_alive = tcp_shutdown_tx;
             tcp_handle.await_shutdown().await;
+        }));
+    }
+
+    // 7c. Conditionally spawn C5 webhook listener.
+    //     Mirrors 7b's pattern: bind synchronously so failures
+    //     surface before the agent claims ready, then drive
+    //     `axum::serve` on a transport task. HMAC secret comes
+    //     from the OS keychain — the `hmac_secret_ref` in
+    //     `profile.yaml` is the `service:account` lookup key
+    //     written by `mur agent webhook secret-set`.
+    if profile.inner.transport.webhook.enabled && !profile.inner.transport.webhook.bind.is_empty() {
+        let cfg = &profile.inner.transport.webhook;
+        let (svc, acct) = cfg.hmac_secret_ref.split_once(':').ok_or_else(|| {
+            anyhow::anyhow!(
+                "transport.webhook.hmac_secret_ref must be `service:account`, got `{}`",
+                cfg.hmac_secret_ref,
+            )
+        })?;
+        let secret = mur_common::secret::keychain_get(svc, acct)
+            .await
+            .with_context(|| format!("read webhook HMAC secret {svc}:{acct}"))?
+            .ok_or_else(|| anyhow::anyhow!(
+                "webhook enabled but HMAC secret missing — run `mur agent webhook secret-set {}`",
+                profile.inner.name,
+            ))?;
+        use secrecy::ExposeSecret;
+        let state =
+            webhook::WebhookState::new(&profile.inner.name, secret.expose_secret().as_bytes());
+        let handle = webhook::spawn_webhook_listener(&cfg.bind, cfg.port, state).await?;
+        info!(
+            "webhook listener at http://{} (slug: {})",
+            handle.local_addr, profile.inner.name,
+        );
+        // Stash the local addr in the lock file so peers (and the
+        // commander) can discover the live URL without re-reading
+        // profile.yaml; mirrors the TCP listener's lock entry.
+        lock_transports.webhook = Some(format!("http://{}", handle.local_addr));
+        transport_tasks.push(tokio::spawn(async move {
+            handle.await_shutdown().await;
         }));
     }
 

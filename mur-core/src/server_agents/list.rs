@@ -97,6 +97,7 @@ pub(crate) mod tests {
                 stdio: true,
                 unix_socket: None,
                 tcp: None,
+                webhook: None,
             },
             card_digest: "sha256:abc123".to_string(),
             capabilities: vec!["a2a.message.send".to_string()],
