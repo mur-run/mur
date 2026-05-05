@@ -18,6 +18,9 @@ pub mod platform;
 #[cfg(target_os = "macos")]
 pub mod vision;
 
+#[cfg(not(target_os = "macos"))]
+pub mod tesseract;
+
 pub struct OcrResult {
     pub text: String,
     pub engine_version: String,
