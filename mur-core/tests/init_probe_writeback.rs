@@ -30,6 +30,12 @@ async fn probe_populates_dims_for_unprobed_omlx_pick() {
         .unwrap();
     assert_eq!(probe.dims, 1024);
 
+    // TODO: replace this manual simulation with a headless invocation of
+    // select_local_embedding once stdin can be injected (the menu prompt
+    // currently blocks on io::stdin().read_line). Until then, the
+    // config-write side of the probe path is covered only by the manual
+    // smoke checklist.
+    //
     // Simulate what select_local_embedding does when dims==None:
     // construct the model, probe, then annotate.
     let mut m = DiscoveredModel {

@@ -3,6 +3,16 @@ use std::io::{self, Write};
 
 use crate::store::yaml::YamlStore;
 
+/// Build a single-threaded Tokio runtime for one-shot async work from sync
+/// callers. Both `discover_blocking` and the dims-probe path use this; both
+/// are short-lived, single-shot, and never nested.
+fn one_shot_rt() -> Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("building tokio runtime")
+}
+
 /// Run embedding + LLM discovery against all detected local runtimes,
 /// blocking the caller's thread. Uses a single-threaded Tokio runtime.
 /// When `refresh` is true, the on-disk cache is deleted first.
@@ -11,10 +21,7 @@ fn discover_blocking(refresh: bool) -> Result<Vec<crate::discovery::DiscoveredMo
         let cache_path = crate::discovery::cache::DiscoveryCache::default_path();
         let _ = std::fs::remove_file(&cache_path);
     }
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("building tokio runtime for discovery")?;
+    let rt = one_shot_rt()?;
     rt.block_on(crate::discovery::run_all())
 }
 
@@ -77,10 +84,7 @@ fn select_local_embedding(
                 Some(d) => d,
                 None => {
                     use crate::discovery::Discovery as _;
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .context("tokio runtime for embedding probe")?;
+                    let rt = one_shot_rt()?;
                     let probe = match m.backend {
                         Backend::Ollama => {
                             let d = crate::discovery::ollama::OllamaDiscovery::new(
@@ -149,6 +153,11 @@ fn select_local_embedding(
                         println!(
                             "  \u{26a0} ollama pull exited with {}; embedding not configured.",
                             s
+                        );
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        println!(
+                            "  \u{26a0} Pull interrupted; re-run `mur init` to retry."
                         );
                     }
                     Err(e) => {

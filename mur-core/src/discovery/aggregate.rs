@@ -87,6 +87,11 @@ fn build_menu(
     }
 
     // Top 2 preference-table entries NOT already in pulled set, with rank > 0.
+    // Note: dedup uses substring `contains`, so a preference-table prefix like
+    // "qwen3-embedding:0.6b" suppresses any pulled id that contains that
+    // exact substring. If a future preference entry uses a very short prefix
+    // (e.g. just "qwen3"), it would suppress unrelated families — keep
+    // preference prefixes specific.
     let pulled_ids: HashSet<&str> = available.iter().map(|m| m.id.as_str()).collect();
     let mut suggestions: Vec<(&str, u32)> = table
         .iter()
