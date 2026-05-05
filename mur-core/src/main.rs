@@ -13,6 +13,7 @@ mod cmd;
 mod community;
 mod context_api;
 mod conversations;
+mod daemon;
 mod dashboard;
 mod evolve;
 mod executor;
@@ -98,6 +99,16 @@ enum Commands {
         query: String,
         #[arg(long)]
         project: Option<String>,
+    },
+    /// Unified hook entry point for all AI tools (prompt/tool/stop/session-start)
+    Hook {
+        #[command(subcommand)]
+        event: HookEvent,
+    },
+    /// Manage the murmurd background daemon
+    Murmurd {
+        #[command(subcommand)]
+        action: MurmurdAction,
     },
     /// Run a workflow by name or semantic query
     Run {
@@ -419,6 +430,51 @@ enum Commands {
         #[command(subcommand)]
         cmd: cmd::source_cmd::SourceCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum HookEvent {
+    /// Handle UserPromptSubmit / BeforeAgent / beforeSubmitPrompt events
+    Prompt {
+        /// AI tool identifier (claude, gemini, cursor, copilot, opencode, amp)
+        #[arg(long, default_value = "claude")]
+        tool: String,
+    },
+    /// Handle PreToolUse / AfterTool / beforeShellExecution events
+    Tool {
+        /// AI tool identifier
+        #[arg(long, default_value = "claude")]
+        tool: String,
+    },
+    /// Handle Stop / SessionEnd events (triggers background pipeline)
+    Stop {
+        /// AI tool identifier
+        #[arg(long, default_value = "claude")]
+        tool: String,
+    },
+    /// Handle SessionStart events (injects L0 capability index in M2)
+    #[command(name = "session-start")]
+    SessionStart {
+        /// AI tool identifier
+        #[arg(long, default_value = "claude")]
+        tool: String,
+    },
+    /// Show hook statistics (skip rate, tier distribution, latency)
+    Stats,
+}
+
+#[derive(Subcommand)]
+enum MurmurdAction {
+    /// Start the murmurd daemon
+    Start {
+        /// Run in background (detach from terminal)
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Stop the murmurd daemon
+    Stop,
+    /// Show murmurd daemon status
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -1356,6 +1412,18 @@ async fn async_main() -> Result<()> {
             }
         }
         Commands::Inject { query, project: _ } => cmd::inject_cmd::cmd_inject(&query).await?,
+        Commands::Hook { event } => match event {
+            HookEvent::Prompt { tool } => cmd::hook::cmd_hook_prompt(&tool).await?,
+            HookEvent::Tool { tool } => cmd::hook::cmd_hook_tool(&tool).await?,
+            HookEvent::Stop { tool } => cmd::hook::cmd_hook_stop(&tool).await?,
+            HookEvent::SessionStart { tool } => cmd::hook::cmd_hook_session_start(&tool).await?,
+            HookEvent::Stats => cmd::hook::cmd_hook_stats()?,
+        },
+        Commands::Murmurd { action } => match action {
+            MurmurdAction::Start { detach } => cmd::murmurd::cmd_murmurd_start(detach)?,
+            MurmurdAction::Stop => cmd::murmurd::cmd_murmurd_stop()?,
+            MurmurdAction::Status => cmd::murmurd::cmd_murmurd_status()?,
+        },
         Commands::Run {
             query,
             fail_fast,
