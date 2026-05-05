@@ -24,7 +24,10 @@ status-level = "skip"
 # DB and full-text search code paths each can sit at 2-3 GB RSS during a
 # real probe.
 [[profile.ci.overrides]]
-filter = 'package(mur-core) and test(/lance|vector|qdrant|tantivy|index/i)'
+# Test names in mur-core are all lowercase, so no case-insensitive flag needed.
+# Nextest's filterset regex syntax uses `/pattern/` literals; `/i` flag is
+# not supported (use inline `(?i)` if needed).
+filter = 'package(mur-core) and test(/lance|vector|qdrant|tantivy|index/)'
 test-group = 'heavy'
 
 [test-groups]
