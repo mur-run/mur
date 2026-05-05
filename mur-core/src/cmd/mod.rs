@@ -14,6 +14,7 @@ pub(crate) mod evolve_cmd;
 pub(crate) mod hook;
 pub(crate) mod init;
 pub(crate) mod init_local;
+pub(crate) mod hook;
 pub(crate) mod inject_cmd;
 pub(crate) mod learn;
 pub(crate) mod misc;
