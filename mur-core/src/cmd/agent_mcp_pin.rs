@@ -93,8 +93,7 @@ pub fn compute_binary_sha256(path: &Path) -> Result<String> {
 /// startup verifier in M9.3 will recompute. Tool order from the
 /// upstream MCP is preserved (the spec reserves it as significant).
 ///
-/// Wired into `cmd_mcp_add` in M9.3 once the live MCP probe lands.
-#[allow(dead_code)] // wired by M9.3
+/// Wired into `cmd_mcp_pin` in M9.3.5 via `probe_mcp_descriptions`.
 pub fn compute_description_hash(tools: &[McpToolDescription]) -> String {
     let value = serde_json::json!({
         "tools": tools.iter().map(|t| serde_json::json!({
@@ -113,12 +112,84 @@ pub fn compute_description_hash(tools: &[McpToolDescription]) -> String {
 /// and as fed into the description hash. Mirrors `mur-agent-runtime::
 /// protocol::mcp_client::ToolInfo` but lives in mur-core so the
 /// install path doesn't need to spawn a runtime.
-#[allow(dead_code)] // wired by M9.3 (live MCP probe)
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct McpToolDescription {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
+}
+
+impl From<mur_agent_runtime::protocol::mcp_client::ToolInfo> for McpToolDescription {
+    fn from(t: mur_agent_runtime::protocol::mcp_client::ToolInfo) -> Self {
+        Self {
+            name: t.name,
+            description: t.description,
+            input_schema: t.input_schema,
+        }
+    }
+}
+
+/// Default budget for the live MCP probe (handshake, initialize,
+/// tools/list, shutdown). Override via `MUR_MCP_PROBE_TIMEOUT_S` for
+/// long-startup MCPs (model warm-up, network discovery).
+pub const DEFAULT_PROBE_TIMEOUT_SECS: u64 = 10;
+
+/// Read the probe timeout from `MUR_MCP_PROBE_TIMEOUT_S` env var,
+/// falling back to `DEFAULT_PROBE_TIMEOUT_SECS`. Invalid values
+/// (non-integer, zero) are silently ignored — better to fall back
+/// than refuse a probe over a bad env var.
+pub fn probe_timeout() -> std::time::Duration {
+    let secs = std::env::var("MUR_MCP_PROBE_TIMEOUT_S")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_PROBE_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Errors a live MCP probe can return. The CLI maps each onto a
+/// distinct user-facing message.
+#[derive(Debug, thiserror::Error)]
+pub enum ProbeError {
+    #[error("probe timed out after {0:?} (raise MUR_MCP_PROBE_TIMEOUT_S to extend)")]
+    Timeout(std::time::Duration),
+    #[error("MCP spawn / handshake failed: {0}")]
+    Mcp(#[from] mur_agent_runtime::protocol::mcp_client::McpError),
+}
+
+/// Spawn the MCP, run `initialize` + `tools/list` + `shutdown`, and
+/// return the canonical description hash plus the raw tools list.
+///
+/// Async because the underlying `McpClient` is async; callers in sync
+/// CLI commands wrap with `tokio::runtime::Handle::current().block_on`
+/// or `tokio::task::block_in_place`.
+pub async fn probe_mcp_descriptions(
+    entry: &McpServerEntry,
+    timeout: std::time::Duration,
+) -> Result<
+    (
+        String,
+        Vec<mur_agent_runtime::protocol::mcp_client::ToolInfo>,
+    ),
+    ProbeError,
+> {
+    let probe = async {
+        let mut client = mur_agent_runtime::protocol::mcp_client::McpClient::spawn(entry).await?;
+        let _info = client.initialize().await?;
+        let tools = client.list_tools().await?;
+        client.shutdown().await;
+        Ok::<_, mur_agent_runtime::protocol::mcp_client::McpError>(tools)
+    };
+
+    let tools = match tokio::time::timeout(timeout, probe).await {
+        Ok(Ok(tools)) => tools,
+        Ok(Err(e)) => return Err(ProbeError::Mcp(e)),
+        Err(_) => return Err(ProbeError::Timeout(timeout)),
+    };
+
+    let descriptions: Vec<McpToolDescription> = tools.iter().cloned().map(Into::into).collect();
+    let hash = compute_description_hash(&descriptions);
+    Ok((hash, tools))
 }
 
 /// Build a fully-populated `McpServerEntry` for a fresh install.
@@ -275,15 +346,17 @@ pub fn cmd_mcp_inspect(name: &str, server_id: Option<&str>) -> Result<i32> {
     Ok(worst as i32)
 }
 
-/// `mur agent mcp pin <name> --server <id> [--force]`. Re-computes the
-/// install-time binary hash + (optional) publisher metadata, shows
-/// the same prompt as `mur agent mcp add`, and persists the refreshed
-/// pin into `profile.yaml`. Updates `installed_at` to "now" so the
-/// audit trail records the re-approval.
+/// `mur agent mcp pin <name> --server <id> [--force] [--no-probe]`.
+/// Re-computes the install-time binary hash and, by default, also
+/// spawns the MCP to refresh the description hash (M9.3.5). On probe
+/// failure (timeout / spawn error) the pin still lands but
+/// `description_hash` stays None — the user sees a warning and can
+/// re-pin later.
 pub fn cmd_mcp_pin(
     name: &str,
     server_id: &str,
     force: bool,
+    no_probe: bool,
     publisher_name: Option<String>,
     publisher_homepage: Option<String>,
     publisher_registry_id: Option<String>,
@@ -299,6 +372,44 @@ pub fn cmd_mcp_pin(
         .with_context(|| format!("resolve command `{}`", entry.command))?;
     let new_hash = compute_binary_sha256(&resolved)
         .with_context(|| format!("hash binary at {}", resolved.display()))?;
+
+    // Live probe to refresh description_hash. Default on; --no-probe
+    // skips for MCPs that can't be cleanly probed (slow boot,
+    // side-effecting init, network discovery during startup, etc.).
+    // Probe failure persists `None` rather than failing the pin —
+    // user can re-pin once the issue is resolved.
+    let new_description_hash: Option<String> = if no_probe {
+        None
+    } else {
+        // Build a probe-ready entry with the latest binary so the
+        // McpClient spawns the same bytes we just hashed.
+        let probe_entry = mur_common::agent::McpServerEntry {
+            command: resolved.display().to_string(),
+            ..entry.clone()
+        };
+        match tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(probe_mcp_descriptions(&probe_entry, probe_timeout()))
+        }) {
+            Ok((hash, tools)) => {
+                tracing::info!(
+                    mcp = %entry.name,
+                    tools = tools.len(),
+                    "M9.3.5: live probe captured description hash",
+                );
+                Some(hash)
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: live MCP probe failed for `{server_id}` ({e}); \
+                     pin will record binary hash only — re-run \
+                     `mur agent mcp pin {name} {server_id}` once the MCP \
+                     is reachable to capture the description hash.",
+                );
+                None
+            }
+        }
+    };
 
     // Preserve existing publisher unless any new field is provided
     // (in which case the user's intent is to overwrite the metadata
@@ -353,6 +464,12 @@ pub fn cmd_mcp_pin(
     }
 
     entry.binary_sha256 = Some(new_hash);
+    if let Some(h) = new_description_hash {
+        entry.description_hash = Some(h);
+    }
+    // If probe was skipped or failed, leave existing description_hash
+    // intact (so `--no-probe` re-pins don't accidentally erase a
+    // previously-captured hash).
     entry.publisher = publisher;
     entry.installed_at = Some(chrono::Utc::now());
     crate::cmd::agent::save_profile(&path, &mut profile)?;
