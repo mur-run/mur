@@ -9,13 +9,16 @@
 //!   `speed`:   float32[1, 1]   — synthesis speed (1.0 = normal)
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use mur_common::agent::VoiceId;
 use ndarray::Array2;
 use ort::{session::Session, value::Tensor};
 
-/// Number of distinct phoneme tokens in Kokoro's IPA vocabulary.
+// Target: 178 entries matching hexgrad/Kokoro-82M tokenizer_config.json
+// Current: ~80 entries covering common English IPA — good enough for v1
+// TODO(D1.v2): download tokenizer_config.json and populate all 178 entries
 pub const KOKORO_VOCAB_SIZE: usize = 178;
 
 /// Output sample rate of the Kokoro ONNX model.
@@ -29,6 +32,8 @@ pub struct KokoroTokenizer;
 impl KokoroTokenizer {
     /// Convert `text` to a sequence of Kokoro phoneme token IDs.
     /// Returns an empty Vec for empty or whitespace-only input.
+    /// Unknown phonemes are skipped with a `tracing::warn` so audio issues
+    /// are diagnosable rather than silently producing garbled output.
     pub fn phonemize_and_encode(text: &str) -> Vec<i64> {
         let text = text.trim();
         if text.is_empty() {
@@ -37,7 +42,15 @@ impl KokoroTokenizer {
         let phonemes = espeakng_to_ipa(text);
         phonemes
             .chars()
-            .filter_map(|c| PHONEME_VOCAB.get(&c).copied())
+            .filter_map(|c| {
+                match PHONEME_VOCAB.get(&c).copied() {
+                    Some(id) => Some(id),
+                    None => {
+                        tracing::warn!("unknown phoneme: {:?}, skipping", c);
+                        None
+                    }
+                }
+            })
             .collect()
     }
 }
@@ -46,7 +59,9 @@ impl KokoroTokenizer {
 
 /// Loaded Kokoro ONNX session + style matrix.
 pub struct KokoroTts {
-    session: Session,
+    /// Wrapped in `Mutex` so `synthesize` can take `&self` (required for
+    /// `Box<dyn KokoroTtsTrait>` usage); `ort::Session::run` needs `&mut self`.
+    session: Mutex<Session>,
     /// Style matrix: 5 rows × 256 columns (one row per VoiceId).
     style_matrix: [[f32; 256]; 5],
     voice_id: VoiceId,
@@ -80,12 +95,12 @@ impl KokoroTts {
             style_matrix[row][col] = f32::from_le_bytes(chunk.try_into().unwrap());
         }
 
-        Ok(Self { session, style_matrix, voice_id })
+        Ok(Self { session: Mutex::new(session), style_matrix, voice_id })
     }
 
     /// Synthesize `text` to 24 kHz mono f32 PCM.
     /// Returns an empty Vec for empty / whitespace-only input.
-    pub fn synthesize(&mut self, text: &str) -> Result<Vec<f32>> {
+    pub fn synthesize(&self, text: &str) -> Result<Vec<f32>> {
         let token_ids = KokoroTokenizer::phonemize_and_encode(text);
         if token_ids.is_empty() {
             return Ok(vec![]);
@@ -109,7 +124,10 @@ impl KokoroTts {
             "style"  => style,
             "speed"  => speed,
         ];
-        let outputs = self.session.run(inputs)?;
+        // Hold the MutexGuard alive for the lifetime of `outputs` to satisfy
+        // the borrow checker (ort outputs borrow from the session).
+        let mut session_guard = self.session.lock().unwrap();
+        let outputs = session_guard.run(inputs)?;
 
         let (_shape, audio_slice) = outputs["audio"]
             .try_extract_tensor::<f32>()
@@ -137,8 +155,8 @@ fn espeakng_to_ipa(text: &str) -> String {
 // IPA character → Kokoro token ID.
 // Derived from hexgrad/Kokoro-82M tokenizer_config.json.
 // This is a representative subset covering common English phonemes.
-// Full 178-entry map must be populated from the upstream config before
-// shipping to avoid degraded audio on uncommon phonemes.
+// TODO(D1.v2): download tokenizer_config.json and populate all 178 entries
+// to avoid degraded audio on uncommon phonemes.
 static PHONEME_VOCAB: std::sync::LazyLock<std::collections::HashMap<char, i64>> =
     std::sync::LazyLock::new(|| {
         let mut m = std::collections::HashMap::new();
@@ -158,6 +176,49 @@ static PHONEME_VOCAB: std::sync::LazyLock<std::collections::HashMap<char, i64>> 
         m.insert('u', 29); m.insert('e', 30); m.insert('o', 31);
         // Stress markers
         m.insert('ˈ', 50); m.insert('ˌ', 51);
+        // Common English IPA consonants used by espeak-ng (IDs 52–100)
+        m.insert('ŋ', 52);  // as in "sing"
+        m.insert('ʃ', 53);  // as in "ship"
+        m.insert('ʒ', 54);  // as in "measure"
+        m.insert('θ', 55);  // as in "think"
+        m.insert('ð', 56);  // as in "this"
+        m.insert('ɹ', 57);  // American English r
+        m.insert('ʔ', 58);  // glottal stop
+        m.insert('ɐ', 59);  // near-open central vowel
+        m.insert('ɜ', 60);  // as in "bird" (British)
+        m.insert('ʍ', 61);  // voiceless w
+        m.insert('ɫ', 62);  // dark l
+        m.insert('ʤ', 63);  // as in "judge"
+        m.insert('ʦ', 64);  // ts affricate
+        m.insert('ʧ', 65);  // as in "church"
+        m.insert('ʋ', 66);  // labiodental approximant
+        m.insert('ɣ', 67);  // voiced velar fricative
+        m.insert('χ', 68);  // voiceless uvular fricative
+        m.insert('ʁ', 69);  // voiced uvular fricative
+        m.insert('ħ', 70);  // pharyngeal fricative
+        m.insert('ʕ', 71);  // voiced pharyngeal fricative
+        m.insert('ʡ', 72);  // epiglottal plosive
+        m.insert('ɦ', 73);  // breathy-voiced glottal
+        m.insert('ɬ', 74);  // lateral fricative
+        m.insert('ɮ', 75);  // voiced lateral fricative
+        m.insert('ɻ', 76);  // retroflex approximant
+        m.insert('ɽ', 77);  // retroflex flap
+        m.insert('ɖ', 78);  // retroflex plosive
+        m.insert('ʈ', 79);  // voiceless retroflex
+        m.insert('ɳ', 80);  // retroflex nasal
+        m.insert('ɭ', 81);  // retroflex lateral
+        m.insert('ʂ', 82);  // retroflex fricative
+        m.insert('ʐ', 83);  // voiced retroflex fricative
+        m.insert('ɴ', 84);  // uvular nasal
+        m.insert('ʟ', 85);  // velar lateral
+        m.insert('ɕ', 86);  // alveolo-palatal fricative
+        m.insert('ʑ', 87);  // voiced alveolo-palatal fricative
+        m.insert('ɥ', 88);  // labial-palatal approximant
+        m.insert('ʜ', 89);  // voiceless epiglottal fricative
+        m.insert('ʢ', 90);  // voiced epiglottal fricative
+        // ASCII alternatives that espeak-ng may output
+        m.insert('R', 57);  // alternative r representation (same as ɹ)
+        m.insert('N', 52);  // alternative ng representation (same as ŋ)
         m
     });
 
