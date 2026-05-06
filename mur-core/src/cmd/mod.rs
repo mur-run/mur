@@ -7,6 +7,7 @@ pub mod agent_export_gui;
 /// B0 M9.2 — install-time MCP hash + publisher prompt for `mur agent mcp add`.
 pub(crate) mod agent_mcp_pin;
 pub(crate) mod agent_rekey;
+pub mod agent_voice;
 /// Track C5 / M5.1 — webhook receiver config + CLI verbs.
 pub(crate) mod agent_webhook;
 pub(crate) mod community_cmd;

@@ -151,6 +151,7 @@ pub fn cmd_create(
         file_transfer: FileTransferConfig::default(),
         deployment: DeploymentConfig::default(),
         companion: CompanionConfig::default(),
+        voice: mur_common::agent::VoiceConfig::default(),
         trusted_peers: Vec::new(),
         created_at: now.clone(),
         updated_at: now,

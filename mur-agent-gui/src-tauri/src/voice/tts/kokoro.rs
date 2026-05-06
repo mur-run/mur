@@ -28,9 +28,9 @@ impl KokoroSession {
         let session = Session::builder()
             .context("ort Session builder")?
             .with_optimization_level(GraphOptimizationLevel::Level3)
-            .context("set optimization level")?
+            .map_err(|e| anyhow::anyhow!("set optimization level: {e:?}"))?
             .with_intra_threads(2)
-            .context("set intra threads")?
+            .map_err(|e| anyhow::anyhow!("set intra threads: {e:?}"))?
             .commit_from_file(onnx_path)
             .with_context(|| format!("loading Kokoro from {}", onnx_path.display()))?;
 
