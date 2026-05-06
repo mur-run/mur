@@ -6,6 +6,7 @@
 
 pub mod audio;
 pub mod download;
+pub mod network_audit;
 pub mod notifier;
 pub mod stt;
 pub mod tts;
