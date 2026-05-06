@@ -287,4 +287,3 @@ mod apply_llm_model_tests {
         assert!(cfg.llm.openai_url.is_none(), "Ollama must clear openai_url");
     }
 }
-

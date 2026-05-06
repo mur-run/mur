@@ -1062,16 +1062,13 @@ Run `mur learn` to extract new patterns from recent sessions.
         }
         "3" => {
             use crate::cmd::init_local::{
-                detect_local_runtimes, print_install_help, print_runtime_summary,
-                select_local_llm,
+                detect_local_runtimes, print_install_help, print_runtime_summary, select_local_llm,
             };
 
             let runtimes = detect_local_runtimes();
             print_runtime_summary(&runtimes);
 
-            if !runtimes.ollama_installed
-                && !runtimes.omlx_installed
-                && !runtimes.mlx_lm_installed
+            if !runtimes.ollama_installed && !runtimes.omlx_installed && !runtimes.mlx_lm_installed
             {
                 print_install_help(runtimes.apple_silicon);
             } else {
