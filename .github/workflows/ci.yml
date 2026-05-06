@@ -90,6 +90,8 @@ jobs:
             protobuf-compiler \
             libprotobuf-dev \
             libdbus-1-dev \
+            libasound2-dev \
+            libespeak-ng-dev \
             pkg-config
       - name: Install protobuf (macOS)
         if: runner.os == 'macOS'
@@ -141,6 +143,8 @@ jobs:
             protobuf-compiler \
             libprotobuf-dev \
             libdbus-1-dev \
+            libasound2-dev \
+            libespeak-ng-dev \
             pkg-config
       # `--no-deps` skips clippy on the ~800 dependency crates (linting them
       # serves no purpose since we can't fix them upstream from here). Saves

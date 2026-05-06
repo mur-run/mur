@@ -19,6 +19,7 @@ pub mod b0_helpers;
 pub mod companion_voice;
 pub mod ledger;
 pub mod telemetry;
+pub mod voice_input;
 
 pub use b0::B0SafetyHook;
 pub use chain::HookChain;
