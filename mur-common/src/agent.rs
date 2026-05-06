@@ -680,7 +680,7 @@ pub struct LockTransports {
 
 /// Kokoro 82M voice identity. Maps to the per-voice style vector
 /// embedded in the Kokoro ONNX model.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VoiceId {
     /// Default: Kokoro af_heart voice.
