@@ -478,3 +478,172 @@ pub fn verify_signed(path: &std::path::Path) -> Result<(), String> {
         Ok(())
     }
 }
+
+// ─────────────────────────────────────────────────────────────────
+// B0 rule 6 / M9.3 — MCP install-time pin verification.
+// ─────────────────────────────────────────────────────────────────
+
+/// Why a pinned MCP entry failed re-verification at startup. Used to
+/// drive the user-facing recovery prompt (`mur agent mcp inspect
+/// <name>`) so the message can specifically say "the binary changed"
+/// vs. "the description changed" rather than a generic mismatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinDriftReason {
+    /// The pinned binary path could not be resolved on disk. The user
+    /// either uninstalled the MCP without removing it from
+    /// profile.yaml or the binary moved. Treated as a soft fail (warn,
+    /// don't block) so the supervisor can still start.
+    BinaryMissing { path: String, io_error: String },
+    /// The pinned binary's SHA-256 did not match the recorded hash.
+    /// Hard fail — the binary on disk is not what was approved at
+    /// install time.
+    BinaryDrift { expected: String, actual: String },
+    /// I/O error while reading the binary (permissions / disk).
+    /// Treated as soft fail; rule 11 codesign check would have caught
+    /// the equivalent permission issue first.
+    BinaryReadError { path: String, io_error: String },
+}
+
+impl std::fmt::Display for PinDriftReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BinaryMissing { path, io_error } => {
+                write!(f, "binary at `{path}` cannot be located ({io_error})")
+            }
+            Self::BinaryDrift { expected, actual } => {
+                let exp_short = expected.chars().take(16).collect::<String>();
+                let act_short = actual.chars().take(16).collect::<String>();
+                write!(
+                    f,
+                    "binary SHA-256 changed (pinned: {exp_short}…, current: {act_short}…)"
+                )
+            }
+            Self::BinaryReadError { path, io_error } => {
+                write!(f, "binary at `{path}` could not be read ({io_error})")
+            }
+        }
+    }
+}
+
+/// Re-compute the SHA-256 of `path` and compare with `expected`. Used
+/// by `B0SafetyHook::on_startup` to enforce the rule-6 install-time
+/// pin on every supervisor start.
+///
+/// Mirrors the chunked stream-hash in `mur-core::cmd::agent_mcp_pin`
+/// so the install-side and verify-side outputs are byte-identical.
+/// Duplicated rather than imported to avoid the `mur-agent-runtime ←
+/// mur-core` dependency cycle this hook already takes pains to avoid.
+pub fn verify_mcp_binary_hash(
+    expected: &str,
+    path: &std::path::Path,
+) -> Result<(), PinDriftReason> {
+    use sha2::{Digest, Sha256};
+    use std::fs::File;
+    use std::io::Read;
+
+    let mut f = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            // ENOENT vs other I/O — distinguish so the user sees a
+            // clear "uninstalled?" hint rather than a generic error.
+            if e.kind() == std::io::ErrorKind::NotFound {
+                return Err(PinDriftReason::BinaryMissing {
+                    path: path.display().to_string(),
+                    io_error: e.to_string(),
+                });
+            }
+            return Err(PinDriftReason::BinaryReadError {
+                path: path.display().to_string(),
+                io_error: e.to_string(),
+            });
+        }
+    };
+
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = match f.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                return Err(PinDriftReason::BinaryReadError {
+                    path: path.display().to_string(),
+                    io_error: e.to_string(),
+                });
+            }
+        };
+        hasher.update(&buf[..n]);
+    }
+    let actual = hex::encode(hasher.finalize());
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(PinDriftReason::BinaryDrift {
+            expected: expected.to_string(),
+            actual,
+        })
+    }
+}
+
+#[cfg(test)]
+mod pin_verify_tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    /// Same SHA-256 fixture as `mur-core::cmd::agent_mcp_pin` so the
+    /// two halves of M9 stay in lockstep.
+    const HELLO_SHA: &str = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03";
+
+    #[test]
+    fn matches_pinned_hash_returns_ok() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"hello\n").unwrap();
+        assert!(verify_mcp_binary_hash(HELLO_SHA, f.path()).is_ok());
+    }
+
+    #[test]
+    fn case_insensitive_hash_match() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"hello\n").unwrap();
+        let upper: String = HELLO_SHA.chars().map(|c| c.to_ascii_uppercase()).collect();
+        assert!(verify_mcp_binary_hash(&upper, f.path()).is_ok());
+    }
+
+    #[test]
+    fn drift_returns_specific_reason() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"world\n").unwrap();
+        let err = verify_mcp_binary_hash(HELLO_SHA, f.path()).unwrap_err();
+        match err {
+            PinDriftReason::BinaryDrift { expected, actual } => {
+                assert_eq!(expected, HELLO_SHA);
+                assert_ne!(actual, HELLO_SHA);
+                assert_eq!(actual.len(), 64);
+            }
+            other => panic!("expected BinaryDrift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_binary_distinguished_from_read_error() {
+        let err = verify_mcp_binary_hash(HELLO_SHA, std::path::Path::new("/no/such/binary-xyz"))
+            .unwrap_err();
+        assert!(
+            matches!(err, PinDriftReason::BinaryMissing { .. }),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn drift_display_includes_short_hash_prefixes() {
+        let drift = PinDriftReason::BinaryDrift {
+            expected: "deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb".into(),
+            actual: "cafebabe00112233445566778899aabbccddeeff00112233445566778899aabb".into(),
+        };
+        let s = drift.to_string();
+        assert!(s.contains("deadbeef00112233"), "got {s}");
+        assert!(s.contains("cafebabe00112233"), "got {s}");
+        assert!(!s.contains("deadbeef00112233445566"), "no full hash leak");
+    }
+}
