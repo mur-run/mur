@@ -703,6 +703,17 @@ impl VoiceId {
             VoiceId::AmMichael => 4,
         }
     }
+
+    /// Canonical lowercase string representation (matches `FromStr` inputs).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            VoiceId::AfHeart => "af_heart",
+            VoiceId::AfBella => "af_bella",
+            VoiceId::AfNicole => "af_nicole",
+            VoiceId::AmAdam => "am_adam",
+            VoiceId::AmMichael => "am_michael",
+        }
+    }
 }
 
 impl std::str::FromStr for VoiceId {
@@ -1112,6 +1123,7 @@ publisher:
 #[cfg(test)]
 mod voice_tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn voice_config_round_trips() {
@@ -1127,5 +1139,25 @@ mod voice_tests {
         let legacy: AgentProfile = serde_yaml_ng::from_str(base).expect("parse without voice");
         assert!(!legacy.voice.enabled);
         assert_eq!(legacy.voice.voice_id, VoiceId::AfHeart);
+    }
+
+    #[test]
+    fn voice_id_from_str_roundtrips() {
+        let cases = [
+            ("af_heart", VoiceId::AfHeart),
+            ("af_bella", VoiceId::AfBella),
+            ("af_nicole", VoiceId::AfNicole),
+            ("am_adam", VoiceId::AmAdam),
+            ("am_michael", VoiceId::AmMichael),
+        ];
+        for (s, expected) in cases {
+            assert_eq!(VoiceId::from_str(s).unwrap(), expected);
+            assert_eq!(expected.as_str(), s);
+        }
+    }
+
+    #[test]
+    fn voice_id_from_str_rejects_unknown() {
+        assert!(VoiceId::from_str("bogus").is_err());
     }
 }
