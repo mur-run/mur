@@ -514,6 +514,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
         file_transfer: FileTransferConfig::default(),
         deployment: DeploymentConfig::default(),
         companion: CompanionConfig::default(),
+        voice: mur_common::agent::VoiceConfig::default(),
         trusted_peers: vec![],
         created_at: now.clone(),
         updated_at: now,
