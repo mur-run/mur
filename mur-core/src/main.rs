@@ -1259,6 +1259,11 @@ enum AgentMcpAction {
         /// Limit to a single MCP server entry; otherwise iterate all.
         #[arg(long = "server")]
         server: Option<String>,
+        /// Spawn the MCP and verify `tools/list` against the pinned
+        /// description hash (B0 rule 6 / M9.3.5). Off by default —
+        /// inspect stays fast; pass `--probe` for the active scan.
+        #[arg(long)]
+        probe: bool,
     },
     /// Re-compute and persist the install-time binary pin (and
     /// optionally refresh publisher metadata). Used after reviewing
@@ -1726,8 +1731,13 @@ async fn async_main() -> Result<()> {
                 AgentMcpAction::Rename { name, old, new } => {
                     cmd::agent::cmd_mcp_rename(&name, &old, &new)?
                 }
-                AgentMcpAction::Inspect { name, server } => {
-                    let code = cmd::agent_mcp_pin::cmd_mcp_inspect(&name, server.as_deref())?;
+                AgentMcpAction::Inspect {
+                    name,
+                    server,
+                    probe,
+                } => {
+                    let code =
+                        cmd::agent_mcp_pin::cmd_mcp_inspect(&name, server.as_deref(), probe)?;
                     if code != 0 {
                         std::process::exit(code);
                     }
