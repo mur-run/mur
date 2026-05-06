@@ -1,6 +1,8 @@
 //! VoiceNotifier — speaks companion messages via Kokoro TTS.
 //! Implements `companion::notifier::Notifier` so it slots into outbox step 11.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -26,14 +28,27 @@ impl KokoroTtsTrait for KokoroTts {
 /// Trait abstraction over `audio::play_pcm` so tests can inject a no-op
 /// player without triggering real cpal hardware access.
 pub trait AudioPlayerTrait: Send + Sync {
-    fn play_pcm(&self, samples: &[f32], sample_rate: u32) -> anyhow::Result<()>;
+    fn play_pcm(
+        &self,
+        samples: &[f32],
+        sample_rate: u32,
+        output_device: Option<&str>,
+    ) -> anyhow::Result<()>;
 }
 
 /// Production audio player — delegates to `audio::play_pcm`.
 struct DefaultAudioPlayer;
 
 impl AudioPlayerTrait for DefaultAudioPlayer {
-    fn play_pcm(&self, samples: &[f32], sample_rate: u32) -> anyhow::Result<()> {
+    fn play_pcm(
+        &self,
+        samples: &[f32],
+        sample_rate: u32,
+        output_device: Option<&str>,
+    ) -> anyhow::Result<()> {
+        // TODO: thread output_device through audio::play_pcm when that function
+        // gains device-selection support (audio::play_pcm currently uses the OS default)
+        let _ = output_device;
         audio::play_pcm(samples, sample_rate)
     }
 }
@@ -42,7 +57,7 @@ impl AudioPlayerTrait for DefaultAudioPlayer {
 
 pub struct VoiceNotifier {
     tts: Box<dyn KokoroTtsTrait>,
-    audio: Box<dyn AudioPlayerTrait>,
+    audio: Arc<dyn AudioPlayerTrait>,
     /// cpal output device name; None = OS default.
     output_device: Option<String>,
 }
@@ -52,7 +67,7 @@ impl VoiceNotifier {
     pub fn new(tts: KokoroTts, output_device: Option<String>) -> Self {
         Self {
             tts: Box::new(tts),
-            audio: Box::new(DefaultAudioPlayer),
+            audio: Arc::new(DefaultAudioPlayer),
             output_device,
         }
     }
@@ -62,13 +77,13 @@ impl VoiceNotifier {
     pub fn with_mock_tts(tts: impl KokoroTtsTrait + 'static) -> Self {
         struct NoopAudio;
         impl AudioPlayerTrait for NoopAudio {
-            fn play_pcm(&self, _samples: &[f32], _sample_rate: u32) -> anyhow::Result<()> {
+            fn play_pcm(&self, _: &[f32], _: u32, _: Option<&str>) -> anyhow::Result<()> {
                 Ok(())
             }
         }
         Self {
             tts: Box::new(tts),
-            audio: Box::new(NoopAudio),
+            audio: Arc::new(NoopAudio),
             output_device: None,
         }
     }
@@ -98,35 +113,19 @@ impl Notifier for VoiceNotifier {
         };
 
         // Play on a blocking thread — cpal requires synchronous calls.
-        // We clone the audio reference as a raw pointer trick is not needed;
-        // instead capture the AudioPlayerTrait reference via a shared wrapper.
-        // Use spawn_blocking with an Arc to avoid lifetime issues.
         let device = self.output_device.clone();
-        // SAFETY: We hold `self` alive for the duration of `await` below,
-        // so the reference remains valid. We transmute to 'static only to
-        // satisfy spawn_blocking's 'static bound; the join().await ensures
-        // the closure completes before we drop `self`.
-        //
-        // A cleaner approach: box the player behind an Arc.
-        // We restructure to use Arc<dyn AudioPlayerTrait> for spawn_blocking.
-        let _ = device; // captured but not yet threaded through play_pcm
+        let audio = Arc::clone(&self.audio);
+        let result = tokio::task::spawn_blocking(move || {
+            audio.play_pcm(&samples, KOKORO_SAMPLE_RATE, device.as_deref())
+        })
+        .await;
 
-        // Delegate to audio player — run blocking call in blocking thread pool.
-        // We cannot move `self.audio` (it's behind &self), so we call
-        // synchronously here. Note: VoiceNotifier::send is called from an
-        // async context that must not block — but the task description
-        // specifically calls for spawn_blocking. We use a small Arc workaround.
-        //
-        // For now: the `audio` field is not Arc, so we cannot move it into
-        // spawn_blocking. Instead, call it directly and document that callers
-        // should invoke `send` from a context that tolerates brief blocking
-        // (e.g. already inside spawn_blocking, or a dedicated audio thread).
-        //
-        // TODO(D1.v2): make audio: Arc<dyn AudioPlayerTrait + Send + Sync>
-        // and use spawn_blocking properly.
-        match self.audio.play_pcm(&samples, KOKORO_SAMPLE_RATE) {
-            Ok(()) => Ok(NotifyOutcome::Delivered),
-            Err(e) => Ok(NotifyOutcome::Failed(e)),
+        match result {
+            Ok(Ok(())) => Ok(NotifyOutcome::Delivered),
+            Ok(Err(e)) => Ok(NotifyOutcome::Failed(e)),
+            Err(join_err) => Ok(NotifyOutcome::Failed(anyhow::anyhow!(
+                "spawn_blocking panicked: {join_err}"
+            ))),
         }
     }
 }
