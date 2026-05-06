@@ -1,5 +1,69 @@
 # Changelog
 
+## v2.9.0 (2026-05-07) — D1 On-Device Voice (Kokoro TTS + whisper.cpp STT)
+
+### TL;DR
+
+Adds on-device voice I/O to `mur-agent-runtime`: **Kokoro 82M ONNX**
+synthesises speech at 24 kHz; **whisper.cpp large-v3-turbo q5_1**
+transcribes mic audio at 16 kHz. No audio or transcript leaves the
+device. B0 rule 18 enforced: STT transcripts wrapped in
+`<untrusted_voice_input>` spotlight tags before reaching any LLM.
+
+### 🆕 New — D1 Voice Stack
+
+- **Kokoro 82M ONNX TTS** (`ort 2.0`) — 5 built-in voices
+  (`af_heart`, `af_bella`, `af_nicole`, `am_adam`, `am_michael`);
+  espeak-ng G2P tokenizer; ~80-entry `PHONEME_VOCAB` with
+  `tracing::warn` on unknown phonemes; style matrix (5 × 256 f32)
+  loaded from `~/.mur/models/kokoro/kokoro-voices.bin`.
+- **whisper.cpp STT** (`whisper-rs 0.11`) — RMS-based `VadGate`
+  (configurable threshold + silence-frame count); `Mutex<WhisperContext>`
+  for `&self` API; transcription runs from a blocking thread.
+- **cpal audio I/O** — `capture_vad_gated` (16 kHz mono, VAD-gated,
+  polls at 10 ms); `play_pcm` (atomic position, done-channel, 60 s
+  timeout); `try_lock` in real-time callbacks (never blocks audio
+  thread); linear-interpolation resampler for non-native rates.
+- **`VoiceNotifier`** — implements the `Notifier` trait; slots into
+  companion outbox step 11 with zero changes to the 12-step loop;
+  `cpal` playback runs in `tokio::task::spawn_blocking`; injectable
+  `AudioPlayerTrait` + `KokoroTtsTrait` for test isolation.
+- **`VoiceInputHook`** (B0 rule 18) — implements `Hook::on_prompt_submit`;
+  captures mic audio, transcribes via whisper.cpp, wraps in
+  `UntrustedWrapper { tag: "untrusted_voice_input", source: "mic" }` +
+  `"after_untrusted_input"` turn flag. Same path as D3 drag-drop and
+  C2 Telegram.
+- **Compile-time privacy audit** (`voice/network_audit.rs`) — build
+  fails if any voice module imports `reqwest`, `hyper`,
+  `tokio::net::*`, or `std::net::*`; extends the existing companion
+  network audit.
+- **`mur agent voice enable/disable/download`** CLI — toggles
+  `profile.yaml` `voice.enabled` + `voice_id`; `VoiceConfig` added
+  to `AgentProfile` with `#[serde(default)]` (existing profiles
+  load unchanged).
+- **Model download scaffolding** — `ModelSpec` + `ensure_model` +
+  SHA-256 verify pipeline; paths under `~/.mur/models/whisper/` and
+  `~/.mur/models/kokoro/`; full download progress bar + real SHA-256
+  values deferred to D1 v2.
+
+### 🛠️ CI
+
+- Test + Clippy Linux jobs now install `libasound2-dev` +
+  `libespeak-ng-dev` (required by `cpal` + `espeak-ng` crates).
+
+### 📦 Notes for distributors
+
+- New runtime deps: `whisper-rs 0.11`, `ort 2.0` (load-dynamic),
+  `cpal 0.15`, `espeak-ng 0.1`, `sha2 0.10`, `indicatif 0.17`.
+- Linux: ensure `libasound2` + `libespeak-ng1` are installed.
+- macOS: no extra system deps (CoreAudio built-in; espeak-ng ships
+  a vendored data bundle).
+- Model weights NOT bundled; download separately via
+  `mur agent voice download <name>` (stub in v2.9.0; full UX in D1 v2).
+- Cookbook: `docs/cookbook/d1-voice.md`.
+
+---
+
 ## v2.8.0 (2026-05-06) — B0 Eval Harness + Baseline
 
 ### TL;DR
