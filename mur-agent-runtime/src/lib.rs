@@ -30,3 +30,4 @@ pub mod supervisor;
 pub mod task_runner;
 pub mod telemetry_writer;
 pub mod transport;
+pub mod voice;

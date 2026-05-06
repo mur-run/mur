@@ -88,6 +88,13 @@ sled = { workspace = true }
 # default-features so we don't pull native-tls; rustls keeps the dep tree
 # consistent with reqwest.
 teloxide = { version = "0.13", default-features = false, features = ["rustls", "throttle", "cache-me"] }
+# D1 voice — TTS + STT (Tasks 3-8)
+indicatif = "0.17"   # progress bar for download
+ort = { version = "2.0.0-rc.12", features = ["load-dynamic", "ndarray"] }   # ONNX Runtime for Kokoro TTS
+ndarray = "0.17"                                           # tensor arrays for ort
+espeak-ng = "0.1"                                           # espeak-ng G2P for Kokoro tokenizer (pure Rust, no bindgen)
+whisper-rs = { version = "0.11", features = [] }            # whisper.cpp STT bindings (CPU-only; no metal to keep CI clean)
+cpal = "0.15"                                               # cross-platform audio I/O (mic capture + speaker playback)
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

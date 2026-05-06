@@ -1115,6 +1115,28 @@ enum AgentAction {
         #[command(subcommand)]
         action: AgentEvalAction,
     },
+    /// Manage voice I/O (TTS + STT) for an agent.
+    Voice {
+        /// Agent name.
+        name: String,
+        #[command(subcommand)]
+        action: VoiceAction,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum VoiceAction {
+    /// Enable voice I/O (TTS + STT) for an agent.
+    Enable {
+        /// Kokoro voice ID (default: af_heart).
+        /// Valid: af_heart, af_bella, af_nicole, am_adam, am_michael.
+        #[arg(long)]
+        voice_id: Option<String>,
+    },
+    /// Disable voice I/O for an agent.
+    Disable,
+    /// Download voice model weights (~1.4 GB; SHA-256 verified).
+    Download,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1885,6 +1907,15 @@ async fn async_main() -> Result<()> {
                 AgentWebhookAction::Show => cmd::agent_webhook::cmd_webhook_show(&agent)?,
                 AgentWebhookAction::SecretSet { value } => {
                     cmd::agent_webhook::cmd_webhook_secret_set(&agent, value.as_deref()).await?
+                }
+            },
+            AgentAction::Voice { name, action } => match action {
+                VoiceAction::Enable { voice_id } => {
+                    cmd::agent_voice::cmd_voice_enable(&name, voice_id.as_deref())?
+                }
+                VoiceAction::Disable => cmd::agent_voice::cmd_voice_disable(&name)?,
+                VoiceAction::Download => {
+                    anyhow::bail!("voice download not yet implemented; will ship in D1 Task 3");
                 }
             },
         },
