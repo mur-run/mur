@@ -870,6 +870,19 @@ pub struct ActiveHours {
     pub end: String,
 }
 
+impl AgentProfile {
+    /// Minimal valid profile for tests — no voice, no MCP, no skills.
+    ///
+    /// Available in all compilation modes so integration tests in
+    /// dependent crates can call it (unlike `#[cfg(test)]` items which
+    /// are invisible to downstream test binaries).
+    #[doc(hidden)]
+    pub fn default_for_tests() -> Self {
+        serde_yaml_ng::from_str(include_str!("../tests/fixtures/minimal_profile.yaml"))
+            .expect("minimal profile fixture")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
