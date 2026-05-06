@@ -1108,7 +1108,7 @@ fn mur_ask_cli_summarize_model_changes_cache_key() {
     assert!(reindex.status.success());
 
     // Run 1 — default model (config has none, so falls back to ask.model =
-    // "qwen3:14b"). Warms the cache under that key.
+    // "qwen3:4b"). Warms the cache under that key.
     let out1 = Command::new(env!("CARGO_BIN_EXE_mur"))
         .args(["ask", "--json", "what was discussed?"])
         .env("MUR_HOME", &mur_home)
@@ -1119,14 +1119,14 @@ fn mur_ask_cli_summarize_model_changes_cache_key() {
         .expect("ask 1");
     assert!(out1.status.success());
 
-    // Run 2 — override model to qwen3:4b. Cache key is different → must
+    // Run 2 — override model to qwen3:9b. Cache key is different → must
     // fresh-compress, cache_hits == 0.
     let out2 = Command::new(env!("CARGO_BIN_EXE_mur"))
         .args([
             "ask",
             "--json",
             "--summarize-model",
-            "qwen3:4b",
+            "qwen3:9b",
             "what was discussed?",
         ])
         .env("MUR_HOME", &mur_home)
@@ -1155,13 +1155,13 @@ fn mur_ask_cli_summarize_model_changes_cache_key() {
         "run 2 must fresh-compress under the new key; got: {stdout2}"
     );
 
-    // Run 3 — same --summarize-model qwen3:4b. Must now hit run 2's cache.
+    // Run 3 — same --summarize-model qwen3:9b. Must now hit run 2's cache.
     let out3 = Command::new(env!("CARGO_BIN_EXE_mur"))
         .args([
             "ask",
             "--json",
             "--summarize-model",
-            "qwen3:4b",
+            "qwen3:9b",
             "what was discussed?",
         ])
         .env("MUR_HOME", &mur_home)

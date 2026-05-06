@@ -128,11 +128,13 @@ fn select_local_embedding(
                     config.embedding.dimensions = dims;
                     config.embedding.api_key_env = Some("OMLX_API_KEY".into());
                     config.embedding.openai_url = Some("http://localhost:8000/v1".into());
-                    println!();
-                    println!(
-                        "  \u{26a0} Set OMLX_API_KEY before first use (any non-empty value works on localhost):"
-                    );
-                    println!("      export OMLX_API_KEY=local");
+                    if std::env::var("OMLX_API_KEY").unwrap_or_default().is_empty() {
+                        println!();
+                        println!(
+                            "  \u{26a0} Set OMLX_API_KEY before first use (any non-empty value works on localhost):"
+                        );
+                        println!("      export OMLX_API_KEY=local");
+                    }
                 }
             }
             Ok(true)
@@ -1059,83 +1061,28 @@ Run `mur learn` to extract new patterns from recent sessions.
             );
         }
         "3" => {
-            // All local — detect Ollama and (on Apple Silicon) MLX, then
-            // present a backend-appropriate model menu.
             use crate::cmd::init_local::{
-                LocalBackend, MLX_RECS, OLLAMA_RECS, detect_local_runtimes, prompt_backend,
-                select_model,
+                detect_local_runtimes, print_install_help, print_runtime_summary, select_local_llm,
             };
 
             let runtimes = detect_local_runtimes();
-            match prompt_backend(&runtimes)? {
-                None => {
-                    // Neither runtime present — keep current config so the
-                    // user can re-run after installing.
-                }
-                Some(LocalBackend::Ollama) => {
-                    let m = select_model(OLLAMA_RECS)?;
-                    config.llm.provider = "ollama".to_string();
-                    config.llm.model = m.id.to_string();
-                    config.llm.api_key_env = None;
-                    config.llm.openai_url = None;
+            print_runtime_summary(&runtimes);
 
-                    let available = discover_blocking(refresh_discovery)?;
+            if !runtimes.ollama_installed && !runtimes.omlx_installed && !runtimes.mlx_lm_installed
+            {
+                print_install_help(runtimes.apple_silicon);
+            } else {
+                let available = discover_blocking(refresh_discovery)?;
+                let wrote_llm = select_local_llm(&mut config, &available)?;
+                if wrote_llm {
                     select_local_embedding(&mut config, &available)?;
                     crate::store::config::save_config(&config)?;
                     println!(
-                        "  \u{2713} Config: ollama/{} (LLM) + {}/{} (search)",
-                        m.id, config.embedding.provider, config.embedding.model
-                    );
-                }
-                Some(LocalBackend::OMlx) => {
-                    let m = select_model(MLX_RECS)?;
-                    // oMLX serves an OpenAI-compatible API on
-                    // localhost:8000; route through the existing openai
-                    // provider with that base URL.
-                    config.llm.provider = "openai".to_string();
-                    config.llm.model = m.id.to_string();
-                    config.llm.api_key_env = Some("OMLX_API_KEY".to_string());
-                    config.llm.openai_url =
-                        Some(LocalBackend::OMlx.openai_base_url().unwrap().to_string());
-
-                    let available = discover_blocking(refresh_discovery)?;
-                    select_local_embedding(&mut config, &available)?;
-                    crate::store::config::save_config(&config)?;
-                    println!(
-                        "  \u{2713} Config: oMLX/{} (LLM) + {}/{} (search)",
-                        m.id, config.embedding.provider, config.embedding.model
-                    );
-                    println!();
-                    println!(
-                        "  \u{26a0} Launch oMLX.app (menu bar \u{2192} Start Server) and pull"
-                    );
-                    println!("      the model via its admin dashboard:  {}", m.id);
-                    println!(
-                        "      export OMLX_API_KEY=local   # any non-empty value; oMLX skips auth on localhost"
-                    );
-                }
-                Some(LocalBackend::MlxLm) => {
-                    let m = select_model(MLX_RECS)?;
-                    // mlx-lm CLI: user runs `mlx_lm.server` themselves on
-                    // :8080. Same OpenAI-compat plumbing as oMLX.
-                    config.llm.provider = "openai".to_string();
-                    config.llm.model = m.id.to_string();
-                    config.llm.api_key_env = Some("MLX_API_KEY".to_string());
-                    config.llm.openai_url =
-                        Some(LocalBackend::MlxLm.openai_base_url().unwrap().to_string());
-
-                    let available = discover_blocking(refresh_discovery)?;
-                    select_local_embedding(&mut config, &available)?;
-                    crate::store::config::save_config(&config)?;
-                    println!(
-                        "  \u{2713} Config: mlx-lm/{} (LLM) + {}/{} (search)",
-                        m.id, config.embedding.provider, config.embedding.model
-                    );
-                    println!();
-                    println!("  \u{26a0} Start the mlx-lm server in a separate terminal:");
-                    println!("      mlx_lm.server --model {} --port 8080", m.id);
-                    println!(
-                        "      export MLX_API_KEY=local   # any non-empty value; mlx_lm.server ignores it"
+                        "  \u{2713} Config: {}/{} (LLM) + {}/{} (search)",
+                        config.llm.provider,
+                        config.llm.model,
+                        config.embedding.provider,
+                        config.embedding.model
                     );
                 }
             }
