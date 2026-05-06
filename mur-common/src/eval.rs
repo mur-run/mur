@@ -34,7 +34,7 @@ pub enum EvalDecision {
 
 /// Which upstream benchmark the case came from. Determines how the
 /// aggregator buckets results in its markdown report.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvalSuite {
     /// Princeton/ETH/Anthropic AgentDojo (Apache-2.0, NeurIPS 2024).

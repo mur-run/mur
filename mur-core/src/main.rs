@@ -1107,6 +1107,27 @@ enum AgentAction {
         #[command(subcommand)]
         action: AgentWebhookAction,
     },
+    /// Aggregate B0 eval JSONL into a markdown report (B0 M11.4).
+    /// Reads a JSONL file produced by `scripts/eval/{agentdojo,harmbench}/run.py`,
+    /// buckets by `(suite, attack_category)`, applies the spec
+    /// thresholds, exits 0 if all gates pass / 1 otherwise.
+    Eval {
+        #[command(subcommand)]
+        action: AgentEvalAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AgentEvalAction {
+    /// Aggregate JSONL → markdown report. Exits 1 on any spec-gate failure.
+    Report {
+        /// Path to the JSONL file to aggregate.
+        #[arg(long = "jsonl")]
+        jsonl: std::path::PathBuf,
+        /// Optional markdown output path. Default: stdout.
+        #[arg(long = "out")]
+        out: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1846,6 +1867,14 @@ async fn async_main() -> Result<()> {
                 AgentSecretAction::List => cmd::agent::cmd_secret_list(&agent).await?,
                 AgentSecretAction::Delete { key } => {
                     cmd::agent::cmd_secret_delete(&agent, &key).await?
+                }
+            },
+            AgentAction::Eval { action } => match action {
+                AgentEvalAction::Report { jsonl, out } => {
+                    let code = cmd::agent_eval::cmd_eval_report(&jsonl, out.as_deref())?;
+                    if code != 0 {
+                        std::process::exit(code);
+                    }
                 }
             },
             AgentAction::Webhook { agent, action } => match action {
