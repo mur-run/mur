@@ -88,6 +88,8 @@ sled = { workspace = true }
 # default-features so we don't pull native-tls; rustls keeps the dep tree
 # consistent with reqwest.
 teloxide = { version = "0.13", default-features = false, features = ["rustls", "throttle", "cache-me"] }
+# D1 voice — TTS + STT (Tasks 3-8)
+indicatif = "0.17"   # progress bar for download
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
