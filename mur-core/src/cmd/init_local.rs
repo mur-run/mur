@@ -9,7 +9,6 @@
 //! Both MLX backends serve an OpenAI-compatible HTTP API; they only
 //! differ in launch flow and default port (oMLX → :8000, mlx-lm → :8080).
 
-use anyhow::Result;
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -23,79 +22,6 @@ pub struct LocalRuntimes {
     pub omlx_installed: bool,
     pub mlx_lm_installed: bool,
     pub apple_silicon: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ModelRec {
-    pub id: &'static str,
-    pub display: &'static str,
-    pub ram_gb: f32,
-    pub note: &'static str,
-}
-
-// Curated 2026-Q2 picks. Multilingual-first ordering — leading option must
-// handle Chinese well because mur has a meaningful zh user base.
-pub const OLLAMA_RECS: &[ModelRec] = &[
-    ModelRec {
-        id: "qwen3.5:4b",
-        display: "qwen3.5:4b",
-        ram_gb: 3.5,
-        note: "multilingual, 256K context",
-    },
-    ModelRec {
-        id: "gemma4:e2b",
-        display: "gemma4:e2b",
-        ram_gb: 7.2,
-        note: "Google frontier MoE, multimodal",
-    },
-    ModelRec {
-        id: "qwen3.5:9b",
-        display: "qwen3.5:9b",
-        ram_gb: 6.6,
-        note: "Qwen larger, multilingual",
-    },
-];
-
-pub const MLX_RECS: &[ModelRec] = &[
-    ModelRec {
-        id: "mlx-community/Qwen3.5-4B-4bit",
-        display: "Qwen3.5-4B (MLX 4bit)",
-        ram_gb: 3.0,
-        note: "multilingual, 256K context",
-    },
-    ModelRec {
-        id: "mlx-community/gemma-4-e2b-4bit",
-        display: "Gemma4-E2B (MLX 4bit)",
-        ram_gb: 4.5,
-        note: "Google frontier, multimodal",
-    },
-    ModelRec {
-        id: "mlx-community/Qwen3.5-9B-4bit",
-        display: "Qwen3.5-9B (MLX 4bit)",
-        ram_gb: 5.5,
-        note: "better quality",
-    },
-];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalBackend {
-    Ollama,
-    /// Native macOS app (https://omlx.ai), serves on :8000.
-    OMlx,
-    /// `pip install mlx-lm`, user runs `mlx_lm.server` on :8080.
-    MlxLm,
-}
-
-impl LocalBackend {
-    /// Default OpenAI-compatible base URL for MLX-family backends; `None`
-    /// for Ollama (uses its own provider plumbing).
-    pub fn openai_base_url(self) -> Option<&'static str> {
-        match self {
-            LocalBackend::Ollama => None,
-            LocalBackend::OMlx => Some("http://localhost:8000/v1"),
-            LocalBackend::MlxLm => Some("http://localhost:8080/v1"),
-        }
-    }
 }
 
 /// Write a discovered LLM model into the llm section of config.
@@ -123,10 +49,6 @@ fn apply_llm_model(config: &mut mur_common::config::Config, m: &DiscoveredModel)
 /// after triggering a pull (caller must re-run `mur init` to select the
 /// newly pulled model).
 ///
-/// Currently has no production caller — wire-up into `cmd_init`'s
-/// interactive flow is a separate follow-up. The `#[allow(dead_code)]`
-/// silences clippy `-D warnings` until that lands.
-#[allow(dead_code)]
 pub fn select_local_llm(
     config: &mut mur_common::config::Config,
     available: &[DiscoveredModel],
@@ -314,61 +236,6 @@ pub fn print_install_help(apple_silicon: bool) {
     println!("    Re-run `mur init` after installing.");
 }
 
-/// Pick the local backend. Priority on Apple Silicon: oMLX > mlx-lm >
-/// Ollama (MLX is ~15-30% faster, lower memory; oMLX has the friendlier
-/// admin UX so we prefer it over the CLI when both are present).
-/// Returns `None` only when no runtime is installed.
-pub fn prompt_backend(rt: &LocalRuntimes) -> Result<Option<LocalBackend>> {
-    print_runtime_summary(rt);
-
-    if !rt.ollama_installed && !rt.omlx_installed && !rt.mlx_lm_installed {
-        print_install_help(rt.apple_silicon);
-        return Ok(None);
-    }
-
-    if rt.omlx_installed {
-        println!();
-        println!("  → Using oMLX (Apple Silicon native).");
-        return Ok(Some(LocalBackend::OMlx));
-    }
-
-    if rt.mlx_lm_installed {
-        println!();
-        println!("  → Using mlx-lm (Apple Silicon native).");
-        return Ok(Some(LocalBackend::MlxLm));
-    }
-
-    Ok(Some(LocalBackend::Ollama))
-}
-
-/// Render a numbered model menu and read the user's choice. Returns the
-/// chosen `ModelRec`. Defaults to the first entry on empty / invalid input.
-pub fn select_model(recs: &[ModelRec]) -> Result<&ModelRec> {
-    println!();
-    println!("LLM model for pattern learning:");
-    for (i, r) in recs.iter().enumerate() {
-        println!(
-            "  {}) {:<32} — {}, ~{:.1}GB RAM",
-            i + 1,
-            r.display,
-            r.note,
-            r.ram_gb
-        );
-    }
-    print!("Choose [1-{}] (default: 1): ", recs.len());
-    io::stdout().flush()?;
-    let mut s = String::new();
-    io::stdin().read_line(&mut s)?;
-    let idx = s
-        .trim()
-        .parse::<usize>()
-        .ok()
-        .filter(|&n| n >= 1 && n <= recs.len())
-        .map(|n| n - 1)
-        .unwrap_or(0);
-    Ok(&recs[idx])
-}
-
 #[cfg(test)]
 mod apply_llm_model_tests {
     use super::*;
@@ -421,55 +288,3 @@ mod apply_llm_model_tests {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rec_lists_nonempty_and_well_formed() {
-        for recs in [OLLAMA_RECS, MLX_RECS] {
-            assert!(!recs.is_empty(), "rec list must not be empty");
-            for r in recs {
-                assert!(!r.id.is_empty(), "id required");
-                assert!(!r.display.is_empty(), "display required");
-                assert!(!r.note.is_empty(), "note required");
-                assert!(r.ram_gb > 0.0, "ram_gb must be positive");
-            }
-        }
-    }
-
-    #[test]
-    fn mlx_ids_use_mlx_community_prefix() {
-        for r in MLX_RECS {
-            assert!(
-                r.id.starts_with("mlx-community/"),
-                "MLX recs must reference mlx-community/* on HF: got {}",
-                r.id
-            );
-        }
-    }
-
-    #[test]
-    fn ollama_ids_use_tag_form() {
-        for r in OLLAMA_RECS {
-            assert!(
-                r.id.contains(':'),
-                "Ollama model ids should be `name:tag`: got {}",
-                r.id
-            );
-        }
-    }
-
-    #[test]
-    fn backend_base_urls() {
-        assert_eq!(LocalBackend::Ollama.openai_base_url(), None);
-        assert_eq!(
-            LocalBackend::OMlx.openai_base_url(),
-            Some("http://localhost:8000/v1")
-        );
-        assert_eq!(
-            LocalBackend::MlxLm.openai_base_url(),
-            Some("http://localhost:8080/v1")
-        );
-    }
-}
