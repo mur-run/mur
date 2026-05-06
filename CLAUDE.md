@@ -258,3 +258,4 @@ When making changes to this repo, check whether the following need to be updated
    intended behavior are ambiguous, ask for clarification before coding.
    Exception: in auto mode, make reasonable assumptions for low-risk decisions
    and flag them in the response.
+3. **SSH Connection**: User Desktop Commander to ssh to remote server instead of BASH/SSH.
