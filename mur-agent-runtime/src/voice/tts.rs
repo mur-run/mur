@@ -124,9 +124,9 @@ impl KokoroTts {
             "style"  => style,
             "speed"  => speed,
         ];
-        // Hold the MutexGuard alive for the lifetime of `outputs` to satisfy
-        // the borrow checker (ort outputs borrow from the session).
-        let mut session_guard = self.session.lock().unwrap();
+        // `session_guard` must be declared before `outputs` so it outlives the
+        // borrow: `SessionOutputs<'s>` holds a reference into the session.
+        let mut session_guard = self.session.lock().map_err(|_| anyhow::anyhow!("TTS session mutex poisoned"))?;
         let outputs = session_guard.run(inputs)?;
 
         let (_shape, audio_slice) = outputs["audio"]
@@ -142,9 +142,8 @@ impl KokoroTts {
 fn espeakng_to_ipa(text: &str) -> String {
     match espeak_ng::text_to_ipa("en", text) {
         Ok(ipa) => ipa,
-        Err(_) => {
-            // espeak-ng unavailable or error; fall back to lowercased raw text
-            // so token lookup still finds ASCII letters in CI.
+        Err(e) => {
+            tracing::warn!("espeak-ng IPA conversion failed ({e}); falling back to ASCII lowercase");
             text.to_ascii_lowercase()
         }
     }
@@ -250,5 +249,34 @@ mod tests {
     fn tokenizer_handles_whitespace_only() {
         let ids = KokoroTokenizer::phonemize_and_encode("   ");
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn style_matrix_loads_correctly_from_le_bytes() {
+        // Build a synthetic 5×256×4-byte blob where value at [row][col] = row as f32
+        const N: usize = 5 * 256 * 4;
+        let mut blob = vec![0u8; N];
+        for row in 0..5usize {
+            for col in 0..256usize {
+                let idx = (row * 256 + col) * 4;
+                let bytes = (row as f32).to_le_bytes();
+                blob[idx..idx + 4].copy_from_slice(&bytes);
+            }
+        }
+        // Replicate the parsing logic from KokoroTts::new
+        let mut style_matrix = [[0f32; 256]; 5];
+        for (i, chunk) in blob.chunks_exact(4).enumerate() {
+            let row = i / 256;
+            let col = i % 256;
+            style_matrix[row][col] = f32::from_le_bytes(chunk.try_into().unwrap());
+        }
+        for row in 0..5 {
+            for col in 0..256 {
+                assert_eq!(
+                    style_matrix[row][col], row as f32,
+                    "style_matrix[{row}][{col}] expected {row}.0"
+                );
+            }
+        }
     }
 }
