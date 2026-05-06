@@ -104,7 +104,7 @@ The writer thread silently no-ops; no `telemetry/*.jsonl` is created. The B0 hoo
 
 ## 4. Crashlogs
 
-If the runtime panics, the supervisor captures a panic backtrace to `~/.mur/agents/<name>/crashlogs/<timestamp>.log`. This file stays local. Backtraces may include source file paths and variable names; we recommend not sharing crashlogs with third parties without redacting them. The redactor in §3.2 does **not** currently apply to crashlog content (deferred to v1.1).
+If the runtime panics, the supervisor captures a panic backtrace to `~/.mur/agents/<name>/crashlogs/<RFC3339-utc>-<pid>.log` (M10). This file stays local. The redactor from §3.2 (credential patterns + home-directory paths) is applied to both the panic payload and the captured backtrace before it lands on disk; the unredacted panic still surfaces on stderr (your terminal session) so debugging stays interactive. Backtraces may still include source file paths and variable names that aren't classified by the redactor — review before sharing externally.
 
 ## 5. Bridges and platform disclosures
 
