@@ -14,6 +14,7 @@ mur agent voice enable my-agent
 mur agent voice enable my-agent --voice-id am_michael
 
 # Download the model weights (~1.4 GB total; SHA-256 verified).
+# Note: download is a stub in D1 v1; full progress + SHA-256 verify lands in D1 v2.
 mur agent voice download my-agent
 
 # Disable voice.
@@ -80,9 +81,10 @@ moment any voice module imports `reqwest`, `hyper`, or any
 
 ## Troubleshooting
 
-**No audio output / input:** run `mur agent voice list-devices` to
-see what cpal sees. On macOS, grant microphone permission in System
-Settings → Privacy & Security.
+**No audio output / input:** cpal uses the OS default device. On macOS,
+grant microphone permission in System Settings → Privacy & Security.
+On Linux, ensure PulseAudio or ALSA is configured and the user is in
+the `audio` group.
 
 **Poor transcription:** the large-v3-turbo model performs best with
 clear speech in a quiet room. VAD threshold defaults to RMS 0.01;
