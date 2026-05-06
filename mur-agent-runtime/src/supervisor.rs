@@ -95,6 +95,13 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         candidate
     };
 
+    // ── B0 M10: install redacted crashlog hook now that agent_home
+    // is resolved. Any panic from this point on (including tokio
+    // tasks spawned later) writes to <agent_home>/crashlogs/<ts>.log
+    // with the M8.1 redactor applied. The unredacted panic still
+    // surfaces on stderr via the chained previous hook.
+    crate::crashlog::install_panic_hook(agent_home.clone());
+
     let profile = match Profile::load(&agent_home) {
         Ok(p) => p,
         Err(e) => {

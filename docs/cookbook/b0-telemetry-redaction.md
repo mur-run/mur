@@ -134,6 +134,38 @@ This silences the writer thread; nothing is appended to
 `telemetry/*.jsonl`. The hook chain still runs (B0 rules 1–22 still
 fire) — only the on-disk record is suppressed.
 
+## Crashlogs (rule 9 extension / M10)
+
+Panics in the runtime are captured to
+`~/.mur/agents/<name>/crashlogs/<RFC3339-utc>-<pid>.log`. The same
+two-pass redactor that covers telemetry (credential patterns +
+home-directory paths) is applied to the panic payload AND the
+captured backtrace before the file is written. The unredacted panic
+still surfaces on stderr (your terminal session) so debugging stays
+interactive — only the on-disk record is scrubbed.
+
+Filename format: timestamp uses RFC3339 with millisecond precision
+(colons replaced by hyphens for filesystem safety) plus the PID, so
+rapid-fire panics from the same process don't overwrite each other:
+
+```
+~/.mur/agents/my-agent/crashlogs/2026-05-06T08-15-32.123Z-12345.log
+```
+
+Caveat: the redactor only knows the patterns documented above —
+backtraces may still include source file paths, type names, and
+non-classified variable values. Review crashlogs before sharing
+externally; the redactor is a defense-in-depth layer, not a
+guarantee.
+
+To clear old crashlogs:
+
+```bash
+rm -rf ~/.mur/agents/<name>/crashlogs
+```
+
+The supervisor recreates the directory on the next panic.
+
 ## What still leaves the device
 
 Telemetry redaction does NOT cover what the agent itself sends to its
