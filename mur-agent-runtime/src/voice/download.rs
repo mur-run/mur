@@ -8,6 +8,7 @@
 
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 /// Static spec describing a downloadable model file.
@@ -53,14 +54,16 @@ pub fn ensure_model(
         if actual == spec.sha256 {
             return Ok(final_path);
         }
-        eprintln!(
-            "warn: {} sha256 mismatch (expected {}, got {}); re-downloading",
-            spec.name, spec.sha256, actual
+        tracing::warn!(
+            name = spec.name,
+            expected = spec.sha256,
+            actual = %actual,
+            "sha256 mismatch on cached file; re-downloading"
         );
         std::fs::remove_file(&final_path)?;
     }
 
-    let tmp_path = final_path.with_extension("bin.tmp");
+    let tmp_path = final_path.with_extension("tmp");
     download_to(&tmp_path, spec.url, on_progress)?;
 
     let actual = sha256_of_file(&tmp_path)?;
@@ -81,10 +84,19 @@ pub fn ensure_model(
 }
 
 fn sha256_of_file(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let f = std::fs::File::open(path)
+        .with_context(|| format!("open {}", path.display()))?;
+    let mut reader = BufReader::with_capacity(65536, f);
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = reader.read(&mut buf)
+            .with_context(|| format!("read {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -96,8 +108,8 @@ fn download_to(dest: &Path, url: &str, on_progress: impl Fn(u64, u64)) -> Result
     if let Some(local) = url.strip_prefix("file://") {
         let bytes = std::fs::read(local)
             .with_context(|| format!("test file-url copy from {url}"))?;
-        on_progress(bytes.len() as u64, bytes.len() as u64);
         std::fs::write(dest, &bytes)?;
+        on_progress(bytes.len() as u64, bytes.len() as u64);
         return Ok(());
     }
     bail!(
@@ -129,6 +141,8 @@ mod tests {
     fn already_present_matching_hash_skips_download() {
         let tmp = tempfile::tempdir().unwrap();
         let content = b"pretend model bytes";
+        // Box::leak is required: ModelSpec.sha256 is &'static str, but the hash
+        // is computed at runtime in this test — leak produces a 'static reference.
         let expected_sha: &'static str = Box::leak(sha256_hex(content).into_boxed_str());
         let target_dir = tmp.path().join("models/kokoro");
         std::fs::create_dir_all(&target_dir).unwrap();
@@ -150,6 +164,8 @@ mod tests {
         let src = tempfile::NamedTempFile::new().unwrap();
         let content = b"kokoro model data";
         std::fs::write(src.path(), content).unwrap();
+        // Box::leak is required: ModelSpec.sha256 is &'static str, but the hash
+        // is computed at runtime in this test — leak produces a 'static reference.
         let expected_sha: &'static str = Box::leak(sha256_hex(content).into_boxed_str());
 
         let mur_tmp = tempfile::tempdir().unwrap();

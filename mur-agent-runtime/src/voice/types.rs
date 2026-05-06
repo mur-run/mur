@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::voice::download::ModelSpec;
 
 /// Resolved on-disk paths for both voice models.
+#[derive(Debug)]
 pub struct VoiceModelPaths {
     /// Path to ggml-large-v3-turbo-q5_1.bin (whisper.cpp format).
     pub whisper: PathBuf,
