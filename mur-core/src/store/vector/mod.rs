@@ -20,8 +20,9 @@ pub mod qdrant;
 pub mod tests;
 
 pub use self::lancedb::LanceDbStore;
+// QdrantStore selected at runtime via factory; re-exported for `tests/qdrant_smoke.rs`.
 #[cfg(all(feature = "qdrant", feature = "sources"))]
-#[allow(unused_imports)] // QdrantStore selected at runtime via factory; re-exported for `tests/qdrant_smoke.rs`
+#[allow(unused_imports)]
 pub use self::qdrant::QdrantStore;
 
 /// An embedded chunk ready to be stored.
