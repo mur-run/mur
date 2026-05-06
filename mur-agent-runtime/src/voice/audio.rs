@@ -73,17 +73,20 @@ pub fn capture_vad_gated(
     let mut silent_count = 0usize;
 
     loop {
+        // Poll every 10 ms; VAD frame = 100 ms → ≤10% extra capture after silence detected.
         std::thread::sleep(Duration::from_millis(10));
         if std::time::Instant::now() >= deadline {
             break;
         }
 
-        let samples = buf.lock().unwrap().clone();
-        if samples.len() < frame {
-            continue;
-        }
-
-        let last_frame = &samples[samples.len() - frame..];
+        let last_frame: Vec<f32> = {
+            let guard = buf.lock().unwrap();
+            if guard.len() < frame {
+                continue;
+            }
+            guard[guard.len() - frame..].to_vec()
+        };
+        // guard dropped here — audio thread can now proceed
         // Downmix multichannel to mono for VAD analysis.
         let mono: Vec<f32> = last_frame
             .chunks(channels)
@@ -101,7 +104,7 @@ pub fn capture_vad_gated(
         }
     }
 
-    drop(stream); // stop capture
+    drop(stream); // stops the capture stream; in-flight callbacks may still complete
 
     let raw = buf.lock().unwrap().clone();
 
@@ -145,6 +148,8 @@ pub fn play_pcm(samples: &[f32], sample_rate: u32) -> Result<()> {
     let pos_c = pos.clone();
     let samples_c = samples_arc.clone();
     // done_tx is moved into the callback; we need to send only once.
+    // cpal calls the output callback sequentially on a single audio thread,
+    // so `sent` is safe to mutate without atomic primitives.
     let mut sent = false;
     let stream = device.build_output_stream(
         &config,
@@ -184,7 +189,11 @@ fn build_input_stream(
             device.build_input_stream(
                 &config.clone().into(),
                 move |data: &[f32], _| {
-                    b.lock().unwrap().extend_from_slice(data);
+                    if let Ok(mut guard) = b.try_lock() {
+                        guard.extend_from_slice(data);
+                    } else {
+                        tracing::warn!("audio: capture buffer locked, dropping frame");
+                    }
                 },
                 |err| tracing::error!("audio capture error: {err}"),
                 None,
@@ -197,7 +206,11 @@ fn build_input_stream(
                 move |data: &[i16], _| {
                     let floats: Vec<f32> =
                         data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                    b.lock().unwrap().extend_from_slice(&floats);
+                    if let Ok(mut guard) = b.try_lock() {
+                        guard.extend_from_slice(&floats);
+                    } else {
+                        tracing::warn!("audio: capture buffer locked, dropping frame");
+                    }
                 },
                 |err| tracing::error!("audio capture error: {err}"),
                 None,
@@ -212,7 +225,11 @@ fn build_input_stream(
                         .iter()
                         .map(|&s| (s as f32 / u16::MAX as f32) * 2.0 - 1.0)
                         .collect();
-                    b.lock().unwrap().extend_from_slice(&floats);
+                    if let Ok(mut guard) = b.try_lock() {
+                        guard.extend_from_slice(&floats);
+                    } else {
+                        tracing::warn!("audio: capture buffer locked, dropping frame");
+                    }
                 },
                 |err| tracing::error!("audio capture error: {err}"),
                 None,
@@ -231,6 +248,9 @@ pub fn resample_to_16k(samples: &[f32], src_rate: u32) -> Vec<f32> {
     }
     let ratio = src_rate as f64 / 16_000.0;
     let out_len = (samples.len() as f64 / ratio) as usize;
+    if out_len == 0 {
+        return Vec::new();
+    }
     (0..out_len)
         .map(|i| {
             let src_pos = i as f64 * ratio;
@@ -279,6 +299,24 @@ mod tests {
         let input = vec![0.0_f32, 1.0];
         let out = resample_to_16k(&input, 32_000);
         assert_eq!(out.len(), 1);
+        assert!((out[0] - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resample_single_sample_at_high_rate_does_not_panic() {
+        // 1 sample at 44100 Hz → out_len = (1 / 2.75625) as usize = 0 → empty vec
+        let out = resample_to_16k(&[0.5], 44_100);
+        // Must not panic; result is empty (out_len rounds to 0) or a single sample
+        let _ = out; // just verify no panic
+    }
+
+    #[test]
+    fn resample_upsample_8k_to_16k() {
+        // 8 samples at 8 kHz → 16 samples at 16 kHz
+        let input: Vec<f32> = vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7];
+        let out = resample_to_16k(&input, 8_000);
+        assert_eq!(out.len(), 16);
+        // First output sample maps to src_pos=0.0 → input[0] exactly
         assert!((out[0] - 0.0).abs() < 1e-6);
     }
 }
