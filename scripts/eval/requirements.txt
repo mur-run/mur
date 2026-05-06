@@ -1,0 +1,25 @@
+# mur B0 eval harness — pinned upstream deps (M11.1).
+#
+# Both packages are pinned to specific versions so re-runs against a
+# given mur tag are reproducible. Bump these only as part of a deliberate
+# eval-harness update PR; the resulting drift in pass-rates should be
+# noted in `eval-results/v<X.Y.Z>.jsonl`.
+#
+# License compatibility: AgentDojo Apache-2.0 + HarmBench CC-BY-4.0 —
+# both compatible with mur's MIT. Attribution: scripts/eval/LICENSES.md.
+
+# AgentDojo — indirect-injection benchmark (Princeton/ETH/Anthropic 2024).
+# Pinned to the published v0.1.32 wheel; later versions may add new
+# environments that the M11.2 case-selection seed wouldn't cover.
+agentdojo==0.1.32
+
+# HarmBench — jailbreak + agentic-misuse benchmark (CAIS 2024).
+# Released as a GitHub repo, not a wheel; pip+git URL with commit
+# hash for full reproducibility. Bump the hash to update.
+harmbench @ git+https://github.com/centerforaisafety/HarmBench.git@v1.0.0
+
+# Driver glue — keep deps minimal. The harness orchestrates upstream
+# packages + spawns the mur runtime; it doesn't need a heavy framework.
+pydantic>=2.0,<3.0
+typer>=0.12,<1.0
+rich>=13.0,<14.0
