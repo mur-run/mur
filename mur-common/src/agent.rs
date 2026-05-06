@@ -44,6 +44,9 @@ pub struct AgentProfile {
     /// continue to load without this block).
     #[serde(default)]
     pub companion: CompanionConfig,
+    /// Voice I/O configuration (D1). Default = disabled.
+    #[serde(default)]
+    pub voice: VoiceConfig,
     /// Pubkeys of bridges (and other LLM-less peers) this agent will accept
     /// signed envelopes from. Empty = accept no bridge traffic. Default = empty.
     #[serde(default)]
@@ -672,6 +675,53 @@ pub struct LockTransports {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// Voice I/O configuration (D1 — Kokoro 82M TTS + whisper.cpp STT)
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Kokoro 82M voice identity. Maps to the per-voice style vector
+/// embedded in the Kokoro ONNX model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceId {
+    /// Default: Kokoro af_heart voice.
+    #[default]
+    AfHeart,
+    AfBella,
+    AfNicole,
+    AmAdam,
+    AmMichael,
+}
+
+impl VoiceId {
+    /// Index into the Kokoro voices.bin style matrix (row index).
+    pub fn style_index(&self) -> usize {
+        match self {
+            VoiceId::AfHeart => 0,
+            VoiceId::AfBella => 1,
+            VoiceId::AfNicole => 2,
+            VoiceId::AmAdam => 3,
+            VoiceId::AmMichael => 4,
+        }
+    }
+}
+
+/// Per-agent voice I/O configuration (D1).
+/// Default = disabled so existing profiles continue to load unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct VoiceConfig {
+    /// Whether TTS (Kokoro) + STT (whisper.cpp) are enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Kokoro voice identity for TTS output. Default: af_heart.
+    #[serde(default)]
+    pub voice_id: VoiceId,
+    /// Optional cpal input device name for mic capture.
+    /// None means the OS default input device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_device: Option<String>,
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // Companion subsystem (Phase 1.1+) — see
 // docs/superpowers/specs/2026-04-29-mur-companion-phase-1-1-design.md §3.1
 // ──────────────────────────────────────────────────────────────────────────
@@ -1038,5 +1088,26 @@ publisher:
         let out = serde_yaml_ng::to_string(&entry).unwrap();
         assert!(!out.contains("homepage:"), "got {out}");
         assert!(!out.contains("registry_id:"), "got {out}");
+    }
+}
+
+#[cfg(test)]
+mod voice_tests {
+    use super::*;
+
+    #[test]
+    fn voice_config_round_trips() {
+        // Base: use the canonical minimal fixture and append a voice: block.
+        let base = include_str!("../tests/fixtures/profile_p0a_minimal.yaml");
+        let yaml = format!("{base}voice:\n  enabled: true\n  voice_id: af_bella\n");
+
+        let profile: AgentProfile = serde_yaml_ng::from_str(&yaml).expect("parse with voice");
+        assert!(profile.voice.enabled);
+        assert_eq!(profile.voice.voice_id, VoiceId::AfBella);
+
+        // Legacy profiles (no voice: block) must still load.
+        let legacy: AgentProfile = serde_yaml_ng::from_str(base).expect("parse without voice");
+        assert!(!legacy.voice.enabled);
+        assert_eq!(legacy.voice.voice_id, VoiceId::AfHeart);
     }
 }
