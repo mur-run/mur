@@ -13,9 +13,11 @@ artefacts and writes them into `~/.mur/agents/<name>/profile.yaml`:
 1. **Binary SHA-256** of the resolved `command` path. Detects "the
    bytes on disk changed" — even between two signed versions from the
    same publisher.
-2. **Description hash** (deferred to M9.3.5) — SHA-256 over the
-   canonical-JSON of the MCP's `tools/list` response. Catches the
-   pure-prompt-injection update where the binary doesn't change but a
+2. **Description hash** (M9.3.5) — SHA-256 over the canonical-JSON of
+   the MCP's `tools/list` response. Captured at install time + on
+   every `mur agent mcp pin`; verified on demand via
+   `mur agent mcp inspect --probe`. Catches the pure-prompt-injection
+   update where the binary doesn't change but a
    tool's description gains a "IGNORE PREVIOUS INSTRUCTIONS …"
    prefix.
 3. **Publisher metadata** (display-only) — name + optional homepage +
@@ -103,14 +105,55 @@ branching:
 |---|---|
 | 0 | Clean — pin matches current state |
 | 1 | Binary drift (the binary on disk has changed) |
-| 2 | (reserved for M9.3.5) Description drift |
-| 3 | (reserved for M9.3.5) Both drifted |
+| 2 | Description drift — `--probe` only; live `tools/list` differs from pinned hash |
+| 3 | Both drifted — `--probe` only; binary AND descriptions changed |
 | 4 | Missing pin — pre-M9 entry, run `mur agent mcp pin` to start enforcing |
 | 5 | Binary missing — pinned binary not on disk anymore |
 
-Without `--server`, inspect reports the **worst** status across all
-configured MCPs so a script can `if mur agent mcp inspect my-agent;
-then …` and bail on any drift.
+Codes 2 + 3 only fire when you pass `--probe` (default `inspect` is
+binary-only and fast). Without `--server`, inspect reports the
+**worst** status across all configured MCPs so a script can
+`if mur agent mcp inspect my-agent; then …` and bail on any drift.
+
+## Periodic drift checks (`--probe`)
+
+Default `mur agent mcp inspect` only re-hashes the binary on disk —
+fast, no MCP spawn. To catch description rug-pulls (the binary
+didn't change but a tool description did), pass `--probe`:
+
+```bash
+mur agent mcp inspect my-agent --server weather --probe
+```
+
+This spawns the MCP, sends `initialize` + `tools/list`, computes the
+canonical-JSON SHA-256, and compares against the pinned
+`description_hash`. Output adds:
+
+```
+  pinned descr:   9a01b2c3…c7e2
+  current descr:  3f4abca8…b81c
+  description status: DESCRIPTION DRIFT
+  hint:           the MCP's tools/list changed since install; review
+                  the new tool descriptions then `mur agent mcp pin
+                  my-agent weather` to re-approve, …
+```
+
+The probe budget defaults to 10 s; raise it via env var for
+slow-startup MCPs (model warm-up, network discovery during
+initialization):
+
+```bash
+MUR_MCP_PROBE_TIMEOUT_S=30 mur agent mcp inspect my-agent --probe
+```
+
+Probe failure (timeout, spawn error) is non-fatal — inspect prints
+`<probe failed: …>` and falls back to the binary-only status. Pass
+`--no-probe` (on `pin`, not `inspect`) to skip the spawn entirely.
+
+A reasonable cadence is: run `--probe` after every MCP-publisher
+update + any time `mur agent doctor` flags an unpinned entry. CI
+pipelines can wire `mur agent mcp inspect <agent> --probe` into the
+post-deploy sanity check; non-zero exit → drift → manual review.
 
 ## Pre-M9 profile migration
 
