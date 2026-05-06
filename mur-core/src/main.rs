@@ -1269,6 +1269,11 @@ enum AgentMcpAction {
         /// Skip the y/N re-approval prompt.
         #[arg(long)]
         force: bool,
+        /// Skip the live MCP probe (M9.3.5). Use for MCPs that can't
+        /// be cleanly probed (slow boot, side-effecting init, etc.).
+        /// `description_hash` stays at its previous value.
+        #[arg(long = "no-probe")]
+        no_probe: bool,
         #[arg(long = "publisher-name")]
         publisher_name: Option<String>,
         #[arg(long = "publisher-homepage")]
@@ -1731,6 +1736,7 @@ async fn async_main() -> Result<()> {
                     name,
                     server_id,
                     force,
+                    no_probe,
                     publisher_name,
                     publisher_homepage,
                     publisher_registry_id,
@@ -1738,6 +1744,7 @@ async fn async_main() -> Result<()> {
                     &name,
                     &server_id,
                     force,
+                    no_probe,
                     publisher_name,
                     publisher_homepage,
                     publisher_registry_id,
