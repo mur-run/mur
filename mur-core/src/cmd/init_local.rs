@@ -159,9 +159,7 @@ pub fn select_local_llm(
                 .expect("auto/pulled rows always carry a model");
             apply_llm_model(config, m);
             if m.backend == Backend::OMlx
-                && std::env::var("OMLX_API_KEY")
-                    .unwrap_or_default()
-                    .is_empty()
+                && std::env::var("OMLX_API_KEY").unwrap_or_default().is_empty()
             {
                 println!();
                 println!(
