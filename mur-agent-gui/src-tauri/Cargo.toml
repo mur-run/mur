@@ -112,7 +112,7 @@ libc = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 # whisper.cpp Metal backend — Apple-only; enabling on Linux/Windows breaks
 # CMake (it looks for the Foundation framework which only exists on macOS).
-whisper-rs = { version = "0.14", default-features = false, features = ["metal"] }
+whisper-rs = { version = "0.11", default-features = false, features = ["metal"] }
 # Track C3 / M-c3.3 — Services menu channel. `objc2` exposes the
 # Objective-C runtime; `objc2-app-kit` and `objc2-foundation` give us
 # NSPasteboard / NSApplication / NSString bindings used by the

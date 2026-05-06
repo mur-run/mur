@@ -185,10 +185,15 @@ mod tests {
 
     #[test]
     fn hash_mismatch_returns_error() {
+        let src = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(src.path(), b"real content").unwrap();
+        let url: &'static str =
+            Box::leak(format!("file://{}", src.path().display()).into_boxed_str());
+
         let mur_tmp = tempfile::tempdir().unwrap();
         let spec = ModelSpec {
             name: "bad.onnx",
-            url: "file:///dev/null",
+            url,
             sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             subdir: "kokoro",
         };
