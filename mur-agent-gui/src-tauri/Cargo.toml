@@ -70,7 +70,7 @@ tempfile = "3"
 
 # ───── voice (D1 / M1) ─────
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["copy-dylibs", "load-dynamic"] }
-whisper-rs = { version = "0.14", default-features = false }
+whisper-rs = { version = "0.11", default-features = false }
 cpal = "0.16"
 hound = "3"
 dasp_ring_buffer = "0.11"
