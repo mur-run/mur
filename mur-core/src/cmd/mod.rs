@@ -1,5 +1,7 @@
 pub(crate) mod agent;
 pub mod agent_companion;
+/// B0 M11.4 — eval-harness JSONL → markdown report aggregator.
+pub(crate) mod agent_eval;
 pub mod agent_export;
 pub mod agent_export_gui;
 /// B0 M9.2 — install-time MCP hash + publisher prompt for `mur agent mcp add`.
