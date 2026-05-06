@@ -1,7 +1,7 @@
 //! Model path helpers and download specs.
 
-use std::path::PathBuf;
 use crate::voice::download::ModelSpec;
+use std::path::PathBuf;
 
 /// Resolved on-disk paths for both voice models.
 #[derive(Debug)]

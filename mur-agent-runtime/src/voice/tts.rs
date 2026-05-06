@@ -42,13 +42,11 @@ impl KokoroTokenizer {
         let phonemes = espeakng_to_ipa(text);
         phonemes
             .chars()
-            .filter_map(|c| {
-                match PHONEME_VOCAB.get(&c).copied() {
-                    Some(id) => Some(id),
-                    None => {
-                        tracing::warn!("unknown phoneme: {:?}, skipping", c);
-                        None
-                    }
+            .filter_map(|c| match PHONEME_VOCAB.get(&c).copied() {
+                Some(id) => Some(id),
+                None => {
+                    tracing::warn!("unknown phoneme: {:?}, skipping", c);
+                    None
                 }
             })
             .collect()
@@ -76,8 +74,7 @@ impl KokoroTts {
             .commit_from_file(onnx_path)
             .context("load kokoro onnx")?;
 
-        let style_bytes = std::fs::read(voices_path)
-            .context("read kokoro-voices.bin")?;
+        let style_bytes = std::fs::read(voices_path).context("read kokoro-voices.bin")?;
 
         const STYLE_DIM: usize = 256;
         const N_VOICES: usize = 5;
@@ -95,7 +92,11 @@ impl KokoroTts {
             style_matrix[row][col] = f32::from_le_bytes(chunk.try_into().unwrap());
         }
 
-        Ok(Self { session: Mutex::new(session), style_matrix, voice_id })
+        Ok(Self {
+            session: Mutex::new(session),
+            style_matrix,
+            voice_id,
+        })
     }
 
     /// Synthesize `text` to 24 kHz mono f32 PCM.
@@ -107,13 +108,11 @@ impl KokoroTts {
         }
 
         let n = token_ids.len();
-        let tokens_arr = Array2::from_shape_vec((1, n), token_ids)
-            .context("build tokens array")?;
+        let tokens_arr = Array2::from_shape_vec((1, n), token_ids).context("build tokens array")?;
         let tokens = Tensor::from_array(tokens_arr).context("build tokens tensor")?;
 
         let style_row = self.style_matrix[self.voice_id.style_index()].to_vec();
-        let style_arr = Array2::from_shape_vec((1, 256), style_row)
-            .context("build style array")?;
+        let style_arr = Array2::from_shape_vec((1, 256), style_row).context("build style array")?;
         let style = Tensor::from_array(style_arr).context("build style tensor")?;
 
         let speed_arr = Array2::from_elem((1, 1), 1.0f32);
@@ -126,7 +125,10 @@ impl KokoroTts {
         ];
         // `session_guard` must be declared before `outputs` so it outlives the
         // borrow: `SessionOutputs<'s>` holds a reference into the session.
-        let mut session_guard = self.session.lock().map_err(|_| anyhow::anyhow!("TTS session mutex poisoned"))?;
+        let mut session_guard = self
+            .session
+            .lock()
+            .map_err(|_| anyhow::anyhow!("TTS session mutex poisoned"))?;
         let outputs = session_guard.run(inputs)?;
 
         let (_shape, audio_slice) = outputs["audio"]
@@ -143,7 +145,9 @@ fn espeakng_to_ipa(text: &str) -> String {
     match espeak_ng::text_to_ipa("en", text) {
         Ok(ipa) => ipa,
         Err(e) => {
-            tracing::warn!("espeak-ng IPA conversion failed ({e}); falling back to ASCII lowercase");
+            tracing::warn!(
+                "espeak-ng IPA conversion failed ({e}); falling back to ASCII lowercase"
+            );
             text.to_ascii_lowercase()
         }
     }
@@ -160,64 +164,84 @@ static PHONEME_VOCAB: std::sync::LazyLock<std::collections::HashMap<char, i64>> 
     std::sync::LazyLock::new(|| {
         let mut m = std::collections::HashMap::new();
         m.insert('\0', 0i64); // pad
-        m.insert(' ',  1);    // word boundary
+        m.insert(' ', 1); // word boundary
         // Common ASCII consonants (mapped to their IPA IDs)
-        m.insert('b', 2); m.insert('d', 3); m.insert('f', 4);
-        m.insert('g', 5); m.insert('h', 6); m.insert('j', 7);
-        m.insert('k', 8); m.insert('l', 9); m.insert('m', 10);
-        m.insert('n', 11); m.insert('p', 12); m.insert('r', 13);
-        m.insert('s', 14); m.insert('t', 15); m.insert('v', 16);
-        m.insert('w', 17); m.insert('z', 18);
+        m.insert('b', 2);
+        m.insert('d', 3);
+        m.insert('f', 4);
+        m.insert('g', 5);
+        m.insert('h', 6);
+        m.insert('j', 7);
+        m.insert('k', 8);
+        m.insert('l', 9);
+        m.insert('m', 10);
+        m.insert('n', 11);
+        m.insert('p', 12);
+        m.insert('r', 13);
+        m.insert('s', 14);
+        m.insert('t', 15);
+        m.insert('v', 16);
+        m.insert('w', 17);
+        m.insert('z', 18);
         // IPA vowels
-        m.insert('æ', 20); m.insert('ɑ', 21); m.insert('ə', 22);
-        m.insert('ɛ', 23); m.insert('ɪ', 24); m.insert('ɔ', 25);
-        m.insert('ʊ', 26); m.insert('ʌ', 27); m.insert('i', 28);
-        m.insert('u', 29); m.insert('e', 30); m.insert('o', 31);
+        m.insert('æ', 20);
+        m.insert('ɑ', 21);
+        m.insert('ə', 22);
+        m.insert('ɛ', 23);
+        m.insert('ɪ', 24);
+        m.insert('ɔ', 25);
+        m.insert('ʊ', 26);
+        m.insert('ʌ', 27);
+        m.insert('i', 28);
+        m.insert('u', 29);
+        m.insert('e', 30);
+        m.insert('o', 31);
         // Stress markers
-        m.insert('ˈ', 50); m.insert('ˌ', 51);
+        m.insert('ˈ', 50);
+        m.insert('ˌ', 51);
         // Common English IPA consonants used by espeak-ng (IDs 52–100)
-        m.insert('ŋ', 52);  // as in "sing"
-        m.insert('ʃ', 53);  // as in "ship"
-        m.insert('ʒ', 54);  // as in "measure"
-        m.insert('θ', 55);  // as in "think"
-        m.insert('ð', 56);  // as in "this"
-        m.insert('ɹ', 57);  // American English r
-        m.insert('ʔ', 58);  // glottal stop
-        m.insert('ɐ', 59);  // near-open central vowel
-        m.insert('ɜ', 60);  // as in "bird" (British)
-        m.insert('ʍ', 61);  // voiceless w
-        m.insert('ɫ', 62);  // dark l
-        m.insert('ʤ', 63);  // as in "judge"
-        m.insert('ʦ', 64);  // ts affricate
-        m.insert('ʧ', 65);  // as in "church"
-        m.insert('ʋ', 66);  // labiodental approximant
-        m.insert('ɣ', 67);  // voiced velar fricative
-        m.insert('χ', 68);  // voiceless uvular fricative
-        m.insert('ʁ', 69);  // voiced uvular fricative
-        m.insert('ħ', 70);  // pharyngeal fricative
-        m.insert('ʕ', 71);  // voiced pharyngeal fricative
-        m.insert('ʡ', 72);  // epiglottal plosive
-        m.insert('ɦ', 73);  // breathy-voiced glottal
-        m.insert('ɬ', 74);  // lateral fricative
-        m.insert('ɮ', 75);  // voiced lateral fricative
-        m.insert('ɻ', 76);  // retroflex approximant
-        m.insert('ɽ', 77);  // retroflex flap
-        m.insert('ɖ', 78);  // retroflex plosive
-        m.insert('ʈ', 79);  // voiceless retroflex
-        m.insert('ɳ', 80);  // retroflex nasal
-        m.insert('ɭ', 81);  // retroflex lateral
-        m.insert('ʂ', 82);  // retroflex fricative
-        m.insert('ʐ', 83);  // voiced retroflex fricative
-        m.insert('ɴ', 84);  // uvular nasal
-        m.insert('ʟ', 85);  // velar lateral
-        m.insert('ɕ', 86);  // alveolo-palatal fricative
-        m.insert('ʑ', 87);  // voiced alveolo-palatal fricative
-        m.insert('ɥ', 88);  // labial-palatal approximant
-        m.insert('ʜ', 89);  // voiceless epiglottal fricative
-        m.insert('ʢ', 90);  // voiced epiglottal fricative
+        m.insert('ŋ', 52); // as in "sing"
+        m.insert('ʃ', 53); // as in "ship"
+        m.insert('ʒ', 54); // as in "measure"
+        m.insert('θ', 55); // as in "think"
+        m.insert('ð', 56); // as in "this"
+        m.insert('ɹ', 57); // American English r
+        m.insert('ʔ', 58); // glottal stop
+        m.insert('ɐ', 59); // near-open central vowel
+        m.insert('ɜ', 60); // as in "bird" (British)
+        m.insert('ʍ', 61); // voiceless w
+        m.insert('ɫ', 62); // dark l
+        m.insert('ʤ', 63); // as in "judge"
+        m.insert('ʦ', 64); // ts affricate
+        m.insert('ʧ', 65); // as in "church"
+        m.insert('ʋ', 66); // labiodental approximant
+        m.insert('ɣ', 67); // voiced velar fricative
+        m.insert('χ', 68); // voiceless uvular fricative
+        m.insert('ʁ', 69); // voiced uvular fricative
+        m.insert('ħ', 70); // pharyngeal fricative
+        m.insert('ʕ', 71); // voiced pharyngeal fricative
+        m.insert('ʡ', 72); // epiglottal plosive
+        m.insert('ɦ', 73); // breathy-voiced glottal
+        m.insert('ɬ', 74); // lateral fricative
+        m.insert('ɮ', 75); // voiced lateral fricative
+        m.insert('ɻ', 76); // retroflex approximant
+        m.insert('ɽ', 77); // retroflex flap
+        m.insert('ɖ', 78); // retroflex plosive
+        m.insert('ʈ', 79); // voiceless retroflex
+        m.insert('ɳ', 80); // retroflex nasal
+        m.insert('ɭ', 81); // retroflex lateral
+        m.insert('ʂ', 82); // retroflex fricative
+        m.insert('ʐ', 83); // voiced retroflex fricative
+        m.insert('ɴ', 84); // uvular nasal
+        m.insert('ʟ', 85); // velar lateral
+        m.insert('ɕ', 86); // alveolo-palatal fricative
+        m.insert('ʑ', 87); // voiced alveolo-palatal fricative
+        m.insert('ɥ', 88); // labial-palatal approximant
+        m.insert('ʜ', 89); // voiceless epiglottal fricative
+        m.insert('ʢ', 90); // voiced epiglottal fricative
         // ASCII alternatives that espeak-ng may output
-        m.insert('R', 57);  // alternative r representation (same as ɹ)
-        m.insert('N', 52);  // alternative ng representation (same as ŋ)
+        m.insert('R', 57); // alternative r representation (same as ɹ)
+        m.insert('N', 52); // alternative ng representation (same as ŋ)
         m
     });
 
@@ -234,7 +258,8 @@ mod tests {
         assert!(!ids.is_empty(), "expected non-empty token IDs for 'hello'");
         // All IDs must be within vocabulary range [0, KOKORO_VOCAB_SIZE)
         assert!(
-            ids.iter().all(|&id| id >= 0 && id < KOKORO_VOCAB_SIZE as i64),
+            ids.iter()
+                .all(|&id| id >= 0 && id < KOKORO_VOCAB_SIZE as i64),
             "token ID out of range"
         );
     }

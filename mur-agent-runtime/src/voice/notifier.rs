@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::companion::notifier::{CompanionMessage, NotifyOutcome, Notifier};
+use crate::companion::notifier::{CompanionMessage, Notifier, NotifyOutcome};
 use crate::voice::{audio, tts::KOKORO_SAMPLE_RATE, tts::KokoroTts};
 
 // ─── KokoroTtsTrait ──────────────────────────────────────────────────────────
@@ -134,14 +134,14 @@ impl Notifier for VoiceNotifier {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use chrono::Utc;
     use mur_common::companion::Situation;
 
     use super::{KokoroTtsTrait, VoiceNotifier};
-    use crate::companion::notifier::{CompanionMessage, NotifyOutcome, Notifier};
+    use crate::companion::notifier::{CompanionMessage, Notifier, NotifyOutcome};
 
     // ── Mock TTS ──────────────────────────────────────────────────────────────
 
@@ -202,7 +202,10 @@ mod tests {
 
         let outcome = notifier.send(&msg).await.expect("send must not error");
 
-        assert!(called.load(Ordering::SeqCst), "TTS synthesize must be called");
+        assert!(
+            called.load(Ordering::SeqCst),
+            "TTS synthesize must be called"
+        );
         assert!(
             matches!(outcome, NotifyOutcome::Delivered),
             "expected Delivered"

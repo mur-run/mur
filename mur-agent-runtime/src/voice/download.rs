@@ -6,7 +6,7 @@
 //! or data leaves the device at runtime. Downloads are a one-time setup
 //! step initiated by the user from the CLI.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -84,13 +84,13 @@ pub fn ensure_model(
 }
 
 fn sha256_of_file(path: &Path) -> Result<String> {
-    let f = std::fs::File::open(path)
-        .with_context(|| format!("open {}", path.display()))?;
+    let f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut reader = BufReader::with_capacity(65536, f);
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 65536];
     loop {
-        let n = reader.read(&mut buf)
+        let n = reader
+            .read(&mut buf)
             .with_context(|| format!("read {}", path.display()))?;
         if n == 0 {
             break;
@@ -106,8 +106,8 @@ fn sha256_of_file(path: &Path) -> Result<String> {
 /// are handled by the CLI via reqwest before the runtime is ever invoked.
 fn download_to(dest: &Path, url: &str, on_progress: impl Fn(u64, u64)) -> Result<()> {
     if let Some(local) = url.strip_prefix("file://") {
-        let bytes = std::fs::read(local)
-            .with_context(|| format!("test file-url copy from {url}"))?;
+        let bytes =
+            std::fs::read(local).with_context(|| format!("test file-url copy from {url}"))?;
         std::fs::write(dest, &bytes)?;
         on_progress(bytes.len() as u64, bytes.len() as u64);
         return Ok(());
@@ -195,7 +195,10 @@ mod tests {
         let result = ensure_model(mur_tmp.path(), &spec, |_, _| {});
         assert!(result.is_err());
         let msg = format!("{:?}", result.unwrap_err());
-        assert!(msg.contains("sha256 mismatch"), "expected sha256 mismatch in: {msg}");
+        assert!(
+            msg.contains("sha256 mismatch"),
+            "expected sha256 mismatch in: {msg}"
+        );
     }
 
     #[test]
@@ -210,6 +213,9 @@ mod tests {
         let result = ensure_model(mur_tmp.path(), &spec, |_, _| {});
         assert!(result.is_err());
         let msg = format!("{:?}", result.unwrap_err());
-        assert!(msg.contains("file://"), "expected file:// guard error, got: {msg}");
+        assert!(
+            msg.contains("file://"),
+            "expected file:// guard error, got: {msg}"
+        );
     }
 }

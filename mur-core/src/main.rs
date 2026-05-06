@@ -1915,9 +1915,7 @@ async fn async_main() -> Result<()> {
                 }
                 VoiceAction::Disable => cmd::agent_voice::cmd_voice_disable(&name)?,
                 VoiceAction::Download => {
-                    anyhow::bail!(
-                        "voice download not yet implemented; will ship in D1 Task 3"
-                    );
+                    anyhow::bail!("voice download not yet implemented; will ship in D1 Task 3");
                 }
             },
         },

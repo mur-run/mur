@@ -166,7 +166,9 @@ mod tests {
         assert_eq!(w.source, "mic");
         assert_eq!(w.content, "open the pod bay doors");
         assert!(
-            patch.turn_flags.contains(&"after_untrusted_input".to_string()),
+            patch
+                .turn_flags
+                .contains(&"after_untrusted_input".to_string()),
             "expected after_untrusted_input turn flag"
         );
     }

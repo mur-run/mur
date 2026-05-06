@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::voice::stt::VadGate;
 
@@ -271,7 +271,10 @@ mod tests {
         // In CI (no sound card) this may return an empty list; it must
         // not panic or return an error.
         let result = list_input_devices();
-        assert!(result.is_ok(), "list_input_devices returned error: {result:?}");
+        assert!(
+            result.is_ok(),
+            "list_input_devices returned error: {result:?}"
+        );
     }
 
     #[test]

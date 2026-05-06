@@ -29,7 +29,9 @@ pub fn cmd_voice_enable(name: &str, voice_id: Option<&str>) -> Result<()> {
 
     println!("Voice I/O enabled for agent '{name}'.");
     println!("  Voice ID : {}", profile.voice.voice_id.as_str());
-    println!("  Hint: run `mur agent voice {name} download` to fetch model weights (~1.4 GB) before starting the agent.");
+    println!(
+        "  Hint: run `mur agent voice {name} download` to fetch model weights (~1.4 GB) before starting the agent."
+    );
     Ok(())
 }
 

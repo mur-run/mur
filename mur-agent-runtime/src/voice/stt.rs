@@ -64,9 +64,8 @@ impl WhisperStt {
         let path_str = model_path
             .to_str()
             .context("model path is not valid UTF-8")?;
-        let ctx =
-            WhisperContext::new_with_params(path_str, WhisperContextParameters::default())
-                .context("whisper context init")?;
+        let ctx = WhisperContext::new_with_params(path_str, WhisperContextParameters::default())
+            .context("whisper context init")?;
         Ok(Self {
             ctx: std::sync::Mutex::new(ctx),
         })
@@ -138,7 +137,10 @@ mod tests {
     #[test]
     fn vad_custom_threshold() {
         // RMS of a full-amplitude sine = 1/√2 ≈ 0.707; threshold 0.9 > 0.707
-        let vad = VadGate { rms_threshold: 0.9, ..VadGate::default() };
+        let vad = VadGate {
+            rms_threshold: 0.9,
+            ..VadGate::default()
+        };
         let tone: Vec<f32> = (0..1600)
             .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16_000.0).sin())
             .collect();
