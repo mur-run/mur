@@ -35,10 +35,15 @@ jobs:
       - id: filter
         uses: dorny/paths-filter@v3
         with:
-          # On push:main, paths-filter sees no diff context — force
-          # everything to true via predicate-quantifier so we never
-          # accidentally skip a job after merge.
-          predicate-quantifier: 'every'
+          # Default `some` semantics: filter is true iff AT LEAST ONE
+          # changed file matches the pattern set. We previously set
+          # `every` here intending to "fail safe" on push:main, but
+          # `every` means the OPPOSITE — it only matches when EVERY
+          # changed file is in the filter, so a PR that touches a
+          # Rust file AND a docs file silently skipped Test / Clippy.
+          # Caught on M10 PR #199 + qdrant feature-gate PR #196.
+          # The push:main safety is already provided by the per-job
+          # `if: github.event_name == 'push' || …` short-circuit.
           filters: |
             code:
               - '**/*.rs'
