@@ -35,10 +35,16 @@ jobs:
       - id: filter
         uses: dorny/paths-filter@v3
         with:
-          # On push:main, paths-filter sees no diff context — force
-          # everything to true via predicate-quantifier so we never
-          # accidentally skip a job after merge.
-          predicate-quantifier: 'every'
+          # Use the default `some` quantifier — at least ONE changed file
+          # matching a filter's patterns is enough to trigger that filter.
+          # The previous `predicate-quantifier: every` was a misreading of
+          # the docs and required ALL changed files to match, so any
+          # multi-file PR that touched even one file outside a filter's
+          # patterns came back false → all jobs skipped → tests bypassed.
+          #
+          # For push:main events, paths-filter falls back to "match all
+          # filters as true" automatically when there's no diff context,
+          # so the post-merge safety net is preserved without `every`.
           filters: |
             code:
               - '**/*.rs'
