@@ -5,4 +5,5 @@
 //! Entry point: model download via `download::ensure_model`.
 
 pub mod download;
+pub mod tts;
 pub mod types;
