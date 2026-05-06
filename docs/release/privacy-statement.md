@@ -102,6 +102,18 @@ telemetry:
 
 The writer thread silently no-ops; no `telemetry/*.jsonl` is created. The B0 hook chain still runs (the security rules are independent of telemetry).
 
+### 3.4 Cross-network observability (mur-commander)
+
+If you point your agent at a `mur-commander` host (`commander.url` in `profile.yaml`), telemetry events are streamed there over the network in addition to the local JSONL. The commander applies a **separate, stricter redaction** before storing them:
+
+- **Default mode (`Redacted`)** — known content fields (`gen_ai.request.messages`, `gen_ai.response.messages`, `gen_ai.request.prompt`, `gen_ai.response.completion`, `tool.args`, `tool.result`) are replaced with `{"content": "sha256:<hex>", "_size": <n>}`. The commander **never sees raw user content** — only the SHA-256 fingerprint + length, useful for detecting "did the conversation change?" but not "what was said".
+- **`MetadataOnly` mode** — the same fields are removed entirely; only operational counters (token counts, durations, timestamps) survive.
+- **`Full` mode** — disables redaction. Only enable on a commander host you fully control, e.g. for self-hosted enterprise deployments where you've audited the pipe end-to-end.
+
+This is **complementary to §3.2**, not a replacement: §3.2's regex pass catches credentials embedded anywhere in free-form strings (great for local debugging); §3.4's hash pass keeps user content opaque cross-network (great for letting commander operate without seeing chat content). Both apply when commander is enabled.
+
+If you don't configure a commander, none of §3.4 applies — telemetry stays purely local under `~/.mur/agents/<name>/telemetry/`.
+
 ## 4. Crashlogs
 
 If the runtime panics, the supervisor captures a panic backtrace to `~/.mur/agents/<name>/crashlogs/<RFC3339-utc>-<pid>.log` (M10). This file stays local. The redactor from §3.2 (credential patterns + home-directory paths) is applied to both the panic payload and the captured backtrace before it lands on disk; the unredacted panic still surfaces on stderr (your terminal session) so debugging stays interactive. Backtraces may still include source file paths and variable names that aren't classified by the redactor — review before sharing externally.
