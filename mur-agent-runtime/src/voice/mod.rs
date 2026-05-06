@@ -6,6 +6,7 @@
 
 pub mod audio;
 pub mod download;
+pub mod notifier;
 pub mod stt;
 pub mod tts;
 pub mod types;
