@@ -47,10 +47,10 @@ impl VadGate {
 
 /// whisper.cpp speech-to-text engine.
 ///
-/// `WhisperContext` is not `Send`, so we wrap it in `Mutex` to allow
-/// the struct to be shared across threads (e.g. via `Arc<WhisperStt>`).
-/// Callers must invoke `transcribe` from a blocking thread
-/// (`tokio::task::spawn_blocking`).
+/// `WhisperContext` is wrapped in `Mutex` so `WhisperStt: Sync` —
+/// assuming `whisper-rs` implements `Send` for `WhisperContext` (it does
+/// in 0.11 via `unsafe impl`). Callers must invoke `transcribe` from a
+/// blocking thread (`tokio::task::spawn_blocking`).
 pub struct WhisperStt {
     ctx: std::sync::Mutex<WhisperContext>,
 }
@@ -83,6 +83,7 @@ impl WhisperStt {
             .ctx
             .lock()
             .map_err(|_| anyhow::anyhow!("whisper context mutex poisoned"))?;
+        // TODO: cache state across calls if transcribe frequency grows (create_state allocates KV-cache)
         let mut state = ctx.create_state().context("whisper state")?;
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -90,6 +91,7 @@ impl WhisperStt {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+        // TODO(i18n): derive from agent locale config rather than hard-coding English
         params.set_language(Some("en"));
 
         state.full(params, samples).context("whisper inference")?;
@@ -97,8 +99,9 @@ impl WhisperStt {
         let n = state.full_n_segments().context("segment count")?;
         let mut transcript = String::new();
         for i in 0..n {
-            if let Ok(text) = state.full_get_segment_text(i) {
-                transcript.push_str(&text);
+            match state.full_get_segment_text(i) {
+                Ok(text) => transcript.push_str(&text),
+                Err(_) => tracing::warn!(segment = i, "whisper segment text unavailable; skipping"),
             }
         }
         Ok(transcript.trim().to_string())
@@ -110,6 +113,11 @@ impl WhisperStt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vad_empty_slice_returns_false() {
+        assert!(!VadGate::default().is_speech(&[]));
+    }
 
     #[test]
     fn vad_silence_returns_false() {
