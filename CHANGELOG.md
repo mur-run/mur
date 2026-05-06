@@ -1,5 +1,115 @@
 # Changelog
 
+## v2.7.0 (2026-05-06) — v1.1 Hardening Pass
+
+### TL;DR
+
+The release that closes the v1.1 security/privacy gaps acknowledged
+in the v2.6 privacy statement. Adds **MCP supply-chain pinning** (B0
+rule 6), **telemetry + crashlog redaction** (rule 9), **companion
+zero-network audit** (rule 12), plus a **webhook receiver** (Track
+C5) so any HTTP-capable app can drive an agent over loopback HMAC-
+signed POSTs.
+
+### 🆕 New — Security & Privacy
+
+- **B0 rule 6 — MCP install-time pinning** (M9). `mur agent mcp add`
+  captures binary SHA-256 + publisher metadata + (via M9.3.5)
+  description hash from a live `tools/list` probe. Supervisor
+  refuses to start on binary drift; `mur agent mcp inspect` /
+  `pin` recover. Stable inspect exit codes (0 clean / 1 binary
+  drift / 2 description drift / 3 both / 4 unpinned / 5 binary
+  missing) for CI gating. Probe budget tunable via
+  `MUR_MCP_PROBE_TIMEOUT_S` env.
+- **B0 rule 9 — telemetry redactor + crashlogs** (M8.1, M10).
+  `redact_secrets` (~11 credential patterns) + `redact_home_path`
+  (`/Users/<u>/`, `/home/<u>/`, `C:\Users\<u>\` → `~/`) applied at
+  a single chokepoint in the writer's spawn loop; new event
+  variants inherit redaction automatically. M10 extends the same
+  pass to the panic-hook → `~/.mur/agents/<n>/crashlogs/<ts>-<pid>.log`
+  writer.
+- **B0 rule 12 audit — companion zero network** (M8.3). Compile-
+  time `include_str!` audit refuses to build if any companion file
+  imports `reqwest`, `hyper`, `surf`, `ureq`, `isahc`,
+  `tokio::net::*`, or `std::net::*`. Drift guard: `pub mod` count
+  in `companion/mod.rs` must match the audit's file list.
+- **Privacy statement v1** — `docs/release/privacy-statement.md`
+  shipped (M8.5). Locks the v2 contract: voice + OCR + companion
+  stay on-device; only the configured model provider + opt-in MCP
+  / bridges see content; no phone-home.
+
+### 🆕 New — Trigger surface
+
+- **Track C5 webhook receiver** — per-agent Axum endpoint at
+  `/agents/{slug}/webhook`, HMAC-SHA256 verification (constant-time
+  via `subtle`), token-bucket rate limit, reuses the C3
+  `SendIngestor` trait so payloads enter the same B0
+  `<untrusted_share>` flow as desktop drag-drop. Loopback by
+  default; explicit bind for LAN exposure. Cookbook + curl /
+  GitHub Actions worked examples in `docs/cookbook/c5-webhook.md`.
+
+### 🆕 New — Local LLMs
+
+- **oMLX dynamic embedding discovery** (M1–M5). Apple-silicon
+  users with oMLX.app can now select arbitrary embedding models
+  without hand-editing `~/.mur/config.yaml`; `mur init` probes
+  `/v1/models` (3-shape parser handles oMLX / Ollama / OpenAI),
+  then writes `embedding.openai_url` so subsequent runs hit the
+  same endpoint. `OMLX_API_KEY` env honored. Auth-aware fallback
+  to Voyage-via-Anthropic when no local provider is reachable.
+
+### 🛠️ Changed — CI hardening
+
+- `cargo nextest run` replaces `cargo test` on the workspace test
+  job (parallel + faster on Linux/macOS; Windows-Defender
+  exclusions added). Custom timeouts + heavy-test concurrency caps
+  in `.config/nextest.toml` to prevent OOM on 16 GiB Windows
+  runners.
+- `apt-cache` action caches Tauri 2 system-libs install (~75 s
+  saved per GUI job).
+- Path-conditional CI: GUI / Test / Clippy / E2E skip on doc-only
+  PRs; the `predicate-quantifier: every` mistake from the first
+  cut (silently skipped tests on mixed-file PRs) was fixed in
+  #198.
+- `[profile.dev] debug = 0` workspace-wide for ~62% Windows wall-
+  clock reduction.
+- `tantivy 0.22 → 0.24` to dedupe with lance's transitive
+  (~50K LOC duplicate compile saved per CI run).
+- `qdrant-client` feature-gated behind `--features qdrant` (off by
+  default; lancedb is the v2 backend). Drops ~3–5 min of duplicate
+  axum/hyper/prost compiles on every Windows CI run.
+
+### 🐛 Fixed
+
+- v2.6.0 binary reported `2.5.0` from `--version` because the
+  workspace `[workspace.package].version` wasn't bumped before the
+  tag was cut. Fixed in #173 (v2.6.1) and locked into release-prep
+  procedure.
+- `TelemetryWriter::flush()` was a 50 ms sleep; replaced with
+  deterministic FIFO drain via
+  `mpsc<WriterMessage::Flush(oneshot::Sender<()>)>` ack. Fixes
+  Windows + macOS CI flakes on the
+  `llm_call_event_appends_jsonl_and_emits_notification` integration
+  test.
+
+### 📦 Notes for distributors
+
+- 4 new e2e scripts: `scripts/e2e/c5-webhook.sh`,
+  `scripts/e2e/b0-m8-telemetry-redaction.sh`,
+  `scripts/e2e/b0-m9-mcp-install-verifier.sh`,
+  `scripts/e2e/b0-m9.3.5-description-probe.sh`. Run them after
+  build to validate the v1.1 invariants on your platform.
+- Profile schema gained 4 optional fields on `McpServerEntry`
+  (`binary_sha256`, `description_hash`, `publisher`,
+  `installed_at`). All `Option` + `#[serde(default, skip_serializing_if)]`,
+  so pre-v2.7 profiles deserialize unchanged.
+- Webhook receiver requires you to set
+  `transport.webhook.hmac_secret_ref` to an OS-keychain entry
+  (`mur-agent` service). `mur agent webhook secret-set <name>`
+  writes it. Bind defaults to `127.0.0.1:6789`.
+
+---
+
 ## v2.5.0 (2026-05-04) — Desktop Companion + Cloud Backends
 
 ### TL;DR by use case
