@@ -51,6 +51,17 @@ jobs:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux system deps
+        # mur-core's transitive deps (lance-encoding via lancedb) need
+        # `protoc` at build time. Mirrors the equivalent step in
+        # `.github/workflows/ci.yml::test`.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler \
+            libprotobuf-dev \
+            libdbus-1-dev \
+            pkg-config
       - name: Build mur-core (for `mur agent eval report`)
         run: cargo build -p mur-core --release --bin mur
       - name: Run AgentDojo skeleton (synthetic cases)
@@ -95,6 +106,15 @@ jobs:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install Linux system deps
+        # Same as the stub job — mur-core needs `protoc` at build time.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler \
+            libprotobuf-dev \
+            libdbus-1-dev \
+            pkg-config
       - name: Guard — refuse to run without API key
         run: |
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
