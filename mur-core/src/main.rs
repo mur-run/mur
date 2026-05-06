@@ -1250,6 +1250,32 @@ enum AgentMcpAction {
         old: String,
         new: String,
     },
+    /// Show pinned vs current state for one (or all) MCP entries.
+    /// Exit codes (B0 rule 6 / M9.4): 0 clean, 1 binary drift, 4
+    /// unpinned (pre-M9), 5 binary missing. Reports the worst status
+    /// across all servers when `--server` is omitted.
+    Inspect {
+        name: String,
+        /// Limit to a single MCP server entry; otherwise iterate all.
+        #[arg(long = "server")]
+        server: Option<String>,
+    },
+    /// Re-compute and persist the install-time binary pin (and
+    /// optionally refresh publisher metadata). Used after reviewing
+    /// drift surfaced by `mur agent mcp inspect`.
+    Pin {
+        name: String,
+        server_id: String,
+        /// Skip the y/N re-approval prompt.
+        #[arg(long)]
+        force: bool,
+        #[arg(long = "publisher-name")]
+        publisher_name: Option<String>,
+        #[arg(long = "publisher-homepage")]
+        publisher_homepage: Option<String>,
+        #[arg(long = "publisher-registry-id")]
+        publisher_registry_id: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1695,6 +1721,27 @@ async fn async_main() -> Result<()> {
                 AgentMcpAction::Rename { name, old, new } => {
                     cmd::agent::cmd_mcp_rename(&name, &old, &new)?
                 }
+                AgentMcpAction::Inspect { name, server } => {
+                    let code = cmd::agent_mcp_pin::cmd_mcp_inspect(&name, server.as_deref())?;
+                    if code != 0 {
+                        std::process::exit(code);
+                    }
+                }
+                AgentMcpAction::Pin {
+                    name,
+                    server_id,
+                    force,
+                    publisher_name,
+                    publisher_homepage,
+                    publisher_registry_id,
+                } => cmd::agent_mcp_pin::cmd_mcp_pin(
+                    &name,
+                    &server_id,
+                    force,
+                    publisher_name,
+                    publisher_homepage,
+                    publisher_registry_id,
+                )?,
             },
             AgentAction::Skill { action } => match action {
                 AgentSkillAction::List { name } => cmd::agent::cmd_skill_list(&name)?,
