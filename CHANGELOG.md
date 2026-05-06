@@ -1,5 +1,70 @@
 # Changelog
 
+## v2.8.0 (2026-05-06) — B0 Eval Harness + Baseline
+
+### TL;DR
+
+Closes the v1 measurement gap: ships the **B0 acceptance eval harness**
+(M11) and records the first **real-LLM baseline** — HarmBench-50 vs
+`claude-sonnet-4-6` at **41/50 = 82% refusal rate**, well above the
+≥50% spec gate. Also fixes `mur init` LLM model selection and
+documents the commander cross-network redaction model.
+
+### 🆕 New — B0 Eval Harness (M11)
+
+- **`mur agent eval report`** — Rust aggregator reads a JSONL run
+  file and renders a per-suite / per-category Markdown report with
+  aggregate pass-rate and spec-gate verdict. Exits non-zero if any
+  gate fails.
+- **HarmBench-50 runner** (`scripts/eval/harmbench/run.py`) — 50
+  seeded cases stratified across 7 semantic categories; stub LLM
+  (deterministic, free) + Anthropic backend (`--backend anthropic`).
+  Heuristic grader `heuristic_v1` matches HarmBench paper §3.2
+  refusal patterns; raw `response_text` stored per record so a future
+  Phase B re-grade against `cais/HarmBench-Llama-2-13b-cls` requires
+  no API re-spend.
+- **AgentDojo-50 runner skeleton** (`scripts/eval/agentdojo/run.py`)
+  — 50 seeded cases across 4 task suites; stub LLM wired; real
+  agent-execution loop deferred to Phase B.
+- **CI eval workflow** (`.github/workflows/eval.yml`) — stub-LLM job
+  on every PR touching `scripts/eval/**`; real-LLM job on `v*` tags
+  + weekly cron + manual dispatch. `make eval-stub` / `eval-release`
+  top-level targets.
+- **Committed case selections** — `scripts/eval/{agentdojo,harmbench}/
+  case_selection.json` freeze the v2.8.0 subset (seed 1202914782 =
+  SHA256("mur-b0-acceptance-2026")[:8]). Re-runs are comparable.
+
+### 📊 v2.7.0 HarmBench Baseline
+
+Run `01KQYJDTKZWBBX239MYHRRT320`, model `claude-sonnet-4-6` @ T=0:
+
+| Category | passed |
+|---|---|
+| chemical_biological | 7/7 (100%) |
+| copyright | 8/13 (62%) |
+| cybercrime_intrusion | 4/8 (50%) |
+| harassment_bullying | 3/3 (100%) |
+| harmful | 3/3 (100%) |
+| illegal | 8/8 (100%) |
+| misinformation_disinformation | 8/8 (100%) |
+| **Aggregate** | **41/50 = 82% — PASS** |
+
+Artifacts: `eval-results/v2.7.0.{jsonl,md}`. Cost: ~$0.20.
+
+### 🐛 Fixes
+
+- **`mur init` dynamic LLM model selection** (#212) — model list
+  fetched at runtime; `qwen3:14b` default now resolves correctly on
+  fresh Ollama installs.
+
+### 📄 Docs
+
+- **Privacy statement §3.4** — documents `mur-commander`'s
+  cross-network SHA-256 field-hash redaction (distinct from M8.1's
+  local regex pass; both should stay — different threat models).
+
+---
+
 ## v2.7.0 (2026-05-06) — v1.1 Hardening Pass
 
 ### TL;DR
