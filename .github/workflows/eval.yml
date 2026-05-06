@@ -1,0 +1,149 @@
+name: B0 Eval
+
+# B0 acceptance-gate eval (M11.5).
+#
+# Two-track: every PR runs the deterministic stub-LLM track (free,
+# fast); a weekly cron + per-release-tag run exercises the real-LLM
+# track against Anthropic Sonnet at temperature=0.
+#
+# Spec: docs/superpowers/specs/2026-05-06-b0-m11-eval-harness-design.md
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/eval/**'
+      - 'mur-common/src/eval.rs'
+      - 'mur-core/src/cmd/agent_eval.rs'
+      - '.github/workflows/eval.yml'
+  push:
+    tags: ['v*']
+  schedule:
+    # Weekly cron — Mondays 09:00 UTC. Picks up regressions even when
+    # nothing eval-touching has merged that week.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: 'LLM backend (stub | anthropic)'
+        required: false
+        default: 'stub'
+
+jobs:
+  # ── Stub-LLM track ────────────────────────────────────────────────
+  # Always runs. Uses the synthetic-fixture path against the
+  # deterministic mock LLM. Catches regressions in the B0 hook chain
+  # without consuming any real model tokens.
+  stub:
+    name: Stub-LLM (PR gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build mur-core (for `mur agent eval report`)
+        run: cargo build -p mur-core --release --bin mur
+      - name: Run AgentDojo skeleton (synthetic cases)
+        run: |
+          mkdir -p eval-out
+          python3 scripts/eval/agentdojo/run.py --out eval-out/run.jsonl
+      - name: Run HarmBench skeleton (synthetic cases)
+        run: |
+          python3 scripts/eval/harmbench/run.py --out eval-out/run.jsonl
+      - name: Aggregate + gate
+        run: |
+          ./target/release/mur agent eval report \
+            --jsonl eval-out/run.jsonl \
+            --out eval-out/report.md
+          cat eval-out/report.md
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stub-eval-report-${{ github.sha }}
+          path: eval-out/
+          retention-days: 30
+
+  # ── Real-LLM track ────────────────────────────────────────────────
+  # Runs on weekly cron + on every v* tag. Costs roughly $5 per run
+  # against Anthropic Sonnet (50+50 cases × ~10K input + 200 output
+  # tokens). Hard cap via timeout-minutes + a token budget gate.
+  real-llm:
+    name: Real-LLM (release / cron)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: >
+      github.event_name == 'schedule' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.backend == 'anthropic')
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Guard — refuse to run without API key
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret unset; refusing to run real-LLM track."
+            exit 1
+          fi
+      - name: Install Python deps (real upstream + driver)
+        # NOTE: `pip install -r requirements.txt` will pull AgentDojo
+        # + HarmBench upstream packages (M11.2.1 / M11.3.1 wire them
+        # into the runner). Until those land, the real-LLM track
+        # exercises the same synthetic-fixture path the stub track
+        # uses; the only difference is the LLM backend.
+        run: pip install -r scripts/eval/requirements.txt
+      - name: Build mur-core
+        run: cargo build -p mur-core --release --bin mur
+      - name: Run AgentDojo (real LLM)
+        run: |
+          mkdir -p eval-out
+          python3 scripts/eval/agentdojo/run.py \
+            --backend anthropic --model claude-sonnet-4-6 \
+            --out eval-out/run.jsonl
+      - name: Run HarmBench (real LLM)
+        run: |
+          python3 scripts/eval/harmbench/run.py \
+            --backend anthropic --model claude-sonnet-4-6 \
+            --out eval-out/run.jsonl
+      - name: Aggregate + gate
+        run: |
+          ./target/release/mur agent eval report \
+            --jsonl eval-out/run.jsonl \
+            --out eval-out/report.md
+          cat eval-out/report.md
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-llm-eval-report-${{ github.sha }}
+          path: eval-out/
+          retention-days: 90
+      - name: Commit baseline on tag
+        # On a v* tag, write the JSONL into eval-results/v<tag>.jsonl
+        # for audit history. Skipped on cron (no canonical tag to
+        # name the file after).
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          mkdir -p eval-results
+          cp eval-out/run.jsonl "eval-results/${tag}.jsonl"
+          # Best-effort commit; if this fails (concurrent push, etc.)
+          # the artifact upload is still authoritative.
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "eval-results/${tag}.jsonl"
+          git commit -m "eval: baseline for $tag" || true
+          git push origin HEAD:main || true
