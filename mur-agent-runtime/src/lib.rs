@@ -8,6 +8,10 @@
 pub mod bridge;
 pub mod communication_policy;
 pub mod companion;
+/// B0 M10 — redacted crashlog writer (panic hook + secret/home-path
+/// redaction). Closes the gap acknowledged in
+/// `docs/release/privacy-statement.md` §4.
+pub mod crashlog;
 pub mod durable;
 pub mod entitlements;
 pub mod export;

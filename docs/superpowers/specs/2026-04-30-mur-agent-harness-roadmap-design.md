@@ -664,7 +664,7 @@ All 22 rules are implemented inside `B0SafetyHook` (Track A built-in handler) an
 - v1 ship status (2026-05-05):
   - Rules 1, 2, 3, 4, 5, 7, 8, 11: shipped (M7.1-M7.7).
   - **Rule 6: shipped (M9.1–M9.5 + M9.3.5)** — `McpServerEntry` pin schema (binary_sha256 + description_hash + publisher + installed_at) + `mur agent mcp add` install-time binary hashing + `B0SafetyHook::on_startup` re-verify + `mur agent mcp inspect`/`pin` recovery verbs + description-hash live probe via `mur agent mcp pin` (default-on) and `mur agent mcp inspect --probe` (opt-in). Cookbook: `docs/cookbook/b0-mcp-install-verify.md`. Acceptance: `bash scripts/e2e/b0-m9-mcp-install-verifier.sh` + `bash scripts/e2e/b0-m9.3.5-description-probe.sh`.
-  - **Rule 9: shipped (M8.1)** — `redact_secrets` + `redact_home_path` + `redact_envelope` chokepoint in `telemetry_writer`. Cookbook: `docs/cookbook/b0-telemetry-redaction.md`. Acceptance: `bash scripts/e2e/b0-m8-telemetry-redaction.sh`.
+  - **Rule 9: shipped (M8.1 + M10)** — `redact_secrets` + `redact_home_path` + `redact_envelope` chokepoint in `telemetry_writer` (M8.1); panic-hook → redacted-crashlog writer at `~/.mur/agents/<name>/crashlogs/<ts>-<pid>.log` (M10). Cookbook: `docs/cookbook/b0-telemetry-redaction.md`. Acceptance: `bash scripts/e2e/b0-m8-telemetry-redaction.sh`.
   - Rule 10: documented; mechanism implemented across M0/M3.8/M7.3.
   - **Rule 12: shipped (M8.3)** — companion zero-network audit at `mur-agent-runtime/src/companion/network_audit.rs` (compile-time enforcement via `include_str!`). Wording refined to acknowledge LlmClient as the only allowed outbound indirection.
   - Rules 13-22: shipped in M3 (drag-drop) + M4 (cards).
