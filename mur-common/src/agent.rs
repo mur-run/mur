@@ -705,6 +705,24 @@ impl VoiceId {
     }
 }
 
+impl std::str::FromStr for VoiceId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> anyhow::Result<Self> {
+        match s {
+            "af_heart" => Ok(VoiceId::AfHeart),
+            "af_bella" => Ok(VoiceId::AfBella),
+            "af_nicole" => Ok(VoiceId::AfNicole),
+            "am_adam" => Ok(VoiceId::AmAdam),
+            "am_michael" => Ok(VoiceId::AmMichael),
+            other => anyhow::bail!(
+                "unknown voice ID '{other}' \
+                 (valid: af_heart, af_bella, af_nicole, am_adam, am_michael)"
+            ),
+        }
+    }
+}
+
 /// Per-agent voice I/O configuration (D1).
 /// Default = disabled so existing profiles continue to load unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

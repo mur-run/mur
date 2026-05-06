@@ -4,6 +4,7 @@ pub mod agent_companion;
 pub(crate) mod agent_eval;
 pub mod agent_export;
 pub mod agent_export_gui;
+pub mod agent_voice;
 /// B0 M9.2 — install-time MCP hash + publisher prompt for `mur agent mcp add`.
 pub(crate) mod agent_mcp_pin;
 pub(crate) mod agent_rekey;
