@@ -4,6 +4,7 @@
 //!
 //! Entry point: model download via `download::ensure_model`.
 
+pub mod audio;
 pub mod download;
 pub mod stt;
 pub mod tts;
