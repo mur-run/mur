@@ -13,6 +13,8 @@ use anyhow::Result;
 use std::io::{self, Write};
 use std::path::Path;
 
+use crate::discovery::{Backend, DiscoveredModel};
+
 #[derive(Debug, Clone, Copy)]
 pub struct LocalRuntimes {
     pub ollama_installed: bool,
@@ -91,6 +93,25 @@ impl LocalBackend {
             LocalBackend::Ollama => None,
             LocalBackend::OMlx => Some("http://localhost:8000/v1"),
             LocalBackend::MlxLm => Some("http://localhost:8080/v1"),
+        }
+    }
+}
+
+/// Write a discovered LLM model into the llm section of config.
+/// Extracted for unit testability (no stdin).
+fn apply_llm_model(config: &mut mur_common::config::Config, m: &DiscoveredModel) {
+    match m.backend {
+        Backend::Ollama => {
+            config.llm.provider = "ollama".into();
+            config.llm.model = m.id.clone();
+            config.llm.api_key_env = None;
+            config.llm.openai_url = None;
+        }
+        Backend::OMlx => {
+            config.llm.provider = "openai".into();
+            config.llm.model = m.id.clone();
+            config.llm.api_key_env = Some("OMLX_API_KEY".into());
+            config.llm.openai_url = Some("http://localhost:8000/v1".into());
         }
     }
 }
@@ -238,6 +259,58 @@ pub fn select_model(recs: &[ModelRec]) -> Result<&ModelRec> {
         .map(|n| n - 1)
         .unwrap_or(0);
     Ok(&recs[idx])
+}
+
+#[cfg(test)]
+mod apply_llm_model_tests {
+    use super::*;
+    use crate::discovery::{Backend, DiscoveredModel, ModelKind};
+
+    fn make_llm(id: &str, backend: Backend) -> DiscoveredModel {
+        DiscoveredModel {
+            id: id.into(),
+            backend,
+            kind: ModelKind::Llm,
+            dims: None,
+            family: None,
+            size_bytes: None,
+            probed_at: None,
+        }
+    }
+
+    #[test]
+    fn ollama_backend_writes_ollama_provider() {
+        let mut cfg = mur_common::config::Config::default();
+        let m = make_llm("qwen3.5:4b", Backend::Ollama);
+        apply_llm_model(&mut cfg, &m);
+        assert_eq!(cfg.llm.provider, "ollama");
+        assert_eq!(cfg.llm.model, "qwen3.5:4b");
+        assert!(cfg.llm.api_key_env.is_none());
+        assert!(cfg.llm.openai_url.is_none());
+    }
+
+    #[test]
+    fn omlx_backend_writes_openai_provider_with_omlx_url() {
+        let mut cfg = mur_common::config::Config::default();
+        let m = make_llm("mlx-community/Qwen3.5-4B-4bit", Backend::OMlx);
+        apply_llm_model(&mut cfg, &m);
+        assert_eq!(cfg.llm.provider, "openai");
+        assert_eq!(cfg.llm.model, "mlx-community/Qwen3.5-4B-4bit");
+        assert_eq!(cfg.llm.api_key_env.as_deref(), Some("OMLX_API_KEY"));
+        assert_eq!(
+            cfg.llm.openai_url.as_deref(),
+            Some("http://localhost:8000/v1")
+        );
+    }
+
+    #[test]
+    fn ollama_does_not_set_openai_url() {
+        let mut cfg = mur_common::config::Config::default();
+        cfg.llm.openai_url = Some("http://old-value".into());
+        let m = make_llm("qwen3:4b", Backend::Ollama);
+        apply_llm_model(&mut cfg, &m);
+        assert!(cfg.llm.openai_url.is_none(), "Ollama must clear openai_url");
+    }
 }
 
 #[cfg(test)]
