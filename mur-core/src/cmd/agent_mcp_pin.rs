@@ -297,10 +297,12 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
         }
     };
     println!("  current sha256: {actual}");
-    println!(
-        "  description:    <pinned hash deferred to M9.3.5 live probe; \
-         binary verification is authoritative for now>",
-    );
+    if let Some(d) = &entry.description_hash {
+        println!("  pinned descr:   {d}");
+        println!("                  (pass --probe to verify against live MCP)");
+    } else {
+        println!("  pinned descr:   <none — re-pin with `mur agent mcp pin` to capture>");
+    }
 
     if actual.eq_ignore_ascii_case(expected) {
         println!("  status:         CLEAN");
@@ -316,10 +318,74 @@ pub fn inspect_one(entry: &mur_common::agent::McpServerEntry) -> InspectStatus {
     }
 }
 
+/// Same as `inspect_one` but additionally spawns the MCP and verifies
+/// `tools/list` against `entry.description_hash` (B0 rule 6 / M9.3.5).
+/// Lights up the `DescriptionDrift` and `BothDrifted` exit codes that
+/// M9.4 reserved.
+pub async fn inspect_one_probed(
+    entry: &mur_common::agent::McpServerEntry,
+    timeout: std::time::Duration,
+) -> InspectStatus {
+    // Run the binary-side inspect synchronously first so its output
+    // appears before the probe results in the user-facing report.
+    let binary_status = inspect_one(entry);
+
+    // Skip the probe entirely if the entry has no pinned description
+    // hash — there's nothing to compare against.
+    let Some(expected_descr) = entry.description_hash.as_deref() else {
+        return binary_status;
+    };
+
+    println!();
+    println!("  Probing live MCP for description verification…");
+    let probe_entry = match resolve_command(&entry.command) {
+        Ok(resolved) => mur_common::agent::McpServerEntry {
+            command: resolved.display().to_string(),
+            ..entry.clone()
+        },
+        Err(_) => {
+            // Binary already flagged as missing by `inspect_one` above.
+            return binary_status;
+        }
+    };
+    match probe_mcp_descriptions(&probe_entry, timeout).await {
+        Ok((current, _)) => {
+            let descr_drifted = !current.eq_ignore_ascii_case(expected_descr);
+            if descr_drifted {
+                println!("  current descr:  {current}");
+                println!("  description status: DESCRIPTION DRIFT");
+                println!(
+                    "  hint:           the MCP's tools/list changed since install; \
+                     review the new tool descriptions then \
+                     `mur agent mcp pin {}` to re-approve, \
+                     or `mur agent mcp remove {}` to uninstall",
+                    entry.name, entry.name,
+                );
+                match binary_status {
+                    InspectStatus::Clean => InspectStatus::DescriptionDrift,
+                    InspectStatus::BinaryDrift => InspectStatus::BothDrifted,
+                    other => other,
+                }
+            } else {
+                println!("  description status: CLEAN");
+                binary_status
+            }
+        }
+        Err(e) => {
+            println!("  description status: <probe failed: {e}>");
+            println!(
+                "  hint:           pass --no-probe to inspect the binary alone, \
+                 or set MUR_MCP_PROBE_TIMEOUT_S to extend the budget",
+            );
+            binary_status
+        }
+    }
+}
+
 /// `mur agent mcp inspect <name> [--server <id>]`. Without `--server`,
 /// prints all MCPs on the agent and returns the WORST status (highest
 /// numeric value) so a scripted caller knows whether ANY MCP drifted.
-pub fn cmd_mcp_inspect(name: &str, server_id: Option<&str>) -> Result<i32> {
+pub fn cmd_mcp_inspect(name: &str, server_id: Option<&str>, probe: bool) -> Result<i32> {
     let (_path, profile) = crate::cmd::agent::load_profile_for_edit(name)?;
     if profile.mcp_servers.is_empty() {
         println!("Agent `{name}` has no MCP servers configured.");
@@ -336,7 +402,14 @@ pub fn cmd_mcp_inspect(name: &str, server_id: Option<&str>) -> Result<i32> {
         if printed {
             println!();
         }
-        let status = inspect_one(entry) as u8;
+        let status = if probe {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(inspect_one_probed(entry, probe_timeout()))
+            }) as u8
+        } else {
+            inspect_one(entry) as u8
+        };
         worst = worst.max(status);
         printed = true;
     }
