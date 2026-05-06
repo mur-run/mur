@@ -37,7 +37,10 @@ jobs:
   stub:
     name: Stub-LLM (PR gate)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 30 min covers cold cargo build (~8 min downloads + ~10 min
+    # compile of mur-core's dep tree on a fresh runner). With
+    # Swatinem/rust-cache@v2 hot, subsequent runs finish in ~3 min.
+    timeout-minutes: 30
     if: >
       github.event_name == 'pull_request' ||
       github.event_name == 'workflow_dispatch'
