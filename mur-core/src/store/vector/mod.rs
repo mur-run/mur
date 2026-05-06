@@ -1,8 +1,11 @@
 //! Abstract vector store trait.
 //!
-//! Phase 1 has one implementation (`lancedb::LanceDbStore`). Phase 1.3 adds
-//! `qdrant::QdrantStore`. Callers interact through `Arc<dyn VectorStore>`
-//! obtained from `factory::get_vector_store(&config, &index_dir)`.
+//! Default implementation is `lancedb::LanceDbStore`. `qdrant::QdrantStore`
+//! is feature-gated behind `--features qdrant` because qdrant-client@1.x
+//! drags in an older HTTP/proto stack (axum 0.7, hyper 0.14, prost 0.13,
+//! tower 0.4, reqwest 0.11, tonic 0.12) that costs ~3-5 min Windows CI
+//! compile time. Callers interact through `Arc<dyn VectorStore>` obtained
+//! from `factory::get_vector_store(&config, &index_dir)`.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -10,14 +13,16 @@ use chrono::{DateTime, Utc};
 
 pub mod factory;
 pub mod lancedb;
+#[cfg(feature = "qdrant")]
 pub mod qdrant;
 
 #[cfg(test)]
 pub mod tests;
 
 pub use self::lancedb::LanceDbStore;
-#[cfg(feature = "sources")]
-#[allow(unused_imports)] // QdrantStore selected at runtime via factory; wired to CLI in P1.4
+// QdrantStore selected at runtime via factory; re-exported for `tests/qdrant_smoke.rs`.
+#[cfg(all(feature = "qdrant", feature = "sources"))]
+#[allow(unused_imports)]
 pub use self::qdrant::QdrantStore;
 
 /// An embedded chunk ready to be stored.

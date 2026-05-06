@@ -48,7 +48,7 @@ regex = "1"
 lancedb = "0.26"
 tantivy = "0.24"   # match lance's transitive dep so we don't compile two
                    # tantivy versions (~50K LOC each) on every CI run
-qdrant-client = "1.12"
+qdrant-client = { version = "1.12", optional = true }   # gated behind `qdrant` feature
 arrow-array = "57"
 arrow-schema = "57"
 futures = "0.3"
@@ -84,6 +84,13 @@ cli = ["dialoguer", "console", "clap"]
 server = ["axum", "tower-http", "rust-embed"]
 sources = []
 ollama-live-smoke = []
+# `qdrant` enables QdrantStore as a vector_backend. Off by default because
+# the qdrant-client@1.x dep tree drags in older axum/hyper/prost/tower/
+# reqwest/tonic versions (~5 duplicate compiles in our workspace), costing
+# ~3-5 min Windows CI compile per run. lancedb is the default backend
+# anyway; flip this only when you need to point at a remote Qdrant.
+#   cargo build --features qdrant
+qdrant = ["dep:qdrant-client"]
 
 [dev-dependencies]
 tempfile = "3"

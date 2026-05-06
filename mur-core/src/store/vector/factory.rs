@@ -1,7 +1,7 @@
 //! Vector store factory.
 //!
 //! Returns an `Arc<dyn VectorStore>` selected by `Config::storage::vector_backend`.
-//! Phase 1.1 supports `"lancedb"`; `"qdrant"` arrives in P1.3.
+//! Default is `"lancedb"`. `"qdrant"` requires building with `--features qdrant`.
 
 use anyhow::{Context, Result, bail};
 use mur_common::config::Config;
@@ -20,6 +20,7 @@ pub async fn get_vector_store(cfg: &Config, index_dir: &Path) -> Result<Arc<dyn 
                 .context("opening LanceDB vector store")?;
             Ok(Arc::new(store))
         }
+        #[cfg(feature = "qdrant")]
         "qdrant" => {
             let url = cfg
                 .storage
@@ -31,6 +32,11 @@ pub async fn get_vector_store(cfg: &Config, index_dir: &Path) -> Result<Arc<dyn 
                 .context("opening Qdrant vector store")?;
             Ok(Arc::new(store))
         }
+        #[cfg(not(feature = "qdrant"))]
+        "qdrant" => bail!(
+            "vector_backend = \"qdrant\" requires building mur with `--features qdrant`. \
+             Default builds use lancedb to keep CI fast (qdrant-client adds ~3-5 min compile)."
+        ),
         other => bail!("unknown storage.vector_backend: {other}"),
     }
 }
@@ -55,6 +61,7 @@ mod tests {
         let _ = store.count(None).await;
     }
 
+    #[cfg(feature = "qdrant")]
     #[tokio::test]
     async fn factory_qdrant_requires_url() {
         let tmp = TempDir::new().unwrap();
@@ -65,6 +72,19 @@ mod tests {
         assert!(
             err.to_string().contains("qdrant_url"),
             "expected qdrant_url error, got: {err}"
+        );
+    }
+
+    #[cfg(not(feature = "qdrant"))]
+    #[tokio::test]
+    async fn factory_qdrant_without_feature_emits_helpful_error() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = dims_128_cfg();
+        cfg.storage.vector_backend = "qdrant".into();
+        let err = get_vector_store(&cfg, tmp.path()).await.err().unwrap();
+        assert!(
+            err.to_string().contains("--features qdrant"),
+            "expected feature-gate hint, got: {err}"
         );
     }
 
