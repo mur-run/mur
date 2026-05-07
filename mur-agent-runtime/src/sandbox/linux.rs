@@ -1,8 +1,8 @@
 use super::{SandboxPolicy, SandboxStatus};
 use anyhow::Context;
 use landlock::{
-    make_bitflags, path_beneath_rules, Access, AccessFs, AccessNet, ABI,
-    NetPort, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
+    ABI, Access, AccessFs, AccessNet, NetPort, Ruleset, RulesetAttr, RulesetCreatedAttr,
+    RulesetStatus, make_bitflags, path_beneath_rules,
 };
 
 pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
@@ -26,17 +26,13 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
 
     // FS read-only paths. path_beneath_rules() silently skips non-existent paths.
     if !policy.fs_read.is_empty() {
-        let read_rules =
-            path_beneath_rules(policy.fs_read.iter(), AccessFs::from_read(abi));
-        created = created
-            .add_rules(read_rules)
-            .context("add fs_read rules")?;
+        let read_rules = path_beneath_rules(policy.fs_read.iter(), AccessFs::from_read(abi));
+        created = created.add_rules(read_rules).context("add fs_read rules")?;
     }
 
     // FS read+write paths (superset of read).
     if !policy.fs_write.is_empty() {
-        let write_rules =
-            path_beneath_rules(policy.fs_write.iter(), AccessFs::from_all(abi));
+        let write_rules = path_beneath_rules(policy.fs_write.iter(), AccessFs::from_all(abi));
         created = created
             .add_rules(write_rules)
             .context("add fs_write rules")?;
@@ -46,9 +42,7 @@ pub fn apply_linux(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     if !policy.fs_exec.is_empty() {
         let exec_access = make_bitflags!(AccessFs::{ Execute | ReadFile | ReadDir });
         let exec_rules = path_beneath_rules(policy.fs_exec.iter(), exec_access);
-        created = created
-            .add_rules(exec_rules)
-            .context("add fs_exec rules")?;
+        created = created.add_rules(exec_rules).context("add fs_exec rules")?;
     }
 
     // Network port rules — only when the mode restricts outbound TCP.
@@ -103,23 +97,21 @@ fn apply_seccomp_denylist() -> anyhow::Result<()> {
     // Map each denied syscall number to an empty rule vector.
     // An empty rule vector means the syscall always triggers the match_action (deny).
     let syscalls: &[i64] = &[
-        libc::SYS_ptrace as i64,
-        libc::SYS_mount as i64,
-        libc::SYS_kexec_load as i64,
-        libc::SYS_bpf as i64,
-        libc::SYS_unshare as i64,
-        libc::SYS_pivot_root as i64,
+        i64::from(libc::SYS_ptrace),
+        i64::from(libc::SYS_mount),
+        i64::from(libc::SYS_kexec_load),
+        i64::from(libc::SYS_bpf),
+        i64::from(libc::SYS_unshare),
+        i64::from(libc::SYS_pivot_root),
     ];
 
-    let rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = syscalls
-        .iter()
-        .map(|&nr| (nr, vec![]))
-        .collect();
+    let rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> =
+        syscalls.iter().map(|&nr| (nr, vec![])).collect();
 
     let filter = SeccompFilter::new(
         rules,
-        SeccompAction::Allow,  // mismatch_action: allow all unmatched syscalls
-        deny_action,           // match_action: deny the listed syscalls
+        SeccompAction::Allow, // mismatch_action: allow all unmatched syscalls
+        deny_action,          // match_action: deny the listed syscalls
         arch,
     )
     .context("build seccomp filter")?;

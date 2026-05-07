@@ -41,7 +41,12 @@ impl OpenAiClient {
         model: String,
         http: reqwest::Client,
     ) -> Self {
-        Self { base_url, api_key, model, http }
+        Self {
+            base_url,
+            api_key,
+            model,
+            http,
+        }
     }
 
     /// Convenience constructor reading API key from `OPENAI_API_KEY` and base
@@ -106,11 +111,12 @@ impl OpenAiClient {
     ) -> Result<Self, LlmError> {
         let account = format!("{agent_name}/OPENAI_API_KEY");
         match mur_common::secret::keychain_get(MUR_AGENT_KEYCHAIN_SERVICE, &account).await {
-            Ok(Some(secret)) => Ok(Self::from_secret_string_with_http(&secret, model, None, http)),
+            Ok(Some(secret)) => Ok(Self::from_secret_string_with_http(
+                &secret, model, None, http,
+            )),
             Ok(None) => {
-                let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                    LlmError::InvalidResponse("OPENAI_API_KEY not set".into())
-                })?;
+                let api_key = std::env::var("OPENAI_API_KEY")
+                    .map_err(|_| LlmError::InvalidResponse("OPENAI_API_KEY not set".into()))?;
                 let base = std::env::var("OPENAI_BASE_URL")
                     .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
                 Ok(Self::new_with_http_client(base, api_key, model, http))

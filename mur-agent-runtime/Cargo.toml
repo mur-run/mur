@@ -95,7 +95,10 @@ ndarray = "0.17"                                           # tensor arrays for o
 espeak-ng = "0.1"                                           # espeak-ng G2P for Kokoro tokenizer (pure Rust, no bindgen)
 whisper-rs = { version = "0.11", features = [] }            # whisper.cpp STT bindings (CPU-only; no metal to keep CI clean)
 cpal = "0.15"                                               # cross-platform audio I/O (mic capture + speaker playback)
-# B1 sandbox — MCP child process sandboxing (Task 7), compiles on all platforms
+# B1 sandbox — MCP child process sandboxing (Task 7).
+# birdcage 0.8 does not compile on Windows (upstream bug); gated to unix-like targets.
+# child.rs already falls back to cmd.spawn() on Windows via #[cfg(not(unix))].
+[target.'cfg(not(target_os = "windows"))'.dependencies]
 birdcage = "0.8"
 
 [target.'cfg(unix)'.dependencies]

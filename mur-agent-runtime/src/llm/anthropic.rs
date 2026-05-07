@@ -153,15 +153,11 @@ impl AnthropicClient {
         let account = format!("{agent_name}/ANTHROPIC_API_KEY");
         match mur_common::secret::keychain_get(MUR_AGENT_KEYCHAIN_SERVICE, &account).await {
             Ok(Some(secret)) => Ok(Self::from_secret_string_with_http(
-                &secret,
-                model,
-                None,
-                http,
+                &secret, model, None, http,
             )),
             Ok(None) => {
-                let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-                    LlmError::InvalidResponse("ANTHROPIC_API_KEY not set".into())
-                })?;
+                let api_key = std::env::var("ANTHROPIC_API_KEY")
+                    .map_err(|_| LlmError::InvalidResponse("ANTHROPIC_API_KEY not set".into()))?;
                 Ok(Self::new_with_http_client(
                     anthropic_base_url(),
                     api_key,

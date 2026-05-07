@@ -11,9 +11,9 @@ mod windows;
 
 pub use policy::SandboxPolicy;
 
+use mur_common::agent::Entitlements;
 use std::path::Path;
 use std::sync::OnceLock;
-use mur_common::agent::Entitlements;
 
 static SANDBOX_STATUS: OnceLock<SandboxStatus> = OnceLock::new();
 
