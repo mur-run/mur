@@ -1,3 +1,18 @@
+/// Verify SBPL profile generation — we only check the string content,
+/// not apply it, so this is safe in the test process.
+#[test]
+#[cfg(target_os = "macos")]
+fn macos_sbpl_contains_deny_for_ssh() {
+    use mur_agent_runtime::sandbox::macos::build_sbpl_profile;
+    use mur_agent_runtime::sandbox::SandboxPolicy;
+
+    let mut policy = SandboxPolicy::default();
+    policy.fs_deny.push(dirs::home_dir().unwrap().join(".ssh"));
+    let sbpl = build_sbpl_profile(&policy);
+    assert!(sbpl.contains("deny file-write*"), "SBPL must deny writes");
+    assert!(sbpl.contains(".ssh"), "SBPL must mention the denied path");
+}
+
 /// Verify that the Landlock layer compiles and SandboxPolicy paths are all absolute.
 /// Does NOT call restrict_self() to avoid locking the test process.
 #[test]
