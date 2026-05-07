@@ -1,0 +1,193 @@
+cargo:rustc-link-lib=dylib=c++
+cargo:rustc-link-lib=framework=Accelerate
+cargo:rerun-if-changed=wrapper.h
+cargo:rerun-if-env-changed=TARGET
+cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS_aarch64-apple-darwin
+cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS_aarch64_apple_darwin
+cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS
+cargo:rerun-if-changed=wrapper.h
+cargo:rerun-if-changed=./whisper.cpp/whisper.h
+cargo:rerun-if-changed=./whisper.cpp/ggml.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/stdint.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/stdint.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_types/_int8_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_types/_int16_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_types/_int32_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_types/_int64_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_types/_uint8_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_types/_uint16_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_types/_uint32_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_types/_uint64_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_types.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/cdefs.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_symbol_aliasing.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_posix_availability.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/ptrcheck.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/machine/_types.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/arm/_types.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_pthread/_pthread_types.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/cdefs.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_types/_intptr_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/machine/_types.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_types/_uintptr_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_types/_intmax_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_types/_uintmax_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/stddef.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_header_macro.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_ptrdiff_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_size_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_rsize_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_wchar_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_null.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_max_align_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_offsetof.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/stdbool.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/stddef.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_header_macro.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_ptrdiff_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_size_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_rsize_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_wchar_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_max_align_t.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/__stddef_offsetof.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/stdint.h
+cargo:rerun-if-changed=/Library/Developer/CommandLineTools/usr/lib/clang/17/include/stdbool.h
+cargo:rerun-if-changed=./whisper.cpp/ggml.h
+CMAKE_TOOLCHAIN_FILE_aarch64-apple-darwin = None
+CMAKE_TOOLCHAIN_FILE_aarch64_apple_darwin = None
+HOST_CMAKE_TOOLCHAIN_FILE = None
+CMAKE_TOOLCHAIN_FILE = None
+CMAKE_GENERATOR_aarch64-apple-darwin = None
+CMAKE_GENERATOR_aarch64_apple_darwin = None
+HOST_CMAKE_GENERATOR = None
+CMAKE_GENERATOR = None
+CMAKE_PREFIX_PATH_aarch64-apple-darwin = None
+CMAKE_PREFIX_PATH_aarch64_apple_darwin = None
+HOST_CMAKE_PREFIX_PATH = None
+CMAKE_PREFIX_PATH = None
+CMAKE_aarch64-apple-darwin = None
+CMAKE_aarch64_apple_darwin = None
+HOST_CMAKE = None
+CMAKE = None
+Running with debug output on.
+-- The C compiler identification is AppleClang 17.0.0.17000604
+   Called from: [3]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [2]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake
+-- The CXX compiler identification is AppleClang 17.0.0.17000604
+   Called from: [3]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [2]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake
+-- Detecting C compiler ABI info
+   Called from: [3]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [2]	/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake
+-- Detecting C compiler ABI info - done
+   Called from: [3]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [2]	/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake
+-- Check for working C compiler: /usr/bin/cc - skipped
+   Called from: [2]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake
+-- Detecting C compile features
+   Called from: [3]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [2]	/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerSupport.cmake
+-- Detecting C compile features - done
+   Called from: [3]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [2]	/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerSupport.cmake
+-- Detecting CXX compiler ABI info
+   Called from: [3]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [2]	/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake
+-- Detecting CXX compiler ABI info - done
+   Called from: [3]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [2]	/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+   Called from: [2]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake
+-- Detecting CXX compile features
+   Called from: [3]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [2]	/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerSupport.cmake
+-- Detecting CXX compile features - done
+   Called from: [3]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [2]	/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerSupport.cmake
+-- Found Git: /opt/homebrew/bin/git (found version "2.53.0")
+   Called from: [5]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [4]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/cmake/GitVars.cmake
+                [3]	/opt/homebrew/share/cmake/Modules/FindGit.cmake
+                [2]	/opt/homebrew/share/cmake/Modules/FindPackageHandleStandardArgs.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/FindPackageMessage.cmake
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+   Called from: [5]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [4]	/opt/homebrew/share/cmake/Modules/FindThreads.cmake
+                [3]	/opt/homebrew/share/cmake/Modules/FindThreads.cmake
+                [2]	/opt/homebrew/share/cmake/Modules/CheckCSourceCompiles.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/Internal/CheckSourceCompiles.cmake
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+   Called from: [5]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [4]	/opt/homebrew/share/cmake/Modules/FindThreads.cmake
+                [3]	/opt/homebrew/share/cmake/Modules/FindThreads.cmake
+                [2]	/opt/homebrew/share/cmake/Modules/CheckCSourceCompiles.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/Internal/CheckSourceCompiles.cmake
+-- Found Threads: TRUE
+   Called from: [4]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+                [3]	/opt/homebrew/share/cmake/Modules/FindThreads.cmake
+                [2]	/opt/homebrew/share/cmake/Modules/FindPackageHandleStandardArgs.cmake
+                [1]	/opt/homebrew/share/cmake/Modules/FindPackageMessage.cmake
+-- Accelerate framework found
+   Called from: [1]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+-- CMAKE_SYSTEM_PROCESSOR: arm64
+   Called from: [1]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+-- ARM detected
+   Called from: [1]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+-- Configuring done (1.2s)
+-- Generating /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build
+   Called from: [1]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/CMakeLists.txt
+-- Generating /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build/bindings
+   Called from: [1]	/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/bindings/CMakeLists.txt
+-- Generating done (0.0s)
+-- Build files have been written to: /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build
+Change Dir: '/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build'
+
+Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile -j10 install
+/opt/homebrew/bin/cmake -S/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp -B/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build --check-build-system CMakeFiles/Makefile.cmake 0
+/opt/homebrew/bin/cmake -E cmake_progress_start /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build/CMakeFiles /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build//CMakeFiles/progress.marks
+/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/Makefile2 all
+/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/whisper.dir/build.make CMakeFiles/whisper.dir/depend
+cd /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build && /opt/homebrew/bin/cmake -E cmake_depends "Unix Makefiles" /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build/CMakeFiles/whisper.dir/DependInfo.cmake "--color=" whisper
+/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/whisper.dir/build.make CMakeFiles/whisper.dir/build
+[ 16%] Building C object CMakeFiles/whisper.dir/ggml-quants.c.o
+/usr/bin/cc -DGGML_USE_ACCELERATE -D_DARWIN_C_SOURCE -D_XOPEN_SOURCE=600 -I/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/. -F/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=26.2 -w -Werror=vla -O2 -g -DNDEBUG -arch arm64 -MD -MT CMakeFiles/whisper.dir/ggml-quants.c.o -MF CMakeFiles/whisper.dir/ggml-quants.c.o.d -o CMakeFiles/whisper.dir/ggml-quants.c.o -c /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/ggml-quants.c
+[ 83%] Building C object CMakeFiles/whisper.dir/ggml-alloc.c.o
+[ 83%] Building C object CMakeFiles/whisper.dir/ggml-backend.c.o
+[ 83%] Building CXX object CMakeFiles/whisper.dir/whisper.cpp.o
+[ 83%] Building C object CMakeFiles/whisper.dir/ggml.c.o
+/usr/bin/c++ -DGGML_USE_ACCELERATE -D_DARWIN_C_SOURCE -D_XOPEN_SOURCE=600 -I/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/. -F/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=26.2 -w -O2 -g -DNDEBUG -arch arm64 -MD -MT CMakeFiles/whisper.dir/whisper.cpp.o -MF CMakeFiles/whisper.dir/whisper.cpp.o.d -o CMakeFiles/whisper.dir/whisper.cpp.o -c /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/whisper.cpp
+/usr/bin/cc -DGGML_USE_ACCELERATE -D_DARWIN_C_SOURCE -D_XOPEN_SOURCE=600 -I/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/. -F/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=26.2 -w -Werror=vla -O2 -g -DNDEBUG -arch arm64 -MD -MT CMakeFiles/whisper.dir/ggml.c.o -MF CMakeFiles/whisper.dir/ggml.c.o.d -o CMakeFiles/whisper.dir/ggml.c.o -c /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/ggml.c
+/usr/bin/cc -DGGML_USE_ACCELERATE -D_DARWIN_C_SOURCE -D_XOPEN_SOURCE=600 -I/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/. -F/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=26.2 -w -Werror=vla -O2 -g -DNDEBUG -arch arm64 -MD -MT CMakeFiles/whisper.dir/ggml-alloc.c.o -MF CMakeFiles/whisper.dir/ggml-alloc.c.o.d -o CMakeFiles/whisper.dir/ggml-alloc.c.o -c /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/ggml-alloc.c
+/usr/bin/cc -DGGML_USE_ACCELERATE -D_DARWIN_C_SOURCE -D_XOPEN_SOURCE=600 -I/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/. -F/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks -ffunction-sections -fdata-sections -fPIC --target=arm64-apple-macosx -mmacosx-version-min=26.2 -w -Werror=vla -O2 -g -DNDEBUG -arch arm64 -MD -MT CMakeFiles/whisper.dir/ggml-backend.c.o -MF CMakeFiles/whisper.dir/ggml-backend.c.o.d -o CMakeFiles/whisper.dir/ggml-backend.c.o -c /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/whisper.cpp/ggml-backend.c
+[100%] Linking CXX static library libwhisper.a
+/opt/homebrew/bin/cmake -P CMakeFiles/whisper.dir/cmake_clean_target.cmake
+/opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/whisper.dir/link.txt --verbose=1
+/usr/bin/ar qc libwhisper.a CMakeFiles/whisper.dir/ggml.c.o "CMakeFiles/whisper.dir/ggml-alloc.c.o" "CMakeFiles/whisper.dir/ggml-backend.c.o" "CMakeFiles/whisper.dir/ggml-quants.c.o" CMakeFiles/whisper.dir/whisper.cpp.o
+/usr/bin/ranlib libwhisper.a
+[100%] Built target whisper
+/opt/homebrew/bin/cmake -E cmake_progress_start /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build/CMakeFiles 0
+/Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/Makefile2 preinstall
+make[1]: Nothing to be done for `preinstall'.
+Install the project...
+/opt/homebrew/bin/cmake -P cmake_install.cmake
+-- Install configuration: "RelWithDebInfo"
+-- Installing: /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/lib/static/libwhisper.a
+-- Installing: /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/include/ggml.h
+-- Installing: /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/include/whisper.h
+
+cargo:root=/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out
+cargo:rustc-link-search=/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build
+cargo:rustc-link-search=native=/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out
+cargo:rustc-link-lib=static=whisper

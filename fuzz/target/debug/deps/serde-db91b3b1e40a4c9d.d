@@ -1,0 +1,14 @@
+/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/deps/serde-db91b3b1e40a4c9d.d: /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/serde-258665a108843663/out/private.rs
+
+/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/deps/libserde-db91b3b1e40a4c9d.rlib: /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/serde-258665a108843663/out/private.rs
+
+/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/deps/libserde-db91b3b1e40a4c9d.rmeta: /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/serde-258665a108843663/out/private.rs
+
+/Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/serde-258665a108843663/out/private.rs:
+
+# env-dep:OUT_DIR=/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/serde-258665a108843663/out

@@ -1,0 +1,11 @@
+/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/deps/i18n_embed-24327e7286f6b2bf.d: /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/lib.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/assets.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/requester.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/util.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/fluent.rs
+
+/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/deps/libi18n_embed-24327e7286f6b2bf.rlib: /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/lib.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/assets.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/requester.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/util.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/fluent.rs
+
+/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/deps/libi18n_embed-24327e7286f6b2bf.rmeta: /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/lib.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/assets.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/requester.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/util.rs /Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/fluent.rs
+
+/Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/lib.rs:
+/Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/assets.rs:
+/Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/requester.rs:
+/Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/util.rs:
+/Users/david/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/fluent.rs:
