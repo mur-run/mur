@@ -264,7 +264,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         let guarded_http = reqwest::ClientBuilder::new()
             .dns_resolver(std::sync::Arc::new(host_guard))
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+            .context("failed to build guarded HTTP client")?;
 
         match entry.provider.as_str() {
             "ollama" => {

@@ -43,7 +43,7 @@ impl HostGuard {
                 }
                 list.iter().any(|allowed| {
                     if let Some(suffix) = allowed.strip_prefix("*.") {
-                        host.ends_with(suffix)
+                        host == suffix || host.ends_with(&format!(".{suffix}"))
                     } else {
                         allowed == host
                     }
