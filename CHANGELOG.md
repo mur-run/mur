@@ -1,5 +1,60 @@
 # Changelog
 
+## v2.10.0 (2026-05-07) — B1 Real Runtime Enforcement (Landlock v4 + SBPL + Job Object + HostGuard)
+
+### TL;DR
+
+Upgrades `mur-agent-runtime` from advisory B0 hooks to **kernel-level OS
+enforcement**. On Linux: Landlock ABI v4 (FS + TCP port allowlist) + seccomp
+BPF denylist (ptrace / mount / kexec_load / bpf / unshare / pivot_root). On
+macOS: SBPL via `sandbox_init_with_parameters`. On Windows: Job Object memory
+cap + break-away disabled. Cross-platform: `HostGuard` custom
+`reqwest::dns::Resolve` enforces the per-agent outbound hostname allowlist at
+the HTTP layer. MCP child processes are sandboxed via birdcage 0.8 (falls back
+to `cmd.spawn()` in multi-threaded tokio, inheriting the parent sandbox via
+`fork()` kernel semantics).
+
+### 🆕 New — B1 Sandbox Stack
+
+- **`sandbox/policy.rs`** — `SandboxPolicy` resolved from `Entitlements`; tilde
+  expansion, agent_home always in `fs_write`, system read/exec paths injected.
+- **`sandbox/linux.rs`** — Landlock v4 ruleset: `AccessFs::from_all` for
+  read/write/exec paths; `AccessNet::ConnectTcp` per-port rules (only enabled
+  when `net_allow_ports.is_some()` — zero rules blocks all TCP). Seccomp BPF
+  denylist via `seccompiler 0.5`; 6 high-risk syscalls return EPERM.
+- **`sandbox/macos.rs`** — SBPL profile builder (deny by default, allow-read
+  list, allow-write list, deny-fs-write list, network clause); applied via
+  `unsafe extern "C" sandbox_init_with_parameters` FFI (Rust 2024 syntax).
+- **`sandbox/windows.rs`** — `CreateJobObjectW` + `SetInformationJobObject`
+  memory cap + `BREAKAWAY_OK=0`; `AssignProcessToJobObject` pins the process.
+- **`sandbox/reqwest_guard.rs`** — `HostGuard` implements
+  `reqwest::dns::Resolve`; wildcard dot-boundary check prevents
+  `evilexample.com` from matching `*.example.com`; injected into all three
+  LLM client builders.
+- **`sandbox/child.rs`** — `spawn_sandboxed(cmd, &SandboxPolicy)` maps policy
+  to birdcage exceptions (ExecuteAndRead / Read / WriteAndRead / Networking /
+  FullEnvironment) then falls back to `cmd.spawn()`.
+- **`sandbox/mod.rs`** — `OnceLock<SandboxStatus>` + `last_status()` for
+  post-apply attestation queries.
+- **`supervisor.rs`** — `sandbox::apply()` called after grace_cleanup, before
+  TelemetryWriter / on_startup hooks; HostGuard injected into all LLM clients.
+- **`hooks/types.rs`** — `HookError::Sandboxed { path, op }` variant.
+- **`hooks/b0.rs`** — B1 attestation block at start of `on_startup`: logs
+  `ENFORCING` / `NOT enforcing` / `not applied` via `tracing::info/warn`.
+
+### 🧪 Tests
+
+- 6 integration tests in `tests/sandbox_e2e.rs` (macos SBPL string check,
+  Windows Job Object apply, HostGuard allow/block, `sandbox::apply` no-panic,
+  `spawn_sandboxed` runs `/usr/bin/true`, Landlock path absoluteness).
+- `sandbox_denies_write_outside_agent_home` subprocess test (Linux only) uses
+  `#[ctor::ctor]` to intercept the test binary before `main()`.
+
+### 📚 Docs
+
+- `docs/cookbook/b1-runtime-enforcement.md` — platform matrix, operator
+  guide, known limitations, upgrade path from B0.
+
 ## v2.9.0 (2026-05-07) — D1 On-Device Voice (Kokoro TTS + whisper.cpp STT)
 
 ### TL;DR
