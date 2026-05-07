@@ -25,6 +25,7 @@ pub fn apply_windows(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
             std::ptr::null_mut(),
         );
         if ok == 0 {
+            windows_sys::Win32::Foundation::CloseHandle(job);
             bail!("QueryInformationJobObject failed: {}", std::io::Error::last_os_error());
         }
 
@@ -45,12 +46,14 @@ pub fn apply_windows(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         );
         if ok == 0 {
+            windows_sys::Win32::Foundation::CloseHandle(job);
             bail!("SetInformationJobObject failed: {}", std::io::Error::last_os_error());
         }
 
         let proc = GetCurrentProcess();
         let ok = AssignProcessToJobObject(job, proc);
         if ok == 0 {
+            windows_sys::Win32::Foundation::CloseHandle(job);
             bail!("AssignProcessToJobObject failed: {}", std::io::Error::last_os_error());
         }
     }
