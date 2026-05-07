@@ -34,6 +34,21 @@ impl OpenAiClient {
         }
     }
 
+    /// Construct with a pre-built reqwest client (e.g. carrying a HostGuard DNS resolver).
+    pub fn new_with_http_client(
+        base_url: String,
+        api_key: String,
+        model: String,
+        http: reqwest::Client,
+    ) -> Self {
+        Self {
+            base_url,
+            api_key,
+            model,
+            http,
+        }
+    }
+
     /// Convenience constructor reading API key from `OPENAI_API_KEY` and base
     /// URL from `OPENAI_BASE_URL` (defaults to api.openai.com/v1).
     pub fn from_env(model: String) -> Result<Self, LlmError> {
@@ -66,6 +81,46 @@ impl OpenAiClient {
         match mur_common::secret::keychain_get(MUR_AGENT_KEYCHAIN_SERVICE, &account).await {
             Ok(Some(secret)) => Ok(Self::from_secret_string(&secret, model, None)),
             Ok(None) => Self::from_env(model),
+            Err(e) => Err(LlmError::InvalidResponse(format!(
+                "keychain backend error reading {MUR_AGENT_KEYCHAIN_SERVICE}/{account}: {e}"
+            ))),
+        }
+    }
+
+    /// Like [`from_secret_string`] but uses a pre-built reqwest client
+    /// (e.g. one carrying a B1 HostGuard DNS resolver).
+    pub fn from_secret_string_with_http(
+        key: &secrecy::SecretString,
+        model: String,
+        base_url: Option<String>,
+        http: reqwest::Client,
+    ) -> Self {
+        use secrecy::ExposeSecret;
+        let base = base_url.unwrap_or_else(|| {
+            std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
+        });
+        Self::new_with_http_client(base, key.expose_secret().to_string(), model, http)
+    }
+
+    /// Like [`from_agent_credentials`] but injects a pre-built reqwest client
+    /// (e.g. one carrying a B1 HostGuard DNS resolver).
+    pub async fn from_agent_credentials_with_http(
+        agent_name: &str,
+        model: String,
+        http: reqwest::Client,
+    ) -> Result<Self, LlmError> {
+        let account = format!("{agent_name}/OPENAI_API_KEY");
+        match mur_common::secret::keychain_get(MUR_AGENT_KEYCHAIN_SERVICE, &account).await {
+            Ok(Some(secret)) => Ok(Self::from_secret_string_with_http(
+                &secret, model, None, http,
+            )),
+            Ok(None) => {
+                let api_key = std::env::var("OPENAI_API_KEY")
+                    .map_err(|_| LlmError::InvalidResponse("OPENAI_API_KEY not set".into()))?;
+                let base = std::env::var("OPENAI_BASE_URL")
+                    .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+                Ok(Self::new_with_http_client(base, api_key, model, http))
+            }
             Err(e) => Err(LlmError::InvalidResponse(format!(
                 "keychain backend error reading {MUR_AGENT_KEYCHAIN_SERVICE}/{account}: {e}"
             ))),

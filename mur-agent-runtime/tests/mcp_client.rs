@@ -1,4 +1,5 @@
 use mur_agent_runtime::protocol::mcp_client::McpClient;
+use mur_agent_runtime::sandbox::SandboxPolicy;
 use mur_common::agent::McpServerEntry;
 
 #[tokio::test]
@@ -10,7 +11,8 @@ async fn initialize_and_tools_list() {
         args: vec![],
         ..Default::default()
     };
-    let mut client = McpClient::spawn(&entry).await.expect("spawn");
+    let policy = SandboxPolicy::default();
+    let mut client = McpClient::spawn(&entry, &policy).await.expect("spawn");
     let info = client.initialize().await.expect("init");
     assert_eq!(info.server_name, "mock_mcp");
     let tools = client.list_tools().await.expect("list");

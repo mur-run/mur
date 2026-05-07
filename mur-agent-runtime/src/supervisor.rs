@@ -21,6 +21,7 @@ use crate::protocol::methods::{
     message_send::MessageSendHandler,
     tasks::{TasksCancelHandler, TasksGetHandler, TasksListHandler},
 };
+use crate::sandbox::reqwest_guard::HostGuard;
 #[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
 use crate::task_runner::TaskRunner;
@@ -30,6 +31,7 @@ use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
 use crate::transport::unix_socket::serve_unix;
 use crate::transport::webhook;
+use mur_common::agent::NetworkOutboundMode;
 use mur_common::identity::AgentIdentity;
 use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
 use std::path::PathBuf;
@@ -143,6 +145,25 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         warn!(error = %e, "grace-period cleanup failed");
     }
 
+    // B1: apply OS-level kernel sandbox based on profile entitlements.
+    // Called AFTER profile load (needs entitlements) and AFTER grace cleanup.
+    // BEFORE telemetry writer (its file I/O must be within sandbox bounds).
+    // BEFORE on_startup hooks.
+    // On platforms without Landlock/SBPL support, returns enforcing=false — B0 still applies.
+    match crate::sandbox::apply(&profile.inner.entitlements, &agent_home) {
+        Ok(status) => {
+            tracing::info!(
+                platform = %status.platform,
+                effective_abi = ?status.effective_abi,
+                enforcing = status.enforcing,
+                "B1 sandbox applied"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "B1 sandbox::apply failed; running advisory-only (B0 remains active)");
+        }
+    }
+
     // 4. Spawn telemetry writer
     let (writer, notif_rx) = TelemetryWriter::new(
         agent_home.join("telemetry"),
@@ -248,13 +269,31 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             },
             None => None,
         };
+
+        // B1 HostGuard: build a guarded reqwest::Client whose DNS resolver
+        // enforces the outbound host allowlist before the OS resolver is called.
+        let outbound = &profile.inner.entitlements.network.outbound;
+        let host_guard = match outbound.mode {
+            NetworkOutboundMode::Unrestricted => HostGuard::unrestricted(),
+            NetworkOutboundMode::Restricted => HostGuard::restricted(outbound.allow_hosts.clone()),
+            NetworkOutboundMode::Off => HostGuard::off(),
+        };
+        let guarded_http = reqwest::ClientBuilder::new()
+            .dns_resolver(std::sync::Arc::new(host_guard))
+            .build()
+            .context("failed to build guarded HTTP client")?;
+
         match entry.provider.as_str() {
             "ollama" => {
                 let base = entry.base_url.clone().unwrap_or_else(|| {
                     std::env::var("OLLAMA_BASE_URL")
                         .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
                 });
-                let client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(base, entry.model));
+                let client: Arc<dyn LlmClient> = Arc::new(OllamaClient::with_http_client(
+                    base,
+                    entry.model,
+                    guarded_http,
+                ));
                 let r = Arc::new(
                     TaskRunner::with_llm(client.clone())
                         .with_system_prompt(profile.system_prompt.clone()),
@@ -269,15 +308,17 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 // stored via `mur agent secret set`.
                 let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
                 {
-                    Ok(Arc::new(AnthropicClient::from_secret_string(
+                    Ok(Arc::new(AnthropicClient::from_secret_string_with_http(
                         key,
                         entry.model.clone(),
                         entry.base_url.clone(),
+                        guarded_http,
                     )))
                 } else {
-                    AnthropicClient::from_agent_credentials(
+                    AnthropicClient::from_agent_credentials_with_http(
                         &profile.inner.name,
                         entry.model.clone(),
+                        guarded_http,
                     )
                     .await
                     .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
@@ -299,15 +340,20 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             "openai" => {
                 let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
                 {
-                    Ok(Arc::new(OpenAiClient::from_secret_string(
+                    Ok(Arc::new(OpenAiClient::from_secret_string_with_http(
                         key,
                         entry.model.clone(),
                         entry.base_url.clone(),
+                        guarded_http,
                     )))
                 } else {
-                    OpenAiClient::from_agent_credentials(&profile.inner.name, entry.model.clone())
-                        .await
-                        .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
+                    OpenAiClient::from_agent_credentials_with_http(
+                        &profile.inner.name,
+                        entry.model.clone(),
+                        guarded_http,
+                    )
+                    .await
+                    .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
                 };
                 match built {
                     Ok(client) => {
