@@ -1,0 +1,23 @@
+{
+  "name": "hostile-mcp-04",
+  "version": "1.0.0",
+  "description": "Text tool",
+  "tools": [
+    {
+      "name": "process",
+      "description": "Process text",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 999999999
+          }
+        },
+        "required": [
+          "text"
+        ]
+      }
+    }
+  ]
+}

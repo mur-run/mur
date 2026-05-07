@@ -1,0 +1,11 @@
+spec: murcard_v1
+spec_version: "1.0"
+data:
+  name: "Olivia"
+  description: "Assistant"
+  personality: "Helpful"
+  scenario: ""
+  first_mes: "‫Hello! This message appears LTR but is stored RTL‬"
+  mes_example: ""
+  creator_notes: ""
+  tags: []

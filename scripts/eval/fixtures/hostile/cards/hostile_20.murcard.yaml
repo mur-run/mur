@@ -1,0 +1,11 @@
+spec: murcard_v1
+spec_version: "1.0"
+data:
+  name: "PayPaᎼ"
+  description: "Cherokee letter (U+13BC) resembles 'L' — homoglyph attack"
+  personality: "Helpful"
+  scenario: ""
+  first_mes: "Hello!"
+  mes_example: ""
+  creator_notes: ""
+  tags: []

@@ -1,0 +1,47 @@
+[workspace]
+
+[package]
+name = "mur-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[[bin]]
+name = "fuzz_signed_envelope"
+path = "fuzz_targets/fuzz_signed_envelope.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_mcp_json"
+path = "fuzz_targets/fuzz_mcp_json.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_agent_profile_yaml"
+path = "fuzz_targets/fuzz_agent_profile_yaml.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_character_card_yaml"
+path = "fuzz_targets/fuzz_character_card_yaml.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_noise_frame"
+path = "fuzz_targets/fuzz_noise_frame.rs"
+test = false
+doc = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+serde_yaml_ng = "0.10"
+mur-common = { path = "../mur-common" }
+mur-agent-runtime = { path = "../mur-agent-runtime" }
