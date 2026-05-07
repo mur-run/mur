@@ -322,6 +322,11 @@ pub enum HookError {
     /// I/O failure reading the ledger inside `B0SafetyHook`).
     #[error("hook runtime error: {0}")]
     Runtime(String),
+    /// B1 kernel sandbox blocked this tool call. Returned to the LLM as a
+    /// structured error so it understands why the operation was denied.
+    /// `path` is the blocked path or host; `op` is "read", "write", or "connect".
+    #[error("Sandboxed: {op} on '{path}' denied by B1 enforcement")]
+    Sandboxed { path: String, op: String },
 }
 
 #[derive(Debug, Clone, Copy)]
