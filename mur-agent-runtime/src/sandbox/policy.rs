@@ -100,6 +100,9 @@ fn system_exec_paths(home: &Path) -> Vec<PathBuf> {
 }
 
 fn system_read_paths() -> Vec<PathBuf> {
+    // `mut` is only used inside the #[cfg(target_os = "macos")] block below;
+    // allow the lint rather than restructure the initialization.
+    #[allow(unused_mut)]
     let mut paths = vec![
         PathBuf::from("/etc"),
         PathBuf::from("/usr/lib"),
@@ -123,8 +126,8 @@ fn system_read_paths() -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use mur_common::agent::{
-        Entitlements, FilesystemEntitlement, NetworkOutboundMode, OutboundNetwork,
-        NetworkEntitlement, InboundNetwork, ProcessesEntitlement, SpawnEntitlement, SpawnMode,
+        Entitlements, FilesystemEntitlement, InboundNetwork, NetworkEntitlement,
+        NetworkOutboundMode, OutboundNetwork, ProcessesEntitlement, SpawnEntitlement, SpawnMode,
     };
 
     fn minimal_entitlements() -> Entitlements {
@@ -144,7 +147,10 @@ mod tests {
                 deny: vec!["~/.ssh".to_string()],
             },
             processes: ProcessesEntitlement {
-                spawn: SpawnEntitlement { mode: SpawnMode::Allowlist, allowed: vec![] },
+                spawn: SpawnEntitlement {
+                    mode: SpawnMode::Allowlist,
+                    allowed: vec![],
+                },
             },
             syscalls: Default::default(),
             limits: Default::default(),
@@ -187,7 +193,10 @@ mod tests {
     fn restricted_mode_populates_allow_hosts() {
         let home = PathBuf::from("/tmp/agent_home");
         let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &home);
-        assert_eq!(policy.net_allow_hosts, Some(vec!["api.anthropic.com".to_string()]));
+        assert_eq!(
+            policy.net_allow_hosts,
+            Some(vec!["api.anthropic.com".to_string()])
+        );
     }
 
     #[test]

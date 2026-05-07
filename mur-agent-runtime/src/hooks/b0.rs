@@ -128,7 +128,9 @@ impl Hook for B0SafetyHook {
                 );
             }
             None => {
-                tracing::warn!("B1 kernel sandbox: not applied (sandbox::apply() not called before on_startup)");
+                tracing::warn!(
+                    "B1 kernel sandbox: not applied (sandbox::apply() not called before on_startup)"
+                );
             }
         }
 
