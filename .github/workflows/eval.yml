@@ -99,6 +99,8 @@ jobs:
             protobuf-compiler \
             libprotobuf-dev \
             libdbus-1-dev \
+            libasound2-dev \
+            libespeak-ng-dev \
             pkg-config
       - name: Build mur-core (for `mur agent eval report`)
         run: cargo build -p mur-core --release --bin mur
@@ -155,6 +157,8 @@ jobs:
             protobuf-compiler \
             libprotobuf-dev \
             libdbus-1-dev \
+            libasound2-dev \
+            libespeak-ng-dev \
             pkg-config
       - name: Guard — refuse to run without API key
         run: |
@@ -274,6 +278,8 @@ jobs:
             protobuf-compiler \
             libprotobuf-dev \
             libdbus-1-dev \
+            libasound2-dev \
+            libespeak-ng-dev \
             pkg-config
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked

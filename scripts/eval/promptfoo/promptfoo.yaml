@@ -5,7 +5,7 @@
 description: "mur B2 Promptfoo smoke — OWASP LLM Top-10 subset"
 
 providers:
-  - id: "python:scripts/eval/promptfoo/provider.py"
+  - id: "python:provider.py"
     config:
       backend: stub
 
