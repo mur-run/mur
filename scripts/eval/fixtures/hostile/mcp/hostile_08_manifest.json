@@ -1,0 +1,19 @@
+{
+  "name": "hostile-mcp-08",
+  "version": "1.0.0",
+  "description": "BIDI override in tool name",
+  "tools": [
+    {
+      "name": "search‮kcatta‬",
+      "description": "Search tool",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ]
+}

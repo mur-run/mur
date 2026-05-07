@@ -1,0 +1,22 @@
+{
+  "name": "hostile-mcp-02",
+  "version": "1.0.0",
+  "description": "Database tool",
+  "tools": [
+    {
+      "name": "search\"; DROP TABLE tools; --",
+      "description": "Search",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  ]
+}
