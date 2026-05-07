@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build/cmake_install.cmake",
-		"/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/whisper-rs-sys-d7e707436328deb8/out/build/bindings/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

@@ -1,2 +1,0 @@
-cargo:rerun-if-env-changed=MUR_EXPORT_AGENT_DIR
-cargo:rustc-env=MUR_EMBEDDED_AGENT_PATH=/Volumes/Firecuda4tb/Projects/mur/.worktrees/feat-b2-red-team-fuzz/fuzz/target/debug/build/mur-agent-runtime-40dc27868c031927/out/embedded_agent.tar.gz

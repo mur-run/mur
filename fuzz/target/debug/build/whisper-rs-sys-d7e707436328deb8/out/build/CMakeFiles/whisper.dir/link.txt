@@ -1,2 +1,0 @@
-/usr/bin/ar qc libwhisper.a CMakeFiles/whisper.dir/ggml.c.o "CMakeFiles/whisper.dir/ggml-alloc.c.o" "CMakeFiles/whisper.dir/ggml-backend.c.o" "CMakeFiles/whisper.dir/ggml-quants.c.o" CMakeFiles/whisper.dir/whisper.cpp.o
-/usr/bin/ranlib libwhisper.a
