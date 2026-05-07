@@ -39,10 +39,7 @@ async fn cron_scheduler_skips_bad_entry() {
     let runner = Arc::new(TaskRunner::new_stub_echo());
     let handle = CronScheduler::new(entries, runner).spawn();
     // The inner loop exits immediately on bad expr; outer task completes naturally.
-    let result = tokio::time::timeout(
-        std::time::Duration::from_millis(200),
-        handle,
-    ).await;
+    let result = tokio::time::timeout(std::time::Duration::from_millis(200), handle).await;
     // Either completes naturally (Ok(Ok(()))) or is still sleeping (timeout).
     // What must NOT happen: panic.
     match result {

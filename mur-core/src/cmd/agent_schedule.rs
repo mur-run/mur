@@ -3,7 +3,7 @@
 //! Reads and writes `profile.lifecycle.schedule` using the same
 //! `load_profile_for_edit` + `save_profile` helpers as `agent_webhook.rs`.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use mur_common::agent::ScheduleEntry;
 
 use super::agent::{load_profile_for_edit, save_profile};

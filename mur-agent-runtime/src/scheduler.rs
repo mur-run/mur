@@ -122,10 +122,7 @@ async fn run_entry(entry: ScheduleEntry, runner: Arc<TaskRunner>, cancel: Cancel
 ///
 /// Used by `mur agent schedule next` to preview upcoming firings.
 /// Converts 5-field → 6-field by prepending `"0 "` (seconds = 0).
-pub fn next_n_fires(
-    cron_expr: &str,
-    count: usize,
-) -> Result<Vec<chrono::DateTime<Local>>> {
+pub fn next_n_fires(cron_expr: &str, count: usize) -> Result<Vec<chrono::DateTime<Local>>> {
     let expr = format!("0 {cron_expr}");
     let schedule = Schedule::from_str(&expr)
         .with_context(|| format!("parse cron expression {cron_expr:?}"))?;

@@ -1962,9 +1962,12 @@ async fn async_main() -> Result<()> {
                 }
             },
             AgentAction::Schedule { action } => match action {
-                AgentScheduleAction::Add { name, cron, message, sends_to } => {
-                    cmd::agent_schedule::cmd_schedule_add(&name, &cron, &message, sends_to)?
-                }
+                AgentScheduleAction::Add {
+                    name,
+                    cron,
+                    message,
+                    sends_to,
+                } => cmd::agent_schedule::cmd_schedule_add(&name, &cron, &message, sends_to)?,
                 AgentScheduleAction::List { name } => {
                     cmd::agent_schedule::cmd_schedule_list(&name)?
                 }

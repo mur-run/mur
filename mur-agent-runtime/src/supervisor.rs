@@ -15,7 +15,6 @@ use crate::llm::{
 use crate::lock_file::{LockHandle, write_lock};
 use crate::multi_call::{DispatchError, extract_profile_name, verify_name_match};
 use crate::profile::Profile;
-use crate::scheduler::CronScheduler;
 use crate::protocol::a2a_server::Dispatcher;
 use crate::protocol::methods::{
     card::CardHandler,
@@ -23,6 +22,7 @@ use crate::protocol::methods::{
     tasks::{TasksCancelHandler, TasksGetHandler, TasksListHandler},
 };
 use crate::sandbox::reqwest_guard::HostGuard;
+use crate::scheduler::CronScheduler;
 #[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
 use crate::task_runner::TaskRunner;
@@ -561,10 +561,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     //     Each loop selects on a shared CancellationToken so SIGTERM (which
     //     calls t.abort() on all transport_tasks) also stops in-flight entries.
     if !profile.inner.lifecycle.schedule.is_empty() {
-        let cs = CronScheduler::new(
-            profile.inner.lifecycle.schedule.clone(),
-            runner.clone(),
-        );
+        let cs = CronScheduler::new(profile.inner.lifecycle.schedule.clone(), runner.clone());
         transport_tasks.push(cs.spawn());
         info!(
             count = profile.inner.lifecycle.schedule.len(),
