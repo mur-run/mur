@@ -1122,6 +1122,11 @@ enum AgentAction {
         #[command(subcommand)]
         action: VoiceAction,
     },
+    /// Manage lifecycle cron schedule entries (C4)
+    Schedule {
+        #[command(subcommand)]
+        action: AgentScheduleAction,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1137,6 +1142,44 @@ enum VoiceAction {
     Disable,
     /// Download voice model weights (~1.4 GB; SHA-256 verified).
     Download,
+}
+
+#[derive(Subcommand)]
+enum AgentScheduleAction {
+    /// Append a cron entry to the agent's lifecycle.schedule
+    Add {
+        /// Agent name
+        name: String,
+        /// 5-field POSIX cron expression (e.g. "30 9 * * 1-5")
+        #[arg(long)]
+        cron: String,
+        /// Message text injected as a user turn when the cron fires
+        #[arg(long)]
+        message: String,
+        /// Send the message to a different agent instead of self (optional)
+        #[arg(long)]
+        sends_to: Option<String>,
+    },
+    /// List all schedule entries for an agent
+    List {
+        /// Agent name
+        name: String,
+    },
+    /// Remove a schedule entry by index (0-based, see `list` for indices)
+    Remove {
+        /// Agent name
+        name: String,
+        /// Entry index to remove
+        index: usize,
+    },
+    /// Show next N fire times for each schedule entry
+    Next {
+        /// Agent name
+        name: String,
+        /// How many upcoming fires to show per entry (default: 5)
+        #[arg(long, default_value_t = 5)]
+        count: usize,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1916,6 +1959,23 @@ async fn async_main() -> Result<()> {
                 VoiceAction::Disable => cmd::agent_voice::cmd_voice_disable(&name)?,
                 VoiceAction::Download => {
                     anyhow::bail!("voice download not yet implemented; will ship in D1 Task 3");
+                }
+            },
+            AgentAction::Schedule { action } => match action {
+                AgentScheduleAction::Add {
+                    name,
+                    cron,
+                    message,
+                    sends_to,
+                } => cmd::agent_schedule::cmd_schedule_add(&name, &cron, &message, sends_to)?,
+                AgentScheduleAction::List { name } => {
+                    cmd::agent_schedule::cmd_schedule_list(&name)?
+                }
+                AgentScheduleAction::Remove { name, index } => {
+                    cmd::agent_schedule::cmd_schedule_remove(&name, index)?
+                }
+                AgentScheduleAction::Next { name, count } => {
+                    cmd::agent_schedule::cmd_schedule_next(&name, count)?
                 }
             },
         },
