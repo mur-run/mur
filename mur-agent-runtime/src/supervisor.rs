@@ -12,8 +12,6 @@ use crate::hooks::{
 use crate::llm::{
     LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
 };
-use crate::sandbox::reqwest_guard::HostGuard;
-use mur_common::agent::NetworkOutboundMode;
 use crate::lock_file::{LockHandle, write_lock};
 use crate::multi_call::{DispatchError, extract_profile_name, verify_name_match};
 use crate::profile::Profile;
@@ -23,6 +21,7 @@ use crate::protocol::methods::{
     message_send::MessageSendHandler,
     tasks::{TasksCancelHandler, TasksGetHandler, TasksListHandler},
 };
+use crate::sandbox::reqwest_guard::HostGuard;
 #[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
 use crate::task_runner::TaskRunner;
@@ -32,6 +31,7 @@ use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
 use crate::transport::unix_socket::serve_unix;
 use crate::transport::webhook;
+use mur_common::agent::NetworkOutboundMode;
 use mur_common::identity::AgentIdentity;
 use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
 use std::path::PathBuf;
@@ -275,9 +275,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         let outbound = &profile.inner.entitlements.network.outbound;
         let host_guard = match outbound.mode {
             NetworkOutboundMode::Unrestricted => HostGuard::unrestricted(),
-            NetworkOutboundMode::Restricted => {
-                HostGuard::restricted(outbound.allow_hosts.clone())
-            }
+            NetworkOutboundMode::Restricted => HostGuard::restricted(outbound.allow_hosts.clone()),
             NetworkOutboundMode::Off => HostGuard::off(),
         };
         let guarded_http = reqwest::ClientBuilder::new()
@@ -291,8 +289,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                     std::env::var("OLLAMA_BASE_URL")
                         .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
                 });
-                let client: Arc<dyn LlmClient> =
-                    Arc::new(OllamaClient::with_http_client(base, entry.model, guarded_http));
+                let client: Arc<dyn LlmClient> = Arc::new(OllamaClient::with_http_client(
+                    base,
+                    entry.model,
+                    guarded_http,
+                ));
                 let r = Arc::new(
                     TaskRunner::with_llm(client.clone())
                         .with_system_prompt(profile.system_prompt.clone()),

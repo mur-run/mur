@@ -60,8 +60,9 @@ impl Resolve for HostGuard {
 
         Box::pin(async move {
             if !allowed {
-                return Err(Box::new(HostGuardError(host))
-                    as Box<dyn std::error::Error + Send + Sync>);
+                return Err(
+                    Box::new(HostGuardError(host)) as Box<dyn std::error::Error + Send + Sync>
+                );
             }
             // Delegate to the OS resolver.
             let addrs: Addrs = Box::new(
