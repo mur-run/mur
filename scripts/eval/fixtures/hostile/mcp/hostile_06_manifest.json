@@ -1,0 +1,27 @@
+{
+  "name": "hostile-mcp-06",
+  "version": "1.0.0",
+  "description": "Circular schema",
+  "tools": [
+    {
+      "name": "process",
+      "description": "Process",
+      "inputSchema": {
+        "$defs": {
+          "Node": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string"
+              },
+              "child": {
+                "$ref": "#/$defs/Node"
+              }
+            }
+          }
+        },
+        "$ref": "#/$defs/Node"
+      }
+    }
+  ]
+}

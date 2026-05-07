@@ -20,9 +20,12 @@ on:
   push:
     tags: ['v*']
   schedule:
-    # Weekly cron — Mondays 09:00 UTC. Picks up regressions even when
-    # nothing eval-touching has merged that week.
+    # Nightly: agentdojo + harmbench + injecagent + llama-guard re-grade
+    - cron: '0 1 * * *'
+    # Weekly Monday 09:00 UTC — real-LLM track (kept for release cadence)
     - cron: '0 9 * * 1'
+    # Weekly Sunday 02:00 UTC — cargo-fuzz 10 min per target
+    - cron: '0 2 * * 0'
   workflow_dispatch:
     inputs:
       backend:
@@ -213,3 +216,83 @@ jobs:
           git add "eval-results/${tag}.jsonl"
           git commit -m "eval: baseline for $tag" || true
           git push origin HEAD:main || true
+
+  # ── Llama-Guard nightly re-grade ─────────────────────────────────
+  # Grades every JSONL response with Llama-Guard-3-8B running locally
+  # via Ollama. Only runs on self-hosted runners that have Ollama with
+  # llama-guard3:8b pulled. Soft-fails if Ollama is unavailable.
+  llama-guard-nightly:
+    name: Llama-Guard nightly re-grade
+    runs-on: [self-hosted, ollama]
+    if: github.event_name == 'schedule' && github.event.schedule == '0 1 * * *'
+    needs: real-llm
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Pull Llama-Guard model
+        run: ollama pull llama-guard3:8b
+      - name: Download eval JSONL artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: real-llm-eval-report-*
+          path: /tmp/eval-results
+          merge-multiple: true
+      - name: Grade all runners
+        run: |
+          find /tmp/eval-results -name "*.jsonl" | while read f; do
+            python3 scripts/eval/llama_guard/grade.py \
+              --jsonl "$f" \
+              --output "${f%.jsonl}.graded.jsonl"
+          done
+      - name: Upload graded results
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-graded-${{ github.run_id }}
+          path: /tmp/eval-results/*.graded.jsonl
+          retention-days: 90
+
+  # ── cargo-fuzz weekly (10 min per target) ────────────────────────
+  # Requires nightly Rust + cargo-fuzz. Runs 5 parser targets × 10 min
+  # on Sunday. Any crash fails the job and uploads the artifact.
+  fuzz-weekly:
+    name: cargo-fuzz weekly (10 min per target)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    if: github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> target
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler \
+            libprotobuf-dev \
+            libdbus-1-dev \
+            pkg-config
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run fuzz targets (10 min each)
+        run: |
+          crash_targets=""
+          for target in fuzz_signed_envelope fuzz_mcp_json fuzz_agent_profile_yaml fuzz_character_card_yaml fuzz_noise_frame; do
+            echo "=== Fuzzing $target ==="
+            cargo fuzz run "$target" -- -max_total_time=600 -timeout=5 \
+              || crash_targets="$crash_targets $target"
+          done
+          if [ -n "$crash_targets" ]; then
+            echo "::error::Crashes detected in:$crash_targets"
+            exit 1
+          fi
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ github.run_id }}
+          path: fuzz/artifacts/
+          retention-days: 30
