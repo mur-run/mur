@@ -145,6 +145,25 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         warn!(error = %e, "grace-period cleanup failed");
     }
 
+    // B1: apply OS-level kernel sandbox based on profile entitlements.
+    // Called AFTER profile load (needs entitlements) and AFTER grace cleanup.
+    // BEFORE telemetry writer (its file I/O must be within sandbox bounds).
+    // BEFORE on_startup hooks.
+    // On platforms without Landlock/SBPL support, returns enforcing=false — B0 still applies.
+    match crate::sandbox::apply(&profile.inner.entitlements, &agent_home) {
+        Ok(status) => {
+            tracing::info!(
+                platform = %status.platform,
+                effective_abi = ?status.effective_abi,
+                enforcing = status.enforcing,
+                "B1 sandbox applied"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "B1 sandbox::apply failed; running advisory-only (B0 remains active)");
+        }
+    }
+
     // 4. Spawn telemetry writer
     let (writer, notif_rx) = TelemetryWriter::new(
         agent_home.join("telemetry"),

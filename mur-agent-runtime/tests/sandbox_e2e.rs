@@ -66,6 +66,26 @@ async fn host_guard_allows_listed_host() {
     }
 }
 
+/// Verify that `sandbox::apply()` returns Ok on any platform (may return enforcing=false on
+/// unsupported platforms). Uses MUR_AGENT_SKIP_SANDBOX to prevent actual restrict_self()
+/// in the test process.
+#[test]
+fn sandbox_apply_does_not_panic() {
+    if std::env::var_os("MUR_AGENT_SKIP_SANDBOX").is_some() {
+        // Skipping sandbox apply in test process — this is expected in most CI configs.
+        return;
+    }
+    use mur_agent_runtime::sandbox;
+    use mur_common::agent::AgentProfile;
+    use std::path::PathBuf;
+
+    let profile = AgentProfile::default_for_tests();
+    let agent_home = PathBuf::from("/tmp/b1_test_agent_apply");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    let result = sandbox::apply(&profile.entitlements, &agent_home);
+    assert!(result.is_ok(), "sandbox::apply must not error: {result:?}");
+}
+
 /// Verify that the Landlock layer compiles and SandboxPolicy paths are all absolute.
 /// Does NOT call restrict_self() to avoid locking the test process.
 #[test]
