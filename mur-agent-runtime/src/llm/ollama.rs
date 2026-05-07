@@ -18,6 +18,11 @@ impl OllamaClient {
             http: reqwest::Client::new(),
         }
     }
+
+    /// Construct with a pre-built reqwest client (e.g. carrying a HostGuard DNS resolver).
+    pub fn with_http_client(base_url: String, model: String, http: reqwest::Client) -> Self {
+        Self { base_url, model, http }
+    }
 }
 
 #[async_trait]
