@@ -174,7 +174,13 @@ pub async fn probe_mcp_descriptions(
     ProbeError,
 > {
     let probe = async {
-        let mut client = mur_agent_runtime::protocol::mcp_client::McpClient::spawn(entry).await?;
+        // Diagnostic probe — no live agent profile available, so use a
+        // default (permissive) sandbox policy. The actual sandbox is
+        // applied by the supervisor at runtime; this call only needs
+        // the spawn to succeed for tool description hashing.
+        let policy = mur_agent_runtime::sandbox::policy::SandboxPolicy::default();
+        let mut client =
+            mur_agent_runtime::protocol::mcp_client::McpClient::spawn(entry, &policy).await?;
         let _info = client.initialize().await?;
         let tools = client.list_tools().await?;
         client.shutdown().await;
