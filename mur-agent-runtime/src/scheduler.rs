@@ -6,7 +6,7 @@
 //! sleep → inject → repeat. All loops are children of `CronScheduler::spawn`,
 //! which returns a single `JoinHandle` aborted on SIGTERM by the supervisor.
 
-use crate::task_runner::{TaskRunner, TaskSpec};
+use crate::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 use anyhow::{Context, Result};
 use chrono::Local;
 use cron::Schedule;
@@ -34,6 +34,7 @@ impl CronScheduler {
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
         let cancel = CancellationToken::new();
         tokio::spawn(async move {
+            let _guard = cancel.clone().drop_guard(); // cancel all entries on abort
             let mut handles = Vec::with_capacity(self.entries.len());
             for entry in self.entries {
                 let runner = self.runner.clone();
@@ -78,7 +79,7 @@ async fn run_entry(entry: ScheduleEntry, runner: Arc<TaskRunner>, cancel: Cancel
                 match delta.to_std() {
                     Ok(dur) => tokio::time::sleep(dur).await,
                     Err(_) => {
-                        warn!(cron = %entry.cron, "sub-ms clock skew; firing immediately");
+                        warn!(cron = %entry.cron, "negative delta after clock adjustment; firing immediately");
                     }
                 }
             } => {}
@@ -107,7 +108,7 @@ async fn run_entry(entry: ScheduleEntry, runner: Arc<TaskRunner>, cancel: Cancel
             .await;
 
         // M2: surface LLM failures in supervisor logs
-        if let crate::task_runner::TaskOutcome::Failed(ref t) = outcome {
+        if let TaskOutcome::Failed(ref t) = outcome {
             warn!(
                 cron = %entry.cron,
                 task_id = %t.id,
