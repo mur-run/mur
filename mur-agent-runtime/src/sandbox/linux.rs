@@ -96,6 +96,9 @@ fn apply_seccomp_denylist() -> anyhow::Result<()> {
 
     // Map each denied syscall number to an empty rule vector.
     // An empty rule vector means the syscall always triggers the match_action (deny).
+    // i64::from() widens c_long (i32 on 32-bit, i64 on 64-bit) to i64.
+    // On x86_64 the conversion is a no-op; allow the lint for cross-arch portability.
+    #[allow(clippy::useless_conversion)]
     let syscalls: &[i64] = &[
         i64::from(libc::SYS_ptrace),
         i64::from(libc::SYS_mount),
