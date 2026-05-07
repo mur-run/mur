@@ -13,6 +13,18 @@ fn macos_sbpl_contains_deny_for_ssh() {
     assert!(sbpl.contains(".ssh"), "SBPL must mention the denied path");
 }
 
+#[test]
+#[cfg(target_os = "windows")]
+fn windows_job_object_applies() {
+    use mur_agent_runtime::sandbox::SandboxPolicy;
+    use mur_agent_runtime::sandbox::windows::apply_windows;
+
+    let policy = SandboxPolicy::default();
+    let status = apply_windows(&policy).expect("windows apply must not error");
+    assert!(status.enforcing);
+    assert_eq!(status.platform, "windows-job-object");
+}
+
 /// Verify that the Landlock layer compiles and SandboxPolicy paths are all absolute.
 /// Does NOT call restrict_self() to avoid locking the test process.
 #[test]
