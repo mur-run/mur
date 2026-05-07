@@ -52,6 +52,8 @@ fn apply_policy(_policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     })
 }
 
+/// Sandbox error type — surfaced to the LLM via `HookError::Sandboxed` (wired in Task 6).
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SandboxedError {
     pub path: String,
