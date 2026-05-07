@@ -86,6 +86,48 @@ fn sandbox_apply_does_not_panic() {
     assert!(result.is_ok(), "sandbox::apply must not error: {result:?}");
 }
 
+/// Verify that `spawn_sandboxed` can launch a simple process and it exits successfully.
+/// On Linux/macOS the birdcage cage is built (policy mapped to exceptions), then
+/// the child is spawned via `cmd.spawn()` fallback (cage.spawn() requires single-threaded
+/// context on Linux and conflicts with the supervisor's own SBPL on macOS).
+#[cfg(unix)]
+#[test]
+fn spawn_sandboxed_runs_true() {
+    use mur_agent_runtime::sandbox::child::spawn_sandboxed;
+    use mur_agent_runtime::sandbox::policy::SandboxPolicy;
+    use mur_common::agent::{
+        Entitlements, FilesystemEntitlement, InboundNetwork, NetworkEntitlement,
+        NetworkOutboundMode, OutboundNetwork, ProcessesEntitlement, SpawnEntitlement, SpawnMode,
+    };
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    let ent = Entitlements {
+        network: NetworkEntitlement {
+            inbound: InboundNetwork { ports: vec![] },
+            outbound: OutboundNetwork {
+                mode: NetworkOutboundMode::Unrestricted,
+                allow_hosts: vec![],
+                protocols: vec!["tcp".to_string()],
+                resolve_dns: Default::default(),
+            },
+        },
+        filesystem: FilesystemEntitlement { read: vec![], write: vec![], deny: vec![] },
+        processes: ProcessesEntitlement {
+            spawn: SpawnEntitlement { mode: SpawnMode::Any, allowed: vec![] },
+        },
+        syscalls: Default::default(),
+        limits: Default::default(),
+        llm: Default::default(),
+    };
+    let home = PathBuf::from("/tmp");
+    let policy = SandboxPolicy::from_entitlements(&ent, &home);
+    let cmd = Command::new("/usr/bin/true");
+    let mut child = spawn_sandboxed(cmd, &policy).expect("spawn_sandboxed failed");
+    let status = child.wait().expect("wait failed");
+    assert!(status.success());
+}
+
 /// Verify that the Landlock layer compiles and SandboxPolicy paths are all absolute.
 /// Does NOT call restrict_self() to avoid locking the test process.
 #[test]
