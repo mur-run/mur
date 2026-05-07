@@ -112,6 +112,28 @@ impl Hook for B0SafetyHook {
         profile: &AgentProfile,
         _tok: &CancellationToken,
     ) -> Result<(), HookError> {
+        // ── B1 sandbox attestation ────────────────────────────────────────
+        match crate::sandbox::last_status() {
+            Some(status) if status.enforcing => {
+                tracing::info!(
+                    platform = %status.platform,
+                    effective_abi = ?status.effective_abi,
+                    "B1 kernel sandbox: ENFORCING"
+                );
+            }
+            Some(status) => {
+                tracing::warn!(
+                    platform = %status.platform,
+                    "B1 kernel sandbox: NOT enforcing (advisory-only; upgrade kernel or check permissions)"
+                );
+            }
+            None => {
+                tracing::warn!(
+                    "B1 kernel sandbox: not applied (sandbox::apply() not called before on_startup)"
+                );
+            }
+        }
+
         // ── Rule 11 (M7.7): MCP binary signature check. ──────────────────
         // Iterate every MCP server binary the supervisor resolved from
         // `profile.mcp_servers[*].command` and refuse startup if any
