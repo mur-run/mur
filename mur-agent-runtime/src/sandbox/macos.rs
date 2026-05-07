@@ -49,10 +49,7 @@ pub fn apply_macos(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
 /// Strategy: allow everything (allow default), deny explicit paths,
 /// then restrict writes to only allowed write paths.
 pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
-    let mut lines = vec![
-        "(version 1)".to_string(),
-        "(allow default)".to_string(),
-    ];
+    let mut lines = vec!["(version 1)".to_string(), "(allow default)".to_string()];
 
     // Deny reads AND writes to explicitly denied paths.
     for path in &policy.fs_deny {
@@ -76,8 +73,12 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
             // Restricted: deny all, then allow listed hosts on ports 443 and 80.
             lines.push("(deny network-outbound)".to_string());
             for host in hosts {
-                lines.push(format!("(allow network-outbound (remote tcp \"{host}:443\"))"));
-                lines.push(format!("(allow network-outbound (remote tcp \"{host}:80\"))"));
+                lines.push(format!(
+                    "(allow network-outbound (remote tcp \"{host}:443\"))"
+                ));
+                lines.push(format!(
+                    "(allow network-outbound (remote tcp \"{host}:80\"))"
+                ));
             }
         }
     }
