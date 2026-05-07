@@ -8,6 +8,8 @@ pub mod agent_export_gui;
 pub(crate) mod agent_mcp_pin;
 pub(crate) mod agent_rekey;
 pub mod agent_voice;
+/// C4 — schedule add/list/remove/next CLI verbs.
+pub mod agent_schedule;
 /// Track C5 / M5.1 — webhook receiver config + CLI verbs.
 pub(crate) mod agent_webhook;
 pub(crate) mod community_cmd;
