@@ -28,8 +28,8 @@ impl SandboxPolicy {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
 
         let expand = |s: &str| -> PathBuf {
-            if s.starts_with("~/") {
-                home.join(&s[2..])
+            if let Some(rest) = s.strip_prefix("~/") {
+                home.join(rest)
             } else if s == "~" {
                 home.clone()
             } else {
@@ -55,12 +55,7 @@ impl SandboxPolicy {
         }
 
         // Standard binary exec paths (needed for MCP spawn + shell tools).
-        let fs_exec = vec![
-            PathBuf::from("/usr/bin"),
-            PathBuf::from("/usr/local/bin"),
-            PathBuf::from("/bin"),
-            home.join(".local/bin"),
-        ];
+        let fs_exec = system_exec_paths(&home);
 
         let (net_allow_ports, net_allow_hosts) = match ent.network.outbound.mode {
             NetworkOutboundMode::Unrestricted => (None, None),
@@ -81,6 +76,26 @@ impl SandboxPolicy {
             net_allow_hosts,
             memory_limit_mb: Some(ent.limits.memory_mb),
         }
+    }
+}
+
+fn system_exec_paths(home: &Path) -> Vec<PathBuf> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        vec![
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/bin"),
+            home.join(".local/bin"),
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = home;
+        vec![
+            PathBuf::from(r"C:\Windows\System32"),
+            PathBuf::from(r"C:\Windows"),
+        ]
     }
 }
 
@@ -146,18 +161,26 @@ mod tests {
 
     #[test]
     fn tilde_expands_to_home_dir() {
-        let home = PathBuf::from("/tmp/agent_home");
-        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &home);
-        let has_docs = policy.fs_read.iter().any(|p| p.ends_with("Documents"));
-        assert!(has_docs);
+        let agent_home = PathBuf::from("/tmp/agent_home_test");
+        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+        let expected = dirs::home_dir().unwrap().join("Documents");
+        assert!(
+            policy.fs_read.contains(&expected),
+            "~/Documents should expand to {expected:?}, got: {:?}",
+            policy.fs_read
+        );
     }
 
     #[test]
     fn deny_paths_propagated() {
-        let home = PathBuf::from("/tmp/agent_home");
-        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &home);
-        let has_ssh = policy.fs_deny.iter().any(|p| p.ends_with(".ssh"));
-        assert!(has_ssh);
+        let agent_home = PathBuf::from("/tmp/agent_home_test");
+        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+        let expected = dirs::home_dir().unwrap().join(".ssh");
+        assert!(
+            policy.fs_deny.contains(&expected),
+            "~/.ssh should expand to {expected:?}, got: {:?}",
+            policy.fs_deny
+        );
     }
 
     #[test]
