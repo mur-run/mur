@@ -1,14 +1,16 @@
 //! MCP client — subprocess stdio JSON-RPC 2.0.
 
+use crate::sandbox::SandboxPolicy;
 use mur_common::agent::McpServerEntry;
 use serde_json::{Value, json};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 
 pub struct McpClient {
-    child: Mutex<Child>,
+    /// Raw std child — used for kill/wait in `shutdown`.
+    child: Mutex<std::process::Child>,
     stdin: Mutex<ChildStdin>,
     stdout: Mutex<Lines<BufReader<ChildStdout>>>,
     next_id: Mutex<u64>,
@@ -42,19 +44,30 @@ pub enum McpError {
 }
 
 impl McpClient {
-    pub async fn spawn(entry: &McpServerEntry) -> Result<Self, McpError> {
-        let mut child = Command::new(&entry.command)
+    /// Spawn an MCP server subprocess under the given sandbox policy.
+    ///
+    /// Uses `sandbox::child::spawn_sandboxed` so that on Linux and macOS the
+    /// child inherits the supervisor's Landlock / seccomp / SBPL restrictions
+    /// (B1 Tasks 2–3).  Sync stdin / stdout handles from `std::process::Child`
+    /// are promoted to async via `ChildStdin::from_std` / `ChildStdout::from_std`.
+    pub async fn spawn(entry: &McpServerEntry, policy: &SandboxPolicy) -> Result<Self, McpError> {
+        let mut std_cmd = std::process::Command::new(&entry.command);
+        std_cmd
             .args(&entry.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let stdin = child.stdin.take().ok_or(McpError::StreamClosed)?;
-        let stdout = BufReader::new(child.stdout.take().ok_or(McpError::StreamClosed)?).lines();
+            .stderr(Stdio::piped());
+        let mut child = crate::sandbox::child::spawn_sandboxed(std_cmd, policy)?;
+
+        let raw_stdin = child.stdin.take().ok_or(McpError::StreamClosed)?;
+        let raw_stdout = child.stdout.take().ok_or(McpError::StreamClosed)?;
+        let stdin = ChildStdin::from_std(raw_stdin)?;
+        let stdout = ChildStdout::from_std(raw_stdout)?;
+
         Ok(Self {
             child: Mutex::new(child),
             stdin: Mutex::new(stdin),
-            stdout: Mutex::new(stdout),
+            stdout: Mutex::new(BufReader::new(stdout).lines()),
             next_id: Mutex::new(1),
             server_name: entry.name.clone(),
         })
@@ -135,7 +148,9 @@ impl McpClient {
     }
 
     pub async fn shutdown(self) {
-        let mut child = self.child.lock().await;
-        let _ = child.kill().await;
+        let mut child = self.child.into_inner();
+        let _ = child.kill();
+        // Reap the child off the async thread so we don't block the runtime.
+        let _ = tokio::task::spawn_blocking(move || child.wait()).await;
     }
 }
