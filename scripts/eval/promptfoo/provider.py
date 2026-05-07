@@ -52,6 +52,27 @@ def classify(prompt: str) -> tuple[str, list[str]]:
     return decision, tags
 
 
+def call_api(prompt: str, options: dict, context: dict) -> dict:
+    """Promptfoo Python provider entry point.
+
+    Promptfoo calls this function directly (persistent_wrapper.py
+    protocol). Returns a dict with an 'output' key containing the
+    structured response; JS assertions access output.decision,
+    output.tags, etc.
+    """
+    decision, tags = classify(prompt)
+    stub = reply_for(decision)
+    response_text = stub.text if decision != "refuse" else ""
+    return {
+        "output": {
+            "decision": decision,
+            "tags": tags,
+            "response_text": response_text,
+            "hook_decisions": [{"hook": "B0SafetyHook.mock", "decision": decision}],
+        }
+    }
+
+
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser()
