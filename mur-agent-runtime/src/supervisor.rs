@@ -12,6 +12,8 @@ use crate::hooks::{
 use crate::llm::{
     LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
 };
+use crate::sandbox::reqwest_guard::HostGuard;
+use mur_common::agent::NetworkOutboundMode;
 use crate::lock_file::{LockHandle, write_lock};
 use crate::multi_call::{DispatchError, extract_profile_name, verify_name_match};
 use crate::profile::Profile;
@@ -248,13 +250,30 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             },
             None => None,
         };
+
+        // B1 HostGuard: build a guarded reqwest::Client whose DNS resolver
+        // enforces the outbound host allowlist before the OS resolver is called.
+        let outbound = &profile.inner.entitlements.network.outbound;
+        let host_guard = match outbound.mode {
+            NetworkOutboundMode::Unrestricted => HostGuard::unrestricted(),
+            NetworkOutboundMode::Restricted => {
+                HostGuard::restricted(outbound.allow_hosts.clone())
+            }
+            NetworkOutboundMode::Off => HostGuard::off(),
+        };
+        let guarded_http = reqwest::ClientBuilder::new()
+            .dns_resolver(std::sync::Arc::new(host_guard))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         match entry.provider.as_str() {
             "ollama" => {
                 let base = entry.base_url.clone().unwrap_or_else(|| {
                     std::env::var("OLLAMA_BASE_URL")
                         .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
                 });
-                let client: Arc<dyn LlmClient> = Arc::new(OllamaClient::new(base, entry.model));
+                let client: Arc<dyn LlmClient> =
+                    Arc::new(OllamaClient::with_http_client(base, entry.model, guarded_http));
                 let r = Arc::new(
                     TaskRunner::with_llm(client.clone())
                         .with_system_prompt(profile.system_prompt.clone()),
@@ -269,15 +288,17 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 // stored via `mur agent secret set`.
                 let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
                 {
-                    Ok(Arc::new(AnthropicClient::from_secret_string(
+                    Ok(Arc::new(AnthropicClient::from_secret_string_with_http(
                         key,
                         entry.model.clone(),
                         entry.base_url.clone(),
+                        guarded_http,
                     )))
                 } else {
-                    AnthropicClient::from_agent_credentials(
+                    AnthropicClient::from_agent_credentials_with_http(
                         &profile.inner.name,
                         entry.model.clone(),
+                        guarded_http,
                     )
                     .await
                     .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
@@ -299,15 +320,20 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             "openai" => {
                 let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
                 {
-                    Ok(Arc::new(OpenAiClient::from_secret_string(
+                    Ok(Arc::new(OpenAiClient::from_secret_string_with_http(
                         key,
                         entry.model.clone(),
                         entry.base_url.clone(),
+                        guarded_http,
                     )))
                 } else {
-                    OpenAiClient::from_agent_credentials(&profile.inner.name, entry.model.clone())
-                        .await
-                        .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
+                    OpenAiClient::from_agent_credentials_with_http(
+                        &profile.inner.name,
+                        entry.model.clone(),
+                        guarded_http,
+                    )
+                    .await
+                    .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
                 };
                 match built {
                     Ok(client) => {

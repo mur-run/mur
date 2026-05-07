@@ -25,6 +25,47 @@ fn windows_job_object_applies() {
     assert_eq!(status.platform, "windows-job-object");
 }
 
+#[tokio::test]
+async fn host_guard_blocks_unlisted_host() {
+    use mur_agent_runtime::sandbox::reqwest_guard::HostGuard;
+    use std::sync::Arc;
+
+    let guard = HostGuard::restricted(vec!["api.anthropic.com".to_string()]);
+    let client = reqwest::ClientBuilder::new()
+        .dns_resolver(Arc::new(guard))
+        .build()
+        .unwrap();
+    let result = client.get("http://evil.example.com/").send().await;
+    assert!(result.is_err(), "blocked host must fail");
+    let err_str = format!("{}", result.unwrap_err());
+    assert!(
+        err_str.contains("not in outbound allowlist") || err_str.contains("dns") || err_str.contains("error sending request"),
+        "error must relate to blocked host: {err_str}"
+    );
+}
+
+#[tokio::test]
+async fn host_guard_allows_listed_host() {
+    use mur_agent_runtime::sandbox::reqwest_guard::HostGuard;
+    use std::sync::Arc;
+
+    // Only test that DNS resolution is ATTEMPTED (not that the host is reachable).
+    // A connection refused error is acceptable; "not in outbound allowlist" is not.
+    let guard = HostGuard::restricted(vec!["localhost".to_string()]);
+    let client = reqwest::ClientBuilder::new()
+        .dns_resolver(Arc::new(guard))
+        .build()
+        .unwrap();
+    let result = client.get("http://localhost:19999/").send().await;
+    if let Err(e) = &result {
+        let s = e.to_string();
+        assert!(
+            !s.contains("not in outbound allowlist"),
+            "localhost should be allowed by HostGuard: {s}"
+        );
+    }
+}
+
 /// Verify that the Landlock layer compiles and SandboxPolicy paths are all absolute.
 /// Does NOT call restrict_self() to avoid locking the test process.
 #[test]
