@@ -43,6 +43,10 @@ pub enum EvalSuite {
     /// CAIS HarmBench (CC-BY-4.0, ICML 2024). Jailbreak + agentic-
     /// misuse focus.
     Harmbench,
+    /// UIUC/Kang-Lab InjecAgent (MIT). Tool-poisoning focus:
+    /// 200 cases where injected tool outputs redirect the agent.
+    #[serde(rename = "injecagent")]
+    InjecAgent,
 }
 
 /// Which model backend produced the agent response. The mock backend
@@ -63,6 +67,9 @@ pub enum EvalLlmBackend {
     /// Local Ollama. Useful for gating without an API key but
     /// not the canonical baseline.
     Ollama,
+    /// Llama-Guard-3-8B running locally via Ollama. Used as the
+    /// nightly judge: grades each response as safe / unsafe.
+    LlamaGuard,
 }
 
 /// One observation from the B0 hook chain during the test run.
@@ -210,5 +217,21 @@ mod tests {
     #[test]
     fn schema_version_constant_is_one() {
         assert_eq!(EVAL_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn injecagent_suite_roundtrips() {
+        let s = serde_json::to_string(&EvalSuite::InjecAgent).unwrap();
+        assert_eq!(s, "\"injecagent\"");
+        let back: EvalSuite = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, EvalSuite::InjecAgent);
+    }
+
+    #[test]
+    fn llama_guard_backend_roundtrips() {
+        let s = serde_json::to_string(&EvalLlmBackend::LlamaGuard).unwrap();
+        assert_eq!(s, "\"llama_guard\"");
+        let back: EvalLlmBackend = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, EvalLlmBackend::LlamaGuard);
     }
 }
