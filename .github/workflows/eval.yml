@@ -16,6 +16,7 @@ on:
       - 'mur-common/src/eval.rs'
       - 'mur-core/src/cmd/agent_eval.rs'
       - '.github/workflows/eval.yml'
+      - 'scripts/eval/promptfoo/**'
   push:
     tags: ['v*']
   schedule:
@@ -30,6 +31,40 @@ on:
         default: 'stub'
 
 jobs:
+  # ── B2 Promptfoo smoke gate ───────────────────────────────────────
+  # 15 OWASP LLM Top-10 cases against the B0 mock hook chain.
+  # Deterministic, < 2 min, blocks PR merge on any regression.
+  promptfoo-smoke:
+    name: Promptfoo B2 smoke (PR gate)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Run Promptfoo smoke (15 cases)
+        run: |
+          npx --yes promptfoo@latest eval \
+            --config scripts/eval/promptfoo/promptfoo.yaml \
+            --output /tmp/promptfoo_results.json \
+            --no-cache
+          python3 - <<'EOF'
+          import json, sys
+          r = json.load(open("/tmp/promptfoo_results.json"))
+          results = r.get("results", {}).get("results", [])
+          failed = [x for x in results if not x.get("success")]
+          if failed:
+              print(f"FAIL: {len(failed)} Promptfoo cases regressed:")
+              for f in failed:
+                  print(f"  {f.get('description','?')}: {f.get('response',{}).get('output','')[:80]}")
+              sys.exit(1)
+          print(f"PASS: {len(results)} Promptfoo smoke cases")
+          EOF
+
   # ── Stub-LLM track ────────────────────────────────────────────────
   # Always runs. Uses the synthetic-fixture path against the
   # deterministic mock LLM. Catches regressions in the B0 hook chain
