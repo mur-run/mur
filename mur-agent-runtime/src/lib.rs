@@ -24,6 +24,7 @@ pub mod multimodal;
 pub mod profile;
 pub mod protocol;
 pub mod retry;
+pub mod sandbox;
 pub mod socket_path;
 pub mod subcommand;
 pub mod supervisor;
