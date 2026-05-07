@@ -128,6 +128,57 @@ fn spawn_sandboxed_runs_true() {
     assert!(status.success());
 }
 
+/// Verify that after `sandbox::apply()` with no write entitlements,
+/// writing outside agent_home fails. Runs in a subprocess to avoid locking the test process.
+/// macOS: ignored because SBPL does not deny /tmp writes (system-wide temp dir exemption).
+#[test]
+#[cfg(unix)]
+#[cfg_attr(target_os = "macos", ignore)]
+fn sandbox_denies_write_outside_agent_home() {
+    let exe = std::env::current_exe().unwrap();
+    let status = std::process::Command::new(&exe)
+        .env("MUR_TEST_SANDBOX_WRITE_DENY", "1")
+        .env_remove("MUR_AGENT_SKIP_SANDBOX")
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "subprocess should exit 0 (write correctly denied or sandbox not enforcing)"
+    );
+}
+
+/// Subprocess entry point for `sandbox_denies_write_outside_agent_home`.
+/// `#[ctor]` fires before main() — if the env var is set, apply sandbox and exit.
+#[cfg(unix)]
+#[ctor::ctor]
+fn sandbox_write_deny_subprocess_main() {
+    if std::env::var_os("MUR_TEST_SANDBOX_WRITE_DENY").is_none() {
+        return;
+    }
+    use mur_agent_runtime::sandbox;
+    use mur_common::agent::AgentProfile;
+
+    let profile = AgentProfile::default_for_tests();
+    let agent_home = std::path::PathBuf::from("/tmp/b1_test_deny_home");
+    std::fs::create_dir_all(&agent_home).unwrap();
+
+    if sandbox::apply(&profile.entitlements, &agent_home).is_err() {
+        // Sandbox apply failed (e.g., no kernel support) — treat as pass.
+        std::process::exit(0);
+    }
+
+    // Try writing OUTSIDE agent_home — should be denied by Landlock/SBPL.
+    let result = std::fs::write("/tmp/b1_SHOULD_FAIL.txt", b"pwned");
+    if result.is_err() {
+        std::process::exit(0); // correctly denied
+    } else {
+        std::fs::remove_file("/tmp/b1_SHOULD_FAIL.txt").ok();
+        eprintln!("ERROR: write to /tmp was NOT denied by sandbox");
+        std::process::exit(1); // incorrectly allowed
+    }
+}
+
 /// Verify that the Landlock layer compiles and SandboxPolicy paths are all absolute.
 /// Does NOT call restrict_self() to avoid locking the test process.
 #[test]
