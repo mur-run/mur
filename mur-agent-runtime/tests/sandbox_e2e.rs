@@ -3,8 +3,8 @@
 #[test]
 #[cfg(target_os = "macos")]
 fn macos_sbpl_contains_deny_for_ssh() {
-    use mur_agent_runtime::sandbox::macos::build_sbpl_profile;
     use mur_agent_runtime::sandbox::SandboxPolicy;
+    use mur_agent_runtime::sandbox::macos::build_sbpl_profile;
 
     let mut policy = SandboxPolicy::default();
     policy.fs_deny.push(dirs::home_dir().unwrap().join(".ssh"));
@@ -39,7 +39,9 @@ async fn host_guard_blocks_unlisted_host() {
     assert!(result.is_err(), "blocked host must fail");
     let err_str = format!("{}", result.unwrap_err());
     assert!(
-        err_str.contains("not in outbound allowlist") || err_str.contains("dns") || err_str.contains("error sending request"),
+        err_str.contains("not in outbound allowlist")
+            || err_str.contains("dns")
+            || err_str.contains("error sending request"),
         "error must relate to blocked host: {err_str}"
     );
 }
@@ -112,9 +114,16 @@ fn spawn_sandboxed_runs_true() {
                 resolve_dns: Default::default(),
             },
         },
-        filesystem: FilesystemEntitlement { read: vec![], write: vec![], deny: vec![] },
+        filesystem: FilesystemEntitlement {
+            read: vec![],
+            write: vec![],
+            deny: vec![],
+        },
         processes: ProcessesEntitlement {
-            spawn: SpawnEntitlement { mode: SpawnMode::Any, allowed: vec![] },
+            spawn: SpawnEntitlement {
+                mode: SpawnMode::Any,
+                allowed: vec![],
+            },
         },
         syscalls: Default::default(),
         limits: Default::default(),
@@ -186,8 +195,8 @@ fn sandbox_write_deny_subprocess_main() {
 fn linux_ruleset_paths_are_absolute() {
     use mur_agent_runtime::sandbox::policy::SandboxPolicy;
     use mur_common::agent::{
-        Entitlements, FilesystemEntitlement, NetworkOutboundMode, OutboundNetwork,
-        NetworkEntitlement, InboundNetwork, ProcessesEntitlement, SpawnEntitlement, SpawnMode,
+        Entitlements, FilesystemEntitlement, InboundNetwork, NetworkEntitlement,
+        NetworkOutboundMode, OutboundNetwork, ProcessesEntitlement, SpawnEntitlement, SpawnMode,
     };
     use std::path::PathBuf;
 
@@ -207,7 +216,10 @@ fn linux_ruleset_paths_are_absolute() {
             deny: vec![],
         },
         processes: ProcessesEntitlement {
-            spawn: SpawnEntitlement { mode: SpawnMode::Any, allowed: vec![] },
+            spawn: SpawnEntitlement {
+                mode: SpawnMode::Any,
+                allowed: vec![],
+            },
         },
         syscalls: Default::default(),
         limits: Default::default(),

@@ -3,17 +3,19 @@ use anyhow::bail;
 
 pub fn apply_windows(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        QueryInformationJobObject, SetInformationJobObject,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
-        JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     unsafe {
         let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-        if job == 0 {
-            bail!("CreateJobObjectW failed: {}", std::io::Error::last_os_error());
+        if job.is_null() {
+            bail!(
+                "CreateJobObjectW failed: {}",
+                std::io::Error::last_os_error()
+            );
         }
 
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
@@ -26,7 +28,10 @@ pub fn apply_windows(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
         );
         if ok == 0 {
             windows_sys::Win32::Foundation::CloseHandle(job);
-            bail!("QueryInformationJobObject failed: {}", std::io::Error::last_os_error());
+            bail!(
+                "QueryInformationJobObject failed: {}",
+                std::io::Error::last_os_error()
+            );
         }
 
         // Disable breakaway: child processes cannot escape the job.
@@ -47,14 +52,20 @@ pub fn apply_windows(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
         );
         if ok == 0 {
             windows_sys::Win32::Foundation::CloseHandle(job);
-            bail!("SetInformationJobObject failed: {}", std::io::Error::last_os_error());
+            bail!(
+                "SetInformationJobObject failed: {}",
+                std::io::Error::last_os_error()
+            );
         }
 
         let proc = GetCurrentProcess();
         let ok = AssignProcessToJobObject(job, proc);
         if ok == 0 {
             windows_sys::Win32::Foundation::CloseHandle(job);
-            bail!("AssignProcessToJobObject failed: {}", std::io::Error::last_os_error());
+            bail!(
+                "AssignProcessToJobObject failed: {}",
+                std::io::Error::last_os_error()
+            );
         }
     }
 
