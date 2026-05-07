@@ -3,10 +3,6 @@
 //! Reads and writes `profile.lifecycle.schedule` using the same
 //! `load_profile_for_edit` + `save_profile` helpers as `agent_webhook.rs`.
 
-// CLI dispatch is wired through main.rs; the binary target sees these as
-// unused until the `mur agent schedule` subcommand is plumbed in.
-#![allow(dead_code)]
-
 use anyhow::{bail, Context, Result};
 use mur_common::agent::ScheduleEntry;
 
