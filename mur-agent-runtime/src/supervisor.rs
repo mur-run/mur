@@ -14,6 +14,7 @@ use crate::llm::{
 };
 use crate::lock_file::{LockHandle, write_lock};
 use crate::multi_call::{DispatchError, extract_profile_name, verify_name_match};
+use crate::scheduler::CronScheduler;
 use crate::profile::Profile;
 use crate::protocol::a2a_server::Dispatcher;
 use crate::protocol::methods::{
@@ -555,6 +556,21 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     };
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
+
+    // 8c. C4 — cron scheduler. Spawn one loop per lifecycle.schedule entry.
+    //     Each loop selects on a shared CancellationToken so SIGTERM (which
+    //     calls t.abort() on all transport_tasks) also stops in-flight entries.
+    if !profile.inner.lifecycle.schedule.is_empty() {
+        let cs = CronScheduler::new(
+            profile.inner.lifecycle.schedule.clone(),
+            runner.clone(),
+        );
+        transport_tasks.push(cs.spawn());
+        info!(
+            count = profile.inner.lifecycle.schedule.len(),
+            "CronScheduler started"
+        );
+    }
 
     // 8.5 — bridge agents (LLM disabled by entitlement) emit a 30 s
     //       heartbeat so peers can classify them via

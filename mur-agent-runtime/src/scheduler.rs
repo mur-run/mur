@@ -14,6 +14,7 @@ use mur_common::a2a::{Message, MessagePart};
 use mur_common::agent::ScheduleEntry;
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 pub struct CronScheduler {
@@ -27,17 +28,21 @@ impl CronScheduler {
     }
 
     /// Spawn an outer tokio task that fans out one loop per entry.
-    /// Push the returned handle onto `supervisor::transport_tasks` so it is
-    /// aborted on SIGTERM alongside all other transports.
+    /// Each inner loop selects on a shared CancellationToken so aborting
+    /// the returned JoinHandle (SIGTERM path in supervisor) cancels all entries.
+    /// Push the returned handle onto `supervisor::transport_tasks`.
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
+        let cancel = CancellationToken::new();
         tokio::spawn(async move {
             let mut handles = Vec::with_capacity(self.entries.len());
             for entry in self.entries {
                 let runner = self.runner.clone();
+                let child_cancel = cancel.clone();
                 handles.push(tokio::spawn(async move {
-                    run_entry(entry, runner).await;
+                    run_entry(entry, runner, child_cancel).await;
                 }));
             }
+            // Wait for all inner loops — they exit when cancelled.
             for h in handles {
                 let _ = h.await;
             }
@@ -45,7 +50,7 @@ impl CronScheduler {
     }
 }
 
-async fn run_entry(entry: ScheduleEntry, runner: Arc<TaskRunner>) {
+async fn run_entry(entry: ScheduleEntry, runner: Arc<TaskRunner>, cancel: CancellationToken) {
     let expr = format!("0 {}", entry.cron);
     let schedule = match Schedule::from_str(&expr) {
         Ok(s) => s,
@@ -66,16 +71,22 @@ async fn run_entry(entry: ScheduleEntry, runner: Arc<TaskRunner>) {
         };
 
         let delta = next - now;
-        if delta.num_milliseconds() > 0 {
-            if let Ok(dur) = delta.to_std() {
-                tokio::time::sleep(dur).await;
-            }
+
+        tokio::select! {
+            _ = cancel.cancelled() => return,
+            _ = async {
+                match delta.to_std() {
+                    Ok(dur) => tokio::time::sleep(dur).await,
+                    Err(_) => {
+                        warn!(cron = %entry.cron, "sub-ms clock skew; firing immediately");
+                    }
+                }
+            } => {}
         }
 
         info!(cron = %entry.cron, message = %entry.message, "cron trigger firing");
 
         if let Some(ref target) = entry.sends_to {
-            // Cross-agent dispatch deferred to C4 v2; log and fall through to local.
             warn!(
                 sends_to = %target,
                 "sends_to cross-agent dispatch not yet implemented; message injected locally"
@@ -88,12 +99,21 @@ async fn run_entry(entry: ScheduleEntry, runner: Arc<TaskRunner>) {
                 text: entry.message.clone(),
             }],
         };
-        runner
+        let outcome = runner
             .run_sync(TaskSpec {
                 input,
                 context_task_id: None,
             })
             .await;
+
+        // M2: surface LLM failures in supervisor logs
+        if let crate::task_runner::TaskOutcome::Failed(ref t) = outcome {
+            warn!(
+                cron = %entry.cron,
+                task_id = %t.id,
+                "cron-triggered task failed"
+            );
+        }
     }
 }
 
