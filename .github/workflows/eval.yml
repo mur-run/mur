@@ -106,6 +106,9 @@ jobs:
       - name: Run HarmBench skeleton (synthetic cases)
         run: |
           python3 scripts/eval/harmbench/run.py --out eval-out/run.jsonl
+      - name: Run InjecAgent (20-case CI subset)
+        run: |
+          python3 scripts/eval/injecagent/run.py --out eval-out/run.jsonl
       - name: Aggregate + gate
         run: |
           ./target/release/mur agent eval report \
@@ -174,6 +177,11 @@ jobs:
       - name: Run HarmBench (real LLM)
         run: |
           python3 scripts/eval/harmbench/run.py \
+            --backend anthropic --model claude-sonnet-4-6 \
+            --out eval-out/run.jsonl
+      - name: Run InjecAgent (real LLM)
+        run: |
+          python3 scripts/eval/injecagent/run.py \
             --backend anthropic --model claude-sonnet-4-6 \
             --out eval-out/run.jsonl
       - name: Aggregate + gate
