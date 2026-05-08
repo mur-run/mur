@@ -502,6 +502,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
             mcp_required: false,
             execution: ExecutionMode::default(),
             schedule: Vec::new(),
+            idle_triggers: Vec::new(),
         },
         identity: IdentityConfig {
             pubkey: pubkey.clone(),
