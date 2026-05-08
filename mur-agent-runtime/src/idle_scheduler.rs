@@ -43,12 +43,11 @@ pub fn should_fire(
             return false;
         }
     }
-    if trigger.respect_quiet_hours {
-        if let Some(window_end) = quiet_window_end_secs {
-            if now_secs >= window_end {
-                return false;
-            }
-        }
+    if trigger.respect_quiet_hours
+        && let Some(window_end) = quiet_window_end_secs
+        && now_secs >= window_end
+    {
+        return false;
     }
     true
 }
