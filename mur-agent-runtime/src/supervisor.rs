@@ -5,10 +5,7 @@ use anyhow::Context;
 
 use crate::companion::clock::SystemClock;
 use crate::entitlements::detect_warnings;
-use crate::hooks::{
-    Hook, HookChain, HookCtx, ShutdownReason, TelemetryEmitter, b0::B0SafetyHook,
-    ledger::LedgerHook, telemetry::TelemetryHook,
-};
+use crate::hooks::{HookCtx, ShutdownReason, TelemetryEmitter};
 use crate::idle_scheduler::IdleScheduler;
 use crate::llm::{
     LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
@@ -174,19 +171,16 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     )
     .await?;
 
-    // 4a. Build the A0 hook chain. M0 ships TelemetryHook + B0SafetyHook
-    //     (no-op stub) + LedgerHook (no-op stub). CompanionVoiceHook is
-    //     registered when the companion subsystem renders its voice (out
-    //     of M0 scope; companion phase 1.1's reactive path remains
-    //     unchanged). The on_startup observe-hooks fire before transports
-    //     bind so telemetry includes the create_agent span event.
+    // 4a. Build the A1 config-driven hook chain.
+    //     Mandatory: TelemetryHook → B0SafetyHook (always).
+    //     Optional: LedgerHook / CompanionVoiceHook / VoiceInputHook
+    //     controlled by profile.hooks + auto-wire from feature flags.
     let telemetry_emitter: Arc<dyn TelemetryEmitter> =
         Arc::new(WriterTelemetryEmitter::new(writer.sender()));
-    let hook_chain = HookChain::new(vec![
-        Arc::new(TelemetryHook::new()) as Arc<dyn Hook>,
-        Arc::new(B0SafetyHook::new()),
-        Arc::new(LedgerHook::new()),
-    ]);
+    let mur_home = std::env::var_os("MUR_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
+    let hook_chain = crate::hooks::builder::build_chain(&profile.inner, &agent_home, &mur_home);
     // Resolve MCP server binary paths from `profile.mcp_servers[*].command`.
     // Each `command` is a shell command line; the first whitespace-separated
     // token is treated as the binary path. M7.7 (rule 11) reads these in
