@@ -9,6 +9,7 @@ use crate::hooks::{
     Hook, HookChain, HookCtx, ShutdownReason, TelemetryEmitter, b0::B0SafetyHook,
     ledger::LedgerHook, telemetry::TelemetryHook,
 };
+use crate::idle_scheduler::IdleScheduler;
 use crate::llm::{
     LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
 };
@@ -21,7 +22,6 @@ use crate::protocol::methods::{
     message_send::MessageSendHandler,
     tasks::{TasksCancelHandler, TasksGetHandler, TasksListHandler},
 };
-use crate::idle_scheduler::IdleScheduler;
 use crate::sandbox::reqwest_guard::HostGuard;
 use crate::scheduler::CronScheduler;
 #[cfg(unix)]

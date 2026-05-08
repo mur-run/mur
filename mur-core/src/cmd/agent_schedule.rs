@@ -158,7 +158,10 @@ pub fn cmd_idle_remove(name: &str, index: usize) -> Result<()> {
     }
     let removed = profile.lifecycle.idle_triggers.remove(index);
     save_profile(&path, &mut profile)?;
-    println!("removed idle trigger [{index}]: after_secs={}", removed.after_secs);
+    println!(
+        "removed idle trigger [{index}]: after_secs={}",
+        removed.after_secs
+    );
     Ok(())
 }
 
