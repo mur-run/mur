@@ -1127,6 +1127,11 @@ enum AgentAction {
         #[command(subcommand)]
         action: AgentScheduleAction,
     },
+    /// Show the active hook chain for an agent (A1)
+    Hooks {
+        #[command(subcommand)]
+        action: AgentHooksAction,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1142,6 +1147,18 @@ enum VoiceAction {
     Disable,
     /// Download voice model weights (~1.4 GB; SHA-256 verified).
     Download,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum AgentHooksAction {
+    /// Print the active hook chain (table or JSON)
+    Show {
+        /// Agent name
+        name: String,
+        /// Emit machine-readable JSON array
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2029,6 +2046,11 @@ async fn async_main() -> Result<()> {
                 }
                 AgentScheduleAction::IdleRemove { name, index } => {
                     cmd::agent_schedule::cmd_idle_remove(&name, index)?
+                }
+            },
+            AgentAction::Hooks { action } => match action {
+                AgentHooksAction::Show { name, json } => {
+                    cmd::agent_hooks::cmd_hooks_show(&name, json)?
                 }
             },
         },
