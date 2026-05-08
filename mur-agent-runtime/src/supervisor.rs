@@ -21,6 +21,7 @@ use crate::protocol::methods::{
     message_send::MessageSendHandler,
     tasks::{TasksCancelHandler, TasksGetHandler, TasksListHandler},
 };
+use crate::idle_scheduler::IdleScheduler;
 use crate::sandbox::reqwest_guard::HostGuard;
 use crate::scheduler::CronScheduler;
 #[cfg(unix)]
@@ -566,6 +567,21 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         info!(
             count = profile.inner.lifecycle.schedule.len(),
             "CronScheduler started"
+        );
+    }
+
+    // 8d. C6 — idle scheduler. Wakes every 30 s, fires triggers when the
+    //     agent has been idle for >= IdleTrigger.after_secs.
+    if !profile.inner.lifecycle.idle_triggers.is_empty() {
+        let is = IdleScheduler::new(
+            profile.inner.lifecycle.idle_triggers.clone(),
+            runner.clone(),
+            profile.inner.companion.proactive.quiet_hours.clone(),
+        );
+        transport_tasks.push(is.spawn());
+        info!(
+            count = profile.inner.lifecycle.idle_triggers.len(),
+            "IdleScheduler started"
         );
     }
 
