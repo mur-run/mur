@@ -141,6 +141,7 @@ pub fn cmd_create(
             mcp_required: false,
             execution: ExecutionMode::default(),
             schedule: Vec::new(),
+            idle_triggers: Vec::new(),
         },
         identity: IdentityConfig {
             pubkey: identity.pubkey_text(),

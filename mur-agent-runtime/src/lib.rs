@@ -16,6 +16,7 @@ pub mod durable;
 pub mod entitlements;
 pub mod export;
 pub mod hooks;
+pub mod idle_scheduler;
 pub mod import;
 pub mod llm;
 pub mod lock_file;

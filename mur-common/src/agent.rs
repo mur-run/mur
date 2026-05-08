@@ -530,6 +530,8 @@ pub struct LifecycleConfig {
     pub execution: ExecutionMode,
     #[serde(default)]
     pub schedule: Vec<ScheduleEntry>,
+    #[serde(default)]
+    pub idle_triggers: Vec<IdleTrigger>,
 }
 fn default_max_restarts() -> u32 {
     3
@@ -566,6 +568,32 @@ pub struct ScheduleEntry {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sends_to: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IdleTrigger {
+    /// Idle threshold in seconds. Fires when (now - last_activity) >= after_secs.
+    pub after_secs: u64,
+    /// Message body injected into the task runner when this trigger fires.
+    pub message: String,
+    /// Optional A2A peer to route the resulting reply to. None means the agent itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sends_to: Option<String>,
+    /// Per-trigger refire cooldown in seconds. Prevents tight loops when the
+    /// idle threshold is short and the runner finishes quickly. Default 600.
+    #[serde(default = "default_idle_cooldown")]
+    pub cooldown_secs: u64,
+    /// When true, suppress firing during the agent's quiet-hours window.
+    /// Default true — idle pings should not wake the user at 3 a.m.
+    #[serde(default = "default_true")]
+    pub respect_quiet_hours: bool,
+}
+
+fn default_idle_cooldown() -> u64 {
+    600
+}
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1172,5 +1200,40 @@ mod voice_tests {
     #[test]
     fn voice_id_from_str_rejects_unknown() {
         assert!(VoiceId::from_str("bogus").is_err());
+    }
+}
+
+#[cfg(test)]
+mod idle_trigger_tests {
+    use super::*;
+
+    #[test]
+    fn idle_trigger_yaml_round_trip() {
+        let yaml = r#"
+restart: on_failure
+idle_triggers:
+  - after_secs: 3600
+    message: "still there?"
+    sends_to: other_agent
+    cooldown_secs: 1800
+    respect_quiet_hours: true
+"#;
+        let cfg: LifecycleConfig = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(cfg.idle_triggers.len(), 1);
+        assert_eq!(cfg.idle_triggers[0].after_secs, 3600);
+        assert_eq!(cfg.idle_triggers[0].message, "still there?");
+        assert_eq!(
+            cfg.idle_triggers[0].sends_to.as_deref(),
+            Some("other_agent")
+        );
+        assert_eq!(cfg.idle_triggers[0].cooldown_secs, 1800);
+        assert!(cfg.idle_triggers[0].respect_quiet_hours);
+    }
+
+    #[test]
+    fn idle_trigger_defaults_when_omitted() {
+        let yaml = "restart: on_failure\n";
+        let cfg: LifecycleConfig = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(cfg.idle_triggers.is_empty());
     }
 }

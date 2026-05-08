@@ -5,6 +5,7 @@ use crate::llm::{LlmClient, LlmMessage, LlmRequest};
 use crate::telemetry_writer::Event;
 use mur_common::a2a::{Message, MessagePart, Task, TaskState};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
@@ -36,6 +37,8 @@ pub struct TaskRunner {
     telemetry: Option<mpsc::Sender<Event>>,
     /// E6: optional system prompt prepended to LLM requests.
     system_prompt: Option<String>,
+    /// Unix timestamp (seconds) of the last start_async call. 0 if none yet.
+    last_activity_at: Arc<AtomicI64>,
 }
 
 impl TaskRunner {
@@ -58,6 +61,7 @@ impl TaskRunner {
             cancel_signals: Arc::new(Mutex::new(HashMap::new())),
             telemetry: None,
             system_prompt: None,
+            last_activity_at: Arc::new(AtomicI64::new(0)),
         }
     }
 
@@ -96,6 +100,8 @@ impl TaskRunner {
     }
 
     pub fn start_async(&self, spec: TaskSpec) -> AsyncTaskHandle {
+        self.last_activity_at
+            .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
         let id = format!("task-{}", Uuid::now_v7());
         let (tx_done, rx_done) = oneshot::channel::<TaskOutcome>();
         let (tx_cancel, mut rx_cancel) = oneshot::channel::<()>();
@@ -155,6 +161,11 @@ impl TaskRunner {
 
     pub fn get_state(&self, id: &str) -> Option<TaskState> {
         self.registry.lock().unwrap().get(id).cloned()
+    }
+
+    /// Unix timestamp of the last `start_async` call. Returns 0 if no task has been started.
+    pub fn last_activity_at(&self) -> i64 {
+        self.last_activity_at.load(Ordering::Relaxed)
     }
 
     async fn run_llm(&self, task_id: &str, client: &dyn LlmClient, input: &Message) -> Message {
@@ -257,5 +268,42 @@ fn echo_response(input: &Message) -> Message {
         parts: vec![MessagePart::Text {
             text: format!("echo: {text}"),
         }],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mur_common::a2a::MessagePart;
+
+    fn ping_spec() -> TaskSpec {
+        TaskSpec {
+            input: mur_common::a2a::Message {
+                role: "user".into(),
+                parts: vec![MessagePart::Text {
+                    text: "ping".into(),
+                }],
+            },
+            context_task_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn last_activity_starts_at_zero() {
+        let runner = TaskRunner::new_stub_echo();
+        assert_eq!(runner.last_activity_at(), 0);
+    }
+
+    #[tokio::test]
+    async fn start_async_bumps_last_activity() {
+        let runner = TaskRunner::new_stub_echo();
+        let before = chrono::Utc::now().timestamp();
+        let _handle = runner.start_async(ping_spec());
+        let activity = runner.last_activity_at();
+        let after = chrono::Utc::now().timestamp();
+        assert!(
+            activity >= before && activity <= after,
+            "activity={activity} not in [{before},{after}]"
+        );
     }
 }

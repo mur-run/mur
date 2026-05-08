@@ -9,6 +9,7 @@ use crate::hooks::{
     Hook, HookChain, HookCtx, ShutdownReason, TelemetryEmitter, b0::B0SafetyHook,
     ledger::LedgerHook, telemetry::TelemetryHook,
 };
+use crate::idle_scheduler::IdleScheduler;
 use crate::llm::{
     LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
 };
@@ -566,6 +567,21 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         info!(
             count = profile.inner.lifecycle.schedule.len(),
             "CronScheduler started"
+        );
+    }
+
+    // 8d. C6 — idle scheduler. Wakes every 30 s, fires triggers when the
+    //     agent has been idle for >= IdleTrigger.after_secs.
+    if !profile.inner.lifecycle.idle_triggers.is_empty() {
+        let is = IdleScheduler::new(
+            profile.inner.lifecycle.idle_triggers.clone(),
+            runner.clone(),
+            profile.inner.companion.proactive.quiet_hours.clone(),
+        );
+        transport_tasks.push(is.spawn());
+        info!(
+            count = profile.inner.lifecycle.idle_triggers.len(),
+            "IdleScheduler started"
         );
     }
 
