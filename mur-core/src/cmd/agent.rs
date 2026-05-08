@@ -153,6 +153,7 @@ pub fn cmd_create(
         deployment: DeploymentConfig::default(),
         companion: CompanionConfig::default(),
         voice: mur_common::agent::VoiceConfig::default(),
+        hooks: mur_common::HooksConfig::default(),
         trusted_peers: Vec::new(),
         created_at: now.clone(),
         updated_at: now,

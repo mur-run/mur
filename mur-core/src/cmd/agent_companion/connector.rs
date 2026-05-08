@@ -516,6 +516,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
         deployment: DeploymentConfig::default(),
         companion: CompanionConfig::default(),
         voice: mur_common::agent::VoiceConfig::default(),
+        hooks: mur_common::HooksConfig::default(),
         trusted_peers: vec![],
         created_at: now.clone(),
         updated_at: now,
