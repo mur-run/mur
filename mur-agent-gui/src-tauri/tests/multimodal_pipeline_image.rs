@@ -70,7 +70,7 @@ async fn pipeline_from_path_reads_file_then_processes() {
 }
 
 #[tokio::test]
-async fn pipeline_image_runs_ocr_with_noop_engine() {
+async fn pipeline_image_records_platform_ocr_engine_version() {
     unsafe {
         std::env::set_var(
             "MUR_AGENT_DECODER_BIN",
@@ -89,19 +89,35 @@ async fn pipeline_image_runs_ocr_with_noop_engine() {
         })
         .await
         .unwrap();
-    // M3.5.4 wires OCR. NoopOcr returns empty text → ocr_text is None
-    // (we collapse empty OCR strings to None so downstream readers
-    // don't see Some("")).
+    // A 1×1 transparent PNG has no text; OCR should return None or empty
+    // (pipeline collapses empty → None).
     assert!(a.ocr_text.is_none());
-    // engine_version is always set (Noop returns "noop/1.0").
-    assert_eq!(a.ocr_engine_version.as_deref(), Some("noop/1.0"));
+    // engine_version is always set by the platform engine (M3.5.2/M3.5.3).
+    let ev = a
+        .ocr_engine_version
+        .as_deref()
+        .expect("engine version must be set");
+    #[cfg(target_os = "macos")]
+    assert!(
+        ev.starts_with("macos-vision/"),
+        "expected macos-vision prefix, got {ev}"
+    );
+    #[cfg(not(target_os = "macos"))]
+    assert!(
+        ev.starts_with("tesseract-cli/") || ev == "noop/1.0",
+        "unexpected engine version: {ev}"
+    );
 
     // Provenance entry's ocr_engine_version is also recorded.
     let ledger =
         mur_common::multimodal::ProvenanceLedger::new(tmp.path().join("telemetry/inputs.jsonl"));
     let entries = ledger.read_turn(1).unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].ocr_engine_version.as_deref(), Some("noop/1.0"));
+    let pev = entries[0]
+        .ocr_engine_version
+        .as_deref()
+        .expect("ledger engine version must be set");
+    assert_eq!(pev, ev, "ledger engine version must match artifact");
 }
 
 #[tokio::test]
