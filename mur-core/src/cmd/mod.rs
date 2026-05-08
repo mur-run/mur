@@ -32,6 +32,7 @@ pub(crate) mod model;
 pub(crate) mod murmurd;
 pub(crate) mod pattern;
 pub(crate) mod reindex;
+pub(crate) mod search;
 pub(crate) mod server_cmd;
 pub(crate) mod session;
 pub(crate) mod sync_cmd;
