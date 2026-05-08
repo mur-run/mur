@@ -64,8 +64,10 @@ fn onboarding_state_pre_d2_yaml_still_deserializes() {
 #[test]
 fn proactive_tiers_helper() {
     use mur_common::agent::{CompanionConfig, ProactiveTier};
-    let mut c = CompanionConfig::default();
-    c.enabled = true;
+    let mut c = CompanionConfig {
+        enabled: true,
+        ..CompanionConfig::default()
+    };
     let t = ProactiveTier::from_config(&c);
     assert_eq!(t, ProactiveTier::WarmOnly);
 
