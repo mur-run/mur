@@ -12,6 +12,7 @@ pub mod error;
 /// B0 M11 — JSONL output schema for the eval harness.
 pub mod eval;
 pub mod event;
+pub mod hooks_config;
 pub mod identity;
 pub mod knowledge;
 pub mod llm;
@@ -33,6 +34,7 @@ pub mod workflow;
 
 pub use actor::{Actor, ActorSource};
 pub use conversation::{CONVERSATION_SCHEMA_VERSION, Content, Message, Role, Source};
+pub use hooks_config::HooksConfig;
 pub use pattern::Pattern;
 pub use scope::Scope;
 pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};

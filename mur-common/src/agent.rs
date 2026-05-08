@@ -47,6 +47,9 @@ pub struct AgentProfile {
     /// Voice I/O configuration (D1). Default = disabled.
     #[serde(default)]
     pub voice: VoiceConfig,
+    /// A1: config-driven handler picker. Absent block = all defaults.
+    #[serde(default)]
+    pub hooks: crate::HooksConfig,
     /// Pubkeys of bridges (and other LLM-less peers) this agent will accept
     /// signed envelopes from. Empty = accept no bridge traffic. Default = empty.
     #[serde(default)]
