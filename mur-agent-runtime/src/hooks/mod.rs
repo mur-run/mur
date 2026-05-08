@@ -16,6 +16,7 @@ pub mod types;
 
 pub mod b0;
 pub mod b0_helpers;
+pub mod builder;
 pub mod companion_voice;
 pub mod ledger;
 pub mod telemetry;
