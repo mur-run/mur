@@ -1180,6 +1180,38 @@ enum AgentScheduleAction {
         #[arg(long, default_value_t = 5)]
         count: usize,
     },
+    /// Add an idle trigger that fires when the agent has been idle for N seconds
+    IdleAdd {
+        /// Agent name
+        name: String,
+        /// Idle threshold in seconds; trigger fires when agent has been idle this long
+        #[arg(long)]
+        after_secs: u64,
+        /// Message injected as a user turn when the trigger fires
+        #[arg(long)]
+        message: String,
+        /// Send the message to a different agent instead of self (optional)
+        #[arg(long)]
+        sends_to: Option<String>,
+        /// Per-trigger refire cooldown in seconds (default: 600)
+        #[arg(long, default_value_t = 600)]
+        cooldown_secs: u64,
+        /// Suppress firing during the agent's configured quiet-hours window (default: true)
+        #[arg(long, default_value_t = true)]
+        respect_quiet_hours: bool,
+    },
+    /// List all idle triggers for an agent
+    IdleList {
+        /// Agent name
+        name: String,
+    },
+    /// Remove an idle trigger by index (0-based, see `idle-list` for indices)
+    IdleRemove {
+        /// Agent name
+        name: String,
+        /// Trigger index to remove
+        index: usize,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1976,6 +2008,27 @@ async fn async_main() -> Result<()> {
                 }
                 AgentScheduleAction::Next { name, count } => {
                     cmd::agent_schedule::cmd_schedule_next(&name, count)?
+                }
+                AgentScheduleAction::IdleAdd {
+                    name,
+                    after_secs,
+                    message,
+                    sends_to,
+                    cooldown_secs,
+                    respect_quiet_hours,
+                } => cmd::agent_schedule::cmd_idle_add(
+                    &name,
+                    after_secs,
+                    &message,
+                    sends_to,
+                    cooldown_secs,
+                    respect_quiet_hours,
+                )?,
+                AgentScheduleAction::IdleList { name } => {
+                    cmd::agent_schedule::cmd_idle_list(&name)?
+                }
+                AgentScheduleAction::IdleRemove { name, index } => {
+                    cmd::agent_schedule::cmd_idle_remove(&name, index)?
                 }
             },
         },
