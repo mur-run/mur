@@ -47,13 +47,7 @@ impl SlackBotLike for MockSlackBot {
         thread_ts: Option<&str>,
     ) -> Result<(), SlackError> {
         if let Some(ref err) = self.post_message_err {
-            return Err(match err {
-                SlackError::Auth(c) => SlackError::Auth(*c),
-                SlackError::RateLimit(d) => SlackError::RateLimit(*d),
-                SlackError::Network(s) => SlackError::Network(s.clone()),
-                SlackError::Parse(s) => SlackError::Parse(s.clone()),
-                SlackError::WebSocket(s) => SlackError::WebSocket(s.clone()),
-            });
+            return Err(err.clone());
         }
         self.sent.lock().unwrap().push(MockSlackMessage {
             channel: channel.to_string(),

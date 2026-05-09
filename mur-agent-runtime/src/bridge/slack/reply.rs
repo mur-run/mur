@@ -1,5 +1,3 @@
-// Stub — fully implemented in M-c7.5
-
 use reqwest::Client;
 
 use crate::bridge::slack::SlackError;
