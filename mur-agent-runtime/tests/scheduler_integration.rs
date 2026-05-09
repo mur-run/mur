@@ -9,7 +9,7 @@ fn next_n_fires_returns_n_times() {
     for w in fires.windows(2) {
         let diff_min = (w[1] - w[0]).num_minutes();
         assert!(
-            diff_min >= 55 && diff_min <= 65,
+            (55..=65).contains(&diff_min),
             "expected ~60 min gap, got {diff_min} min"
         );
     }

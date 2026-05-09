@@ -295,10 +295,10 @@ mod tests {
             let col = i % 256;
             style_matrix[row][col] = f32::from_le_bytes(chunk.try_into().unwrap());
         }
-        for row in 0..5 {
-            for col in 0..256 {
+        for (row, row_vals) in style_matrix.iter().enumerate() {
+            for (col, val) in row_vals.iter().enumerate() {
                 assert_eq!(
-                    style_matrix[row][col], row as f32,
+                    *val, row as f32,
                     "style_matrix[{row}][{col}] expected {row}.0"
                 );
             }
