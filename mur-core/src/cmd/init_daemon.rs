@@ -23,14 +23,12 @@ pub(crate) fn install_daemon_service(murmurd_path: &Path) -> Result<bool> {
 #[cfg(target_os = "macos")]
 fn install_launchd(murmurd_path: &Path) -> Result<()> {
     let label = "run.mur.murmurd";
-    let agents_dir = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join("Library")
-        .join("LaunchAgents");
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
+    let agents_dir = home.join("Library").join("LaunchAgents");
     std::fs::create_dir_all(&agents_dir)?;
 
     let plist_path = agents_dir.join(format!("{label}.plist"));
-    let log_path = dirs::home_dir().unwrap().join(".mur").join("murmurd.log");
+    let log_path = home.join(".mur").join("murmurd.log");
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -122,11 +120,8 @@ mod tests {
     }
 
     #[test]
-    fn install_daemon_service_on_unsupported_platform_returns_false() {
-        // This test only runs on non-mac, non-linux (e.g. tests run in cross-compile scenarios)
-        // On mac/linux this test is skipped (platform cfg blocks apply at compile time).
-        // We test the API surface is callable and returns Ok(_) without panicking.
-        // Since we can't disable cfg in unit tests, just test murmurd_bin_path().
+    fn murmurd_bin_path_does_not_panic() {
+        // Test that murmurd_bin_path() can be called without panicking.
         let _ = murmurd_bin_path();
     }
 }
