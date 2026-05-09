@@ -53,8 +53,8 @@ use sessions::{
 };
 use stats::{get_links, get_stats, get_tags};
 use workflows::{
-    create_workflow, delete_workflow, extract_workflow_from_session, get_workflow,
-    list_workflows, search_workflows, update_workflow,
+    create_workflow, delete_workflow, extract_workflow_from_session, get_workflow, list_workflows,
+    search_workflows, update_workflow,
 };
 
 // Web UI assets — set MUR_WEB_DIST env at build time for full dashboard,
