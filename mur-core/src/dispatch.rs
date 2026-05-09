@@ -10,9 +10,9 @@ use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
     AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
     AgentWebhookAction, ChatAction, Cli, Commands, CommunityAction, ConversationsAction,
-    DeployAction, DraftsAction, EvolveAction, ExchangeAction, FeedbackAction, GepAction,
-    HookEvent, LearnAction, MurmurdAction, PackAction, PatternAction, ScheduleAction,
-    SessionAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    DeployAction, DraftsAction, EvolveAction, ExchangeAction, FeedbackAction, GepAction, HookEvent,
+    LearnAction, MurmurdAction, PackAction, PatternAction, ScheduleAction, SessionAction,
+    SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::{cmd, dashboard, verify};
 
@@ -446,9 +446,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::List { json } => cmd::agent::cmd_list(json)?,
         AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
         AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
-        AgentAction::Remove { name, purge, force } => {
-            cmd::agent::cmd_remove(&name, purge, force)?
-        }
+        AgentAction::Remove { name, purge, force } => cmd::agent::cmd_remove(&name, purge, force)?,
         AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
         AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
         AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
@@ -458,9 +456,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             yes,
             emergency,
         } => cmd::agent_rekey::cmd_rekey(&name, &reason, yes, emergency)?,
-        AgentAction::RekeyStatus { name, json } => {
-            cmd::agent_rekey::cmd_rekey_status(&name, json)?
-        }
+        AgentAction::RekeyStatus { name, json } => cmd::agent_rekey::cmd_rekey_status(&name, json)?,
         AgentAction::InstallService { name, dry_run } => {
             cmd::agent::cmd_install_service(&name, dry_run)?
         }
@@ -678,9 +674,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             }
         },
         AgentAction::Hooks { action } => match action {
-            AgentHooksAction::Show { name, json } => {
-                cmd::agent_hooks::cmd_hooks_show(&name, json)?
-            }
+            AgentHooksAction::Show { name, json } => cmd::agent_hooks::cmd_hooks_show(&name, json)?,
         },
     }
     Ok(())
