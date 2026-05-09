@@ -116,7 +116,10 @@ mod tests {
         // Should never panic and should produce a path ending in "murmurd"
         let p = murmurd_bin_path();
         let name = p.file_name().unwrap_or_default().to_string_lossy();
-        assert!(name.contains("murmurd"), "expected murmurd in path, got: {p:?}");
+        assert!(
+            name.contains("murmurd"),
+            "expected murmurd in path, got: {p:?}"
+        );
     }
 
     #[test]
