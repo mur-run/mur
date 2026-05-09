@@ -11,6 +11,9 @@ pub struct HookStats {
     /// Top tools sorted descending by call count, truncated to 5.
     pub top_tools: Vec<(String, usize)>,
     pub unique_sessions: usize,
+    pub latency_p50_ms: Option<u64>,
+    pub latency_p95_ms: Option<u64>,
+    pub latency_p99_ms: Option<u64>,
 }
 
 #[allow(dead_code)] // called from cmd::hook_stats in Task 3
@@ -20,7 +23,7 @@ pub fn compute(events: &[NormalizedEvent]) -> HookStats {
     let mut tool_counts: HashMap<String, usize> = HashMap::new();
     let mut sessions: HashSet<String> = HashSet::new();
 
-    for ev in events {
+    for ev in events.iter().filter(|e| !e.is_duration_record) {
         let kind_key = match ev.kind {
             EventKind::Prompt => "Prompt",
             EventKind::Tool => "Tool",
@@ -43,12 +46,26 @@ pub fn compute(events: &[NormalizedEvent]) -> HookStats {
     top_tools.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     top_tools.truncate(5);
 
+    let mut durations: Vec<u64> = events.iter().filter_map(|e| e.duration_ms).collect();
+    durations.sort_unstable();
+
+    fn percentile(sorted: &[u64], pct: f64) -> Option<u64> {
+        if sorted.is_empty() {
+            return None;
+        }
+        let idx = ((pct / 100.0) * (sorted.len() - 1) as f64).floor() as usize;
+        Some(sorted[idx.min(sorted.len() - 1)])
+    }
+
     HookStats {
-        total: events.len(),
+        total: events.iter().filter(|e| !e.is_duration_record).count(),
         by_kind,
         by_provider,
         top_tools,
         unique_sessions: sessions.len(),
+        latency_p50_ms: percentile(&durations, 50.0),
+        latency_p95_ms: percentile(&durations, 95.0),
+        latency_p99_ms: percentile(&durations, 99.0),
     }
 }
 
@@ -98,6 +115,22 @@ pub fn format_stats(stats: &HookStats, queue_path: &str) -> String {
         }
     }
 
+    if stats.latency_p50_ms.is_some()
+        || stats.latency_p95_ms.is_some()
+        || stats.latency_p99_ms.is_some()
+    {
+        out.push_str("\nLatency (prompt+tool hooks with timing):\n");
+        if let Some(p50) = stats.latency_p50_ms {
+            out.push_str(&format!("  p50: {p50} ms\n"));
+        }
+        if let Some(p95) = stats.latency_p95_ms {
+            out.push_str(&format!("  p95: {p95} ms\n"));
+        }
+        if let Some(p99) = stats.latency_p99_ms {
+            out.push_str(&format!("  p99: {p99} ms\n"));
+        }
+    }
+
     out
 }
 
@@ -120,6 +153,8 @@ mod tests {
             tool_input: None,
             stop_reason: None,
             session_id: session.map(str::to_owned),
+            duration_ms: None,
+            is_duration_record: false,
         }
     }
 
@@ -229,6 +264,8 @@ mod tests {
             tool_input: None,
             stop_reason: None,
             session_id: None,
+            duration_ms: None,
+            is_duration_record: false,
         }];
         let stats = compute(&events);
         assert!(
@@ -274,6 +311,80 @@ mod tests {
         assert!(
             out.contains("Sessions:  1"),
             "session count must appear; got: {out}"
+        );
+    }
+
+    #[test]
+    fn latency_percentiles_from_events() {
+        let events: Vec<NormalizedEvent> = (1u64..=100)
+            .map(|i| NormalizedEvent {
+                kind: EventKind::Prompt,
+                tool_provider: "claude".into(),
+                query: None,
+                tool_called: None,
+                tool_input: None,
+                stop_reason: None,
+                session_id: None,
+                duration_ms: Some(i),
+                is_duration_record: false,
+            })
+            .collect();
+        let stats = compute(&events);
+        assert_eq!(stats.latency_p50_ms, Some(50));
+        assert_eq!(stats.latency_p95_ms, Some(95));
+        assert_eq!(stats.latency_p99_ms, Some(99));
+    }
+
+    #[test]
+    fn latency_none_when_no_durations() {
+        let events = vec![NormalizedEvent {
+            kind: EventKind::Prompt,
+            tool_provider: "claude".into(),
+            query: None,
+            tool_called: None,
+            tool_input: None,
+            stop_reason: None,
+            session_id: None,
+            duration_ms: None,
+            is_duration_record: false,
+        }];
+        let stats = compute(&events);
+        assert!(stats.latency_p50_ms.is_none());
+        assert!(stats.latency_p99_ms.is_none());
+    }
+
+    #[test]
+    fn duration_records_excluded_from_counts() {
+        let events = vec![
+            NormalizedEvent {
+                kind: EventKind::Prompt,
+                tool_provider: "claude".into(),
+                query: None,
+                tool_called: None,
+                tool_input: None,
+                stop_reason: None,
+                session_id: None,
+                duration_ms: Some(42),
+                is_duration_record: true,
+            },
+            NormalizedEvent {
+                kind: EventKind::Prompt,
+                tool_provider: "claude".into(),
+                query: None,
+                tool_called: None,
+                tool_input: None,
+                stop_reason: None,
+                session_id: None,
+                duration_ms: None,
+                is_duration_record: false,
+            },
+        ];
+        let stats = compute(&events);
+        assert_eq!(stats.total, 1, "duration records must not be counted");
+        assert_eq!(
+            stats.latency_p50_ms,
+            Some(42),
+            "duration from timing record must appear"
         );
     }
 }
