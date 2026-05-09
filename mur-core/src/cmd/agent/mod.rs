@@ -54,9 +54,9 @@ pub use perm::{
     cmd_perm_set_limit, cmd_perm_set_mode, cmd_perm_show,
 };
 #[allow(unused_imports)]
-pub use prompt::{cmd_prompt_edit, cmd_prompt_set, cmd_prompt_show};
-#[allow(unused_imports)]
 pub(crate) use prompt::prompt_path_for;
+#[allow(unused_imports)]
+pub use prompt::{cmd_prompt_edit, cmd_prompt_set, cmd_prompt_show};
 #[allow(unused_imports)]
 pub use secret::{cmd_secret_delete, cmd_secret_list, cmd_secret_set};
 #[allow(unused_imports)]
