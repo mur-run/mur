@@ -10,7 +10,7 @@ pub mod reply;
 pub mod socket;
 
 pub use inbound::{InboundDeps, SlackBotLike, SlackInboundLoop};
-pub use mock::{MockSlackBot, MockSlackMessage};
+pub use mock::{MockSlackBot, MockSlackMessage, MockUserAgentHandle};
 pub use socket::SlackSocketConn;
 
 /// Local error type for all Slack bridge operations.
