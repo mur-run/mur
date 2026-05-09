@@ -4,7 +4,7 @@
 //! min/max bound the acceptable answer (inclusive on both ends).
 //! Skip=0, L0=1, L1=2, L2=3
 
-use mur_core::retrieve::gate::{evaluate_query_v2, GateInputs, Tier};
+use mur_core::retrieve::gate::{GateInputs, Tier, evaluate_query_v2};
 
 fn tier_ord(t: &Tier) -> u8 {
     match t {
@@ -79,29 +79,81 @@ fn golden_cases() -> Vec<Case> {
         c("make the test pass for capture/noise_filter.rs", 2, 3),
         c("the pattern retrieval is returning stale results", 1, 3),
         c("help me implement the adaptive gate scoring function", 2, 3),
-        c("I need to add a new CLI subcommand for model registry", 2, 3),
+        c(
+            "I need to add a new CLI subcommand for model registry",
+            2,
+            3,
+        ),
         c("找出 mur-core/src/inject/hook.rs 中的 bug", 2, 3),
         c("implement missing tests for the webhook handler", 2, 3),
-        c("create a new pattern for Rust error handling with anyhow", 2, 3),
+        c(
+            "create a new pattern for Rust error handling with anyhow",
+            2,
+            3,
+        ),
         c("trace why embed() fails when Ollama is not running", 1, 3),
-        c("check the BM25 score calculation in retrieve/scoring.rs", 2, 3),
+        c(
+            "check the BM25 score calculation in retrieve/scoring.rs",
+            2,
+            3,
+        ),
         // L2 (3): action verbs + long technical + code context
         c("implement the tokio worker pool in murmurd consumer", 2, 3),
-        c("build the release binary and run cargo test --workspace", 2, 3),
-        c("fix the race condition between heartbeat and event drain in mur-daemon/src/main.rs", 2, 3),
-        c("implement progressive disclosure: return L0 index on SessionStart, L1 snippet on UserPromptSubmit", 2, 3),
-        c("refactor mur-core/src/cmd/init.rs to split the 1400-line file into submodules under cmd/init/", 2, 3),
-        c("add async:true to the Claude Code hook entry written by mur init --hooks in settings.json", 2, 3),
-        c("migrate the on-prompt.sh hook to use mur hook prompt --tool claude", 2, 3),
-        c("write integration tests for all nine tool stdin schemas in inject/event.rs", 2, 3),
-        c("add latency p50/p95/p99 tracking to mur hook stats using duration_ms in the event queue", 2, 3),
-        c("deploy the murmurd binary to production and install the launchd plist", 2, 3),
+        c(
+            "build the release binary and run cargo test --workspace",
+            2,
+            3,
+        ),
+        c(
+            "fix the race condition between heartbeat and event drain in mur-daemon/src/main.rs",
+            2,
+            3,
+        ),
+        c(
+            "implement progressive disclosure: return L0 index on SessionStart, L1 snippet on UserPromptSubmit",
+            2,
+            3,
+        ),
+        c(
+            "refactor mur-core/src/cmd/init.rs to split the 1400-line file into submodules under cmd/init/",
+            2,
+            3,
+        ),
+        c(
+            "add async:true to the Claude Code hook entry written by mur init --hooks in settings.json",
+            2,
+            3,
+        ),
+        c(
+            "migrate the on-prompt.sh hook to use mur hook prompt --tool claude",
+            2,
+            3,
+        ),
+        c(
+            "write integration tests for all nine tool stdin schemas in inject/event.rs",
+            2,
+            3,
+        ),
+        c(
+            "add latency p50/p95/p99 tracking to mur hook stats using duration_ms in the event queue",
+            2,
+            3,
+        ),
+        c(
+            "deploy the murmurd binary to production and install the launchd plist",
+            2,
+            3,
+        ),
         // CJK action verbs
         c("實作 hook 的 L2 tier 邏輯", 2, 3),
         c("修正 inject/queue.rs 中的 offset 計算錯誤", 2, 3),
         c("新增 mur hook stats 命令顯示每種 tier 的比例", 2, 3),
         c("重構 mur-core/src/inject/index.rs 的 format_l0 函式", 2, 3),
-        c("找出並修復 retrieve/gate.rs 中 intent_score 的 regex 錯誤", 2, 3),
+        c(
+            "找出並修復 retrieve/gate.rs 中 intent_score 的 regex 錯誤",
+            2,
+            3,
+        ),
         // Edge / boundary
         c("test", 0, 2),
         c("run tests", 0, 2),
@@ -149,12 +201,19 @@ fn gate_accuracy_on_golden_set() {
 
     let accuracy = correct as f64 / total as f64;
     if !failures.is_empty() {
-        println!("\nGolden set failures ({}/{} wrong):", failures.len(), total);
+        println!(
+            "\nGolden set failures ({}/{} wrong):",
+            failures.len(),
+            total
+        );
         for f in &failures {
             println!("{f}");
         }
     }
-    println!("\nGate accuracy: {correct}/{total} = {:.1}%", accuracy * 100.0);
+    println!(
+        "\nGate accuracy: {correct}/{total} = {:.1}%",
+        accuracy * 100.0
+    );
     assert!(
         accuracy >= 0.85,
         "Gate accuracy {:.1}% < 85% required by spec §7 M0",

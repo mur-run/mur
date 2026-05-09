@@ -115,7 +115,10 @@ pub fn format_stats(stats: &HookStats, queue_path: &str) -> String {
         }
     }
 
-    if stats.latency_p50_ms.is_some() || stats.latency_p95_ms.is_some() || stats.latency_p99_ms.is_some() {
+    if stats.latency_p50_ms.is_some()
+        || stats.latency_p95_ms.is_some()
+        || stats.latency_p99_ms.is_some()
+    {
         out.push_str("\nLatency (prompt+tool hooks with timing):\n");
         if let Some(p50) = stats.latency_p50_ms {
             out.push_str(&format!("  p50: {p50} ms\n"));
@@ -378,6 +381,10 @@ mod tests {
         ];
         let stats = compute(&events);
         assert_eq!(stats.total, 1, "duration records must not be counted");
-        assert_eq!(stats.latency_p50_ms, Some(42), "duration from timing record must appear");
+        assert_eq!(
+            stats.latency_p50_ms,
+            Some(42),
+            "duration from timing record must appear"
+        );
     }
 }
