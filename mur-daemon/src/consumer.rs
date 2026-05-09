@@ -91,6 +91,8 @@ mod tests {
             tool_input: None,
             stop_reason: None,
             session_id: Some("sess1".into()),
+            duration_ms: None,
+            is_duration_record: false,
         }
     }
 
