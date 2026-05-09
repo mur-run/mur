@@ -70,6 +70,11 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
     let event = parse_event(raw.clone(), EventKind::Prompt, tool);
     let _ = enqueue(&event);
 
+    // Ensure murmurd is running; respawn silently if heartbeat is stale.
+    if !crate::daemon::is_daemon_healthy() {
+        crate::daemon::try_respawn_daemon();
+    }
+
     let query = extract_query(&raw).unwrap_or_default();
     if query.trim().is_empty() {
         return Ok(());
