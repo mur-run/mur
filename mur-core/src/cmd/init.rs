@@ -213,6 +213,19 @@ pub(crate) const HOOK_SCRIPT_SESSION_START: &str = "#!/bin/bash
 exec mur hook session-start --tool \"${MUR_TOOL:-claude}\"
 ";
 
+/// Derive Claude Code async flags for a given hook event name.
+///
+/// Returns `(async_flag, rewake_flag)`:
+/// - `async_flag=true` for `UserPromptSubmit` (async execution)
+/// - `rewake_flag=true` for `Stop` (async re-wake after completion)
+/// - Both false for other events
+fn hook_async_flags(event_name: &str) -> (bool, bool) {
+    (
+        matches!(event_name, "UserPromptSubmit"),
+        matches!(event_name, "Stop"),
+    )
+}
+
 pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
@@ -354,8 +367,7 @@ pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> 
             });
 
             // Add our hook with Claude Code async flags
-            let async_flag = matches!(*event_name, "UserPromptSubmit");
-            let rewake_flag = matches!(*event_name, "Stop");
+            let (async_flag, rewake_flag) = hook_async_flags(event_name);
             let mut hook_entry = serde_json::json!({
                 "hooks": [{
                     "type": "command",
@@ -1463,15 +1475,21 @@ mod runtime_regression_tests {
 
 #[cfg(test)]
 mod claude_hook_flags_tests {
+    use super::hook_async_flags;
     use std::collections::HashMap;
 
     #[test]
     fn claude_hooks_have_async_flags() {
-        let events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionStart"];
+        let events = [
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "Stop",
+            "SessionStart",
+        ];
         let mut results: HashMap<&str, serde_json::Value> = HashMap::new();
         for event_name in events {
-            let async_flag = matches!(event_name, "UserPromptSubmit");
-            let rewake_flag = matches!(event_name, "Stop");
+            let (async_flag, rewake_flag) = hook_async_flags(event_name);
             let mut hook_entry = serde_json::json!({
                 "hooks": [{"type": "command", "command": "bash /tmp/hook.sh"}],
                 "matcher": ""
@@ -1484,9 +1502,29 @@ mod claude_hook_flags_tests {
             }
             results.insert(event_name, hook_entry);
         }
-        assert_eq!(results["UserPromptSubmit"]["hooks"][0]["async"], serde_json::json!(true));
-        assert_eq!(results["Stop"]["hooks"][0]["asyncRewake"], serde_json::json!(true));
+        assert_eq!(
+            results["UserPromptSubmit"]["hooks"][0]["async"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            results["Stop"]["hooks"][0]["asyncRewake"],
+            serde_json::json!(true)
+        );
         assert!(results["PreToolUse"]["hooks"][0].get("async").is_none());
-        assert!(results["PostToolUse"]["hooks"][0].get("asyncRewake").is_none());
+        assert!(
+            results["PostToolUse"]["hooks"][0]
+                .get("asyncRewake")
+                .is_none()
+        );
+        assert!(
+            results["SessionStart"]["hooks"][0].get("async").is_none(),
+            "SessionStart should not have async flag"
+        );
+        assert!(
+            results["SessionStart"]["hooks"][0]
+                .get("asyncRewake")
+                .is_none(),
+            "SessionStart should not have asyncRewake flag"
+        );
     }
 }
