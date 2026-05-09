@@ -147,6 +147,7 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
     let mut done_event = parse_event(serde_json::json!({}), EventKind::Prompt, tool);
     done_event.duration_ms = Some(duration_ms);
     done_event.session_id = event.session_id.clone();
+    done_event.is_duration_record = true;
     let _ = enqueue(&done_event);
 
     Ok(())
@@ -216,6 +217,7 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
     let mut done_event = parse_event(serde_json::json!({}), EventKind::Tool, tool);
     done_event.duration_ms = Some(duration_ms);
     done_event.session_id = event.session_id.clone();
+    done_event.is_duration_record = true;
     let _ = enqueue(&done_event);
 
     Ok(())

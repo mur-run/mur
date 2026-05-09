@@ -59,6 +59,7 @@ mod tests {
             stop_reason: None,
             session_id: Some("test_sess".into()),
             duration_ms: None,
+            is_duration_record: false,
         }
     }
 

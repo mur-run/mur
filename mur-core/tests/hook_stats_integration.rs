@@ -14,6 +14,7 @@ fn make_event(kind: EventKind, tool: Option<&str>, session: Option<&str>) -> Nor
         stop_reason: None,
         session_id: session.map(str::to_owned),
         duration_ms: None,
+        is_duration_record: false,
     }
 }
 

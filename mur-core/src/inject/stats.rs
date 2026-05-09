@@ -23,7 +23,7 @@ pub fn compute(events: &[NormalizedEvent]) -> HookStats {
     let mut tool_counts: HashMap<String, usize> = HashMap::new();
     let mut sessions: HashSet<String> = HashSet::new();
 
-    for ev in events {
+    for ev in events.iter().filter(|e| !e.is_duration_record) {
         let kind_key = match ev.kind {
             EventKind::Prompt => "Prompt",
             EventKind::Tool => "Tool",
@@ -58,7 +58,7 @@ pub fn compute(events: &[NormalizedEvent]) -> HookStats {
     }
 
     HookStats {
-        total: events.len(),
+        total: events.iter().filter(|e| !e.is_duration_record).count(),
         by_kind,
         by_provider,
         top_tools,
@@ -115,7 +115,7 @@ pub fn format_stats(stats: &HookStats, queue_path: &str) -> String {
         }
     }
 
-    if stats.latency_p50_ms.is_some() || stats.latency_p95_ms.is_some() {
+    if stats.latency_p50_ms.is_some() || stats.latency_p95_ms.is_some() || stats.latency_p99_ms.is_some() {
         out.push_str("\nLatency (prompt+tool hooks with timing):\n");
         if let Some(p50) = stats.latency_p50_ms {
             out.push_str(&format!("  p50: {p50} ms\n"));
@@ -151,6 +151,7 @@ mod tests {
             stop_reason: None,
             session_id: session.map(str::to_owned),
             duration_ms: None,
+            is_duration_record: false,
         }
     }
 
@@ -261,6 +262,7 @@ mod tests {
             stop_reason: None,
             session_id: None,
             duration_ms: None,
+            is_duration_record: false,
         }];
         let stats = compute(&events);
         assert!(
@@ -321,6 +323,7 @@ mod tests {
                 stop_reason: None,
                 session_id: None,
                 duration_ms: Some(i),
+                is_duration_record: false,
             })
             .collect();
         let stats = compute(&events);
@@ -340,9 +343,41 @@ mod tests {
             stop_reason: None,
             session_id: None,
             duration_ms: None,
+            is_duration_record: false,
         }];
         let stats = compute(&events);
         assert!(stats.latency_p50_ms.is_none());
         assert!(stats.latency_p99_ms.is_none());
+    }
+
+    #[test]
+    fn duration_records_excluded_from_counts() {
+        let events = vec![
+            NormalizedEvent {
+                kind: EventKind::Prompt,
+                tool_provider: "claude".into(),
+                query: None,
+                tool_called: None,
+                tool_input: None,
+                stop_reason: None,
+                session_id: None,
+                duration_ms: Some(42),
+                is_duration_record: true,
+            },
+            NormalizedEvent {
+                kind: EventKind::Prompt,
+                tool_provider: "claude".into(),
+                query: None,
+                tool_called: None,
+                tool_input: None,
+                stop_reason: None,
+                session_id: None,
+                duration_ms: None,
+                is_duration_record: false,
+            },
+        ];
+        let stats = compute(&events);
+        assert_eq!(stats.total, 1, "duration records must not be counted");
+        assert_eq!(stats.latency_p50_ms, Some(42), "duration from timing record must appear");
     }
 }

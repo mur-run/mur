@@ -25,6 +25,10 @@ pub struct NormalizedEvent {
     /// None for events written at entry (before processing completes).
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    /// True for synthetic timing records written after hook processing completes.
+    /// Excluded from event counts in compute() but included in latency percentiles.
+    #[serde(default)]
+    pub is_duration_record: bool,
 }
 
 #[allow(dead_code)]
@@ -60,6 +64,7 @@ fn parse_claude(raw: Value, kind: EventKind) -> NormalizedEvent {
             .and_then(|v| v.as_str())
             .map(str::to_owned),
         duration_ms: None,
+        is_duration_record: false,
     }
 }
 
@@ -85,6 +90,7 @@ fn parse_gemini(raw: Value, kind: EventKind) -> NormalizedEvent {
             .and_then(|v| v.as_str())
             .map(str::to_owned),
         duration_ms: None,
+        is_duration_record: false,
     }
 }
 
@@ -108,6 +114,7 @@ fn parse_cursor(raw: Value, kind: EventKind) -> NormalizedEvent {
             .map(str::to_owned),
         session_id: None, // Cursor hooks do not expose a session identifier
         duration_ms: None,
+        is_duration_record: false,
     }
 }
 
@@ -128,6 +135,7 @@ fn parse_copilot(raw: Value, kind: EventKind) -> NormalizedEvent {
         stop_reason: None, // Copilot stop events arrive as separate sessionEnd hooks
         session_id: None,  // Copilot does not surface session ID in hook payloads
         duration_ms: None,
+        is_duration_record: false,
     }
 }
 
@@ -152,6 +160,7 @@ fn parse_opencode(raw: Value, kind: EventKind) -> NormalizedEvent {
             .and_then(|v| v.as_str())
             .map(str::to_owned),
         duration_ms: None,
+        is_duration_record: false,
     }
 }
 
