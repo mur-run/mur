@@ -24,7 +24,10 @@ const COMPANION_FILES: &[(&str, &str)] = &[
     ("linter.rs", include_str!("linter.rs")),
     ("mod.rs", include_str!("mod.rs")),
     ("notifier.rs", include_str!("notifier.rs")),
-    ("outbox.rs", include_str!("outbox.rs")),
+    ("outbox/mod.rs", include_str!("outbox/mod.rs")),
+    ("outbox/deliver.rs", include_str!("outbox/deliver.rs")),
+    ("outbox/generate.rs", include_str!("outbox/generate.rs")),
+    ("outbox/i18n.rs", include_str!("outbox/i18n.rs")),
     ("picker.rs", include_str!("picker.rs")),
     ("schedule.rs", include_str!("schedule.rs")),
     ("situations.rs", include_str!("situations.rs")),
@@ -91,14 +94,26 @@ mod tests {
             .lines()
             .filter(|l| l.trim_start().starts_with("pub mod "))
             .count();
+        // outbox is split into a folder; count its production submodules
+        // (excluding `mod tests;`) so each one shows up in COMPANION_FILES.
+        let outbox_mod_rs = include_str!("outbox/mod.rs");
+        let outbox_subs = outbox_mod_rs
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                t.starts_with("mod ") && t != "mod tests;"
+            })
+            .count();
         // mod.rs itself is not a `pub mod` line; +1 to include it.
+        let expected = declared + 1 + outbox_subs;
         assert_eq!(
             COMPANION_FILES.len(),
-            declared + 1,
-            "COMPANION_FILES count ({}) ≠ pub mod count in mod.rs ({}) + mod.rs itself. \
+            expected,
+            "COMPANION_FILES count ({}) ≠ pub mod count in mod.rs ({}) + mod.rs itself + outbox submodules ({}). \
              Did you add a new companion file without updating network_audit::COMPANION_FILES?",
             COMPANION_FILES.len(),
             declared,
+            outbox_subs,
         );
     }
 
