@@ -75,7 +75,8 @@ mod daemon_health_tests {
             "heartbeat_at": heartbeat_at,
         });
         let mut f = std::fs::File::create(path).unwrap();
-        f.write_all(serde_json::to_string(&state).unwrap().as_bytes()).unwrap();
+        f.write_all(serde_json::to_string(&state).unwrap().as_bytes())
+            .unwrap();
     }
 
     #[test]
@@ -84,7 +85,10 @@ mod daemon_health_tests {
         let lock = dir.path().join("murmurd.lock");
         let old_ts = chrono::Utc::now() - chrono::Duration::seconds(60);
         write_lock(&lock, &old_ts.to_rfc3339());
-        assert!(!daemon_healthy_for_lock(&lock), "stale lock should return false");
+        assert!(
+            !daemon_healthy_for_lock(&lock),
+            "stale lock should return false"
+        );
     }
 
     #[test]
@@ -93,14 +97,20 @@ mod daemon_health_tests {
         let lock = dir.path().join("murmurd.lock");
         let now_ts = chrono::Utc::now();
         write_lock(&lock, &now_ts.to_rfc3339());
-        assert!(daemon_healthy_for_lock(&lock), "fresh lock should return true");
+        assert!(
+            daemon_healthy_for_lock(&lock),
+            "fresh lock should return true"
+        );
     }
 
     #[test]
     fn missing_lock_returns_false() {
         let dir = tempfile::TempDir::new().unwrap();
         let lock = dir.path().join("nonexistent.lock");
-        assert!(!daemon_healthy_for_lock(&lock), "missing lock should return false");
+        assert!(
+            !daemon_healthy_for_lock(&lock),
+            "missing lock should return false"
+        );
     }
 
     #[test]
@@ -108,6 +118,9 @@ mod daemon_health_tests {
         let dir = tempfile::TempDir::new().unwrap();
         let lock = dir.path().join("murmurd.lock");
         std::fs::write(&lock, b"not json").unwrap();
-        assert!(!daemon_healthy_for_lock(&lock), "malformed lock should return false");
+        assert!(
+            !daemon_healthy_for_lock(&lock),
+            "malformed lock should return false"
+        );
     }
 }
