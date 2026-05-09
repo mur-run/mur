@@ -31,17 +31,50 @@ fn reset_backoff_returns_to_one_second() {
 async fn open_wss_url_returns_auth_error_on_401() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
     tokio::spawn(async move {
+        ready_tx.send(()).ok();
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf).await;
         let resp = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n";
         stream.write_all(resp).await.unwrap();
     });
+    ready_rx.await.unwrap();
 
     let client = reqwest::Client::new();
     let conn =
         SlackSocketConn::new_with_base_url("xapp-test".into(), format!("http://127.0.0.1:{port}"));
     let err = conn.open_wss_url(&client).await.unwrap_err();
     assert!(matches!(err, SlackError::Auth(401)), "got: {err:?}");
+}
+
+#[tokio::test]
+async fn open_wss_url_returns_auth_error_on_ok_false_invalid_auth() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move {
+        ready_tx.send(()).ok();
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf).await;
+        let body = r#"{"ok":false,"error":"invalid_auth"}"#;
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(resp.as_bytes()).await.unwrap();
+    });
+    ready_rx.await.unwrap();
+
+    let client = reqwest::Client::new();
+    let conn =
+        SlackSocketConn::new_with_base_url("xapp-test".into(), format!("http://127.0.0.1:{port}"));
+    let err = conn.open_wss_url(&client).await.unwrap_err();
+    assert!(
+        matches!(err, SlackError::Auth(_)),
+        "invalid_auth should map to SlackError::Auth, got: {err:?}"
+    );
 }

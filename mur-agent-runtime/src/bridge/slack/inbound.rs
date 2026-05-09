@@ -1,5 +1,4 @@
 // Stub — fully implemented in M-c7.2+
-use crate::bridge::slack::SlackError;
 
 pub trait SlackBotLike: Send + Sync + 'static {}
 
@@ -15,8 +14,3 @@ impl<B: SlackBotLike> SlackInboundLoop<B> {
         Self { bot, deps: None }
     }
 }
-
-// Suppress unused-import warning until M-c7.2 fills this module.
-const _: fn() = || {
-    let _: Option<SlackError> = None;
-};

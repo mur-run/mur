@@ -58,6 +58,18 @@ impl SlackSocketConn {
 
         if !body["ok"].as_bool().unwrap_or(false) {
             let code = body["error"].as_str().unwrap_or("unknown");
+            // These Slack error codes mean the token is invalid/revoked — permanent.
+            const AUTH_ERRORS: &[&str] = &[
+                "invalid_auth",
+                "token_revoked",
+                "token_expired",
+                "missing_scope",
+                "not_authed",
+                "account_inactive",
+            ];
+            if AUTH_ERRORS.contains(&code) {
+                return Err(SlackError::Auth(200));
+            }
             return Err(SlackError::Network(format!(
                 "apps.connections.open returned ok=false: {code}"
             )));
