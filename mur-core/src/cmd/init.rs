@@ -389,6 +389,16 @@ pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> 
         std::fs::write(&settings_path, pretty)?;
 
         hooks_installed.push("Claude Code");
+
+        // Install murmurd as login service
+        let murmurd_bin = super::init_daemon::murmurd_bin_path();
+        match super::init_daemon::install_daemon_service(&murmurd_bin) {
+            Ok(true) => println!("  murmurd autostart installed (login service)."),
+            Ok(false) => println!(
+                "  murmurd autostart: unsupported platform.\n  Run `mur murmurd start --detach` manually."
+            ),
+            Err(e) => eprintln!("  murmurd install warning: {e:#}"),
+        }
     }
 
     // ─── Step C2: Install Auggie hooks in settings.json ──────────
