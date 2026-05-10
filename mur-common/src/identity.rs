@@ -101,6 +101,15 @@ impl AgentIdentity {
         &self.signing
     }
 
+    /// Sign `msg` with the Ed25519 private key and return the raw 64-byte
+    /// signature. Callers that only have a `&AgentIdentity` (and therefore
+    /// cannot import `ed25519_dalek::Signer` themselves) should use this
+    /// instead of calling `signing_key().sign()` directly.
+    pub fn sign_bytes(&self, msg: &[u8]) -> [u8; 64] {
+        use ed25519_dalek::Signer;
+        self.signing.sign(msg).to_bytes()
+    }
+
     pub fn verifying_key(&self) -> VerifyingKey {
         self.signing.verifying_key()
     }
@@ -110,6 +119,13 @@ impl AgentIdentity {
     }
 
     pub fn pubkey_text(&self) -> String {
+        encode_pubkey(&self.signing.verifying_key())
+    }
+
+    /// Alias for `pubkey_text()` — returns the verifying key as multibase
+    /// base58btc (`z`-prefixed string), matching the `bridge_pubkey_multibase`
+    /// field used in signed envelopes.
+    pub fn public_key_multibase(&self) -> String {
         encode_pubkey(&self.signing.verifying_key())
     }
 
