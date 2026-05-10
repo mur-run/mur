@@ -10,11 +10,11 @@ pub mod reply;
 pub mod socket;
 
 pub use inbound::{InboundDeps, SlackBotLike, SlackInboundLoop};
-pub use mock::{MockSlackBot, MockSlackMessage};
+pub use mock::{MockSlackBot, MockSlackMessage, MockUserAgentHandle};
 pub use socket::SlackSocketConn;
 
 /// Local error type for all Slack bridge operations.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum SlackError {
     #[error("Slack auth error (HTTP {0}): check your tokens")]
     Auth(u16),
