@@ -114,7 +114,7 @@ pub struct InboundDeps {
 
 pub struct SlackInboundLoop<B: SlackBotLike> {
     pub bot: B,
-    pub(crate) deps: Option<InboundDeps>,
+    pub deps: Option<InboundDeps>,
 }
 
 impl<B: SlackBotLike> SlackInboundLoop<B> {
@@ -137,12 +137,13 @@ pub struct TickResult {
 }
 
 impl<B: SlackBotLike> SlackInboundLoop<B> {
-    /// Process one `events_api` envelope through phases 1-3 (classify, privacy, dedupe).
+    /// Process one `events_api` envelope through phases 1-7 (classify, privacy,
+    /// dedupe, strip mention, sign, forward, reply).
     pub async fn tick_once(&mut self, envelope: SlackEnvelope) -> Result<TickResult, SlackError> {
         let Some(payload) = envelope.payload else {
             return Ok(TickResult { forwarded: false });
         };
-        let event = &payload.event;
+        let event = payload.event;
 
         let is_dm = event.channel_type.as_deref() == Some("im");
         let is_mention = event.kind == "app_mention";
@@ -173,6 +174,79 @@ impl<B: SlackBotLike> SlackInboundLoop<B> {
             .mark_seen(&dedupe_key)
             .map_err(|e| SlackError::Network(e.to_string()))?;
 
-        Ok(TickResult { forwarded: true })
+        // Phase 4: strip bot mention prefix "<@U…> " from text
+        let raw_text = event.text.clone().unwrap_or_default();
+        let text = if is_mention {
+            if let Some(rest) = raw_text.split_once("> ") {
+                rest.1.trim().to_string()
+            } else {
+                raw_text.trim().to_string()
+            }
+        } else {
+            raw_text
+        };
+
+        // Phase 5: build + sign JSON payload using the bridge identity
+        let payload_value = serde_json::json!({
+            "text": text,
+            "sender_slack_user_id": event.user.as_deref().unwrap_or(""),
+            "channel": event.channel,
+            "ts": event.ts,
+            "thread_ts": event.thread_ts,
+            "is_dm": is_dm,
+        });
+        let canonical =
+            serde_json::to_vec(&payload_value).map_err(|e| SlackError::Parse(e.to_string()))?;
+        let sig_bytes = deps.identity.sign_bytes(&canonical);
+        let bridge_pubkey = deps.identity.public_key_multibase();
+
+        let forwarded_payload = serde_json::json!({
+            "payload": payload_value,
+            "signature": hex::encode(sig_bytes),
+            "bridge_pubkey_multibase": bridge_pubkey,
+            "key_version": deps.key_version,
+        });
+
+        // Phase 6: forward to user agent + advance AckTracker
+        let (status, reply_text) = if let Some(ref agent) = deps.user_agent {
+            agent.forward(forwarded_payload)
+        } else if deps.always_5xx {
+            (500u16, String::new())
+        } else {
+            (200u16, String::new())
+        };
+
+        let did_forward = status / 100 == 2;
+        if did_forward {
+            deps.ack.start_pending(event.ts.clone());
+            deps.ack.confirm();
+        } else {
+            tracing::warn!(
+                channel = %event.channel,
+                ts = %event.ts,
+                status,
+                "A2A forward failed — AckTracker not advanced"
+            );
+        }
+
+        // Phase 7: post reply — in-thread for mentions, inline for DMs
+        if did_forward && !reply_text.is_empty() {
+            let thread_ts = if is_mention {
+                Some(event.ts.as_str())
+            } else {
+                None
+            };
+            if let Err(e) = self
+                .bot
+                .post_message(&event.channel, &reply_text, thread_ts)
+                .await
+            {
+                tracing::warn!("post_message failed: {e}");
+            }
+        }
+
+        Ok(TickResult {
+            forwarded: did_forward,
+        })
     }
 }
