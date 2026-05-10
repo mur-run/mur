@@ -57,7 +57,7 @@ jobs:
 
       - name: Install protobuf (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libdbus-1-dev
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libdbus-1-dev libasound2-dev
 
       - name: Install protobuf (macOS)
         if: runner.os == 'macOS'
