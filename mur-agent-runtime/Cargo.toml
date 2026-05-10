@@ -89,6 +89,9 @@ sled = { workspace = true }
 # default-features so we don't pull native-tls; rustls keeps the dep tree
 # consistent with reqwest.
 teloxide = { version = "0.13", default-features = false, features = ["rustls", "throttle", "cache-me"] }
+# Track C7 — Slack bridge (Socket Mode). tokio-tungstenite drives the WSS
+# connection; rustls keeps TLS consistent with reqwest/teloxide.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 # D1 voice — TTS + STT (Tasks 3-8)
 indicatif = "0.17"   # progress bar for download
 ort = { version = "2.0.0-rc.12", features = ["load-dynamic", "ndarray"] }   # ONNX Runtime for Kokoro TTS
