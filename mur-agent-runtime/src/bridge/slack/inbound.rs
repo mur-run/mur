@@ -138,7 +138,6 @@ pub struct TickResult {
 
 impl<B: SlackBotLike> SlackInboundLoop<B> {
     /// Process one `events_api` envelope through phases 1-3 (classify, privacy, dedupe).
-    /// Phases 4-7 (sign, A2A forward, ack, reply) are added in M-c7.4/M-c7.5.
     pub async fn tick_once(&mut self, envelope: SlackEnvelope) -> Result<TickResult, SlackError> {
         let Some(payload) = envelope.payload else {
             return Ok(TickResult { forwarded: false });
@@ -170,7 +169,9 @@ impl<B: SlackBotLike> SlackInboundLoop<B> {
         if deps.dedupe.is_seen(&dedupe_key).unwrap_or(false) {
             return Ok(TickResult { forwarded: false });
         }
-        let _ = deps.dedupe.mark_seen(&dedupe_key);
+        deps.dedupe
+            .mark_seen(&dedupe_key)
+            .map_err(|e| SlackError::Network(e.to_string()))?;
 
         Ok(TickResult { forwarded: true })
     }
