@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mur_common::bridge::{PrivacyMode, TelegramConfig};
+use mur_common::bridge::{PrivacyMode, SlackConfig, SlackPrivacyMode, TelegramConfig};
 
 use crate::bridge_keychain::{Keychain, MockKeychain, SystemKeychain};
 
@@ -42,8 +42,12 @@ pub async fn add(
             scaffold_stub_bridge(&name, default_route).await?;
             run_telegram_setup(&name, bot_token, bot_username, chat_id, ack, allow_groups).await
         }
+        "slack" => {
+            scaffold_stub_bridge(&name, default_route).await?;
+            run_slack_setup(&name).await
+        }
         other => bail!(
-            "platform '{other}' not supported in Track C1/C2 — recognised: 'stub', 'telegram'. \
+            "platform '{other}' not supported — recognised: 'stub', 'telegram', 'slack'. \
              Send-from-any-app lands in C3."
         ),
     }
@@ -192,6 +196,120 @@ async fn interactive_botfather_flow(
         "telegram bridge scaffolded; config: {}",
         profile_path.display()
     );
+    Ok(())
+}
+
+/// Interactive 5-step Slack App setup wizard.
+async fn run_slack_setup(bridge_id: &str) -> Result<()> {
+    use std::io::Write;
+
+    let kc: Box<dyn Keychain> = if std::env::var("MUR_SLACK_KEYCHAIN_BACKEND")
+        .ok()
+        .as_deref()
+        == Some("mock")
+    {
+        Box::new(MockKeychain::default())
+    } else {
+        Box::new(SystemKeychain)
+    };
+
+    println!("\n━━ Slack Bridge Setup ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    println!(
+        "Step 1/5  Create a Slack App\n\
+         → https://api.slack.com/apps → Create New App → From scratch\n\
+         Name: anything (e.g. \"{bridge_id}\"); pick your team's workspace.\n"
+    );
+    print!("          Press Enter when done… ");
+    std::io::stdout().flush()?;
+    let mut _buf = String::new();
+    std::io::stdin().read_line(&mut _buf)?;
+
+    println!(
+        "\nStep 2/5  Enable Socket Mode + App Token\n\
+         Settings → Socket Mode → Enable Socket Mode\n\
+         Generate an App-level Token with scope: connections:write\n\
+         Copy the token (starts with xapp-)\n"
+    );
+    print!("          App Token: ");
+    std::io::stdout().flush()?;
+    let mut app_token = String::new();
+    std::io::stdin().read_line(&mut app_token)?;
+    let app_token = app_token.trim().to_string();
+    if !app_token.starts_with("xapp-") {
+        anyhow::bail!("App Token must start with 'xapp-'");
+    }
+
+    println!(
+        "\nStep 3/5  Add Bot Token Scopes\n\
+         OAuth & Permissions → Bot Token Scopes → Add:\n\
+           app_mentions:read  im:read  im:history  chat:write  users:read  channels:read\n"
+    );
+    print!("          Press Enter when done… ");
+    std::io::stdout().flush()?;
+    let mut _buf = String::new();
+    std::io::stdin().read_line(&mut _buf)?;
+
+    println!(
+        "\nStep 4/5  Install App + Bot Token\n\
+         OAuth & Permissions → Install to Workspace → Allow\n\
+         Copy the Bot OAuth Token (starts with xoxb-)\n"
+    );
+    print!("          Bot Token: ");
+    std::io::stdout().flush()?;
+    let mut bot_token = String::new();
+    std::io::stdin().read_line(&mut bot_token)?;
+    let bot_token = bot_token.trim().to_string();
+    if !bot_token.starts_with("xoxb-") {
+        anyhow::bail!("Bot Token must start with 'xoxb-'");
+    }
+
+    print!("\nStep 5/5  Verifying… ");
+    std::io::stdout().flush()?;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://slack.com/api/auth.test")
+        .bearer_auth(&bot_token)
+        .send()
+        .await
+        .context("auth.test request failed")?;
+    let body: serde_json::Value = resp.json().await.context("auth.test parse failed")?;
+    if !body["ok"].as_bool().unwrap_or(false) {
+        anyhow::bail!(
+            "auth.test failed: {}",
+            body["error"].as_str().unwrap_or("unknown")
+        );
+    }
+    println!("auth.test ✓");
+
+    let bot_account = format!("mur_slack_bot_{bridge_id}");
+    let app_account = format!("mur_slack_app_{bridge_id}");
+    kc.put(&bot_account, &bot_token)
+        .context("storing bot token in keychain")?;
+    kc.put(&app_account, &app_token)
+        .context("storing app token in keychain")?;
+
+    let agent_dir = crate::paths::mur_root(None).join("agents").join(bridge_id);
+    let slack_config = SlackConfig {
+        workspace_url: body["url"].as_str().unwrap_or("").to_string(),
+        bot_token_keychain_account: bot_account,
+        app_token_keychain_account: app_account,
+        privacy_mode: SlackPrivacyMode::DmAndMentions,
+        allowed_channels: vec![],
+    };
+    let yaml =
+        serde_yaml_ng::to_string(&slack_config).context("serialising slack.yaml")?;
+    std::fs::write(agent_dir.join("slack.yaml"), yaml).context("writing slack.yaml")?;
+
+    println!(
+        "\n⚠  Privacy notice: This bridge is NOT end-to-end encrypted.\n\
+         Messages are forwarded to your local mur agent over A2A.\n"
+    );
+    println!(
+        "✅ Slack bridge configured for agent '{bridge_id}'.\n\
+         Run: mur agent start {bridge_id}\n"
+    );
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     Ok(())
 }
 
