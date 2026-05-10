@@ -176,3 +176,115 @@ async fn duplicate_event_skipped() {
     assert!(r1.forwarded, "first delivery should forward");
     assert!(!r2.forwarded, "duplicate should be skipped");
 }
+
+// ── M-c7.4 tests ──────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn mention_prefix_stripped_before_forward() {
+    let dir = TempDir::new().unwrap();
+    let mut deps = make_deps(SlackPrivacyMode::DmAndMentions, vec![], &dir);
+    deps.user_agent = Some(MockUserAgentHandle::ok("response"));
+    let bot = MockSlackBot::new();
+    let mut loop_ = SlackInboundLoop::new(bot, deps);
+    let env = mention_envelope("C_CHAN", "1000000005.000001", "<@U_BOT_ID> please help");
+    loop_.tick_once(env).await.unwrap();
+
+    let received = loop_
+        .deps
+        .as_ref()
+        .unwrap()
+        .user_agent
+        .as_ref()
+        .unwrap()
+        .received
+        .lock()
+        .unwrap();
+    let text = received[0]["payload"]["text"].as_str().unwrap();
+    assert!(
+        !text.contains("<@"),
+        "bot prefix should be stripped, got: {text}"
+    );
+    assert!(
+        text.contains("please help"),
+        "text should remain, got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn mention_sets_thread_ts_in_reply() {
+    let dir = TempDir::new().unwrap();
+    let mut deps = make_deps(SlackPrivacyMode::DmAndMentions, vec![], &dir);
+    deps.user_agent = Some(MockUserAgentHandle::ok("I can help!"));
+    let bot = MockSlackBot::new();
+    let mut loop_ = SlackInboundLoop::new(bot, deps);
+    let env = mention_envelope("C_CHAN", "1000000006.000001", "<@U_BOT> question");
+    loop_.tick_once(env).await.unwrap();
+    let msgs = loop_.bot.sent_messages();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(
+        msgs[0].thread_ts.as_deref(),
+        Some("1000000006.000001"),
+        "mention should reply in-thread"
+    );
+}
+
+#[tokio::test]
+async fn dm_does_not_set_thread_ts() {
+    let dir = TempDir::new().unwrap();
+    let mut deps = make_deps(SlackPrivacyMode::DmAndMentions, vec![], &dir);
+    deps.user_agent = Some(MockUserAgentHandle::ok("reply"));
+    let bot = MockSlackBot::new();
+    let mut loop_ = SlackInboundLoop::new(bot, deps);
+    let env = dm_envelope("D_DM", "1000000007.000001", "hello");
+    loop_.tick_once(env).await.unwrap();
+    let msgs = loop_.bot.sent_messages();
+    assert_eq!(msgs.len(), 1);
+    assert!(msgs[0].thread_ts.is_none(), "DM should not set thread_ts");
+}
+
+#[tokio::test]
+async fn a2a_5xx_does_not_advance_ack() {
+    let dir = TempDir::new().unwrap();
+    let mut deps = make_deps(SlackPrivacyMode::DmAndMentions, vec![], &dir);
+    deps.user_agent = Some(MockUserAgentHandle::server_error());
+    let bot = MockSlackBot::new();
+    let mut loop_ = SlackInboundLoop::new(bot, deps);
+    let env = mention_envelope("C_CHAN", "1000000008.000001", "<@U_BOT> hi");
+    loop_.tick_once(env).await.unwrap();
+    let committed = loop_.deps.as_ref().unwrap().ack.committed_offset();
+    assert!(
+        committed.is_empty(),
+        "AckTracker should not advance on 5xx, got: {committed}"
+    );
+}
+
+#[tokio::test]
+async fn envelope_signed_correctly() {
+    let dir = TempDir::new().unwrap();
+    let mut deps = make_deps(SlackPrivacyMode::DmAndMentions, vec![], &dir);
+    let pubkey = deps.identity.public_key_multibase();
+    deps.user_agent = Some(MockUserAgentHandle::ok("ok"));
+    let bot = MockSlackBot::new();
+    let mut loop_ = SlackInboundLoop::new(bot, deps);
+    let env = dm_envelope("D_DM", "1000000009.000001", "test");
+    loop_.tick_once(env).await.unwrap();
+
+    let received = loop_
+        .deps
+        .as_ref()
+        .unwrap()
+        .user_agent
+        .as_ref()
+        .unwrap()
+        .received
+        .lock()
+        .unwrap();
+    assert!(
+        received[0].get("signature").is_some(),
+        "forwarded payload missing signature"
+    );
+    let env_pubkey = received[0]["bridge_pubkey_multibase"]
+        .as_str()
+        .unwrap_or("");
+    assert_eq!(env_pubkey, pubkey, "pubkey mismatch");
+}
