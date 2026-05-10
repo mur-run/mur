@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use mur_common::bridge::SlackConfig;
+use mur_common::bridge::{SlackConfig, SlackPrivacyMode};
 use mur_common::identity::AgentIdentity;
 
 use crate::bridge::ack::AckTracker;
@@ -127,5 +127,52 @@ impl<B: SlackBotLike> SlackInboundLoop<B> {
             bot,
             deps: Some(deps),
         }
+    }
+}
+
+/// Result of processing one Socket Mode envelope.
+#[derive(Debug)]
+pub struct TickResult {
+    pub forwarded: bool,
+}
+
+impl<B: SlackBotLike> SlackInboundLoop<B> {
+    /// Process one `events_api` envelope through phases 1-3 (classify, privacy, dedupe).
+    pub async fn tick_once(&mut self, envelope: SlackEnvelope) -> Result<TickResult, SlackError> {
+        let Some(payload) = envelope.payload else {
+            return Ok(TickResult { forwarded: false });
+        };
+        let event = &payload.event;
+
+        let is_dm = event.channel_type.as_deref() == Some("im");
+        let is_mention = event.kind == "app_mention";
+        if !is_dm && !is_mention {
+            return Ok(TickResult { forwarded: false });
+        }
+
+        let deps = self
+            .deps
+            .as_mut()
+            .expect("tick_once called on stub_new loop");
+
+        if is_mention && deps.config.privacy_mode == SlackPrivacyMode::DmOnly {
+            return Ok(TickResult { forwarded: false });
+        }
+        if is_mention
+            && !deps.config.allowed_channels.is_empty()
+            && !deps.config.allowed_channels.contains(&event.channel)
+        {
+            return Ok(TickResult { forwarded: false });
+        }
+
+        let dedupe_key = format!("{}:{}", event.channel, event.ts);
+        if deps.dedupe.is_seen(&dedupe_key).unwrap_or(false) {
+            return Ok(TickResult { forwarded: false });
+        }
+        deps.dedupe
+            .mark_seen(&dedupe_key)
+            .map_err(|e| SlackError::Network(e.to_string()))?;
+
+        Ok(TickResult { forwarded: true })
     }
 }
