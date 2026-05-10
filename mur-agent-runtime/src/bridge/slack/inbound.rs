@@ -70,6 +70,7 @@ impl SlackBotLike for RealSlackBot {
             channel,
             text,
             thread_ts,
+            None,
         )
         .await
     }

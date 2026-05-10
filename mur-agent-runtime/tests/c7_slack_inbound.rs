@@ -258,6 +258,49 @@ async fn a2a_5xx_does_not_advance_ack() {
     );
 }
 
+// ── M-c7.5 tests ──────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn rate_limit_exhausted_returns_error() {
+    use mur_agent_runtime::bridge::slack::reply::post_message;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    tokio::spawn(async move {
+        // MAX_RETRIES=3 means 4 total attempts; accept 5 to be safe
+        for _ in 0..5u32 {
+            if let Ok((mut s, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf).await;
+                let resp = b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = s.write_all(resp).await;
+            }
+        }
+    });
+
+    let client = reqwest::Client::new();
+    let base_url = format!("http://127.0.0.1:{port}");
+    let result = post_message(
+        &client,
+        "xoxb-fake",
+        "C_CHAN",
+        "hello",
+        None,
+        Some(&base_url),
+    )
+    .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(mur_agent_runtime::bridge::slack::SlackError::RateLimit(_))
+        ),
+        "expected RateLimit after exhausted retries, got: {result:?}"
+    );
+}
+
 #[tokio::test]
 async fn envelope_signed_correctly() {
     let dir = TempDir::new().unwrap();
