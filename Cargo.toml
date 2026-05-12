@@ -9,11 +9,11 @@ members = [
     # "mur-commander",  # separate crate — v0.2.0 released
 ]
 exclude = [
-    # Tauri 2 GUI shell. Excluded from the workspace so default
+    # Tauri 2 GUI shells. Excluded from the workspace so default
     # `cargo build --workspace` does not pull WebKitGTK / Cocoa /
-    # WebView2 toolchains. Built only by `mur agent export --format gui`
-    # and the GUI-relevant CI job.
+    # WebView2 toolchains. Built via their own manifests and CI jobs.
     "mur-agent-gui",
+    "mur-hub-gui",
     # cargo-fuzz harness. Excluded because libfuzzer-sys requires a
     # nightly toolchain and the fuzz binaries are not part of normal
     # dev/CI builds. Run with: cargo +nightly fuzz run <target>
