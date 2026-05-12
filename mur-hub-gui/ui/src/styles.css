@@ -1,0 +1,29 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f7f5ef 0%, #ece5d6 100%);
+}
+
+.hub-shell {
+  padding: 32px;
+  text-align: center;
+}
+
+.hub-shell h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.hub-shell .subtitle {
+  margin: 0;
+  font-size: 13px;
+  opacity: 0.6;
+}
