@@ -36,11 +36,18 @@ cargo run -- <command>          # e.g. cargo run -- search "swift testing"
 
 ## Architecture
 
-Cargo workspace with three crates:
+Cargo workspace with five crates plus two workspace-excluded Tauri apps:
 
 - **`mur-common`** — Shared types only. No logic, no I/O. `Pattern`, `KnowledgeBase`, `Workflow`, `Config`, `MurEvent`, plus `AgentProfile`/`LockFile`/A2A envelopes/telemetry constants.
 - **`mur-core`** — All CLI logic and the `mur` binary. Modules map to the four-stage pipeline. Hosts `mur agent ...` user-facing subcommands.
 - **`mur-agent-runtime`** — Per-agent A2A v0.3 supervisor (P0a). One binary, one BusyBox-style symlink per agent (`mur_agent_<name>` → `mur-agent-runtime`). Crate README has the walkthrough.
+- **`mur-daemon`** — Long-running background daemon binary.
+- **`mur-gui-core`** — Shared GUI library (sidecar supervisor, companion bridge, A2A client). Consumed by `mur-hub-gui` and during migration also by `mur-agent-gui`. See `docs/superpowers/specs/2026-05-11-mur-hub-companion-design.md` §3.1.
+
+Workspace-excluded Tauri 2 GUI apps (built via their own manifests so `cargo build --workspace` does not pull WebKitGTK / Cocoa / WebView2):
+
+- **`mur-agent-gui`** — Per-agent `.app` shell (legacy; deprecated in M-h8).
+- **`mur-hub-gui`** — MuR Hub cross-agent desktop app (in development; replaces `mur-agent-gui` in v1).
 
 ### Four-Stage Pipeline
 
