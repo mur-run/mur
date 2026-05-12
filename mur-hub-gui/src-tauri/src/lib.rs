@@ -8,7 +8,10 @@ use tracing_subscriber::EnvFilter;
 
 pub fn run() {
     init_tracing();
-    tracing::info!(version = mur_gui_core::CRATE_VERSION, "starting mur-hub-gui");
+    tracing::info!(
+        version = mur_gui_core::CRATE_VERSION,
+        "starting mur-hub-gui"
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
