@@ -203,15 +203,12 @@ async fn interactive_botfather_flow(
 async fn run_slack_setup(bridge_id: &str) -> Result<()> {
     use std::io::Write;
 
-    let kc: Box<dyn Keychain> = if std::env::var("MUR_SLACK_KEYCHAIN_BACKEND")
-        .ok()
-        .as_deref()
-        == Some("mock")
-    {
-        Box::new(MockKeychain::default())
-    } else {
-        Box::new(SystemKeychain)
-    };
+    let kc: Box<dyn Keychain> =
+        if std::env::var("MUR_SLACK_KEYCHAIN_BACKEND").ok().as_deref() == Some("mock") {
+            Box::new(MockKeychain::default())
+        } else {
+            Box::new(SystemKeychain)
+        };
 
     println!("\n━━ Slack Bridge Setup ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
@@ -297,8 +294,7 @@ async fn run_slack_setup(bridge_id: &str) -> Result<()> {
         privacy_mode: SlackPrivacyMode::DmAndMentions,
         allowed_channels: vec![],
     };
-    let yaml =
-        serde_yaml_ng::to_string(&slack_config).context("serialising slack.yaml")?;
+    let yaml = serde_yaml_ng::to_string(&slack_config).context("serialising slack.yaml")?;
     std::fs::write(agent_dir.join("slack.yaml"), yaml).context("writing slack.yaml")?;
 
     println!(

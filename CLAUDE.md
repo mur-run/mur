@@ -127,3 +127,15 @@ When making changes, check whether these need updating:
 4. **Single source file ≤ 800 lines.** When approaching the limit, split into submodules following the same structural pattern as siblings (e.g., `cmd/agent/{create,list,export}.rs`, `server/routes/{patterns,agents}.rs`, `companion/outbox/{step}.rs`). Pure code movement first; behavior changes in a separate PR.
 5. **Read narrowly.** Prefer LSP queries (goToDefinition, findReferences) and `grep`/`Grep` over reading whole large files. When you must read a file, target the relevant range with `offset`/`limit` if you already know the section.
 6. **CLAUDE.md is operational, not a changelog.** Historical milestone descriptions, completed phase notes, and detailed design walkthroughs belong in `docs/architecture/` or `docs/superpowers/specs/`. Keep this file lean so every session starts cheap.
+
+
+5. **Token saving rules**
+- Skip brainstorming unless explicitly requested
+- Skip multi-step planning for small tasks
+- Do not create plan files automatically
+- Keep responses concise
+- Avoid restating requirements
+- Do not use subagents unless necessary
+- Never use subagents for simple tasks
+- Prefer direct implementation
+- Use one-pass execution
