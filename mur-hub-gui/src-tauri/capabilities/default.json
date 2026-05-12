@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability set for MuR Hub. M-h0 starts with shell/open only; later milestones add fs, dialog, autostart, etc.",
+  "windows": ["dashboard"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open"
+  ]
+}
