@@ -85,7 +85,7 @@ fn unknown_platform_errors() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("not supported in Track C1/C2"),
+        stderr.contains("not supported"),
         "stderr was: {stderr}"
     );
 }

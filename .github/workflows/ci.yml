@@ -263,6 +263,7 @@ jobs:
             pkg-config
             protobuf-compiler
             libprotobuf-dev
+            libasound2-dev
       - name: Install protobuf (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf
