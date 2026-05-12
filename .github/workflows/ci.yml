@@ -29,6 +29,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       gui:  ${{ steps.filter.outputs.gui }}
+      hub_gui: ${{ steps.filter.outputs.hub_gui }}
       e2e:  ${{ steps.filter.outputs.e2e }}
     steps:
       - uses: actions/checkout@v6
@@ -59,6 +60,13 @@ jobs:
               - 'rust-toolchain.toml'
             gui:
               - 'mur-agent-gui/**'
+              - 'mur-agent-runtime/**'
+              - 'mur-core/**'
+              - 'mur-common/**'
+              - '.github/workflows/ci.yml'
+            hub_gui:
+              - 'mur-hub-gui/**'
+              - 'mur-gui-core/**'
               - 'mur-agent-runtime/**'
               - 'mur-core/**'
               - 'mur-common/**'
@@ -163,6 +171,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - name: fmt mur-agent-gui (workspace-excluded)
         run: cargo fmt --manifest-path mur-agent-gui/src-tauri/Cargo.toml -- --check
+      - name: fmt mur-hub-gui (workspace-excluded)
+        run: cargo fmt --manifest-path mur-hub-gui/src-tauri/Cargo.toml -- --check
 
   gui:
     name: GUI crate (mur-agent-gui)
@@ -219,6 +229,58 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --manifest-path mur-agent-gui/src-tauri/Cargo.toml --lib -- -D warnings
 
+  hub_gui:
+    name: Hub GUI crate (mur-hub-gui) — ${{ matrix.os }}
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.hub_gui == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mur-hub-gui/src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: 'mur-hub-gui/ui/.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: 'mur-hub-gui/ui/package-lock.json'
+      - name: Install Linux system libraries (Tauri 2)
+        if: runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          version: 1.0
+          packages: >-
+            libwebkit2gtk-4.1-dev
+            libsoup-3.0-dev
+            libayatana-appindicator3-dev
+            librsvg2-dev
+            pkg-config
+            protobuf-compiler
+            libprotobuf-dev
+      - name: Install protobuf (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: Install protobuf (Windows)
+        if: runner.os == 'Windows'
+        run: choco install protoc -y
+      - name: Install npm deps
+        run: cd mur-hub-gui/ui && npm ci
+      - name: Frontend build
+        run: cd mur-hub-gui/ui && npm run build
+      - name: cargo check
+        run: cargo check --manifest-path mur-hub-gui/src-tauri/Cargo.toml
+      - name: cargo test --lib
+        run: cargo test --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib
+      - name: cargo clippy
+        run: cargo clippy --manifest-path mur-hub-gui/src-tauri/Cargo.toml --lib -- -D warnings
+
   e2e_quick:
     name: E2E orchestration smoke (quick mode)
     needs: changes
@@ -250,7 +312,7 @@ jobs:
   ci-pass:
     name: CI pass
     if: always()
-    needs: [changes, test, clippy, fmt, gui, e2e_quick, required-reason-apis]
+    needs: [changes, test, clippy, fmt, gui, hub_gui, e2e_quick, required-reason-apis]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required jobs succeeded or were skipped
@@ -258,7 +320,7 @@ jobs:
           # Echo the status of each upstream job so failures are obvious in logs.
           # `cancelled` propagates as failure; `skipped` is acceptable (means
           # paths-filter excluded it). Anything else (failure, neutral) fails.
-          for job in test clippy fmt gui e2e_quick required-reason-apis; do
+          for job in test clippy fmt gui hub_gui e2e_quick required-reason-apis; do
             result="${{ toJson(needs) }}"
             echo "$result"
             break  # printed once is enough; per-job check below is the real gate
@@ -274,6 +336,9 @@ jobs:
           fi
           if [[ "${{ needs.gui.result }}" != "success" && "${{ needs.gui.result }}" != "skipped" ]]; then
             echo "::error::gui job failed: ${{ needs.gui.result }}"; exit 1
+          fi
+          if [[ "${{ needs.hub_gui.result }}" != "success" && "${{ needs.hub_gui.result }}" != "skipped" ]]; then
+            echo "::error::hub_gui job failed: ${{ needs.hub_gui.result }}"; exit 1
           fi
           if [[ "${{ needs.e2e_quick.result }}" != "success" && "${{ needs.e2e_quick.result }}" != "skipped" ]]; then
             echo "::error::e2e_quick job failed: ${{ needs.e2e_quick.result }}"; exit 1
