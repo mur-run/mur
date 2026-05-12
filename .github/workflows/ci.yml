@@ -67,7 +67,6 @@ jobs:
             hub_gui:
               - 'mur-hub-gui/**'
               - 'mur-gui-core/**'
-              - 'mur-agent-runtime/**'
               - 'mur-core/**'
               - 'mur-common/**'
               - '.github/workflows/ci.yml'
