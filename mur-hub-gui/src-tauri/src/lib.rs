@@ -1,8 +1,10 @@
 //! MuR Hub — Tauri 2 desktop app.
 //!
 //! M-h1: tray icon, popover + dashboard windows, agent discovery, global shortcut.
+//! M-h2: sidecar Supervisor — spawn/supervise agent runtimes; start_agent/stop_agent commands.
 
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
+use mur_gui_core::sidecar::{AgentRuntimeStatus, Supervisor};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{
@@ -13,14 +15,29 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tracing_subscriber::EnvFilter;
 
-/// Managed Tauri state: current snapshot of discovered agents.
+/// Managed Tauri state: current agent metadata snapshot.
 pub struct AgentState(pub Mutex<Vec<AgentEntry>>);
+
+/// Managed Tauri state: sidecar supervisor handle.
+pub struct SupervisorState(pub Supervisor);
 
 // ─── Tauri commands ────────────────────────────────────────────────────────
 
 #[tauri::command]
 fn list_agents(state: State<'_, AgentState>) -> Vec<AgentEntry> {
     state.0.lock().unwrap().clone()
+}
+
+#[tauri::command]
+async fn start_agent(name: String, supervisor: State<'_, SupervisorState>) -> Result<(), String> {
+    supervisor.0.start(&name).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_agent(name: String, supervisor: State<'_, SupervisorState>) -> Result<(), String> {
+    supervisor.0.stop(&name).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -51,8 +68,6 @@ fn toggle_popover(app: AppHandle) {
 // ─── Tray positioning ──────────────────────────────────────────────────────
 
 fn position_popover(app: &AppHandle, win: &tauri::WebviewWindow) {
-    // Try to position below the tray icon (macOS) or above it (Windows/Linux).
-    // Fall back to top-right corner of the primary monitor.
     let scale = win.scale_factor().unwrap_or(1.0);
 
     let (px, py) = app
@@ -84,7 +99,7 @@ fn position_popover(app: &AppHandle, win: &tauri::WebviewWindow) {
     let _ = win.set_position(tauri::PhysicalPosition::new(px, py));
 }
 
-// ─── Background event bridge ───────────────────────────────────────────────
+// ─── Background event bridges ──────────────────────────────────────────────
 
 fn spawn_agent_watcher(app: AppHandle, mut rx: tokio::sync::watch::Receiver<Vec<AgentEntry>>) {
     tokio::spawn(async move {
@@ -93,11 +108,25 @@ fn spawn_agent_watcher(app: AppHandle, mut rx: tokio::sync::watch::Receiver<Vec<
                 break;
             }
             let entries = rx.borrow().clone();
-            // Update managed state and broadcast to all windows.
             if let Some(state) = app.try_state::<AgentState>() {
                 *state.0.lock().unwrap() = entries.clone();
             }
             let _ = app.emit("agents-updated", &entries);
+        }
+    });
+}
+
+fn spawn_runtime_watcher(
+    app: AppHandle,
+    mut rx: tokio::sync::watch::Receiver<Vec<AgentRuntimeStatus>>,
+) {
+    tokio::spawn(async move {
+        loop {
+            if rx.changed().await.is_err() {
+                break;
+            }
+            let statuses = rx.borrow().clone();
+            let _ = app.emit("runtime-status-changed", &statuses);
         }
     });
 }
@@ -111,22 +140,28 @@ pub fn run() {
         "starting mur-hub-gui"
     );
 
+    let mur_home = mur_home_path();
+    let supervisor = Supervisor::new(mur_home.clone());
+    let runtime_rx = supervisor.status_receiver();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(AgentState(Mutex::new(Vec::new())))
-        .setup(|app| {
-            // Start agent discovery.
-            let mur_home = mur_home_path();
-            let (discovery, rx) = AgentDiscovery::new(mur_home);
-            // Pre-populate state with initial scan.
+        .manage(SupervisorState(supervisor))
+        .setup(move |app| {
+            // Start agent discovery (filesystem scan).
+            let (discovery, agent_rx) = AgentDiscovery::new(mur_home.clone());
             {
-                let initial = rx.borrow().clone();
+                let initial = agent_rx.borrow().clone();
                 *app.state::<AgentState>().0.lock().unwrap() = initial;
             }
             discovery.run();
-            spawn_agent_watcher(app.handle().clone(), rx);
+            spawn_agent_watcher(app.handle().clone(), agent_rx);
+
+            // Bridge supervisor status → Tauri events.
+            spawn_runtime_watcher(app.handle().clone(), runtime_rx);
 
             // Register global shortcut CmdOrCtrl+Shift+M → toggle_popover.
             let handle = app.handle().clone();
@@ -179,6 +214,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_agents,
+            start_agent,
+            stop_agent,
             open_dashboard,
             toggle_popover,
         ])
