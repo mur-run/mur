@@ -1,0 +1,17 @@
+[package]
+name = "mur-gui-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared GUI core library — sidecar supervisor, companion bridge, A2A client. Consumed by mur-hub-gui and (during migration) mur-agent-gui."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

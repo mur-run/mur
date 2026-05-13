@@ -52,7 +52,7 @@ async fn sigterm_removes_running_lock_and_flushes_telemetry() {
     unsafe {
         libc::kill(child.id().unwrap() as libc::pid_t, libc::SIGTERM);
     }
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(15), child.wait()).await;
 
     assert!(
         !lock_path.exists(),

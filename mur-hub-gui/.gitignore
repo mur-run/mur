@@ -1,0 +1,13 @@
+# Rust
+target/
+
+# UI
+ui/dist/
+ui/node_modules/
+
+# Tauri build artifacts
+src-tauri/gen/
+
+# Re-include icons directory (otherwise ~/.gitignore_global's `Icon?` glob
+# eats it; we already had to `git add -f` once in Task 3).
+!src-tauri/icons/

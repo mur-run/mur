@@ -1,0 +1,44 @@
+[package]
+name = "mur-hub-gui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/mur-run/mur"
+description = "MuR Hub — cross-agent desktop app (Tauri 2). Replaces mur-agent-gui in v1."
+
+# Mark as a standalone workspace so cargo doesn't walk past the root
+# Cargo.toml and accidentally attach to the main workspace, which excludes
+# this crate. Mirrors mur-agent-gui/src-tauri's exclusion pattern.
+[workspace]
+
+[lib]
+name = "mur_hub_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "mur-hub-gui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-shell = "2"
+
+# Workspace siblings — reused from the root repo via relative path.
+mur-common = { path = "../../mur-common" }
+mur-core = { path = "../../mur-core" }
+mur-gui-core = { path = "../../mur-gui-core" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
