@@ -75,6 +75,13 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
   const isRunning = runtime?.state.state === "running";
   const isBusy = runtime?.state.state === "restarting";
 
+  // Drag-to-spawn state
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [ghostPos, setGhostPos] = useState({ x: 0, y: 0 });
+  const cursorOutsideRef = useRef(false);
+  const mouseDownPosRef = useRef({ x: 0, y: 0 });
+
   async function handleRun() {
     await invoke("start_agent", { name: agent.name }).catch((e) =>
       showToast(`Failed: ${e}`),
@@ -86,38 +93,107 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
     );
   }
 
+  function startHold(e: React.MouseEvent) {
+    if (e.button !== 0) return;
+    mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
+    holdTimer.current = setTimeout(() => {
+      setDragging(true);
+      setGhostPos({ x: e.screenX, y: e.screenY });
+      cursorOutsideRef.current = false;
+    }, 300);
+  }
+
+  function cancelHold() {
+    if (holdTimer.current) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+  }
+
+  useEffect(() => {
+    if (!dragging) return;
+
+    function onMove(e: MouseEvent) {
+      setGhostPos({ x: e.screenX, y: e.screenY });
+    }
+    function onLeave() { cursorOutsideRef.current = true; }
+    function onEnter() { cursorOutsideRef.current = false; }
+    function onUp(e: MouseEvent) {
+      setDragging(false);
+      if (cursorOutsideRef.current) {
+        invoke("pet_spawn_at", {
+          agentName: agent.name,
+          screenX: e.screenX,
+          screenY: e.screenY,
+        }).catch((err) => showToast(`Pet: ${err}`));
+      }
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    document.addEventListener("mouseleave", onLeave);
+    document.addEventListener("mouseenter", onEnter);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.removeEventListener("mouseleave", onLeave);
+      document.removeEventListener("mouseenter", onEnter);
+    };
+  }, [dragging, agent.name]);
+
   return (
-    <div
-      className={`grid-card${isSelected ? " grid-card--selected" : ""}`}
-      data-agent={agent.name}
-    >
-      <div className="grid-avatar" style={{ background: color }}>
-        {avatarInitials(agent.display_name)}
+    <>
+      <div
+        className={`grid-card${isSelected ? " grid-card--selected" : ""}${dragging ? " grid-card--dragging" : ""}`}
+        data-agent={agent.name}
+        onMouseDown={startHold}
+        onMouseUp={cancelHold}
+        onMouseLeave={cancelHold}
+      >
+        <div className="grid-avatar" style={{ background: color }}>
+          {avatarInitials(agent.display_name)}
+        </div>
+        <p className="grid-name">{agent.display_name}</p>
+        <div className="grid-status">
+          <span className={runtimeDotClass(runtime?.state)} />
+          <span className="grid-status-text">
+            {runtimeLabel(runtime?.state) || agent.status}
+          </span>
+        </div>
+        <div className="grid-actions">
+          <button
+            disabled={isRunning || isBusy}
+            onClick={handleRun}
+            title="Start agent runtime"
+          >
+            ▶ Run
+          </button>
+          <button
+            disabled={!isRunning && !isBusy}
+            onClick={handleStop}
+            title="Stop agent runtime"
+          >
+            ■ Stop
+          </button>
+        </div>
       </div>
-      <p className="grid-name">{agent.display_name}</p>
-      <div className="grid-status">
-        <span className={runtimeDotClass(runtime?.state)} />
-        <span className="grid-status-text">
-          {runtimeLabel(runtime?.state) || agent.status}
-        </span>
-      </div>
-      <div className="grid-actions">
-        <button
-          disabled={isRunning || isBusy}
-          onClick={handleRun}
-          title="Start agent runtime"
+
+      {dragging && (
+        <div
+          className="drag-ghost"
+          style={{
+            position: "fixed",
+            left: ghostPos.x - window.screenX - 40,
+            top: ghostPos.y - window.screenY - 40,
+            pointerEvents: "none",
+          }}
         >
-          ▶ Run
-        </button>
-        <button
-          disabled={!isRunning && !isBusy}
-          onClick={handleStop}
-          title="Stop agent runtime"
-        >
-          ■ Stop
-        </button>
-      </div>
-    </div>
+          <div className="drag-ghost-avatar" style={{ background: color }}>
+            {avatarInitials(agent.display_name)}
+          </div>
+          <span className="drag-ghost-label">{agent.display_name}</span>
+        </div>
+      )}
+    </>
   );
 }
 
