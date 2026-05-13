@@ -7,9 +7,11 @@ repository.workspace = true
 description = "Shared GUI core library — sidecar supervisor, companion bridge, A2A client. Consumed by mur-hub-gui and (during migration) mur-agent-gui."
 
 [dependencies]
+mur-common = { path = "../mur-common" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml_ng = "0.10"
 anyhow = { workspace = true }
 tracing = { workspace = true }
 

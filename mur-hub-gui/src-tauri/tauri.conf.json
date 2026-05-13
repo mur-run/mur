@@ -12,13 +12,26 @@
       {
         "label": "dashboard",
         "title": "MuR Hub",
+        "url": "index.html",
         "width": 720,
         "height": 520,
         "minWidth": 560,
         "minHeight": 400,
         "resizable": true,
         "fullscreen": false,
-        "visible": true
+        "visible": false
+      },
+      {
+        "label": "popover",
+        "title": "MuR Hub Popover",
+        "url": "index.html#/popover",
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "width": 280,
+        "height": 480,
+        "resizable": false
       }
     ],
     "security": {
