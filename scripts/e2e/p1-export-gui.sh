@@ -15,6 +15,10 @@
 # Exit code !0 → unexpected failure
 set -euo pipefail
 
+# Ensure cargo is in PATH. On some CI runners (e.g. macos-14 ARM64),
+# Homebrew's rustup-init can shadow ~/.cargo/bin/cargo.
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
