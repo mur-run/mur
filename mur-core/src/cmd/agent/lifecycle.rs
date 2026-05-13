@@ -156,6 +156,7 @@ pub fn cmd_create(
         voice: mur_common::agent::VoiceConfig::default(),
         hooks: mur_common::HooksConfig::default(),
         trusted_peers: Vec::new(),
+        appearance: mur_common::AgentAppearance::default(),
         created_at: now.clone(),
         updated_at: now,
     };

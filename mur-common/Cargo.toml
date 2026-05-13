@@ -31,6 +31,7 @@ shellexpand = "3"
 shell-words = "1"
 fs2 = "0.4"
 tracing = "0.1"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }

@@ -1,0 +1,36 @@
+id: default-blob
+display_name: "Default Blob"
+author: builtin
+version: 1
+family: chibi
+description: "SVG-only internal fallback — shown before LLM render completes or on render failure"
+
+llm_image_gen:
+  base_prompt: |
+    Simple friendly blob character, smooth rounded shape, single flat
+    color, minimal dot eyes and small smile, SVG-friendly design,
+    no details, universal placeholder style.
+  negative_prompt: "complex, detailed, realistic, sharp"
+  size: "256x256"
+  steps: 16
+
+expressions:
+  - { id: idle,       prompt_suffix: "neutral resting blob" }
+  - { id: smile,      prompt_suffix: "blob smiling" }
+  - { id: wave,       prompt_suffix: "blob with waving pseudopod" }
+  - { id: think,      prompt_suffix: "blob with thought bubble" }
+  - { id: wow,        prompt_suffix: "blob wide-eyed" }
+  - { id: sparkle,    prompt_suffix: "blob with sparkles" }
+  - { id: cry,        prompt_suffix: "blob with teardrops" }
+  - { id: sleep,      prompt_suffix: "blob with Zzz" }
+  - { id: peek,       prompt_suffix: "blob half-hidden" }
+  - { id: talk_open,  prompt_suffix: "blob open mouth" }
+  - { id: talk_close, prompt_suffix: "blob closed mouth" }
+  - { id: error,      prompt_suffix: "blob distressed" }
+
+renderer:
+  family: chibi
+  default_size: { w: 64, h: 64 }
+  idle_animation: breathe
+  blink_interval_s: [4.0, 8.0]
+  crossfade_ms: 160

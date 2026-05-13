@@ -1,0 +1,37 @@
+id: shimeji-retro
+display_name: "Shimeji Retro"
+author: builtin
+version: 1
+family: pixel
+description: "Pixel / shimeji retro 8-bit sprite style — chunky pixels, limited palette"
+
+llm_image_gen:
+  base_prompt: |
+    Cute 8-bit pixel art sprite character, shimeji desktop pet style.
+    Chunky square pixels, 16-color limited palette, black outlines,
+    retro video game aesthetic, NES / Game Boy era look,
+    transparent background.
+  negative_prompt: "smooth, anti-aliased, realistic, photographic, gradient, many colors"
+  size: "256x256"
+  steps: 20
+
+expressions:
+  - { id: idle,       prompt_suffix: "idle standing animation frame" }
+  - { id: smile,      prompt_suffix: "happy expression, pixel smile" }
+  - { id: wave,       prompt_suffix: "waving arm up pixel frame" }
+  - { id: think,      prompt_suffix: "pixel question mark above head" }
+  - { id: wow,        prompt_suffix: "surprised pixel eyes wide" }
+  - { id: sparkle,    prompt_suffix: "pixel star burst effect" }
+  - { id: cry,        prompt_suffix: "pixel tear drops" }
+  - { id: sleep,      prompt_suffix: "sleeping ZZZ pixel bubbles" }
+  - { id: peek,       prompt_suffix: "peeking sprite half visible" }
+  - { id: talk_open,  prompt_suffix: "speech bubble pixel open mouth" }
+  - { id: talk_close, prompt_suffix: "closed mouth pixel sprite" }
+  - { id: error,      prompt_suffix: "pixel X eyes glitch effect" }
+
+renderer:
+  family: pixel
+  default_size: { w: 64, h: 64 }
+  idle_animation: none
+  blink_interval_s: [2.0, 4.0]
+  crossfade_ms: 0
