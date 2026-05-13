@@ -388,3 +388,188 @@ input {
   from { opacity: 0; transform: translateX(-50%) translateY(8px); }
   to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
+
+/* ── Wizard ───────────────────────────────────────────────────────────── */
+.wz-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+.wz-modal {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 480px;
+  max-width: 95vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+  animation: fadeInUp 0.18s ease;
+}
+.wz-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.wz-progress-dots { display: flex; gap: 6px; align-items: center; }
+.wz-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 0.15s, width 0.15s;
+}
+.wz-dot--active { background: var(--accent); width: 20px; border-radius: 4px; }
+.wz-dot--done   { background: var(--accent); opacity: 0.4; }
+.wz-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-secondary); font-size: 14px; padding: 4px 6px;
+  border-radius: 4px; line-height: 1;
+}
+.wz-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+.wz-body {
+  padding: 24px 28px;
+  overflow-y: auto;
+  flex: 1;
+}
+.wz-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+.wz-loading { color: var(--text-secondary); text-align: center; padding: 40px 0; }
+.wz-step h2 { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
+.wz-hint { font-size: 13px; color: var(--text-secondary); margin: 0 0 20px; line-height: 1.5; }
+.wz-optional { font-size: 12px; color: var(--text-secondary); font-weight: 400; }
+
+/* Buttons */
+.wz-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px; padding: 9px 18px; border-radius: 8px;
+  font-size: 14px; font-weight: 500; cursor: pointer; border: none;
+  transition: background 0.12s, opacity 0.12s;
+}
+.wz-btn.primary { background: var(--accent); color: #fff; }
+.wz-btn.primary:hover { background: var(--accent-hover, #4338CA); }
+.wz-btn.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.wz-btn.secondary { background: var(--bg-hover); color: var(--text-primary); }
+.wz-btn.secondary:hover { background: var(--border); }
+.wz-btn.ghost {
+  background: none; color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.wz-btn.ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+.wz-actions { margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end; }
+.wz-error { color: #EF4444; font-size: 13px; margin: 8px 0 0; }
+
+/* Inputs */
+.wz-label {
+  display: flex; flex-direction: column; gap: 5px;
+  font-size: 13px; font-weight: 500; color: var(--text-primary); margin-bottom: 14px;
+}
+.wz-input, .wz-textarea {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 14px;
+  padding: 8px 10px;
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+  font-family: inherit;
+}
+.wz-input:focus, .wz-textarea:focus { border-color: var(--accent); }
+.wz-textarea { resize: vertical; min-height: 72px; }
+
+/* Step 1 — Persona grid */
+.wz-persona-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.wz-persona-card {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 6px; padding: 16px 12px;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border);
+  border-radius: 10px; cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.wz-persona-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.wz-persona-card.selected { border-color: var(--accent); background: rgba(99,102,241,0.08); }
+.wz-persona-icon { font-size: 26px; }
+.wz-persona-label { font-size: 13px; font-weight: 600; }
+.wz-persona-desc { font-size: 11px; color: var(--text-secondary); text-align: center; line-height: 1.4; }
+
+/* Step 3 — Preset grid */
+.wz-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+.wz-preset-card {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 14px 14px; text-align: left;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border);
+  border-radius: 10px; cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.wz-preset-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.wz-preset-card.selected { border-color: var(--accent); background: rgba(99,102,241,0.08); }
+.wz-preset-family-icon { font-size: 22px; }
+.wz-preset-name { font-size: 13px; font-weight: 600; }
+.wz-preset-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.4; }
+.wz-preset-family-tag {
+  display: inline-block; margin-top: 4px;
+  font-size: 10px; color: var(--text-secondary);
+  background: var(--border); border-radius: 4px; padding: 1px 5px;
+  text-transform: capitalize;
+}
+
+/* Step 4 — Behavior list */
+.wz-behavior-list { display: flex; flex-direction: column; gap: 8px; }
+.wz-behavior-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px; text-align: left;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border);
+  border-radius: 10px; cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.wz-behavior-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.wz-behavior-card.selected { border-color: var(--accent); background: rgba(99,102,241,0.08); }
+.wz-behavior-label { font-size: 14px; font-weight: 600; min-width: 60px; }
+.wz-behavior-desc { font-size: 12px; color: var(--text-secondary); }
+
+/* Step 5 — Photo */
+.wz-photo-selected {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 16px; font-size: 14px; color: var(--text-primary);
+}
+
+/* Step 6 — Render */
+.wz-render-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.wz-progress {
+  background: var(--bg-secondary);
+  border-radius: 6px; overflow: hidden;
+  height: 8px; margin: 12px 0 6px;
+  position: relative;
+}
+.wz-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 6px;
+  transition: width 0.3s ease;
+}
+.wz-progress-text { font-size: 13px; color: var(--text-secondary); margin: 0; }
+.wz-progress-failed { color: #EF4444; }
+.wz-render-done { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.wz-render-error { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
+import { WizardModal } from "./wizard/WizardModal";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -190,6 +191,7 @@ export function DashboardApp() {
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [query, setQuery] = useState("");
+  const [wizardOpen, setWizardOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Build a lookup map for runtime statuses.
@@ -232,11 +234,10 @@ export function DashboardApp() {
   return (
     <div className="dashboard-root">
       <Sidebar activeCategory={activeCategory} agents={agents} onSelect={setActiveCategory} />
-      <div className="dashboard-main">
-        <div className="toolbar">
+      <div className="dashboard-main">        <div className="toolbar">
           <button
             className="toolbar-btn"
-            onClick={() => window.open("https://docs.mur.run/agents/create", "_blank")}
+            onClick={() => setWizardOpen(true)}
           >
             + New Agent
           </button>
@@ -307,6 +308,13 @@ export function DashboardApp() {
           )}
         </div>
       </div>
+      <WizardModal
+        isOpen={wizardOpen}
+        onClose={(name) => {
+          setWizardOpen(false);
+          if (name) invoke("list_agents").catch(() => {});
+        }}
+      />
     </div>
   );
 }
