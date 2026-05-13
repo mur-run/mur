@@ -3,12 +3,15 @@
 //! M-h1: tray icon, popover + dashboard windows, agent discovery, global shortcut.
 //! M-h2: sidecar Supervisor — spawn/supervise agent runtimes; start_agent/stop_agent commands.
 //! M-h4: onboarding wizard — wizard_open/set_persona/.../start_render/finish/cancel.
+//! M-h5: pet windows — pet_spawn_at/close/reposition/return_to_hub/list/get_expression.
 
 pub mod onboarding;
+pub mod pet;
 
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
 use mur_gui_core::sidecar::{AgentRuntimeStatus, Supervisor};
 use onboarding::WizardState;
+use pet::PetState;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{
@@ -156,6 +159,7 @@ pub fn run() {
         .manage(AgentState(Mutex::new(Vec::new())))
         .manage(SupervisorState(supervisor))
         .manage(WizardState(Mutex::new(None)))
+        .manage(PetState(Mutex::new(std::collections::HashMap::new())))
         .setup(move |app| {
             // Start agent discovery (filesystem scan).
             let (discovery, agent_rx) = AgentDiscovery::new(mur_home.clone());
@@ -233,6 +237,12 @@ pub fn run() {
             onboarding::wizard_start_render,
             onboarding::wizard_finish,
             onboarding::wizard_cancel,
+            pet::pet_spawn_at,
+            pet::pet_close,
+            pet::pet_reposition,
+            pet::pet_return_to_hub,
+            pet::pet_list,
+            pet::pet_get_expression,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
