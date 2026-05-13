@@ -1,0 +1,36 @@
+id: chiikawa
+display_name: "ちいかわ"
+author: builtin
+version: 1
+family: chibi
+description: "Nagano-style soft pastel chibi, vulnerable cute"
+
+llm_image_gen:
+  base_prompt: |
+    Soft pastel chibi character in Nagano-style ちいかわ aesthetic.
+    Tiny round body, oversized head, dot eyes, small 'w' mouth,
+    pale cream / beige color palette, hand-drawn line, vulnerable cute.
+  negative_prompt: "realistic, sharp lines, dark colors, adult"
+  size: "512x512"
+  steps: 28
+
+expressions:
+  - { id: idle,       prompt_suffix: "sitting peacefully, soft smile" }
+  - { id: smile,      prompt_suffix: "happy smile, slight blush" }
+  - { id: wave,       prompt_suffix: "waving hello, one paw up" }
+  - { id: think,      prompt_suffix: "thinking pose, finger on chin" }
+  - { id: wow,        prompt_suffix: "surprised, eyes wide open" }
+  - { id: sparkle,    prompt_suffix: "celebrating, sparkles around" }
+  - { id: cry,        prompt_suffix: "teary eyes, holding back tears" }
+  - { id: sleep,      prompt_suffix: "sleeping, Zzz above head" }
+  - { id: peek,       prompt_suffix: "peeking from corner, shy" }
+  - { id: talk_open,  prompt_suffix: "talking, mouth open" }
+  - { id: talk_close, prompt_suffix: "talking, mouth slightly closed" }
+  - { id: error,      prompt_suffix: "worried, hand on cheek" }
+
+renderer:
+  family: chibi
+  default_size: { w: 96, h: 112 }
+  idle_animation: breathe
+  blink_interval_s: [3.0, 6.0]
+  crossfade_ms: 240

@@ -1,0 +1,37 @@
+id: sumikko
+display_name: "Sumikko Gurashi"
+author: builtin
+version: 1
+family: chibi
+description: "Sumikko Gurashi shy corner creatures — muted tones, introverted, cozy"
+
+llm_image_gen:
+  base_prompt: |
+    Tiny shy creature in Sumikko Gurashi style. Simple rounded blob
+    body, small worried dot eyes, muted pastel tones (mint green, beige,
+    dusty pink), loves corners, timid but endearing expression,
+    flat 2D illustration style.
+  negative_prompt: "bold colors, scary, sharp, realistic, busy background"
+  size: "512x512"
+  steps: 26
+
+expressions:
+  - { id: idle,       prompt_suffix: "huddled in a corner, calm and still" }
+  - { id: smile,      prompt_suffix: "tiny shy smile, slight blush" }
+  - { id: wave,       prompt_suffix: "hesitant small wave, still a bit nervous" }
+  - { id: think,      prompt_suffix: "side-eye thinking, small thought bubble" }
+  - { id: wow,        prompt_suffix: "startled, peeking from shell or blanket" }
+  - { id: sparkle,    prompt_suffix: "happy sparkles, rare excited expression" }
+  - { id: cry,        prompt_suffix: "teardrops, curled up sad" }
+  - { id: sleep,      prompt_suffix: "sleeping soundly in cozy corner" }
+  - { id: peek,       prompt_suffix: "peeking from behind a corner wall" }
+  - { id: talk_open,  prompt_suffix: "timidly speaking, small open mouth" }
+  - { id: talk_close, prompt_suffix: "finished speaking, small content smile" }
+  - { id: error,      prompt_suffix: "distressed, hiding under a pile of leaves" }
+
+renderer:
+  family: chibi
+  default_size: { w: 88, h: 100 }
+  idle_animation: breathe
+  blink_interval_s: [5.0, 9.0]
+  crossfade_ms: 280

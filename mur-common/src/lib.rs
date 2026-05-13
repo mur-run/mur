@@ -13,6 +13,7 @@ pub mod error;
 pub mod eval;
 pub mod event;
 pub mod hooks_config;
+pub mod hub;
 pub mod identity;
 pub mod knowledge;
 pub mod llm;
@@ -42,9 +43,9 @@ pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};
 pub use a2a::Message as A2aMessage;
 pub use a2a::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Task, TaskState};
 pub use agent::{
-    AgentProfile, DeploymentConfig, DeploymentType, Entitlements, ExecutionMode,
-    FileTransferConfig, IdentityConfig, LockFile, Persona, PersonaCategory, RetryPolicy,
-    ScheduleEntry,
+    AgentAppearance, AgentProfile, BehaviorPreset, DeploymentConfig, DeploymentType, Entitlements,
+    ExecutionMode, FileTransferConfig, IdentityConfig, LockFile, Persona, PersonaCategory,
+    RenderStatus, RetryPolicy, ScheduleEntry,
 };
 pub use agent_name::{AgentNameError, MAX_AGENT_NAME_LEN, validate_agent_name};
 pub use bridge::{LlmEntitlement, LlmMode};
