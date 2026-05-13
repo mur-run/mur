@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AgentEntry } from "../types";
+import { useAgents } from "../context/AgentContext";
+import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -32,15 +33,58 @@ function showToast(msg: string) {
   setTimeout(() => el.remove(), 2000);
 }
 
+function runtimeLabel(rt: RuntimeState | undefined): string {
+  if (!rt) return "";
+  switch (rt.state) {
+    case "running":
+      return `pid ${rt.pid}`;
+    case "restarting":
+      return `restarting (attempt ${rt.attempt})`;
+    case "failed":
+      return "failed";
+    case "stopped":
+      return "";
+  }
+}
+
+function runtimeDotClass(rt: RuntimeState | undefined): string {
+  if (!rt) return "";
+  switch (rt.state) {
+    case "running":
+      return "status-dot status-running";
+    case "restarting":
+      return "status-dot status-restarting";
+    case "failed":
+      return "status-dot status-stale";
+    default:
+      return "status-dot status-idle";
+  }
+}
+
 // ─── GridCard ──────────────────────────────────────────────────────────────
 
 interface GridCardProps {
   agent: AgentEntry;
+  runtime: AgentRuntimeStatus | undefined;
   isSelected: boolean;
 }
 
-export function GridCard({ agent, isSelected }: GridCardProps) {
+export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
+  const isRunning = runtime?.state.state === "running";
+  const isBusy = runtime?.state.state === "restarting";
+
+  async function handleRun() {
+    await invoke("start_agent", { name: agent.name }).catch((e) =>
+      showToast(`Failed: ${e}`),
+    );
+  }
+  async function handleStop() {
+    await invoke("stop_agent", { name: agent.name }).catch((e) =>
+      showToast(`Failed: ${e}`),
+    );
+  }
+
   return (
     <div
       className={`grid-card${isSelected ? " grid-card--selected" : ""}`}
@@ -51,12 +95,26 @@ export function GridCard({ agent, isSelected }: GridCardProps) {
       </div>
       <p className="grid-name">{agent.display_name}</p>
       <div className="grid-status">
-        <span className={`status-dot status-${agent.status}`} />
-        <span className="grid-status-text">{agent.status}</span>
+        <span className={runtimeDotClass(runtime?.state)} />
+        <span className="grid-status-text">
+          {runtimeLabel(runtime?.state) || agent.status}
+        </span>
       </div>
       <div className="grid-actions">
-        <button onClick={() => showToast("Coming in M-h2")}>Run</button>
-        <button onClick={() => showToast("Coming in M-h2")}>Stop</button>
+        <button
+          disabled={isRunning || isBusy}
+          onClick={handleRun}
+          title="Start agent runtime"
+        >
+          ▶ Run
+        </button>
+        <button
+          disabled={!isRunning && !isBusy}
+          onClick={handleStop}
+          title="Stop agent runtime"
+        >
+          ■ Stop
+        </button>
       </div>
     </div>
   );
@@ -66,10 +124,11 @@ export function GridCard({ agent, isSelected }: GridCardProps) {
 
 interface ListRowProps {
   agent: AgentEntry;
+  runtime: AgentRuntimeStatus | undefined;
   isSelected: boolean;
 }
 
-export function ListRow({ agent, isSelected }: ListRowProps) {
+export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
   const model =
     agent.model_id.length > 24 ? agent.model_id.slice(0, 24) + "…" : agent.model_id;
@@ -86,7 +145,7 @@ export function ListRow({ agent, isSelected }: ListRowProps) {
       <span className="list-model" title={agent.model_id}>
         {model}
       </span>
-      <span className={`status-dot status-${agent.status}`} />
+      <span className={runtimeDotClass(runtime?.state)} />
     </div>
   );
 }
@@ -127,28 +186,26 @@ export function Sidebar({ activeCategory, agents, onSelect }: SidebarProps) {
 // ─── DashboardApp ──────────────────────────────────────────────────────────
 
 export function DashboardApp() {
-  const [agents, setAgents] = useState<AgentEntry[]>([]);
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const { agents, runtimeStatuses, selectedAgent } = useAgents();
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    invoke<AgentEntry[]>("list_agents").then(setAgents).catch(console.error);
+  // Build a lookup map for runtime statuses.
+  const runtimeMap = new Map<string, AgentRuntimeStatus>(
+    runtimeStatuses.map((s) => [s.name, s]),
+  );
 
-    const unAgents = listen<AgentEntry[]>("agents-updated", (e) => setAgents(e.payload));
+  useEffect(() => {
     const unSelect = listen<string>("select-agent", (e) => {
-      setSelectedAgent(e.payload);
       setTimeout(() => {
         document
           .querySelector(`[data-agent="${e.payload}"]`)
           ?.scrollIntoView({ behavior: "smooth", block: "center" });
       }, 50);
     });
-
     return () => {
-      unAgents.then((fn) => fn());
       unSelect.then((fn) => fn());
     };
   }, []);
@@ -210,7 +267,9 @@ export function DashboardApp() {
           <button
             className="toolbar-btn"
             onClick={() =>
-              invoke<AgentEntry[]>("list_agents").then(setAgents).catch(console.error)
+              invoke<AgentEntry[]>("list_agents")
+                .then(() => {}) // state updated via event
+                .catch(console.error)
             }
           >
             ↺
@@ -226,13 +285,23 @@ export function DashboardApp() {
           ) : viewMode === "grid" ? (
             <div className="grid-view">
               {visible.map((a) => (
-                <GridCard key={a.name} agent={a} isSelected={selectedAgent === a.name} />
+                <GridCard
+                  key={a.name}
+                  agent={a}
+                  runtime={runtimeMap.get(a.name)}
+                  isSelected={selectedAgent === a.name}
+                />
               ))}
             </div>
           ) : (
             <div className="list-view">
               {visible.map((a) => (
-                <ListRow key={a.name} agent={a} isSelected={selectedAgent === a.name} />
+                <ListRow
+                  key={a.name}
+                  agent={a}
+                  runtime={runtimeMap.get(a.name)}
+                  isSelected={selectedAgent === a.name}
+                />
               ))}
             </div>
           )}
