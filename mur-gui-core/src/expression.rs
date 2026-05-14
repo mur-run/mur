@@ -9,14 +9,13 @@ use crate::event_bus::HubEvent;
 
 fn priority_of(expression: &str) -> u8 {
     match expression {
-        "error" | "cry"              => 10,
-        "hidden"                     => 9,
-        "talk_open" | "talk_close"   => 8,
-        "think"                      => 6,
-        "wave" | "sparkle" | "peek"
-        | "smile" | "wow"            => 4,
-        "sleep"                      => 2,
-        _                            => 0, // idle + unknown
+        "error" | "cry" => 10,
+        "hidden" => 9,
+        "talk_open" | "talk_close" => 8,
+        "think" => 6,
+        "wave" | "sparkle" | "peek" | "smile" | "wow" => 4,
+        "sleep" => 2,
+        _ => 0, // idle + unknown
     }
 }
 
@@ -113,24 +112,23 @@ impl ExpressionStateMachine {
         // Higher-priority events (error, cry) always preempt immediately.
         if new_prio <= active_prio {
             let now = Instant::now();
-            if let Some(t) = self.last_fired {
-                if now.duration_since(t) < DEBOUNCE {
-                    return None;
-                }
+            if let Some(t) = self.last_fired
+                && now.duration_since(t) < DEBOUNCE
+            {
+                return None;
             }
         }
 
         self.last_fired = Some(Instant::now());
 
-        let bubble_text = if trigger.bubble {
-            Some(
-                trigger.message.clone().unwrap_or_else(|| {
+        let bubble_text =
+            if trigger.bubble {
+                Some(trigger.message.clone().unwrap_or_else(|| {
                     event.payload.as_str().map(String::from).unwrap_or_default()
-                }),
-            )
-        } else {
-            None
-        };
+                }))
+            } else {
+                None
+            };
 
         let slot = Slot::new(&trigger, bubble_text);
 
@@ -156,27 +154,27 @@ impl ExpressionStateMachine {
     pub fn tick(&mut self, now: Instant) -> Option<ExpressionChange> {
         // Lipsync mode: alternate talk_open / talk_close every 200ms while
         // the active slot has dwell_s: lipsync.
-        if let Some(ref slot) = self.active {
-            if slot.dwell == DwellSpec::Lipsync {
-                let elapsed = self
-                    .lipsync_last_tick
-                    .map(|t| now.duration_since(t))
-                    .unwrap_or(Duration::MAX);
-                if elapsed >= Duration::from_millis(200) {
-                    self.lipsync_phase = !self.lipsync_phase;
-                    self.lipsync_last_tick = Some(now);
-                    let expression = if self.lipsync_phase {
-                        "talk_close"
-                    } else {
-                        "talk_open"
-                    };
-                    return Some(ExpressionChange {
-                        expression: expression.into(),
-                        bubble_text: slot.bubble_text.clone(),
-                    });
-                }
-                return None;
+        if let Some(ref slot) = self.active
+            && slot.dwell == DwellSpec::Lipsync
+        {
+            let elapsed = self
+                .lipsync_last_tick
+                .map(|t| now.duration_since(t))
+                .unwrap_or(Duration::MAX);
+            if elapsed >= Duration::from_millis(200) {
+                self.lipsync_phase = !self.lipsync_phase;
+                self.lipsync_last_tick = Some(now);
+                let expression = if self.lipsync_phase {
+                    "talk_close"
+                } else {
+                    "talk_open"
+                };
+                return Some(ExpressionChange {
+                    expression: expression.into(),
+                    bubble_text: slot.bubble_text.clone(),
+                });
             }
+            return None;
         }
 
         let expired = self
@@ -199,7 +197,10 @@ impl ExpressionStateMachine {
             Some(change)
         } else {
             self.active = None;
-            Some(ExpressionChange { expression: "idle".into(), bubble_text: None })
+            Some(ExpressionChange {
+                expression: "idle".into(),
+                bubble_text: None,
+            })
         }
     }
 
@@ -225,7 +226,10 @@ impl ExpressionStateMachine {
             Some(change)
         } else {
             self.active = None;
-            Some(ExpressionChange { expression: "idle".into(), bubble_text: None })
+            Some(ExpressionChange {
+                expression: "idle".into(),
+                bubble_text: None,
+            })
         }
     }
 }
