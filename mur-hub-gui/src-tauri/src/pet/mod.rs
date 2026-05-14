@@ -82,11 +82,7 @@ fn emit_change(app: &AppHandle, label: &str, change: ExpressionChange) {
         &change.expression,
     );
     if let Some(text) = change.bubble_text {
-        let _ = app.emit_to(
-            tauri::EventTarget::labeled(label),
-            "pet-bubble",
-            &text,
-        );
+        let _ = app.emit_to(tauri::EventTarget::labeled(label), "pet-bubble", &text);
     }
 }
 
@@ -155,8 +151,11 @@ pub fn pet_spawn_at(
         pets.remove(&agent_name);
     }
 
-    let pos = load_position(&agent_name)
-        .unwrap_or(PetPosition { x: screen_x, y: screen_y, display_id: None });
+    let pos = load_position(&agent_name).unwrap_or(PetPosition {
+        x: screen_x,
+        y: screen_y,
+        display_id: None,
+    });
 
     let url_path = format!("index.html#/pet/{}", urlenc(&agent_name));
 
@@ -175,7 +174,10 @@ pub fn pet_spawn_at(
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     pets.insert(
         agent_name.clone(),
-        PetHandle { window_label: label.clone(), shutdown_tx },
+        PetHandle {
+            window_label: label.clone(),
+            shutdown_tx,
+        },
     );
 
     start_event_loop(
@@ -215,7 +217,14 @@ pub fn pet_close(
 
 #[tauri::command]
 pub fn pet_reposition(agent_name: String, x: f64, y: f64) {
-    save_position(&agent_name, &PetPosition { x, y, display_id: None });
+    save_position(
+        &agent_name,
+        &PetPosition {
+            x,
+            y,
+            display_id: None,
+        },
+    );
 }
 
 #[tauri::command]
@@ -276,11 +285,10 @@ pub fn hub_emit_event(
 
 /// Resolve an `until_ack` dwell (user acknowledged an error bubble).
 #[tauri::command]
-pub fn pet_ack_bubble(
-    agent_name: String,
-    bus_state: State<'_, EventBusState>,
-) {
-    bus_state.0.publish(HubEvent::new(&agent_name, "pet.bubble.acked"));
+pub fn pet_ack_bubble(agent_name: String, bus_state: State<'_, EventBusState>) {
+    bus_state
+        .0
+        .publish(HubEvent::new(&agent_name, "pet.bubble.acked"));
 }
 
 /// Speak `text` for `agent_name`: synthesise via Kokoro (if models present),
@@ -304,6 +312,12 @@ pub async fn pet_speak(
 
 fn urlenc(s: &str) -> String {
     s.chars()
-        .flat_map(|c| if c == ' ' { vec!['%', '2', '0'] } else { vec![c] })
+        .flat_map(|c| {
+            if c == ' ' {
+                vec!['%', '2', '0']
+            } else {
+                vec![c]
+            }
+        })
         .collect()
 }

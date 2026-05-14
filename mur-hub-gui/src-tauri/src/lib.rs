@@ -12,10 +12,10 @@ pub mod preset;
 
 use companion::BridgeState;
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
+use mur_gui_core::event_bus::EventBus;
 use mur_gui_core::sidecar::{AgentRuntimeStatus, Supervisor};
 use onboarding::WizardState;
 use pet::{EventBusState, PetState};
-use mur_gui_core::event_bus::EventBus;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{

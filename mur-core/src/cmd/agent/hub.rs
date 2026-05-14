@@ -25,22 +25,29 @@ pub fn cmd_migrate_to_hub() -> Result<()> {
     let agents_dir = mur_home.join("agents");
 
     if !agents_dir.exists() {
-        println!("No agents directory found at {}; nothing to migrate.", agents_dir.display());
+        println!(
+            "No agents directory found at {}; nothing to migrate.",
+            agents_dir.display()
+        );
         return Ok(());
     }
 
     let mut migrated = 0usize;
     let mut skipped = 0usize;
 
-    let entries = fs::read_dir(&agents_dir)
-        .with_context(|| format!("read {}", agents_dir.display()))?;
+    let entries =
+        fs::read_dir(&agents_dir).with_context(|| format!("read {}", agents_dir.display()))?;
 
     for entry in entries.flatten() {
         let agent_dir = entry.path();
         if !agent_dir.is_dir() {
             continue;
         }
-        let Some(name) = agent_dir.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+        let Some(name) = agent_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_owned)
+        else {
             continue;
         };
 
@@ -86,12 +93,11 @@ fn migrate_agent(name: &str, profile_path: &PathBuf) -> Result<bool> {
     }
 
     // Deserialise; serde #[default] fills appearance if the key is absent.
-    let profile: AgentProfile = serde_yaml_ng::from_str(&raw)
-        .with_context(|| format!("parse profile.yaml for {name}"))?;
+    let profile: AgentProfile =
+        serde_yaml_ng::from_str(&raw).with_context(|| format!("parse profile.yaml for {name}"))?;
 
     // Re-serialise and compare — only write if something changed.
-    let new_yaml = serde_yaml_ng::to_string(&profile)
-        .context("serialize profile")?;
+    let new_yaml = serde_yaml_ng::to_string(&profile).context("serialize profile")?;
 
     if new_yaml.trim() == raw.trim() {
         return Ok(false);
@@ -99,8 +105,7 @@ fn migrate_agent(name: &str, profile_path: &PathBuf) -> Result<bool> {
 
     // Atomic overwrite.
     let tmp = profile_path.with_extension("yaml.tmp");
-    fs::write(&tmp, new_yaml.as_bytes())
-        .with_context(|| format!("write {}", tmp.display()))?;
+    fs::write(&tmp, new_yaml.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
     fs::rename(&tmp, profile_path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), profile_path.display()))?;
 
