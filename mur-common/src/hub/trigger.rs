@@ -20,7 +20,10 @@ impl<'de> Deserialize<'de> for DwellSpec {
         impl<'de> serde::de::Visitor<'de> for Visitor {
             type Value = DwellSpec;
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "a number or one of until_done/until_ack/until_active/lipsync/until_focus_off")
+                write!(
+                    f,
+                    "a number or one of until_done/until_ack/until_active/lipsync/until_focus_off"
+                )
             }
             fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
                 Ok(DwellSpec::Seconds(v as f64))
@@ -33,12 +36,21 @@ impl<'de> Deserialize<'de> for DwellSpec {
             }
             fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
                 match v {
-                    "until_done"      => Ok(DwellSpec::UntilDone),
-                    "until_ack"       => Ok(DwellSpec::UntilAck),
-                    "until_active"    => Ok(DwellSpec::UntilActive),
-                    "lipsync"         => Ok(DwellSpec::Lipsync),
+                    "until_done" => Ok(DwellSpec::UntilDone),
+                    "until_ack" => Ok(DwellSpec::UntilAck),
+                    "until_active" => Ok(DwellSpec::UntilActive),
+                    "lipsync" => Ok(DwellSpec::Lipsync),
                     "until_focus_off" => Ok(DwellSpec::UntilFocusOff),
-                    _ => Err(E::unknown_variant(v, &["until_done","until_ack","until_active","lipsync","until_focus_off"])),
+                    _ => Err(E::unknown_variant(
+                        v,
+                        &[
+                            "until_done",
+                            "until_ack",
+                            "until_active",
+                            "lipsync",
+                            "until_focus_off",
+                        ],
+                    )),
                 }
             }
         }
@@ -49,12 +61,12 @@ impl<'de> Deserialize<'de> for DwellSpec {
 impl Serialize for DwellSpec {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
-            DwellSpec::Seconds(n)   => s.serialize_f64(*n),
-            DwellSpec::UntilDone    => s.serialize_str("until_done"),
-            DwellSpec::UntilAck     => s.serialize_str("until_ack"),
-            DwellSpec::UntilActive  => s.serialize_str("until_active"),
-            DwellSpec::Lipsync      => s.serialize_str("lipsync"),
-            DwellSpec::UntilFocusOff=> s.serialize_str("until_focus_off"),
+            DwellSpec::Seconds(n) => s.serialize_f64(*n),
+            DwellSpec::UntilDone => s.serialize_str("until_done"),
+            DwellSpec::UntilAck => s.serialize_str("until_ack"),
+            DwellSpec::UntilActive => s.serialize_str("until_active"),
+            DwellSpec::Lipsync => s.serialize_str("lipsync"),
+            DwellSpec::UntilFocusOff => s.serialize_str("until_focus_off"),
         }
     }
 }
@@ -94,10 +106,10 @@ pub fn default_triggers() -> Vec<ExpressionTrigger> {
 /// Load per-agent trigger overrides; falls back to defaults if file is absent or invalid.
 pub fn load_triggers(agent_dir: &Path) -> Vec<ExpressionTrigger> {
     let path = agent_dir.join("triggers.yaml");
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(ts) = serde_yaml_ng::from_str::<TriggerSet>(&text) {
-            return ts.triggers;
-        }
+    if let Ok(text) = std::fs::read_to_string(&path)
+        && let Ok(ts) = serde_yaml_ng::from_str::<TriggerSet>(&text)
+    {
+        return ts.triggers;
     }
     default_triggers()
 }
@@ -115,9 +127,9 @@ mod tests {
 
     #[test]
     fn dwell_spec_numeric() {
-        let t: TriggerSet = serde_yaml_ng::from_str(
-            "triggers:\n  - { on: x, expression: idle, dwell_s: 3.5 }",
-        ).unwrap();
+        let t: TriggerSet =
+            serde_yaml_ng::from_str("triggers:\n  - { on: x, expression: idle, dwell_s: 3.5 }")
+                .unwrap();
         assert_eq!(t.triggers[0].dwell_s, DwellSpec::Seconds(3.5));
     }
 
@@ -125,7 +137,8 @@ mod tests {
     fn dwell_spec_until_ack() {
         let t: TriggerSet = serde_yaml_ng::from_str(
             "triggers:\n  - { on: x, expression: error, dwell_s: until_ack }",
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(t.triggers[0].dwell_s, DwellSpec::UntilAck);
     }
 

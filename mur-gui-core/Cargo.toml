@@ -22,6 +22,9 @@ base64 = "0.22"
 chrono = { workspace = true }
 notify = "6"
 
+[features]
+audio = []
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
