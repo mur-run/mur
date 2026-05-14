@@ -17,8 +17,8 @@ fn presets_dir() -> PathBuf {
 }
 
 fn install_preset(yaml: &str) -> Result<String, String> {
-    let preset: StylePreset = serde_yaml_ng::from_str(yaml)
-        .map_err(|e| format!("invalid preset YAML: {e}"))?;
+    let preset: StylePreset =
+        serde_yaml_ng::from_str(yaml).map_err(|e| format!("invalid preset YAML: {e}"))?;
 
     let dir = presets_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("create presets dir: {e}"))?;
@@ -32,8 +32,7 @@ fn install_preset(yaml: &str) -> Result<String, String> {
 /// Import a StylePreset YAML from a local file path.
 #[tauri::command]
 pub fn import_preset_file(path: String) -> Result<String, String> {
-    let yaml = fs::read_to_string(&path)
-        .map_err(|e| format!("read {path}: {e}"))?;
+    let yaml = fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?;
     install_preset(&yaml)
 }
 

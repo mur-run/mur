@@ -1,9 +1,9 @@
 use mur_common::agent::{AgentAppearance, BehaviorPreset, RenderStatus};
 use mur_common::hub::preset_loader::{default_blob, find_preset};
 use mur_common::hub::style_preset::PresetFamily;
-use mur_gui_core::image_gen::{CancelToken, RenderProgress};
 use mur_gui_core::image_gen::gemini::GeminiImageGenProvider;
 use mur_gui_core::image_gen::mock::MockImageGenProvider;
+use mur_gui_core::image_gen::{CancelToken, RenderProgress};
 use mur_gui_core::render::RenderJob;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -51,7 +51,11 @@ pub struct RenderProgressSnapshot {
 
 impl From<&RenderProgress> for RenderProgressSnapshot {
     fn from(p: &RenderProgress) -> Self {
-        Self { total: p.total, done: p.done, failed: p.failed }
+        Self {
+            total: p.total,
+            done: p.done,
+            failed: p.failed,
+        }
     }
 }
 
@@ -81,9 +85,7 @@ impl WizardSnapshot {
         let needs_photo = session
             .style_preset_id
             .as_deref()
-            .and_then(|id| {
-                find_preset(id, &mur_home.join("hub")).ok()
-            })
+            .and_then(|id| find_preset(id, &mur_home.join("hub")).ok())
             .map(|p| p.family == PresetFamily::Polaroid && p.llm_image_gen.requires_source_image)
             .unwrap_or(false);
 
@@ -119,7 +121,10 @@ impl WizardSnapshot {
 /// Open the wizard and return initial state (step 1).
 #[tauri::command]
 pub fn wizard_open(state: State<'_, WizardState>) -> WizardSnapshot {
-    let session = WizardSession { step: 1, ..Default::default() };
+    let session = WizardSession {
+        step: 1,
+        ..Default::default()
+    };
     let snap = WizardSnapshot::from_session(&session, &mur_home_path());
     *state.0.lock().unwrap() = Some(session);
     snap
@@ -162,8 +167,7 @@ pub fn wizard_set_preset(
 ) -> Result<WizardSnapshot, String> {
     // Validate that the preset exists.
     let hub_dir = mur_home_path().join("hub");
-    find_preset(&preset_id, &hub_dir)
-        .map_err(|e| format!("unknown preset: {e}"))?;
+    find_preset(&preset_id, &hub_dir).map_err(|e| format!("unknown preset: {e}"))?;
     update_session(&state, |s| {
         s.style_preset_id = Some(preset_id);
         s.step = 4;
@@ -214,17 +218,14 @@ pub async fn wizard_start_render(
     app: AppHandle,
     state: State<'_, WizardState>,
 ) -> Result<(), String> {
-    let (preset, agent_dir, cancel) = {        let guard = state.0.lock().unwrap();
+    let (preset, agent_dir, cancel) = {
+        let guard = state.0.lock().unwrap();
         let session = guard.as_ref().ok_or("no wizard session")?;
 
         // Resolve preset.
         let hub_dir = mur_home_path().join("hub");
-        let preset_id = session
-            .style_preset_id
-            .as_deref()
-            .unwrap_or("default-blob");
-        let preset = find_preset(preset_id, &hub_dir)
-            .unwrap_or_else(|_| default_blob());
+        let preset_id = session.style_preset_id.as_deref().unwrap_or("default-blob");
+        let preset = find_preset(preset_id, &hub_dir).unwrap_or_else(|_| default_blob());
 
         // Agent expressions dir.
         let name = session.name.clone().unwrap_or_else(|| "unnamed".into());
@@ -236,10 +237,9 @@ pub async fn wizard_start_render(
     // Resolve provider: try Gemini (if API key set), fall back to mock.
     let provider: std::sync::Arc<dyn mur_gui_core::image_gen::ImageGenProvider> =
         match read_gemini_key() {
-            Some(key) => std::sync::Arc::new(GeminiImageGenProvider::new(
-                key,
-                "gemini-2.5-flash-image",
-            )),
+            Some(key) => {
+                std::sync::Arc::new(GeminiImageGenProvider::new(key, "gemini-2.5-flash-image"))
+            }
             None => std::sync::Arc::new(MockImageGenProvider),
         };
 
@@ -267,10 +267,13 @@ pub async fn wizard_start_render(
         let result = job.run(cancel, Some(tx)).await;
         match result {
             Ok(manifest) => {
-                let _ = app.emit("wizard-render-done", serde_json::json!({
-                    "expressions_rendered": manifest.expressions.len(),
-                    "total": 12,
-                }));
+                let _ = app.emit(
+                    "wizard-render-done",
+                    serde_json::json!({
+                        "expressions_rendered": manifest.expressions.len(),
+                        "total": 12,
+                    }),
+                );
                 if let Ok(mut guard) = app.state::<WizardState>().0.lock() {
                     if let Some(s) = guard.as_mut() {
                         s.render_done = true;
@@ -289,18 +292,15 @@ pub async fn wizard_start_render(
 /// Finish the wizard — create the agent profile YAML and close the session.
 #[tauri::command]
 pub fn wizard_finish(state: State<'_, WizardState>) -> Result<String, String> {
-    let session = state
-        .0
-        .lock()
-        .unwrap()
-        .take()
-        .ok_or("no wizard session")?;
+    let session = state.0.lock().unwrap().take().ok_or("no wizard session")?;
 
     let name = session.name.ok_or("missing name")?;
     let agent_dir = mur_home_path().join("agents").join(&name);
     std::fs::create_dir_all(&agent_dir).map_err(|e| e.to_string())?;
 
-    let preset_id = session.style_preset_id.unwrap_or_else(|| "default-blob".into());
+    let preset_id = session
+        .style_preset_id
+        .unwrap_or_else(|| "default-blob".into());
     let appearance = AgentAppearance {
         style_preset: preset_id,
         behavior_preset: session.behavior_preset.unwrap_or(BehaviorPreset::Normal),
