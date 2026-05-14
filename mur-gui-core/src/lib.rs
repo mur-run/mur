@@ -13,6 +13,7 @@ pub mod expression;
 pub mod image_gen;
 pub mod render;
 pub mod sidecar;
+pub mod voice;
 
 pub const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
