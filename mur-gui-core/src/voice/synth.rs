@@ -186,11 +186,10 @@ impl KokoroSession {
 // ─── cpal playback ───────────────────────────────────────────────────────────
 
 fn play_pcm(pcm: &[f32], sample_rate: u32, stop: Arc<Notify>) -> anyhow::Result<()> {
-    use std::sync::Mutex;
-
     #[cfg(feature = "audio")]
     {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        use std::sync::Mutex;
 
         let host = cpal::default_host();
         let device = host

@@ -82,7 +82,7 @@ mod platform {
         // QUNS_BUSY (2), QUNS_RUNNING_D3D_FULL_SCREEN (3),
         // QUNS_PRESENTATION_MODE (4) → suppress voice.
         #[link(name = "Shell32")]
-        extern "system" {
+        unsafe extern "system" {
             fn SHQueryUserNotificationState(pquns: *mut i32) -> i32;
         }
         let mut state: i32 = 0;

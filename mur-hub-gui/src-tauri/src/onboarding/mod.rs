@@ -254,10 +254,10 @@ pub async fn wizard_start_render(
             let snap = RenderProgressSnapshot::from(&p);
             let _ = app_clone.emit("wizard-render-progress", &snap);
             // Update session progress.
-            if let Ok(mut guard) = app_clone.state::<WizardState>().0.lock() {
-                if let Some(s) = guard.as_mut() {
-                    s.render_progress = Some(snap);
-                }
+            if let Ok(mut guard) = app_clone.state::<WizardState>().0.lock()
+                && let Some(s) = guard.as_mut()
+            {
+                s.render_progress = Some(snap);
             }
         }
     });
@@ -274,10 +274,10 @@ pub async fn wizard_start_render(
                         "total": 12,
                     }),
                 );
-                if let Ok(mut guard) = app.state::<WizardState>().0.lock() {
-                    if let Some(s) = guard.as_mut() {
-                        s.render_done = true;
-                    }
+                if let Ok(mut guard) = app.state::<WizardState>().0.lock()
+                    && let Some(s) = guard.as_mut()
+                {
+                    s.render_done = true;
                 }
             }
             Err(e) => {
