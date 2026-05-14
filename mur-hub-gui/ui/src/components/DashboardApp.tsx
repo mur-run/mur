@@ -5,6 +5,7 @@ import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
+import { CompanionInbox, useUnreadCount } from "./CompanionInbox";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -72,6 +73,8 @@ interface GridCardProps {
 }
 
 export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
+  const { setSelected } = useAgents();
+  const unread = useUnreadCount(agent.name);
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
   const isRunning = runtime?.state.state === "running";
   const isBusy = runtime?.state.state === "restarting";
@@ -149,9 +152,13 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
         onMouseDown={startHold}
         onMouseUp={cancelHold}
         onMouseLeave={cancelHold}
+        onClick={() => setSelected(isSelected ? null : agent.name)}
       >
         <div className="grid-avatar" style={{ background: color }}>
           {avatarInitials(agent.display_name)}
+          {unread > 0 && (
+            <span className="unread-badge">{unread > 99 ? "99+" : unread}</span>
+          )}
         </div>
         <p className="grid-name">{agent.display_name}</p>
         <div className="grid-status">
@@ -264,7 +271,7 @@ export function Sidebar({ activeCategory, agents, onSelect }: SidebarProps) {
 // ─── DashboardApp ──────────────────────────────────────────────────────────
 
 export function DashboardApp() {
-  const { agents, runtimeStatuses, selectedAgent } = useAgents();
+  const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [query, setQuery] = useState("");
@@ -393,6 +400,31 @@ export function DashboardApp() {
           )}
         </div>
       </div>
+
+      {/* Companion Inbox detail panel — slides in when an agent is selected */}
+      {selectedAgent && (
+        <aside className="detail-panel">
+          <div className="detail-panel-header">
+            <span className="detail-panel-title">
+              {agents.find((a) => a.name === selectedAgent)?.display_name ?? selectedAgent}
+            </span>
+            <button
+              className="detail-panel-close"
+              onClick={() => setSelected(null)}
+              title="Close"
+            >
+              ×
+            </button>
+          </div>
+          <div className="detail-panel-tabs">
+            <span className="detail-tab detail-tab--active">Inbox</span>
+          </div>
+          <div className="detail-panel-body">
+            <CompanionInbox agentName={selectedAgent} />
+          </div>
+        </aside>
+      )}
+
       <WizardModal
         isOpen={wizardOpen}
         onClose={(name) => {

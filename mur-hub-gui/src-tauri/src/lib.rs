@@ -5,10 +5,12 @@
 //! M-h4: onboarding wizard — wizard_open/set_persona/.../start_render/finish/cancel.
 //! M-h5: pet windows — pet_spawn_at/close/reposition/return_to_hub/list/get_expression.
 
+pub mod companion;
 pub mod onboarding;
 pub mod pet;
 pub mod preset;
 
+use companion::BridgeState;
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
 use mur_gui_core::sidecar::{AgentRuntimeStatus, Supervisor};
 use onboarding::WizardState;
@@ -163,6 +165,7 @@ pub fn run() {
         .manage(WizardState(Mutex::new(None)))
         .manage(PetState(Mutex::new(std::collections::HashMap::new())))
         .manage(EventBusState(EventBus::new(256)))
+        .manage(BridgeState::default())
         .setup(move |app| {
             // Start agent discovery (filesystem scan).
             let (discovery, agent_rx) = AgentDiscovery::new(mur_home.clone());
@@ -251,6 +254,13 @@ pub fn run() {
             pet::pet_speak,
             preset::import_preset_file,
             preset::import_preset_url,
+            companion::companion_bridge_pending,
+            companion::companion_bridge_subscribe,
+            companion::companion_bridge_unsubscribe,
+            companion::companion_ack,
+            companion::companion_unread_count,
+            companion::companion_proactive,
+            companion::companion_quiet,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
