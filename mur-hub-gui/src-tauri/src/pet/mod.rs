@@ -1,15 +1,29 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use base64::Engine as _;
+use mur_common::hub::trigger::load_triggers;
+use mur_gui_core::event_bus::{EventBus, HubEvent};
+use mur_gui_core::expression::{ExpressionChange, ExpressionStateMachine};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tokio::sync::oneshot;
 
 // ─── Managed state ──────────────────────────────────────────────────────────
 
-/// Active pet windows: agent_name → window_label.
-pub struct PetState(pub Mutex<HashMap<String, String>>);
+pub struct PetHandle {
+    pub window_label: String,
+    /// Sending on this channel shuts down the event-loop task.
+    pub shutdown_tx: oneshot::Sender<()>,
+}
+
+/// Active pet windows: agent_name → handle.
+pub struct PetState(pub Mutex<HashMap<String, PetHandle>>);
+
+/// Application-wide event bus (broadcast).
+pub struct EventBusState(pub EventBus);
 
 // ─── Position persistence ────────────────────────────────────────────────────
 
@@ -50,17 +64,71 @@ fn save_position(agent_name: &str, pos: &PetPosition) {
 }
 
 fn window_label(agent_name: &str) -> String {
-    // Window labels must be ASCII alphanumeric + hyphen/underscore.
     format!(
         "pet-{}",
-        agent_name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>()
+        agent_name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>()
     )
+}
+
+// ─── Event-loop helpers ──────────────────────────────────────────────────────
+
+fn emit_change(app: &AppHandle, label: &str, change: ExpressionChange) {
+    let _ = app.emit_to(
+        tauri::EventTarget::labeled(label),
+        "pet-expression",
+        &change.expression,
+    );
+    if let Some(text) = change.bubble_text {
+        let _ = app.emit_to(
+            tauri::EventTarget::labeled(label),
+            "pet-bubble",
+            &text,
+        );
+    }
+}
+
+/// Spawn a tokio task that drives the ExpressionStateMachine for one pet.
+fn start_event_loop(
+    app: AppHandle,
+    agent_name: String,
+    label: String,
+    bus: EventBus,
+    shutdown_rx: oneshot::Receiver<()>,
+) {
+    let agent_dir = mur_home().join("agents").join(&agent_name);
+    let triggers = load_triggers(&agent_dir);
+    let mut sm = ExpressionStateMachine::new(agent_name.clone(), triggers);
+    let mut rx = bus.subscribe();
+
+    tokio::spawn(async move {
+        tokio::pin!(shutdown_rx);
+        let tick_interval = tokio::time::Duration::from_millis(100);
+        let mut interval = tokio::time::interval(tick_interval);
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => break,
+                Ok(event) = rx.recv() => {
+                    if let Some(change) = sm.process(&event) {
+                        emit_change(&app, &label, change);
+                    }
+                }
+                _ = interval.tick() => {
+                    if let Some(change) = sm.tick(Instant::now()) {
+                        emit_change(&app, &label, change);
+                    }
+                }
+            }
+        }
+    });
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────
 
-/// Spawn a transparent always-on-top pet window for `agent_name` at the given
-/// screen-logical coordinates.  If the pet is already open, move it instead.
 #[tauri::command]
 pub fn pet_spawn_at(
     agent_name: String,
@@ -68,11 +136,11 @@ pub fn pet_spawn_at(
     screen_y: f64,
     app: AppHandle,
     state: State<'_, PetState>,
+    bus_state: State<'_, EventBusState>,
 ) -> Result<(), String> {
     let label = window_label(&agent_name);
     let mut pets = state.0.lock().unwrap();
 
-    // Already open — move and ensure visible.
     if pets.contains_key(&agent_name) {
         if let Some(win) = app.get_webview_window(&label) {
             let _ = win.set_position(tauri::LogicalPosition::new(screen_x, screen_y));
@@ -82,11 +150,9 @@ pub fn pet_spawn_at(
         pets.remove(&agent_name);
     }
 
-    // Use saved position if available, otherwise the drop position.
     let pos = load_position(&agent_name)
         .unwrap_or(PetPosition { x: screen_x, y: screen_y, display_id: None });
 
-    // Build the window URL: index.html#/pet/<name>
     let url_path = format!("index.html#/pet/{}", urlenc(&agent_name));
 
     WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url_path.into()))
@@ -101,22 +167,31 @@ pub fn pet_spawn_at(
         .build()
         .map_err(|e| e.to_string())?;
 
-    pets.insert(agent_name.clone(), label.clone());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    pets.insert(
+        agent_name.clone(),
+        PetHandle { window_label: label.clone(), shutdown_tx },
+    );
 
-    // wave → idle sequence after window has had time to render.
-    let app2 = app.clone();
-    let label2 = label.clone();
+    start_event_loop(
+        app.clone(),
+        agent_name.clone(),
+        label.clone(),
+        bus_state.0.clone(),
+        shutdown_rx,
+    );
+
+    // Publish spawn event so the state machine fires the wave sequence.
+    let bus = bus_state.0.clone();
+    let name = agent_name.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        let _ = app2.emit_to(tauri::EventTarget::labeled(&label2), "pet-expression", "wave");
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        let _ = app2.emit_to(tauri::EventTarget::labeled(&label2), "pet-expression", "idle");
+        tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+        bus.publish(HubEvent::new(&name, "pet.spawned"));
     });
 
     Ok(())
 }
 
-/// Close the pet window for `agent_name`.
 #[tauri::command]
 pub fn pet_close(
     agent_name: String,
@@ -124,25 +199,20 @@ pub fn pet_close(
     state: State<'_, PetState>,
 ) -> Result<(), String> {
     let mut pets = state.0.lock().unwrap();
-    if let Some(label) = pets.remove(&agent_name) {
-        if let Some(win) = app.get_webview_window(&label) {
+    if let Some(handle) = pets.remove(&agent_name) {
+        let _ = handle.shutdown_tx.send(());
+        if let Some(win) = app.get_webview_window(&handle.window_label) {
             win.close().map_err(|e| e.to_string())?;
         }
     }
     Ok(())
 }
 
-/// Persist the new position after a drag-reposition.
 #[tauri::command]
-pub fn pet_reposition(
-    agent_name: String,
-    x: f64,
-    y: f64,
-) {
+pub fn pet_reposition(agent_name: String, x: f64, y: f64) {
     save_position(&agent_name, &PetPosition { x, y, display_id: None });
 }
 
-/// Close the pet window and surface the Hub dashboard.
 #[tauri::command]
 pub fn pet_return_to_hub(
     agent_name: String,
@@ -150,8 +220,9 @@ pub fn pet_return_to_hub(
     state: State<'_, PetState>,
 ) -> Result<(), String> {
     let mut pets = state.0.lock().unwrap();
-    if let Some(label) = pets.remove(&agent_name) {
-        if let Some(win) = app.get_webview_window(&label) {
+    if let Some(handle) = pets.remove(&agent_name) {
+        let _ = handle.shutdown_tx.send(());
+        if let Some(win) = app.get_webview_window(&handle.window_label) {
             let _ = win.close();
         }
     }
@@ -162,14 +233,11 @@ pub fn pet_return_to_hub(
     Ok(())
 }
 
-/// Names of currently-open pet windows.
 #[tauri::command]
 pub fn pet_list(state: State<'_, PetState>) -> Vec<String> {
     state.0.lock().unwrap().keys().cloned().collect()
 }
 
-/// Load an expression image and return it as a `data:image/webp;base64,…` URL.
-/// Returns an empty string if the file does not exist (UI falls back to initials).
 #[tauri::command]
 pub fn pet_get_expression(agent_name: String, expression: String) -> String {
     let path = mur_home()
@@ -186,17 +254,34 @@ pub fn pet_get_expression(agent_name: String, expression: String) -> String {
         .unwrap_or_default()
 }
 
+/// Publish an arbitrary event onto the bus (called from the pet window UI).
+#[tauri::command]
+pub fn hub_emit_event(
+    agent_name: String,
+    event_name: String,
+    payload: Option<String>,
+    bus_state: State<'_, EventBusState>,
+) {
+    let mut ev = HubEvent::new(&agent_name, &event_name);
+    if let Some(p) = payload {
+        ev = ev.with_payload(serde_json::Value::String(p));
+    }
+    bus_state.0.publish(ev);
+}
+
+/// Resolve an `until_ack` dwell (user acknowledged an error bubble).
+#[tauri::command]
+pub fn pet_ack_bubble(
+    agent_name: String,
+    bus_state: State<'_, EventBusState>,
+) {
+    bus_state.0.publish(HubEvent::new(&agent_name, "pet.bubble.acked"));
+}
+
 // ─── Helper ──────────────────────────────────────────────────────────────────
 
-/// Percent-encode a string for use in a URL path segment (spaces → %20 only).
 fn urlenc(s: &str) -> String {
     s.chars()
-        .flat_map(|c| {
-            if c == ' ' {
-                vec!['%', '2', '0']
-            } else {
-                vec![c]
-            }
-        })
+        .flat_map(|c| if c == ' ' { vec!['%', '2', '0'] } else { vec![c] })
         .collect()
 }

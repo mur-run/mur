@@ -1,0 +1,11 @@
+triggers:
+  - { on: "pet.spawned",             expression: wave,      dwell_s: 2 }
+  - { on: "companion.message.new",   expression: wave,      dwell_s: 4,           bubble: true }
+  - { on: "idle.trigger.fired",      expression: peek,      dwell_s: 4,           bubble: true }
+  - { on: "agent.tool.running",      expression: think,     dwell_s: until_done }
+  - { on: "agent.tool.completed.ok", expression: sparkle,   dwell_s: 3 }
+  - { on: "agent.error",             expression: error,     dwell_s: until_ack,   bubble: true }
+  - { on: "user.idle.30m",           expression: sleep,     dwell_s: until_active }
+  - { on: "user.click.pet",          expression: smile,     dwell_s: 2 }
+  - { on: "voice.playing",           expression: talk_open, dwell_s: lipsync }
+  - { on: "os.focus.engaged",        expression: hidden,    dwell_s: until_focus_off }

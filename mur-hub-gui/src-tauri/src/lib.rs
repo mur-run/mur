@@ -11,7 +11,8 @@ pub mod pet;
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
 use mur_gui_core::sidecar::{AgentRuntimeStatus, Supervisor};
 use onboarding::WizardState;
-use pet::PetState;
+use pet::{EventBusState, PetState};
+use mur_gui_core::event_bus::EventBus;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{
@@ -160,6 +161,7 @@ pub fn run() {
         .manage(SupervisorState(supervisor))
         .manage(WizardState(Mutex::new(None)))
         .manage(PetState(Mutex::new(std::collections::HashMap::new())))
+        .manage(EventBusState(EventBus::new(256)))
         .setup(move |app| {
             // Start agent discovery (filesystem scan).
             let (discovery, agent_rx) = AgentDiscovery::new(mur_home.clone());
@@ -243,6 +245,8 @@ pub fn run() {
             pet::pet_return_to_hub,
             pet::pet_list,
             pet::pet_get_expression,
+            pet::hub_emit_event,
+            pet::pet_ack_bubble,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
