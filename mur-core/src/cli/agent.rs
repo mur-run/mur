@@ -209,6 +209,8 @@ pub enum AgentAction {
         #[command(subcommand)]
         action: AgentHooksAction,
     },
+    /// Migrate all agents from mur-agent-gui (v0) to mur-hub (v1). Idempotent.
+    MigrateToHub,
 }
 
 #[derive(Debug, Subcommand)]

@@ -7,6 +7,7 @@
 
 pub mod onboarding;
 pub mod pet;
+pub mod preset;
 
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
 use mur_gui_core::sidecar::{AgentRuntimeStatus, Supervisor};
@@ -247,6 +248,9 @@ pub fn run() {
             pet::pet_get_expression,
             pet::hub_emit_event,
             pet::pet_ack_bubble,
+            pet::pet_speak,
+            preset::import_preset_file,
+            preset::import_preset_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

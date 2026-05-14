@@ -26,6 +26,7 @@ use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 mod comm;
 mod export;
+mod hub;
 mod lifecycle;
 mod mcp;
 mod perm;
@@ -43,6 +44,8 @@ mod stats;
 pub use comm::{cmd_card, cmd_send};
 #[allow(unused_imports)]
 pub use export::cmd_export;
+#[allow(unused_imports)]
+pub use hub::cmd_migrate_to_hub;
 #[allow(unused_imports)]
 pub use lifecycle::{cmd_create, cmd_list, cmd_remove, cmd_rename, cmd_status, cmd_stop};
 #[allow(unused_imports)]

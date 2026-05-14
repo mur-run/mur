@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
+import { PresetImportModal } from "./PresetImportModal";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -268,6 +269,7 @@ export function DashboardApp() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [query, setQuery] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [presetImportOpen, setPresetImportOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Build a lookup map for runtime statuses.
@@ -316,6 +318,13 @@ export function DashboardApp() {
             onClick={() => setWizardOpen(true)}
           >
             + New Agent
+          </button>
+          <button
+            className="toolbar-btn"
+            onClick={() => setPresetImportOpen(true)}
+            title="Import a custom style preset YAML"
+          >
+            Import Preset
           </button>
           <input
             ref={searchRef}
@@ -390,6 +399,10 @@ export function DashboardApp() {
           setWizardOpen(false);
           if (name) invoke("list_agents").catch(() => {});
         }}
+      />
+      <PresetImportModal
+        isOpen={presetImportOpen}
+        onClose={() => setPresetImportOpen(false)}
       />
     </div>
   );

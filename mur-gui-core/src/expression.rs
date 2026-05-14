@@ -75,6 +75,10 @@ pub struct ExpressionStateMachine {
     queue: VecDeque<Slot>,
     /// Last time any trigger fired — for 100ms debounce.
     last_fired: Option<Instant>,
+    /// Last time the lipsync alternation ticked.
+    lipsync_last_tick: Option<Instant>,
+    /// Which half of the lipsync cycle we're in (false=open, true=close).
+    lipsync_phase: bool,
 }
 
 const DEBOUNCE: Duration = Duration::from_millis(100);
@@ -87,6 +91,8 @@ impl ExpressionStateMachine {
             active: None,
             queue: VecDeque::new(),
             last_fired: None,
+            lipsync_last_tick: None,
+            lipsync_phase: false,
         }
     }
 
@@ -148,6 +154,31 @@ impl ExpressionStateMachine {
     /// Returns `Some(change)` if the active expression expired and a new one
     /// (or idle) takes over.
     pub fn tick(&mut self, now: Instant) -> Option<ExpressionChange> {
+        // Lipsync mode: alternate talk_open / talk_close every 200ms while
+        // the active slot has dwell_s: lipsync.
+        if let Some(ref slot) = self.active {
+            if slot.dwell == DwellSpec::Lipsync {
+                let elapsed = self
+                    .lipsync_last_tick
+                    .map(|t| now.duration_since(t))
+                    .unwrap_or(Duration::MAX);
+                if elapsed >= Duration::from_millis(200) {
+                    self.lipsync_phase = !self.lipsync_phase;
+                    self.lipsync_last_tick = Some(now);
+                    let expression = if self.lipsync_phase {
+                        "talk_close"
+                    } else {
+                        "talk_open"
+                    };
+                    return Some(ExpressionChange {
+                        expression: expression.into(),
+                        bubble_text: slot.bubble_text.clone(),
+                    });
+                }
+                return None;
+            }
+        }
+
         let expired = self
             .active
             .as_ref()
