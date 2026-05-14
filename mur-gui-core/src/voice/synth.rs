@@ -159,6 +159,7 @@ impl VoicePlayer {
 struct KokoroSession {
     #[allow(dead_code)]
     onnx_path: std::path::PathBuf,
+    #[allow(dead_code)]
     sample_rate_hz: u32,
 }
 

@@ -56,7 +56,10 @@ mod tests {
             .generate(
                 "test prompt idle",
                 None,
-                ImageSize { width: 64, height: 64 },
+                ImageSize {
+                    width: 64,
+                    height: 64,
+                },
                 None,
                 CancelToken::new(),
             )
@@ -72,7 +75,16 @@ mod tests {
         let cancel = CancelToken::new();
         cancel.cancel();
         let result = provider
-            .generate("anything", None, ImageSize { width: 64, height: 64 }, None, cancel)
+            .generate(
+                "anything",
+                None,
+                ImageSize {
+                    width: 64,
+                    height: 64,
+                },
+                None,
+                cancel,
+            )
             .await;
         assert!(matches!(result, Err(ImageGenError::Cancelled)));
     }

@@ -86,13 +86,14 @@ fn position_popover(app: &AppHandle, win: &tauri::WebviewWindow) {
         .and_then(|tray| tray.rect().ok().flatten())
         .map(|rect| {
             let pos = rect.position.to_physical::<i32>(scale);
-            let _sz = rect.size.to_physical::<u32>(scale);
+            let sz = rect.size.to_physical::<u32>(scale);
             #[cfg(target_os = "macos")]
             {
                 (pos.x, pos.y + sz.height as i32)
             }
             #[cfg(not(target_os = "macos"))]
             {
+                let _ = sz;
                 (pos.x, pos.y - 480)
             }
         })
