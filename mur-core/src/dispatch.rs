@@ -676,6 +676,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::Hooks { action } => match action {
             AgentHooksAction::Show { name, json } => cmd::agent_hooks::cmd_hooks_show(&name, json)?,
         },
+        AgentAction::MigrateToHub => cmd::agent::cmd_migrate_to_hub()?,
     }
     Ok(())
 }

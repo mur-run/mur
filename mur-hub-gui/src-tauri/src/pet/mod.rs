@@ -113,7 +113,12 @@ fn start_event_loop(
                 biased;
                 _ = &mut shutdown_rx => break,
                 Ok(event) = rx.recv() => {
-                    if let Some(change) = sm.process(&event) {
+                    // voice.ended resolves an active lipsync dwell.
+                    if event.name == "voice.ended" && event.agent_id == agent_name {
+                        if let Some(change) = sm.resolve(mur_common::hub::trigger::DwellSpec::Lipsync) {
+                            emit_change(&app, &label, change);
+                        }
+                    } else if let Some(change) = sm.process(&event) {
                         emit_change(&app, &label, change);
                     }
                 }
@@ -276,6 +281,23 @@ pub fn pet_ack_bubble(
     bus_state: State<'_, EventBusState>,
 ) {
     bus_state.0.publish(HubEvent::new(&agent_name, "pet.bubble.acked"));
+}
+
+/// Speak `text` for `agent_name`: synthesise via Kokoro (if models present),
+/// play audio (unless Focus/DND active), and alternate talk_open / talk_close
+/// on the bus every 200 ms while audio plays.
+#[tauri::command]
+pub async fn pet_speak(
+    agent_name: String,
+    text: String,
+    voice_id: Option<String>,
+    bus_state: State<'_, EventBusState>,
+) -> Result<(), String> {
+    let bus = bus_state.0.clone();
+    let mur_home = mur_home();
+    let player = mur_gui_core::voice::VoicePlayer::new(agent_name, mur_home, bus);
+    player.speak(text, voice_id).await;
+    Ok(())
 }
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
