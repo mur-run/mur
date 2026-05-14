@@ -20,6 +20,7 @@ image = "0.25"
 reqwest = { workspace = true }
 base64 = "0.22"
 chrono = { workspace = true }
+notify = "6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
