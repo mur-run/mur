@@ -83,6 +83,7 @@ struct RespPart {
 #[derive(Deserialize, Debug)]
 struct InlineData {
     #[serde(rename = "mimeType")]
+    #[allow(dead_code)]
     mime_type: String,
     data: String, // base64
 }
@@ -124,7 +125,7 @@ impl ImageGenProvider for GeminiImageGenProvider {
 
         let resp: GenerateResponse = self
             .client
-            .post(&self.endpoint())
+            .post(self.endpoint())
             .query(&[("key", &self.api_key)])
             .json(&body)
             .send()
@@ -153,8 +154,8 @@ impl ImageGenProvider for GeminiImageGenProvider {
             .decode(&inline.data)
             .map_err(|e| ImageGenError::Decode(e.to_string()))?;
 
-        let img = image::load_from_memory(&bytes)
-            .map_err(|e| ImageGenError::Decode(e.to_string()))?;
+        let img =
+            image::load_from_memory(&bytes).map_err(|e| ImageGenError::Decode(e.to_string()))?;
 
         Ok(img)
     }
