@@ -138,11 +138,7 @@ mod mic {
             let ns_cls = objc_getClass(ns_string_class.as_ptr());
             let sel_init = CString::new("stringWithUTF8String:").unwrap();
             let c = CString::new("soun").unwrap();
-            objc_msgSend(
-                ns_cls,
-                sel_registerName(sel_init.as_ptr()),
-                c.as_ptr(),
-            )
+            objc_msgSend(ns_cls, sel_registerName(sel_init.as_ptr()), c.as_ptr())
         };
         let device = objc_msgSend(
             cls,

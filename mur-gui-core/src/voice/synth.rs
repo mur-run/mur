@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use tokio::sync::Notify;
 
-use crate::event_bus::{EventBus, HubEvent};
 use super::dnd;
+use crate::event_bus::{EventBus, HubEvent};
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -63,7 +63,8 @@ impl VoicePlayer {
         let pcm_result: Option<(Vec<f32>, u32)> = if skip_audio {
             None
         } else {
-            self.try_synthesize(&text, voice_id.as_deref().unwrap_or("af_heart")).await
+            self.try_synthesize(&text, voice_id.as_deref().unwrap_or("af_heart"))
+                .await
         };
 
         // Estimate duration for lipsync tick count.
@@ -91,12 +92,9 @@ impl VoicePlayer {
         let bus = self.bus.clone();
         let abort = Arc::clone(&self.abort);
         for _ in 0..ticks {
-            let stopped = tokio::time::timeout(
-                Duration::from_millis(200),
-                abort.notified(),
-            )
-            .await
-            .is_ok();
+            let stopped = tokio::time::timeout(Duration::from_millis(200), abort.notified())
+                .await
+                .is_ok();
 
             if stopped {
                 break;
@@ -114,9 +112,7 @@ impl VoicePlayer {
 
     /// Attempt synthesis via Kokoro if models are present.
     async fn try_synthesize(&self, text: &str, _voice_id: &str) -> Option<(Vec<f32>, u32)> {
-        let kokoro_onnx = self
-            .mur_home
-            .join("models/kokoro/kokoro-v0_19.onnx");
+        let kokoro_onnx = self.mur_home.join("models/kokoro/kokoro-v0_19.onnx");
 
         if !kokoro_onnx.exists() {
             tracing::debug!("Kokoro ONNX not found; running silent");
@@ -249,9 +245,7 @@ fn play_pcm(pcm: &[f32], sample_rate: u32, stop: Arc<Notify>) -> anyhow::Result<
     #[cfg(not(feature = "audio"))]
     {
         // Silent mode: sleep for the equivalent duration then return.
-        let duration = Duration::from_millis(
-            (pcm.len() as u64 * 1000) / sample_rate.max(1) as u64,
-        );
+        let duration = Duration::from_millis((pcm.len() as u64 * 1000) / sample_rate.max(1) as u64);
         std::thread::sleep(duration);
         let _ = stop;
     }

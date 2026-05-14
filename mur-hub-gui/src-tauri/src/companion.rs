@@ -21,7 +21,9 @@ pub struct BridgeState {
 
 impl Default for BridgeState {
     fn default() -> Self {
-        Self { watchers: Mutex::new(HashMap::new()) }
+        Self {
+            watchers: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -57,8 +59,7 @@ pub async fn companion_bridge_subscribe(
     state: tauri::State<'_, BridgeState>,
 ) -> Result<(), String> {
     let (tx, mut rx) = mpsc::channel::<BridgeEvent>(32);
-    let watcher =
-        InboxWatcher::start(agent_inbox(&agent), tx).map_err(|e| format!("{e:#}"))?;
+    let watcher = InboxWatcher::start(agent_inbox(&agent), tx).map_err(|e| format!("{e:#}"))?;
 
     state
         .watchers
@@ -93,17 +94,13 @@ pub fn companion_bridge_unsubscribe(
 
 /// Acknowledge a message (rewrite `>>> response: <unset>` → `>>> response: <signal>`).
 #[tauri::command]
-pub fn companion_ack(
-    agent: String,
-    msg_id: String,
-    signal: String,
-) -> Result<(), String> {
+pub fn companion_ack(agent: String, msg_id: String, signal: String) -> Result<(), String> {
     if !matches!(signal.as_str(), "good" | "bad" | "dismiss") {
         return Err(format!("unknown signal `{signal}`"));
     }
     let path = agent_inbox(&agent).join(format!("{msg_id}.md"));
-    let body = std::fs::read_to_string(&path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let body =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let marker = ">>> response:";
     let Some((head, _)) = body.rsplit_once(marker) else {
         return Err(format!("missing response marker in {}", path.display()));
@@ -143,12 +140,7 @@ pub async fn companion_quiet(
     off: bool,
 ) -> Result<(), String> {
     let for_str = for_seconds.map(|n| format!("{n}s"));
-    mur_core::cmd::agent_companion::quiet::set(
-        &agent,
-        for_str.as_deref(),
-        until.as_deref(),
-        off,
-    )
-    .await
-    .map_err(|e| format!("{e:#}"))
+    mur_core::cmd::agent_companion::quiet::set(&agent, for_str.as_deref(), until.as_deref(), off)
+        .await
+        .map_err(|e| format!("{e:#}"))
 }
