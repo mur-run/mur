@@ -962,9 +962,14 @@ pub enum BehaviorPreset {
 pub enum RenderStatus {
     #[default]
     Pending,
-    Rendering { done: u8, total: u8 },
+    Rendering {
+        done: u8,
+        total: u8,
+    },
     Ready,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 impl AgentProfile {
@@ -1318,12 +1323,18 @@ mod appearance_tests {
 
     #[test]
     fn appearance_default_behavior_is_normal() {
-        assert_eq!(AgentAppearance::default().behavior_preset, BehaviorPreset::Normal);
+        assert_eq!(
+            AgentAppearance::default().behavior_preset,
+            BehaviorPreset::Normal
+        );
     }
 
     #[test]
     fn appearance_default_render_status_is_pending() {
-        assert_eq!(AgentAppearance::default().render_status, RenderStatus::Pending);
+        assert_eq!(
+            AgentAppearance::default().render_status,
+            RenderStatus::Pending
+        );
     }
 
     #[test]
@@ -1332,7 +1343,9 @@ mod appearance_tests {
             RenderStatus::Pending,
             RenderStatus::Rendering { done: 3, total: 12 },
             RenderStatus::Ready,
-            RenderStatus::Failed { reason: "out of quota".into() },
+            RenderStatus::Failed {
+                reason: "out of quota".into(),
+            },
         ];
         for status in cases {
             let yaml = serde_yaml_ng::to_string(&status).expect("serialize");
