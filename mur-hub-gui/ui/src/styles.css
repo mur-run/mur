@@ -680,3 +680,68 @@ input {
   white-space: nowrap;
 }
 .grid-card--dragging { opacity: 0.4; }
+
+/* ── Pet Bubble ─────────────────────────────────────────────────────────── */
+.pet-bubble {
+  position: absolute;
+  bottom: 210px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 280px;
+  min-width: 120px;
+  background: #1F2937;
+  border: 1px solid #374151;
+  border-radius: 10px;
+  padding: 10px 28px 10px 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  animation: bubbleFadeIn 0.15s ease;
+  z-index: 100;
+}
+@keyframes bubbleFadeIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+/* tail */
+.pet-bubble::after {
+  content: "";
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 8px solid transparent;
+  border-top-color: #374151;
+  border-bottom: none;
+}
+.pet-bubble-text {
+  font-size: 13px;
+  color: #F9FAFB;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.pet-bubble-progress {
+  height: 2px;
+  background: #374151;
+  border-radius: 1px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+.pet-bubble-bar {
+  height: 100%;
+  background: #6366F1;
+  border-radius: 1px;
+  transition: width 0.1s linear;
+}
+.pet-bubble-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #6B7280;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  line-height: 1;
+}
+.pet-bubble-close:hover { color: #F9FAFB; background: #374151; }

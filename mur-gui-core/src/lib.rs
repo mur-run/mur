@@ -8,6 +8,8 @@
 //! See `docs/superpowers/specs/2026-05-11-mur-hub-companion-design.md` §3.1.
 
 pub mod discovery;
+pub mod event_bus;
+pub mod expression;
 pub mod image_gen;
 pub mod render;
 pub mod sidecar;
