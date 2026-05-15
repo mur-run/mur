@@ -15,16 +15,19 @@
 # Exit code !0 → unexpected failure
 set -euo pipefail
 
-# Ensure cargo is in PATH. On some CI runners (e.g. macos-14 ARM64),
-# Homebrew's rustup-init can shadow ~/.cargo/bin/cargo.
+# Ensure cargo is in PATH. On macOS-14 ARM64 CI runners, the rust-cache
+# action can restore ~/.cargo/bin/cargo as a bare rustup-init proxy that
+# doesn't recognise argv[0] correctly. Use `rustup which` to get the
+# actual toolchain binary, falling back to PATH lookup.
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+CARGO="$(rustup which cargo 2>/dev/null || command -v cargo)"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
 echo "▸ Building mur CLI"
-cargo build -p mur-core --bin mur >/dev/null
+"$CARGO" build -p mur-core --bin mur >/dev/null
 
 MUR=./target/debug/mur
 
