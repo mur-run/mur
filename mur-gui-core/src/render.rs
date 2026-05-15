@@ -188,15 +188,15 @@ mod tests {
             .find(|p| p.id == "default-blob")
             .unwrap();
 
-        let job = RenderJob::new(
-            preset.clone(),
-            Arc::new(MockImageGenProvider),
-            tmp.path(),
-        );
+        let job = RenderJob::new(preset.clone(), Arc::new(MockImageGenProvider), tmp.path());
         let manifest = job.run(CancelToken::new(), None).await.unwrap();
 
         assert_eq!(manifest.preset_id, "default-blob");
-        assert_eq!(manifest.expressions.len(), 12, "all 12 expressions rendered");
+        assert_eq!(
+            manifest.expressions.len(),
+            12,
+            "all 12 expressions rendered"
+        );
 
         // Files should exist.
         for id in &manifest.expressions {
@@ -233,8 +233,8 @@ mod tests {
             .unwrap();
         let cancel = CancelToken::new();
         cancel.cancel(); // cancel before run
-        let job =
-            RenderJob::new(preset, Arc::new(MockImageGenProvider), tmp.path()).with_parallel_jobs(1);
+        let job = RenderJob::new(preset, Arc::new(MockImageGenProvider), tmp.path())
+            .with_parallel_jobs(1);
         let manifest = job.run(cancel, None).await.unwrap();
         assert!(
             manifest.expressions.is_empty(),
