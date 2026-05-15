@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/mur-run/mur"
 description = "Tauri 2 desktop shell for a single mur agent"
+publish = false  # [legacy] — superseded by mur-hub-gui in M-h8; see mur-agent-gui/README.md
 
 # Mark as a standalone workspace so cargo doesn't walk past
 # `.worktrees/<name>/Cargo.toml` (which excludes mur-agent-gui) and accidentally

@@ -56,6 +56,9 @@ pub struct AgentProfile {
     pub trusted_peers: Vec<crate::bridge::peer::TrustedPeer>,
     pub created_at: String,
     pub updated_at: String,
+    /// Hub companion visual identity (M-h3). Default = default-blob / Normal / Pending.
+    #[serde(default)]
+    pub appearance: AgentAppearance,
 }
 
 fn default_algorithm() -> String {
@@ -901,6 +904,74 @@ pub struct ActiveHours {
     pub end: String,
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Hub companion appearance (M-h3)
+// ──────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentAppearance {
+    /// ID of the active style preset (e.g. "chiikawa", "default-blob").
+    #[serde(default = "default_style_preset")]
+    pub style_preset: String,
+    #[serde(default)]
+    pub behavior_preset: BehaviorPreset,
+    /// Required for the polaroid family; none for all others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_image_path: Option<std::path::PathBuf>,
+    /// Local dir where rendered .webp expression frames are stored.
+    #[serde(default = "default_expressions_dir")]
+    pub expressions_dir: std::path::PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_rendered_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub render_status: RenderStatus,
+}
+
+fn default_style_preset() -> String {
+    "default-blob".into()
+}
+
+fn default_expressions_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from("expressions")
+}
+
+impl Default for AgentAppearance {
+    fn default() -> Self {
+        Self {
+            style_preset: default_style_preset(),
+            behavior_preset: BehaviorPreset::Normal,
+            source_image_path: None,
+            expressions_dir: default_expressions_dir(),
+            last_rendered_at: None,
+            render_status: RenderStatus::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BehaviorPreset {
+    Quiet,
+    #[default]
+    Normal,
+    Lively,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RenderStatus {
+    #[default]
+    Pending,
+    Rendering {
+        done: u8,
+        total: u8,
+    },
+    Ready,
+    Failed {
+        reason: String,
+    },
+}
+
 impl AgentProfile {
     /// Minimal valid profile for tests — no voice, no MCP, no skills.
     ///
@@ -1238,5 +1309,72 @@ idle_triggers:
         let yaml = "restart: on_failure\n";
         let cfg: LifecycleConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(cfg.idle_triggers.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod appearance_tests {
+    use super::*;
+
+    #[test]
+    fn appearance_default_style_preset_is_default_blob() {
+        assert_eq!(AgentAppearance::default().style_preset, "default-blob");
+    }
+
+    #[test]
+    fn appearance_default_behavior_is_normal() {
+        assert_eq!(
+            AgentAppearance::default().behavior_preset,
+            BehaviorPreset::Normal
+        );
+    }
+
+    #[test]
+    fn appearance_default_render_status_is_pending() {
+        assert_eq!(
+            AgentAppearance::default().render_status,
+            RenderStatus::Pending
+        );
+    }
+
+    #[test]
+    fn render_status_serde_round_trip() {
+        let cases = [
+            RenderStatus::Pending,
+            RenderStatus::Rendering { done: 3, total: 12 },
+            RenderStatus::Ready,
+            RenderStatus::Failed {
+                reason: "out of quota".into(),
+            },
+        ];
+        for status in cases {
+            let yaml = serde_yaml_ng::to_string(&status).expect("serialize");
+            let back: RenderStatus = serde_yaml_ng::from_str(&yaml).expect("deserialize");
+            assert_eq!(status, back);
+        }
+    }
+
+    #[test]
+    fn agent_profile_with_appearance_round_trips() {
+        let base = include_str!("../tests/fixtures/profile_p0a_minimal.yaml");
+        let yaml = format!(
+            "{base}appearance:\n  style_preset: chiikawa\n  render_status:\n    status: ready\n"
+        );
+        let profile: AgentProfile = serde_yaml_ng::from_str(&yaml).expect("parse with appearance");
+        assert_eq!(profile.appearance.style_preset, "chiikawa");
+        assert_eq!(profile.appearance.render_status, RenderStatus::Ready);
+
+        let out = serde_yaml_ng::to_string(&profile).expect("serialize");
+        let back: AgentProfile = serde_yaml_ng::from_str(&out).expect("re-parse");
+        assert_eq!(profile.appearance, back.appearance);
+    }
+
+    #[test]
+    fn legacy_profile_without_appearance_uses_default() {
+        let yaml = include_str!("../tests/fixtures/profile_p0a_minimal.yaml");
+        let profile: AgentProfile = serde_yaml_ng::from_str(yaml).expect("parse legacy");
+        assert_eq!(profile.appearance.style_preset, "default-blob");
+        assert_eq!(profile.appearance.behavior_preset, BehaviorPreset::Normal);
+        assert_eq!(profile.appearance.render_status, RenderStatus::Pending);
     }
 }

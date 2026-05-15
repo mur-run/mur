@@ -1,0 +1,39 @@
+id: family-photo
+display_name: "Family Photo"
+author: builtin
+version: 1
+family: polaroid
+description: "Polaroid family style — turns a user-supplied photo into a cartoon companion"
+
+llm_image_gen:
+  base_prompt: |
+    Transform the provided reference photo into a friendly cartoon chibi
+    companion. Preserve the subject's recognizable features (hair color,
+    glasses, distinctive traits) while softening into a cute chibi style.
+    Warm pastel tones, friendly expression, simple clean background.
+  negative_prompt: "ugly, distorted, scary, realistic photo"
+  size: "512x512"
+  steps: 32
+  img2img: true
+  requires_source_image: true
+
+expressions:
+  - { id: idle,       prompt_suffix: "calm friendly expression" }
+  - { id: smile,      prompt_suffix: "warm cheerful smile" }
+  - { id: wave,       prompt_suffix: "friendly wave gesture" }
+  - { id: think,      prompt_suffix: "thoughtful contemplating expression" }
+  - { id: wow,        prompt_suffix: "surprised delighted expression" }
+  - { id: sparkle,    prompt_suffix: "proud happy celebrating expression" }
+  - { id: cry,        prompt_suffix: "sad emotional expression" }
+  - { id: sleep,      prompt_suffix: "peacefully sleeping" }
+  - { id: peek,       prompt_suffix: "peeking shyly from side" }
+  - { id: talk_open,  prompt_suffix: "speaking with open mouth" }
+  - { id: talk_close, prompt_suffix: "mouth closed attentive expression" }
+  - { id: error,      prompt_suffix: "confused worried expression" }
+
+renderer:
+  family: polaroid
+  default_size: { w: 96, h: 112 }
+  idle_animation: breathe
+  blink_interval_s: [4.0, 8.0]
+  crossfade_ms: 260

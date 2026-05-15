@@ -1,4 +1,8 @@
-# mur-agent-gui
+# mur-agent-gui [legacy]
+
+> **Deprecated as of M-h8.** Use [mur-hub-gui](../mur-hub-gui) instead.
+> Run `mur agent migrate-to-hub` to move your agents to the new Hub.
+> This crate is in maintenance mode and will be removed in v2.
 
 Tauri 2 desktop shell for a single mur agent. Produced (one-shot, per-agent) by `mur agent export --format gui`.
 

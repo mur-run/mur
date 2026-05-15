@@ -1,0 +1,37 @@
+id: vtuber-soft
+display_name: "VTuber Soft"
+author: builtin
+version: 1
+family: chibi
+description: "Soft VTuber anime style — cel-shaded, big eyes, colorful hair, expressive"
+
+llm_image_gen:
+  base_prompt: |
+    Cute VTuber character in soft anime chibi style. Large expressive
+    eyes with highlight reflections, colorful pastel hair, cel-shaded
+    flat colors with soft shadow, clean digital illustration,
+    streaming aesthetic, kawaii but slightly stylish.
+  negative_prompt: "realistic, 3D, dark, gritty, low quality, blurry"
+  size: "512x512"
+  steps: 30
+
+expressions:
+  - { id: idle,       prompt_suffix: "relaxed streaming pose, soft smile" }
+  - { id: smile,      prompt_suffix: "bright smile, happy streamer energy" }
+  - { id: wave,       prompt_suffix: "enthusiastic wave hello to chat" }
+  - { id: think,      prompt_suffix: "thinking pose, finger to lips" }
+  - { id: wow,        prompt_suffix: "shocked pog face, wide shining eyes" }
+  - { id: sparkle,    prompt_suffix: "celebrating, confetti and sparkles" }
+  - { id: cry,        prompt_suffix: "crying face, sad streamer moment" }
+  - { id: sleep,      prompt_suffix: "falling asleep on stream, Zzz" }
+  - { id: peek,       prompt_suffix: "peeking from corner, curious" }
+  - { id: talk_open,  prompt_suffix: "talking to chat, mouth open" }
+  - { id: talk_close, prompt_suffix: "mouth closed, listening expression" }
+  - { id: error,      prompt_suffix: "technical difficulties face, worried" }
+
+renderer:
+  family: chibi
+  default_size: { w: 96, h: 120 }
+  idle_animation: breathe
+  blink_interval_s: [3.0, 5.0]
+  crossfade_ms: 200

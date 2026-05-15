@@ -1,0 +1,36 @@
+id: sanrio-pastel
+display_name: "Sanrio Pastel"
+author: builtin
+version: 1
+family: chibi
+description: "Sanrio pastel kawaii style — soft rounded shapes, pastel palette, bow accents"
+
+llm_image_gen:
+  base_prompt: |
+    Kawaii chibi character in Sanrio pastel style. Soft rounded body,
+    large sparkly eyes, pastel pink / mint / lavender palette, cute bow
+    accessory, clean vector-like linework, friendly and cheerful.
+  negative_prompt: "realistic, dark, edgy, sharp, adult, scary"
+  size: "512x512"
+  steps: 28
+
+expressions:
+  - { id: idle,       prompt_suffix: "sitting cutely, gentle smile" }
+  - { id: smile,      prompt_suffix: "big happy smile, star-shaped sparkles" }
+  - { id: wave,       prompt_suffix: "waving with both hands, cheerful" }
+  - { id: think,      prompt_suffix: "head tilted, thinking bubble above" }
+  - { id: wow,        prompt_suffix: "eyes shining, mouth open in awe" }
+  - { id: sparkle,    prompt_suffix: "surrounded by pastel stars and hearts" }
+  - { id: cry,        prompt_suffix: "tiny tears, pouty face" }
+  - { id: sleep,      prompt_suffix: "curled up asleep, moon and stars" }
+  - { id: peek,       prompt_suffix: "peeking behind a large pastel star" }
+  - { id: talk_open,  prompt_suffix: "talking, round open mouth" }
+  - { id: talk_close, prompt_suffix: "talking, mouth gently closed" }
+  - { id: error,      prompt_suffix: "confused sweat drop, question mark" }
+
+renderer:
+  family: chibi
+  default_size: { w: 96, h: 112 }
+  idle_animation: breathe
+  blink_interval_s: [4.0, 7.0]
+  crossfade_ms: 200
