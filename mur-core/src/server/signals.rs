@@ -1,9 +1,9 @@
 //! POST /api/v1/core/signals/batch — receive sync signals from commander
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::Json;
 use mur_common::Signal;
 use serde::{Deserialize, Serialize};
 
