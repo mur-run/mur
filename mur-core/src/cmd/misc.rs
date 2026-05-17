@@ -181,6 +181,44 @@ pub(crate) fn cmd_gc(auto: bool) -> Result<()> {
         println!("Applied {} lifecycle changes.\n", lifecycle_changes);
     }
 
+    // C3: Auto-generate commander workflow files for Stable/Canonical patterns
+    // that don't already have a workflow. Closes the pattern→workflow feedback loop.
+    {
+        use evolve::commander_bridge::CommanderBridge;
+        let bridge = CommanderBridge::with_defaults();
+        let by_name: std::collections::HashMap<String, Pattern> = store
+            .list_all()?
+            .into_iter()
+            .map(|p| (p.name.clone(), p))
+            .collect();
+        let candidates = bridge.detect_workflow_candidates(
+            &by_name.values().cloned().collect::<Vec<_>>(),
+        );
+        let mut wf_count = 0;
+        for candidate in &candidates {
+            if let Some(pattern) = by_name.get(&candidate.pattern_name) {
+                match bridge.suggest_workflow(pattern) {
+                    Ok(Some(preview)) => {
+                        let wf_path = bridge
+                            .config
+                            .workflows_dir
+                            .join(format!("{}.yaml", preview.workflow.name));
+                        if !wf_path.exists() {
+                            if bridge.save_workflow(&preview.workflow).is_ok() {
+                                wf_count += 1;
+                                println!("  🔗 Generated workflow: {}", preview.workflow.name);
+                            }
+                        }
+                    }
+                    Ok(None) | Err(_) => {}
+                }
+            }
+        }
+        if wf_count > 0 {
+            println!("Generated {} commander workflow(s).\n", wf_count);
+        }
+    }
+
     // Link discovery pass (pattern↔pattern and pattern↔workflow)
     {
         use evolve::linker::{
