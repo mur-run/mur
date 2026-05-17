@@ -5,7 +5,9 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use mur_common::pattern::Contribution;
 use mur_common::{Signal, SignalKind, SignalTarget};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 use crate::store::yaml::YamlStore;
 
@@ -58,8 +60,13 @@ impl Inbox {
     ///
     /// Successfully-applied or intentionally-skipped files are removed from
     /// the inbox; failures stay in place to be retried next run.
+    ///
+    /// Signal IDs are tracked in `.seen.yaml` to prevent double-counting when
+    /// the same signal UUID is re-emitted (e.g. after a retry in FlushService).
     pub fn apply_all(&self, store: &YamlStore) -> Result<ApplyReport> {
         let mut report = ApplyReport::default();
+        let mut seen = self.load_seen_ids();
+        let mut newly_seen: Vec<Uuid> = Vec::new();
 
         for entry in std::fs::read_dir(&self.dir)? {
             let p = entry?.path();
@@ -86,22 +93,61 @@ impl Inbox {
                 }
             };
 
+            // Skip duplicate signal IDs (idempotency guard against FlushService retries)
+            if seen.contains(&signal.id) {
+                report.skipped += 1;
+                let _ = std::fs::remove_file(&p);
+                continue;
+            }
+
             match self.apply_one(store, &signal) {
                 Ok(true) => {
                     report.applied += 1;
+                    newly_seen.push(signal.id);
                     let _ = std::fs::remove_file(&p);
                 }
                 Ok(false) => {
                     report.skipped += 1;
+                    newly_seen.push(signal.id);
                     let _ = std::fs::remove_file(&p);
                 }
                 Err(e) => {
                     report.errors.push(format!("{}: {e}", p.display()));
-                    // Keep file for retry
+                    // Keep file for retry — do NOT record as seen
                 }
             }
         }
+
+        if !newly_seen.is_empty() {
+            seen.extend(newly_seen);
+            let _ = self.save_seen_ids(&seen);
+        }
+
         Ok(report)
+    }
+
+    fn load_seen_ids(&self) -> HashSet<Uuid> {
+        let path = self.dir.join(".seen.yaml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_yaml::from_str::<Vec<Uuid>>(&s).ok())
+            .map(|v| v.into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    fn save_seen_ids(&self, seen: &HashSet<Uuid>) -> Result<()> {
+        let mut ids: Vec<Uuid> = seen.iter().copied().collect();
+        ids.sort();
+        // Cap at 2048 to prevent unbounded growth
+        if ids.len() > 2048 {
+            let start = ids.len() - 2048;
+            ids = ids[start..].to_vec();
+        }
+        let yaml = serde_yaml::to_string(&ids)?;
+        let tmp = self.dir.join(".seen.tmp");
+        std::fs::write(&tmp, &yaml)?;
+        std::fs::rename(&tmp, self.dir.join(".seen.yaml"))?;
+        Ok(())
     }
 
     fn apply_one(&self, store: &YamlStore, signal: &Signal) -> Result<bool> {
@@ -150,9 +196,13 @@ impl Inbox {
                 store.save(&pattern)?;
                 Ok(true)
             }
-            SignalTarget::NewDraftPattern { .. } => {
-                // Phase 2 handles drafts; silently skip here.
-                Ok(false)
+            SignalTarget::NewDraftPattern { payload } => {
+                // Never overwrite a pattern the user may have edited
+                if store.exists(&payload.name) {
+                    return Ok(false);
+                }
+                store.save(payload)?;
+                Ok(true)
             }
         }
     }
@@ -336,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_skips_new_draft_pattern_target() {
+    fn apply_creates_new_draft_pattern() {
         let tmp = tempdir().unwrap();
         let (store, inbox) = setup(tmp.path());
         let pat = make_pattern("draft-x");
@@ -361,10 +411,42 @@ mod tests {
         };
         inbox.receive(&sig).unwrap();
         let report = inbox.apply_all(&store).unwrap();
+        assert_eq!(report.applied, 1);
+        assert_eq!(report.skipped, 0);
+        // Pattern was created as draft
+        assert!(store.exists("draft-x"));
+    }
+
+    #[test]
+    fn apply_skips_new_draft_pattern_when_pattern_already_exists() {
+        let tmp = tempdir().unwrap();
+        let (store, inbox) = setup(tmp.path());
+        // Pre-existing pattern with the same name
+        store.save(&make_pattern("draft-x")).unwrap();
+        let pat = make_pattern("draft-x");
+        let sig = Signal {
+            id: Uuid::new_v4(),
+            emitted_at: Utc::now(),
+            actor: Actor {
+                source: ActorSource::Slack,
+                native_id: "alice".into(),
+                display_name: None,
+                resolved_user_id: None,
+            },
+            target: SignalTarget::NewDraftPattern {
+                payload: Box::new(pat),
+            },
+            kind: SignalKind::NewPatternProposal {
+                origin_context: "chat".into(),
+            },
+            scope: Scope::Personal,
+            confidence: 1.0,
+            schema_version: SIGNAL_SCHEMA_VERSION,
+        };
+        inbox.receive(&sig).unwrap();
+        let report = inbox.apply_all(&store).unwrap();
         assert_eq!(report.skipped, 1);
         assert_eq!(report.applied, 0);
-        // Pattern was NOT auto-created:
-        assert!(!store.exists("draft-x"));
     }
 
     #[test]
@@ -416,5 +498,32 @@ mod tests {
         let bob = p.evidence.contributions.get("Slack:bob").unwrap();
         assert_eq!(alice.success_signals, 2);
         assert_eq!(bob.override_signals, 3);
+    }
+
+    #[test]
+    fn duplicate_signal_id_is_not_double_counted() {
+        let tmp = tempdir().unwrap();
+        let (store, inbox) = setup(tmp.path());
+        store.save(&make_pattern("p1")).unwrap();
+
+        // First receive + apply
+        let sig = signal("p1", SignalKind::ExecutionSuccess, "alice");
+        inbox.receive(&sig).unwrap();
+        inbox.apply_all(&store).unwrap();
+
+        // Receive the SAME signal UUID again (retry scenario) with different filename
+        // by writing directly with a different timestamp prefix
+        let yaml = serde_yaml::to_string(&sig).unwrap();
+        let dup_path = inbox.dir.join("2099-01-01T00-00-00-dup.yaml");
+        std::fs::write(&dup_path, yaml).unwrap();
+        let report = inbox.apply_all(&store).unwrap();
+
+        // The duplicate should be skipped (not applied again)
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.skipped, 1);
+
+        let p = store.get("p1").unwrap();
+        // Still only 1 success signal — not incremented twice
+        assert_eq!(p.evidence.success_signals, 1);
     }
 }
