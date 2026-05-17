@@ -40,6 +40,11 @@ fn test_state_readonly(tmp: &tempfile::TempDir) -> AppState {
     state
 }
 
+/// Re-exported for use by sibling module tests (e.g. signals::tests).
+pub(super) fn test_state_for_signals(tmp: &tempfile::TempDir) -> AppState {
+    test_state(tmp)
+}
+
 fn make_test_pattern(name: &str) -> Pattern {
     Pattern {
         base: KnowledgeBase {

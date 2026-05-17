@@ -34,6 +34,7 @@ mod patterns;
 mod pipelines;
 mod search;
 mod sessions;
+mod signals;
 mod stats;
 mod workflows;
 
@@ -47,6 +48,7 @@ use pipelines::{
     run_pipeline_expr, update_pipeline, validate_pipeline,
 };
 use search::search_patterns;
+use signals::batch_signals;
 use sessions::{
     bulk_delete_sessions, delete_session, get_session, get_session_events, list_sessions,
     patch_session,
@@ -201,6 +203,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/context", post(context_retrieve))
         .route("/api/v1/ingest", post(context_ingest))
         .route("/api/v1/feedback", post(context_feedback))
+        // Cloud-mode signal ingestion
+        .route("/api/v1/core/signals/batch", post(batch_signals))
         // Sessions
         .route("/api/v1/sessions", get(list_sessions))
         .route(
