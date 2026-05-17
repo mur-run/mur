@@ -24,6 +24,10 @@ pub(crate) async fn cmd_inject(query: &str) -> Result<()> {
     }
 
     let yaml_store = YamlStore::default_store()?;
+    // Drain pending commander signals so evidence scores are current before ranking
+    if let Ok(inbox) = crate::sync::inbox::Inbox::default_location() {
+        let _ = inbox.apply_all(&yaml_store);
+    }
     let patterns = yaml_store.list_all()?;
 
     // Also load workflows
@@ -106,6 +110,71 @@ pub(crate) async fn cmd_inject(query: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::store::yaml::YamlStore;
+    use crate::sync::inbox::Inbox;
+    use mur_common::knowledge::KnowledgeBase;
+    use mur_common::pattern::{Content, Pattern, Tier};
+    use mur_common::{
+        Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope, Signal, SignalKind, SignalTarget,
+    };
+    use uuid::Uuid;
+
+    fn make_pattern(name: &str) -> Pattern {
+        Pattern {
+            base: KnowledgeBase {
+                name: name.into(),
+                description: "test".into(),
+                content: Content::Plain("body".into()),
+                tier: Tier::Session,
+                ..Default::default()
+            },
+            kind: None,
+            origin: None,
+            attachments: vec![],
+        }
+    }
+
+    #[test]
+    fn inbox_drain_applies_signals_to_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let patterns_dir = tmp.path().join("patterns");
+        let inbox_dir = tmp.path().join("inbox");
+        std::fs::create_dir_all(&inbox_dir).unwrap();
+
+        let store = YamlStore::new(patterns_dir).unwrap();
+        store.save(&make_pattern("drain-test")).unwrap();
+
+        let signal = Signal {
+            id: Uuid::new_v4(),
+            emitted_at: chrono::Utc::now(),
+            actor: Actor {
+                source: ActorSource::Slack,
+                native_id: "bot".into(),
+                display_name: None,
+                resolved_user_id: None,
+            },
+            target: SignalTarget::Pattern {
+                name: "drain-test".into(),
+                scope: Scope::Personal,
+            },
+            kind: SignalKind::ExecutionSuccess,
+            scope: Scope::Personal,
+            confidence: 0.9,
+            schema_version: SIGNAL_SCHEMA_VERSION,
+        };
+        let inbox = Inbox::new(&inbox_dir).unwrap();
+        inbox.receive(&signal).unwrap();
+
+        let report = inbox.apply_all(&store).unwrap();
+        assert_eq!(report.applied, 1);
+
+        let p = store.get("drain-test").unwrap();
+        assert_eq!(p.evidence.success_signals, 1);
+    }
 }
 
 pub(crate) fn cmd_why(name: &str) -> Result<()> {
