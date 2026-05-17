@@ -191,9 +191,8 @@ pub(crate) fn cmd_gc(auto: bool) -> Result<()> {
             .into_iter()
             .map(|p| (p.name.clone(), p))
             .collect();
-        let candidates = bridge.detect_workflow_candidates(
-            &by_name.values().cloned().collect::<Vec<_>>(),
-        );
+        let candidates =
+            bridge.detect_workflow_candidates(&by_name.values().cloned().collect::<Vec<_>>());
         let mut wf_count = 0;
         for candidate in &candidates {
             if let Some(pattern) = by_name.get(&candidate.pattern_name) {
