@@ -27,6 +27,14 @@ pub struct RejectedSignal {
     pub reason: String,
 }
 
+/// Receive a batch of sync signals from commander and apply them to pattern evidence.
+///
+/// # Concurrency note
+/// This endpoint uses a two-phase write: `receive` appends YAML files to the inbox,
+/// then `apply_all` reads and applies them. Under concurrent requests the last writer
+/// wins per pattern (the YAML store uses atomic rename). This is acceptable because
+/// the commander daemon runs as a single process with one `FlushService`, so concurrent
+/// batches from the same process are not expected in practice.
 pub async fn batch_signals(
     State(state): State<Arc<AppState>>,
     Json(body): Json<BatchRequest>,
@@ -57,7 +65,20 @@ pub async fn batch_signals(
     }
 
     if !accepted.is_empty() {
-        let _ = inbox.apply_all(&store);
+        match inbox.apply_all(&store) {
+            Ok(report) if !report.errors.is_empty() => {
+                tracing::warn!(
+                    "signals/batch: {} signal(s) accepted but {} failed to apply: {:?}",
+                    accepted.len(),
+                    report.errors.len(),
+                    report.errors
+                );
+            }
+            Err(e) => {
+                tracing::error!("signals/batch: apply_all failed: {:#}", e);
+            }
+            Ok(_) => {}
+        }
     }
 
     Ok(Json(BatchResponse { accepted, rejected }))
