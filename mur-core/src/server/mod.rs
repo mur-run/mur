@@ -48,11 +48,11 @@ use pipelines::{
     run_pipeline_expr, update_pipeline, validate_pipeline,
 };
 use search::search_patterns;
-use signals::batch_signals;
 use sessions::{
     bulk_delete_sessions, delete_session, get_session, get_session_events, list_sessions,
     patch_session,
 };
+use signals::batch_signals;
 use stats::{get_links, get_stats, get_tags};
 use workflows::{
     create_workflow, delete_workflow, extract_workflow_from_session, get_workflow, list_workflows,
