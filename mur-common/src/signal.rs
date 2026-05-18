@@ -13,7 +13,23 @@ use uuid::Uuid;
 
 use crate::{Actor, Pattern, Scope};
 
-/// Current schema version of the Signal wire format.
+// ─── FROZEN SCHEMA — v1 ──────────────────────────────────────────────────
+// This module is the canonical wire format between commander and mur.
+// SCHEMA FREEZE DATE: 2026-05-18
+// Spec: docs/superpowers/specs/2026-05-18-commander-feedback-wire-protocol-design.md
+//
+// Changes to Signal, SignalKind, SignalTarget, Actor, ActorSource, or
+// SIGNAL_SCHEMA_VERSION require:
+//   1. Bumping SIGNAL_SCHEMA_VERSION to 2
+//   2. Coordinated update in the commander repo (closed-source)
+//   3. Adding a v2 HTTP endpoint at /v2/signals/...
+//   4. Migration plan in a new design spec
+//
+// Additive changes (new fields with #[serde(default)]) are allowed within v1.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Current schema version of the Signal wire format. FROZEN at v1 — see
+/// module-level comment for change rules.
 pub const SIGNAL_SCHEMA_VERSION: u32 = 1;
 
 /// A single event envelope: who produced what kind of event about which target,
