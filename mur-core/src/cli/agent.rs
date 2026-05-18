@@ -211,6 +211,19 @@ pub enum AgentAction {
     },
     /// Migrate all agents from mur-agent-gui (v0) to mur-hub (v1). Idempotent.
     MigrateToHub,
+    /// Show version history for an agent's profile (requires versioned store)
+    History {
+        /// Agent name
+        name: String,
+    },
+    /// Roll back an agent profile to a prior version (creates a new commit)
+    Rollback {
+        /// Agent name
+        name: String,
+        /// Version number to restore
+        #[arg(long)]
+        to: u32,
+    },
 }
 
 #[derive(Debug, Subcommand)]
