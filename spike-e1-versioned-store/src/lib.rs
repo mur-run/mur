@@ -351,7 +351,29 @@ impl SpikeStore {
     }
 
     fn current_pattern_version(&self, name: &str) -> Result<u32> {
-        Ok(self.history(name)?.len() as u32)
+        // O(1) per call: count archived versions on disk instead of walking
+        // git history. Walking history per save was the SECOND O(N²) bomb
+        // R2 surfaced (after add_all). Production VersionedYamlStore must
+        // also avoid walking history on the save path — version derivation
+        // must be O(1) regardless of repo size.
+        //
+        // Invariant: live count = archive_dir entries + (1 if current file exists else 0).
+        let archive_dir = self.root.join("archive/patterns").join(name);
+        let archive_count = if archive_dir.exists() {
+            std::fs::read_dir(&archive_dir)?
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path().extension().and_then(|s| s.to_str()) == Some("yaml")
+                })
+                .count() as u32
+        } else {
+            0
+        };
+        let current_exists = self
+            .root
+            .join(format!("patterns/{name}.yaml"))
+            .exists();
+        Ok(archive_count + if current_exists { 1 } else { 0 })
     }
 
     fn head_sha(&self, repo: &Repository) -> Result<String> {
