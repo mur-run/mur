@@ -89,6 +89,27 @@ impl YamlStore {
         fs::rename(&tmp_path, &path)
             .with_context(|| format!("Failed to rename temp to final: {}", path.display()))?;
 
+        // Version gate: when the knowledge git repo is active, commit this
+        // change. Best-effort — a commit failure never fails the primary save.
+        if let Some(mur_dir) = self.patterns_dir.parent()
+            && mur_dir.join(".git").exists()
+        {
+            match crate::store::versioned::VersionedYamlStore::open(mur_dir) {
+                Ok(mut vs) => {
+                    if let Err(e) = vs.commit_existing_pattern(pattern, "updated") {
+                        tracing::warn!(
+                            pattern = %pattern.name,
+                            error = %e,
+                            "versioned commit failed"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to open versioned store for commit");
+                }
+            }
+        }
+
         Ok(())
     }
 
