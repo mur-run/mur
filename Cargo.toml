@@ -6,6 +6,7 @@ members = [
     "mur-agent-runtime",
     "mur-daemon",
     "mur-gui-core",
+    "spike-e1-versioned-store"
     # "mur-commander",  # separate crate — v0.2.0 released
 ]
 exclude = [
@@ -18,6 +19,11 @@ exclude = [
     # nightly toolchain and the fuzz binaries are not part of normal
     # dev/CI builds. Run with: cargo +nightly fuzz run <target>
     "fuzz",
+    # E1 versioned-store spike (throwaway, 2026-05-18). Pulls git2 + libgit2
+    # which we don't want in default workspace builds. Run on demand:
+    #   cargo test -p spike-e1-versioned-store
+    # Delete after spike decision meeting (see crate README).
+    "spike-e1-versioned-store",
 ]
 
 [workspace.package]
