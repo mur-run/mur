@@ -409,4 +409,9 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: cmd::source_cmd::SourceCommand,
     },
+    /// Low-level access to versioned-store internals (git repos, index rebuild)
+    Internals {
+        #[command(subcommand)]
+        action: InternalsAction,
+    },
 }
