@@ -14,6 +14,8 @@
 
 mod git_ops;
 mod index;
+pub mod agent;
+mod agent_index;
 
 use anyhow::{Context, Result, anyhow};
 use git2::Repository;
