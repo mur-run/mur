@@ -71,14 +71,14 @@ fn check_agents(agents_dir: &Path) {
 /// Uses a marker file `<mur_dir>/.last-gc` to track the last run time.
 fn gc_if_due(mur_dir: &Path) {
     let marker = mur_dir.join(GC_MARKER_FILE);
-    if let Ok(meta) = std::fs::metadata(&marker) {
-        if let Ok(modified) = meta.modified() {
-            let age = std::time::SystemTime::now()
-                .duration_since(modified)
-                .unwrap_or_default();
-            if age.as_secs() < GC_INTERVAL_DAYS * 86_400 {
-                return;
-            }
+    if let Ok(meta) = std::fs::metadata(&marker)
+        && let Ok(modified) = meta.modified()
+    {
+        let age = std::time::SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or_default();
+        if age.as_secs() < GC_INTERVAL_DAYS * 86_400 {
+            return;
         }
     }
 
