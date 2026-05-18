@@ -143,7 +143,32 @@ pub(crate) fn load_profile_for_edit(name: &str) -> Result<(PathBuf, _AgentProfil
 pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<()> {
     profile.updated_at = chrono::Utc::now().to_rfc3339();
     let yaml = serde_yaml_ng::to_string(profile).context("serialize profile.yaml")?;
-    write_atomic(path, yaml.as_bytes())
+    write_atomic(path, yaml.as_bytes())?;
+
+    // Version gate: when the agents git repo is active, commit this change.
+    // Best-effort — a commit failure never fails the primary save.
+    if let Some(agent_dir) = path.parent()
+        && let Some(agents_root) = agent_dir.parent()
+        && let Some(agent_name) = agent_dir.file_name().and_then(|n| n.to_str())
+        && agents_root.join(".git").exists()
+    {
+        match crate::store::versioned::agent::VersionedAgentStore::open(agents_root) {
+            Ok(mut vs) => {
+                if let Err(e) = vs.commit_existing_profile(agent_name, "updated") {
+                    tracing::warn!(
+                        agent = %agent_name,
+                        error = %e,
+                        "versioned agent commit failed"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to open versioned agent store for commit");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Used by stop/remove/rename to refuse mutation when the supervisor is alive.
