@@ -1,0 +1,72 @@
+name: spike-e1
+
+# Triggered when work happens on the spike branch, OR manually from the
+# Actions tab. Spike crate is workspace-excluded so it has no effect on
+# normal CI for other branches.
+
+on:
+  push:
+    branches:
+      - spike/e1-versioned-store
+  workflow_dispatch:
+
+# Cancel in-flight runs when the spike branch gets new commits.
+concurrency:
+  group: spike-e1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # actions-rust-lang/setup-rust-toolchain (rust-lang official) is more
+      # robust on macOS-arm runners than dtolnay/rust-toolchain against the
+      # known rustup race that produces:
+      #   "could not rename '...partial': No such file or directory"
+      # The official action self-updates rustup before installing the
+      # toolchain, breaking the concurrent-rustup race. Caching is also
+      # built-in, so we drop Swatinem/rust-cache here (kept for main ci.yml).
+      - name: install rust stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          # Spike-local cache key (don't collide with main ci.yml workspace cache)
+          cache-workspaces: spike-e1-versioned-store
+          # Don't propagate `-D warnings` — spike code intentionally has warnings.
+          rustflags: ""
+
+      # ── Day 1 smoke — must pass on all 3 OS or the spike is dead ──────
+      - name: smoke (01_smoke)
+        working-directory: spike-e1-versioned-store
+        run: cargo test --test "01_smoke" -- --test-threads=1
+
+      # ── Day 2 wave 1 — R4 + R8 are #[test] (not ignored). Run them. ──
+      - name: R4 external reset + R8 split-brain
+        working-directory: spike-e1-versioned-store
+        run: cargo test --test "risk_stubs" -- --test-threads=1 r4_ r8_
+
+      # ── Day 2 R1 (semantic marker, redundant body, runs ignored) ─────
+      - name: R1 git2 platform smoke
+        working-directory: spike-e1-versioned-store
+        run: cargo test --test "risk_stubs" -- --include-ignored --test-threads=1 r1_
+
+      # ── Print sizes to track risk #5 (telemetry growth) hint even
+      #    before R5 is wired up: lib.rs target dir should not explode.
+      - name: artifact size report
+        if: always()
+        working-directory: spike-e1-versioned-store
+        shell: bash
+        run: |
+          echo "── target dir size ──"
+          du -sh target 2>/dev/null || echo "no target dir"
+          echo "── dep tree depth ──"
+          cargo tree --depth 2 || true
