@@ -144,12 +144,100 @@ fn r4_external_reset_recovery() {
 
 /// Risk #5 — telemetry growth: agents/.git stays small under high-freq writes
 ///
-/// PASS: 86400 lines of telemetry append (24h @ 1Hz) → agents/.git size delta < 5MB.
-/// KILL: > 50MB → telemetry must live OUTSIDE the git tree.
+/// Validates the .gitignore-based separation in spec §4.2.1: telemetry
+/// jsonl files in `agents/<name>/telemetry/` must NOT be tracked, and
+/// 24h of @1Hz appends must leave `agents/.git` essentially untouched.
+///
+/// PASS: agents/.git size delta < 5MB after 86400 telemetry appends.
+/// KILL: > 50MB → telemetry must live OUTSIDE the git tree entirely
+///       (spec §4.2.1 dir structure needs rewrite).
 #[test]
-#[ignore = "risk #5 — slow, opt-in"]
+#[ignore = "risk #5 — slow (writes ~10MB), opt-in"]
 fn r5_telemetry_growth_under_gitignore() {
-    todo!("create agents/agent-a/telemetry/2026-05-18.jsonl + 86400 appends, measure agents/.git size delta");
+    use std::io::Write;
+
+    let tmp = tempdir().unwrap();
+    let mut store = SpikeStore::init(tmp.path()).unwrap();
+
+    // Seed: a real agent so agents/.git has a committed baseline
+    store
+        .save_agent_profile("agent-a", "name: agent-a\nmodel: m1\n", "seed")
+        .unwrap();
+
+    let agents_git = tmp.path().join("agents/.git");
+    let initial_size = dir_size(&agents_git);
+
+    // Simulate 24h @ 1Hz telemetry append (86400 lines, ~10MB raw)
+    let tele_dir = tmp.path().join("agents/agent-a/telemetry");
+    std::fs::create_dir_all(&tele_dir).unwrap();
+    let tele_file = tele_dir.join("2026-05-18.jsonl");
+    {
+        let f = std::fs::File::create(&tele_file).unwrap();
+        let mut bw = std::io::BufWriter::with_capacity(64 * 1024, f);
+        for i in 0..86_400u32 {
+            writeln!(
+                bw,
+                r#"{{"ts":"2026-05-18T{:02}:{:02}:{:02}Z","event":"tick","seq":{}}}"#,
+                (i / 3600) % 24,
+                (i / 60) % 60,
+                i % 60,
+                i
+            )
+            .unwrap();
+        }
+    }
+
+    let raw_telemetry_mb = std::fs::metadata(&tele_file).unwrap().len() / 1_000_000;
+    println!("r5: telemetry file = {} MB raw", raw_telemetry_mb);
+
+    // gitignore working? telemetry path must NOT appear in any status entry.
+    let agents_repo = git2::Repository::open(tmp.path().join("agents")).unwrap();
+    let statuses = agents_repo.statuses(None).unwrap();
+    let mut leaked = Vec::new();
+    for entry in statuses.iter() {
+        if let Some(path) = entry.path() {
+            if path.contains("telemetry/") {
+                leaked.push(path.to_string());
+            }
+        }
+    }
+    assert!(
+        leaked.is_empty(),
+        "telemetry path leaked into git status (gitignore broken): {leaked:?}"
+    );
+
+    // Trigger a legit commit AFTER the telemetry burst to exercise the
+    // add-all path with the heavy telemetry on disk. This is where a broken
+    // gitignore would explode .git size.
+    store
+        .save_agent_profile("agent-a", "name: agent-a\nmodel: m1\nupdated: true\n", "post-tele")
+        .unwrap();
+
+    let final_size = dir_size(&agents_git);
+    let delta = final_size.saturating_sub(initial_size);
+    let delta_mb = delta as f64 / 1_000_000.0;
+
+    println!(
+        "r5: agents/.git initial={}B, final={}B, delta={:.3}MB",
+        initial_size, final_size, delta_mb
+    );
+
+    // PASS: < 5MB delta
+    assert!(
+        delta < 5_000_000,
+        "agents/.git grew by {} bytes ({:.3}MB) — telemetry suspected to leak through .gitignore",
+        delta,
+        delta_mb
+    );
+}
+
+fn dir_size(p: &std::path::Path) -> u64 {
+    walkdir::WalkDir::new(p)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+        .sum()
 }
 
 /// Risk #6 — atomic commit safety under SIGKILL
