@@ -4,6 +4,7 @@ pub mod agent_companion;
 pub(crate) mod agent_eval;
 pub mod agent_export;
 pub mod agent_export_gui;
+pub(crate) mod agent_history;
 /// A1 — hooks show [--json] CLI verb.
 pub mod agent_hooks;
 /// B0 M9.2 — install-time MCP hash + publisher prompt for `mur agent mcp add`.
@@ -27,11 +28,13 @@ pub(crate) mod init;
 pub(crate) mod init_daemon;
 pub(crate) mod init_local;
 pub(crate) mod inject_cmd;
+pub(crate) mod internals;
 pub(crate) mod learn;
 pub(crate) mod misc;
 pub(crate) mod model;
 pub(crate) mod murmurd;
 pub(crate) mod pattern;
+pub(crate) mod pattern_history;
 pub(crate) mod reindex;
 pub(crate) mod search;
 pub(crate) mod server_cmd;
