@@ -1,0 +1,13 @@
+# Per-agent high-frequency state — never versioned (FIN-4: bare patterns)
+telemetry/
+outbox-ledger
+inbox/
+crashlogs/
+running.lock
+.extract_digest
+.apply-staging/
+.apply-in-progress
+
+# Derived — maintained by mur, NOT tracked in agents git
+.mur-agents-versions.yaml
+*.tmp
