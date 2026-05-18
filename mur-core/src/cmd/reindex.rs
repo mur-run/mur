@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::store::workflow_yaml::WorkflowYamlStore;
-use crate::store::yaml::YamlStore;
+use crate::store::yaml::{YamlStore, default_mur_dir};
 
 pub(crate) async fn cmd_reindex() -> Result<()> {
     use crate::store::embedding::{EmbeddingConfig, embed};
@@ -103,5 +103,32 @@ pub(crate) async fn cmd_reindex() -> Result<()> {
         index_path.display()
     );
 
+    Ok(())
+}
+
+/// Initialise the knowledge git repo and commit all existing patterns in one
+/// bootstrap commit. After this, every `YamlStore::save` auto-commits via
+/// the write path gate, and `mur pattern history` returns real history.
+pub(crate) fn cmd_reindex_bootstrap() -> Result<()> {
+    use crate::store::versioned::VersionedYamlStore;
+
+    let mur_dir = default_mur_dir();
+    let already = mur_dir.join(".git").exists();
+
+    let mut vs = if already {
+        println!("Versioned store already initialised — committing any un-tracked patterns.");
+        VersionedYamlStore::open(&mur_dir)?
+    } else {
+        println!("Initialising versioned store at {} ...", mur_dir.display());
+        VersionedYamlStore::init(&mur_dir)?
+    };
+
+    let count = vs.bootstrap_all()?;
+    if count == 0 {
+        println!("All patterns already up to date in versioned store.");
+    } else {
+        println!("Bootstrap complete: {count} pattern(s) committed.");
+        println!("Future saves are now auto-versioned. Try `mur pattern history <name>`.");
+    }
     Ok(())
 }

@@ -134,7 +134,13 @@ pub async fn run(cli: Cli) -> Result<()> {
                 cmd::workflow::cmd_workflow_install(&name, &from)?
             }
         },
-        Commands::Reindex => cmd::reindex::cmd_reindex().await?,
+        Commands::Reindex { bootstrap } => {
+            if bootstrap {
+                cmd::reindex::cmd_reindex_bootstrap()?;
+            } else {
+                cmd::reindex::cmd_reindex().await?;
+            }
+        }
         Commands::Promote { name, tier } => cmd::pattern::cmd_promote(&name, &tier)?,
         Commands::Deprecate { name } => cmd::pattern::cmd_deprecate(&name)?,
         Commands::Links { name } => cmd::pattern::cmd_links(&name)?,

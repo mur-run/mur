@@ -1,6 +1,4 @@
 //! `VersionedYamlStore` — git-backed versioned pattern store (E1 W1).
-// Not yet wired into the CLI — remove when integrated (E1-W3).
-#![allow(dead_code)]
 //!
 //! Wraps `~/.mur/` as a knowledge-layer git repository. Every
 //! `save_pattern` call produces exactly one commit and an O(1) index
@@ -130,6 +128,7 @@ impl VersionedYamlStore {
         Ok(PatternRevision { name: name.clone(), version: new_v, sha })
     }
 
+    #[allow(dead_code)]
     pub fn read_pattern(&self, name: &str) -> Result<Option<Pattern>> {
         let path = self.root.join("patterns").join(format!("{name}.yaml"));
         if !path.exists() {
@@ -186,6 +185,7 @@ impl VersionedYamlStore {
 
     /// Returns `true` if the on-disk HEAD differs from the HEAD recorded in
     /// the index — indicating external git surgery since the last save.
+    #[allow(dead_code)]
     pub fn detect_external_change(&self) -> Result<bool> {
         let head = git_ops::head_sha(&self.knowledge_repo)?;
         Ok(!head.is_empty() && self.index.knowledge_head != head)
@@ -199,7 +199,133 @@ impl VersionedYamlStore {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Stage and commit a pattern file that has **already been written to disk**
+    /// by `YamlStore::save()`. Used by the write path gate so that plain saves
+    /// are automatically versioned when the knowledge git repo is active.
+    ///
+    /// No-op fast path: compares the new YAML against the HEAD blob (not the
+    /// file) to detect whether anything actually changed.
+    pub fn commit_existing_pattern(
+        &mut self,
+        pattern: &Pattern,
+        reason: &str,
+    ) -> Result<PatternRevision> {
+        let name = &pattern.name;
+        let pattern_rel = PathBuf::from("patterns").join(format!("{name}.yaml"));
+
+        let new_yaml =
+            serde_yaml::to_string(pattern).with_context(|| format!("serialize {name}"))?;
+
+        // No-op: compare against HEAD blob (file on disk is already updated)
+        let head_yaml = self.read_head_blob_str(&pattern_rel).unwrap_or_default();
+        if head_yaml == new_yaml {
+            return Ok(PatternRevision {
+                name: name.clone(),
+                version: self.index.current_version_of(name),
+                sha: git_ops::head_sha(&self.knowledge_repo)?,
+            });
+        }
+
+        let mut paths_to_stage = vec![pattern_rel.clone()];
+
+        // Archive the HEAD version before committing the new one.
+        // The file on disk is already new content, so we copy from HEAD blob.
+        let prev_v = self.index.current_version_of(name);
+        if prev_v > 0 && !head_yaml.is_empty() {
+            let archive_dir = self.root.join("archive/patterns").join(name);
+            std::fs::create_dir_all(&archive_dir)?;
+            let archive_rel = PathBuf::from("archive/patterns")
+                .join(name)
+                .join(format!("v{prev_v}.yaml"));
+            std::fs::write(self.root.join(&archive_rel), &head_yaml)?;
+            paths_to_stage.push(archive_rel);
+        }
+
+        let new_v = prev_v + 1;
+        let ts = chrono::Utc::now().to_rfc3339();
+        let msg = format!("pattern({name}): v{new_v} {reason}");
+        let sha = git_ops::commit_paths(&self.knowledge_repo, &paths_to_stage, &msg)?;
+
+        let head = git_ops::head_sha(&self.knowledge_repo)?;
+        self.index.append_version(name, &sha, reason, &head, &ts);
+        self.index.save(&self.root)?;
+
+        Ok(PatternRevision { name: name.clone(), version: new_v, sha })
+    }
+
+    /// Stage and commit all existing pattern YAML files in a single bootstrap
+    /// commit. Skips patterns already identical to their HEAD blob.
+    ///
+    /// Used by `mur reindex --bootstrap` to import existing patterns into
+    /// git history in one operation.
+    pub fn bootstrap_all(&mut self) -> Result<usize> {
+        let patterns_dir = self.root.join("patterns");
+        if !patterns_dir.exists() {
+            return Ok(0);
+        }
+
+        let head_tree = self
+            .knowledge_repo
+            .head()
+            .ok()
+            .and_then(|r| r.peel_to_tree().ok());
+
+        let mut paths: Vec<PathBuf> = vec![];
+        for entry in std::fs::read_dir(&patterns_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let rel = match path.strip_prefix(&self.root) {
+                Ok(r) => r.to_path_buf(),
+                Err(_) => continue,
+            };
+            // Skip patterns already committed with identical content
+            if let Some(tree) = &head_tree
+                && let Ok(te) = tree.get_path(&rel)
+                && let Ok(blob) = self.knowledge_repo.find_blob(te.id())
+            {
+                let on_disk = std::fs::read(&path).unwrap_or_default();
+                if blob.content() == on_disk.as_slice() {
+                    continue;
+                }
+            }
+            paths.push(rel);
+        }
+
+        if paths.is_empty() {
+            return Ok(0);
+        }
+
+        let count = paths.len();
+        let ts = chrono::Utc::now().to_rfc3339();
+        let msg = "bootstrap: import existing patterns";
+        let sha = git_ops::commit_paths(&self.knowledge_repo, &paths, msg)?;
+        let head = git_ops::head_sha(&self.knowledge_repo)?;
+
+        for path_rel in &paths {
+            if let Some(name) = path_rel.file_stem().and_then(|s| s.to_str()) {
+                self.index
+                    .append_version(name, &sha, "bootstrap: import existing", &head, &ts);
+            }
+        }
+        self.index.save(&self.root)?;
+
+        Ok(count)
+    }
+
+    fn read_head_blob_str(&self, rel: &Path) -> Result<String> {
+        let tree = self.knowledge_repo.head()?.peel_to_tree()?;
+        let entry = tree
+            .get_path(rel)
+            .with_context(|| format!("path {} not in HEAD", rel.display()))?;
+        let blob = self.knowledge_repo.find_blob(entry.id())?;
+        Ok(String::from_utf8_lossy(blob.content()).into_owned())
     }
 }
