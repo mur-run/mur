@@ -1,0 +1,13 @@
+# Execution layer — has its own .git repo
+/agents/
+
+# Runtime state — never versioned
+/inbox/
+/outbox/
+/session/
+/cache/
+/secrets/
+
+# Derived index — maintained by mur, NOT tracked in git
+.mur-versions.yaml
+*.tmp

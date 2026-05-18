@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::store::workflow_yaml::WorkflowYamlStore;
-use crate::store::yaml::YamlStore;
+use crate::store::yaml::{YamlStore, default_mur_dir};
 
 pub(crate) async fn cmd_reindex() -> Result<()> {
     use crate::store::embedding::{EmbeddingConfig, embed};
@@ -103,5 +103,59 @@ pub(crate) async fn cmd_reindex() -> Result<()> {
         index_path.display()
     );
 
+    Ok(())
+}
+
+/// Initialise the knowledge git repo and commit all existing patterns in one
+/// bootstrap commit. After this, every `YamlStore::save` auto-commits via
+/// the write path gate, and `mur pattern history` returns real history.
+///
+/// Also bootstraps the agents git repo at `~/.mur/agents/.git` if it exists
+/// or if there are agent profiles to track.
+pub(crate) fn cmd_reindex_bootstrap() -> Result<()> {
+    use crate::store::versioned::VersionedYamlStore;
+    use crate::store::versioned::agent::VersionedAgentStore;
+
+    let mur_dir = default_mur_dir();
+
+    // ── Knowledge layer ───────────────────────────────────────────────────────
+    let already = mur_dir.join(".git").exists();
+    let mut vs = if already {
+        println!("Knowledge store already initialised — committing any un-tracked patterns.");
+        VersionedYamlStore::open(&mur_dir)?
+    } else {
+        println!("Initialising knowledge store at {} ...", mur_dir.display());
+        VersionedYamlStore::init(&mur_dir)?
+    };
+
+    let count = vs.bootstrap_all()?;
+    if count == 0 {
+        println!("Knowledge: all patterns already up to date.");
+    } else {
+        println!("Knowledge: {count} pattern(s) committed.");
+    }
+
+    // ── Agents layer ──────────────────────────────────────────────────────────
+    let agents_dir = mur_dir.join("agents");
+    if agents_dir.exists() {
+        let agents_already = agents_dir.join(".git").exists();
+        let mut avs = if agents_already {
+            println!("Agents store already initialised — committing any un-tracked profiles.");
+            VersionedAgentStore::open(&agents_dir)?
+        } else {
+            println!("Initialising agents store at {} ...", agents_dir.display());
+            VersionedAgentStore::init(&agents_dir)?
+        };
+
+        let agent_count = avs.bootstrap_all()?;
+        if agent_count == 0 {
+            println!("Agents: all profiles already up to date.");
+        } else {
+            println!("Agents: {agent_count} agent profile(s) committed.");
+        }
+    }
+
+    println!("Future saves are now auto-versioned.");
+    println!("Try `mur pattern history <name>` or `mur agent history <name>`.");
     Ok(())
 }

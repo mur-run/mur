@@ -151,7 +151,12 @@ pub enum Commands {
         action: WorkflowAction,
     },
     /// Rebuild index from YAML files
-    Reindex,
+    Reindex {
+        /// Initialise the versioned git store and commit all existing patterns
+        /// in one bootstrap commit. Run once to enable `mur pattern history`.
+        #[arg(long)]
+        bootstrap: bool,
+    },
     /// Show pattern connections
     Links {
         /// Pattern name
@@ -408,5 +413,10 @@ pub enum Commands {
     Source {
         #[command(subcommand)]
         cmd: cmd::source_cmd::SourceCommand,
+    },
+    /// Low-level access to versioned-store internals (git repos, index rebuild)
+    Internals {
+        #[command(subcommand)]
+        action: InternalsAction,
     },
 }
