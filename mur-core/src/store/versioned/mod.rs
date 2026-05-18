@@ -10,10 +10,10 @@
 //!   FIN-3 — `.mur-versions.yaml` is load-bearing; `history()` reads it
 //!   FIN-4 — knowledge.gitignore uses bare patterns, no `*/` anchors
 
-mod git_ops;
-mod index;
 pub mod agent;
 mod agent_index;
+mod git_ops;
+mod index;
 
 use anyhow::{Context, Result, anyhow};
 use git2::Repository;
@@ -51,16 +51,16 @@ impl VersionedYamlStore {
     /// knowledge git repo and required subdirectories on first call.
     pub fn init(root: &Path) -> Result<Self> {
         for sub in ["patterns", "archive/patterns", "workflows"] {
-            std::fs::create_dir_all(root.join(sub))
-                .with_context(|| format!("mkdir {sub}"))?;
+            std::fs::create_dir_all(root.join(sub)).with_context(|| format!("mkdir {sub}"))?;
         }
-        let knowledge_repo = git_ops::open_or_init_repo(
-            root,
-            KNOWLEDGE_GITIGNORE,
-            "init: knowledge layer",
-        )?;
+        let knowledge_repo =
+            git_ops::open_or_init_repo(root, KNOWLEDGE_GITIGNORE, "init: knowledge layer")?;
         let index = VersionIndex::load(root)?;
-        Ok(Self { root: root.to_path_buf(), knowledge_repo, index })
+        Ok(Self {
+            root: root.to_path_buf(),
+            knowledge_repo,
+            index,
+        })
     }
 
     /// Open an existing store. Returns an error if `root/.git` is absent.
@@ -68,7 +68,11 @@ impl VersionedYamlStore {
         let knowledge_repo = Repository::open(root)
             .with_context(|| format!("open knowledge repo at {}", root.display()))?;
         let index = VersionIndex::load(root)?;
-        Ok(Self { root: root.to_path_buf(), knowledge_repo, index })
+        Ok(Self {
+            root: root.to_path_buf(),
+            knowledge_repo,
+            index,
+        })
     }
 
     /// Write `pattern` to disk and commit. Returns a `PatternRevision`
@@ -81,8 +85,7 @@ impl VersionedYamlStore {
         let pattern_rel = PathBuf::from("patterns").join(format!("{name}.yaml"));
         let pattern_abs = self.root.join(&pattern_rel);
 
-        let yaml = serde_yaml::to_string(pattern)
-            .with_context(|| format!("serialize {name}"))?;
+        let yaml = serde_yaml::to_string(pattern).with_context(|| format!("serialize {name}"))?;
 
         // No-op fast path
         if pattern_abs.exists() {
@@ -125,7 +128,11 @@ impl VersionedYamlStore {
         self.index.append_version(name, &sha, reason, &head, &ts);
         self.index.save(&self.root)?;
 
-        Ok(PatternRevision { name: name.clone(), version: new_v, sha })
+        Ok(PatternRevision {
+            name: name.clone(),
+            version: new_v,
+            sha,
+        })
     }
 
     #[allow(dead_code)]
@@ -136,8 +143,7 @@ impl VersionedYamlStore {
         }
         let content = std::fs::read_to_string(&path)?;
         Ok(Some(
-            serde_yaml::from_str(&content)
-                .with_context(|| format!("parse {name}"))?,
+            serde_yaml::from_str(&content).with_context(|| format!("parse {name}"))?,
         ))
     }
 
@@ -255,7 +261,11 @@ impl VersionedYamlStore {
         self.index.append_version(name, &sha, reason, &head, &ts);
         self.index.save(&self.root)?;
 
-        Ok(PatternRevision { name: name.clone(), version: new_v, sha })
+        Ok(PatternRevision {
+            name: name.clone(),
+            version: new_v,
+            sha,
+        })
     }
 
     /// Stage and commit all existing pattern YAML files in a single bootstrap

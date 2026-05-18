@@ -52,10 +52,13 @@ impl VersionedAgentStore {
     pub fn init(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root)
             .with_context(|| format!("mkdir agents dir {}", root.display()))?;
-        let agents_repo =
-            git_ops::open_or_init_repo(root, AGENTS_GITIGNORE, "init: agents layer")?;
+        let agents_repo = git_ops::open_or_init_repo(root, AGENTS_GITIGNORE, "init: agents layer")?;
         let index = AgentVersionIndex::load(root)?;
-        Ok(Self { root: root.to_path_buf(), agents_repo, index })
+        Ok(Self {
+            root: root.to_path_buf(),
+            agents_repo,
+            index,
+        })
     }
 
     /// Open an existing store. Returns an error if `.git` is absent.
@@ -63,7 +66,11 @@ impl VersionedAgentStore {
         let agents_repo = Repository::open(root)
             .with_context(|| format!("open agents repo at {}", root.display()))?;
         let index = AgentVersionIndex::load(root)?;
-        Ok(Self { root: root.to_path_buf(), agents_repo, index })
+        Ok(Self {
+            root: root.to_path_buf(),
+            agents_repo,
+            index,
+        })
     }
 
     /// Re-init agents repo when `.git` is missing or broken (split-brain
@@ -108,7 +115,10 @@ impl VersionedAgentStore {
             )?;
         }
 
-        Ok(RepairReport { recovered: true, agents_recommitted })
+        Ok(RepairReport {
+            recovered: true,
+            agents_recommitted,
+        })
     }
 
     /// Write `profile_yaml` to `<agent>/profile.yaml` and commit.
@@ -142,8 +152,9 @@ impl VersionedAgentStore {
         if prev_v > 0 && profile_abs.exists() {
             let archive_dir = self.root.join(agent).join("archive");
             std::fs::create_dir_all(&archive_dir)?;
-            let archive_rel =
-                PathBuf::from(agent).join("archive").join(format!("v{prev_v}.yaml"));
+            let archive_rel = PathBuf::from(agent)
+                .join("archive")
+                .join(format!("v{prev_v}.yaml"));
             std::fs::copy(&profile_abs, self.root.join(&archive_rel))?;
             paths_to_stage.push(archive_rel);
         }
@@ -163,7 +174,11 @@ impl VersionedAgentStore {
         self.index.append_version(agent, &sha, reason, &head, &ts);
         self.index.save(&self.root)?;
 
-        Ok(AgentRevision { name: agent.to_string(), version: new_v, sha })
+        Ok(AgentRevision {
+            name: agent.to_string(),
+            version: new_v,
+            sha,
+        })
     }
 
     pub fn read_profile(&self, agent: &str) -> Result<Option<String>> {
@@ -184,7 +199,9 @@ impl VersionedAgentStore {
     ) -> Result<AgentRevision> {
         let skills_dir = self.root.join(agent).join("skills");
         std::fs::create_dir_all(&skills_dir)?;
-        let skill_rel = PathBuf::from(agent).join("skills").join(format!("{skill}.md"));
+        let skill_rel = PathBuf::from(agent)
+            .join("skills")
+            .join(format!("{skill}.md"));
         let skill_abs = self.root.join(&skill_rel);
 
         // No-op fast path
@@ -209,11 +226,19 @@ impl VersionedAgentStore {
         self.index.append_version(agent, &sha, reason, &head, &ts);
         self.index.save(&self.root)?;
 
-        Ok(AgentRevision { name: agent.to_string(), version: new_v, sha })
+        Ok(AgentRevision {
+            name: agent.to_string(),
+            version: new_v,
+            sha,
+        })
     }
 
     pub fn read_skill(&self, agent: &str, skill: &str) -> Result<Option<String>> {
-        let path = self.root.join(agent).join("skills").join(format!("{skill}.md"));
+        let path = self
+            .root
+            .join(agent)
+            .join("skills")
+            .join(format!("{skill}.md"));
         if !path.exists() {
             return Ok(None);
         }
@@ -271,19 +296,35 @@ impl VersionedAgentStore {
 
         // 1. subtree split — isolate agent's history into a temp branch
         let status = std::process::Command::new("git")
-            .args(["-C", root.to_str().unwrap(), "subtree", "split",
-                   "--prefix", agent, "-b", &branch])
+            .args([
+                "-C",
+                root.to_str().unwrap(),
+                "subtree",
+                "split",
+                "--prefix",
+                agent,
+                "-b",
+                &branch,
+            ])
             .status()
             .with_context(|| "git subtree split failed — is git-subtree installed?")?;
         if !status.success() {
-            return Err(anyhow!("git subtree split returned non-zero for agent '{agent}'"));
+            return Err(anyhow!(
+                "git subtree split returned non-zero for agent '{agent}'"
+            ));
         }
 
         // 2. bundle the split branch
         let bundle_str = bundle_path.to_str().unwrap();
         let status = std::process::Command::new("git")
-            .args(["-C", root.to_str().unwrap(), "bundle", "create",
-                   bundle_str, &branch])
+            .args([
+                "-C",
+                root.to_str().unwrap(),
+                "bundle",
+                "create",
+                bundle_str,
+                &branch,
+            ])
             .status()
             .with_context(|| "git bundle create failed")?;
         if !status.success() {
