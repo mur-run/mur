@@ -86,6 +86,46 @@ cd mur-agent-gui/src-tauri && cargo tauri dev          # 6-tab settings window o
 
 ---
 
+## MuR Hub (`mur-hub-gui`)
+
+MuR Hub is the cross-agent desktop app (Tauri 2 + React 18 + Vite). It replaces `mur-agent-gui` as the single desktop entry point (deprecated in M-h8). Both crates are **workspace-EXCLUDED** in the root `Cargo.toml`. Hub dev server runs on port `5174` to allow coexistence with `mur-agent-gui` (`5173`) during the migration window.
+
+**Milestones shipped (M-h0 → M-h8):**
+
+- **M-h0** — workspace scaffold: `mur-gui-core` + `mur-hub-gui` crate skeletons
+- **M-h1** — hub-ui-shell: system tray, popover window, dashboard, `AgentDiscovery`
+- **M-h2** — supervisor + runtime event bus: multi-agent sidecar, start/stop commands, `runtime-status-changed` events
+- **M-h4** — image-gen pipeline + 6-step agent creation wizard (`ui/src/components/wizard/`)
+- **M-h5** — pet window + drag-to-desktop (`src-tauri/src/pet/`)
+- **M-h6** — expression engine + triggers + speech bubble
+- **M-h7** — voice + DND + preset import + migrate-to-hub (`src-tauri/src/preset.rs`)
+- **M-h8** — companion inbox in Hub (`ui/src/components/CompanionInbox.tsx`) + `mur-agent-gui` deprecation
+
+**Key source layout:**
+
+- `src-tauri/src/companion.rs` — companion bridge (A2A inbox relay)
+- `src-tauri/src/pet/` — pet window logic
+- `src-tauri/src/onboarding/` — first-launch onboarding flow
+- `src-tauri/src/preset.rs` — preset import/export
+- `ui/src/components/` — `DashboardApp`, `PopoverApp`, `PetApp`, `CompanionInbox`, `AgentRow`, `PresetImportModal`, `wizard/`
+
+**Build & dev:**
+
+```bash
+# Build
+cd mur-hub-gui/ui && npm ci && npm run build
+cargo build --manifest-path mur-hub-gui/src-tauri/Cargo.toml
+
+# Dev (two terminals)
+cd mur-hub-gui/ui && npm run dev                                          # port 5174
+cargo tauri dev --manifest-path mur-hub-gui/src-tauri/Cargo.toml
+```
+
+- **Design spec:** `docs/superpowers/specs/2026-05-11-mur-hub-companion-design.md`
+- **Shared library:** `mur-gui-core` (sidecar supervisor, companion bridge, A2A client) — see §3.1 of the design spec
+
+---
+
 ## Agent Runtime (murmur P0a)
 
 The per-agent supervisor lives in `mur-agent-runtime/`. Each agent has a directory under `~/.mur/agents/<name>/` (`profile.yaml`, `sys_prompt.md`, `skills/`, `running.lock`, `telemetry/<date>.jsonl`) and a symlink in `MUR_AGENT_BIN_DIR` (default `~/.local/bin`) named `mur_agent_<name>`. The symlink is the runtime binary; argv[0] tells it which profile to load.
