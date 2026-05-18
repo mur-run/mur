@@ -31,6 +31,7 @@ tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
+git2 = { version = "0.20", default-features = false }
 async-trait = "0.1"
 notify = "6"
 oauth2 = { version = "4", features = ["reqwest"] }

@@ -8,5 +8,6 @@ pub mod exchange;
 pub mod pipeline_yaml;
 pub mod spot_rate;
 pub mod vector;
+pub mod versioned;
 pub mod workflow_yaml;
 pub mod yaml;
