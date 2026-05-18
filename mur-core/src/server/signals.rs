@@ -64,9 +64,9 @@ pub async fn batch_signals(
         }
     }
 
-    if !accepted.is_empty() {
-        match inbox.apply_all(&store) {
-            Ok(report) if !report.errors.is_empty() => {
+    if !accepted.is_empty()
+        && let Err(e) = inbox.apply_all(&store).map(|report| {
+            if !report.errors.is_empty() {
                 tracing::warn!(
                     "signals/batch: {} signal(s) accepted but {} failed to apply: {:?}",
                     accepted.len(),
@@ -74,11 +74,9 @@ pub async fn batch_signals(
                     report.errors
                 );
             }
-            Err(e) => {
-                tracing::error!("signals/batch: apply_all failed: {:#}", e);
-            }
-            Ok(_) => {}
-        }
+        })
+    {
+        tracing::error!("signals/batch: apply_all failed: {:#}", e);
     }
 
     Ok(Json(BatchResponse { accepted, rejected }))
