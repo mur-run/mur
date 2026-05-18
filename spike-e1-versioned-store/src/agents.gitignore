@@ -1,0 +1,8 @@
+*/telemetry/
+*/companion/outbox-ledger
+*/companion/inbox/
+*/crashlogs/
+*/running.lock
+*/.extract_digest
+*/.apply-staging/
+*/.apply-in-progress

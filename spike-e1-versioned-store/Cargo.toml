@@ -1,0 +1,26 @@
+[package]
+name = "spike-e1-versioned-store"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = """
+Throwaway spike for E1 (dual git-repo versioned store). Validates the design
+in plans/2026-05-18-continual-learning-versioned-evolution.md §4 against 8
+risk assumptions before committing to full W1-W3 implementation.
+
+Decision criteria — see README.md. Kill switch: if any RED finding in
+tests/02-08, revise §4 spec BEFORE writing production code.
+
+This crate is workspace-excluded (see root Cargo.toml `exclude`).
+"""
+
+[dependencies]
+anyhow = "1"
+git2 = { version = "0.20", default-features = false }
+tempfile = "3"
+walkdir = "2"
+
+[dev-dependencies]
+# Day 2 risk tests
+ctrlc = "3"        # for test 06 (SIGKILL mid-commit)
+nix = { version = "0.29", features = ["signal", "process"] }
