@@ -22,7 +22,9 @@ fn profile(content: &str) -> String {
 fn save_and_read_profile_roundtrip() {
     let (_dir, mut store) = temp_store();
 
-    let rev = store.save_profile("agent-a", &profile("v1"), "init").unwrap();
+    let rev = store
+        .save_profile("agent-a", &profile("v1"), "init")
+        .unwrap();
     assert_eq!(rev.version, 1);
     assert_eq!(rev.name, "agent-a");
     assert!(!rev.sha.is_empty());
@@ -43,13 +45,19 @@ fn read_missing_agent_returns_none() {
 fn version_increments_on_each_save() {
     let (_dir, mut store) = temp_store();
 
-    let r1 = store.save_profile("agent-b", &profile("v1"), "init").unwrap();
+    let r1 = store
+        .save_profile("agent-b", &profile("v1"), "init")
+        .unwrap();
     assert_eq!(r1.version, 1);
 
-    let r2 = store.save_profile("agent-b", &profile("v2"), "update").unwrap();
+    let r2 = store
+        .save_profile("agent-b", &profile("v2"), "update")
+        .unwrap();
     assert_eq!(r2.version, 2);
 
-    let r3 = store.save_profile("agent-b", &profile("v3"), "refine").unwrap();
+    let r3 = store
+        .save_profile("agent-b", &profile("v3"), "refine")
+        .unwrap();
     assert_eq!(r3.version, 3);
 
     assert_eq!(store.current_version("agent-b"), 3);
@@ -73,8 +81,12 @@ fn no_op_save_does_not_increment_version() {
 fn history_populated_after_saves() {
     let (_dir, mut store) = temp_store();
 
-    store.save_profile("agent-d", &profile("v1"), "init").unwrap();
-    store.save_profile("agent-d", &profile("v2"), "update skills").unwrap();
+    store
+        .save_profile("agent-d", &profile("v1"), "init")
+        .unwrap();
+    store
+        .save_profile("agent-d", &profile("v2"), "update skills")
+        .unwrap();
 
     let hist = store.history("agent-d").unwrap();
     assert_eq!(hist.len(), 2);
@@ -95,7 +107,13 @@ fn history_fast_on_many_revisions() {
     let (_dir, mut store) = temp_store();
 
     for i in 1..=50u32 {
-        store.save_profile("perf-agent", &profile(&format!("v{i}")), &format!("rev {i}")).unwrap();
+        store
+            .save_profile(
+                "perf-agent",
+                &profile(&format!("v{i}")),
+                &format!("rev {i}"),
+            )
+            .unwrap();
     }
 
     let t = Instant::now();
@@ -116,8 +134,17 @@ fn history_fast_on_many_revisions() {
 fn save_and_read_skill() {
     let (_dir, mut store) = temp_store();
 
-    store.save_profile("agent-e", &profile("v1"), "init").unwrap();
-    store.save_skill("agent-e", "rust-basics", "# Rust basics\nUse Result.", "add skill").unwrap();
+    store
+        .save_profile("agent-e", &profile("v1"), "init")
+        .unwrap();
+    store
+        .save_skill(
+            "agent-e",
+            "rust-basics",
+            "# Rust basics\nUse Result.",
+            "add skill",
+        )
+        .unwrap();
 
     let content = store.read_skill("agent-e", "rust-basics").unwrap().unwrap();
     assert!(content.contains("Rust basics"));
@@ -129,20 +156,29 @@ fn save_and_read_skill() {
 fn rollback_restores_profile_as_new_version() {
     let (_dir, mut store) = temp_store();
 
-    store.save_profile("agent-f", &profile("original"), "init").unwrap(); // v1
-    store.save_profile("agent-f", &profile("modified"), "update").unwrap(); // v2
+    store
+        .save_profile("agent-f", &profile("original"), "init")
+        .unwrap(); // v1
+    store
+        .save_profile("agent-f", &profile("modified"), "update")
+        .unwrap(); // v2
 
     let rev = store.rollback_profile("agent-f", 1).unwrap(); // v3 = rollback to v1
     assert_eq!(rev.version, 3);
 
     let loaded = store.read_profile("agent-f").unwrap().unwrap();
-    assert!(!loaded.contains("modified"), "rollback should revert to v1 content");
+    assert!(
+        !loaded.contains("modified"),
+        "rollback should revert to v1 content"
+    );
 }
 
 #[test]
 fn rollback_missing_version_errors() {
     let (_dir, mut store) = temp_store();
-    store.save_profile("agent-g", &profile("v1"), "init").unwrap();
+    store
+        .save_profile("agent-g", &profile("v1"), "init")
+        .unwrap();
 
     let err = store.rollback_profile("agent-g", 99).unwrap_err();
     assert!(err.to_string().contains("no archived"));
@@ -153,15 +189,21 @@ fn rollback_missing_version_errors() {
 #[test]
 fn detect_external_change_false_after_save() {
     let (_dir, mut store) = temp_store();
-    store.save_profile("agent-h", &profile("v1"), "init").unwrap();
+    store
+        .save_profile("agent-h", &profile("v1"), "init")
+        .unwrap();
     assert!(!store.detect_external_change().unwrap());
 }
 
 #[test]
 fn rebuild_index_restores_history() {
     let (_dir, mut store) = temp_store();
-    store.save_profile("agent-i", &profile("v1"), "init").unwrap();
-    store.save_profile("agent-i", &profile("v2"), "update").unwrap();
+    store
+        .save_profile("agent-i", &profile("v1"), "init")
+        .unwrap();
+    store
+        .save_profile("agent-i", &profile("v2"), "update")
+        .unwrap();
 
     store.rebuild_index().unwrap();
 

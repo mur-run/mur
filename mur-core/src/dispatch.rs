@@ -443,9 +443,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         #[cfg(feature = "sources")]
         Commands::Source { cmd } => crate::cmd::source_cmd::handle(cmd).await?,
         Commands::Internals { action } => match action {
-            InternalsAction::RebuildIndex { layer } => {
-                cmd::internals::cmd_rebuild_index(&layer)?
-            }
+            InternalsAction::RebuildIndex { layer } => cmd::internals::cmd_rebuild_index(&layer)?,
             InternalsAction::Git { layer, args } => {
                 cmd::internals::cmd_internals_git(&layer, &args)?
             }
