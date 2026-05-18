@@ -195,21 +195,16 @@ pub(crate) fn cmd_gc(auto: bool) -> Result<()> {
             bridge.detect_workflow_candidates(&by_name.values().cloned().collect::<Vec<_>>());
         let mut wf_count = 0;
         for candidate in &candidates {
-            if let Some(pattern) = by_name.get(&candidate.pattern_name) {
-                match bridge.suggest_workflow(pattern) {
-                    Ok(Some(preview)) => {
-                        let wf_path = bridge
-                            .config
-                            .workflows_dir
-                            .join(format!("{}.yaml", preview.workflow.name));
-                        if !wf_path.exists() {
-                            if bridge.save_workflow(&preview.workflow).is_ok() {
-                                wf_count += 1;
-                                println!("  🔗 Generated workflow: {}", preview.workflow.name);
-                            }
-                        }
-                    }
-                    Ok(None) | Err(_) => {}
+            if let Some(pattern) = by_name.get(&candidate.pattern_name)
+                && let Ok(Some(preview)) = bridge.suggest_workflow(pattern)
+            {
+                let wf_path = bridge
+                    .config
+                    .workflows_dir
+                    .join(format!("{}.yaml", preview.workflow.name));
+                if !wf_path.exists() && bridge.save_workflow(&preview.workflow).is_ok() {
+                    wf_count += 1;
+                    println!("  🔗 Generated workflow: {}", preview.workflow.name);
                 }
             }
         }
