@@ -59,6 +59,14 @@ jobs:
         working-directory: spike-e1-versioned-store
         run: cargo test --test "risk_stubs" -- --include-ignored --test-threads=1 r1_
 
+      # ── Day 2 wave 2 — R2 (perf) + R5 (telemetry growth) ──────────────
+      # Both are #[ignore]'d (slow); CI runs them explicitly. Run AFTER
+      # the cheap risks so a flake here doesn't mask R4/R8 results.
+      # Build in --release for R2 timing realism (close to prod hot path).
+      - name: R2 history perf + R5 telemetry growth
+        working-directory: spike-e1-versioned-store
+        run: cargo test --release --test "risk_stubs" -- --include-ignored --test-threads=1 --nocapture r2_ r5_
+
       # ── Print sizes to track risk #5 (telemetry growth) hint even
       #    before R5 is wired up: lib.rs target dir should not explode.
       - name: artifact size report
