@@ -85,12 +85,13 @@ impl VersionedYamlStore {
         let pattern_rel = PathBuf::from("patterns").join(format!("{name}.yaml"));
         let pattern_abs = self.root.join(&pattern_rel);
 
+        // Serialize without version (version=0 is skipped by skip_serializing_if).
         let yaml = serde_yaml::to_string(pattern).with_context(|| format!("serialize {name}"))?;
 
-        // No-op fast path
+        // No-op fast path: strip version/revision from existing before comparing.
         if pattern_abs.exists() {
             let existing = std::fs::read_to_string(&pattern_abs)?;
-            if existing == yaml {
+            if strip_version_meta(&existing) == yaml {
                 return Ok(PatternRevision {
                     name: name.clone(),
                     version: self.index.current_version_of(name),
@@ -114,12 +115,16 @@ impl VersionedYamlStore {
             paths_to_stage.push(archive_rel);
         }
 
-        // Atomic write: temp → rename
+        // Write schema-3 version field into the YAML before committing.
+        let new_v = prev_v + 1;
+        let mut versioned = pattern.clone();
+        versioned.version = new_v;
+        let versioned_yaml = serde_yaml::to_string(&versioned)
+            .with_context(|| format!("serialize {name} v{new_v}"))?;
         let tmp = pattern_abs.with_extension("yaml.tmp");
-        std::fs::write(&tmp, &yaml)?;
+        std::fs::write(&tmp, &versioned_yaml)?;
         std::fs::rename(&tmp, &pattern_abs)?;
 
-        let new_v = prev_v + 1;
         let ts = chrono::Utc::now().to_rfc3339();
         let msg = format!("pattern({name}): v{new_v} {reason}");
         let sha = git_ops::commit_paths(&self.knowledge_repo, &paths_to_stage, &msg)?;
@@ -223,13 +228,16 @@ impl VersionedYamlStore {
     ) -> Result<PatternRevision> {
         let name = &pattern.name;
         let pattern_rel = PathBuf::from("patterns").join(format!("{name}.yaml"));
+        let pattern_abs = self.root.join(&pattern_rel);
 
+        // Serialize the in-memory pattern (version=0, omitted by skip_serializing_if).
         let new_yaml =
             serde_yaml::to_string(pattern).with_context(|| format!("serialize {name}"))?;
 
-        // No-op: compare against HEAD blob (file on disk is already updated)
+        // Compare against HEAD blob with version/revision lines stripped so the
+        // no-op check is not confused by schema-3 metadata added by this method.
         let head_yaml = self.read_head_blob_str(&pattern_rel).unwrap_or_default();
-        if head_yaml == new_yaml {
+        if strip_version_meta(&head_yaml) == new_yaml {
             return Ok(PatternRevision {
                 name: name.clone(),
                 version: self.index.current_version_of(name),
@@ -255,6 +263,17 @@ impl VersionedYamlStore {
         let new_v = prev_v + 1;
         let ts = chrono::Utc::now().to_rfc3339();
         let msg = format!("pattern({name}): v{new_v} {reason}");
+
+        // Write schema-3 version field into the on-disk file before committing
+        // so the committed YAML contains version metadata (FIN-1: explicit path).
+        let mut versioned = pattern.clone();
+        versioned.version = new_v;
+        let versioned_yaml = serde_yaml::to_string(&versioned)
+            .with_context(|| format!("serialize {name} v{new_v}"))?;
+        let tmp = pattern_abs.with_extension("yaml.tmp");
+        std::fs::write(&tmp, &versioned_yaml)?;
+        std::fs::rename(&tmp, &pattern_abs)?;
+
         let sha = git_ops::commit_paths(&self.knowledge_repo, &paths_to_stage, &msg)?;
 
         let head = git_ops::head_sha(&self.knowledge_repo)?;
@@ -338,4 +357,19 @@ impl VersionedYamlStore {
         let blob = self.knowledge_repo.find_blob(entry.id())?;
         Ok(String::from_utf8_lossy(blob.content()).into_owned())
     }
+}
+
+/// Strip schema-3 `version:` and `revision:` lines from a YAML string so
+/// no-op detection compares only semantic content, not version metadata.
+fn strip_version_meta(yaml: &str) -> String {
+    let mut result = yaml
+        .lines()
+        .filter(|l| !l.starts_with("version:") && !l.starts_with("revision:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Preserve trailing newline that serde_yaml always produces.
+    if yaml.ends_with('\n') {
+        result.push('\n');
+    }
+    result
 }
