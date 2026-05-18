@@ -406,6 +406,73 @@ impl VersionedAgentStore {
         })
     }
 
+    /// Commit all existing `profile.yaml` files that are not yet in HEAD.
+    /// Returns the number of agents bootstrapped.
+    pub fn bootstrap_all(&mut self) -> Result<usize> {
+        let head_tree = self
+            .agents_repo
+            .head()
+            .ok()
+            .and_then(|r| r.peel_to_tree().ok());
+
+        let mut paths: Vec<PathBuf> = vec![];
+
+        for entry in std::fs::read_dir(&self.root)? {
+            let entry = entry?;
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.') {
+                continue;
+            }
+            let profile_rel = PathBuf::from(name_str.as_ref()).join("profile.yaml");
+            let profile_abs = self.root.join(&profile_rel);
+            if !profile_abs.exists() {
+                continue;
+            }
+            // Skip if already committed with identical content.
+            if let Some(tree) = &head_tree
+                && let Ok(te) = tree.get_path(&profile_rel)
+                && let Ok(blob) = self.agents_repo.find_blob(te.id())
+            {
+                let on_disk = std::fs::read(&profile_abs).unwrap_or_default();
+                if blob.content() == on_disk.as_slice() {
+                    continue;
+                }
+            }
+            paths.push(profile_rel);
+        }
+
+        if paths.is_empty() {
+            return Ok(0);
+        }
+
+        let count = paths.len();
+        let ts = chrono::Utc::now().to_rfc3339();
+        let msg = "bootstrap: import existing agent profiles";
+        let sha = git_ops::commit_paths(&self.agents_repo, &paths, msg)?;
+        let head = git_ops::head_sha(&self.agents_repo)?;
+
+        for path_rel in &paths {
+            // path_rel = "<agent>/profile.yaml" — take the first component
+            if let Some(agent) = path_rel.components().next().and_then(|c| {
+                if let std::path::Component::Normal(n) = c {
+                    n.to_str()
+                } else {
+                    None
+                }
+            }) {
+                self.index
+                    .append_version(agent, &sha, "bootstrap: import existing", &head, &ts);
+            }
+        }
+        self.index.save(&self.root)?;
+
+        Ok(count)
+    }
+
     fn read_head_blob_str(&self, rel: &Path) -> Result<String> {
         let tree = self.agents_repo.head()?.peel_to_tree()?;
         let entry = tree

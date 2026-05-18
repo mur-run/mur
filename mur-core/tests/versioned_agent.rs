@@ -308,3 +308,31 @@ fn commit_existing_profile_versions_externally_written_file() {
     let rev2 = store.commit_existing_profile("agent1", "updated").unwrap();
     assert_eq!(rev2.version, 2);
 }
+
+// ── bootstrap_all ─────────────────────────────────────────────────────────────
+
+#[test]
+fn bootstrap_all_imports_existing_profiles() {
+    let dir = TempDir::new().unwrap();
+    let agents_dir = dir.path();
+
+    // Pre-create two agent dirs with profiles (no .git yet).
+    for name in ["alpha", "beta"] {
+        let agent_dir = agents_dir.join(name);
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("profile.yaml"), profile(name)).unwrap();
+    }
+
+    let mut store = VersionedAgentStore::init(agents_dir).unwrap();
+    let count = store.bootstrap_all().unwrap();
+    assert_eq!(count, 2);
+
+    // Both agents should be at version 1 and readable.
+    assert_eq!(store.current_version("alpha"), 1);
+    assert_eq!(store.current_version("beta"), 1);
+    assert!(store.read_profile("alpha").unwrap().is_some());
+
+    // Idempotent: second bootstrap is a no-op.
+    let count2 = store.bootstrap_all().unwrap();
+    assert_eq!(count2, 0);
+}
