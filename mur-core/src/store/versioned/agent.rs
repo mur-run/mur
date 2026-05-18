@@ -1,5 +1,5 @@
 //! `VersionedAgentStore` — git-backed execution-layer store (E1 W2).
-// Not yet wired into the CLI — remove when integrated (E1-W3).
+// Methods not yet fully wired to CLI commands — remove when integrated.
 #![allow(dead_code)]
 //!
 //! Manages `~/.mur/agents/.git` (execution layer). Profile + skills
@@ -354,6 +354,65 @@ impl VersionedAgentStore {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Commit an already-written `profile.yaml` for `agent` into the agents
+    /// repo. Mirrors `VersionedYamlStore::commit_existing_pattern` — the
+    /// primary write has already happened; this gate records the version.
+    pub fn commit_existing_profile(&mut self, agent: &str, reason: &str) -> Result<AgentRevision> {
+        let profile_rel = PathBuf::from(agent).join("profile.yaml");
+        let profile_abs = self.root.join(&profile_rel);
+
+        let new_yaml = std::fs::read_to_string(&profile_abs)
+            .with_context(|| format!("read {}", profile_abs.display()))?;
+
+        // No-op: file on disk matches HEAD blob → nothing to commit.
+        let head_yaml = self.read_head_blob_str(&profile_rel).unwrap_or_default();
+        if head_yaml == new_yaml {
+            return Ok(AgentRevision {
+                name: agent.to_string(),
+                version: self.index.current_version_of(agent),
+                sha: git_ops::head_sha(&self.agents_repo)?,
+            });
+        }
+
+        let mut paths_to_stage = vec![profile_rel.clone()];
+
+        // Archive the HEAD blob (previous version) before committing new content.
+        let prev_v = self.index.current_version_of(agent);
+        if prev_v > 0 && !head_yaml.is_empty() {
+            let archive_dir = self.root.join(agent).join("archive");
+            std::fs::create_dir_all(&archive_dir)?;
+            let archive_rel = PathBuf::from(agent)
+                .join("archive")
+                .join(format!("v{prev_v}.yaml"));
+            std::fs::write(self.root.join(&archive_rel), &head_yaml)?;
+            paths_to_stage.push(archive_rel);
+        }
+
+        let new_v = prev_v + 1;
+        let ts = chrono::Utc::now().to_rfc3339();
+        let msg = format!("profile({agent}): v{new_v} {reason}");
+        let sha = git_ops::commit_paths(&self.agents_repo, &paths_to_stage, &msg)?;
+
+        let head = git_ops::head_sha(&self.agents_repo)?;
+        self.index.append_version(agent, &sha, reason, &head, &ts);
+        self.index.save(&self.root)?;
+
+        Ok(AgentRevision {
+            name: agent.to_string(),
+            version: new_v,
+            sha,
+        })
+    }
+
+    fn read_head_blob_str(&self, rel: &Path) -> Result<String> {
+        let tree = self.agents_repo.head()?.peel_to_tree()?;
+        let entry = tree
+            .get_path(rel)
+            .with_context(|| format!("path {} not in HEAD", rel.display()))?;
+        let blob = self.agents_repo.find_blob(entry.id())?;
+        Ok(String::from_utf8_lossy(blob.content()).into_owned())
     }
 }
 
