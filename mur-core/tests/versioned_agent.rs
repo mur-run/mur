@@ -280,3 +280,31 @@ fn gitignore_tracks_profile_and_skills() {
         );
     }
 }
+
+// ── commit_existing_profile ───────────────────────────────────────────────────
+
+#[test]
+fn commit_existing_profile_versions_externally_written_file() {
+    let (dir, mut store) = temp_store();
+
+    // Seed a first version through the normal path so HEAD has a blob.
+    store
+        .save_profile("agent1", &profile("v1"), "created")
+        .unwrap();
+    assert_eq!(store.current_version("agent1"), 1);
+
+    // Simulate external write (what cmd::agent::save_profile does).
+    let profile_path = dir.path().join("agent1").join("profile.yaml");
+    std::fs::write(&profile_path, profile("v2")).unwrap();
+
+    let rev = store.commit_existing_profile("agent1", "updated").unwrap();
+    assert_eq!(rev.version, 2);
+    assert_eq!(store.current_version("agent1"), 2);
+
+    // Archive for v1 must exist.
+    assert!(dir.path().join("agent1/archive/v1.yaml").exists());
+
+    // No-op: same content on disk as HEAD → version stays at 2.
+    let rev2 = store.commit_existing_profile("agent1", "updated").unwrap();
+    assert_eq!(rev2.version, 2);
+}
