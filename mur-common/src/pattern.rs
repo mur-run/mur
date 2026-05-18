@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::knowledge::KnowledgeBase;
 
 /// Pattern schema version
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The kind of knowledge a pattern represents.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
