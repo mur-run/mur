@@ -32,7 +32,7 @@ cargo fmt --check
 cargo run -- <command>          # e.g. cargo run -- search "swift testing"
 ```
 
-`build.sh` requires `~/Projects/mur-web` (or `MUR_WEB_DIR`). The `mur-agent-gui` crate is workspace-EXCLUDED so `cargo build --workspace` does not pull WebKitGTK / Cocoa / WebView2.
+`build.sh` requires `~/Projects/mur-web` (or `MUR_WEB_DIR`). Both `mur-agent-gui` and `mur-hub-gui` are workspace-EXCLUDED so `cargo build --workspace` does not pull WebKitGTK / Cocoa / WebView2.
 
 ## Architecture
 
@@ -47,7 +47,7 @@ Cargo workspace with five crates plus two workspace-excluded Tauri apps:
 Workspace-excluded Tauri 2 GUI apps (built via their own manifests so `cargo build --workspace` does not pull WebKitGTK / Cocoa / WebView2):
 
 - **`mur-agent-gui`** — Per-agent `.app` shell (legacy; deprecated in M-h8).
-- **`mur-hub-gui`** — MuR Hub cross-agent desktop app (in development; replaces `mur-agent-gui` in v1).
+- **`mur-hub-gui`** — MuR Hub cross-agent desktop app (shipped M-h0→M-h8; replaces `mur-agent-gui` as the single desktop entry point).
 
 ### Four-Stage Pipeline
 
