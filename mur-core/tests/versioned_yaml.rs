@@ -2,7 +2,10 @@
 //!
 //! Validates ADR-0001 FIN-1 through FIN-4 + basic CRUD.
 
-use mur_common::{knowledge::KnowledgeBase, pattern::{Content, Pattern}};
+use mur_common::{
+    knowledge::KnowledgeBase,
+    pattern::{Content, Pattern},
+};
 use mur_core::store::versioned::VersionedYamlStore;
 use std::time::Instant;
 use tempfile::TempDir;

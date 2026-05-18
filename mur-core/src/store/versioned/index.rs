@@ -117,20 +117,17 @@ impl VersionIndex {
         for oid_result in walker {
             let oid = oid_result?;
             let commit = repo.find_commit(oid)?;
-            let msg = commit
-                .message()
-                .unwrap_or("")
-                .lines()
-                .next()
-                .unwrap_or("");
+            let msg = commit.message().unwrap_or("").lines().next().unwrap_or("");
             if let Some((name, v, reason)) = parse_pattern_commit(msg) {
                 let ts = chrono::DateTime::from_timestamp(commit.time().seconds(), 0)
                     .map(|dt: chrono::DateTime<chrono::Utc>| dt.to_rfc3339())
                     .unwrap_or_default();
-                per_pattern
-                    .entry(name)
-                    .or_default()
-                    .push(VersionEntry { v, sha: git_ops::short_sha(&oid), ts, reason });
+                per_pattern.entry(name).or_default().push(VersionEntry {
+                    v,
+                    sha: git_ops::short_sha(&oid),
+                    ts,
+                    reason,
+                });
             }
         }
 
@@ -144,8 +141,13 @@ impl VersionIndex {
             // revwalk is newest-first; sort ascending by v for canonical order
             entries.sort_by_key(|e| e.v);
             let current_version = entries.last().map_or(0, |e| e.v);
-            idx.patterns
-                .insert(name, PatternIndex { versions: entries, current_version });
+            idx.patterns.insert(
+                name,
+                PatternIndex {
+                    versions: entries,
+                    current_version,
+                },
+            );
         }
 
         Ok(idx)
@@ -176,8 +178,7 @@ mod tests {
 
     #[test]
     fn parse_pattern_commit_rollback() {
-        let (name, v, reason) =
-            parse_pattern_commit("pattern(foo): v4 rollback to v2").unwrap();
+        let (name, v, reason) = parse_pattern_commit("pattern(foo): v4 rollback to v2").unwrap();
         assert_eq!(v, 4);
         assert_eq!(reason, "rollback to v2");
         assert_eq!(name, "foo");

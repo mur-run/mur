@@ -1,7 +1,7 @@
 //! `mur pattern history/diff/rollback` — versioned pattern commands (E1 W3).
 
-use anyhow::{Context, Result};
 use crate::store::versioned::VersionedYamlStore;
+use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::store::yaml::default_mur_dir;
@@ -80,7 +80,10 @@ pub(crate) fn cmd_pattern_rollback(name: &str, to: u32) -> Result<()> {
     }
 
     let rev = store.rollback_pattern(name, to)?;
-    println!("Rolled back '{name}' to v{to} → new commit v{} ({})", rev.version, rev.sha);
+    println!(
+        "Rolled back '{name}' to v{to} → new commit v{} ({})",
+        rev.version, rev.sha
+    );
     Ok(())
 }
 
@@ -115,7 +118,7 @@ fn read_version(root: &Path, name: &str, version: u32, current_v: u32) -> Result
 fn print_diff(a: &str, b: &str) {
     for diff in diff::lines(a, b) {
         match diff {
-            diff::Result::Left(l)  => println!("- {l}"),
+            diff::Result::Left(l) => println!("- {l}"),
             diff::Result::Right(r) => println!("+ {r}"),
             diff::Result::Both(l, _) => println!("  {l}"),
         }

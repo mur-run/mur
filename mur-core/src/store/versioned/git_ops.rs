@@ -15,12 +15,10 @@ use std::path::{Path, PathBuf};
 /// and an initial commit if `.git` is absent.
 pub fn open_or_init_repo(dir: &Path, gitignore: &str, init_msg: &str) -> Result<Repository> {
     if dir.join(".git").exists() {
-        return Repository::open(dir)
-            .with_context(|| format!("open repo at {}", dir.display()));
+        return Repository::open(dir).with_context(|| format!("open repo at {}", dir.display()));
     }
 
-    let repo = Repository::init(dir)
-        .with_context(|| format!("init repo at {}", dir.display()))?;
+    let repo = Repository::init(dir).with_context(|| format!("init repo at {}", dir.display()))?;
     std::fs::write(dir.join(".gitignore"), gitignore)?;
 
     let sig = signature()?;
