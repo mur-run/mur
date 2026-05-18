@@ -391,7 +391,13 @@ fn commit_paths(repo: &Repository, paths: &[PathBuf], message: &str) -> Result<S
     for p in paths {
         index.add_path(p)?;
     }
-    index.add_all(["."], IndexAddOption::DEFAULT, None)?; // catch archive dir too
+    // NOTE: do NOT add_all(".") here. R2 (Day 2 CI) found that add_all
+    // walks the full working tree on every commit, turning save_pattern
+    // into O(N) per call → O(N²) over the lifetime of the repo. At 3000
+    // commits on Windows runner this caused 20+ min seed → CI timeout.
+    // Production VersionedYamlStore MUST stage only explicit paths.
+    // See plans/2026-05-18-continual-learning-versioned-evolution.md
+    // §4.2 (to be patched with this finding on day 3).
     index.write()?;
     let tree_id = index.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
