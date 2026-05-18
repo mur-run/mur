@@ -11,8 +11,8 @@ use crate::cli::{
     AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
     AgentWebhookAction, ChatAction, Cli, Commands, CommunityAction, ConversationsAction,
     DeployAction, DraftsAction, EvolveAction, ExchangeAction, FeedbackAction, GepAction, HookEvent,
-    LearnAction, MurmurdAction, PackAction, PatternAction, ScheduleAction, SessionAction,
-    SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    InternalsAction, LearnAction, MurmurdAction, PackAction, PatternAction, ScheduleAction,
+    SessionAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::{cmd, dashboard, verify};
 
@@ -101,6 +101,13 @@ pub async fn run(cli: Cli) -> Result<()> {
         } => cmd::workflow::cmd_workflow_run(&query, fail_fast, prompt).await?,
         Commands::Pattern { action } => match action {
             PatternAction::Show { name } => cmd::pattern::cmd_pattern_show(&name)?,
+            PatternAction::History { name } => cmd::pattern_history::cmd_pattern_history(&name)?,
+            PatternAction::Diff { name, v1, v2 } => {
+                cmd::pattern_history::cmd_pattern_diff(&name, v1, v2)?
+            }
+            PatternAction::Rollback { name, to } => {
+                cmd::pattern_history::cmd_pattern_rollback(&name, to)?
+            }
         },
         Commands::Workflow { action } => match action {
             WorkflowAction::List => cmd::workflow::cmd_workflow_list()?,
@@ -429,6 +436,14 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         #[cfg(feature = "sources")]
         Commands::Source { cmd } => crate::cmd::source_cmd::handle(cmd).await?,
+        Commands::Internals { action } => match action {
+            InternalsAction::RebuildIndex { layer } => {
+                cmd::internals::cmd_rebuild_index(&layer)?
+            }
+            InternalsAction::Git { layer, args } => {
+                cmd::internals::cmd_internals_git(&layer, &args)?
+            }
+        },
     }
 
     Ok(())
@@ -677,6 +692,8 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentHooksAction::Show { name, json } => cmd::agent_hooks::cmd_hooks_show(&name, json)?,
         },
         AgentAction::MigrateToHub => cmd::agent::cmd_migrate_to_hub()?,
+        AgentAction::History { name } => cmd::agent_history::cmd_agent_history(&name)?,
+        AgentAction::Rollback { name, to } => cmd::agent_history::cmd_agent_rollback(&name, to)?,
     }
     Ok(())
 }

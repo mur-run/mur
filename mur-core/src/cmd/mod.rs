@@ -1,4 +1,5 @@
 pub(crate) mod agent;
+pub(crate) mod agent_history;
 pub mod agent_companion;
 /// B0 M11.4 — eval-harness JSONL → markdown report aggregator.
 pub(crate) mod agent_eval;
@@ -27,11 +28,13 @@ pub(crate) mod init;
 pub(crate) mod init_daemon;
 pub(crate) mod init_local;
 pub(crate) mod inject_cmd;
+pub(crate) mod internals;
 pub(crate) mod learn;
 pub(crate) mod misc;
 pub(crate) mod model;
 pub(crate) mod murmurd;
 pub(crate) mod pattern;
+pub(crate) mod pattern_history;
 pub(crate) mod reindex;
 pub(crate) mod search;
 pub(crate) mod server_cmd;

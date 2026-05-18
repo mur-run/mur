@@ -112,6 +112,47 @@ pub enum FeedbackAction {
 pub enum PatternAction {
     /// Show a pattern by name (with attachments)
     Show { name: String },
+    /// Show version history for a pattern
+    History {
+        /// Pattern name
+        name: String,
+    },
+    /// Show diff between two pattern versions (defaults: current vs previous)
+    Diff {
+        /// Pattern name
+        name: String,
+        /// First version number (default: previous)
+        v1: Option<u32>,
+        /// Second version number (default: current)
+        v2: Option<u32>,
+    },
+    /// Roll back a pattern to a prior version (creates a new commit)
+    Rollback {
+        /// Pattern name
+        name: String,
+        /// Version number to restore
+        #[arg(long)]
+        to: u32,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum InternalsAction {
+    /// Rebuild the versioned-store history index from git log (recovery only)
+    RebuildIndex {
+        /// Which layer: `knowledge` (patterns/workflows) or `agents`
+        #[arg(long, default_value = "knowledge")]
+        layer: String,
+    },
+    /// Run a raw git subcommand against the knowledge or agents repo
+    Git {
+        /// Which layer: `knowledge` or `agents`
+        #[arg(long, default_value = "knowledge")]
+        layer: String,
+        /// Git arguments (e.g. `log --oneline -10`)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
