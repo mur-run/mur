@@ -579,6 +579,13 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         );
     }
 
+    // 8e. E3 — agent-side sleep cycle: flush evidence outbox + pull snapshot.
+    {
+        let name = profile.inner.name.clone();
+        transport_tasks.push(crate::federation::spawn_agent_sleep_cycle(name));
+        info!("agent sleep-cycle spawned");
+    }
+
     // 8.5 — bridge agents (LLM disabled by entitlement) emit a 30 s
     //       heartbeat so peers can classify them via
     //       `bridge::beacon::bridge_status_for_peer` (running.lock mtime
