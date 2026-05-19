@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use mur_common::config::RetrievalConfig;
 use mur_common::knowledge::KnowledgeBase;
 use mur_common::pattern::{Content, Pattern, Tier};
@@ -24,11 +24,19 @@ pub fn cmd_eval_run(suite: &str, format: &str) -> Result<i32> {
             println!("federation suite not yet implemented (E6 dependency)");
             Ok(0)
         }
-        other => bail!("unknown suite '{other}' — valid: retrieval, maturity, reflector, federation"),
+        other => {
+            bail!("unknown suite '{other}' — valid: retrieval, maturity, reflector, federation")
+        }
     }
 }
 
-fn make_pattern(name: &str, description: &str, content: &str, tier: Tier, importance: f64) -> Pattern {
+fn make_pattern(
+    name: &str,
+    description: &str,
+    content: &str,
+    tier: Tier,
+    importance: f64,
+) -> Pattern {
     Pattern {
         base: KnowledgeBase {
             name: name.to_string(),
@@ -46,12 +54,48 @@ fn make_pattern(name: &str, description: &str, content: &str, tier: Tier, import
 
 fn seed_patterns() -> Vec<(&'static str, &'static str, &'static str, Tier, f64)> {
     vec![
-        ("swift-testing", "Use @Test macro for Swift unit tests", "Use @Test macro instead of XCTest for Swift Testing framework", Tier::Project, 0.8),
-        ("rust-error-handling", "Use anyhow for error propagation in Rust binaries", "Use anyhow::Result for application-level error handling", Tier::Core, 0.9),
-        ("prefer-chinese", "Reply in Traditional Chinese", "Always respond to the user in Traditional Chinese (zh-TW)", Tier::Core, 0.9),
-        ("git-commit-format", "Conventional commit messages", "Use conventional commits: feat/fix/docs/refactor scope message", Tier::Project, 0.7),
-        ("no-comments", "Avoid unnecessary code comments", "Do not add comments unless the WHY is non-obvious", Tier::Core, 0.8),
-        ("test-before-commit", "Run tests before committing", "Always run cargo test --workspace before creating a git commit", Tier::Project, 0.8),
+        (
+            "swift-testing",
+            "Use @Test macro for Swift unit tests",
+            "Use @Test macro instead of XCTest for Swift Testing framework",
+            Tier::Project,
+            0.8,
+        ),
+        (
+            "rust-error-handling",
+            "Use anyhow for error propagation in Rust binaries",
+            "Use anyhow::Result for application-level error handling",
+            Tier::Core,
+            0.9,
+        ),
+        (
+            "prefer-chinese",
+            "Reply in Traditional Chinese",
+            "Always respond to the user in Traditional Chinese (zh-TW)",
+            Tier::Core,
+            0.9,
+        ),
+        (
+            "git-commit-format",
+            "Conventional commit messages",
+            "Use conventional commits: feat/fix/docs/refactor scope message",
+            Tier::Project,
+            0.7,
+        ),
+        (
+            "no-comments",
+            "Avoid unnecessary code comments",
+            "Do not add comments unless the WHY is non-obvious",
+            Tier::Core,
+            0.8,
+        ),
+        (
+            "test-before-commit",
+            "Run tests before committing",
+            "Always run cargo test --workspace before creating a git commit",
+            Tier::Project,
+            0.8,
+        ),
     ]
 }
 
@@ -60,7 +104,10 @@ fn test_queries() -> Vec<(&'static str, &'static str)> {
         ("swift @Test macro unit test", "swift-testing"),
         ("rust error handling anyhow result", "rust-error-handling"),
         ("reply language traditional chinese zh-TW", "prefer-chinese"),
-        ("git commit conventional format feat fix", "git-commit-format"),
+        (
+            "git commit conventional format feat fix",
+            "git-commit-format",
+        ),
         ("code comments documentation why", "no-comments"),
     ]
 }
@@ -120,7 +167,10 @@ fn run_retrieval_eval(format: &str) -> Result<i32> {
 
     for (query, expected) in &queries {
         let scored = score_and_rank_with_config(query, patterns.clone(), &config);
-        let rank = scored.iter().position(|sp| sp.pattern.name == *expected).map(|i| i + 1);
+        let rank = scored
+            .iter()
+            .position(|sp| sp.pattern.name == *expected)
+            .map(|i| i + 1);
         let hit = rank.is_some();
         if hit {
             hits += 1;
@@ -168,13 +218,8 @@ fn run_retrieval_eval(format: &str) -> Result<i32> {
                 None => "absent".to_string(),
             };
             let mark = if r.hit { "✓" } else { "✗" };
-            if r.hit {
-                println!("query: {:?}", r.query);
-                println!("  expected: {}  rank: {}  {}", r.expected, rank_str, mark);
-            } else {
-                println!("query: {:?}", r.query);
-                println!("  expected: {}  ✗ (rank {} or absent)", r.expected, rank_str);
-            }
+            println!("query: {:?}", r.query);
+            println!("  expected: {}  {} (rank {})", r.expected, mark, rank_str);
         }
         println!("{}", "─".repeat(30));
         let pass_str = if pass { "✓ PASS" } else { "✗ FAIL" };
@@ -201,6 +246,9 @@ mod tests {
         let err = cmd_eval_run("bogus", "text");
         assert!(err.is_err(), "unknown suite should return an error");
         let msg = err.unwrap_err().to_string();
-        assert!(msg.contains("unknown suite"), "error message should mention 'unknown suite'");
+        assert!(
+            msg.contains("unknown suite"),
+            "error message should mention 'unknown suite'"
+        );
     }
 }
