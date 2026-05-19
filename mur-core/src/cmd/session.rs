@@ -72,7 +72,7 @@ pub(crate) fn cmd_session_start(source: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_session_stop(analyze: bool) -> Result<()> {
+pub(crate) async fn cmd_session_stop(analyze: bool, reflect: bool) -> Result<()> {
     match session::stop()? {
         Some(id) => {
             eprintln!("Session stopped: {}", &id[..8]);
@@ -94,6 +94,10 @@ pub(crate) async fn cmd_session_stop(analyze: bool) -> Result<()> {
                         eprintln!("Extracted {} fingerprints from session.", fps.len());
                     }
                 }
+            }
+
+            if reflect && recording_path.exists() {
+                run_reflect_curate(&recording_path, false)?;
             }
 
             // Auto-push to device sync if configured
@@ -1264,4 +1268,54 @@ fn format_epoch_ms(epoch_ms: u64) -> String {
     let mins = (secs % 3600) / 60;
     let s = secs % 60;
     format!("{:02}:{:02}:{:02}", hours, mins, s)
+}
+
+/// Shared reflect+curate logic for both `session stop --reflect` and `session reflect`.
+fn run_reflect_curate(recording_path: &std::path::Path, dry_run: bool) -> anyhow::Result<()> {
+    let content = std::fs::read_to_string(recording_path)?;
+    if content.trim().is_empty() {
+        return Ok(());
+    }
+    let registry = mur_common::model::ModelRegistry::load_from(
+        &mur_common::model::ModelRegistry::default_path()?,
+    )
+    .unwrap_or_default();
+    let injected = crate::capture::feedback::read_injection_record()
+        .map(|r| r.patterns)
+        .unwrap_or_default();
+    let results = crate::capture::reflect_session(&content, &injected, &registry);
+    let mut store = crate::store::yaml::YamlStore::default_store()?;
+    let cr = crate::capture::curate(&results, &mut store, dry_run)?;
+    eprintln!(
+        "Reflect+Curate: {} updated, {} conflicts, {} skipped{}",
+        cr.updated.len(),
+        cr.conflicts.len(),
+        cr.skipped.len(),
+        if dry_run { " (dry run)" } else { "" }
+    );
+    for c in &cr.conflicts {
+        eprintln!("  conflict: {} — {}", c.pattern_name, c.reason);
+    }
+    Ok(())
+}
+
+/// `mur session reflect` — run Reflector+Curator on the most recent recording.
+pub(crate) async fn cmd_session_reflect(dry_run: bool) -> anyhow::Result<()> {
+    let recordings_dir = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
+        .join(".mur/session/recordings");
+    if !recordings_dir.exists() {
+        eprintln!("No session recordings found.");
+        return Ok(());
+    }
+    let latest = std::fs::read_dir(&recordings_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+    let Some(entry) = latest else {
+        eprintln!("No session recordings found.");
+        return Ok(());
+    };
+    run_reflect_curate(&entry.path(), dry_run)?;
+    Ok(())
 }
