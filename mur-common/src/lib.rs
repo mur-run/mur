@@ -39,7 +39,9 @@ pub use conversation::{CONVERSATION_SCHEMA_VERSION, Content, Message, Role, Sour
 pub use hooks_config::HooksConfig;
 pub use pattern::Pattern;
 pub use scope::Scope;
-pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalBatch, SignalBatchResponse, SignalKind, SignalTarget};
+pub use signal::{
+    SIGNAL_SCHEMA_VERSION, Signal, SignalBatch, SignalBatchResponse, SignalKind, SignalTarget,
+};
 
 pub use a2a::Message as A2aMessage;
 pub use a2a::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Task, TaskState};

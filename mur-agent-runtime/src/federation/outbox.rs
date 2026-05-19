@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use mur_common::{Actor, ActorSource, Scope, Signal, SignalKind, SignalTarget, SIGNAL_SCHEMA_VERSION};
+use mur_common::{
+    Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope, Signal, SignalKind, SignalTarget,
+};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -109,8 +111,8 @@ impl AgentOutbox {
         let fname = format!("{ts}-{id}.yaml");
         let dest = self.dir.join(&fname);
         let tmp = self.dir.join(format!(".{fname}.tmp"));
-        let yaml = serde_yaml_ng::to_string(&signal)
-            .with_context(|| format!("serialize signal {id}"))?;
+        let yaml =
+            serde_yaml_ng::to_string(&signal).with_context(|| format!("serialize signal {id}"))?;
         std::fs::write(&tmp, yaml)?;
         std::fs::rename(&tmp, &dest)?;
         Ok(dest)

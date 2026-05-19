@@ -36,8 +36,12 @@ pub(crate) fn apply_filter(patterns: Vec<Pattern>, filter: &PatternFilter) -> Ve
             }
             // applies_in filter: match against applies.projects (contexts are project-scoped)
             if !filter.applies_in.is_empty() {
-                let projects: Vec<String> =
-                    p.applies.projects.iter().map(|c| c.to_lowercase()).collect();
+                let projects: Vec<String> = p
+                    .applies
+                    .projects
+                    .iter()
+                    .map(|c| c.to_lowercase())
+                    .collect();
                 if !filter
                     .applies_in
                     .iter()
@@ -162,7 +166,8 @@ links: []
 lifecycle: {{}}
 "#
         );
-        serde_yaml_ng::from_str(&yaml).unwrap_or_else(|e| panic!("parse test pattern '{name}': {e}"))
+        serde_yaml_ng::from_str(&yaml)
+            .unwrap_or_else(|e| panic!("parse test pattern '{name}': {e}"))
     }
 
     #[test]
@@ -221,8 +226,7 @@ lifecycle: {{}}
         };
         write_snapshot_ref("test-agent", &snap, dir.path()).unwrap();
         // Read back directly
-        let content =
-            std::fs::read_to_string(dir.path().join(".snapshot-ref")).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".snapshot-ref")).unwrap();
         let back: SnapshotRef = serde_yaml_ng::from_str(&content).unwrap();
         assert_eq!(snap, back);
     }

@@ -34,8 +34,14 @@ pub fn cmd_sleep_status() -> Result<()> {
     let sc = &cfg.sleep_cycle;
     let state = if sc.enabled { "enabled" } else { "disabled" };
     println!("sleep cycle     : {state}");
-    println!("idle threshold  : {}min (daemon)", sc.idle_threshold_minutes);
-    println!("agent idle      : {}min (agent-side)", sc.agent_idle_minutes);
+    println!(
+        "idle threshold  : {}min (daemon)",
+        sc.idle_threshold_minutes
+    );
+    println!(
+        "agent idle      : {}min (agent-side)",
+        sc.agent_idle_minutes
+    );
     Ok(())
 }
 

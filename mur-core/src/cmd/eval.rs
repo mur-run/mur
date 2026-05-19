@@ -595,7 +595,8 @@ mod tests {
     #[test]
     fn test_federation_eval_json_format() {
         // JSON output should be valid JSON regardless of agent state.
-        let code = cmd_eval_run("federation", "json").expect("federation json eval should not error");
+        let code =
+            cmd_eval_run("federation", "json").expect("federation json eval should not error");
         assert!(code == 0 || code == 1);
     }
 }
