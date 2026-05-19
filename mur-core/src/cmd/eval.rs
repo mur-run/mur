@@ -16,11 +16,21 @@ pub fn cmd_eval_run(suite: &str, format: &str) -> Result<i32> {
         "retrieval" => run_retrieval_eval(format),
         "maturity" => run_maturity_eval(format),
         "reflector" => {
-            println!("reflector suite not yet implemented (E2 dependency)");
+            println!("mur eval — reflector suite");
+            println!("{}", "═".repeat(30));
+            println!("reflector suite not yet implemented (requires E2 Reflector/Curator)");
+            println!(
+                "Run `mur eval run retrieval` and `mur eval run maturity` for available suites."
+            );
             Ok(0)
         }
         "federation" => {
-            println!("federation suite not yet implemented (E6 dependency)");
+            println!("mur eval — federation suite");
+            println!("{}", "═".repeat(30));
+            println!("federation suite not yet implemented (requires E6 Agent Federation)");
+            println!(
+                "Run `mur eval run retrieval` and `mur eval run maturity` for available suites."
+            );
             Ok(0)
         }
         other => {
@@ -375,5 +385,17 @@ mod tests {
             msg.contains("unknown suite"),
             "error message should mention 'unknown suite'"
         );
+    }
+
+    #[test]
+    fn test_reflector_stub_returns_ok() {
+        let code = cmd_eval_run("reflector", "text").expect("reflector stub should not error");
+        assert_eq!(code, 0, "reflector stub should return exit code 0");
+    }
+
+    #[test]
+    fn test_federation_stub_returns_ok() {
+        let code = cmd_eval_run("federation", "text").expect("federation stub should not error");
+        assert_eq!(code, 0, "federation stub should return exit code 0");
     }
 }
