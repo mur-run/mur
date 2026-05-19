@@ -229,6 +229,11 @@ pub enum AgentAction {
         #[command(subcommand)]
         action: SnapshotAction,
     },
+    /// Flush an offline agent's evidence outbox into the pattern store.
+    Reconnect {
+        /// Agent name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
