@@ -10,7 +10,7 @@ use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
     AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
     AgentWebhookAction, ChatAction, Cli, Commands, CommunityAction, ConversationsAction,
-    DeployAction, DraftsAction, EvolveAction, ExchangeAction, FeedbackAction, GepAction, HookEvent,
+    DeployAction, DraftsAction, EvalAction, EvolveAction, ExchangeAction, FeedbackAction, GepAction, HookEvent,
     InternalsAction, LearnAction, MurmurdAction, PackAction, PatternAction, ScheduleAction,
     SessionAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
@@ -446,6 +446,12 @@ pub async fn run(cli: Cli) -> Result<()> {
             InternalsAction::RebuildIndex { layer } => cmd::internals::cmd_rebuild_index(&layer)?,
             InternalsAction::Git { layer, args } => {
                 cmd::internals::cmd_internals_git(&layer, &args)?
+            }
+        },
+        Commands::Eval { action } => match action {
+            EvalAction::Run { suite, format } => {
+                let code = cmd::eval::cmd_eval_run(&suite, &format)?;
+                std::process::exit(code);
             }
         },
     }
