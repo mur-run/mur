@@ -1,6 +1,7 @@
 mod consumer;
 mod inbox;
 mod lock;
+mod sleep;
 mod store_health;
 
 use anyhow::Result;
@@ -9,6 +10,7 @@ use lock::{LockState, is_healthy, lock_path, read_lock, write_lock};
 use mur_core::inject::event::{EventKind, NormalizedEvent};
 use mur_core::inject::index::{build as build_index, format_l0};
 use mur_core::store::yaml::YamlStore;
+use std::time::Instant;
 
 const L0_BUDGET_CHARS: usize = 2400;
 
@@ -91,18 +93,31 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Event loop: poll queue every second
+    // Event loop: poll queue every second; track idle for sleep cycle.
     let mut poll = tokio::time::interval(tokio::time::Duration::from_secs(1));
+    let mut last_event_at = Instant::now();
+    let mut sleep_cycle_fired = false;
     loop {
         poll.tick().await;
         let (events, new_offset) = consumer::drain_new(&queue_file, offset)?;
-        if new_offset > offset {
+        let had_events = new_offset > offset;
+        if had_events {
             consumer::write_offset(&offset_file, new_offset)?;
             offset = new_offset;
+            last_event_at = Instant::now();
+            sleep_cycle_fired = false;
         }
-        for event in events {
-            if let Err(e) = process_event(&event) {
+        for event in &events {
+            if let Err(e) = process_event(event) {
                 eprintln!("murmurd: process_event error: {e:#}");
+            }
+        }
+        // Fire sleep cycle once per idle period when opt-in enabled.
+        if !sleep_cycle_fired && sleep::is_enabled() {
+            let threshold = std::time::Duration::from_secs(sleep::idle_threshold_minutes() * 60);
+            if last_event_at.elapsed() >= threshold {
+                sleep::run_sleep_cycle();
+                sleep_cycle_fired = true;
             }
         }
     }
