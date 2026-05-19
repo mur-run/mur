@@ -497,7 +497,8 @@ mod tests {
             scope: ContextScope::default(),
             source: "test".into(),
         };
-        let resp = retrieve_with_config(&req, &store, None, &mur_common::config::Config::default()).unwrap();
+        let resp = retrieve_with_config(&req, &store, None, &mur_common::config::Config::default())
+            .unwrap();
         assert!(!resp.patterns.is_empty());
         assert!(!resp.formatted.is_empty());
         assert!(!resp.injection_ids.is_empty());
