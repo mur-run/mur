@@ -611,3 +611,15 @@ pub enum DeployAction {
         file: Option<String>,
     },
 }
+
+#[derive(Subcommand)]
+pub enum EvalAction {
+    /// Run a named eval suite
+    Run {
+        /// Suite name: retrieval | maturity | reflector | federation
+        suite: String,
+        /// Output format: text (default) | json
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+}
