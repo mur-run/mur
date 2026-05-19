@@ -717,6 +717,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 cmd::agent::cmd_snapshot_show(&name)?
             }
         },
+        AgentAction::Reconnect { name } => cmd::agent::cmd_agent_reconnect(&name)?,
     }
     Ok(())
 }

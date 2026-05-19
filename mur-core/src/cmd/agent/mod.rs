@@ -31,6 +31,7 @@ mod lifecycle;
 mod mcp;
 mod perm;
 mod prompt;
+mod reconnect;
 mod secret;
 mod service;
 mod skill;
@@ -69,6 +70,8 @@ pub use service::cmd_install_service;
 pub use skill::{cmd_skill_add, cmd_skill_list, cmd_skill_remove, cmd_skill_show};
 #[allow(unused_imports)]
 pub use stats::{cmd_logs, cmd_stats};
+#[allow(unused_imports)]
+pub use reconnect::cmd_agent_reconnect;
 #[allow(unused_imports)]
 pub use snapshot::{cmd_snapshot_pull, cmd_snapshot_show};
 
