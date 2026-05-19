@@ -186,7 +186,9 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Session { action } => match action {
             SessionAction::Start { source } => cmd::session::cmd_session_start(&source)?,
-            SessionAction::Stop { analyze } => cmd::session::cmd_session_stop(analyze).await?,
+            SessionAction::Stop { analyze, reflect } => {
+                cmd::session::cmd_session_stop(analyze, reflect).await?
+            }
             SessionAction::Record {
                 event_type,
                 tool,
@@ -206,6 +208,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             } => cmd::session::cmd_session_export(&id, &format, analyze, output).await?,
             SessionAction::Push { id, all } => {
                 cmd::session::cmd_session_push(id.as_deref(), all).await?
+            }
+            SessionAction::Reflect { dry_run } => {
+                cmd::session::cmd_session_reflect(dry_run).await?
             }
         },
         Commands::Dashboard => {
