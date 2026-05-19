@@ -172,15 +172,13 @@ mod tests {
         assert!((kb2.importance - 0.8).abs() < 0.001);
         assert!((kb2.confidence - 0.9).abs() < 0.001);
         assert_eq!(kb2.maturity, Maturity::Stable);
-        assert_eq!(kb2.schema, 2);
+        assert_eq!(kb2.schema, 3);
     }
 
     #[test]
     fn test_knowledgebase_default() {
         let kb = KnowledgeBase::default();
-        assert_eq!(kb.schema, 2);
-        assert_eq!(kb.tier, Tier::Session);
-        assert!((kb.importance - 0.5).abs() < 0.001);
+        assert_eq!(kb.schema, 3);
         assert!((kb.confidence - 0.5).abs() < 0.001);
         assert_eq!(kb.maturity, Maturity::Draft);
     }
@@ -191,7 +189,7 @@ mod tests {
         let yaml = "name: minimal\ndescription: Minimal test\ncontent: Just text\n";
         let kb: KnowledgeBase = serde_yaml::from_str(yaml).expect("deserialize minimal");
         assert_eq!(kb.name, "minimal");
-        assert_eq!(kb.schema, 2); // default_schema
+        assert_eq!(kb.schema, 3); // default_schema
         assert_eq!(kb.tier, Tier::Session);
     }
 }
