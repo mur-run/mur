@@ -12,7 +12,8 @@ use crate::cli::{
     AgentWebhookAction, ChatAction, Cli, Commands, CommunityAction, ConversationsAction,
     DeployAction, DraftsAction, EvalAction, EvolveAction, ExchangeAction, FeedbackAction,
     GepAction, HookEvent, InternalsAction, LearnAction, MurmurdAction, PackAction, PatternAction,
-    ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
+    WorkflowAction,
 };
 use crate::{cmd, dashboard, verify};
 
