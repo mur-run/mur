@@ -44,8 +44,9 @@ pub use a2a::Message as A2aMessage;
 pub use a2a::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Task, TaskState};
 pub use agent::{
     AgentAppearance, AgentProfile, BehaviorPreset, DeploymentConfig, DeploymentType, Entitlements,
-    ExecutionMode, FileTransferConfig, IdentityConfig, LockFile, Persona, PersonaCategory,
-    RenderStatus, RetryPolicy, ScheduleEntry,
+    ExecutionMode, FederationConfig, FileTransferConfig, IdentityConfig, LockFile, PatternFilter,
+    Persona, PersonaCategory, RenderStatus, RetryPolicy, ScheduleEntry, SnapshotPolicy,
+    SnapshotRef,
 };
 pub use agent_name::{AgentNameError, MAX_AGENT_NAME_LEN, validate_agent_name};
 pub use bridge::{LlmEntitlement, LlmMode};
