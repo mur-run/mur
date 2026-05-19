@@ -66,17 +66,17 @@ pub(crate) use prompt::prompt_path_for;
 #[allow(unused_imports)]
 pub use prompt::{cmd_prompt_edit, cmd_prompt_set, cmd_prompt_show};
 #[allow(unused_imports)]
+pub use reconnect::cmd_agent_reconnect;
+#[allow(unused_imports)]
 pub use secret::{cmd_secret_delete, cmd_secret_list, cmd_secret_set};
 #[allow(unused_imports)]
 pub use service::cmd_install_service;
 #[allow(unused_imports)]
 pub use skill::{cmd_skill_add, cmd_skill_list, cmd_skill_remove, cmd_skill_show};
 #[allow(unused_imports)]
-pub use stats::{cmd_logs, cmd_stats};
-#[allow(unused_imports)]
-pub use reconnect::cmd_agent_reconnect;
-#[allow(unused_imports)]
 pub use snapshot::{cmd_snapshot_pull, cmd_snapshot_show};
+#[allow(unused_imports)]
+pub use stats::{cmd_logs, cmd_stats};
 
 // ─── Shared helpers used across submodules ─────────────────────────
 

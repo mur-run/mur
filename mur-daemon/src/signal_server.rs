@@ -32,8 +32,8 @@ pub fn ensure_token() -> Result<String> {
         std::fs::create_dir_all(p)?;
     }
     if path.exists() {
-        let t = std::fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let t =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         return Ok(t.trim().to_owned());
     }
     let token = uuid::Uuid::new_v4().to_string();
@@ -83,13 +83,18 @@ async fn handle_batch(
     Json(batch): Json<SignalBatch>,
 ) -> impl IntoResponse {
     if !check_bearer(&state.token, &headers) {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "unauthorized"})),
+        )
+            .into_response();
     }
     if batch.schema_version != mur_common::SIGNAL_SCHEMA_VERSION {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({"error": "schema_version_mismatch"})),
-        ).into_response();
+        )
+            .into_response();
     }
 
     // Batch-level dedup.
@@ -108,8 +113,15 @@ async fn handle_batch(
 
     // Write signals to inbox.
     let (accepted, deduplicated) = write_to_inbox(&batch.signals);
-    let resp = SignalBatchResponse { accepted, deduplicated };
-    (StatusCode::OK, Json(serde_json::json!({"accepted": resp.accepted, "deduplicated": resp.deduplicated}))).into_response()
+    let resp = SignalBatchResponse {
+        accepted,
+        deduplicated,
+    };
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"accepted": resp.accepted, "deduplicated": resp.deduplicated})),
+    )
+        .into_response()
 }
 
 fn write_to_inbox(signals: &[Signal]) -> (usize, usize) {

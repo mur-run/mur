@@ -83,7 +83,7 @@ fn collect_pending(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mur_common::{Actor, ActorSource, Scope, SignalKind, SignalTarget, SIGNAL_SCHEMA_VERSION};
+    use mur_common::{Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope, SignalKind, SignalTarget};
     use tempfile::TempDir;
     use uuid::Uuid;
 
