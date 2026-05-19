@@ -25,6 +25,7 @@ pub mod dashboard;
 pub mod discovery;
 pub mod evolve;
 pub mod executor;
+pub mod federation;
 pub mod extract;
 pub mod extract_llm;
 pub mod gep;

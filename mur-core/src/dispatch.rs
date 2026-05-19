@@ -709,6 +709,14 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::MigrateToHub => cmd::agent::cmd_migrate_to_hub()?,
         AgentAction::History { name } => cmd::agent_history::cmd_agent_history(&name)?,
         AgentAction::Rollback { name, to } => cmd::agent_history::cmd_agent_rollback(&name, to)?,
+        AgentAction::Snapshot { action } => match action {
+            crate::cli::agent::SnapshotAction::Pull { name, dry_run } => {
+                cmd::agent::cmd_snapshot_pull(&name, dry_run)?
+            }
+            crate::cli::agent::SnapshotAction::Show { name } => {
+                cmd::agent::cmd_snapshot_show(&name)?
+            }
+        },
     }
     Ok(())
 }
