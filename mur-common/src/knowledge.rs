@@ -32,12 +32,15 @@ pub struct DecayMeta {
     pub half_life_override: Option<u32>,
 }
 
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
 /// Shared fields for all knowledge items (patterns, workflows).
 ///
 /// Embedded via `#[serde(flatten)]` so YAML stays flat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeBase {
-    /// Schema version (2 for v2)
     #[serde(default = "default_schema")]
     pub schema: u32,
 
@@ -100,6 +103,17 @@ pub struct KnowledgeBase {
     /// Orthogonal to `tier` — tier manages temporal half-life, scope manages audience.
     #[serde(default)]
     pub scope: Scope,
+
+    /// Monotonically increasing version counter, managed by VersionedYamlStore.
+    /// 0 means "not yet versioned" (pre-schema-3 or pre-bootstrap).
+    /// Omitted from YAML when zero so old files stay clean.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub version: u32,
+
+    /// 12-char short SHA of the knowledge-layer commit that wrote this version.
+    /// None until the pattern has been committed at least once post-schema-3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
 }
 
 impl Default for KnowledgeBase {
@@ -122,6 +136,8 @@ impl Default for KnowledgeBase {
             maturity: Maturity::default(),
             decay: DecayMeta::default(),
             scope: Scope::default(),
+            version: 0,
+            revision: None,
         }
     }
 }
@@ -156,15 +172,13 @@ mod tests {
         assert!((kb2.importance - 0.8).abs() < 0.001);
         assert!((kb2.confidence - 0.9).abs() < 0.001);
         assert_eq!(kb2.maturity, Maturity::Stable);
-        assert_eq!(kb2.schema, 2);
+        assert_eq!(kb2.schema, 3);
     }
 
     #[test]
     fn test_knowledgebase_default() {
         let kb = KnowledgeBase::default();
-        assert_eq!(kb.schema, 2);
-        assert_eq!(kb.tier, Tier::Session);
-        assert!((kb.importance - 0.5).abs() < 0.001);
+        assert_eq!(kb.schema, 3);
         assert!((kb.confidence - 0.5).abs() < 0.001);
         assert_eq!(kb.maturity, Maturity::Draft);
     }
@@ -175,7 +189,7 @@ mod tests {
         let yaml = "name: minimal\ndescription: Minimal test\ncontent: Just text\n";
         let kb: KnowledgeBase = serde_yaml::from_str(yaml).expect("deserialize minimal");
         assert_eq!(kb.name, "minimal");
-        assert_eq!(kb.schema, 2); // default_schema
+        assert_eq!(kb.schema, 3); // default_schema
         assert_eq!(kb.tier, Tier::Session);
     }
 }

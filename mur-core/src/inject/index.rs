@@ -156,6 +156,8 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
                 scope: mur_common::Scope::default(),
+                version: 0,
+                revision: None,
             },
             kind: None,
             origin: None,
