@@ -264,6 +264,9 @@ pub enum SessionAction {
         /// Run fingerprint extraction on the recording
         #[arg(long)]
         analyze: bool,
+        /// Run Reflector+Curator: update pattern confidence from session transcript.
+        #[arg(long)]
+        reflect: bool,
     },
     /// Record an event to the active session
     Record {
@@ -318,6 +321,15 @@ pub enum SessionAction {
         /// Push all unsynced sessions
         #[arg(long)]
         all: bool,
+    },
+    /// Reflect + curate the last session transcript (E2).
+    ///
+    /// Runs the Reflector+Curator pipeline on the most recent recording:
+    /// updates pattern confidence and evidence signals based on usage signals.
+    Reflect {
+        /// Preview changes without saving to the pattern store.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -609,5 +621,17 @@ pub enum DeployAction {
         /// Path to a docker-compose file
         #[arg(short, long)]
         file: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum EvalAction {
+    /// Run a named eval suite
+    Run {
+        /// Suite name: retrieval | maturity | reflector | federation
+        suite: String,
+        /// Output format: text (default) | json
+        #[arg(long, default_value = "text")]
+        format: String,
     },
 }
