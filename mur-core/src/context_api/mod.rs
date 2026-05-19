@@ -136,6 +136,16 @@ pub fn retrieve(
     store: &YamlStore,
     vector_scores: Option<&std::collections::HashMap<String, f64>>,
 ) -> Result<ContextResponse> {
+    let config = load_config().unwrap_or_default();
+    retrieve_with_config(req, store, vector_scores, &config)
+}
+
+fn retrieve_with_config(
+    req: &ContextRequest,
+    store: &YamlStore,
+    vector_scores: Option<&std::collections::HashMap<String, f64>>,
+    config: &mur_common::config::Config,
+) -> Result<ContextResponse> {
     // Apply query gate
     if evaluate_query(&req.query).tier == GateTier::Skip {
         return Ok(ContextResponse {
@@ -153,7 +163,6 @@ pub fn retrieve(
     let filtered = apply_scope_filter(all_patterns, &req.scope, &req.source);
 
     // Score and rank using config-driven retrieval parameters
-    let config = load_config().unwrap_or_default();
     let scored = if let Some(vs) = vector_scores {
         score_and_rank_hybrid_with_config(&req.query, filtered, vs, &config.retrieval)
     } else {
@@ -488,7 +497,7 @@ mod tests {
             scope: ContextScope::default(),
             source: "test".into(),
         };
-        let resp = retrieve(&req, &store, None).unwrap();
+        let resp = retrieve_with_config(&req, &store, None, &mur_common::config::Config::default()).unwrap();
         assert!(!resp.patterns.is_empty());
         assert!(!resp.formatted.is_empty());
         assert!(!resp.injection_ids.is_empty());
