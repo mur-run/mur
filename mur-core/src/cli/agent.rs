@@ -234,6 +234,12 @@ pub enum AgentAction {
         /// Agent name
         name: String,
     },
+    /// Create or update an agent from a declarative manifest YAML.
+    Apply {
+        /// Path to AgentManifest YAML file
+        #[arg(short = 'f', long)]
+        file: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
