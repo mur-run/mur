@@ -419,4 +419,9 @@ pub enum Commands {
         #[command(subcommand)]
         action: InternalsAction,
     },
+    /// Run an eval suite against the local pattern store
+    Eval {
+        #[command(subcommand)]
+        action: EvalAction,
+    },
 }
