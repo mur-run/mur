@@ -157,6 +157,7 @@ pub fn cmd_create(
         hooks: mur_common::HooksConfig::default(),
         trusted_peers: Vec::new(),
         appearance: mur_common::AgentAppearance::default(),
+        federation: mur_common::FederationConfig::default(),
         created_at: now.clone(),
         updated_at: now,
     };
