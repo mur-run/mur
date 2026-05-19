@@ -31,11 +31,28 @@ pub struct ModelEntry {
     pub params: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RoleEntry {
+    /// Registry model ID (key in `models:`) to use as primary.
+    pub primary: String,
+    /// Fallback model ID if primary is unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
+    /// Optional daily cost cap in USD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_budget_per_day_usd: Option<f64>,
+    /// If true, only use local models when handling sensitive data.
+    #[serde(default)]
+    pub privacy_local_only: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelRegistry {
     pub schema_version: u32,
     #[serde(default)]
     pub models: BTreeMap<String, ModelEntry>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub roles: BTreeMap<String, RoleEntry>,
 }
 
 impl Default for ModelRegistry {
@@ -43,6 +60,7 @@ impl Default for ModelRegistry {
         Self {
             schema_version: 1,
             models: BTreeMap::new(),
+            roles: BTreeMap::new(),
         }
     }
 }
@@ -80,6 +98,23 @@ impl ModelRegistry {
         }
         let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
         Ok(home.join(".mur/models.yaml"))
+    }
+
+    /// Return the primary model ID for `role`, or the fallback if the primary
+    /// is not in the `models` map, or `None` if the role is not configured.
+    pub fn resolve_role(&self, role: &str) -> Option<&str> {
+        let entry = self.roles.get(role)?;
+        if self.models.contains_key(&entry.primary) {
+            return Some(&entry.primary);
+        }
+        // primary not in registry — try fallback
+        if let Some(fb) = &entry.fallback
+            && self.models.contains_key(fb)
+        {
+            return Some(fb);
+        }
+        // role configured but no available model
+        None
     }
 }
 
@@ -148,6 +183,83 @@ models:
 "#;
         let r: Result<ModelRegistry, _> = serde_yaml_ng::from_str(yaml);
         assert!(r.is_err(), "should reject unknown scheme");
+    }
+
+    #[test]
+    fn test_registry_roundtrip_with_roles() {
+        let yaml = r#"
+schema_version: 1
+models:
+  haiku:
+    provider: anthropic
+    model: claude-haiku-4-5
+roles:
+  reflector:
+    primary: haiku
+    fallback: null
+    cost_budget_per_day_usd: 0.5
+"#;
+        let reg: ModelRegistry = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(reg.roles["reflector"].primary, "haiku");
+        let back = serde_yaml_ng::to_string(&reg).unwrap();
+        let reg2: ModelRegistry = serde_yaml_ng::from_str(&back).unwrap();
+        assert_eq!(reg, reg2);
+    }
+
+    #[test]
+    fn test_resolve_role_primary() {
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "haiku".into(),
+            ModelEntry {
+                provider: "anthropic".into(),
+                model: "claude-haiku-4-5".into(),
+                base_url: None,
+                secret: None,
+                capabilities: vec![],
+                params: serde_json::Value::Null,
+            },
+        );
+        reg.roles.insert(
+            "reflector".into(),
+            RoleEntry {
+                primary: "haiku".into(),
+                fallback: None,
+                ..Default::default()
+            },
+        );
+        assert_eq!(reg.resolve_role("reflector"), Some("haiku"));
+    }
+
+    #[test]
+    fn test_resolve_role_fallback() {
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "haiku".into(),
+            ModelEntry {
+                provider: "anthropic".into(),
+                model: "claude-haiku-4-5".into(),
+                base_url: None,
+                secret: None,
+                capabilities: vec![],
+                params: serde_json::Value::Null,
+            },
+        );
+        reg.roles.insert(
+            "reflector".into(),
+            RoleEntry {
+                primary: "nonexistent".into(),
+                fallback: Some("haiku".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(reg.resolve_role("reflector"), Some("haiku"));
+    }
+
+    #[test]
+    fn test_resolve_role_none() {
+        let reg = ModelRegistry::default();
+        assert_eq!(reg.resolve_role("reflector"), None);
     }
 }
 

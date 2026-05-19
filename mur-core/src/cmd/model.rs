@@ -3,7 +3,7 @@
 use anyhow::Context;
 use clap::{Args, Subcommand};
 use mur_common::agent::AgentProfile;
-use mur_common::model::{ModelEntry, ModelRegistry};
+use mur_common::model::{ModelEntry, ModelRegistry, RoleEntry};
 use mur_common::secret::SecretRef;
 
 #[derive(Args, Debug)]
@@ -45,6 +45,33 @@ pub enum ModelCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Manage model roles (reflector, curator, embedding).
+    Role {
+        #[command(subcommand)]
+        sub: RoleSubCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RoleSubCmd {
+    /// Assign a model to a role.
+    Set {
+        /// Role name (e.g. reflector, curator, embedding).
+        role: String,
+        /// Primary model ID from the registry.
+        model: String,
+        /// Fallback model ID.
+        #[arg(long)]
+        fallback: Option<String>,
+        /// Daily cost budget in USD.
+        #[arg(long)]
+        budget: Option<f64>,
+        /// Only use local models for sensitive data.
+        #[arg(long)]
+        privacy_local_only: bool,
+    },
+    /// List configured roles.
+    List,
 }
 
 pub fn run(args: ModelArgs) -> anyhow::Result<()> {
@@ -99,6 +126,7 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
             }
         }
         ModelCmd::Migrate { dry_run } => cmd_migrate(dry_run)?,
+        ModelCmd::Role { sub } => cmd_role(sub, &mut reg, &path)?,
     }
     Ok(())
 }
@@ -162,4 +190,48 @@ fn cmd_migrate(dry_run: bool) -> anyhow::Result<()> {
 fn synthesize_model_id(provider: &str, model: &str) -> String {
     let sanitized = model.replace(['-', ':', '.', '/'], "_");
     format!("{provider}_{sanitized}")
+}
+
+fn cmd_role(
+    sub: RoleSubCmd,
+    reg: &mut ModelRegistry,
+    path: &std::path::Path,
+) -> anyhow::Result<()> {
+    match sub {
+        RoleSubCmd::Set {
+            role,
+            model,
+            fallback,
+            budget,
+            privacy_local_only,
+        } => {
+            reg.roles.insert(
+                role.clone(),
+                RoleEntry {
+                    primary: model.clone(),
+                    fallback,
+                    cost_budget_per_day_usd: budget,
+                    privacy_local_only,
+                },
+            );
+            reg.save_to(path)?;
+            println!("Role {role} → {model}");
+        }
+        RoleSubCmd::List => {
+            if reg.roles.is_empty() {
+                println!("(no roles configured)");
+                return Ok(());
+            }
+            println!("{:<15} {:<25} {:<25}", "ROLE", "PRIMARY", "FALLBACK");
+            for (name, entry) in &reg.roles {
+                println!(
+                    "{:<15} {:<25} {:<25}",
+                    name,
+                    entry.primary,
+                    entry.fallback.as_deref().unwrap_or("-"),
+                );
+            }
+        }
+    }
+    Ok(())
 }
