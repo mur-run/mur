@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
+mod apply;
 mod comm;
 mod export;
 mod hub;
@@ -42,6 +43,8 @@ mod stats;
 // reference these names internally; consumers (main.rs, agent_admin) reach them
 // via `crate::cmd::agent::cmd_*`. Rustc still flags them as `unused_imports`
 // under the lib+bin compilation split — silenced here.
+#[allow(unused_imports)]
+pub use apply::cmd_agent_apply;
 #[allow(unused_imports)]
 pub use comm::{cmd_card, cmd_send};
 #[allow(unused_imports)]

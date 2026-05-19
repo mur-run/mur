@@ -1,6 +1,7 @@
 mod consumer;
 mod inbox;
 mod lock;
+mod signal_server;
 mod sleep;
 mod store_health;
 
@@ -71,6 +72,14 @@ async fn main() -> Result<()> {
     // §4.2.7 — startup store health checks (best-effort)
     let mur_dir = mur_core::store::yaml::default_mur_dir();
     store_health::run(&mur_dir);
+
+    // E5 — start HTTP signal server (best-effort; failure is non-fatal)
+    match signal_server::ensure_token() {
+        Ok(token) => {
+            signal_server::spawn(token);
+        }
+        Err(e) => eprintln!("murmurd: signal-server token error: {e:#}"),
+    }
 
     let queue_file = consumer::queue_path();
     let offset_file = consumer::offset_path();
