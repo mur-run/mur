@@ -723,6 +723,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             }
         },
         AgentAction::Reconnect { name } => cmd::agent::cmd_agent_reconnect(&name)?,
+        AgentAction::Apply { file } => cmd::agent::cmd_agent_apply(&file)?,
     }
     Ok(())
 }
