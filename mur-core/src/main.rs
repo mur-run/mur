@@ -23,6 +23,7 @@ mod dispatch;
 mod discovery;
 mod evolve;
 mod executor;
+mod federation;
 mod extract;
 mod extract_llm;
 mod gep;

@@ -224,6 +224,28 @@ pub enum AgentAction {
         #[arg(long)]
         to: u32,
     },
+    /// Manage pattern snapshot for an agent.
+    Snapshot {
+        #[command(subcommand)]
+        action: SnapshotAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SnapshotAction {
+    /// Pull (or refresh) the pattern snapshot for this agent.
+    Pull {
+        /// Agent name
+        name: String,
+        /// Preview what would be snapshotted without writing to disk.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Show the current snapshot ref for this agent.
+    Show {
+        /// Agent name
+        name: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

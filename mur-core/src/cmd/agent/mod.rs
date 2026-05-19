@@ -34,6 +34,7 @@ mod prompt;
 mod secret;
 mod service;
 mod skill;
+mod snapshot;
 mod stats;
 
 // `pub use` re-exports for the public CLI dispatch API. The lib crate doesn't
@@ -68,6 +69,8 @@ pub use service::cmd_install_service;
 pub use skill::{cmd_skill_add, cmd_skill_list, cmd_skill_remove, cmd_skill_show};
 #[allow(unused_imports)]
 pub use stats::{cmd_logs, cmd_stats};
+#[allow(unused_imports)]
+pub use snapshot::{cmd_snapshot_pull, cmd_snapshot_show};
 
 // ─── Shared helpers used across submodules ─────────────────────────
 
