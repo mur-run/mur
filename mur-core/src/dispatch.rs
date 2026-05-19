@@ -12,7 +12,7 @@ use crate::cli::{
     AgentWebhookAction, ChatAction, Cli, Commands, CommunityAction, ConversationsAction,
     DeployAction, DraftsAction, EvalAction, EvolveAction, ExchangeAction, FeedbackAction,
     GepAction, HookEvent, InternalsAction, LearnAction, MurmurdAction, PackAction, PatternAction,
-    ScheduleAction, SessionAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::{cmd, dashboard, verify};
 
@@ -458,6 +458,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                 let code = cmd::eval::cmd_eval_run(&suite, &format)?;
                 std::process::exit(code);
             }
+        },
+        Commands::Sleep { action } => match action {
+            SleepAction::Enable => cmd::sleep::cmd_sleep_enable()?,
+            SleepAction::Disable => cmd::sleep::cmd_sleep_disable()?,
+            SleepAction::Status => cmd::sleep::cmd_sleep_status()?,
         },
     }
 
