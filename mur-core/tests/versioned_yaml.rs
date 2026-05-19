@@ -228,3 +228,41 @@ fn gitignore_tracks_patterns_and_archive() {
         );
     }
 }
+
+// ── Schema-3 version field ────────────────────────────────────────────────────
+
+#[test]
+fn schema3_version_written_to_yaml_on_save() {
+    let (dir, mut store) = temp_store();
+    let p = minimal_pattern("schema3-test", "hello");
+
+    let rev = store.save_pattern(&p, "init").unwrap();
+    assert_eq!(rev.version, 1);
+
+    // The on-disk YAML must contain `version: 1`.
+    let yaml = std::fs::read_to_string(dir.path().join("patterns/schema3-test.yaml")).unwrap();
+    assert!(
+        yaml.contains("version: 1"),
+        "expected 'version: 1' in:\n{yaml}"
+    );
+    assert!(
+        !yaml.contains("revision:"),
+        "revision should not appear until set explicitly"
+    );
+
+    // No-op: saving same content again must not bump version even though
+    // the in-memory pattern has version=0 (skip_serializing_if default).
+    let rev2 = store.save_pattern(&p, "same content").unwrap();
+    assert_eq!(rev2.version, 1, "no-op must not bump version");
+
+    // Real change: new content → version=2.
+    let p2 = minimal_pattern("schema3-test", "world");
+    let rev3 = store.save_pattern(&p2, "changed").unwrap();
+    assert_eq!(rev3.version, 2);
+
+    let yaml2 = std::fs::read_to_string(dir.path().join("patterns/schema3-test.yaml")).unwrap();
+    assert!(
+        yaml2.contains("version: 2"),
+        "expected 'version: 2' in:\n{yaml2}"
+    );
+}

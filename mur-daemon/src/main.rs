@@ -1,6 +1,7 @@
 mod consumer;
 mod inbox;
 mod lock;
+mod store_health;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -64,6 +65,10 @@ async fn main() -> Result<()> {
     };
     write_lock(&lock_file, &state)?;
     eprintln!("murmurd started (pid {})", state.pid);
+
+    // §4.2.7 — startup store health checks (best-effort)
+    let mur_dir = mur_core::store::yaml::default_mur_dir();
+    store_health::run(&mur_dir);
 
     let queue_file = consumer::queue_path();
     let offset_file = consumer::offset_path();
