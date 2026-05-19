@@ -10,9 +10,9 @@ use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
     AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
     AgentWebhookAction, ChatAction, Cli, Commands, CommunityAction, ConversationsAction,
-    DeployAction, DraftsAction, EvalAction, EvolveAction, ExchangeAction, FeedbackAction, GepAction, HookEvent,
-    InternalsAction, LearnAction, MurmurdAction, PackAction, PatternAction, ScheduleAction,
-    SessionAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    DeployAction, DraftsAction, EvalAction, EvolveAction, ExchangeAction, FeedbackAction,
+    GepAction, HookEvent, InternalsAction, LearnAction, MurmurdAction, PackAction, PatternAction,
+    ScheduleAction, SessionAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::{cmd, dashboard, verify};
 
