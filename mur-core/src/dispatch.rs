@@ -142,6 +142,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 cmd::reindex::cmd_reindex().await?;
             }
         }
+        Commands::Update { check } => cmd::update::cmd_update(check)?,
         Commands::Promote { name, tier } => cmd::pattern::cmd_promote(&name, &tier)?,
         Commands::Deprecate { name } => cmd::pattern::cmd_deprecate(&name)?,
         Commands::Links { name } => cmd::pattern::cmd_links(&name)?,
