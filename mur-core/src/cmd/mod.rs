@@ -43,6 +43,7 @@ pub(crate) mod session;
 pub(crate) mod sleep;
 pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;
+pub(crate) mod update;
 #[allow(dead_code)]
 pub(crate) mod var;
 pub(crate) mod verify;

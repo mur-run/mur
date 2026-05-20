@@ -40,6 +40,7 @@ mod sources;
 mod store;
 mod sync;
 mod team;
+mod update;
 mod verify;
 
 use cli::Cli;

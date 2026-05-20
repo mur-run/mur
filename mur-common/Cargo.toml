@@ -4,6 +4,11 @@ description = "Shared types and traits for the MUR ecosystem"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage = "https://mur.run"
+readme = "../README.md"
+keywords = ["ai", "coding", "cli", "learning", "patterns"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 serde = { workspace = true }
