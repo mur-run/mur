@@ -22,7 +22,8 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
         return Ok(());
     }
 
-    let release = release::fetch_latest().context("Could not check for updates. Are you online?")?;
+    let release =
+        release::fetch_latest().context("Could not check for updates. Are you online?")?;
     let current = env!("CARGO_PKG_VERSION");
     let latest = release::strip_v_prefix(&release.tag_name);
 
@@ -76,7 +77,11 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
          curl -fsSL https://mur.run/install.sh | sh",
     )?;
     let tmp_dir = tempfile::tempdir()?;
-    let tmp_bin = tmp_dir.path().join(if cfg!(windows) { "mur.new.exe" } else { "mur.new" });
+    let tmp_bin = tmp_dir.path().join(if cfg!(windows) {
+        "mur.new.exe"
+    } else {
+        "mur.new"
+    });
     release::extract_binary(asset_name, &bin_bytes, &tmp_bin)?;
 
     #[cfg(unix)]

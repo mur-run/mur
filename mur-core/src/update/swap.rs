@@ -75,9 +75,11 @@ pub fn spawn_windows_swap_helper(new_exe: &Path, target_exe: &Path) -> anyhow::R
         ])
         .arg(&helper)
         .spawn()
-        .map_err(|e| anyhow::anyhow!(
-            "On Windows, mur update requires PowerShell to complete the update: {e}"
-        ))?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "On Windows, mur update requires PowerShell to complete the update: {e}"
+            )
+        })?;
     Ok(())
 }
 
