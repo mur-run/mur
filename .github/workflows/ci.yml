@@ -291,7 +291,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install rust-src (prevent parallel download race)
         run: rustup component add rust-src
-      - uses: Swatinem/rust-cache@v2
       - name: Install protobuf
         run: brew install protobuf
       - name: Run quick e2e smoke
