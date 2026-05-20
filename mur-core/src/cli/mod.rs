@@ -424,4 +424,9 @@ pub enum Commands {
         #[command(subcommand)]
         action: EvalAction,
     },
+    /// Configure the daemon sleep cycle (idle background learning).
+    Sleep {
+        #[command(subcommand)]
+        action: SleepAction,
+    },
 }

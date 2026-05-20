@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
+mod apply;
 mod comm;
 mod export;
 mod hub;
@@ -31,15 +32,19 @@ mod lifecycle;
 mod mcp;
 mod perm;
 mod prompt;
+mod reconnect;
 mod secret;
 mod service;
 mod skill;
+mod snapshot;
 mod stats;
 
 // `pub use` re-exports for the public CLI dispatch API. The lib crate doesn't
 // reference these names internally; consumers (main.rs, agent_admin) reach them
 // via `crate::cmd::agent::cmd_*`. Rustc still flags them as `unused_imports`
 // under the lib+bin compilation split — silenced here.
+#[allow(unused_imports)]
+pub use apply::cmd_agent_apply;
 #[allow(unused_imports)]
 pub use comm::{cmd_card, cmd_send};
 #[allow(unused_imports)]
@@ -61,11 +66,15 @@ pub(crate) use prompt::prompt_path_for;
 #[allow(unused_imports)]
 pub use prompt::{cmd_prompt_edit, cmd_prompt_set, cmd_prompt_show};
 #[allow(unused_imports)]
+pub use reconnect::cmd_agent_reconnect;
+#[allow(unused_imports)]
 pub use secret::{cmd_secret_delete, cmd_secret_list, cmd_secret_set};
 #[allow(unused_imports)]
 pub use service::cmd_install_service;
 #[allow(unused_imports)]
 pub use skill::{cmd_skill_add, cmd_skill_list, cmd_skill_remove, cmd_skill_show};
+#[allow(unused_imports)]
+pub use snapshot::{cmd_snapshot_pull, cmd_snapshot_show};
 #[allow(unused_imports)]
 pub use stats::{cmd_logs, cmd_stats};
 
