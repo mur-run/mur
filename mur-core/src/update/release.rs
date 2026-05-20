@@ -1,14 +1,14 @@
 //! GitHub Releases API client used by `mur update`.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseAsset {
     pub name: String,
     pub browser_download_url: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Release {
     pub tag_name: String,
     pub assets: Vec<ReleaseAsset>,
@@ -139,5 +139,94 @@ mod tests {
     #[test]
     fn is_newer_errors_on_garbage() {
         assert!(is_newer("nope", "v1.0.0").is_err());
+    }
+}
+
+// ─── Releases API client with cache ─────────────────────────────────────────
+
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
+
+const LATEST_URL: &str = "https://api.github.com/repos/mur-run/mur/releases/latest";
+const CACHE_TTL: Duration = Duration::from_secs(300);
+const USER_AGENT: &str = concat!("mur-update/", env!("CARGO_PKG_VERSION"));
+
+fn cache_path() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    Some(home.join(".mur").join("update-cache.json"))
+}
+
+/// Read the cached release if it is still fresh.
+pub fn read_cached_release(path: &std::path::Path, now: SystemTime) -> Option<Release> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
+    if now.duration_since(modified).ok()? > CACHE_TTL {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice::<Release>(&bytes).ok()
+}
+
+pub fn write_cached_release(path: &std::path::Path, release: &Release) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_vec(release)?)?;
+    Ok(())
+}
+
+/// Fetch the latest release, using a 5-minute cache to avoid rate limits.
+pub fn fetch_latest() -> anyhow::Result<Release> {
+    let cache = cache_path();
+    if let Some(p) = cache.as_ref() {
+        if let Some(r) = read_cached_release(p, SystemTime::now()) {
+            return Ok(r);
+        }
+    }
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let resp = client.get(LATEST_URL).send()?;
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        anyhow::bail!(
+            "GitHub API rate limit reached. Try again in a few minutes."
+        );
+    }
+    let release: Release = resp.error_for_status()?.json()?;
+    if let Some(p) = cache.as_ref() {
+        let _ = write_cached_release(p, &release);
+    }
+    Ok(release)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn release_fixture() -> Release {
+        Release {
+            tag_name: "v9.9.9".into(),
+            assets: vec![],
+        }
+    }
+
+    #[test]
+    fn round_trips_cache_within_ttl() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        write_cached_release(&path, &release_fixture()).unwrap();
+        let got = read_cached_release(&path, SystemTime::now()).unwrap();
+        assert_eq!(got.tag_name, "v9.9.9");
+    }
+
+    #[test]
+    fn expires_after_ttl() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        write_cached_release(&path, &release_fixture()).unwrap();
+        let future = SystemTime::now() + Duration::from_secs(301);
+        assert!(read_cached_release(&path, future).is_none());
     }
 }
