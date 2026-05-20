@@ -1,5 +1,103 @@
 //! GitHub Releases API client used by `mur update`.
 
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReleaseAsset {
+    pub name: String,
+    pub browser_download_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Release {
+    pub tag_name: String,
+    pub assets: Vec<ReleaseAsset>,
+}
+
+/// Returns the expected asset filename for the current host platform, or `None`
+/// if no prebuilt binary is published for it.
+pub fn asset_name_for_host() -> Option<&'static str> {
+    asset_name_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+pub fn asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("macos", "aarch64") => Some("mur-aarch64-apple-darwin.tar.gz"),
+        ("linux", "x86_64") => Some("mur-x86_64-unknown-linux-gnu.tar.gz"),
+        ("windows", "x86_64") => Some("mur-x86_64-pc-windows-msvc.zip"),
+        _ => None,
+    }
+}
+
+/// Find the asset matching `name` in a release; returns the asset or an error.
+pub fn select_asset<'a>(release: &'a Release, name: &str) -> anyhow::Result<&'a ReleaseAsset> {
+    release
+        .assets
+        .iter()
+        .find(|a| a.name == name)
+        .ok_or_else(|| anyhow::anyhow!("no asset named {name} in release {}", release.tag_name))
+}
+
+#[cfg(test)]
+mod asset_tests {
+    use super::*;
+
+    fn fake_release() -> Release {
+        Release {
+            tag_name: "v2.17.0".into(),
+            assets: vec![
+                ReleaseAsset {
+                    name: "mur-aarch64-apple-darwin.tar.gz".into(),
+                    browser_download_url: "https://example/mac.tgz".into(),
+                },
+                ReleaseAsset {
+                    name: "mur-x86_64-unknown-linux-gnu.tar.gz".into(),
+                    browser_download_url: "https://example/lnx.tgz".into(),
+                },
+                ReleaseAsset {
+                    name: "checksums.txt".into(),
+                    browser_download_url: "https://example/c.txt".into(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn maps_known_targets() {
+        assert_eq!(
+            asset_name_for("macos", "aarch64"),
+            Some("mur-aarch64-apple-darwin.tar.gz")
+        );
+        assert_eq!(
+            asset_name_for("linux", "x86_64"),
+            Some("mur-x86_64-unknown-linux-gnu.tar.gz")
+        );
+        assert_eq!(
+            asset_name_for("windows", "x86_64"),
+            Some("mur-x86_64-pc-windows-msvc.zip")
+        );
+    }
+
+    #[test]
+    fn returns_none_for_unsupported() {
+        assert_eq!(asset_name_for("linux", "aarch64"), None);
+        assert_eq!(asset_name_for("macos", "x86_64"), None);
+    }
+
+    #[test]
+    fn select_asset_finds_match() {
+        let r = fake_release();
+        let a = select_asset(&r, "mur-aarch64-apple-darwin.tar.gz").unwrap();
+        assert_eq!(a.browser_download_url, "https://example/mac.tgz");
+    }
+
+    #[test]
+    fn select_asset_errors_when_missing() {
+        let r = fake_release();
+        assert!(select_asset(&r, "mur-aarch64-unknown-linux-gnu.tar.gz").is_err());
+    }
+}
+
 /// Strip a leading `v` (or `V`) from a git-tag-style version string.
 pub fn strip_v_prefix(tag: &str) -> &str {
     tag.strip_prefix('v').or_else(|| tag.strip_prefix('V')).unwrap_or(tag)
