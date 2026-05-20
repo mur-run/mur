@@ -14,9 +14,7 @@ impl InstallSource {
     pub fn upgrade_hint(self) -> Option<&'static str> {
         match self {
             InstallSource::Homebrew => Some("Installed via Homebrew. Run: brew upgrade mur"),
-            InstallSource::Cargo => {
-                Some("Installed via cargo. Run: cargo install mur --force")
-            }
+            InstallSource::Cargo => Some("Installed via cargo. Run: cargo install mur --force"),
             InstallSource::Other => None,
         }
     }
@@ -26,11 +24,17 @@ impl InstallSource {
 /// tests can inject fake command outputs via [`detect_from_outputs`].
 pub fn detect() -> InstallSource {
     let brew = Command::new("brew").args(["list", "mur"]).output().ok();
-    let cargo = Command::new("cargo").args(["install", "--list"]).output().ok();
+    let cargo = Command::new("cargo")
+        .args(["install", "--list"])
+        .output()
+        .ok();
 
     detect_from_outputs(
-        brew.as_ref().map(|o| (o.status.success(), o.stdout.as_slice())),
-        cargo.as_ref().map(|o| (o.status.success(), o.stdout.as_slice())),
+        brew.as_ref()
+            .map(|o| (o.status.success(), o.stdout.as_slice())),
+        cargo
+            .as_ref()
+            .map(|o| (o.status.success(), o.stdout.as_slice())),
     )
 }
 
@@ -43,7 +47,9 @@ pub fn detect_from_outputs(
     }
     if let Some((true, stdout)) = cargo {
         let s = std::str::from_utf8(stdout).unwrap_or("");
-        if s.lines().any(|l| l.starts_with("mur ") || l.starts_with("mur-core ")) {
+        if s.lines()
+            .any(|l| l.starts_with("mur ") || l.starts_with("mur-core "))
+        {
             return InstallSource::Cargo;
         }
     }
@@ -82,8 +88,18 @@ mod tests {
 
     #[test]
     fn hints_are_shaped() {
-        assert!(InstallSource::Homebrew.upgrade_hint().unwrap().contains("brew upgrade"));
-        assert!(InstallSource::Cargo.upgrade_hint().unwrap().contains("cargo install"));
+        assert!(
+            InstallSource::Homebrew
+                .upgrade_hint()
+                .unwrap()
+                .contains("brew upgrade")
+        );
+        assert!(
+            InstallSource::Cargo
+                .upgrade_hint()
+                .unwrap()
+                .contains("cargo install")
+        );
         assert!(InstallSource::Other.upgrade_hint().is_none());
     }
 }
