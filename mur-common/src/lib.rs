@@ -18,6 +18,7 @@ pub mod identity;
 pub mod knowledge;
 pub mod llm;
 pub mod lock_file;
+pub mod manifest;
 pub mod model;
 pub mod multimodal;
 pub mod parameterize;
@@ -38,14 +39,17 @@ pub use conversation::{CONVERSATION_SCHEMA_VERSION, Content, Message, Role, Sour
 pub use hooks_config::HooksConfig;
 pub use pattern::Pattern;
 pub use scope::Scope;
-pub use signal::{SIGNAL_SCHEMA_VERSION, Signal, SignalKind, SignalTarget};
+pub use signal::{
+    SIGNAL_SCHEMA_VERSION, Signal, SignalBatch, SignalBatchResponse, SignalKind, SignalTarget,
+};
 
 pub use a2a::Message as A2aMessage;
 pub use a2a::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Task, TaskState};
 pub use agent::{
     AgentAppearance, AgentProfile, BehaviorPreset, DeploymentConfig, DeploymentType, Entitlements,
-    ExecutionMode, FileTransferConfig, IdentityConfig, LockFile, Persona, PersonaCategory,
-    RenderStatus, RetryPolicy, ScheduleEntry,
+    ExecutionMode, FederationConfig, FileTransferConfig, IdentityConfig, LockFile, PatternFilter,
+    Persona, PersonaCategory, RenderStatus, RetryPolicy, ScheduleEntry, SnapshotPolicy,
+    SnapshotRef,
 };
 pub use agent_name::{AgentNameError, MAX_AGENT_NAME_LEN, validate_agent_name};
 pub use bridge::{LlmEntitlement, LlmMode};
@@ -53,3 +57,4 @@ pub use identity::{
     AgentIdentity, ChainError, ChainOptions, ChainOutcome, IdentityError, RotationAttestation,
     RotationReason, decode_pubkey, encode_pubkey, verify_chain,
 };
+pub use manifest::AgentManifest;

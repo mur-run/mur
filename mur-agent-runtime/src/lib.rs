@@ -15,6 +15,7 @@ pub mod crashlog;
 pub mod durable;
 pub mod entitlements;
 pub mod export;
+pub mod federation;
 pub mod hooks;
 pub mod idle_scheduler;
 pub mod import;

@@ -25,6 +25,7 @@ mod evolve;
 mod executor;
 mod extract;
 mod extract_llm;
+mod federation;
 mod gep;
 mod inject;
 mod interactive;
