@@ -38,6 +38,7 @@ pub mod sources;
 pub mod store;
 pub mod sync;
 pub mod team;
+pub mod update;
 pub mod verify;
 pub mod yaml_edit;
 

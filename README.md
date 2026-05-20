@@ -45,8 +45,8 @@ walkthrough (`create / start / send / card / list / export`).
 ## Quick Start
 
 ```bash
-# Install via Homebrew (macOS)
-brew tap mur-run/tap && brew install mur
+# macOS / Linux — one-liner
+curl -fsSL https://mur.run/install.sh | sh
 
 # Interactive setup — configures embeddings, hooks, and sync targets
 mur init
@@ -62,13 +62,21 @@ mur sync
 <summary>Other install methods</summary>
 
 ```bash
-# From source (requires Rust toolchain)
-cargo install --git https://github.com/mur-run/mur.git
+# Windows (PowerShell)
+irm https://mur.run/install.ps1 | iex
 
-# Or clone and build
-git clone https://github.com/mur-run/mur.git
-cd mur
-cargo build --release
+# macOS — signed installer
+# Download mur-aarch64-apple-darwin.dmg from the Releases page and double-click.
+
+# Homebrew (macOS arm64)
+brew install mur-run/tap/mur
+
+# crates.io
+cargo install mur
+
+# Keep up to date
+mur update           # check + install latest
+mur update --check   # check only, don't install
 ```
 
 </details>

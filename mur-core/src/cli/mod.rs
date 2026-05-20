@@ -157,6 +157,12 @@ pub enum Commands {
         #[arg(long)]
         bootstrap: bool,
     },
+    /// Check for and install the latest mur release
+    Update {
+        /// Only check whether a newer version exists; don't install
+        #[arg(long)]
+        check: bool,
+    },
     /// Show pattern connections
     Links {
         /// Pattern name
