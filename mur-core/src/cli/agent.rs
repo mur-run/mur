@@ -224,6 +224,39 @@ pub enum AgentAction {
         #[arg(long)]
         to: u32,
     },
+    /// Manage pattern snapshot for an agent.
+    Snapshot {
+        #[command(subcommand)]
+        action: SnapshotAction,
+    },
+    /// Flush an offline agent's evidence outbox into the pattern store.
+    Reconnect {
+        /// Agent name
+        name: String,
+    },
+    /// Create or update an agent from a declarative manifest YAML.
+    Apply {
+        /// Path to AgentManifest YAML file
+        #[arg(short = 'f', long)]
+        file: std::path::PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SnapshotAction {
+    /// Pull (or refresh) the pattern snapshot for this agent.
+    Pull {
+        /// Agent name
+        name: String,
+        /// Preview what would be snapshotted without writing to disk.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Show the current snapshot ref for this agent.
+    Show {
+        /// Agent name
+        name: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

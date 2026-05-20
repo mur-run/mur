@@ -12,7 +12,8 @@ use crate::cli::{
     AgentWebhookAction, ChatAction, Cli, Commands, CommunityAction, ConversationsAction,
     DeployAction, DraftsAction, EvalAction, EvolveAction, ExchangeAction, FeedbackAction,
     GepAction, HookEvent, InternalsAction, LearnAction, MurmurdAction, PackAction, PatternAction,
-    ScheduleAction, SessionAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
+    WorkflowAction,
 };
 use crate::{cmd, dashboard, verify};
 
@@ -459,6 +460,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                 std::process::exit(code);
             }
         },
+        Commands::Sleep { action } => match action {
+            SleepAction::Enable => cmd::sleep::cmd_sleep_enable()?,
+            SleepAction::Disable => cmd::sleep::cmd_sleep_disable()?,
+            SleepAction::Status => cmd::sleep::cmd_sleep_status()?,
+        },
     }
 
     Ok(())
@@ -709,6 +715,16 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::MigrateToHub => cmd::agent::cmd_migrate_to_hub()?,
         AgentAction::History { name } => cmd::agent_history::cmd_agent_history(&name)?,
         AgentAction::Rollback { name, to } => cmd::agent_history::cmd_agent_rollback(&name, to)?,
+        AgentAction::Snapshot { action } => match action {
+            crate::cli::agent::SnapshotAction::Pull { name, dry_run } => {
+                cmd::agent::cmd_snapshot_pull(&name, dry_run)?
+            }
+            crate::cli::agent::SnapshotAction::Show { name } => {
+                cmd::agent::cmd_snapshot_show(&name)?
+            }
+        },
+        AgentAction::Reconnect { name } => cmd::agent::cmd_agent_reconnect(&name)?,
+        AgentAction::Apply { file } => cmd::agent::cmd_agent_apply(&file)?,
     }
     Ok(())
 }

@@ -635,3 +635,13 @@ pub enum EvalAction {
         format: String,
     },
 }
+
+#[derive(Subcommand)]
+pub enum SleepAction {
+    /// Enable the daemon sleep cycle (idle background learning).
+    Enable,
+    /// Disable the daemon sleep cycle.
+    Disable,
+    /// Show current sleep cycle configuration.
+    Status,
+}

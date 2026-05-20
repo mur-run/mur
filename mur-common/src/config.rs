@@ -34,6 +34,10 @@ pub struct Config {
 
     #[serde(default)]
     pub sources_global: SourcesGlobalConfig,
+
+    // --- E3 additions ---
+    #[serde(default)]
+    pub sleep_cycle: SleepCycleConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1199,6 +1203,43 @@ timeout_secs: 60
         let yaml = serde_yaml::to_string(&original).unwrap();
         let parsed: BackendConfig = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed, original);
+    }
+}
+
+/// Configuration for the daemon-side sleep cycle (idle background learning).
+///
+/// When enabled, the daemon fires a consolidation pipeline after the user has been
+/// idle for `idle_threshold_minutes` minutes (default 15). Opt-in only — off by default.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepCycleConfig {
+    /// Master switch. False by default (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Minutes of idle (no events) before triggering the daemon sleep cycle.
+    #[serde(default = "default_idle_threshold_minutes")]
+    pub idle_threshold_minutes: u64,
+
+    /// Minutes of agent idle before the agent-side cycle fires (outbox flush + snapshot pull).
+    #[serde(default = "default_agent_idle_minutes")]
+    pub agent_idle_minutes: u64,
+}
+
+fn default_idle_threshold_minutes() -> u64 {
+    15
+}
+
+fn default_agent_idle_minutes() -> u64 {
+    5
+}
+
+impl Default for SleepCycleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            idle_threshold_minutes: default_idle_threshold_minutes(),
+            agent_idle_minutes: default_agent_idle_minutes(),
+        }
     }
 }
 

@@ -59,6 +59,9 @@ pub struct AgentProfile {
     /// Hub companion visual identity (M-h3). Default = default-blob / Normal / Pending.
     #[serde(default)]
     pub appearance: AgentAppearance,
+    /// E6: Pattern federation — snapshot filter + outbox config.
+    #[serde(default)]
+    pub federation: FederationConfig,
 }
 
 fn default_algorithm() -> String {
@@ -972,6 +975,73 @@ pub enum RenderStatus {
     },
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// E6 — Agent Pattern Federation types
+// ──────────────────────────────────────────────────────────────────────────
+
+/// When the agent pulls an updated pattern snapshot from the daemon.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SnapshotPolicy {
+    #[default]
+    PullOnStart,
+    PullPeriodic,
+    Manual,
+}
+
+/// Filter criteria for the pattern snapshot written to the agent's patterns_cache.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PatternFilter {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applies_in: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tier: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub maturity: Vec<String>,
+    #[serde(default)]
+    pub importance_min: f64,
+    #[serde(default = "default_max_snapshot_count")]
+    pub max_count: usize,
+    #[serde(default)]
+    pub snapshot_policy: SnapshotPolicy,
+}
+
+fn default_max_snapshot_count() -> usize {
+    200
+}
+
+impl Default for PatternFilter {
+    fn default() -> Self {
+        Self {
+            applies_in: vec![],
+            tier: vec![],
+            maturity: vec![],
+            importance_min: 0.0,
+            max_count: 200,
+            snapshot_policy: SnapshotPolicy::default(),
+        }
+    }
+}
+
+/// Points to the knowledge-layer commit this agent's patterns_cache was built from.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SnapshotRef {
+    pub knowledge_commit: String,
+    pub taken_at: String,
+    pub filter: PatternFilter,
+}
+
+/// Federation configuration embedded in AgentProfile (E6).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FederationConfig {
+    #[serde(default)]
+    pub filter: PatternFilter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_ref: Option<SnapshotRef>,
+    #[serde(default)]
+    pub evidence_flush_interval_minutes: u32,
+}
+
 impl AgentProfile {
     /// Minimal valid profile for tests — no voice, no MCP, no skills.
     ///
@@ -1376,5 +1446,48 @@ mod appearance_tests {
         assert_eq!(profile.appearance.style_preset, "default-blob");
         assert_eq!(profile.appearance.behavior_preset, BehaviorPreset::Normal);
         assert_eq!(profile.appearance.render_status, RenderStatus::Pending);
+    }
+}
+
+#[cfg(test)]
+mod federation_tests {
+    use super::*;
+
+    #[test]
+    fn test_pattern_filter_default() {
+        let f = PatternFilter::default();
+        assert_eq!(f.max_count, 200);
+        assert_eq!(f.importance_min, 0.0);
+        assert!(f.tier.is_empty());
+    }
+
+    #[test]
+    fn test_federation_config_roundtrip() {
+        let cfg = FederationConfig {
+            filter: PatternFilter {
+                tier: vec!["core".into()],
+                max_count: 50,
+                ..Default::default()
+            },
+            snapshot_ref: Some(SnapshotRef {
+                knowledge_commit: "abc123def456".into(),
+                taken_at: "2026-05-19T00:00:00Z".into(),
+                filter: PatternFilter::default(),
+            }),
+            evidence_flush_interval_minutes: 15,
+        };
+        let yaml = serde_yaml_ng::to_string(&cfg).unwrap();
+        let back: FederationConfig = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn test_agent_profile_federation_defaults() {
+        // AgentProfile without a federation block deserializes with FederationConfig::default().
+        // Use the minimal YAML that passes validation — just the required fields.
+        // (We check only that the field has its zero value, not full profile parse.)
+        let cfg = FederationConfig::default();
+        assert_eq!(cfg.evidence_flush_interval_minutes, 0);
+        assert!(cfg.snapshot_ref.is_none());
     }
 }

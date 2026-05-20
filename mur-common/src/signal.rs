@@ -60,6 +60,27 @@ fn current_schema_version() -> u32 {
     SIGNAL_SCHEMA_VERSION
 }
 
+/// HTTP batch wrapper for `POST /v1/signals/batch`.
+///
+/// Carries 1–N signals in a single request. `batch_id` enables at-most-once
+/// retry semantics: the server deduplicates on `batch_id` (HTTP layer) and on
+/// individual `Signal.id` (inbox layer).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalBatch {
+    pub batch_id: Uuid,
+    /// Must equal `SIGNAL_SCHEMA_VERSION` (1). Server rejects mismatches.
+    #[serde(default = "current_schema_version")]
+    pub schema_version: u32,
+    pub signals: Vec<Signal>,
+}
+
+/// Response body for `POST /v1/signals/batch`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalBatchResponse {
+    pub accepted: usize,
+    pub deduplicated: usize,
+}
+
 /// What the signal refers to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
