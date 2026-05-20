@@ -100,7 +100,9 @@ mod asset_tests {
 
 /// Strip a leading `v` (or `V`) from a git-tag-style version string.
 pub fn strip_v_prefix(tag: &str) -> &str {
-    tag.strip_prefix('v').or_else(|| tag.strip_prefix('V')).unwrap_or(tag)
+    tag.strip_prefix('v')
+        .or_else(|| tag.strip_prefix('V'))
+        .unwrap_or(tag)
 }
 
 /// Returns `true` when `latest` is strictly newer than `current` per semver.
@@ -189,9 +191,7 @@ pub fn fetch_latest() -> anyhow::Result<Release> {
         .build()?;
     let resp = client.get(LATEST_URL).send()?;
     if resp.status() == reqwest::StatusCode::FORBIDDEN {
-        anyhow::bail!(
-            "GitHub API rate limit reached. Try again in a few minutes."
-        );
+        anyhow::bail!("GitHub API rate limit reached. Try again in a few minutes.");
     }
     let release: Release = resp.error_for_status()?.json()?;
     if let Some(p) = cache.as_ref() {
