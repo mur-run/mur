@@ -289,6 +289,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install rust-src (prevent parallel download race)
+        run: rustup component add rust-src
       - uses: Swatinem/rust-cache@v2
       - name: Install protobuf
         run: brew install protobuf
