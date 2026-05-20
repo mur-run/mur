@@ -7,6 +7,20 @@ on:
 permissions:
   contents: write
 
+# Required secrets:
+#   APPLE_SIGNING_CERT       - base64-encoded Developer ID p12 bundle
+#   APPLE_KEYCHAIN_PASSWORD  - password for the p12 above
+#   APPLE_NOTARY_USER        - Apple ID email used for notarization
+#   APPLE_NOTARY_PASSWORD    - app-specific password for that Apple ID
+#   APPLE_TEAM_ID            - Apple Developer Team ID
+#   APPLE_TEAM_NAME          - "common name" piece used in the codesign identity
+#   CRATES_IO_TOKEN          - crates.io API token (publish-crates job)
+#   HOMEBREW_TAP_TOKEN       - existing, used by update-homebrew job
+# DNS prerequisite:
+#   - mur.run DNS must CNAME to mur-run.github.io
+#   - GitHub Pages must be configured to publish from gh-pages branch with
+#     "mur.run" as the custom domain.
+
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -105,9 +119,105 @@ jobs:
             ${{ matrix.name }}.tar.gz
             ${{ matrix.name }}.zip
 
+  package-macos:
+    name: Package macOS (DMG + PKG)
+    needs: build
+    runs-on: macos-latest
+    if: always() && needs.build.result == 'success'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mur-aarch64-apple-darwin
+
+      - name: Extract binary from tar.gz
+        run: tar xzf mur-aarch64-apple-darwin.tar.gz
+
+      - name: Import Apple signing certs
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.APPLE_SIGNING_CERT }}
+          p12-password: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+
+      - name: Stage pkg-root
+        run: |
+          mkdir -p pkg-root/usr/local/bin
+          mkdir -p pkg-root/usr/local/share/doc/mur
+          cp mur pkg-root/usr/local/bin/mur
+          chmod +x pkg-root/usr/local/bin/mur
+          cp LICENSE pkg-root/usr/local/share/doc/mur/LICENSE
+          mkdir -p scripts-pkg
+          cat > scripts-pkg/postinstall <<'EOF'
+          #!/bin/sh
+          echo "MUR installed to /usr/local/bin/mur"
+          echo "Run 'mur init' to get started."
+          exit 0
+          EOF
+          chmod +x scripts-pkg/postinstall
+
+      - name: Build .pkg
+        run: |
+          pkgbuild --root pkg-root \
+            --identifier run.mur.cli \
+            --version "${{ steps.version.outputs.version }}" \
+            --scripts scripts-pkg/ \
+            --install-location / \
+            mur.pkg
+
+      - name: Sign .pkg
+        run: |
+          productsign --sign "Developer ID Installer: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
+            mur.pkg mur-aarch64-apple-darwin.pkg
+        env:
+          APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Create DMG
+        run: |
+          mkdir dmg-root
+          cp mur-aarch64-apple-darwin.pkg dmg-root/
+          hdiutil create -volname "MUR" -srcfolder dmg-root -format UDZO mur-aarch64-apple-darwin.dmg
+
+      - name: Sign DMG
+        run: |
+          codesign --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
+            mur-aarch64-apple-darwin.dmg
+        env:
+          APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Notarize DMG
+        run: |
+          xcrun notarytool submit mur-aarch64-apple-darwin.dmg \
+            --apple-id "$APPLE_ID" \
+            --team-id "$TEAM_ID" \
+            --password "$NOTARY_PWD" \
+            --wait
+          xcrun stapler staple mur-aarch64-apple-darwin.dmg
+        env:
+          APPLE_ID: ${{ secrets.APPLE_NOTARY_USER }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_PWD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+
+      - name: Verify Gatekeeper acceptance
+        run: spctl -a -t open --context context:primary-signature mur-aarch64-apple-darwin.dmg
+
+      - name: Upload DMG + PKG artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mur-macos-installer
+          path: |
+            mur-aarch64-apple-darwin.pkg
+            mur-aarch64-apple-darwin.dmg
+
   release:
     name: Publish Release
-    needs: build
+    needs: [build, package-macos]
     if: always() && contains(needs.build.result, 'success')
     runs-on: ubuntu-latest
     steps:
@@ -124,6 +234,8 @@ jobs:
           files: |
             *.tar.gz
             *.zip
+            *.pkg
+            *.dmg
             checksums.txt
 
   update-homebrew:
@@ -194,3 +306,63 @@ jobs:
           git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "mur ${{ steps.version.outputs.version }}"
           git push
+
+  deploy-installer:
+    name: Deploy install.sh / install.ps1 to mur.run
+    needs: release
+    if: always() && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Stage installer scripts
+        run: |
+          mkdir -p /tmp/installer
+          cp scripts/install.sh  /tmp/installer/install.sh
+          cp scripts/install.ps1 /tmp/installer/install.ps1
+
+      - name: Push to gh-pages
+        run: |
+          git fetch origin gh-pages || git checkout --orphan gh-pages
+          git checkout gh-pages
+          cp /tmp/installer/install.sh  install.sh
+          cp /tmp/installer/install.ps1 install.ps1
+          if [ ! -f CNAME ]; then echo "mur.run" > CNAME; fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add install.sh install.ps1 CNAME
+          if git diff --cached --quiet; then
+            echo "No installer changes."
+            exit 0
+          fi
+          git commit -m "installer scripts for ${GITHUB_REF_NAME}"
+          git push origin gh-pages
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: release
+    if: always() && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protobuf
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libdbus-1-dev libasound2-dev
+
+      - name: Publish mur-common
+        run: cargo publish -p mur-common --token "${CRATES_IO_TOKEN}"
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for crates.io index propagation
+        run: sleep 60
+
+      - name: Publish mur-core
+        # Allowed to fail until mur-agent-runtime is published to crates.io.
+        continue-on-error: true
+        run: cargo publish -p mur-core --token "${CRATES_IO_TOKEN}"
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
