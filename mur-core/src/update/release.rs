@@ -178,10 +178,10 @@ pub fn write_cached_release(path: &std::path::Path, release: &Release) -> anyhow
 /// Fetch the latest release, using a 5-minute cache to avoid rate limits.
 pub fn fetch_latest() -> anyhow::Result<Release> {
     let cache = cache_path();
-    if let Some(p) = cache.as_ref() {
-        if let Some(r) = read_cached_release(p, SystemTime::now()) {
-            return Ok(r);
-        }
+    if let Some(p) = cache.as_ref()
+        && let Some(r) = read_cached_release(p, SystemTime::now())
+    {
+        return Ok(r);
     }
     let client = reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)

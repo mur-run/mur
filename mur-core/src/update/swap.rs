@@ -43,6 +43,7 @@ mod tests {
 
 /// Generate the PowerShell helper script content used on Windows to replace a
 /// locked .exe after this process exits.
+#[cfg(any(windows, test))]
 pub fn windows_helper_script(new_exe: &Path, target_exe: &Path, self_path: &Path) -> String {
     fn escape(p: &Path) -> String {
         p.display().to_string().replace('\'', "''")
