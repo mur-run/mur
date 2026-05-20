@@ -295,3 +295,88 @@ mod checksum_tests {
         );
     }
 }
+
+// ─── Archive extraction ──────────────────────────────────────────────────────
+
+use std::io::{Read, Write};
+use std::path::Path;
+
+/// Extract the `mur` (or `mur.exe`) binary from a release archive (tar.gz or zip)
+/// and write it to `dest`. Returns an error if the archive contains no `mur` entry.
+pub fn extract_binary(archive_name: &str, bytes: &[u8], dest: &Path) -> anyhow::Result<()> {
+    if archive_name.ends_with(".tar.gz") || archive_name.ends_with(".tgz") {
+        let gz = flate2::read::GzDecoder::new(bytes);
+        let mut tar = tar::Archive::new(gz);
+        for entry in tar.entries()? {
+            let mut entry = entry?;
+            let path = entry.path()?.into_owned();
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name == "mur" {
+                let mut buf = Vec::new();
+                entry.read_to_end(&mut buf)?;
+                std::fs::File::create(dest)?.write_all(&buf)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
+                }
+                return Ok(());
+            }
+        }
+        anyhow::bail!("archive {archive_name} did not contain a `mur` binary");
+    }
+    if archive_name.ends_with(".zip") {
+        let cursor = std::io::Cursor::new(bytes);
+        let mut zip = zip::ZipArchive::new(cursor)?;
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i)?;
+            let name = entry.name().rsplit('/').next().unwrap_or("").to_string();
+            if name == "mur.exe" {
+                let mut buf = Vec::new();
+                entry.read_to_end(&mut buf)?;
+                std::fs::File::create(dest)?.write_all(&buf)?;
+                return Ok(());
+            }
+        }
+        anyhow::bail!("archive {archive_name} did not contain mur.exe");
+    }
+    anyhow::bail!("unknown archive type: {archive_name}")
+}
+
+#[cfg(test)]
+mod extract_tests {
+    use super::*;
+
+    fn build_tgz(contents: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        {
+            let mut tar = tar::Builder::new(&mut gz);
+            for (name, data) in contents {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(data.len() as u64);
+                header.set_mode(0o755);
+                header.set_cksum();
+                tar.append_data(&mut header, name, *data).unwrap();
+            }
+            tar.finish().unwrap();
+        }
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn extracts_mur_from_tgz() {
+        let bytes = build_tgz(&[("mur", b"FAKEBIN")]);
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("mur");
+        extract_binary("foo.tar.gz", &bytes, &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"FAKEBIN");
+    }
+
+    #[test]
+    fn errors_when_mur_missing_from_tgz() {
+        let bytes = build_tgz(&[("README", b"hi")]);
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("mur");
+        assert!(extract_binary("foo.tar.gz", &bytes, &dest).is_err());
+    }
+}
