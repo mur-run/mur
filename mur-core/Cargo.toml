@@ -4,6 +4,11 @@ description = "Continuous learning for AI assistants — CLI and library"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage = "https://mur.run"
+readme = "../README.md"
+keywords = ["ai", "coding", "cli", "learning", "patterns"]
+categories = ["command-line-utilities", "development-tools"]
 
 [lib]
 name = "mur_core"
@@ -14,10 +19,11 @@ name = "mur"
 path = "src/main.rs"
 
 [dependencies]
-mur-common = { path = "../mur-common" }
+mur-common = { path = "../mur-common", version = "2.16" }
 mur-agent-runtime = { path = "../mur-agent-runtime" }  # for cmd::agent::cmd_export
 tar = "0.4"           # cmd::agent_export_gui template-mode identity stripping
 flate2 = "1"          # gzip wrapper for the same
+zip = { version = "2", default-features = false, features = ["deflate"] }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -44,9 +50,11 @@ walkdir = "2"
 aho-corasick = "1"
 thiserror = { workspace = true }
 dirs = "6"
+tempfile = "3"
 sha2 = "0.10"
 hex = "0.4"
 regex = "1"
+semver = "1"
 lancedb = "0.26"
 tantivy = "0.24"   # match lance's transitive dep so we don't compile two
                    # tantivy versions (~50K LOC each) on every CI run
