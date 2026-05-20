@@ -230,3 +230,68 @@ mod cache_tests {
         assert!(read_cached_release(&path, future).is_none());
     }
 }
+
+// ─── Checksum verification ───────────────────────────────────────────────────
+
+use sha2::{Digest, Sha256};
+
+/// Parse a `checksums.txt` line ("<hex> *<filename>" or "<hex>  <filename>")
+/// and return the SHA256 hex for `filename`, or `None`.
+pub fn checksum_for(checksums_txt: &str, filename: &str) -> Option<String> {
+    for line in checksums_txt.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(2, char::is_whitespace);
+        let hex = parts.next()?.trim();
+        let rest = parts.next()?.trim_start_matches('*').trim();
+        if rest == filename {
+            return Some(hex.to_string());
+        }
+    }
+    None
+}
+
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(bytes);
+    hex::encode(h.finalize())
+}
+
+#[cfg(test)]
+mod checksum_tests {
+    use super::*;
+
+    #[test]
+    fn parses_bsd_style_with_asterisk() {
+        let txt = "deadbeef *mur-x86_64.tar.gz\nfeedface *mur.zip\n";
+        assert_eq!(
+            checksum_for(txt, "mur-x86_64.tar.gz").as_deref(),
+            Some("deadbeef")
+        );
+    }
+
+    #[test]
+    fn parses_gnu_style_with_double_space() {
+        let txt = "deadbeef  mur-x86_64.tar.gz\n";
+        assert_eq!(
+            checksum_for(txt, "mur-x86_64.tar.gz").as_deref(),
+            Some("deadbeef")
+        );
+    }
+
+    #[test]
+    fn returns_none_when_missing() {
+        let txt = "deadbeef *mur.zip\n";
+        assert!(checksum_for(txt, "other.tar.gz").is_none());
+    }
+
+    #[test]
+    fn sha256_of_known_string() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}
