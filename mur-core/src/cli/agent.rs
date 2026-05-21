@@ -122,15 +122,16 @@ pub enum AgentAction {
         #[command(subcommand)]
         action: AgentPermAction,
     },
-    /// Export an agent to a .murpkg, self-contained binary, or click-to-launch GUI app
+    /// Export an agent to a .muragent (default, signed v2 portable), .murpkg (legacy),
+    /// self-contained binary, or click-to-launch GUI app
     Export {
         /// Agent name
         name: String,
-        /// Output path (e.g. agent.murpkg, my_agent, or MyAgent.app)
+        /// Output path (e.g. agent.muragent, agent.murpkg, my_agent, or MyAgent.app)
         #[arg(long, short = 'o')]
         out: String,
-        /// Format: "pkg" (default), "bin", or "gui"
-        #[arg(long, default_value = "pkg")]
+        /// Format: "muragent" (default — signed v2 portable), "pkg" (legacy v1), "bin", or "gui"
+        #[arg(long, default_value = "muragent")]
         format: String,
         /// (gui only) Default theme baked into the bundle
         #[arg(long, default_value = "light")]
@@ -145,6 +146,24 @@ pub enum AgentAction {
         /// (gui only) Skip macOS codesign + notarization (testing only)
         #[arg(long)]
         skip_notarize: bool,
+    },
+    /// Install an agent from a signed `.muragent` package
+    Install {
+        /// Path to the `.muragent` file
+        path: String,
+    },
+    /// Uninstall an agent (data preserved at <home>/data unless --purge)
+    Uninstall {
+        /// Agent name
+        name: String,
+        /// Also delete the agent's data directory
+        #[arg(long)]
+        purge: bool,
+    },
+    /// Inspect a `.muragent` package — print manifest + signature status
+    Inspect {
+        /// Path to the `.muragent` file
+        path: String,
     },
     /// Aggregate telemetry counters from <agent_home>/telemetry/*.jsonl
     Stats {
