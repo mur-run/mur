@@ -6,6 +6,7 @@ members = [
     "mur-agent-runtime",
     "mur-daemon",
     "mur-gui-core",
+    "mur-agent-launcher",
     # "mur-commander",  # separate crate — v0.2.0 released
 ]
 exclude = [

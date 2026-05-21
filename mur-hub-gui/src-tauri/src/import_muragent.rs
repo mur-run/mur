@@ -90,6 +90,8 @@ pub struct InstallReceipt {
     pub was_update: bool,
     pub trust_level: String,
     pub fingerprint_hex: String,
+    /// Platform stub path (`.app`, `.lnk`, or `.desktop`), empty if generation failed.
+    pub stub_path: String,
 }
 
 /// Read-only inspection of a `.muragent` for the §7.2 dialog. Errors here are
@@ -138,12 +140,42 @@ fn install_inner(path: &Path) -> anyhow::Result<InstallReceipt> {
     let mur_home = trust::mur_home();
     let outcome = installer::install(&archive, &mur_home, "hub")
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // Generate the per-agent OS stub (Dock icon / URL scheme / Start Menu entry).
+    // Read the installed icon so the stub can show a proper icon.
+    let icon_path = mur_home
+        .join("agents")
+        .join(&outcome.manifest.agent.slug)
+        .join("icon")
+        .join("icon.icns");
+    let icon_icns = std::fs::read(&icon_path).ok();
+
+    let stub_path = match mur_gui_core::stub::generate(
+        &outcome.manifest.agent.slug,
+        &outcome.manifest.agent.display_name,
+        &outcome.manifest.agent.bundle_id,
+        &outcome.manifest.agent.url_scheme,
+        icon_icns.as_deref(),
+        env!("CARGO_PKG_VERSION"),
+        &mur_home,
+    ) {
+        Ok(info) => info.path.to_string_lossy().into_owned(),
+        Err(e) => {
+            // Stub generation is best-effort: log the error but don't fail
+            // the install. The agent is installed and usable; the user just
+            // won't have an OS stub until they reinstall or Hub retries.
+            tracing::warn!("stub generation failed for {}: {e}", outcome.manifest.agent.slug);
+            String::new()
+        }
+    };
+
     Ok(InstallReceipt {
         display_name: outcome.manifest.agent.display_name.clone(),
         slug: outcome.manifest.agent.slug.clone(),
         was_update: outcome.was_update,
         trust_level: format!("{:?}", outcome.trust_level).to_lowercase(),
         fingerprint_hex: outcome.fingerprint_hex,
+        stub_path,
     })
 }
 

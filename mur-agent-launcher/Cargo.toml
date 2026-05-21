@@ -1,0 +1,20 @@
+[package]
+name = "mur-agent-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "macOS per-agent stub launcher — reads agent.txt, execs Hub binary"
+
+[[bin]]
+name = "mur-agent-launcher"
+path = "src/main.rs"
+
+# Pure std + libc — no heavy deps. Size budget: < 100 KB statically linked.
+# No tokio, no serde, no anyhow. Keep it that way.
+[dependencies]
+libc = "0.2"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# This binary is macOS-only. On other platforms it still compiles (for CI)
+# but the execv path is never invoked.

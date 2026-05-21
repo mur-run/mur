@@ -154,6 +154,11 @@ pub fn run() {
     );
 
     let mur_home = mur_home_path();
+    // Write ~/.mur/host_path so mur-agent-launcher stubs can find the Hub binary
+    // and detect version mismatches for self-update (spec §5.2, §5.4).
+    if let Err(e) = write_host_path(env!("CARGO_PKG_VERSION"), &mur_home) {
+        tracing::warn!("failed to write host_path: {e}");
+    }
     let supervisor = Supervisor::new(mur_home.clone());
     let runtime_rx = supervisor.status_receiver();
 
@@ -278,6 +283,24 @@ fn mur_home_path() -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".mur")
         })
+}
+
+/// Atomically write `~/.mur/host_path` so per-agent launcher stubs can locate
+/// the Hub binary and detect version mismatches (spec §5.2).
+///
+/// Format: two lines — `<absolute_exe_path>\n<version>`.
+fn write_host_path(version: &str, mur_home: &std::path::Path) -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?
+        .canonicalize()
+        .unwrap_or_else(|_| std::env::current_exe().unwrap());
+    std::fs::create_dir_all(mur_home)
+        .map_err(|e| anyhow::anyhow!("create mur_home: {e}"))?;
+    let tmp = mur_home.join("host_path.tmp");
+    std::fs::write(&tmp, format!("{}\n{}", exe.display(), version))
+        .map_err(|e| anyhow::anyhow!("write host_path.tmp: {e}"))?;
+    std::fs::rename(&tmp, mur_home.join("host_path"))
+        .map_err(|e| anyhow::anyhow!("rename host_path: {e}"))?;
+    Ok(())
 }
 
 fn init_tracing() {
