@@ -13,6 +13,7 @@
 
 pub mod dsse;
 pub mod executable_ban;
+pub mod installer;
 pub mod jcs_canonical;
 pub mod manifest;
 pub mod reader;
