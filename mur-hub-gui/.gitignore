@@ -4,6 +4,9 @@ target/
 # UI
 ui/dist/
 ui/node_modules/
+ui/*.tsbuildinfo
+ui/vite.config.d.ts
+ui/vite.config.js
 
 # Tauri build artifacts
 src-tauri/gen/

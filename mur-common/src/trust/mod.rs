@@ -155,7 +155,9 @@ fn trust_store_path() -> PathBuf {
     mur_home().join("trust").join("trust.yaml")
 }
 
-fn mur_home() -> PathBuf {
+/// Resolve `~/.mur` (or `$MUR_HOME` if set). Shared root for the trust store,
+/// agent home dirs, and other on-disk state used by every surface.
+pub fn mur_home() -> PathBuf {
     if let Some(p) = std::env::var_os("MUR_HOME") {
         return PathBuf::from(p);
     }
@@ -201,6 +203,15 @@ const PLACEHOLDER_WORD_LIST: &[&str] = &[
 ];
 
 #[cfg(test)]
+pub(crate) mod test_env_lock {
+    use std::sync::Mutex;
+    /// Tests in this crate that set MUR_HOME must lock this mutex first —
+    /// the env var is process-global and parallel tests trampling it
+    /// produce spurious failures.
+    pub(crate) static MUR_HOME_LOCK: Mutex<()> = Mutex::new(());
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -229,8 +240,8 @@ mod tests {
 
     #[test]
     fn trust_store_roundtrip() {
+        let _guard = test_env_lock::MUR_HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        // Override MUR_HOME via env var (process-local; OK for sequential test)
         let prev_home = std::env::var_os("MUR_HOME");
         unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
 
@@ -257,7 +268,6 @@ mod tests {
             "Coach"
         );
 
-        // Cleanup
         unsafe {
             if let Some(p) = prev_home {
                 std::env::set_var("MUR_HOME", p);
