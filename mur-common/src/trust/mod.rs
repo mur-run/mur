@@ -4,7 +4,10 @@
 //! File-locked writes; lock-free reads with retry.
 
 pub mod legacy;
+pub mod revocations;
 pub mod rotation;
+
+pub use revocations::{RevokedEntry, RevocationsList};
 
 use crate::muragent::MuragentError;
 use serde::{Deserialize, Serialize};

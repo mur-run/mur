@@ -13,6 +13,7 @@ pub mod event_bus;
 pub mod expression;
 pub mod image_gen;
 pub mod render;
+pub mod revocations;
 pub mod sidecar;
 pub mod voice;
 
