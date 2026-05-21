@@ -5,6 +5,7 @@ import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
+import { MuragentImportModal } from "./MuragentImportModal";
 import { CompanionInbox, useUnreadCount } from "./CompanionInbox";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
@@ -277,6 +278,7 @@ export function DashboardApp() {
   const [query, setQuery] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
+  const [muragentImportOpen, setMuragentImportOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Build a lookup map for runtime statuses.
@@ -325,6 +327,13 @@ export function DashboardApp() {
             onClick={() => setWizardOpen(true)}
           >
             + New Agent
+          </button>
+          <button
+            className="toolbar-btn"
+            onClick={() => setMuragentImportOpen(true)}
+            title="Install an agent from a signed .muragent package"
+          >
+            Import Agent
           </button>
           <button
             className="toolbar-btn"
@@ -435,6 +444,13 @@ export function DashboardApp() {
       <PresetImportModal
         isOpen={presetImportOpen}
         onClose={() => setPresetImportOpen(false)}
+      />
+      <MuragentImportModal
+        isOpen={muragentImportOpen}
+        onClose={() => {
+          setMuragentImportOpen(false);
+          invoke("list_agents").catch(() => {});
+        }}
       />
     </div>
   );

@@ -1,93 +1,40 @@
 //! `mur agent install <path>` / `mur agent uninstall <name>` / `mur agent inspect <path>`
 //!
-//! These commands manage `.muragent` v2 packages on the local host. Install
-//! runs the full 11-step validation pipeline from `mur_common::muragent`,
-//! checks the trust store for key-change-without-rotation attacks, and
-//! extracts the payload into `~/.mur/agents/<slug>/`. Inspect prints
-//! manifest details without modifying the local filesystem.
+//! Thin CLI wrappers around the `mur_common::muragent::installer` flow. The
+//! actual install logic — validation, trust upsert, payload extraction — lives
+//! in mur-common and is shared with Hub and (future) Commander.
 
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use base64::{Engine, engine::general_purpose::STANDARD as B64};
-use mur_common::AgentProfile;
+use mur_common::muragent::installer::{self, InstallOutcome};
 use mur_common::muragent::manifest::MuragentManifest;
 use mur_common::muragent::reader::MuragentArchive;
-use mur_common::muragent::validator::{self, ValidationResult};
-use mur_common::trust::{self, TrustEntry, TrustLevel, TrustStore};
+use mur_common::muragent::validator;
+use mur_common::trust;
 
 use super::resolve_mur_home;
-
-/// Files in the .muragent that belong to the package envelope (not payload).
-const ENVELOPE_FILES: &[&str] = &["manifest.yaml", "manifest.signed.json", "signatures.json"];
 
 pub fn cmd_install(path: &Path) -> Result<()> {
     let archive = MuragentArchive::read(path)
         .with_context(|| format!("read .muragent file at {}", path.display()))?;
-
-    // Full validation pipeline — fatal on any failure (spec §7.5)
-    let result = validator::validate(&archive).context("validate .muragent")?;
-    let manifest = &result.manifest;
-    let slug = &manifest.agent.slug;
-    let display_name = &manifest.agent.display_name;
-
-    // Validate slug shape so we don't write to `agents/../../etc`
-    mur_common::validate_agent_name(slug)
-        .with_context(|| format!("invalid agent slug '{slug}' in manifest"))?;
-
-    let mut trust = TrustStore::load().context("load trust store")?;
-    let author_pubkey_b64 = B64.encode(result.author_pubkey);
-    let existing_by_pubkey = trust.find_by_pubkey(&author_pubkey_b64).cloned();
-
-    if existing_by_pubkey.is_none() {
-        let by_name = trust.find_by_display_name(display_name);
-        if !by_name.is_empty() {
-            bail!(
-                "Agent '{}' has a new signing key but no rotation manifest is present. \
-                 This could indicate an impersonation attempt. \
-                 Remove the existing trust entry first if this is intentional.",
-                display_name
-            );
-        }
-    }
-
     let mur_home = resolve_mur_home()?;
-    let agent_dir = mur_home.join("agents").join(slug);
+    let outcome: InstallOutcome =
+        installer::install(&archive, &mur_home, "cli").context("install .muragent")?;
 
-    if agent_dir.exists() {
-        // Same UUID → update flow; different UUID → collision
-        let existing_profile = agent_dir.join("profile.yaml");
-        if existing_profile.exists() {
-            let existing_yaml = fs::read_to_string(&existing_profile)
-                .with_context(|| format!("read {}", existing_profile.display()))?;
-            if let Ok(existing) = serde_yaml_ng::from_str::<AgentProfile>(&existing_yaml)
-                && existing.id == manifest.agent.original_uuid
-            {
-                update_agent(&archive, &agent_dir, manifest)?;
-                upsert_trust(&mut trust, &result, &author_pubkey_b64, &existing_by_pubkey)?;
-                trust.save().context("save trust store")?;
-                return Ok(());
-            }
-        }
-        bail!(
-            "agent '{slug}' already exists at {}. Run 'mur agent remove {slug}' first, \
-             or rename the existing agent.",
-            agent_dir.display()
-        );
-    }
-
-    fs::create_dir_all(&agent_dir).context("create agent directory")?;
-    extract_payload(&archive, &agent_dir)?;
-    upsert_trust(&mut trust, &result, &author_pubkey_b64, &existing_by_pubkey)?;
-    trust.save().context("save trust store")?;
-
-    println!("Installed agent '{display_name}' ({slug})");
-    println!("  trust:       {:?}", trust_level_for(&existing_by_pubkey));
+    let verb = if outcome.was_update {
+        "Updated"
+    } else {
+        "Installed"
+    };
     println!(
-        "  fingerprint: {}",
-        trust::short_fingerprint(&result.author_pubkey)
+        "{verb} agent '{}' ({})",
+        outcome.manifest.agent.display_name, outcome.manifest.agent.slug
     );
+    println!("  trust:       {:?}", outcome.trust_level);
+    println!("  fingerprint: {}", outcome.fingerprint_hex);
+    println!("  words:       {}", outcome.fingerprint_words);
     Ok(())
 }
 
@@ -169,87 +116,5 @@ pub fn cmd_inspect(path: &Path) -> Result<()> {
             println!("Signature:    INVALID — {e}");
         }
     }
-    Ok(())
-}
-
-fn trust_level_for(existing: &Option<TrustEntry>) -> TrustLevel {
-    existing
-        .as_ref()
-        .map(|e| e.trust_level.clone())
-        .unwrap_or(TrustLevel::Pending)
-}
-
-fn upsert_trust(
-    trust: &mut TrustStore,
-    result: &ValidationResult,
-    author_pubkey_b64: &str,
-    existing: &Option<TrustEntry>,
-) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let first_seen = existing
-        .as_ref()
-        .map(|e| e.first_seen.clone())
-        .unwrap_or_else(|| now.clone());
-    let level = existing
-        .as_ref()
-        .map(|e| e.trust_level.clone())
-        .unwrap_or(TrustLevel::Pending);
-
-    trust.upsert(TrustEntry {
-        public_key: author_pubkey_b64.to_string(),
-        display_name_seen: result.manifest.agent.display_name.clone(),
-        first_seen,
-        last_seen: now,
-        last_seen_surface: "cli".into(),
-        trust_level: level,
-        fingerprint: trust::short_fingerprint(&result.author_pubkey),
-        word_list: trust::word_list_fingerprint(&result.author_pubkey),
-        rotated_from: existing.as_ref().and_then(|e| e.rotated_from.clone()),
-        superseded_at: existing.as_ref().and_then(|e| e.superseded_at.clone()),
-        last_rotation_at: existing.as_ref().and_then(|e| e.last_rotation_at.clone()),
-    });
-    Ok(())
-}
-
-fn extract_payload(archive: &MuragentArchive, agent_dir: &Path) -> Result<()> {
-    for (path, data) in &archive.files {
-        if ENVELOPE_FILES.contains(&path.as_str()) {
-            continue;
-        }
-        let dest = agent_dir.join(path);
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create dir {}", parent.display()))?;
-        }
-        fs::write(&dest, data).with_context(|| format!("write payload file {}", dest.display()))?;
-    }
-    Ok(())
-}
-
-fn update_agent(
-    archive: &MuragentArchive,
-    agent_dir: &Path,
-    manifest: &MuragentManifest,
-) -> Result<()> {
-    // Preserve any user data in data/, replace everything else
-    for entry in fs::read_dir(agent_dir)? {
-        let entry = entry?;
-        if entry.file_name() == "data" {
-            continue;
-        }
-        let path = entry.path();
-        if path.is_dir() {
-            fs::remove_dir_all(&path)?;
-        } else {
-            fs::remove_file(&path)?;
-        }
-    }
-
-    extract_payload(archive, agent_dir)?;
-
-    println!(
-        "Updated '{}' to mur version {}",
-        manifest.agent.display_name, manifest.exporter.mur_version
-    );
     Ok(())
 }
