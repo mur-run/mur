@@ -224,7 +224,29 @@ impl ExpressionStateMachine {
 /// pushes expression updates. Reconnects every 1s if Hub isn't ready yet.
 ///
 /// Returns a channel sender — send `ExpressionChange` values to push them.
+/// Only available on Unix (uses Unix domain sockets).
+#[cfg(unix)]
 pub fn spawn_hub_push(
+    agent_id: String,
+    slug: String,
+    mur_home: std::path::PathBuf,
+) -> tokio::sync::mpsc::Sender<ExpressionChange> {
+    spawn_hub_push_impl(agent_id, slug, mur_home)
+}
+
+/// No-op stub on non-Unix platforms — the sidecar socket protocol is Unix-only.
+#[cfg(not(unix))]
+pub fn spawn_hub_push(
+    _agent_id: String,
+    _slug: String,
+    _mur_home: std::path::PathBuf,
+) -> tokio::sync::mpsc::Sender<ExpressionChange> {
+    let (tx, _rx) = tokio::sync::mpsc::channel::<ExpressionChange>(32);
+    tx
+}
+
+#[cfg(unix)]
+fn spawn_hub_push_impl(
     agent_id: String,
     slug: String,
     mur_home: std::path::PathBuf,
