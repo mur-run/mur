@@ -64,13 +64,13 @@ impl RevocationsList {
         }
 
         // Monotonicity: reject rollback even under clock-rollback attack.
-        if let Some(n) = known_crl {
-            if list.crl_number <= n {
-                return Err(MuragentError::Other(format!(
-                    "revocations: crl_number {} is not greater than known {}",
-                    list.crl_number, n
-                )));
-            }
+        if let Some(n) = known_crl
+            && list.crl_number <= n
+        {
+            return Err(MuragentError::Other(format!(
+                "revocations: crl_number {} is not greater than known {}",
+                list.crl_number, n
+            )));
         }
 
         if list.expires_at < Utc::now() {

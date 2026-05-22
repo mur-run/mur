@@ -81,20 +81,20 @@ fn run() -> Result<(), String> {
     // URL activation: stub was opened via `open muragent-<slug>://<rest>`
     // macOS passes the URL as argv[1] when launched via CFBundleURLTypes.
     let argv: Vec<String> = std::env::args().collect();
-    if let Some(url) = argv.get(1) {
-        if url.starts_with(&format!("muragent-{slug}://")) || url.starts_with("muragent-") {
-            hub_args.push("--url".to_string());
-            hub_args.push(url.clone());
-        }
+    if let Some(url) = argv.get(1)
+        && (url.starts_with(&format!("muragent-{slug}://")) || url.starts_with("muragent-"))
+    {
+        hub_args.push("--url".to_string());
+        hub_args.push(url.clone());
     }
 
     // NSServices share: Hub's NSServices handler writes a temp file and sets
     // MUR_SHARE_FILE in the environment before re-execing the launcher.
-    if let Ok(share_file) = std::env::var("MUR_SHARE_FILE") {
-        if !share_file.is_empty() {
-            hub_args.push("--share-from-file".to_string());
-            hub_args.push(share_file);
-        }
+    if let Ok(share_file) = std::env::var("MUR_SHARE_FILE")
+        && !share_file.is_empty()
+    {
+        hub_args.push("--share-from-file".to_string());
+        hub_args.push(share_file);
     }
 
     // ── 8. execv Hub binary ───────────────────────────────────────────────────
