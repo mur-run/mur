@@ -16,11 +16,7 @@ pub fn register(
     _mur_home: &Path,
 ) -> Result<()> {
     let key = format!("run.mur.agent.{slug}");
-    let cmd = format!(
-        r#""{}" --profile {} start"#,
-        runtime_binary.display(),
-        slug
-    );
+    let cmd = format!(r#""{}" --profile {} start"#, runtime_binary.display(), slug);
     let status = Command::new("reg")
         .args(["add", REG_RUN, "/v", &key, "/t", "REG_SZ", "/d", &cmd, "/f"])
         .status()
@@ -58,7 +54,13 @@ pub fn start_service(slug: &str) -> Result<()> {
 pub fn stop_service(slug: &str) -> Result<()> {
     // Kill any running mur-agent-runtime processes for this slug.
     let _ = Command::new("taskkill")
-        .args(["/F", "/IM", "mur-agent-runtime.exe", "/FI", &format!("WINDOWTITLE eq run.mur.agent.{slug}")])
+        .args([
+            "/F",
+            "/IM",
+            "mur-agent-runtime.exe",
+            "/FI",
+            &format!("WINDOWTITLE eq run.mur.agent.{slug}"),
+        ])
         .status(); // non-fatal
     Ok(())
 }

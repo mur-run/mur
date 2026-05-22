@@ -37,7 +37,13 @@ pub fn generate(
     std::fs::create_dir_all(&lnk_dir).context("create MuR Agents dir")?;
     let safe_name: String = display_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let lnk_path = lnk_dir.join(format!("{safe_name}.lnk"));
 

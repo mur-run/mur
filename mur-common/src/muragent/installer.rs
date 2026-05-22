@@ -26,8 +26,8 @@ use crate::muragent::MuragentError;
 use crate::muragent::manifest::MuragentManifest;
 use crate::muragent::reader::MuragentArchive;
 use crate::muragent::validator::{self, ValidationResult};
-use crate::trust::{self, TrustEntry, TrustLevel, TrustStore};
 use crate::trust::rotation::RotationManifest;
+use crate::trust::{self, TrustEntry, TrustLevel, TrustStore};
 
 /// Files in the .muragent that belong to the package envelope (not payload).
 const ENVELOPE_FILES: &[&str] = &["manifest.yaml", "manifest.signed.json", "signatures.json"];
@@ -78,7 +78,10 @@ pub fn install(
         let by_name = trust_store.find_by_display_name(&display_name);
         if !by_name.is_empty() {
             // Key change detected — look for a rotation manifest before refusing.
-            let old_entry = by_name.into_iter().find(|e| e.trust_level != TrustLevel::Superseded).cloned();
+            let old_entry = by_name
+                .into_iter()
+                .find(|e| e.trust_level != TrustLevel::Superseded)
+                .cloned();
             match try_apply_rotation(
                 &mut trust_store,
                 old_entry.as_ref(),
@@ -185,8 +188,8 @@ fn try_apply_rotation(
         );
     }
 
-    let yaml = fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("read rotation manifest: {e}"))?;
+    let yaml =
+        fs::read_to_string(&manifest_path).map_err(|e| format!("read rotation manifest: {e}"))?;
     let manifest: RotationManifest =
         serde_yaml_ng::from_str(&yaml).map_err(|e| format!("parse rotation manifest: {e}"))?;
 
@@ -333,7 +336,9 @@ mod tests {
         tmp: &TempDir,
         identity: &AgentIdentity,
     ) -> std::path::PathBuf {
-        let out = tmp.path().join(format!("{}.muragent", &identity.pubkey_text()[..8]));
+        let out = tmp
+            .path()
+            .join(format!("{}.muragent", &identity.pubkey_text()[..8]));
         let profile = AgentProfile::default_for_tests();
         let manifest = build_manifest_from_profile(&profile, "2.13.0");
         let profile_yaml = serde_yaml_ng::to_string(&profile).unwrap();

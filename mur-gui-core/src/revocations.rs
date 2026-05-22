@@ -58,19 +58,9 @@ impl RevocationRefresher {
         }
     }
 
-    async fn fetch_and_parse(
-        &self,
-        known_crl: Option<u64>,
-    ) -> anyhow::Result<RevocationsList> {
-        let bytes = self
-            .http
-            .get(REVOCATIONS_URL)
-            .send()
-            .await?
-            .bytes()
-            .await?;
-        RevocationsList::parse_and_validate(&bytes, known_crl)
-            .map_err(|e| anyhow::anyhow!("{e}"))
+    async fn fetch_and_parse(&self, known_crl: Option<u64>) -> anyhow::Result<RevocationsList> {
+        let bytes = self.http.get(REVOCATIONS_URL).send().await?.bytes().await?;
+        RevocationsList::parse_and_validate(&bytes, known_crl).map_err(|e| anyhow::anyhow!("{e}"))
     }
 }
 

@@ -54,7 +54,9 @@ mod platform {
 
     unsafe fn cf_string(s: &str) -> *const std::ffi::c_void {
         let c = CString::new(s).unwrap();
-        unsafe { CFStringCreateWithCString(std::ptr::null(), c.as_ptr(), K_CF_STRING_ENCODING_UTF8) }
+        unsafe {
+            CFStringCreateWithCString(std::ptr::null(), c.as_ptr(), K_CF_STRING_ENCODING_UTF8)
+        }
     }
 
     unsafe fn read_cf_focus_pref() -> bool {

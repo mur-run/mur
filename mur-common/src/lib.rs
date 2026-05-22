@@ -2,7 +2,6 @@ pub mod a2a;
 pub mod actor;
 pub mod agent;
 pub mod agent_name;
-pub mod expression;
 pub mod bridge;
 pub mod bundle;
 pub mod canonical;
@@ -13,6 +12,7 @@ pub mod error;
 /// B0 M11 — JSONL output schema for the eval harness.
 pub mod eval;
 pub mod event;
+pub mod expression;
 pub mod hooks_config;
 pub mod hub;
 pub mod identity;

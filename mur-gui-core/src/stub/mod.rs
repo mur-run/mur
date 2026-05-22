@@ -45,17 +45,49 @@ pub fn generate(
     mur_home: &Path,
 ) -> Result<StubInfo> {
     #[cfg(target_os = "macos")]
-    return macos::generate(slug, display_name, bundle_id, url_scheme, icon_icns, hub_version, mur_home);
+    return macos::generate(
+        slug,
+        display_name,
+        bundle_id,
+        url_scheme,
+        icon_icns,
+        hub_version,
+        mur_home,
+    );
 
     #[cfg(target_os = "windows")]
-    return windows::generate(slug, display_name, bundle_id, url_scheme, icon_icns, hub_version, mur_home);
+    return windows::generate(
+        slug,
+        display_name,
+        bundle_id,
+        url_scheme,
+        icon_icns,
+        hub_version,
+        mur_home,
+    );
 
     #[cfg(target_os = "linux")]
-    return linux::generate(slug, display_name, bundle_id, url_scheme, icon_icns, hub_version, mur_home);
+    return linux::generate(
+        slug,
+        display_name,
+        bundle_id,
+        url_scheme,
+        icon_icns,
+        hub_version,
+        mur_home,
+    );
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
-        let _ = (slug, display_name, bundle_id, url_scheme, icon_icns, hub_version, mur_home);
+        let _ = (
+            slug,
+            display_name,
+            bundle_id,
+            url_scheme,
+            icon_icns,
+            hub_version,
+            mur_home,
+        );
         anyhow::bail!("stub generation not implemented for this platform");
     }
 }
@@ -113,13 +145,17 @@ fn scan_stale_macos(hub_version: &str, mur_home: &Path) -> anyhow::Result<()> {
         let version_file = resources.join("host_version.txt");
         let agent_file = resources.join("agent.txt");
 
-        let Ok(stub_version) = std::fs::read_to_string(&version_file) else { continue };
+        let Ok(stub_version) = std::fs::read_to_string(&version_file) else {
+            continue;
+        };
         let stub_version = stub_version.trim();
         if stub_version == hub_version {
             continue;
         }
 
-        let Ok(slug) = std::fs::read_to_string(&agent_file) else { continue };
+        let Ok(slug) = std::fs::read_to_string(&agent_file) else {
+            continue;
+        };
         let slug = slug.trim().to_string();
 
         tracing::info!("regenerating stale stub for {slug} ({stub_version} → {hub_version})");
@@ -148,7 +184,9 @@ fn scan_stale_linux(hub_version: &str, mur_home: &Path) -> anyhow::Result<()> {
             continue;
         }
 
-        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         let stub_version = content
             .lines()
             .find_map(|l| l.strip_prefix("X-Mur-Host-Version="))
@@ -180,7 +218,8 @@ fn regenerate_from_slug(slug: &str, hub_version: &str, mur_home: &Path) -> anyho
     let agent_dir = mur_home.join("agents").join(slug);
 
     // Load display name from profile.yaml (or fall back to slug).
-    let display_name = load_display_name_from_profile(&agent_dir).unwrap_or_else(|| slug.to_string());
+    let display_name =
+        load_display_name_from_profile(&agent_dir).unwrap_or_else(|| slug.to_string());
 
     // bundle_id and url_scheme are deterministic from slug.
     let bundle_id = format!("run.mur.agent.{slug}");
@@ -190,7 +229,15 @@ fn regenerate_from_slug(slug: &str, hub_version: &str, mur_home: &Path) -> anyho
     let icon_path = agent_dir.join("icon").join("icon.icns");
     let icon_icns = std::fs::read(&icon_path).ok();
 
-    generate(slug, &display_name, &bundle_id, &url_scheme, icon_icns.as_deref(), hub_version, mur_home)?;
+    generate(
+        slug,
+        &display_name,
+        &bundle_id,
+        &url_scheme,
+        icon_icns.as_deref(),
+        hub_version,
+        mur_home,
+    )?;
     Ok(())
 }
 

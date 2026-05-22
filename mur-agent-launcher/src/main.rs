@@ -36,8 +36,8 @@ fn run() -> Result<(), String> {
     let resources = bundle_root.join("Contents").join("Resources");
 
     // ── 2. Read agent slug ────────────────────────────────────────────────────
-    let slug = read_file_trimmed(&resources.join("agent.txt"))
-        .map_err(|e| format!("agent.txt: {e}"))?;
+    let slug =
+        read_file_trimmed(&resources.join("agent.txt")).map_err(|e| format!("agent.txt: {e}"))?;
 
     // ── 3. Read expected Host version ─────────────────────────────────────────
     let expected_version = read_file_trimmed(&resources.join("host_version.txt"))
@@ -76,11 +76,7 @@ fn run() -> Result<(), String> {
     // We exec it directly (not via `open -b`), preserving argv.
 
     // ── 7. Detect invocation mode and build args ──────────────────────────────
-    let mut hub_args = vec![
-        host_exe.to_string(),
-        "--agent".to_string(),
-        slug.clone(),
-    ];
+    let mut hub_args = vec![host_exe.to_string(), "--agent".to_string(), slug.clone()];
 
     // URL activation: stub was opened via `open muragent-<slug>://<rest>`
     // macOS passes the URL as argv[1] when launched via CFBundleURLTypes.
@@ -108,14 +104,12 @@ fn run() -> Result<(), String> {
 
 /// Replace current process with `program` and `args` via POSIX execv.
 fn execv(program: &str, args: &[String]) -> Result<(), String> {
-    let c_program =
-        CString::new(program).map_err(|e| format!("CString program: {e}"))?;
+    let c_program = CString::new(program).map_err(|e| format!("CString program: {e}"))?;
     let c_args: Vec<CString> = args
         .iter()
         .map(|a| CString::new(a.as_str()).map_err(|e| format!("CString arg: {e}")))
         .collect::<Result<_, _>>()?;
-    let mut argv_ptrs: Vec<*const libc::c_char> =
-        c_args.iter().map(|s| s.as_ptr()).collect();
+    let mut argv_ptrs: Vec<*const libc::c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
     argv_ptrs.push(std::ptr::null());
 
     let _ret = unsafe { libc::execv(c_program.as_ptr(), argv_ptrs.as_ptr()) };

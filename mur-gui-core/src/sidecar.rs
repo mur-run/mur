@@ -148,7 +148,10 @@ fn emit_status(known: &HashSet<String>, tx: &watch::Sender<Vec<AgentRuntimeStatu
             } else {
                 RuntimeState::Stopped
             };
-            AgentRuntimeStatus { name: name.clone(), state }
+            AgentRuntimeStatus {
+                name: name.clone(),
+                state,
+            }
         })
         .collect();
     snapshot.sort_by(|a, b| a.name.cmp(&b.name));
@@ -158,7 +161,9 @@ fn emit_status(known: &HashSet<String>, tx: &watch::Sender<Vec<AgentRuntimeStatu
 /// Find the `mur-agent-runtime` binary alongside the current executable.
 fn find_runtime_binary() -> anyhow::Result<PathBuf> {
     let exe = std::env::current_exe()?;
-    let dir = exe.parent().ok_or_else(|| anyhow::anyhow!("no parent dir for current exe"))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("no parent dir for current exe"))?;
 
     #[cfg(target_os = "windows")]
     let name = "mur-agent-runtime.exe";
@@ -170,7 +175,10 @@ fn find_runtime_binary() -> anyhow::Result<PathBuf> {
         return Ok(candidate);
     }
 
-    anyhow::bail!("mur-agent-runtime not found alongside Hub binary at {}", dir.display())
+    anyhow::bail!(
+        "mur-agent-runtime not found alongside Hub binary at {}",
+        dir.display()
+    )
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
