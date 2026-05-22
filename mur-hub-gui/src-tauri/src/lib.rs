@@ -157,30 +157,29 @@ pub fn run() {
     // Handle --regenerate-stub <slug> emitted by mur-agent-launcher when it
     // detects a Hub version mismatch (spec §5.4). Regenerate and exit.
     let args: Vec<String> = std::env::args().collect();
-    if let Some(pos) = args.iter().position(|a| a == "--regenerate-stub") {
-        if let Some(slug) = args.get(pos + 1) {
-            let mur_home = mur_home_path();
-            let bundle_id = format!("run.mur.agent.{slug}");
-            let url_scheme = format!("muragent-{slug}");
-            let agent_dir = mur_home.join("agents").join(slug);
-            let display_name =
-                load_display_name_for_stub(&agent_dir).unwrap_or_else(|| slug.clone());
-            let icon_path = agent_dir.join("icon").join("icon.icns");
-            let icon_icns = std::fs::read(&icon_path).ok();
-            if let Err(e) = stub::generate(
-                slug,
-                &display_name,
-                &bundle_id,
-                &url_scheme,
-                icon_icns.as_deref(),
-                env!("CARGO_PKG_VERSION"),
-                &mur_home,
-            ) {
-                tracing::error!("--regenerate-stub failed for {slug}: {e}");
-                std::process::exit(1);
-            }
-            std::process::exit(0);
+    if let Some(pos) = args.iter().position(|a| a == "--regenerate-stub")
+        && let Some(slug) = args.get(pos + 1)
+    {
+        let mur_home = mur_home_path();
+        let bundle_id = format!("run.mur.agent.{slug}");
+        let url_scheme = format!("muragent-{slug}");
+        let agent_dir = mur_home.join("agents").join(slug);
+        let display_name = load_display_name_for_stub(&agent_dir).unwrap_or_else(|| slug.clone());
+        let icon_path = agent_dir.join("icon").join("icon.icns");
+        let icon_icns = std::fs::read(&icon_path).ok();
+        if let Err(e) = stub::generate(
+            slug,
+            &display_name,
+            &bundle_id,
+            &url_scheme,
+            icon_icns.as_deref(),
+            env!("CARGO_PKG_VERSION"),
+            &mur_home,
+        ) {
+            tracing::error!("--regenerate-stub failed for {slug}: {e}");
+            std::process::exit(1);
         }
+        std::process::exit(0);
     }
 
     let mur_home = mur_home_path();

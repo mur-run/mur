@@ -238,32 +238,25 @@ mod unix {
 
         let (tx, rx) = tokio::sync::mpsc::channel::<SidecarMessage>(64);
         tokio::spawn(async move {
-            loop {
-                match listener.accept().await {
-                    Ok((stream, _)) => {
-                        let tx2 = tx.clone();
-                        tokio::spawn(async move {
-                            let mut reader = BufReader::new(stream);
-                            let mut line = String::new();
-                            loop {
-                                line.clear();
-                                match reader.read_line(&mut line).await {
-                                    Ok(0) | Err(_) => break,
-                                    Ok(_) => {
-                                        if let Ok(msg) =
-                                            serde_json::from_str::<SidecarMessage>(line.trim())
-                                        {
-                                            if tx2.send(msg).await.is_err() {
-                                                break;
-                                            }
-                                        }
-                                    }
+            while let Ok((stream, _)) = listener.accept().await {
+                let tx2 = tx.clone();
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {
+                                if let Ok(msg) = serde_json::from_str::<SidecarMessage>(line.trim())
+                                    && tx2.send(msg).await.is_err()
+                                {
+                                    break;
                                 }
                             }
-                        });
+                        }
                     }
-                    Err(_) => break,
-                }
+                });
             }
         });
         Ok(rx)
