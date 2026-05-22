@@ -52,10 +52,7 @@ impl RevocationsList {
     ///
     /// `known_crl` is the `crl_number` from the last accepted list (or `None`
     /// on first fetch — in which case any validly-signed list is accepted).
-    pub fn parse_and_validate(
-        bytes: &[u8],
-        known_crl: Option<u64>,
-    ) -> Result<Self, MuragentError> {
+    pub fn parse_and_validate(bytes: &[u8], known_crl: Option<u64>) -> Result<Self, MuragentError> {
         let list: Self = serde_json::from_slice(bytes)
             .map_err(|e| MuragentError::Other(format!("revocations parse: {e}")))?;
 
@@ -96,9 +93,9 @@ impl RevocationsList {
     ///
     /// `manifest_hash` should be the `sha256:<hex>` string from the manifest.
     pub fn is_package_revoked(&self, manifest_hash: &str) -> bool {
-        self.revoked.iter().any(|e| {
-            matches!(e, RevokedEntry::Package { manifest_hash: h, .. } if h == manifest_hash)
-        })
+        self.revoked.iter().any(
+            |e| matches!(e, RevokedEntry::Package { manifest_hash: h, .. } if h == manifest_hash),
+        )
     }
 
     /// Returns `true` if the given author pubkey is revoked.

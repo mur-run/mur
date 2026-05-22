@@ -94,7 +94,11 @@ impl ExpressionStateMachine {
     }
 
     /// Process an event by name. Returns `Some(change)` if the expression changed.
-    pub fn process_event(&mut self, event_name: &str, payload_str: Option<&str>) -> Option<ExpressionChange> {
+    pub fn process_event(
+        &mut self,
+        event_name: &str,
+        payload_str: Option<&str>,
+    ) -> Option<ExpressionChange> {
         let trigger = self.triggers.iter().find(|t| t.on == event_name)?.clone();
         let new_prio = priority_of(&trigger.expression);
         let active_prio = self.active.as_ref().map(|s| s.priority).unwrap_or(0);
@@ -111,9 +115,12 @@ impl ExpressionStateMachine {
         self.last_fired = Some(Instant::now());
 
         let bubble_text = if trigger.bubble {
-            Some(trigger.message.clone().unwrap_or_else(|| {
-                payload_str.map(String::from).unwrap_or_default()
-            }))
+            Some(
+                trigger
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| payload_str.map(String::from).unwrap_or_default()),
+            )
         } else {
             None
         };
@@ -146,7 +153,11 @@ impl ExpressionStateMachine {
             if elapsed >= Duration::from_millis(200) {
                 self.lipsync_phase = !self.lipsync_phase;
                 self.lipsync_last_tick = Some(now);
-                let expression = if self.lipsync_phase { "talk_close" } else { "talk_open" };
+                let expression = if self.lipsync_phase {
+                    "talk_close"
+                } else {
+                    "talk_open"
+                };
                 return Some(ExpressionChange {
                     expression: expression.into(),
                     bubble_text: slot.bubble_text.clone(),
@@ -155,7 +166,11 @@ impl ExpressionStateMachine {
             return None;
         }
 
-        let expired = self.active.as_ref().map(|s| s.is_expired(now)).unwrap_or(false);
+        let expired = self
+            .active
+            .as_ref()
+            .map(|s| s.is_expired(now))
+            .unwrap_or(false);
         if !expired {
             return None;
         }
@@ -169,13 +184,20 @@ impl ExpressionStateMachine {
             Some(change)
         } else {
             self.active = None;
-            Some(ExpressionChange { expression: "idle".into(), bubble_text: None })
+            Some(ExpressionChange {
+                expression: "idle".into(),
+                bubble_text: None,
+            })
         }
     }
 
     /// Resolve a dwell that waits for an external signal (ack, done, etc.).
     pub fn resolve(&mut self, kind: DwellSpec) -> Option<ExpressionChange> {
-        let matches = self.active.as_ref().map(|s| s.dwell == kind).unwrap_or(false);
+        let matches = self
+            .active
+            .as_ref()
+            .map(|s| s.dwell == kind)
+            .unwrap_or(false);
         if !matches {
             return None;
         }
@@ -188,7 +210,10 @@ impl ExpressionStateMachine {
             Some(change)
         } else {
             self.active = None;
-            Some(ExpressionChange { expression: "idle".into(), bubble_text: None })
+            Some(ExpressionChange {
+                expression: "idle".into(),
+                bubble_text: None,
+            })
         }
     }
 }
