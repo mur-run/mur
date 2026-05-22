@@ -311,10 +311,10 @@ mod windows_ipc {
             Ok(Self { pipe_name, server })
         }
 
-        pub async fn accept_one(&self) -> Result<ActivationPayload> {
+        pub async fn accept_one(&mut self) -> Result<ActivationPayload> {
             use tokio::io::{AsyncBufReadExt, BufReader};
             self.server.connect().await.context("pipe connect")?;
-            let mut reader = BufReader::new(&self.server);
+            let mut reader = BufReader::new(&mut self.server);
             let mut line = String::new();
             reader.read_line(&mut line).await.context("read line")?;
             serde_json::from_str(line.trim()).context("parse payload")
