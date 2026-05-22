@@ -37,6 +37,12 @@ shell-words = "1"
 fs2 = "0.4"
 tracing = "0.1"
 sha2 = "0.10"
+serde_jcs = "0.2.0"
+unicode-normalization = "0.1.25"
+hex = "0.4.3"
+base64 = "0.22.1"
+tar = "0.4.46"
+flate2 = "1.1.9"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }

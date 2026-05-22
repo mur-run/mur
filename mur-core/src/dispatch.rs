@@ -636,6 +636,9 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 cmd::agent::cmd_export(&name, &out, &format)?;
             }
         }
+        AgentAction::Install { path } => cmd::agent::cmd_install(std::path::Path::new(&path))?,
+        AgentAction::Uninstall { name, purge } => cmd::agent::cmd_uninstall(&name, purge)?,
+        AgentAction::Inspect { path } => cmd::agent::cmd_inspect(std::path::Path::new(&path))?,
         AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
         AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
         AgentAction::Companion(args) => cmd::agent_companion::run(args).await?,
