@@ -54,22 +54,24 @@ mod platform {
 
     unsafe fn cf_string(s: &str) -> *const std::ffi::c_void {
         let c = CString::new(s).unwrap();
-        CFStringCreateWithCString(std::ptr::null(), c.as_ptr(), K_CF_STRING_ENCODING_UTF8)
+        unsafe { CFStringCreateWithCString(std::ptr::null(), c.as_ptr(), K_CF_STRING_ENCODING_UTF8) }
     }
 
     unsafe fn read_cf_focus_pref() -> bool {
-        let app_id = cf_string("com.apple.notificationcenterui");
-        let key = cf_string("doNotDisturb");
-        let val = CFPreferencesCopyAppValue(key, app_id);
-        CFRelease(key);
-        CFRelease(app_id);
-        if val.is_null() {
-            return false;
+        unsafe {
+            let app_id = cf_string("com.apple.notificationcenterui");
+            let key = cf_string("doNotDisturb");
+            let val = CFPreferencesCopyAppValue(key, app_id);
+            CFRelease(key);
+            CFRelease(app_id);
+            if val.is_null() {
+                return false;
+            }
+            let is_bool = CFGetTypeID(val) == CFBooleanGetTypeID();
+            let result = is_bool && CFBooleanGetValue(val);
+            CFRelease(val);
+            result
         }
-        let is_bool = CFGetTypeID(val) == CFBooleanGetTypeID();
-        let result = is_bool && CFBooleanGetValue(val);
-        CFRelease(val);
-        result
     }
 }
 
@@ -124,32 +126,34 @@ mod mic {
     }
 
     unsafe fn query_av_capture_mic_busy() -> bool {
-        // Link AVFoundation only if present.
-        let av_capture = CString::new("AVCaptureDevice").unwrap();
-        let cls = objc_getClass(av_capture.as_ptr());
-        if cls.is_null() {
-            return false;
+        unsafe {
+            // Link AVFoundation only if present.
+            let av_capture = CString::new("AVCaptureDevice").unwrap();
+            let cls = objc_getClass(av_capture.as_ptr());
+            if cls.is_null() {
+                return false;
+            }
+            let sel_default = CString::new("defaultDeviceWithMediaType:").unwrap();
+            let sel_busy = CString::new("isUsedByAnotherApplication").unwrap();
+            // kAVMediaTypeAudio is the NSString "soun"
+            let media_type_audio = {
+                let ns_string_class = CString::new("NSString").unwrap();
+                let ns_cls = objc_getClass(ns_string_class.as_ptr());
+                let sel_init = CString::new("stringWithUTF8String:").unwrap();
+                let c = CString::new("soun").unwrap();
+                objc_msgSend(ns_cls, sel_registerName(sel_init.as_ptr()), c.as_ptr())
+            };
+            let device = objc_msgSend(
+                cls,
+                sel_registerName(sel_default.as_ptr()),
+                media_type_audio,
+            );
+            if device.is_null() {
+                return false;
+            }
+            let busy = objc_msgSend(device, sel_registerName(sel_busy.as_ptr()));
+            busy as usize != 0
         }
-        let sel_default = CString::new("defaultDeviceWithMediaType:").unwrap();
-        let sel_busy = CString::new("isUsedByAnotherApplication").unwrap();
-        // kAVMediaTypeAudio is the NSString "soun"
-        let media_type_audio = {
-            let ns_string_class = CString::new("NSString").unwrap();
-            let ns_cls = objc_getClass(ns_string_class.as_ptr());
-            let sel_init = CString::new("stringWithUTF8String:").unwrap();
-            let c = CString::new("soun").unwrap();
-            objc_msgSend(ns_cls, sel_registerName(sel_init.as_ptr()), c.as_ptr())
-        };
-        let device = objc_msgSend(
-            cls,
-            sel_registerName(sel_default.as_ptr()),
-            media_type_audio,
-        );
-        if device.is_null() {
-            return false;
-        }
-        let busy = objc_msgSend(device, sel_registerName(sel_busy.as_ptr()));
-        busy as usize != 0
     }
 }
 
