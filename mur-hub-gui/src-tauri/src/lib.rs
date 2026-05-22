@@ -15,6 +15,7 @@ use companion::BridgeState;
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
 use mur_gui_core::event_bus::EventBus;
 use mur_gui_core::sidecar::{AgentRuntimeStatus, Supervisor};
+use mur_gui_core::stub;
 use onboarding::WizardState;
 use pet::{EventBusState, PetState};
 use std::path::PathBuf;
@@ -153,6 +154,34 @@ pub fn run() {
         "starting mur-hub-gui"
     );
 
+    // Handle --regenerate-stub <slug> emitted by mur-agent-launcher when it
+    // detects a Hub version mismatch (spec §5.4). Regenerate and exit.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--regenerate-stub") {
+        if let Some(slug) = args.get(pos + 1) {
+            let mur_home = mur_home_path();
+            let bundle_id = format!("run.mur.agent.{slug}");
+            let url_scheme = format!("muragent-{slug}");
+            let agent_dir = mur_home.join("agents").join(slug);
+            let display_name = load_display_name_for_stub(&agent_dir).unwrap_or_else(|| slug.clone());
+            let icon_path = agent_dir.join("icon").join("icon.icns");
+            let icon_icns = std::fs::read(&icon_path).ok();
+            if let Err(e) = stub::generate(
+                slug,
+                &display_name,
+                &bundle_id,
+                &url_scheme,
+                icon_icns.as_deref(),
+                env!("CARGO_PKG_VERSION"),
+                &mur_home,
+            ) {
+                tracing::error!("--regenerate-stub failed for {slug}: {e}");
+                std::process::exit(1);
+            }
+            std::process::exit(0);
+        }
+    }
+
     let mur_home = mur_home_path();
     // Write ~/.mur/host_path so mur-agent-launcher stubs can find the Hub binary
     // and detect version mismatches for self-update (spec §5.2, §5.4).
@@ -185,6 +214,9 @@ pub fn run() {
 
             // Bridge supervisor status → Tauri events.
             spawn_runtime_watcher(app.handle().clone(), runtime_rx);
+
+            // Scan for stale OS stubs and regenerate in a background task (§5.4).
+            stub::scan_and_regenerate_stale(env!("CARGO_PKG_VERSION").into(), mur_home.clone());
 
             // Register global shortcut CmdOrCtrl+Shift+M → toggle_popover.
             let handle = app.handle().clone();
@@ -309,6 +341,20 @@ fn init_tracing() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .try_init();
+}
+
+fn load_display_name_for_stub(agent_dir: &std::path::Path) -> Option<String> {
+    let yaml = std::fs::read_to_string(agent_dir.join("profile.yaml")).ok()?;
+    for line in yaml.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("name:") {
+            let name = rest.trim().trim_matches('"').trim_matches('\'');
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

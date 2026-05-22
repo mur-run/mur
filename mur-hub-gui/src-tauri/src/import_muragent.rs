@@ -22,6 +22,7 @@ use mur_common::muragent::manifest::{MuragentManifest, Surface};
 use mur_common::muragent::reader::MuragentArchive;
 use mur_common::muragent::validator;
 use mur_common::trust::{self, TrustLevel, TrustStore};
+use mur_gui_core::autostart;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,6 +170,22 @@ fn install_inner(path: &Path) -> anyhow::Result<InstallReceipt> {
         }
     };
 
+    // Register and start the agent via the OS init system (spec §3.1).
+    // Both calls are best-effort — the agent is already installed on disk.
+    let slug = &outcome.manifest.agent.slug;
+    let bundle_id = &outcome.manifest.agent.bundle_id;
+    if let Ok(runtime_bin) = find_runtime_binary_for_autostart() {
+        if let Err(e) = autostart::register(slug, &outcome.manifest.agent.display_name, &runtime_bin, &mur_home) {
+            tracing::warn!("autostart register failed for {slug}: {e}");
+        }
+        if let Err(e) = autostart::start_service(slug) {
+            tracing::warn!("autostart start_service failed for {slug}: {e}");
+        }
+    } else {
+        tracing::warn!("mur-agent-runtime binary not found; skipping autostart for {slug}");
+    }
+    let _ = bundle_id;
+
     Ok(InstallReceipt {
         display_name: outcome.manifest.agent.display_name.clone(),
         slug: outcome.manifest.agent.slug.clone(),
@@ -177,6 +194,20 @@ fn install_inner(path: &Path) -> anyhow::Result<InstallReceipt> {
         fingerprint_hex: outcome.fingerprint_hex,
         stub_path,
     })
+}
+
+fn find_runtime_binary_for_autostart() -> anyhow::Result<std::path::PathBuf> {
+    let exe = std::env::current_exe()?;
+    let dir = exe.parent().ok_or_else(|| anyhow::anyhow!("no parent"))?;
+    #[cfg(target_os = "windows")]
+    let name = "mur-agent-runtime.exe";
+    #[cfg(not(target_os = "windows"))]
+    let name = "mur-agent-runtime";
+    let candidate = dir.join(name);
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+    anyhow::bail!("mur-agent-runtime not found at {}", candidate.display())
 }
 
 fn build_inspection(

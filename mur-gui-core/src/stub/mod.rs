@@ -59,3 +59,164 @@ pub fn generate(
         anyhow::bail!("stub generation not implemented for this platform");
     }
 }
+
+/// Scan existing stubs for a stale hub version and regenerate them (spec §5.4).
+///
+/// Called once on Hub startup in a background tokio task after a short delay so
+/// the UI is ready first. Idempotent — stubs already at the current version are
+/// skipped.
+pub fn scan_and_regenerate_stale(hub_version: String, mur_home: PathBuf) {
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        if let Err(e) = scan_stale_sync(&hub_version, &mur_home) {
+            tracing::warn!("stub scan failed: {e}");
+        }
+    });
+}
+
+fn scan_stale_sync(hub_version: &str, mur_home: &Path) -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    scan_stale_macos(hub_version, mur_home)?;
+
+    #[cfg(target_os = "linux")]
+    scan_stale_linux(hub_version, mur_home)?;
+
+    // Windows: stubs are .lnk files with no embedded version field; skip for now.
+    let _ = (hub_version, mur_home);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn scan_stale_macos(hub_version: &str, mur_home: &Path) -> anyhow::Result<()> {
+    use std::ffi::OsStr;
+
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("HOME not set"))?;
+    let apps_dir = home.join("Applications");
+    if !apps_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(&apps_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension() != Some(OsStr::new("app")) {
+            continue;
+        }
+        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if !name.starts_with("MuR-Agent-") {
+            continue;
+        }
+
+        let resources = path.join("Contents").join("Resources");
+        let version_file = resources.join("host_version.txt");
+        let agent_file = resources.join("agent.txt");
+
+        let Ok(stub_version) = std::fs::read_to_string(&version_file) else { continue };
+        let stub_version = stub_version.trim();
+        if stub_version == hub_version {
+            continue;
+        }
+
+        let Ok(slug) = std::fs::read_to_string(&agent_file) else { continue };
+        let slug = slug.trim().to_string();
+
+        tracing::info!("regenerating stale stub for {slug} ({stub_version} → {hub_version})");
+        if let Err(e) = regenerate_from_slug(&slug, hub_version, mur_home) {
+            tracing::warn!("stub regeneration failed for {slug}: {e}");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn scan_stale_linux(hub_version: &str, mur_home: &Path) -> anyhow::Result<()> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("HOME not set"))?;
+    let desktop_dir = home.join(".local").join("share").join("applications");
+    if !desktop_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(&desktop_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if !name.starts_with("run.mur.agent.") || !name.ends_with(".desktop") {
+            continue;
+        }
+
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let stub_version = content
+            .lines()
+            .find_map(|l| l.strip_prefix("X-Mur-Host-Version="))
+            .unwrap_or("");
+        if stub_version == hub_version {
+            continue;
+        }
+
+        // Slug is embedded in the filename: run.mur.agent.<slug>.desktop
+        let slug = name
+            .strip_prefix("run.mur.agent.")
+            .and_then(|s| s.strip_suffix(".desktop"))
+            .unwrap_or("")
+            .to_string();
+        if slug.is_empty() {
+            continue;
+        }
+
+        tracing::info!("regenerating stale stub for {slug} ({stub_version} → {hub_version})");
+        if let Err(e) = regenerate_from_slug(&slug, hub_version, mur_home) {
+            tracing::warn!("stub regeneration failed for {slug}: {e}");
+        }
+    }
+    Ok(())
+}
+
+/// Regenerate the stub for `slug` using profile info from the installed agent dir.
+fn regenerate_from_slug(slug: &str, hub_version: &str, mur_home: &Path) -> anyhow::Result<()> {
+    let agent_dir = mur_home.join("agents").join(slug);
+
+    // Load display name from profile.yaml (or fall back to slug).
+    let display_name = load_display_name_from_profile(&agent_dir).unwrap_or_else(|| slug.to_string());
+
+    // bundle_id and url_scheme are deterministic from slug.
+    let bundle_id = format!("run.mur.agent.{slug}");
+    let url_scheme = format!("muragent-{slug}");
+
+    // Load icon if present.
+    let icon_path = agent_dir.join("icon").join("icon.icns");
+    let icon_icns = std::fs::read(&icon_path).ok();
+
+    generate(slug, &display_name, &bundle_id, &url_scheme, icon_icns.as_deref(), hub_version, mur_home)?;
+    Ok(())
+}
+
+fn load_display_name_from_profile(agent_dir: &Path) -> Option<String> {
+    let profile_yaml = std::fs::read_to_string(agent_dir.join("profile.yaml")).ok()?;
+    // Extract `name:` field with a simple scan rather than pulling a full parser.
+    for line in profile_yaml.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("name:") {
+            let name = rest.trim().trim_matches('"').trim_matches('\'');
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_does_not_panic_on_missing_dir() {
+        // Just verify the sync scanner returns Ok when the stubs dir doesn't exist.
+        let mur_home = std::path::PathBuf::from("/tmp/nonexistent-mur-scan-test");
+        assert!(scan_stale_sync("2.0.0", &mur_home).is_ok());
+    }
+}

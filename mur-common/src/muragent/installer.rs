@@ -27,11 +27,13 @@ use crate::muragent::manifest::MuragentManifest;
 use crate::muragent::reader::MuragentArchive;
 use crate::muragent::validator::{self, ValidationResult};
 use crate::trust::{self, TrustEntry, TrustLevel, TrustStore};
+use crate::trust::rotation::RotationManifest;
 
 /// Files in the .muragent that belong to the package envelope (not payload).
 const ENVELOPE_FILES: &[&str] = &["manifest.yaml", "manifest.signed.json", "signatures.json"];
 
 /// Result of a successful install or update.
+#[derive(Debug)]
 pub struct InstallOutcome {
     pub manifest: MuragentManifest,
     pub trust_level: TrustLevel,
@@ -75,11 +77,23 @@ pub fn install(
     if existing_by_pubkey.is_none() {
         let by_name = trust_store.find_by_display_name(&display_name);
         if !by_name.is_empty() {
-            return Err(MuragentError::TrustRefused(format!(
-                "agent '{}' has a new signing key but no rotation manifest is present \
-                 (possible impersonation; remove the existing trust entry first if intentional)",
-                display_name
-            )));
+            // Key change detected — look for a rotation manifest before refusing.
+            let old_entry = by_name.into_iter().find(|e| e.trust_level != TrustLevel::Superseded).cloned();
+            match try_apply_rotation(
+                &mut trust_store,
+                old_entry.as_ref(),
+                &author_pubkey_b64,
+                &display_name,
+                mur_home,
+            ) {
+                Ok(()) => {} // rotation accepted; trust store updated in-place
+                Err(reason) => {
+                    return Err(MuragentError::TrustRefused(format!(
+                        "agent '{}' has a new signing key but no valid rotation manifest: {}",
+                        display_name, reason
+                    )));
+                }
+            }
         }
     }
 
@@ -131,6 +145,101 @@ pub fn install(
         fingerprint_words,
         was_update,
     })
+}
+
+/// Convert a display name to a filesystem-safe slug for rotation manifest lookup.
+fn display_name_slug(name: &str) -> String {
+    name.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn rotation_manifest_path(mur_home: &Path, display_name: &str) -> PathBuf {
+    mur_home
+        .join("trust")
+        .join("rotations")
+        .join(format!("{}.yaml", display_name_slug(display_name)))
+}
+
+/// Try to load and apply a key rotation manifest. Returns Ok(()) if the
+/// rotation is valid and the trust store has been updated in-place. Returns
+/// Err(reason) if the manifest is missing, invalid, or replayed.
+fn try_apply_rotation(
+    trust_store: &mut TrustStore,
+    old_entry: Option<&TrustEntry>,
+    new_pubkey_b64: &str,
+    display_name: &str,
+    mur_home: &Path,
+) -> Result<(), String> {
+    let manifest_path = rotation_manifest_path(mur_home, display_name);
+    if !manifest_path.exists() {
+        return Err(
+            "no rotation manifest is present (possible impersonation; place \
+             <display_name>.yaml in ~/.mur/trust/rotations/ if intentional)"
+                .into(),
+        );
+    }
+
+    let yaml = fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("read rotation manifest: {e}"))?;
+    let manifest: RotationManifest =
+        serde_yaml_ng::from_str(&yaml).map_err(|e| format!("parse rotation manifest: {e}"))?;
+
+    // Cross-check: manifest must reference the known old key and the incoming new key.
+    if let Some(entry) = old_entry {
+        if manifest.old_pubkey != entry.public_key {
+            return Err("rotation manifest old_pubkey does not match the known trust entry".into());
+        }
+    }
+    if manifest.new_pubkey != new_pubkey_b64 {
+        return Err("rotation manifest new_pubkey does not match the package's signing key".into());
+    }
+
+    // Cryptographic verification (old key signs, new key countersigns).
+    manifest.verify()?;
+
+    // Replay prevention: issued_at must be strictly newer than last_rotation_at.
+    if let Some(entry) = old_entry {
+        if let Some(last_at) = &entry.last_rotation_at {
+            if manifest.issued_at <= *last_at {
+                return Err(format!(
+                    "rotation manifest issued_at ({}) is not newer than last_rotation_at ({})",
+                    manifest.issued_at, last_at
+                ));
+            }
+        }
+    }
+
+    // Apply: mark old entry Superseded, insert new entry.
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Some(entry) = old_entry.cloned() {
+        trust_store.upsert(TrustEntry {
+            trust_level: TrustLevel::Superseded,
+            superseded_at: Some(manifest.issued_at.clone()),
+            last_rotation_at: Some(manifest.issued_at.clone()),
+            ..entry
+        });
+    }
+    trust_store.upsert(TrustEntry {
+        public_key: new_pubkey_b64.to_string(),
+        display_name_seen: display_name.to_string(),
+        first_seen: now.clone(),
+        last_seen: now,
+        last_seen_surface: String::new(), // filled by caller during upsert_trust
+        trust_level: TrustLevel::Pending,
+        fingerprint: String::new(), // filled by caller
+        word_list: String::new(),   // filled by caller
+        rotated_from: old_entry.map(|e| e.public_key.clone()),
+        superseded_at: None,
+        last_rotation_at: Some(manifest.issued_at.clone()),
+    });
+
+    Ok(())
 }
 
 /// Remove every entry in `dir` except `data/`. Used by the update path.
@@ -218,6 +327,69 @@ mod tests {
         writer.add_icon("icon-512.png", b"fake-png".to_vec());
         writer.write(&out).unwrap();
         out
+    }
+
+    fn make_test_package_with_identity(
+        tmp: &TempDir,
+        identity: &AgentIdentity,
+    ) -> std::path::PathBuf {
+        let out = tmp.path().join(format!("{}.muragent", &identity.pubkey_text()[..8]));
+        let profile = AgentProfile::default_for_tests();
+        let manifest = build_manifest_from_profile(&profile, "2.13.0");
+        let profile_yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        let mut writer = MuragentWriter::new(manifest, profile_yaml, identity.clone());
+        writer.add_icon("icon-512.png", b"fake-png".to_vec());
+        writer.write(&out).unwrap();
+        out
+    }
+
+    #[test]
+    fn rotation_manifest_missing_still_refuses() {
+        let _guard = crate::trust::test_env_lock::MUR_HOME_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path().join("mur");
+        let prev = std::env::var_os("MUR_HOME");
+        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+
+        let old_identity = AgentIdentity::generate();
+        let pkg_old = make_test_package_with_identity(&tmp, &old_identity);
+        let archive = MuragentArchive::read(&pkg_old).unwrap();
+        let outcome = install(&archive, &mur_home, "test").unwrap();
+        let slug = outcome.manifest.agent.slug.clone();
+
+        let new_identity = AgentIdentity::generate();
+        let profile = AgentProfile::default_for_tests();
+        let out2 = tmp.path().join("new2.muragent");
+        let manifest2 = build_manifest_from_profile(&profile, "2.14.0");
+        let profile_yaml2 = serde_yaml_ng::to_string(&profile).unwrap();
+        let mut writer2 = MuragentWriter::new(manifest2, profile_yaml2, new_identity);
+        writer2.add_icon("icon-512.png", b"fake-png".to_vec());
+        writer2.write(&out2).unwrap();
+        let archive2 = MuragentArchive::read(&out2).unwrap();
+        let agent_dir = mur_home.join("agents").join(&slug);
+        fs::remove_dir_all(&agent_dir).unwrap();
+
+        let err = install(&archive2, &mur_home, "test").unwrap_err();
+        assert!(
+            matches!(err, MuragentError::TrustRefused(_)),
+            "expected TrustRefused, got: {:?}",
+            err
+        );
+
+        unsafe {
+            if let Some(p) = prev {
+                std::env::set_var("MUR_HOME", p);
+            } else {
+                std::env::remove_var("MUR_HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn display_name_slug_roundtrip() {
+        assert_eq!(display_name_slug("My Agent"), "my-agent");
+        assert_eq!(display_name_slug("Coach (Beta)"), "coach-beta");
+        assert_eq!(display_name_slug("test"), "test");
     }
 
     #[test]

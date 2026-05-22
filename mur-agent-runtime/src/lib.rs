@@ -14,6 +14,7 @@ pub mod companion;
 pub mod crashlog;
 pub mod durable;
 pub mod entitlements;
+pub mod expression;
 pub mod export;
 pub mod federation;
 pub mod hooks;
