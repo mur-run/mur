@@ -110,8 +110,8 @@ pub fn install_muragent_file(path: String) -> Result<InstallReceipt, String> {
 }
 
 fn inspect_inner(path: &Path) -> anyhow::Result<MuragentInspection> {
-    let archive = MuragentArchive::read(path)
-        .map_err(|e| anyhow::anyhow!("read .muragent: {e}"))?;
+    let archive =
+        MuragentArchive::read(path).map_err(|e| anyhow::anyhow!("read .muragent: {e}"))?;
 
     // Validate the archive fully. Signature/integrity failures land in the
     // returned inspection so the UI renders a clear refusal screen rather
@@ -136,11 +136,11 @@ fn inspect_inner(path: &Path) -> anyhow::Result<MuragentInspection> {
 }
 
 fn install_inner(path: &Path) -> anyhow::Result<InstallReceipt> {
-    let archive = MuragentArchive::read(path)
-        .map_err(|e| anyhow::anyhow!("read .muragent: {e}"))?;
+    let archive =
+        MuragentArchive::read(path).map_err(|e| anyhow::anyhow!("read .muragent: {e}"))?;
     let mur_home = trust::mur_home();
-    let outcome = installer::install(&archive, &mur_home, "hub")
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let outcome =
+        installer::install(&archive, &mur_home, "hub").map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Generate the per-agent OS stub (Dock icon / URL scheme / Start Menu entry).
     // Read the installed icon so the stub can show a proper icon.
@@ -165,7 +165,10 @@ fn install_inner(path: &Path) -> anyhow::Result<InstallReceipt> {
             // Stub generation is best-effort: log the error but don't fail
             // the install. The agent is installed and usable; the user just
             // won't have an OS stub until they reinstall or Hub retries.
-            tracing::warn!("stub generation failed for {}: {e}", outcome.manifest.agent.slug);
+            tracing::warn!(
+                "stub generation failed for {}: {e}",
+                outcome.manifest.agent.slug
+            );
             String::new()
         }
     };
@@ -175,7 +178,12 @@ fn install_inner(path: &Path) -> anyhow::Result<InstallReceipt> {
     let slug = &outcome.manifest.agent.slug;
     let bundle_id = &outcome.manifest.agent.bundle_id;
     if let Ok(runtime_bin) = find_runtime_binary_for_autostart() {
-        if let Err(e) = autostart::register(slug, &outcome.manifest.agent.display_name, &runtime_bin, &mur_home) {
+        if let Err(e) = autostart::register(
+            slug,
+            &outcome.manifest.agent.display_name,
+            &runtime_bin,
+            &mur_home,
+        ) {
             tracing::warn!("autostart register failed for {slug}: {e}");
         }
         if let Err(e) = autostart::start_service(slug) {
@@ -216,8 +224,7 @@ fn build_inspection(
     valid: Option<&validator::ValidationResult>,
     signature_error: Option<String>,
 ) -> anyhow::Result<MuragentInspection> {
-    let trust_store = TrustStore::load()
-        .map_err(|e| anyhow::anyhow!("load trust store: {e}"))?;
+    let trust_store = TrustStore::load().map_err(|e| anyhow::anyhow!("load trust store: {e}"))?;
 
     let (fingerprint_hex, fingerprint_words, author_keyid, pubkey_b64) = match valid {
         Some(r) => (
@@ -226,12 +233,7 @@ fn build_inspection(
             r.keyid.clone(),
             B64.encode(r.author_pubkey),
         ),
-        None => (
-            "—".into(),
-            "—".into(),
-            "—".into(),
-            String::new(),
-        ),
+        None => ("—".into(), "—".into(), "—".into(), String::new()),
     };
 
     let trust_status = if valid.is_none() {
