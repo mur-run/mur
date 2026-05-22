@@ -12,6 +12,7 @@
 //! Payload encoding: JSON (spec suggests CBOR; JSON avoids a new dep in v1).
 
 use anyhow::{Context, Result};
+use mur_common::expression::ExpressionChange;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -80,10 +81,40 @@ pub fn ipc_channel_path(slug: &str, mur_home: &Path) -> std::path::PathBuf {
     }
 }
 
+/// Returns the sidecar-to-Hub push stream socket path for a given agent slug.
+///
+/// The runtime connects to this socket and writes `SidecarMessage` lines.
+/// Hub listens on it in a background task per agent.
+pub fn sidecar_stream_path(slug: &str, mur_home: &Path) -> std::path::PathBuf {
+    #[cfg(not(target_os = "windows"))]
+    {
+        mur_home.join("agents").join(slug).join("sidecar.sock")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (slug, mur_home);
+        std::path::PathBuf::from(format!(r"\\.\pipe\mur-sidecar-{slug}"))
+    }
+}
+
+/// Message pushed from mur-agent-runtime → Hub over the sidecar stream socket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SidecarMessage {
+    /// Expression state update for the pet window.
+    ExpressionUpdate {
+        change: ExpressionChange,
+        agent_id: String,
+        ts: i64,
+    },
+    /// Heartbeat from the sidecar to signal liveness.
+    Heartbeat { ts: i64 },
+}
+
 // ── Unix (macOS + Linux) ──────────────────────────────────────────────────────
 
 #[cfg(not(target_os = "windows"))]
-pub use unix::{send_activation, IpcServer};
+pub use unix::{accept_sidecar_stream, connect_sidecar_stream, send_activation, IpcServer};
 
 #[cfg(not(target_os = "windows"))]
 mod unix {
@@ -161,6 +192,84 @@ mod unix {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.socket_path);
         }
+    }
+
+    /// Connect to Hub's sidecar stream socket and return a channel for pushing
+    /// `SidecarMessage`s. Used by mur-agent-runtime.
+    ///
+    /// Returns `None` if Hub's socket doesn't exist yet (agent started before Hub).
+    pub async fn connect_sidecar_stream(
+        slug: &str,
+        mur_home: &Path,
+    ) -> Option<tokio::sync::mpsc::Sender<SidecarMessage>> {
+        let path = crate::ipc::sidecar_stream_path(slug, mur_home);
+        let stream = UnixStream::connect(&path).await.ok()?;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<SidecarMessage>(32);
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let mut stream = stream;
+            while let Some(msg) = rx.recv().await {
+                let Ok(mut json) = serde_json::to_vec(&msg) else { break };
+                json.push(b'\n');
+                if stream.write_all(&json).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Some(tx)
+    }
+
+    /// Bind Hub's sidecar stream socket and return a channel that receives
+    /// `SidecarMessage`s pushed by the runtime. Used by Hub.
+    pub async fn accept_sidecar_stream(
+        slug: &str,
+        mur_home: &Path,
+    ) -> Result<tokio::sync::mpsc::Receiver<SidecarMessage>> {
+        let path = crate::ipc::sidecar_stream_path(slug, mur_home);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .context("create sidecar dir")?;
+        }
+        if path.exists() {
+            let _ = tokio::fs::remove_file(&path).await;
+        }
+        let listener = UnixListener::bind(&path).context("bind sidecar socket")?;
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .context("chmod sidecar socket")?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<SidecarMessage>(64);
+        tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, _)) => {
+                        let tx2 = tx.clone();
+                        tokio::spawn(async move {
+                            let mut reader = BufReader::new(stream);
+                            let mut line = String::new();
+                            loop {
+                                line.clear();
+                                match reader.read_line(&mut line).await {
+                                    Ok(0) | Err(_) => break,
+                                    Ok(_) => {
+                                        if let Ok(msg) = serde_json::from_str::<SidecarMessage>(line.trim()) {
+                                            if tx2.send(msg).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Ok(rx)
     }
 
     /// Connect to a running IPC server for `slug` and send one activation.
@@ -286,6 +395,27 @@ mod tests {
         let _server = IpcServer::bind(slug, mur_home).await.unwrap();
         let result = IpcServer::bind(slug, mur_home).await;
         assert!(result.is_err(), "second bind should fail");
+    }
+
+    #[test]
+    fn sidecar_message_roundtrip() {
+        use mur_common::expression::ExpressionChange;
+
+        let msg = SidecarMessage::ExpressionUpdate {
+            change: ExpressionChange {
+                expression: "smile".into(),
+                bubble_text: Some("hello".into()),
+            },
+            agent_id: "agent-1".into(),
+            ts: 1_700_000_000,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"kind\":\"expression_update\""));
+        assert!(json.contains("smile"));
+
+        let hb = SidecarMessage::Heartbeat { ts: 1_700_000_001 };
+        let hb_json = serde_json::to_string(&hb).unwrap();
+        assert!(hb_json.contains("\"kind\":\"heartbeat\""));
     }
 
     #[test]
