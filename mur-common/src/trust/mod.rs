@@ -7,7 +7,7 @@ pub mod legacy;
 pub mod revocations;
 pub mod rotation;
 
-pub use revocations::{RevokedEntry, RevocationsList};
+pub use revocations::{RevocationsList, RevokedEntry};
 
 use crate::muragent::MuragentError;
 use serde::{Deserialize, Serialize};

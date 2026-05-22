@@ -114,7 +114,7 @@ pub enum SidecarMessage {
 // ── Unix (macOS + Linux) ──────────────────────────────────────────────────────
 
 #[cfg(not(target_os = "windows"))]
-pub use unix::{accept_sidecar_stream, connect_sidecar_stream, send_activation, IpcServer};
+pub use unix::{IpcServer, accept_sidecar_stream, connect_sidecar_stream, send_activation};
 
 #[cfg(not(target_os = "windows"))]
 mod unix {
@@ -161,14 +161,10 @@ mod unix {
                 }
             }
 
-            let listener =
-                UnixListener::bind(&path).context("bind unix socket")?;
+            let listener = UnixListener::bind(&path).context("bind unix socket")?;
             // Restrict to owner-only (0600).
-            std::fs::set_permissions(
-                &path,
-                std::fs::Permissions::from_mode(0o600),
-            )
-            .context("chmod ipc socket")?;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .context("chmod ipc socket")?;
 
             Ok(Self {
                 listener,
@@ -209,7 +205,9 @@ mod unix {
             use tokio::io::AsyncWriteExt;
             let mut stream = stream;
             while let Some(msg) = rx.recv().await {
-                let Ok(mut json) = serde_json::to_vec(&msg) else { break };
+                let Ok(mut json) = serde_json::to_vec(&msg) else {
+                    break;
+                };
                 json.push(b'\n');
                 if stream.write_all(&json).await.is_err() {
                     break;
@@ -235,11 +233,8 @@ mod unix {
             let _ = tokio::fs::remove_file(&path).await;
         }
         let listener = UnixListener::bind(&path).context("bind sidecar socket")?;
-        std::fs::set_permissions(
-            &path,
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .context("chmod sidecar socket")?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .context("chmod sidecar socket")?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<SidecarMessage>(64);
         tokio::spawn(async move {
@@ -255,7 +250,9 @@ mod unix {
                                 match reader.read_line(&mut line).await {
                                     Ok(0) | Err(_) => break,
                                     Ok(_) => {
-                                        if let Ok(msg) = serde_json::from_str::<SidecarMessage>(line.trim()) {
+                                        if let Ok(msg) =
+                                            serde_json::from_str::<SidecarMessage>(line.trim())
+                                        {
                                             if tx2.send(msg).await.is_err() {
                                                 break;
                                             }
@@ -292,7 +289,7 @@ mod unix {
 // ── Windows ───────────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
-pub use windows_ipc::{send_activation, IpcServer};
+pub use windows_ipc::{IpcServer, send_activation};
 
 #[cfg(target_os = "windows")]
 mod windows_ipc {
@@ -311,10 +308,7 @@ mod windows_ipc {
                 .first_pipe_instance(true)
                 .create(&pipe_name)
                 .context("create named pipe")?;
-            Ok(Self {
-                pipe_name,
-                server,
-            })
+            Ok(Self { pipe_name, server })
         }
 
         pub async fn accept_one(&self) -> Result<ActivationPayload> {

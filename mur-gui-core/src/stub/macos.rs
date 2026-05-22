@@ -159,7 +159,13 @@ fn stub_app_path(display_name: &str) -> Result<PathBuf> {
         .context("HOME env var not set")?;
     let safe_name: String = display_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let apps_dir = home.join("Applications");
     std::fs::create_dir_all(&apps_dir).context("create ~/Applications")?;
@@ -308,7 +314,10 @@ mod tests {
         let plist = info_plist("coach", "Coach", "run.mur.agent.coach", "muragent-coach");
         assert!(plist.contains("run.mur.agent.coach"), "bundle_id missing");
         assert!(plist.contains("muragent-coach"), "url_scheme missing");
-        assert!(plist.contains("<string>coach</string>"), "executable missing");
+        assert!(
+            plist.contains("<string>coach</string>"),
+            "executable missing"
+        );
         assert!(plist.contains("Coach"), "display_name missing");
     }
 
@@ -319,7 +328,13 @@ mod tests {
         // doesn't contain slashes.
         let safe: String = "My Agent / Test"
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
             .collect();
         assert!(!safe.contains('/'));
         assert_eq!(safe, "My-Agent---Test");
