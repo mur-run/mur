@@ -194,10 +194,10 @@ fn try_apply_rotation(
         serde_yaml_ng::from_str(&yaml).map_err(|e| format!("parse rotation manifest: {e}"))?;
 
     // Cross-check: manifest must reference the known old key and the incoming new key.
-    if let Some(entry) = old_entry {
-        if manifest.old_pubkey != entry.public_key {
-            return Err("rotation manifest old_pubkey does not match the known trust entry".into());
-        }
+    if let Some(entry) = old_entry
+        && manifest.old_pubkey != entry.public_key
+    {
+        return Err("rotation manifest old_pubkey does not match the known trust entry".into());
     }
     if manifest.new_pubkey != new_pubkey_b64 {
         return Err("rotation manifest new_pubkey does not match the package's signing key".into());
@@ -207,15 +207,14 @@ fn try_apply_rotation(
     manifest.verify()?;
 
     // Replay prevention: issued_at must be strictly newer than last_rotation_at.
-    if let Some(entry) = old_entry {
-        if let Some(last_at) = &entry.last_rotation_at {
-            if manifest.issued_at <= *last_at {
-                return Err(format!(
-                    "rotation manifest issued_at ({}) is not newer than last_rotation_at ({})",
-                    manifest.issued_at, last_at
-                ));
-            }
-        }
+    if let Some(entry) = old_entry
+        && let Some(last_at) = &entry.last_rotation_at
+        && manifest.issued_at <= *last_at
+    {
+        return Err(format!(
+            "rotation manifest issued_at ({}) is not newer than last_rotation_at ({})",
+            manifest.issued_at, last_at
+        ));
     }
 
     // Apply: mark old entry Superseded, insert new entry.
