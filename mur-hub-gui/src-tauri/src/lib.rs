@@ -163,7 +163,8 @@ pub fn run() {
             let bundle_id = format!("run.mur.agent.{slug}");
             let url_scheme = format!("muragent-{slug}");
             let agent_dir = mur_home.join("agents").join(slug);
-            let display_name = load_display_name_for_stub(&agent_dir).unwrap_or_else(|| slug.clone());
+            let display_name =
+                load_display_name_for_stub(&agent_dir).unwrap_or_else(|| slug.clone());
             let icon_path = agent_dir.join("icon").join("icon.icns");
             let icon_icns = std::fs::read(&icon_path).ok();
             if let Err(e) = stub::generate(
@@ -325,8 +326,7 @@ fn write_host_path(version: &str, mur_home: &std::path::Path) -> anyhow::Result<
     let exe = std::env::current_exe()?
         .canonicalize()
         .unwrap_or_else(|_| std::env::current_exe().unwrap());
-    std::fs::create_dir_all(mur_home)
-        .map_err(|e| anyhow::anyhow!("create mur_home: {e}"))?;
+    std::fs::create_dir_all(mur_home).map_err(|e| anyhow::anyhow!("create mur_home: {e}"))?;
     let tmp = mur_home.join("host_path.tmp");
     std::fs::write(&tmp, format!("{}\n{}", exe.display(), version))
         .map_err(|e| anyhow::anyhow!("write host_path.tmp: {e}"))?;
