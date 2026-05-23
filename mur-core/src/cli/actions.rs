@@ -645,3 +645,33 @@ pub enum SleepAction {
     /// Show current sleep cycle configuration.
     Status,
 }
+
+#[derive(Subcommand)]
+pub enum ProjectAction {
+    /// Index a project's source code for semantic search
+    Index {
+        #[arg(long)]
+        path: Option<String>,
+        #[arg(long)]
+        rebuild: bool,
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Search indexed code for a query
+    Search {
+        query: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "5")]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show indexing status for a project
+    Status {
+        #[arg(long)]
+        path: Option<String>,
+    },
+    /// List all indexed projects
+    List,
+}

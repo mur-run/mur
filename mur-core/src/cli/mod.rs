@@ -435,4 +435,9 @@ pub enum Commands {
         #[command(subcommand)]
         action: SleepAction,
     },
+    /// Index and search project source code
+    Project {
+        #[command(subcommand)]
+        action: ProjectAction,
+    },
 }
