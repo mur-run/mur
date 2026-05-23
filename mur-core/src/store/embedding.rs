@@ -71,15 +71,23 @@ pub async fn embed(text: &str, config: &EmbeddingConfig) -> Result<Vec<f32>> {
     }
 }
 
-/// Batch embed multiple texts.
-#[allow(dead_code)] // Public API for batch operations
+/// Batch embed multiple texts. Uses native batch API for Ollama, sequential for OpenAI.
 pub async fn embed_batch(texts: &[String], config: &EmbeddingConfig) -> Result<Vec<Vec<f32>>> {
-    // For now, sequential. Could parallelize later.
-    let mut results = Vec::with_capacity(texts.len());
-    for text in texts {
-        results.push(embed(text, config).await?);
+    if texts.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(results)
+    match &config.provider {
+        EmbeddingProvider::Ollama { base_url } => {
+            embed_ollama_batch(texts, base_url, &config.model).await
+        }
+        EmbeddingProvider::OpenAI { .. } => {
+            let mut results = Vec::with_capacity(texts.len());
+            for text in texts {
+                results.push(embed(text, config).await?);
+            }
+            Ok(results)
+        }
+    }
 }
 
 // ─── Ollama ──────────────────────────────────────────────────────
@@ -118,6 +126,32 @@ async fn embed_ollama(text: &str, base_url: &str, model: &str) -> Result<Vec<f32
         .into_iter()
         .next()
         .context("no embedding returned")
+}
+
+async fn embed_ollama_batch(
+    texts: &[String],
+    base_url: &str,
+    model: &str,
+) -> Result<Vec<Vec<f32>>> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/api/embed", base_url))
+        .json(&serde_json::json!({
+            "model": model,
+            "input": texts,
+        }))
+        .send()
+        .await
+        .context("calling Ollama batch embed API")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Ollama API error {}: {}", status, body);
+    }
+
+    let data: OllamaEmbedResponse = resp.json().await.context("parsing Ollama batch response")?;
+    Ok(data.embeddings)
 }
 
 // ─── OpenAI ─────────────────────────────────────────────────────

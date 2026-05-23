@@ -9,6 +9,7 @@ pub mod auth;
 pub mod bridge_keychain;
 pub mod capture;
 pub mod character_card;
+pub mod codebase;
 pub mod daemon;
 // `cmd` is shared with the binary (`main.rs`). When compiled as part of the
 // library, most CLI dispatch fns are unreachable — they're only invoked by
