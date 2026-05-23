@@ -160,6 +160,16 @@ jobs:
           EOF
           chmod +x scripts-pkg/postinstall
 
+      - name: Sign binary with hardened runtime
+        run: |
+          codesign --force --options runtime --timestamp \
+            --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
+            pkg-root/usr/local/bin/mur
+          codesign --verify --verbose pkg-root/usr/local/bin/mur
+        env:
+          APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
       - name: Build .pkg
         run: |
           pkgbuild --root pkg-root \
