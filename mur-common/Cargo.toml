@@ -33,6 +33,7 @@ secrecy = "0.10"
 age = { version = "0.11", features = ["armor"] }
 tokio = { workspace = true }
 shellexpand = "3"
+subtle = "2"
 shell-words = "1"
 fs2 = "0.4"
 tracing = "0.1"
