@@ -164,6 +164,25 @@ fn serialize_canonical_frontmatter(m: &SkillManifest) -> Result<String, ParseErr
     Ok(serde_yaml_ng::to_string(&value)?)
 }
 
+/// Parse a legacy skill file — pre-M0 markdown with minimal frontmatter
+/// (just `name` + `description`). Fills in defaults so the file can be
+/// loaded by the new pipeline without rewriting it.
+pub fn parse_legacy_markdown(input: &str) -> Result<SkillManifest, ParseError> {
+    let (frontmatter, body) = split_frontmatter(input)?;
+    let mut value: serde_yaml_ng::Value = serde_yaml_ng::from_str(frontmatter)?;
+    let map = value
+        .as_mapping_mut()
+        .ok_or_else(|| ParseError::LegacyMarkdown("frontmatter is not a mapping".into()))?;
+    use serde_yaml_ng::Value;
+    let key = |k: &str| Value::String(k.into());
+    map.entry(key("version")).or_insert(Value::String("0.0.0".into()));
+    map.entry(key("publisher")).or_insert(Value::String("human:mur".into()));
+    map.entry(key("category")).or_insert(Value::String("context".into()));
+    inject_content_from_body(&mut value, body)?;
+    let m: SkillManifest = serde_yaml_ng::from_value(value)?;
+    Ok(m)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,5 +302,15 @@ content:
         let p2 = m2.content.procedure.unwrap();
         assert_eq!(p2.steps.len(), 2);
         assert_eq!(p2.steps[0].description, "First");
+    }
+
+    #[test]
+    fn legacy_minimal_frontmatter_loads() {
+        let md = "---\nname: mur-context\ndescription: Background context\n---\n\n# MUR\n\nSome body.\n";
+        let m = parse_legacy_markdown(md).unwrap();
+        assert_eq!(m.name, "mur-context");
+        assert_eq!(m.publisher, "human:mur");
+        assert_eq!(m.version, "0.0.0");
+        assert!(m.content.context.is_some());
     }
 }

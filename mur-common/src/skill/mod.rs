@@ -7,7 +7,8 @@ pub mod validate;
 
 pub use manifest::*;
 pub use parser::{
-    ParseError, parse_canonical, parse_markdown, serialize_canonical, serialize_markdown,
+    ParseError, parse_canonical, parse_legacy_markdown, parse_markdown, serialize_canonical,
+    serialize_markdown,
 };
 pub use types::*;
 pub use validate::{ValidationError, validate};
