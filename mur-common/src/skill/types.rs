@@ -1,42 +1,33 @@
-//! Skill type enums — kept separate from the bulky manifest module
-//! so callers that only need `TrustLevel` don't pull in the full schema.
+//! Skill type enums.
 
 use serde::{Deserialize, Serialize};
 
 /// Which host(s) may load a skill. See spec §2.3.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum HostId {
     MurAgent,
     MurCommander,
     /// Default when `hosts:` is omitted — backward compatible.
+    #[default]
     All,
     #[serde(untagged)]
     Custom(String),
 }
 
-impl Default for HostId {
-    fn default() -> Self {
-        HostId::All
-    }
-}
-
 /// Three-tier skill trust model. Mirrors mur-commander `trust/level.rs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord, Default,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum TrustLevel {
     /// Peer transfer, agent-generated, untrusted registry.
+    #[default]
     Sandboxed,
     /// Registry-verified checksum match, community-reviewed.
     Verified,
     /// Built-in, user-promoted, or trusted-publisher-signed.
     Trusted,
-}
-
-impl Default for TrustLevel {
-    fn default() -> Self {
-        TrustLevel::Sandboxed
-    }
 }
 
 /// Top-level skill category.
@@ -58,19 +49,14 @@ pub enum ContentMode {
     Command,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
     Low,
+    #[default]
     Normal,
     High,
     Critical,
-}
-
-impl Default for Priority {
-    fn default() -> Self {
-        Priority::Normal
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
