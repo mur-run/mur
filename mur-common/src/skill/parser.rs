@@ -125,6 +125,45 @@ fn build_procedure_from_steps(body: &str) -> serde_yaml_ng::Value {
     Value::Mapping(procedure)
 }
 
+/// Render a `SkillManifest` back to markdown frontmatter form. The body is
+/// derived from the populated content mode: `context` → context body,
+/// `procedure` → "## Steps" list, `command` → fenced block.
+pub fn serialize_markdown(m: &SkillManifest) -> Result<String, ParseError> {
+    let frontmatter = serialize_canonical_frontmatter(m)?;
+    let mut out = String::new();
+    out.push_str("---\n");
+    out.push_str(&frontmatter);
+    out.push_str("---\n\n");
+    out.push_str(&format!("# {}\n\n", m.name));
+    out.push_str(&m.content.r#abstract);
+    out.push('\n');
+    if let Some(ctx) = &m.content.context {
+        out.push('\n');
+        out.push_str(ctx);
+        out.push('\n');
+    } else if let Some(proc) = &m.content.procedure {
+        out.push_str("\n## Steps\n");
+        for (i, s) in proc.steps.iter().enumerate() {
+            out.push_str(&format!("{}. {}\n", i + 1, s.description));
+        }
+    } else if let Some(cmd) = &m.content.command {
+        out.push_str("\n## Command\n\n```\n");
+        out.push_str(cmd);
+        out.push_str("\n```\n");
+    }
+    Ok(out)
+}
+
+/// Frontmatter is the manifest serialised *without* the `content` field —
+/// the content moves into the markdown body.
+fn serialize_canonical_frontmatter(m: &SkillManifest) -> Result<String, ParseError> {
+    let mut value = serde_yaml_ng::to_value(m)?;
+    if let Some(map) = value.as_mapping_mut() {
+        map.remove(serde_yaml_ng::Value::String("content".into()));
+    }
+    Ok(serde_yaml_ng::to_string(&value)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,5 +251,37 @@ Does a thing.
     fn markdown_without_frontmatter_fails() {
         let md = "# just a heading\n";
         assert!(matches!(parse_markdown(md), Err(ParseError::MissingFrontmatter)));
+    }
+
+    #[test]
+    fn canonical_to_markdown_roundtrips_context() {
+        let m = parse_canonical(SAMPLE).unwrap();
+        let md = serialize_markdown(&m).unwrap();
+        let m2 = parse_markdown(&md).unwrap();
+        assert_eq!(m.name, m2.name);
+        assert_eq!(m.content.context.is_some(), m2.content.context.is_some());
+    }
+
+    #[test]
+    fn canonical_to_markdown_roundtrips_workflow() {
+        let yaml = r#"
+name: w
+version: 1.0.0
+publisher: human:test
+description: d
+category: workflow
+content:
+  abstract: a
+  procedure:
+    steps:
+      - description: First
+      - description: Second
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        let md = serialize_markdown(&m).unwrap();
+        let m2 = parse_markdown(&md).unwrap();
+        let p2 = m2.content.procedure.unwrap();
+        assert_eq!(p2.steps.len(), 2);
+        assert_eq!(p2.steps[0].description, "First");
     }
 }
