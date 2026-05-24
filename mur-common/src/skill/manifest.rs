@@ -18,7 +18,7 @@ pub struct Skill {
     #[serde(default)]
     pub trust_level: TrustLevel,
 
-    /// Capabilities the skill declares it needs (see Task 14).
+    /// Capabilities the skill declares it needs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities_declared: Vec<String>,
 
@@ -61,8 +61,7 @@ pub struct Content {
     /// Layer 2 — injected into the system prompt at session start.
     pub r#abstract: String,
 
-    /// Exactly one of the following is `Some`. Schema validation (Task 5)
-    /// enforces this invariant.
+    /// Exactly one of the following is `Some`. Enforced by schema validation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
 
@@ -74,7 +73,6 @@ pub struct Content {
 }
 
 impl Content {
-    /// Which content mode is populated.
     pub fn mode(&self) -> Option<ContentMode> {
         match (
             self.context.is_some(),
@@ -138,7 +136,6 @@ fn default_any_version() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_yaml_ng;
 
     #[test]
     fn full_manifest_roundtrips() {
