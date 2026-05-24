@@ -507,7 +507,7 @@ depends_on = []
     }
 
     #[test]
-    fn test_validate_acyclic_dag() {
+    fn test_reject_dependency_cycle() {
         let toml = r#"
 [plan]
 version = "0"
@@ -540,6 +540,40 @@ depends_on = ["s1"]
         assert!(!errors.is_empty(), "cycle must fail validation");
         let has_cycle = errors.iter().any(|e| matches!(e, PlanValidationError::CycleDetected { .. }));
         assert!(has_cycle, "error must mention cycle, got: {:?}", errors);
+    }
+
+    #[test]
+    fn test_validate_valid_plan() {
+        let toml = r#"
+[plan]
+version = "0"
+plan_id = "550e8400-e29b-41d4-a716-446655440000"
+goal = "valid plan"
+created_at = "2026-05-24T12:00:00Z"
+created_by = "agent:test"
+budget_estimate_usd = 0.0
+determinism = "best-effort"
+content_sha256 = "abc123"
+
+[[plan.steps]]
+step_id = "build"
+description = "build"
+agent_hint = "generic"
+phases = ["plan", "implement", "verify"]
+verify_command = "cargo build"
+depends_on = []
+
+[[plan.steps]]
+step_id = "test"
+description = "test"
+agent_hint = "code-review"
+phases = ["test", "verify"]
+verify_command = "cargo test"
+depends_on = ["build"]
+"#;
+        let plan: Plan = toml::from_str(toml).expect("parse valid plan");
+        let errors = plan.validate();
+        assert!(errors.is_empty(), "validation must pass for valid plan, got: {:?}", errors);
     }
 
     #[test]
