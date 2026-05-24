@@ -34,6 +34,7 @@ pub mod schedule_claim;
 pub mod scope;
 pub mod secret;
 pub mod signal;
+pub mod skill;
 pub mod telemetry;
 pub mod trust;
 pub mod variable;
