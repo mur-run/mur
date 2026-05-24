@@ -80,6 +80,9 @@ pub struct Step {
     /// Step-specific input variables (free-form).
     #[serde(default)]
     pub input: Option<toml::Table>,
+    /// Whether to run an independent judge on this step's result.
+    #[serde(default)]
+    pub judge: bool,
 }
 
 /// Validation error returned by [`Plan::validate`].
