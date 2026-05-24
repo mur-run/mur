@@ -3,9 +3,11 @@
 
 pub mod actions;
 pub mod agent;
+pub mod skill;
 
 pub use actions::*;
 pub use agent::*;
+pub use skill::SkillAction;
 
 use clap::{Parser, Subcommand};
 
@@ -293,6 +295,11 @@ pub enum Commands {
     Agent {
         #[command(subcommand)]
         action: AgentAction,
+    },
+    /// Manage skills — validate, fmt (M0).
+    Skill {
+        #[command(subcommand)]
+        action: SkillAction,
     },
     /// Manage shared model registry (~/.mur/models.yaml)
     Model(cmd::model::ModelArgs),
