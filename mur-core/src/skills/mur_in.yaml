@@ -1,0 +1,22 @@
+name: mur-in
+version: 0.1.0
+publisher: human:mur
+description: "Start MUR session recording to capture your workflow for pattern extraction"
+category: context
+content:
+  abstract: |
+    Start session recording with `mur in`. Captures prompts, responses,
+    tool calls, errors for later pattern extraction.
+  context: |
+    # mur-in — Start Recording
+
+    Run `mur in` to start a session and inject context patterns.
+
+    Captures user prompts, AI responses, tool calls, errors. Used later
+    by mur-out to extract patterns. When to use: before debugging,
+    exploring new codebases, or any non-trivial task.
+tags: [mur, recording, builtin]
+triggers:
+  - type: command
+    pattern: "/mur-in"
+priority: normal

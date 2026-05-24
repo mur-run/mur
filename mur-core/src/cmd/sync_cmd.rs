@@ -807,10 +807,10 @@ fn is_index_dirty(home: &std::path::Path) -> bool {
 /// Returns true if any skill was written.
 pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
     let skills: &[(&str, &str)] = &[
-        ("mur-context", include_str!("../mur_skill.md")),
-        ("mur-in", include_str!("../mur_in_skill.md")),
-        ("mur-out", include_str!("../mur_out_skill.md")),
-        ("mur-run", include_str!("../mur_workflow_skill.md")),
+        ("mur-context.yaml", include_str!("../skills/mur_context.yaml")),
+        ("mur-in.yaml", include_str!("../skills/mur_in.yaml")),
+        ("mur-out.yaml", include_str!("../skills/mur_out.yaml")),
+        ("mur-run.yaml", include_str!("../skills/mur_run.yaml")),
     ];
 
     let mur_skills_dir = home.join(".mur").join("skills");

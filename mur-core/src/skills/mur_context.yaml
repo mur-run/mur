@@ -1,0 +1,42 @@
+name: mur-context
+version: 0.1.0
+publisher: human:mur
+description: "Background context: explains the auto-injected learning patterns you see at session start. Not a user command."
+category: context
+hosts: [all]
+content:
+  abstract: |
+    MUR auto-injects relevant patterns at session start based on the
+    current project context, ranked by hybrid keyword + vector similarity
+    with a 5-pattern, ~2000-token budget.
+  context: |
+    # MUR — Continuous Learning for AI Assistants
+
+    At each session start, MUR scores all patterns against the current
+    project context, ranks by relevance (keyword match, tags, recency,
+    confidence, tier), applies MMR diversity filtering, and injects the
+    top 5 patterns within a 2000 token budget. Limits are configurable
+    under `retrieval:` in `~/.mur/config.yaml`.
+
+    Commands worth knowing:
+    - `mur search <query>` — Find patterns by keyword
+    - `mur context` — Show what would be injected for the current project
+    - `mur feedback helpful <name>` — Mark a pattern as helpful
+    - `mur feedback unhelpful <name>` — Mark a pattern as unhelpful
+    - `mur new` — Create a new pattern interactively
+    - `mur stats` — Show pattern statistics
+    - `mur sync` — Sync patterns to other AI tool configs
+    - `mur evolve` — Run decay + maturity evaluation
+    - `mur reindex` — Rebuild semantic search index
+
+    If you see `[Workflow: <name>]` entries, those are saved task
+    sequences. Run `mur workflow show <name> --md` for variables / tools
+    / steps, or `mur run <name>` for a ready-to-execute prompt.
+
+    Pattern tiers: session / project / core. Maturity stages:
+    Draft → Emerging → Stable → Canonical. Confidence decays without
+    use; patterns below 0.1 auto-archive.
+tags: [mur, context, builtin]
+triggers:
+  - type: session_start
+priority: normal
