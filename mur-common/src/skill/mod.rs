@@ -2,6 +2,7 @@
 
 pub mod manifest;
 pub mod parser;
+pub mod scan;
 pub mod types;
 pub mod validate;
 
