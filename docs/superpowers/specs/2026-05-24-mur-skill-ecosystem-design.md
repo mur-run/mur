@@ -19,6 +19,21 @@ MuR currently has two separate "skills" concepts that share no code, format, or 
 
 This design unifies both into a single structured skill ecosystem supporting agent-to-agent skill transfer (peer learning + registry marketplace), human+agent co-authorship, composable skills, and a defense-in-depth security model drawn from mur's existing B0/B1 runtime enforcement and mur-commander's constitution + trust system.
 
+### 1.5 Coordination Boundary
+
+A skill describes **what to do**, never **how the host should recover when it fails**. Cross-step coordination — retry policy, microstep journaling, replay-on-restart, deterministic ordering — is the **host's** responsibility, not the skill's.
+
+This boundary is intentional. Skills are portable across hosts (mur agent runtime, mur-commander, future hosts) precisely because they do not encode host-specific recovery logic. Each host implements a coordination protocol that meets a shared contract.
+
+The contract requires every host to:
+
+1. **Journal** each skill load and each procedure step with a stable `skill_id@version` reference.
+2. **Microstep** skill procedure steps within the host's larger plan, so they appear in the host's coordination journal alongside non-skill steps.
+3. **Apply the host's failure-recovery policy** (retry / reroute / escalate) to skill step failures, classified by the `FailureCategory` taxonomy (Knowledge / Tool / Clarification / Style / Transient — same taxonomy as §8.2).
+4. **Resume on restart** using the host's journal — skills carry no replay state.
+
+Skills that need behaviour beyond what the host coordination protocol guarantees (e.g. a skill that must run inside a transaction) MUST declare this in `capabilities_declared` and a host that cannot meet the requirement MUST refuse to load the skill.
+
 ## 2. Security & Supply Chain Risk Management
 
 **This is M0 priority.** The threat landscape is severe and active as of 2026: 36.8% of public skills contain security flaws, 1,184 malicious skills were found in one marketplace (247K+ installations), and 82% of public MCP servers lack path-traversal protections. The average malicious skill combines 4 attack vectors: traditional malware + prompt injection + credential exfiltration + memory poisoning. A skill ecosystem without security at its foundation is a supply chain attack vector, not a feature.
@@ -138,6 +153,16 @@ Any → Revoked: incident detected → auto-revoke + audit log
 | `mur-commander crates/engine/src/policy/engine.rs` | Skill policy enforcement |
 | `mur-common/src/permissions.rs` (GrantStore + audit) | Skill permission grants |
 
+### 2.5.1 Concurrent-Host Safety
+
+Multiple hosts (mur agent runtime + mur-commander + future hosts) may concurrently write to `~/.mur/trust/skills.json`. The trust store uses:
+
+1. **File locking** via `fs2::FileExt::lock_exclusive()` before read-modify-write.
+2. **Atomic rename** for writes (`write to .tmp`, `fsync`, `rename`).
+3. **Per-skill-per-host entries**: `approved_by_host: Vec<HostId>` so different hosts can hold different opinions about a skill's trust level. Trust is per (skill, host); not global.
+
+Reuse the atomic-write + constant-time-checksum primitives from mur-commander `engine/src/trust/store.rs` to avoid implementing this twice.
+
 ## 3. Skill Data Model
 
 A skill is a self-contained unit of transferable knowledge with three progressive-disclosure layers.
@@ -170,6 +195,9 @@ version: 1.0.0
 publisher: human:david
 description: Search and compare product prices across e-commerce sites
 category: workflow            # context | workflow | command | meta
+
+# Which hosts may load this skill (omit = [all])
+hosts: [mur-agent, mur-commander]
 
 content:
   abstract: |
@@ -216,6 +244,19 @@ priority: normal               # low | normal | high | critical
 ### 2.3 Content Modes
 
 Publisher identifiers use the format `human:<name>` for human-authored skills or `agent:<agent_id>` for agent-generated skills. Agent IDs match the agent's directory name in `~/.mur/agents/`.
+
+Host compatibility is declared via `hosts: [mur-agent, mur-commander]`. The `HostId` enum lives in `mur-common::skill`:
+
+```rust
+pub enum HostId {
+    MurAgent,
+    MurCommander,
+    All,                  // both / any future host
+    Custom(String),       // reserved for future hosts
+}
+```
+
+Default value (empty/missing) is `[all]` for backward compatibility. Hosts filter via `SkillLoader::filter_for_host()`.
 
 A skill has exactly one content mode:
 
@@ -301,6 +342,45 @@ installed_at: 2026-05-24T10:30:00Z
 
 Ensures reproducible dependency resolution. `mur skill update` bumps locked versions.
 
+### 3.3 Loader API
+
+Skills are loaded via a host-implemented `SkillLoader` trait, defined in `mur-common`:
+
+```rust
+pub trait SkillLoader {
+    /// Scopes this host knows about, in priority order (lowest first).
+    fn scopes(&self) -> Vec<SkillScope>;
+
+    /// Walk all scopes and return resolved manifests (later scopes override earlier).
+    fn load_all(&self) -> Vec<(SkillScope, SkillManifest)>;
+
+    /// Filter manifests to those compatible with this host id (uses §3 hosts: field).
+    fn filter_for_host(&self, host: HostId) -> Vec<SkillManifest>;
+
+    /// Verify a manifest's signature and content hash (uses §2 trust model).
+    fn verify(&self, manifest: &SkillManifest) -> Result<TrustVerdict, LoadError>;
+}
+
+pub enum SkillScope {
+    /// Built-in skills shipped with the host binary.
+    Builtin,
+    /// Global skills at `~/.mur/skills/`.
+    Global,
+    /// Host-private skills (e.g. `~/.mur/commander/skills/`).
+    Host(PathBuf),
+    /// Per-agent skills (mur agent runtime only).
+    Agent { agent: String },
+    /// Marketplace install at `~/.mur/marketplace/`.
+    Marketplace,
+}
+```
+
+- mur agent runtime provides `MurAgentSkillLoader`.
+- mur-commander provides `CommanderSkillLoader`.
+- The trait is the **single** integration point for hosts.
+
+Skills cannot bypass the loader — there is no public `Skill::from_str` for arbitrary skill execution. This forces every load to pass trust verification.
+
 ## 4. Runtime Injection
 
 ### 4.1 Agent Boot Sequence
@@ -319,16 +399,29 @@ Agent boot
 
 ### 4.2 Token Budget
 
-Reuses mur's existing retrieval config in `~/.mur/config.yaml`:
+Skill injection is **adaptive** — the budget changes based on conversation state to prevent Context Rot (the LLM increasingly ignoring early instructions as context fills up). Commander observed measurable instruction-following degradation past ~30 turns with 4+ static skills injected.
 
 ```yaml
 skills:
+  # Static caps (upper bounds — always enforced)
   max_skills_in_prompt: 5
-  max_tokens: 2000
-  priority_order: [global, agent]   # or [agent, global]
+  max_total_tokens: 2000
+  priority_order: [global, agent]
+
+  # Adaptive policy (optional; omit for static-only behaviour)
+  adaptive:
+    # Reduce skill budget proportionally as context fills.
+    # Formula: effective_budget = max_total_tokens * (1 - context_fill_ratio)^decay
+    context_fill_decay: 1.5
+    # Below this threshold, skip skill injection entirely.
+    min_remaining_context_ratio: 0.20
+    # Promote a skill's priority if it fired in the last N turns.
+    recent_fire_boost_turns: 5
 ```
 
 Layer 3 (body) is excluded from this budget — it loads on trigger match, replacing the skill's Layer 2 abstract in context.
+
+Hosts MAY refuse to inject a skill when remaining context is below `min_remaining_context_ratio`, recording a `skill_skip_context_full` event in the journal. This is observable and tunable; hardcoded static budgets are not.
 
 ### 4.3 Trigger Matching
 
@@ -652,17 +745,18 @@ A skill ecosystem needs internal execution observability — not just provenance
 
 ### 10.1 Skill Execution Trace
 
-Each skill activation produces a structured trace (modeled on mur-commander's `trace_emit()` system):
+Skill execution emits the **same** journal event types as the host (`step_started`, `step_completed`, `step_failed`, etc.) with skill-specific attributes. Skill steps are microsteps within host steps, producing ONE coherent journal that replay tooling can read end-to-end.
 
 ```jsonl
-{"event":"skill_loaded","skill":"research-prices","version":"1.1.0","trust":"verified","trigger":"keyword"}
-{"event":"skill_step_start","skill":"research-prices","step":1,"tool":"browser.navigate"}
-{"event":"skill_step_complete","skill":"research-prices","step":1,"duration_ms":1230,"success":true}
-{"event":"skill_step_start","skill":"research-prices","step":2,"tool":"browser.fill"}
-{"event":"skill_step_error","skill":"research-prices","step":2,"error":"Element not found: #search-input","retry":1}
-{"event":"skill_complete","skill":"research-prices","total_duration_ms":4520,"steps":5,"success":true,
- "output_summary":"Found 3 prices: PChome $899, Momo $920, Shopee $875"}
+{"event":"step_started","plan_id":"P-8f3a","step_id":"step_001","microstep":"skill.research-prices.1","skill_id":"research-prices@1.1.0","skill_step":1,"tool":"browser.navigate","trust":"verified"}
+{"event":"step_completed","plan_id":"P-8f3a","step_id":"step_001","microstep":"skill.research-prices.1","duration_ms":1230}
+{"event":"step_started","plan_id":"P-8f3a","step_id":"step_001","microstep":"skill.research-prices.2","skill_id":"research-prices@1.1.0","skill_step":2,"tool":"browser.fill"}
+{"event":"step_failed","plan_id":"P-8f3a","step_id":"step_001","microstep":"skill.research-prices.2","skill_id":"research-prices@1.1.0","skill_step":2,"error":"Element not found: #search-input","recovery_action":"retry","retry":1}
 ```
+
+The `microstep` attribute uses the convention `skill.<skill_name>.<step_index>`. The host's `plan_id` and `step_id` remain the primary keys; skill steps are nested microsteps within the host step that loaded them.
+
+Skill-specific lifecycle events (`skill_loaded`, `skill_skip_context_full`) are emitted as standalone events only when they don't correspond to a procedure step.
 
 ### 10.2 Trace Infrastructure (Reuse)
 
