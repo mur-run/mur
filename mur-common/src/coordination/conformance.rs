@@ -459,10 +459,7 @@ mod tests {
     use crate::coordination::types::ConformanceLevel;
 
     /// A no-op adapter that returns pre-parsed plans from a Vec.
-    #[allow(dead_code)]
-    struct StaticAdapter {
-        plans: Vec<Plan>,
-    }
+    struct StaticAdapter {}
 
     impl ConformanceAdapter for StaticAdapter {
         fn parse_and_validate(&self, toml: &str) -> Result<Plan, Vec<String>> {
@@ -485,9 +482,7 @@ mod tests {
 
     #[test]
     fn test_conformance_minimal_plan_loading_passes() {
-        let adapter = StaticAdapter {
-            plans: vec![],
-        };
+        let adapter = StaticAdapter {};
         let suite = PlanLoadingSuite::new();
         let report = suite.run(&adapter);
         assert!(
