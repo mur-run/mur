@@ -333,6 +333,8 @@ mur-common/     Shared types (Pattern, Workflow, KnowledgeBase, Config)
 mur-core/       CLI + server + all logic
 ```
 
+- `mur-common/src/coordination/` — Shared coordination protocol types (Plan/Step/Microstep schema, Verify Gateway, conformance suite). Used by mur-runtime and mur-commander.
+
 ~12,000 lines of Rust. YAML as source of truth with a rebuildable LanceDB vector index.
 
 ## System Requirements
