@@ -6,6 +6,7 @@ pub mod bridge;
 pub mod bundle;
 pub mod canonical;
 pub mod companion;
+pub mod coordination;
 pub mod config;
 pub mod conversation;
 pub mod error;
