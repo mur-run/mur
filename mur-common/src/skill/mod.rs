@@ -3,7 +3,9 @@
 pub mod manifest;
 pub mod parser;
 pub mod types;
+pub mod validate;
 
 pub use manifest::*;
-pub use parser::{parse_canonical, serialize_canonical, ParseError};
+pub use parser::{ParseError, parse_canonical, serialize_canonical};
 pub use types::*;
+pub use validate::{ValidationError, validate};
