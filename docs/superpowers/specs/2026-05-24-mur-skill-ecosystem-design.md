@@ -2,7 +2,7 @@
 
 **Date**: 2026-05-24
 **Status**: Draft
-**Scope**: Unified skill authoring, storage, runtime injection, composition, registry, peer transfer, and agent-generated skills
+**Scope**: Unified skill authoring, storage, runtime injection, composition, registry, peer transfer, agent-generated skills, security & supply chain risk management, lifecycle management, automated evolution, MCP integration, and observability
 
 ## 1. Motivation
 
@@ -17,9 +17,128 @@ MuR currently has two separate "skills" concepts that share no code, format, or 
 | **Composition** | None | None |
 | **Discovery** | `mur sync` symlinks | Agent Card only |
 
-This design unifies both into a single structured skill ecosystem supporting agent-to-agent skill transfer (peer learning + registry marketplace), human+agent co-authorship, and composable skills.
+This design unifies both into a single structured skill ecosystem supporting agent-to-agent skill transfer (peer learning + registry marketplace), human+agent co-authorship, composable skills, and a defense-in-depth security model drawn from mur's existing B0/B1 runtime enforcement and mur-commander's constitution + trust system.
 
-## 2. Skill Data Model
+## 2. Security & Supply Chain Risk Management
+
+**This is M0 priority.** The threat landscape is severe and active as of 2026: 36.8% of public skills contain security flaws, 1,184 malicious skills were found in one marketplace (247K+ installations), and 82% of public MCP servers lack path-traversal protections. The average malicious skill combines 4 attack vectors: traditional malware + prompt injection + credential exfiltration + memory poisoning. A skill ecosystem without security at its foundation is a supply chain attack vector, not a feature.
+
+### 2.1 Threat Model
+
+Skills face five attack surfaces adapted from OWASP AST10 (Agentic Skills Top 10, April 2026):
+
+| ID | Risk | Severity | Mitigation |
+|----|------|----------|------------|
+| AST01 | Malicious Skills (DDIPE, prompt injection in skill body) | Critical | Content scanning + sandboxed execution |
+| AST02 | Supply Chain Compromise (typosquatting, dependency hijacking) | Critical | Registry verification + binary pinning |
+| AST03 | Over-Privileged Skills (no capability declaration) | High | Entitlement declaration + enforcement |
+| AST04 | Memory Poisoning (skill rewrites MEMORY.md / system prompt) | High | Immutable instruction zones + drift detection |
+| AST05 | Exfiltration (skill reads secrets and sends to C2) | Critical | Secret pre-filter + outbound network gating |
+| AST06 | Ranking Manipulation (fake downloads push malicious skills to #1) | Medium | Registry auth + download attestation |
+| AST07 | Unicode/Bidi Obfuscation (evades signature scanning) | Medium | NFC normalization + glyph-aware scanning |
+| AST08 | Time-Gated Payloads (malicious behavior activates after N days) | High | Continuous behavioral monitoring |
+| AST09 | Cross-Platform Reuse (skill safe on Linux, dangerous on macOS) | Medium | Platform capability matrix |
+| AST10 | Tool Description Poisoning (MCP tool descriptions are the attack) | High | Tool description allowlist + capability gating |
+
+### 2.2 Defense-in-Depth Architecture
+
+MuR already has substantial security infrastructure across two codebases. The skill security model layers them:
+
+```
+Layer 1: Content Integrity (static analysis)
+  ├─ mur-common: executable content ban (muragent/executable_ban.rs)
+  ├─ mur-common: DSSE + Ed25519 package signing (muragent/dsse.rs)
+  ├─ mur-common: in-toto subject hash verification (muragent/validator.rs)
+  ├─ NEW: skill content scanner (prompt injection patterns, secret patterns)
+  └─ NEW: Unicode NFC normalization + bidi detection (from mur-commander constitution signing.rs)
+
+Layer 2: Identity & Trust (who published this?)
+  ├─ mur-common: Ed25519 AgentIdentity (identity.rs) — reuse for skill signing
+  ├─ mur-core: Ed25519 character card signing (character_card/signing.rs)
+  ├─ mur-commander: three-tier TrustStore (Sandboxed < Verified < Trusted)
+  │   └─ engine/src/trust/ — JSON-backed, 0o600 perms, atomic writes, constant-time checksum
+  └─ NEW: SkillTrustStore — per-skill trust level derived from publisher + verification
+
+Layer 3: Runtime Sandboxing (what can the skill do?)
+  ├─ mur-agent-runtime: Landlock V4 + seccomp BPF (sandbox/linux.rs)
+  ├─ mur-agent-runtime: macOS SBPL (sandbox/macos.rs) — deny-by-default Seatbelt profiles
+  ├─ mur-agent-runtime: Windows Job Object (sandbox/windows.rs)
+  ├─ mur-agent-runtime: reqwest HostGuard DNS-level network gating (sandbox/reqwest_guard.rs)
+  ├─ mur-agent-runtime: birdcage child process sandbox (sandbox/child.rs)
+  ├─ mur-commander: OS sandbox (sandbox/os.rs) + resource limiter (sandbox/limiter.rs)
+  └─ NEW: SkillSandboxPolicy — per-trust-level resource limits applied at skill load time
+
+Layer 4: Runtime Hook Enforcement (what rules apply at execution time?)
+  ├─ mur-agent-runtime: B0SafetyHook — 8+ rules (hooks/b0.rs)
+  │   ├─ Rule 1: FS confinement (path_confined_to)
+  │   ├─ Rule 2: Outbound network gating (host_is_allowlisted + GrantStore)
+  │   ├─ Rule 4: Side-effect gating after untrusted input
+  │   ├─ Rule 5: Process spawn gating (deny/allowlist/any)
+  │   ├─ Rule 6: MCP binary SHA-256 pin verification
+  │   ├─ Rule 7: Credential pre-filter (11 secret patterns in b0_helpers.rs)
+  │   ├─ Rule 8: PII redaction on memory.* tool outputs
+  │   └─ Rule 11: Native binary code signing check (codesign/signtool)
+  ├─ mur-commander: Constitution system (constitution/) — Ed25519-signed tamper-proof rules
+  │   └─ engine/src/constitution/signing.rs — constant-time SHA-256 + Ed25519 verification
+  ├─ mur-commander: PolicyEngine (policy/engine.rs) — rules can only downgrade, never upgrade
+  ├─ mur-commander: PathGuard (gateway/src/auth/path_guard.rs) — per-user filesystem ACL
+  └─ NEW: SkillConstitution — per-skill or per-trust-level safety rules
+```
+
+### 2.3 Skill Trust Model
+
+Adapted from mur-commander's three-tier `TrustLevel` (`engine/src/trust/level.rs`):
+
+| Trust Level | Source | Default Capabilities |
+|-------------|--------|---------------------|
+| **Sandboxed** (default) | Peer transfer, agent-generated, untrusted registry | Read-only within agent_home; no network; no spawn; strict timeout; token budget cap |
+| **Verified** | Registry-verified (checksum match), community-reviewed | Read/write within agent_home; restricted outbound network; allowlisted spawn; normal limits |
+| **Trusted** | First-party (built-in), user-approved, signed by trusted publisher | Full agent capabilities per entitlements; standard limits |
+
+Trust transitions:
+```
+Sandboxed → Verified: user approval + checksum verification + N days without incident
+Verified → Trusted: user explicit promotion + publisher signature verification
+Any → Revoked: incident detected → auto-revoke + audit log
+```
+
+### 2.4 Skill-Specific Security Requirements
+
+**At install time** (static):
+1. Content scan: detect known prompt injection patterns (DDIPE), secret patterns, code-execution markers
+2. Unicode normalization: NFC + bidi character detection (mur-commander pattern from `constitution/signing.rs` lines 217-237, SEC-14)
+3. Executable content ban: extend mur's existing `executable_ban.rs` to skill body (no embedded shell/python/js)
+4. Dependency audit: recursive `requires` scan against known-vulnerable skill versions
+5. Publisher verification: if signed, verify Ed25519 signature (reuse `identity.rs` + `character_card/signing.rs`)
+
+**At load time** (runtime):
+1. Capability declaration enforcement: skill declares required capabilities; denied if exceeds trust level
+2. Instruction boundary: skill body is wrapped in `<skill-instruction source="..." trust="...">` tags, separated from system prompt by mur-commander's `<untrusted_tool_result>` pattern
+3. Resource limits applied: timeout, output size, call count — from mur-commander `sandbox/limiter.rs`
+
+**At execution time** (continuous):
+1. B0 hook chain: all existing B0 rules apply to skill-triggered tool calls
+2. Drift detection: skill file SHA-256 compared to install-time pin (reuse `b0_helpers.rs` MCP pin pattern)
+3. Memory poisoning guard: skill modification to `profile.yaml` or `sys_prompt.md` blocked unless via `mur agent skill` CLI
+
+### 2.5 Reuse of Existing Security Infrastructure
+
+| Existing mur/mur-commander component | Reused for skill security |
+|--------------------------------------|--------------------------|
+| `mur-common/src/muragent/executable_ban.rs` | Skill body executable content scan |
+| `mur-common/src/muragent/dsse.rs` (DSSE + Ed25519) | Skill package signing |
+| `mur-common/src/muragent/validator.rs` (11-step) | Skill package validation |
+| `mur-common/src/identity.rs` (Ed25519 keys) | Skill publisher identity |
+| `mur-agent-runtime/src/sandbox/` (Landlock/SBPL/Job) | Per-skill sandboxing |
+| `mur-agent-runtime/src/hooks/b0.rs` (8 rules) | Skill execution enforcement |
+| `mur-agent-runtime/src/hooks/b0_helpers.rs` (11 secret patterns) | Skill body secret scan |
+| `mur-commander crates/engine/src/trust/` (TrustStore, 3-tier) | Skill trust model |
+| `mur-commander crates/engine/src/constitution/signing.rs` (SEC-14/15) | Unicode + constant-time verify |
+| `mur-commander crates/gateway/src/auth/path_guard.rs` | Per-skill filesystem ACL |
+| `mur-commander crates/engine/src/policy/engine.rs` | Skill policy enforcement |
+| `mur-common/src/permissions.rs` (GrantStore + audit) | Skill permission grants |
+
+## 3. Skill Data Model
 
 A skill is a self-contained unit of transferable knowledge with three progressive-disclosure layers.
 
@@ -391,9 +510,16 @@ provenance:
 
 Re-shared skills append to `transfer_chain`, creating an auditable skill propagation graph.
 
-### 7.5 Trust Model (Deferred to M5)
+### 7.5 Trust Model
 
-Peer-transferred skills are installed with `priority: low` and a `peer-transferred: true` flag. The runtime may limit their token budget or require human approval before first use. Full trust/safety metadata (signatures, publisher verification, safety ratings) is deferred to a future design.
+Trust is not deferred — it is the first decision made when a skill is installed. Section 2 defines the full three-tier trust model (Sandboxed / Verified / Trusted) and the defense-in-depth architecture. Every skill, regardless of install source, enters at a trust level that gates its capabilities:
+
+- **Registry install with signed publisher** → Verified (checksum + signature verified)
+- **Peer transfer** → Sandboxed (requires user approval + N days without incident to upgrade)
+- **Agent-generated** → Sandboxed (requires review before promotion)
+- **Local file install** → Verified if checksum matches registry; Sandboxed otherwise
+
+All trust decisions are recorded in a `SkillTrustStore` (modeled on mur-commander's `TrustStore` at `engine/src/trust/store.rs`), persisted to `~/.mur/trust/skills.json` with 0o600 permissions, atomic writes, and constant-time checksum verification.
 
 ## 8. Agent-Generated Skills
 
@@ -403,20 +529,32 @@ Peer-transferred skills are installed with `priority: low` and a `peer-transferr
 2. **Auto-suggest**: Agent detects repeated task pattern >= 3 times, offers to extract
 3. **Pattern promotion**: `mur skill from-pattern <pattern-name>` — promote a Stable/Canonical pattern to a skill
 
-### 8.2 Generation Pipeline
+### 8.2 Generation Pipeline (Trace2Skill Pattern)
+
+The state-of-the-art approach (Trace2Skill, arXiv 2603.25158; SkillForge, SIGIR 2026) uses a three-stage parallel pipeline rather than a single LLM pass:
 
 ```
-Session recording (mur in/out)
-  -> LLM analyzes session events
-  -> Identifies repeatable step sequences
-  -> Extracts Procedure:
-      - Variables: parameterized parts of the conversation
-      - Steps: derived from tool call sequences
-      - Tools: derived from actual MCP tool usage
-  -> Generates skill.yaml (L1+L2+L3)
-  -> Writes to agent skills store
-  -> Agent can optionally publish to registry
+Phase 1: Trajectory Generation
+  Session recordings (mur in/out) → pool of success + failure trajectories
+
+Phase 2: Parallel Multi-Agent Patch Proposal
+  ├─ Success Analysts: extract reusable behavior patterns from each success trajectory
+  └─ Error Analysts (multi-turn ReAct): diagnose root causes of failures
+      across 4 dimensions: Knowledge, Tool, Clarification, Style
+
+Phase 3: Conflict-Free Patch Consolidation
+  → Hierarchical merge of all patches
+  → Deduplication + conflict detection
+  → Format validation
+  → Single coherent skill.yaml output
 ```
+
+Key findings from Trace2Skill that inform this design:
+- **Cross-model transfer**: skills evolved by a 35B model improved a 122B model by +57.65pp — skills are transferable across scales
+- **Parallel consolidation outperforms sequential**: 20× speedup, higher quality
+- **Single comprehensive skill > retrieval-based experience banks**
+- **Agentic error analysis > single-call LLM analysis** for robust patch generation
+- **Skills generalize out-of-distribution**: spreadsheet skills transferred to Wikipedia table QA
 
 ### 8.3 Agent vs Human Output
 
@@ -427,7 +565,177 @@ Canonical YAML (agent output)  <->  Markdown frontmatter (human authoring)
        mur skill fmt --yaml               mur skill fmt --markdown
 ```
 
-## 9. CLI Surface Summary
+### 8.4 Closed-Loop Self-Evolution (SkillForge Pattern)
+
+Beyond one-shot generation, skills participate in a continuous improvement loop (per SkillForge, SIGIR 2026):
+
+```
+Create → Execute → Evaluate → Diagnose → Optimize → Repeat
+```
+
+**Failure Analyzer**: batch-diagnoses execution failures across 4 dimensions:
+- **Knowledge**: skill lacks domain information → enrich context section
+- **Tool**: wrong tool or tool params → update procedure steps
+- **Clarification**: ambiguous instructions → clarify variable descriptions
+- **Style**: output format mismatch → adjust output templates
+
+**Skill Optimizer**: rewrites skill with minimal-modification principle — only changes what's broken, preserving verified behavior. After 3 iterations, auto-evolved skills surpass human-expert-crafted quality (+9–12pp in cloud support domain).
+
+**Evolution tracking**: each iteration records `evolution_event` (modeled on EvoMap's EvolutionEvent / mur's pattern lifecycle):
+```yaml
+evolution_log:
+  - version: 1.0.0
+    generation: 0
+    source: human:david
+  - version: 1.1.0
+    generation: 1
+    source: agent:researcher
+    changes: "Added error handling for timeout, clarified variable descriptions"
+    quality_score: 0.87  # vs 0.82 for v1.0.0
+```
+
+## 9. Skill Lifecycle & Technical Debt Management
+
+Skill Technical Debt (STD) is recognized in 2026 as a distinct category of software defect. Skills "rot" as their underlying tools, APIs, and assumptions change — and agents silently produce worse results. Version constraints alone don't solve the entropy problem.
+
+### 9.1 Lifecycle States
+
+Adapted from mur's existing pattern lifecycle (`evolve/lifecycle.rs`) and maturity (`evolve/maturity.rs`):
+
+```
+Draft → Emerging → Stable → Canonical → Deprecated → Archived
+```
+
+| State | Criteria | Behavior |
+|-------|----------|----------|
+| **Draft** | Newly created/generated | Sandboxed trust; not injected automatically |
+| **Emerging** | Used successfully >= 3 times | Injected with low priority; eligible for peer transfer |
+| **Stable** | Used >= 10 times, effectiveness >= 0.6, age >= 7 days | Verified trust; registry-publishable |
+| **Canonical** | Used >= 30 times, effectiveness >= 0.8, age >= 30 days, pinned | Trusted; injected with highest priority |
+| **Deprecated** | Effectiveness < 0.3 OR no successful use in 90 days | Still usable but flagged; warning on install |
+| **Archived** | Deprecated + 180 days | Read-only; removed from registry search |
+
+### 9.2 Skill Decay (Entropy Management)
+
+Adapted from mur's pattern decay (`evolve/decay.rs`):
+
+- **Confidence decay**: `confidence * 0.5^(days_since_last_success / half_life)`
+- **Half-life defaults**: Draft=14 days, Emerging=90 days, Stable=365 days, Canonical=730 days
+- **Auto-demotion**: Skill drops a tier when confidence falls below threshold
+- **Auto-archival**: confidence < 0.1 → archived
+- **Pinned skills**: immune to decay (human override)
+- **Effectiveness tracking**: each skill execution records success/failure; rolling 10-execution window
+
+### 9.3 Health Checks
+
+`mur skill doctor` — modeled on `mur agent doctor`:
+- **Tool availability**: are referenced MCP tools still present?
+- **Dependency freshness**: are all `requires` within supported version range?
+- **Execution recency**: when was this skill last used successfully?
+- **Failure rate**: last 10 executions success ratio
+- **API drift**: do step descriptions reference outdated API patterns?
+
+`mur skill doctor --fix` attempts auto-repair for low-severity issues (update dependency versions, refresh examples).
+
+### 9.4 Consolidation
+
+Adapted from mur's pattern consolidation (`evolve/consolidate.rs`):
+
+- **Dedup detection**: cosine similarity >= 0.85 between two skills → flag for merge
+- **Contradiction detection**: two skills give conflicting instructions for same trigger → flag
+- **Orphan detection**: skill with zero uses in 180 days → suggest archival
+- **Coverage gap**: common user task with no matching skill → suggest creation
+
+## 10. Observability & Execution Tracing
+
+A skill ecosystem needs internal execution observability — not just provenance of where a skill came from, but what happens when it runs.
+
+### 10.1 Skill Execution Trace
+
+Each skill activation produces a structured trace (modeled on mur-commander's `trace_emit()` system):
+
+```jsonl
+{"event":"skill_loaded","skill":"research-prices","version":"1.1.0","trust":"verified","trigger":"keyword"}
+{"event":"skill_step_start","skill":"research-prices","step":1,"tool":"browser.navigate"}
+{"event":"skill_step_complete","skill":"research-prices","step":1,"duration_ms":1230,"success":true}
+{"event":"skill_step_start","skill":"research-prices","step":2,"tool":"browser.fill"}
+{"event":"skill_step_error","skill":"research-prices","step":2,"error":"Element not found: #search-input","retry":1}
+{"event":"skill_complete","skill":"research-prices","total_duration_ms":4520,"steps":5,"success":true,
+ "output_summary":"Found 3 prices: PChome $899, Momo $920, Shopee $875"}
+```
+
+### 10.2 Trace Infrastructure (Reuse)
+
+Mur already has the infrastructure:
+
+| Existing Component | Reuse for Skill Observability |
+|--------------------|------------------------------|
+| `mur-agent-runtime/src/telemetry_writer.rs` (JSONL daily files) | Skill execution trace sink |
+| `mur-common/src/telemetry.rs` (OTel GenAI constants) | Skill telemetry spans (`mur.skill.*`) |
+| `mur-agent-runtime/src/hooks/telemetry.rs` (10-phase hook) | Skill lifecycle hooks |
+| `mur-commander crates/engine/src/observability/` (collector + redaction) | Skill trace redaction + collection |
+| `mur-core/src/session/mod.rs` (JSONL recording) | Skill session recording |
+| `mur-core/src/conversations/audit.rs` (hash-chained audit) | Immutable skill execution audit |
+
+### 10.3 Redaction Modes
+
+Adapted from mur-commander `observability/redaction.rs`:
+- **Full**: pass through (debug mode)
+- **Redacted** (default): replace content bodies with SHA-256 digest + length metadata
+- **MetadataOnly**: drop all content, keep counters and timing only
+
+### 10.4 Skill Health Dashboard
+
+Per-skill metrics viewable via `mur skill info <name> --metrics`:
+- Execution count (total, last 7d, last 30d)
+- Success rate (rolling 10-execution window)
+- Average latency per step
+- Most common failure modes
+- Dependency health summary
+
+## 11. MCP Deep Integration (Roadmap)
+
+The initial design treats skills as procedural knowledge and MCP as tool execution — separate concerns. Long-term, a skill's execution substrate IS MCP: skills declare tool requirements, MCP servers provide them, and the runtime dynamically wires them.
+
+### 11.1 Skill → MCP Binding
+
+```yaml
+# Future: skill declares MCP tool requirements
+mcp_requirements:
+  - tool_pattern: "browser.*"        # Any browser tool
+    capability: network_http          # Required trust capability
+    fallback: "builtin-http"          # Fallback if no MCP server provides this
+  - tool_pattern: "filesystem.write.*"
+    capability: write_file
+```
+
+This mirrors mur-commander's MCP capability system (`engine/src/mcp/trust.rs` lines 16-73): six capabilities (`ReadFile`, `ListTools`, `Search`, `WriteFile`, `ExecuteSafe`, `NetworkHttp`) mapped to trust levels.
+
+### 11.2 MCP as the Skill Execution Substrate
+
+EvoMap's GEP protocol conceptual stack: MCP (tool layer) → Skill (capability layer) → Evolution (adaptation layer). The mur skill ecosystem should follow the same layering:
+
+```
+Evolution Layer (M4+): mur evolve + self-evolution loop
+    ↕
+Skill Layer (M1-M3):   This design — authoring, sharing, composing
+    ↕
+Tool Layer (existing):  MCP servers registered per agent
+```
+
+### 11.3 Dynamic Tool Resolution
+
+Skills shouldn't hardcode tool names — they should declare intent:
+```yaml
+steps:
+  - description: Navigate to search page
+    intent: web_navigate
+    tool_hint: "browser.navigate"      # Preferred, falls back to any web_navigate provider
+```
+
+The runtime resolves `intent` to available MCP tools at execution time. This avoids skill breakage when MCP servers change.
+
+## 12. CLI Surface Summary
 
 ### New: Global Skill Management
 
@@ -444,6 +752,11 @@ mur skill validate <path>           # Validate skill format
 mur skill fmt <path> [--markdown|--yaml]  # Convert between formats
 mur skill generate --from-session <id>    # Generate skill from session recording
 mur skill from-pattern <pattern>    # Promote pattern to skill
+mur skill audit <name>              # Run full security scan on a skill
+mur skill trust <name> --level <L>  # Promote/demote skill trust level
+mur skill doctor [<name>]           # Health check (tool availability, decay, failures)
+mur skill doctor --fix              # Auto-repair low-severity issues
+mur skill evolve                    # Run full lifecycle pass across all skills
 ```
 
 ### Upgraded: Agent Skill Binding
@@ -456,7 +769,7 @@ mur agent skill show <agent> <name>     # Show skill content
 mur agent skill publish <agent> <name>  # Publish agent's skill to registry
 ```
 
-## 10. Migration Path
+## 13. Migration Path
 
 ### Phase 1 — Format Compatibility (non-breaking)
 - `Skill` struct supports parsing from old markdown frontmatter
@@ -482,52 +795,101 @@ mur agent skill publish <agent> <name>  # Publish agent's skill to registry
 | mur-out | command | command: `/mur-out` |
 | mur-run | workflow | keyword: `mur run`, `/mur-run` |
 
-## 11. Milestones
+## 14. Milestones
 
-### M0 — Foundation
-- `Skill` struct in `mur-common/src/skill.rs` with serde + validation
+### M0 — Security Foundation + Data Model (HIGHEST PRIORITY)
+
+**Data model:**
+- `Skill` struct in `mur-common/src/skill.rs` with serde + validation (including `trust_level`, `capabilities_declared`, `publisher_signature`, `content_sha256` fields)
 - Dual format parser (canonical YAML + markdown frontmatter)
 - `~/.mur/skills/<name>/skill.yaml` storage
 - `mur skill validate`
 - Four built-in skills upgraded
 - Backward-compatible old-format reader
 
-### M1 — CLI + Registry
+**Security (MANDATORY — no skill system ships without this):**
+- `SkillTrustStore` at `~/.mur/trust/skills.json` (0o600, atomic writes, constant-time checksum — modeled on mur-commander `engine/src/trust/store.rs`)
+- Three-tier trust model (Sandboxed / Verified / Trusted) — reuse mur-commander `trust/level.rs`
+- Skill content scanner: DDIPE prompt injection detection, 11 secret patterns (reuse `b0_helpers.rs` lines 151-179), executable content ban (reuse `muragent/executable_ban.rs`)
+- Unicode NFC normalization + bidi detection (reuse mur-commander `constitution/signing.rs` SEC-14)
+- Skill install-time SHA-256 pinning (reuse B0 rule 6 pattern from `b0_helpers.rs` lines 536-586)
+- Publisher Ed25519 signature verification (reuse `identity.rs` + `character_card/signing.rs`)
+- Skill capability declaration — each skill declares required entitlements; denied if exceeds trust level
+- Malicious skill kill-switch: ability to revoke a skill globally by content hash
+
+### M1 — CLI + Registry + Content Scanning
 - `mur skill install/list/show/remove/search/info`
 - Git-based registry: `mur-run/skill-registry` repo + index.yaml
-- `mur skill publish` (human flow)
+- `mur skill publish` (human flow) — requires signed skill
+- `mur skill audit <name>` — run full security scan on a skill
+- `mur skill trust <name> --level verified` — promote trust level after review
 - `mur agent skill add/remove/list/show` upgraded, CLI-compatible
+- CI auto-validation for registry PRs (content scan + signature check)
 
-### M2 — Runtime Injection
+### M2 — Runtime Injection + Sandboxing
 - Agent runtime reads skills, injects Layer 2 into system prompt
-- Token budget + priority logic
+- Token budget + priority logic + trust-level priority ordering (Trusted > Verified > Sandboxed)
 - Trigger matching engine (command / keyword / session_start)
 - Layer 3 on-demand loading
+- Per-skill sandbox policy derived from trust level (reuse mur's `sandbox/` Landlock/SBPL/Job + mur-commander's `sandbox/limiter.rs`)
+- Skill instruction boundary: `<skill-instruction source="..." trust="...">` wrapping (patterned after `<untrusted_tool_result>`)
+- B0 hook chain applies to skill-triggered tool calls
+- Skill SHA-256 drift detection at load time
 
-### M3 — Composition + Agent Generation
-- `requires:` dependency resolution and installation
+### M3 — Composition + Agent Generation + Self-Evolution
+- `requires:` dependency resolution and installation (with security audit of transitive dependencies)
 - `skill.lock` lock file
 - Circular dependency detection
-- `mur skill generate --from-session`
+- `mur skill generate --from-session` — Trace2Skill-style parallel multi-agent pipeline
 - `mur skill from-pattern`
+- Self-evolution loop: Failure Analyzer (4-dimension diagnosis) + Skill Optimizer (minimal-modification rewrites)
+- Evolution tracking with `evolution_log`
 
-### M4 — Peer Transfer
+### M4 — Peer Transfer + Observability
 - A2A endpoints: `GET /skills/{name}`, `POST /skills/offer`
 - Agent Card skill broadcast (existing field, upgraded content)
 - Pull transfer flow + push offer flow
-- Provenance recording
+- Provenance recording + transfer chain
 - `mur skill install agent://<name>`
+- Peer-transferred skills auto-enter at Sandboxed trust
+- Skill execution traces (JSONL daily files — reuse `telemetry_writer.rs`)
+- `mur.skill.*` OTel telemetry spans
+- `mur skill info <name> --metrics` — per-skill health dashboard
+- Hash-chained skill execution audit (reuse `conversations/audit.rs`)
 
-### M5 — Polish & Ecosystem
+### M5 — Lifecycle Management + Consolidation
+- Full lifecycle state machine (Draft→Emerging→Stable→Canonical→Deprecated→Archived)
+- Confidence decay + auto-demotion + auto-archival
+- `mur skill doctor` — health checks (tool availability, dependency freshness, failure rate, API drift)
+- `mur skill doctor --fix` — auto-repair for low-severity issues
+- Consolidation: dedup detection, contradiction detection, orphan detection, coverage gap analysis
+- `mur skill evolve` — run full lifecycle pass across all installed skills
+
+### M6 — MCP Deep Integration + Ecosystem
+- Skill → MCP capability binding (`mcp_requirements` with tool patterns → trust capabilities)
+- Dynamic tool resolution (`intent` + `tool_hint` → best available MCP tool)
+- MCP as execution substrate for skill procedures
 - Skill propagation graph visualization
 - Registry web UI
 - Skill ratings / usage statistics
-- CI auto-validation for registry PRs
 
-## 12. Deferred to Future Design
+### M7 — Cross-Agent Evolution (Future Platform)
+- EvoMap-style genetic sharing: skills as "genes" that can be inherited, mutated, and recombined
+- Population-level skill evolution: skills that perform well propagate; poor skills are pruned
+- Credit/reputation incentive system for skill contributions
+- Cross-agent skill performance benchmarking
 
-- MCP tool binding within skills (user deselected in brainstorming)
-- Trust/safety metadata: signatures, publisher verification, safety ratings (user deselected)
-- Skill execution sandboxing for peer-transferred skills
-- Paid/private skill registries
-- Cross-platform skill compatibility matrix
+## 15. Deferred to Future Design
+
+- Paid/private skill registries (authentication, billing, private namespaces)
+- Cross-platform skill compatibility matrix (Linux vs macOS vs Windows sandbox capability mapping)
+- WASM sandbox for skills (mur-commander `sandbox/wasm.rs` via wasmtime — stronger isolation than OS-level only)
+- Skill A/B testing framework (compare two versions of a skill on the same task across multiple runs)
+- Federated registry protocol (registries that mirror and cross-validate each other)
+- Skill "genes" — EvoMap-style genetic recombination of skill components
+- Population-level evolution analytics (skill propagation graph, fitness metrics across the ecosystem)
+
+**Items that were deferred in v1 but are now first-class:**
+- ~~Trust/safety metadata~~ → Section 2 (Security & Supply Chain), M0 priority
+- ~~Skill execution sandboxing~~ → Section 2.2 Layer 3, M2 milestone
+- ~~MCP tool binding within skills~~ → Section 11 (MCP Deep Integration), M6 milestone
