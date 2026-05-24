@@ -5,6 +5,7 @@ pub mod hash;
 pub mod manifest;
 pub mod parser;
 pub mod scan;
+pub mod store;
 pub mod types;
 pub mod validate;
 
@@ -16,4 +17,5 @@ pub use parser::{
     serialize_markdown,
 };
 pub use types::*;
+pub use store::{StoreError, agent_skill_dir, global_skill_dir, read_from_dir, write_to_dir};
 pub use validate::{ValidationError, validate};
