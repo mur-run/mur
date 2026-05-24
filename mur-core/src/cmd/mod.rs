@@ -27,6 +27,7 @@ pub(crate) mod evolve_cmd;
 pub(crate) mod hook;
 pub(crate) mod init;
 pub(crate) mod init_daemon;
+pub(crate) mod skill_cmd;
 pub(crate) mod init_local;
 pub(crate) mod inject_cmd;
 pub(crate) mod internals;
