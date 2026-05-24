@@ -1,6 +1,6 @@
 //! Dual-format parser. Canonical YAML is the source of truth; markdown
 //! frontmatter is the human-authoring surface that round-trips via
-//! `canonical_from_markdown()` / `markdown_from_canonical()` (Task 6).
+//! `canonical_from_markdown()` / `markdown_from_canonical()`.
 
 use super::manifest::SkillManifest;
 use std::fmt;
