@@ -31,6 +31,7 @@ pub mod sandbox;
 pub mod scheduler;
 pub mod skills;
 pub mod socket_path;
+pub mod supervisor_runner;
 pub mod subcommand;
 pub mod supervisor;
 pub mod task_runner;
