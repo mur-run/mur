@@ -336,6 +336,36 @@ pub async fn run(cli: Cli) -> Result<()> {
                 )
                 .await?
             }
+            crate::cli::SkillAction::Stats { name } => {
+                cmd::skill_stats::cmd_stats(&name)?
+            }
+            crate::cli::SkillAction::Pin { name, reason } => {
+                cmd::skill_stats::cmd_pin(&name, reason.as_deref())?
+            }
+            crate::cli::SkillAction::Unpin { name } => {
+                cmd::skill_stats::cmd_unpin(&name)?
+            }
+            crate::cli::SkillAction::ReindexStats { name, days_back } => {
+                cmd::skill_stats::cmd_reindex_stats(name.as_deref(), days_back).await?
+            }
+            crate::cli::SkillAction::Doctor {
+                names,
+                check,
+                json,
+                strict,
+                fix,
+                apply,
+            } => {
+                // M5a: read-only doctor. --fix and --apply are stubs.
+                cmd::skill_doctor::cmd_doctor(
+                    &names,
+                    &check,
+                    json,
+                    strict,
+                    fix,
+                    apply,
+                )?
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
