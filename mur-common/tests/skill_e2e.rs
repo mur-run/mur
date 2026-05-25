@@ -4,8 +4,8 @@
 use mur_common::identity::AgentIdentity;
 use mur_common::skill::types::TrustLevel;
 use mur_common::skill::{
-    self, content_sha256, drift_status, parse_canonical, read_from_dir, scan::scan_skill,
-    sign_manifest, validate, verify_manifest, write_to_dir, DriftStatus,
+    self, DriftStatus, content_sha256, drift_status, parse_canonical, read_from_dir,
+    scan::scan_skill, sign_manifest, validate, verify_manifest, write_to_dir,
 };
 use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
 use tempfile::tempdir;

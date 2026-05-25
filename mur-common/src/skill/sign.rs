@@ -1,6 +1,6 @@
 use crate::identity::AgentIdentity;
-use crate::muragent::dsse::{sign as dsse_sign, verify as dsse_verify, DsseEnvelope};
 use crate::muragent::MuragentError;
+use crate::muragent::dsse::{DsseEnvelope, sign as dsse_sign, verify as dsse_verify};
 use crate::skill::manifest::SkillManifest;
 use crate::skill::scan::scan_unicode;
 use crate::skill::serialize_canonical;
@@ -51,8 +51,8 @@ pub fn verify_manifest(m: &SkillManifest, envelope_json: &str) -> Result<(), Sig
 
     dsse_verify(&envelope, SKILL_PAYLOAD_TYPE)?;
 
-    use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as B64;
     let signed_bytes = B64
         .decode(&envelope.payload)
         .map_err(|e| MuragentError::Other(format!("payload base64: {e}")))?;

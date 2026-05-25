@@ -88,23 +88,11 @@ pub struct Step {
 /// Validation error returned by [`Plan::validate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanValidationError {
-    UnknownDependency {
-        step_id: String,
-        referenced: String,
-    },
-    CycleDetected {
-        cycle: Vec<String>,
-    },
-    EmptyPhases {
-        step_id: String,
-    },
-    MissingVerifyCommand {
-        step_id: String,
-    },
-    PhasesOutOfOrder {
-        step_id: String,
-        phases: Vec<Phase>,
-    },
+    UnknownDependency { step_id: String, referenced: String },
+    CycleDetected { cycle: Vec<String> },
+    EmptyPhases { step_id: String },
+    MissingVerifyCommand { step_id: String },
+    PhasesOutOfOrder { step_id: String, phases: Vec<Phase> },
     MissingContentHash,
 }
 
@@ -136,7 +124,10 @@ impl std::fmt::Display for PlanValidationError {
                 )
             }
             PlanValidationError::MissingContentHash => {
-                write!(f, "content_sha256 is empty — call compute_content_sha256() first")
+                write!(
+                    f,
+                    "content_sha256 is empty — call compute_content_sha256() first"
+                )
             }
         }
     }
@@ -187,14 +178,14 @@ impl Plan {
             let mut prev_idx: Option<u8> = None;
             for phase in &step.phases {
                 let idx = phase.sdlc_index();
-                if let Some(p) = prev_idx {
-                    if idx <= p {
-                        errors.push(PlanValidationError::PhasesOutOfOrder {
-                            step_id: step.step_id.clone(),
-                            phases: step.phases.clone(),
-                        });
-                        break;
-                    }
+                if let Some(p) = prev_idx
+                    && idx <= p
+                {
+                    errors.push(PlanValidationError::PhasesOutOfOrder {
+                        step_id: step.step_id.clone(),
+                        phases: step.phases.clone(),
+                    });
+                    break;
                 }
                 prev_idx = Some(idx);
             }
@@ -382,7 +373,9 @@ depends_on = ["step_001"]
         assert_eq!(plan.plan.version, "0");
         assert_eq!(
             plan.plan.plan_id,
-            "550e8400-e29b-41d4-a716-446655440000".parse::<Uuid>().unwrap()
+            "550e8400-e29b-41d4-a716-446655440000"
+                .parse::<Uuid>()
+                .unwrap()
         );
         assert_eq!(plan.plan.goal, "Add Stripe webhook handler");
         assert_eq!(plan.plan.determinism, DeterminismMode::BestEffort);
@@ -480,7 +473,10 @@ depends_on = []
 "#;
         let plan = toml::from_str::<Plan>(toml).expect("parse ok");
         let errors = plan.validate();
-        assert!(!errors.is_empty(), "empty verify_command must fail validation");
+        assert!(
+            !errors.is_empty(),
+            "empty verify_command must fail validation"
+        );
     }
 
     #[test]
@@ -541,7 +537,9 @@ depends_on = ["s1"]
         let plan = toml::from_str::<Plan>(toml).expect("parse ok");
         let errors = plan.validate();
         assert!(!errors.is_empty(), "cycle must fail validation");
-        let has_cycle = errors.iter().any(|e| matches!(e, PlanValidationError::CycleDetected { .. }));
+        let has_cycle = errors
+            .iter()
+            .any(|e| matches!(e, PlanValidationError::CycleDetected { .. }));
         assert!(has_cycle, "error must mention cycle, got: {:?}", errors);
     }
 
@@ -576,7 +574,11 @@ depends_on = ["build"]
 "#;
         let plan: Plan = toml::from_str(toml).expect("parse valid plan");
         let errors = plan.validate();
-        assert!(errors.is_empty(), "validation must pass for valid plan, got: {:?}", errors);
+        assert!(
+            errors.is_empty(),
+            "validation must pass for valid plan, got: {:?}",
+            errors
+        );
     }
 
     #[test]
