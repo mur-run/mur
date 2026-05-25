@@ -1,6 +1,6 @@
 use crate::skill::manifest::SkillManifest;
 use crate::skill::parser::{
-    ParseError, parse_canonical, parse_legacy_markdown, parse_markdown, serialize_canonical,
+    parse_canonical, parse_legacy_markdown, parse_markdown, serialize_canonical, ParseError,
 };
 use std::fs;
 use std::io::{self, Write};

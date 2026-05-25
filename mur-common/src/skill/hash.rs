@@ -33,12 +33,18 @@ pub enum DriftStatus {
     Unpinned,
 }
 
-pub fn drift_status(m: &SkillManifest, expected: Option<&str>) -> Result<DriftStatus, crate::skill::ParseError> {
+pub fn drift_status(
+    m: &SkillManifest,
+    expected: Option<&str>,
+) -> Result<DriftStatus, crate::skill::ParseError> {
     let actual = content_sha256(m)?;
     Ok(match expected {
         None => DriftStatus::Unpinned,
         Some(exp) if ct_eq_hex(exp, &actual) => DriftStatus::Pinned,
-        Some(exp) => DriftStatus::Drift { expected: exp.to_string(), actual },
+        Some(exp) => DriftStatus::Drift {
+            expected: exp.to_string(),
+            actual,
+        },
     })
 }
 

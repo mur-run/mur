@@ -70,7 +70,10 @@ pub fn check_capabilities(
             });
         };
         if !allowed.contains(&cap) {
-            return Err(CapabilityViolation { capability: cap, trust_level: level });
+            return Err(CapabilityViolation {
+                capability: cap,
+                trust_level: level,
+            });
         }
     }
     Ok(())
@@ -83,13 +86,22 @@ mod tests {
     #[test]
     fn sandboxed_blocks_network() {
         let r = check_capabilities(&["network_outbound".into()], TrustLevel::Sandboxed);
-        assert!(matches!(r, Err(CapabilityViolation { capability: Capability::NetworkOutbound, .. })));
+        assert!(matches!(
+            r,
+            Err(CapabilityViolation {
+                capability: Capability::NetworkOutbound,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn verified_allows_allowlisted_net() {
         let r = check_capabilities(
-            &["network_outbound_allowlisted".into(), "fs_write_agent_home".into()],
+            &[
+                "network_outbound_allowlisted".into(),
+                "fs_write_agent_home".into(),
+            ],
             TrustLevel::Verified,
         );
         assert!(r.is_ok());

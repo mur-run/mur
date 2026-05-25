@@ -2,11 +2,11 @@
 //! read → sign → verify → tamper → drift-detect → revoke → trust-deny.
 
 use mur_common::identity::AgentIdentity;
-use mur_common::skill::{
-    self, DriftStatus, content_sha256, drift_status, parse_canonical, scan::scan_skill,
-    sign_manifest, validate, verify_manifest, write_to_dir, read_from_dir,
-};
 use mur_common::skill::types::TrustLevel;
+use mur_common::skill::{
+    self, content_sha256, drift_status, parse_canonical, read_from_dir, scan::scan_skill,
+    sign_manifest, validate, verify_manifest, write_to_dir, DriftStatus,
+};
 use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
 use tempfile::tempdir;
 
@@ -42,7 +42,11 @@ fn full_pipeline_happy_path() {
 
     // 2. Run the content security scan — no findings.
     let report = scan_skill(&m).unwrap();
-    assert!(!report.has_blocking_findings(), "{:?}", report.human_summary());
+    assert!(
+        !report.has_blocking_findings(),
+        "{:?}",
+        report.human_summary()
+    );
 
     // 3. Hash the canonical form deterministically.
     let h1 = content_sha256(&m).unwrap();

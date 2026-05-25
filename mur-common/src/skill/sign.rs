@@ -1,5 +1,5 @@
 use crate::identity::AgentIdentity;
-use crate::muragent::dsse::{DsseEnvelope, sign as dsse_sign, verify as dsse_verify};
+use crate::muragent::dsse::{sign as dsse_sign, verify as dsse_verify, DsseEnvelope};
 use crate::muragent::MuragentError;
 use crate::skill::manifest::SkillManifest;
 use crate::skill::scan::scan_unicode;
@@ -40,8 +40,8 @@ pub fn sign_manifest(m: &SkillManifest, identity: &AgentIdentity) -> Result<Stri
     let yaml = serialize_canonical(m)?;
     let (normalised, _) = scan_unicode(&yaml);
     let envelope = dsse_sign(SKILL_PAYLOAD_TYPE, &normalised, identity)?;
-    let s =
-        serde_json::to_string(&envelope).map_err(|e| MuragentError::Other(format!("envelope json: {e}")))?;
+    let s = serde_json::to_string(&envelope)
+        .map_err(|e| MuragentError::Other(format!("envelope json: {e}")))?;
     Ok(s)
 }
 
