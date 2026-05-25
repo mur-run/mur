@@ -1249,6 +1249,10 @@ pub struct AdaptiveSkillsConfig {
     pub context_fill_decay: f64,
     pub min_remaining_context_ratio: f64,
     pub recent_fire_boost_turns: usize,
+    /// Model max context window in tokens. Used to compute
+    /// `context_fill_ratio = cumulative_input_tokens / model_max_context_tokens`.
+    /// Default 200_000 (Claude 3.5/4.x).
+    pub model_max_context_tokens: u64,
 }
 
 impl Default for AdaptiveSkillsConfig {
@@ -1257,6 +1261,7 @@ impl Default for AdaptiveSkillsConfig {
             context_fill_decay: 1.5,
             min_remaining_context_ratio: 0.20,
             recent_fire_boost_turns: 5,
+            model_max_context_tokens: 200_000,
         }
     }
 }
