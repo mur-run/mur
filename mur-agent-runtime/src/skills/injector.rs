@@ -1,7 +1,7 @@
 use mur_common::config::SkillsConfig;
+use mur_common::skill::TriggerKind;
 use mur_common::skill::loader::LoadedSkill;
 use mur_common::skill::types::{HostId, Priority};
-use mur_common::skill::TriggerKind;
 use std::collections::HashSet;
 
 fn priority_val(p: &Priority) -> u8 {
@@ -116,14 +116,9 @@ mod tests {
     use super::*;
     use mur_common::skill::loader::SkillScope;
     use mur_common::skill::parse_canonical;
-    use mur_common::skill::types::{Category, Priority, TrustLevel};
+    use mur_common::skill::types::TrustLevel;
 
-    fn loaded(
-        name: &str,
-        abstract_: &str,
-        trust: TrustLevel,
-        triggers: &str,
-    ) -> LoadedSkill {
+    fn loaded(name: &str, abstract_: &str, trust: TrustLevel, triggers: &str) -> LoadedSkill {
         let yaml = format!(
             r#"name: {name}
 version: 1.0.0
@@ -148,7 +143,12 @@ content:
 
     #[test]
     fn no_session_start_not_injected() {
-        let s = loaded("cmd-only", "Do stuff", TrustLevel::Verified, "triggers:\n  - type: command\n    pattern: /x\n");
+        let s = loaded(
+            "cmd-only",
+            "Do stuff",
+            TrustLevel::Verified,
+            "triggers:\n  - type: command\n    pattern: /x\n",
+        );
         let result = inject_layer2(&[s], &SkillsConfig::default(), 0.0, &HashSet::new());
         assert!(result.system_addendum.is_empty());
         assert!(result.injected_names.is_empty());
@@ -156,14 +156,19 @@ content:
 
     #[test]
     fn trusted_before_sandboxed() {
-        let a = loaded("sand", "low trust", TrustLevel::Sandboxed, "triggers:\n  - type: session_start\n");
-        let b = loaded("trust", "high trust", TrustLevel::Trusted, "triggers:\n  - type: session_start\n");
-        let result = inject_layer2(
-            &[a, b],
-            &SkillsConfig::default(),
-            0.0,
-            &HashSet::new(),
+        let a = loaded(
+            "sand",
+            "low trust",
+            TrustLevel::Sandboxed,
+            "triggers:\n  - type: session_start\n",
         );
+        let b = loaded(
+            "trust",
+            "high trust",
+            TrustLevel::Trusted,
+            "triggers:\n  - type: session_start\n",
+        );
+        let result = inject_layer2(&[a, b], &SkillsConfig::default(), 0.0, &HashSet::new());
         assert_eq!(result.injected_names.len(), 2);
         assert_eq!(result.injected_names[0], "trust");
         assert_eq!(result.injected_names[1], "sand");
@@ -171,9 +176,19 @@ content:
 
     #[test]
     fn adaptive_skips_when_context_too_full() {
-        let s = loaded("x", "hi", TrustLevel::Verified, "triggers:\n  - type: session_start\n");
-        let mut cfg = SkillsConfig::default();
-        cfg.adaptive.as_mut().unwrap().min_remaining_context_ratio = 0.5;
+        let s = loaded(
+            "x",
+            "hi",
+            TrustLevel::Verified,
+            "triggers:\n  - type: session_start\n",
+        );
+        let cfg = SkillsConfig {
+            adaptive: Some(mur_common::config::AdaptiveSkillsConfig {
+                min_remaining_context_ratio: 0.5,
+                ..mur_common::config::AdaptiveSkillsConfig::default()
+            }),
+            ..SkillsConfig::default()
+        };
         let result = inject_layer2(&[s], &cfg, 0.85, &HashSet::new());
         assert!(result.budget_skipped);
         assert!(result.injected_names.is_empty());
@@ -191,16 +206,28 @@ content:
                 )
             })
             .collect();
-        let mut cfg = SkillsConfig::default();
-        cfg.max_skills_in_prompt = 2;
+        let cfg = SkillsConfig {
+            max_skills_in_prompt: 2,
+            ..SkillsConfig::default()
+        };
         let result = inject_layer2(&skills, &cfg, 0.0, &HashSet::new());
         assert_eq!(result.injected_names.len(), 2);
     }
 
     #[test]
     fn recently_fired_breaks_tie_within_same_trust() {
-        let a = loaded("a", "a", TrustLevel::Verified, "triggers:\n  - type: session_start\n");
-        let b = loaded("b", "b", TrustLevel::Verified, "triggers:\n  - type: session_start\n");
+        let a = loaded(
+            "a",
+            "a",
+            TrustLevel::Verified,
+            "triggers:\n  - type: session_start\n",
+        );
+        let b = loaded(
+            "b",
+            "b",
+            TrustLevel::Verified,
+            "triggers:\n  - type: session_start\n",
+        );
         let mut fired = HashSet::new();
         fired.insert("b".to_string());
         let result = inject_layer2(&[a, b], &SkillsConfig::default(), 0.0, &fired);

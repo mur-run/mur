@@ -1,6 +1,6 @@
+use mur_common::skill::TriggerKind;
 use mur_common::skill::loader::LoadedSkill;
 use mur_common::skill::types::TrustLevel;
-use mur_common::skill::TriggerKind;
 use regex::Regex;
 
 #[derive(Debug, Clone)]

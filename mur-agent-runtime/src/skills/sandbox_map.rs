@@ -10,8 +10,8 @@
 //! as an observable seam.
 
 use mur_common::agent::{
-    Entitlements, NetworkEntitlement, NetworkOutboundMode, OutboundNetwork,
-    ProcessesEntitlement, SpawnEntitlement, SpawnMode,
+    Entitlements, NetworkOutboundMode, OutboundNetwork, ProcessesEntitlement, SpawnEntitlement,
+    SpawnMode,
 };
 use mur_common::skill::types::TrustLevel;
 
@@ -47,8 +47,8 @@ pub fn restrict_for_trust(base: &Entitlements, trust: TrustLevel) -> Entitlement
 mod tests {
     use super::*;
     use mur_common::agent::{
-        FilesystemEntitlement, InboundNetwork, LimitsEntitlement, ResolveDnsConfig,
-        SyscallsEntitlement,
+        FilesystemEntitlement, InboundNetwork, LimitsEntitlement, NetworkEntitlement,
+        ResolveDnsConfig, SyscallsEntitlement,
     };
 
     fn base_open() -> Entitlements {
@@ -65,7 +65,7 @@ mod tests {
             filesystem: FilesystemEntitlement::default(),
             processes: ProcessesEntitlement {
                 spawn: SpawnEntitlement {
-                    mode: SpawnMode::Unrestricted,
+                    mode: SpawnMode::Any,
                     allowed: vec!["sh".into()],
                 },
             },

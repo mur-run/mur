@@ -2,7 +2,7 @@
 //! resolves trust level, checks drift, returns one flat Vec.
 
 use crate::skill::types::TrustLevel;
-use crate::skill::{SkillManifest, content_sha256, drift_status, local, DriftStatus};
+use crate::skill::{DriftStatus, SkillManifest, content_sha256, drift_status, local};
 use crate::trust::skills::SkillTrustStore;
 use std::path::Path;
 
@@ -47,7 +47,7 @@ pub fn load_all(mur_home: &Path, agent_name: &str) -> Vec<LoadedSkill> {
                 &name,
                 SkillScope::Global,
                 &trust,
-                |m, n| local::load_installed(m, n),
+                local::load_installed,
             ) {
                 out.push(loaded);
             }
@@ -84,9 +84,7 @@ where
     // and it disagrees, refuse to load.
     let entry = trust.entries.get(&hash);
     if let Some(pinned) = entry {
-        if let Ok(DriftStatus::Drift { expected, actual }) =
-            drift_status(&manifest, Some(&hash))
-        {
+        if let Ok(DriftStatus::Drift { expected, actual }) = drift_status(&manifest, Some(&hash)) {
             tracing::warn!(skill = %name, expected, actual, "skill drift detected; skipping");
             return None;
         }
