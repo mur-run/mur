@@ -41,6 +41,7 @@ pub(crate) mod reindex;
 pub(crate) mod search;
 pub(crate) mod server_cmd;
 pub(crate) mod session;
+pub(crate) mod skill_cmd;
 pub(crate) mod sleep;
 pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;

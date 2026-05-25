@@ -144,16 +144,32 @@ mod allowlist_tests {
     }
 }
 
-/// Shared credential pattern set used by both `scan_for_secrets`
-/// (drop semantics, B0 rule 7 / M7.5) and `redact_secrets` (replace
-/// semantics, B0 rule 9 / M8.1). Single source of truth so the two
-/// rules can never drift.
-fn secret_patterns() -> &'static [(regex::Regex, &'static str)] {
+/// Scan body for known credential/secret patterns. Returns the FIRST
+/// match's classification (or `None` if clean). Delegates to
+/// `mur_common::skill::scan::secrets` so the pattern list is a single
+/// source of truth.
+pub fn scan_for_secrets(body: &str) -> Option<&'static str> {
+    mur_common::skill::scan::scan_secrets(body)
+        .into_iter()
+        .next()
+        .map(|f| f.label)
+}
+
+/// Replace every match of the credential pattern set with
+/// `[REDACTED:<label>]`. Used at the telemetry write boundary
+/// (B0 rule 9 / M8.1) to scrub free-form strings before they
+/// land on disk in `~/.mur/agents/<name>/telemetry/<date>.jsonl`.
+///
+/// Returns `Cow::Borrowed` when nothing matched so the common
+/// hot path (no secrets present) avoids any allocation.
+pub fn redact_secrets(input: &str) -> std::borrow::Cow<'_, str> {
+    // TODO(M1): collapse into mur-common::skill::scan::secrets
     use regex::Regex;
+    use std::borrow::Cow;
     use std::sync::OnceLock;
 
-    static PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
-    PATTERNS.get_or_init(|| {
+    static REDACT_PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+    let patterns = REDACT_PATTERNS.get_or_init(|| {
         vec![
             // OpenAI / Anthropic API keys
             (Regex::new(r"\bsk-[a-zA-Z0-9]{20,}\b").unwrap(), "openai_key"),
@@ -175,33 +191,10 @@ fn secret_patterns() -> &'static [(regex::Regex, &'static str)] {
             // Generic .env-style assignment with high-entropy value
             (Regex::new(r"(?i)\b(api_key|api_secret|secret_key|access_token|password|token)\s*[:=]\s*[A-Za-z0-9_\-./+=]{20,}\b").unwrap(), "env_assignment"),
         ]
-    })
-}
+    });
 
-/// Scan body for known credential/secret patterns. Returns the FIRST
-/// match's classification (or `None` if clean). Patterns deliberately
-/// favor false-positives over false-negatives — accidentally dropping
-/// a benign message is fine; leaking a key is not.
-pub fn scan_for_secrets(body: &str) -> Option<&'static str> {
-    for (rx, label) in secret_patterns() {
-        if rx.is_match(body) {
-            return Some(label);
-        }
-    }
-    None
-}
-
-/// Replace every match of the credential pattern set with
-/// `[REDACTED:<label>]`. Used at the telemetry write boundary
-/// (B0 rule 9 / M8.1) to scrub free-form strings before they
-/// land on disk in `~/.mur/agents/<name>/telemetry/<date>.jsonl`.
-///
-/// Returns `Cow::Borrowed` when nothing matched so the common
-/// hot path (no secrets present) avoids any allocation.
-pub fn redact_secrets(input: &str) -> std::borrow::Cow<'_, str> {
-    use std::borrow::Cow;
     let mut out: Cow<'_, str> = Cow::Borrowed(input);
-    for (rx, label) in secret_patterns() {
+    for (rx, label) in patterns {
         if rx.is_match(&out) {
             let replacement = format!("[REDACTED:{label}]");
             out = Cow::Owned(rx.replace_all(&out, replacement.as_str()).into_owned());
