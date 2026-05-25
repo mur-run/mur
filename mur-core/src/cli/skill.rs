@@ -95,4 +95,15 @@ pub enum SkillAction {
         #[clap(long, default_value = "3")]
         threshold: usize,
     },
+    /// Self-evolve a skill by analyzing telemetry and applying minimal fixes.
+    Evolve {
+        /// Skill name to evolve.
+        name: String,
+        /// Preview changes without writing.
+        #[clap(long)]
+        dry_run: bool,
+        /// Max evolution iterations (default 3).
+        #[clap(long, default_value = "3")]
+        max_iterations: usize,
+    },
 }

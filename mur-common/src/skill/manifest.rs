@@ -1,5 +1,6 @@
 //! Skill manifest — full serde representation of canonical `skill.yaml`.
 
+use super::evolution::EvolutionEvent;
 use super::types::{Category, ContentMode, HostId, Priority, TriggerKind, TrustLevel};
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +55,10 @@ pub struct SkillManifest {
 
     #[serde(default)]
     pub priority: Priority,
+
+    /// Evolution history — each entry records one generation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evolution_log: Vec<EvolutionEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,5 +195,48 @@ priority: normal
             command: None,
         };
         assert_eq!(c.mode(), None);
+    }
+
+    #[test]
+    fn skill_without_evolution_log_defaults_to_empty() {
+        // YAML without evolution_log field must parse and default to vec![].
+        let yaml = r#"
+name: no-evol
+version: 0.1.0
+publisher: human:test
+description: test
+category: workflow
+content:
+  abstract: test
+"#;
+        let m: SkillManifest = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(m.evolution_log.is_empty());
+    }
+
+    #[test]
+    fn skill_with_evolution_log_roundtrips() {
+        let yaml = r#"
+name: with-evol
+version: 0.1.0
+publisher: human:test
+description: test
+category: workflow
+content:
+  abstract: test
+evolution_log:
+  - version: "0.1.0"
+    generation: 0
+    source: "human:test"
+    changes: "Initial"
+    timestamp: "2026-01-01T00:00:00Z"
+"#;
+        let m: SkillManifest = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(m.evolution_log.len(), 1);
+        assert_eq!(m.evolution_log[0].version, "0.1.0");
+        // Round-trip.
+        let back = serde_yaml_ng::to_string(&m).unwrap();
+        let m2: SkillManifest = serde_yaml_ng::from_str(&back).unwrap();
+        assert_eq!(m2.evolution_log.len(), 1);
+        assert_eq!(m2.evolution_log[0].generation, 0);
     }
 }

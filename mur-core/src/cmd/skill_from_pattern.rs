@@ -97,6 +97,7 @@ pub fn pattern_to_skill(pattern: &Pattern, polish: bool) -> Result<SkillManifest
         tags,
         triggers: vec![],
         priority: Default::default(),
+        evolution_log: vec![],
     };
 
     validate(&manifest).context("derived skill manifest failed schema validation")?;

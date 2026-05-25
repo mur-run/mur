@@ -209,7 +209,7 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             latency_ms,
             cost_usd,
             provider,
-            fired_skills: _,
+            fired_skills,
         } => {
             params[GEN_AI_PROVIDER_NAME] = json!(provider);
             params[GEN_AI_REQUEST_MODEL] = json!(model);
@@ -219,6 +219,9 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             params["cost_usd"] = json!(cost_usd);
             params["trace_id"] = json!(trace_id);
             params[MUR_TASK_ID] = json!(task_id);
+            if !fired_skills.is_empty() {
+                params[MUR_FIRED_SKILLS] = json!(fired_skills);
+            }
             METHOD_LLM_CALL
         }
         Event::ToolCall {
@@ -298,6 +301,7 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             METHOD_BRIDGE_ALIVE
         }
     };
+    params[MUR_EVENT_TYPE] = json!(method);
     json!({"jsonrpc": "2.0", "method": method, "params": params})
 }
 
