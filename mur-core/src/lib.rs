@@ -4,6 +4,7 @@
 //! retrieval, and evolution. Used by the `mur` CLI binary
 //! and by MUR Commander (daemon).
 
+pub mod a2a_dial;
 pub mod agent_admin;
 pub mod auth;
 pub mod bridge_keychain;

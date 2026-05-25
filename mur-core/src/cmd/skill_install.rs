@@ -5,7 +5,7 @@ use std::path::Path;
 
 use mur_common::skill::{
     SkillLock, SkillManifest, TrustLevel, content_hash_for_trust, content_sha256, global_skill_dir,
-    lockfile, read_from_dir, scan::scan_skill, write_to_dir,
+    lockfile, scan::scan_skill, write_to_dir,
 };
 use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
 
@@ -109,22 +109,57 @@ fn install_resolved_node(home: &Path, node: &ResolvedNode) -> Result<()> {
 }
 
 fn install_from_agent(home: &Path, agent_name: &str, skill_name: &str) -> Result<()> {
-    // 1. Discover — verify the named agent exists locally.
+    // 1. Discover — confirm the named agent is registered on this host.
     let agent_dir = home.join("agents").join(agent_name);
     if !agent_dir.exists() {
         bail!(
-            "agent '{agent_name}' not found at {} — \
-             M4a requires the source agent to live on the same MUR_HOME",
+            "agent '{agent_name}' not found at {} — cannot dial",
             agent_dir.display()
         );
     }
 
-    // 2. Pull — read the skill directly from the shared local store.
-    let source_dir = global_skill_dir(home, skill_name);
-    let mut manifest: SkillManifest = read_from_dir(&source_dir)
-        .map_err(|e| anyhow!("pull from agent://{agent_name}/{skill_name} failed: {e}"))?;
+    // 2. Pull — JSON-RPC `skills/get` to the source agent.
+    tracing::info!(skill = %skill_name, source = %agent_name, "pulling skill via A2A");
+    use crate::a2a_dial::{DialMode, dial_method};
+    use mur_common::skill::parse_canonical;
+
+    let response = dial_method(
+        home,
+        agent_name,
+        "skills/get",
+        serde_json::json!({"skill": skill_name}),
+        DialMode::Auto,
+    )
+    .with_context(|| format!("pull agent://{agent_name}/{skill_name}"))?;
+
+    let manifest_yaml = response
+        .get("manifest")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow!("agent://{agent_name}/{skill_name}: response missing 'manifest' field")
+        })?;
+    let mut manifest: SkillManifest = parse_canonical(manifest_yaml)
+        .with_context(|| format!("parse manifest from agent://{agent_name}/{skill_name}"))?;
+
+    let advertised_hash = response
+        .get("content_sha256")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow!("agent://{agent_name}/{skill_name}: response missing 'content_sha256'")
+        })?;
     let received_hash =
-        content_hash_for_trust(&manifest).map_err(|e| anyhow!("hash source manifest: {e}"))?;
+        content_hash_for_trust(&manifest).map_err(|e| anyhow!("hash received manifest: {e}"))?;
+
+    // The sender's advertised hash must match what we just computed.
+    // Otherwise the payload was tampered with in transit or the sender is
+    // buggy — either way, refuse the install rather than poisoning the
+    // trust store.
+    if advertised_hash != received_hash {
+        bail!(
+            "agent://{agent_name}/{skill_name}: hash mismatch \
+             (sender advertised {advertised_hash}, computed {received_hash}) — install blocked"
+        );
+    }
 
     // 3. Verify — content-based trust.
     let trust_level = resolve_agent_install_trust(home, &manifest, &received_hash)?;

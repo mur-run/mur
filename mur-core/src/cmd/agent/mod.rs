@@ -102,7 +102,7 @@ pub(super) fn resolve_bin_dir() -> Result<PathBuf> {
     bail!("cannot resolve bin dir")
 }
 
-pub(super) fn resolve_runtime_target() -> PathBuf {
+pub(crate) fn resolve_runtime_target() -> PathBuf {
     if let Some(v) = std::env::var_os("MUR_AGENT_RUNTIME_BIN") {
         return PathBuf::from(v);
     }
