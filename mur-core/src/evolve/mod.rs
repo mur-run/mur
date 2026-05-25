@@ -9,6 +9,7 @@ pub mod feedback;
 pub mod lifecycle;
 pub mod linker;
 pub mod maturity;
+pub mod skill_evolve;
 pub mod telemetry_reader;
 
 use mur_common::pattern::Pattern;
