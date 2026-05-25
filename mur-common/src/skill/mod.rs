@@ -2,6 +2,7 @@
 
 pub mod capability;
 pub mod hash;
+pub mod local;
 pub mod manifest;
 pub mod parser;
 pub mod scan;
