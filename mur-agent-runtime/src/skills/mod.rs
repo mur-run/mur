@@ -1,4 +1,5 @@
 pub mod injector;
+pub mod sandbox_map;
 pub mod trigger_matcher;
 
 use mur_common::skill::loader::LoadedSkill;
