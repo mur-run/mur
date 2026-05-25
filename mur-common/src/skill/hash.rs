@@ -3,6 +3,16 @@ use crate::skill::serialize_canonical;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
+/// Compute content hash for trust verification — excludes `transfer_chain`
+/// and `evolution_log` so registry lookup and trust-store keys remain stable
+/// across transfers and across generation increments.
+pub fn content_hash_for_trust(m: &SkillManifest) -> Result<String, crate::skill::ParseError> {
+    let mut clone = m.clone();
+    clone.transfer_chain = vec![];
+    clone.evolution_log = vec![];
+    content_sha256(&clone)
+}
+
 /// Hex-encoded SHA-256 of the canonical YAML form. Lowercase.
 pub fn content_sha256(m: &SkillManifest) -> Result<String, crate::skill::ParseError> {
     let yaml = serialize_canonical(m)?;
@@ -93,5 +103,44 @@ content:
     #[test]
     fn ct_eq_hex_rejects_unequal_length() {
         assert!(!ct_eq_hex("aa", "aaa"));
+    }
+
+    #[test]
+    fn trust_hash_is_stable_across_transfers() {
+        let m = parse_canonical(SAMPLE).unwrap();
+        let h1 = content_hash_for_trust(&m).unwrap();
+        let mut m2 = m.clone();
+        m2.transfer_chain = vec!["agent://alice".into(), "agent://bob".into()];
+        let h2 = content_hash_for_trust(&m2).unwrap();
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn trust_hash_is_stable_across_evolution() {
+        use crate::skill::EvolutionEvent;
+        let m = parse_canonical(SAMPLE).unwrap();
+        let h1 = content_hash_for_trust(&m).unwrap();
+        let mut m2 = m.clone();
+        m2.evolution_log = vec![EvolutionEvent {
+            version: "0.2.0".into(),
+            generation: 0,
+            source: "agent:self".into(),
+            changes: "tweak".into(),
+            quality_score: None,
+            timestamp: "2026-05-25T00:00:00Z".into(),
+        }];
+        let h2 = content_hash_for_trust(&m2).unwrap();
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn trust_hash_differs_when_content_changes() {
+        let m = parse_canonical(SAMPLE).unwrap();
+        let mut m2 = m.clone();
+        m2.description = "changed".into();
+        assert_ne!(
+            content_hash_for_trust(&m).unwrap(),
+            content_hash_for_trust(&m2).unwrap()
+        );
     }
 }
