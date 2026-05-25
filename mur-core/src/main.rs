@@ -36,6 +36,7 @@ mod server;
 #[cfg(feature = "server")]
 mod server_agents;
 mod session;
+mod skill_gen;
 #[cfg(feature = "sources")]
 mod sources;
 mod store;
