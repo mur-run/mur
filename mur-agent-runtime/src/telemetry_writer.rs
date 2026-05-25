@@ -2,6 +2,7 @@
 //! so the stdio/socket transport can stream notifications to callers.
 
 use mur_common::telemetry::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use tokio::fs::{self, OpenOptions};
@@ -17,6 +18,16 @@ const CHANNEL_BUF: usize = 256;
 enum WriterMessage {
     Event(Event),
     Flush(oneshot::Sender<()>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillOutcome {
+    Success,
+    Failure,
+    /// Skill fired but outcome unknown (M5a fallback when per-skill
+    /// success/failure is not tracked by the M2 wiring).
+    NotEvaluated,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +72,18 @@ pub enum Event {
         stage: String,
         message: Option<String>,
         percent: Option<u8>,
+    },
+    /// Per-skill execution telemetry. Emitted for each skill fired on a
+    /// turn. Outcome is `NotEvaluated` when the M2 wiring knows a skill was
+    /// triggered but does not track per-skill success/failure (M5a fallback).
+    SkillExecuted {
+        trace_id: String,
+        task_id: String,
+        skill_name: String,
+        skill_version: String,
+        manifest_digest: String,
+        outcome: SkillOutcome,
+        duration_ms: u64,
     },
     /// Generic hook fire event. `method` is the JSON-RPC notification
     /// method (typically `METHOD_HOOK_FIRED`); `attrs` is the
@@ -223,6 +246,24 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
                 params[MUR_FIRED_SKILLS] = json!(fired_skills);
             }
             METHOD_LLM_CALL
+        }
+        Event::SkillExecuted {
+            trace_id,
+            task_id,
+            skill_name,
+            skill_version,
+            manifest_digest,
+            outcome,
+            duration_ms,
+        } => {
+            params["trace_id"] = json!(trace_id);
+            params[MUR_TASK_ID] = json!(task_id);
+            params[MUR_SKILL_NAME] = json!(skill_name);
+            params[MUR_SKILL_VERSION] = json!(skill_version);
+            params[MUR_SKILL_OUTCOME] = json!(outcome);
+            params["duration_ms"] = json!(duration_ms);
+            params[MUR_SKILL_MANIFEST_DIGEST] = json!(manifest_digest);
+            METHOD_SKILL_EXECUTED
         }
         Event::ToolCall {
             trace_id,

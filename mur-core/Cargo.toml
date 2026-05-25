@@ -55,6 +55,7 @@ sha2 = "0.10"
 hex = "0.4"
 regex = "1"
 semver = "1"
+supports-color = "3"
 lancedb = "0.26"
 tantivy = "0.24"   # match lance's transitive dep so we don't compile two
                    # tantivy versions (~50K LOC each) on every CI run
