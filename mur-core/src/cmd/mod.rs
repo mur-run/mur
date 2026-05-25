@@ -45,6 +45,7 @@ pub(crate) mod skill_cmd;
 pub(crate) mod skill_install;
 pub(crate) mod skill_publish;
 pub(crate) mod skill_registry;
+#[allow(dead_code)]
 pub(crate) mod skill_resolver;
 pub(crate) mod sleep;
 pub(crate) mod sync_cmd;
