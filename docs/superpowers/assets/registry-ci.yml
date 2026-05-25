@@ -1,0 +1,46 @@
+# .github/workflows/validate.yml — for mur-run/skill-registry
+name: Validate Registry PR
+on:
+  pull_request:
+    paths:
+      - 'skills/**/*.yaml'
+      - 'index.yaml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install mur CLI
+        run: cargo install --git https://github.com/mur-run/mur.git
+
+      - name: Find changed skill YAMLs
+        id: changed
+        run: |
+          CHANGED=$(git diff --name-only origin/main...HEAD -- 'skills/**/*.yaml' | tr '\n' ' ')
+          echo "Changed files: $CHANGED"
+          echo "files=$CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Validate each skill
+        run: |
+          for f in ${{ steps.changed.outputs.files }}; do
+            if [ -n "$f" ]; then
+              echo "Validating $f..."
+              mur skill validate "$f" || exit 1
+            fi
+          done
+
+      - name: Verify signatures
+        run: |
+          for sig in $(git diff --name-only origin/main...HEAD -- 'skills/**/*.sig.json'); do
+            if [ -n "$sig" ]; then
+              echo "Checking signature: $sig"
+              # TODO(M2): wire signature verification here
+            fi
+          done
