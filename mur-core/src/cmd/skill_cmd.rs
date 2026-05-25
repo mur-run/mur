@@ -1,13 +1,13 @@
 //! `mur skill` command handlers.
 
-use anyhow::{anyhow, bail, Context, Result};
+use crate::cmd::agent::resolve_mur_home;
+use anyhow::{Context, Result, anyhow, bail};
 use mur_common::skill::{
-    local, parse_canonical, parse_legacy_markdown, parse_markdown, scan::scan_skill,
-    serialize_canonical, serialize_markdown, TrustLevel, validate,
+    TrustLevel, local, parse_canonical, parse_legacy_markdown, parse_markdown, scan::scan_skill,
+    serialize_canonical, serialize_markdown, validate,
 };
 use std::fs;
 use std::path::Path;
-use crate::cmd::agent::resolve_mur_home;
 
 pub fn cmd_validate(path: &str, warnings_only: bool) -> Result<()> {
     let m = read_any(path)?;
@@ -73,8 +73,7 @@ pub fn cmd_list() -> Result<()> {
         return Ok(());
     }
     for name in &names {
-        let level = local::get_trust_level(&home, name)
-            .unwrap_or(TrustLevel::Sandboxed);
+        let level = local::get_trust_level(&home, name).unwrap_or(TrustLevel::Sandboxed);
         println!("{name:30} [{level:?}]");
     }
     Ok(())
@@ -82,8 +81,8 @@ pub fn cmd_list() -> Result<()> {
 
 pub fn cmd_show(name: &str) -> Result<()> {
     let home = resolve_mur_home()?;
-    let m = local::load_installed(&home, name)
-        .map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let m =
+        local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
     let yaml = serialize_canonical(&m)?;
     print!("{yaml}");
     Ok(())
@@ -91,16 +90,14 @@ pub fn cmd_show(name: &str) -> Result<()> {
 
 pub fn cmd_remove(name: &str) -> Result<()> {
     let home = resolve_mur_home()?;
-    local::remove_installed(&home, name)
-        .map_err(|e| anyhow!("failed to remove '{name}': {e}"))?;
+    local::remove_installed(&home, name).map_err(|e| anyhow!("failed to remove '{name}': {e}"))?;
     println!("removed: {name}");
     Ok(())
 }
 
 pub fn cmd_search(query: &str, local_only: bool) -> Result<()> {
     let home = resolve_mur_home()?;
-    let local_results = local::search_installed(&home, query)
-        .context("search installed")?;
+    let local_results = local::search_installed(&home, query).context("search installed")?;
 
     if !local_results.is_empty() {
         println!("Installed:");
@@ -112,7 +109,10 @@ pub fn cmd_search(query: &str, local_only: bool) -> Result<()> {
     }
 
     if !local_only {
-        match crate::cmd::skill_registry::fetch_and_load(&home, crate::cmd::skill_registry::DEFAULT_REGISTRY) {
+        match crate::cmd::skill_registry::fetch_and_load(
+            &home,
+            crate::cmd::skill_registry::DEFAULT_REGISTRY,
+        ) {
             Ok((_dir, idx)) => {
                 let reg_results = crate::cmd::skill_registry::search_registry(&idx, query);
                 if !reg_results.is_empty() {
@@ -121,7 +121,10 @@ pub fn cmd_search(query: &str, local_only: bool) -> Result<()> {
                     }
                     println!("Registry:");
                     for (name, entry) in reg_results {
-                        println!("  {name:25} registry    {} [v{}]", entry.description, entry.latest);
+                        println!(
+                            "  {name:25} registry    {} [v{}]",
+                            entry.description, entry.latest
+                        );
                     }
                 }
             }
@@ -142,10 +145,10 @@ pub fn cmd_search(query: &str, local_only: bool) -> Result<()> {
 
 pub fn cmd_info(name: &str, full: bool) -> Result<()> {
     let home = resolve_mur_home()?;
-    let m = local::load_installed(&home, name)
-        .map_err(|_| anyhow!("skill '{name}' not installed"))?;
-    let level = local::get_trust_level(&home, name)
-        .unwrap_or(mur_common::skill::TrustLevel::Sandboxed);
+    let m =
+        local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let level =
+        local::get_trust_level(&home, name).unwrap_or(mur_common::skill::TrustLevel::Sandboxed);
     println!("Name:        {}", m.name);
     println!("Version:     {}", m.version);
     println!("Publisher:   {}", m.publisher);
@@ -161,8 +164,8 @@ pub fn cmd_info(name: &str, full: bool) -> Result<()> {
 
 pub fn cmd_audit(name: &str) -> Result<()> {
     let home = resolve_mur_home()?;
-    let m = local::load_installed(&home, name)
-        .map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let m =
+        local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
 
     let report = scan_skill(&m)?;
     if report.has_blocking_findings() {
@@ -178,7 +181,11 @@ pub fn cmd_audit(name: &str) -> Result<()> {
     let trust = mur_common::trust::skills::SkillTrustStore::load(&home)
         .map_err(|e| anyhow!("load trust store: {e}"))?;
     match trust.lookup(&hash) {
-        Some(e) => println!("Trust: {:?} (publisher: {})", e.level, e.publisher.as_deref().unwrap_or("-")),
+        Some(e) => println!(
+            "Trust: {:?} (publisher: {})",
+            e.level,
+            e.publisher.as_deref().unwrap_or("-")
+        ),
         None => println!("No trust entry (defaults to Sandboxed)"),
     }
 
@@ -194,20 +201,25 @@ pub fn cmd_trust(name: &str, level_str: &str) -> Result<()> {
         other => bail!("invalid level '{other}' (expected: sandboxed | verified | trusted)"),
     };
     let home = resolve_mur_home()?;
-    let m = local::load_installed(&home, name)
-        .map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let m =
+        local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
     let hash = mur_common::skill::content_sha256(&m)?;
 
     let mut trust = mur_common::trust::skills::SkillTrustStore::load(&home)
         .map_err(|e| anyhow!("load trust store: {e}"))?;
-    trust.insert(hash, mur_common::trust::skills::TrustEntry {
-        name: name.to_string(),
-        version: m.version.clone(),
-        level,
-        installed_at: chrono::Utc::now().to_rfc3339(),
-        publisher: Some(m.publisher.clone()),
-    });
-    trust.save(&home).map_err(|e| anyhow!("save trust store: {e}"))?;
+    trust.insert(
+        hash,
+        mur_common::trust::skills::TrustEntry {
+            name: name.to_string(),
+            version: m.version.clone(),
+            level,
+            installed_at: chrono::Utc::now().to_rfc3339(),
+            publisher: Some(m.publisher.clone()),
+        },
+    );
+    trust
+        .save(&home)
+        .map_err(|e| anyhow!("save trust store: {e}"))?;
     println!("Trust level for '{name}' set to {level:?}");
     Ok(())
 }

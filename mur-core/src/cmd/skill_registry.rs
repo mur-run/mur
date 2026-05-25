@@ -20,7 +20,13 @@ pub fn fetch_registry(mur_home: &Path, registry_url: &str) -> Result<PathBuf> {
 
     if git_dir.exists() {
         let status = Command::new("git")
-            .args(["-C", &*cache_dir.to_string_lossy(), "pull", "--depth=1", "--ff-only"])
+            .args([
+                "-C",
+                &*cache_dir.to_string_lossy(),
+                "pull",
+                "--depth=1",
+                "--ff-only",
+            ])
             .status()
             .map_err(|e| anyhow::anyhow!("git pull: {e}"))?;
         if !status.success() {
@@ -28,10 +34,14 @@ pub fn fetch_registry(mur_home: &Path, registry_url: &str) -> Result<PathBuf> {
         }
     } else {
         let parent = cache_dir.parent().unwrap_or(mur_home);
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         let status = Command::new("git")
-            .args(["clone", "--depth=1", registry_url, &*cache_dir.to_string_lossy()])
+            .args([
+                "clone",
+                "--depth=1",
+                registry_url,
+                &*cache_dir.to_string_lossy(),
+            ])
             .status()
             .map_err(|e| anyhow::anyhow!("git clone: {e}"))?;
         if !status.success() {
@@ -43,10 +53,8 @@ pub fn fetch_registry(mur_home: &Path, registry_url: &str) -> Result<PathBuf> {
 
 pub fn load_index(registry_dir: &Path) -> Result<RegistryIndex> {
     let p = registry_dir.join("index.yaml");
-    let text = std::fs::read_to_string(&p)
-        .with_context(|| format!("read {}", p.display()))?;
-    RegistryIndex::from_yaml(&text)
-        .map_err(|e| anyhow::anyhow!("parse index: {e}"))
+    let text = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
+    RegistryIndex::from_yaml(&text).map_err(|e| anyhow::anyhow!("parse index: {e}"))
 }
 
 pub fn fetch_and_load(mur_home: &Path, url: &str) -> Result<(PathBuf, RegistryIndex)> {
@@ -56,18 +64,25 @@ pub fn fetch_and_load(mur_home: &Path, url: &str) -> Result<(PathBuf, RegistryIn
 }
 
 pub fn skill_yaml_path(registry_dir: &Path, name: &str, version: &str) -> PathBuf {
-    registry_dir.join("skills").join(name).join("versions").join(format!("{version}.yaml"))
+    registry_dir
+        .join("skills")
+        .join(name)
+        .join("versions")
+        .join(format!("{version}.yaml"))
 }
 
-pub fn search_registry<'a>(idx: &'a RegistryIndex, query: &str) -> Vec<(&'a str, &'a RegistrySkillEntry)> {
+pub fn search_registry<'a>(
+    idx: &'a RegistryIndex,
+    query: &str,
+) -> Vec<(&'a str, &'a RegistrySkillEntry)> {
     idx.search(query)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn cache_dir_path() {
@@ -78,7 +93,9 @@ mod tests {
     #[test]
     fn load_index_from_fs() {
         let d = tempdir().unwrap();
-        fs::write(d.path().join("index.yaml"), r#"
+        fs::write(
+            d.path().join("index.yaml"),
+            r#"
 skills:
   test:
     latest: 1.0.0
@@ -87,7 +104,9 @@ skills:
     category: context
     tags: []
     content_sha256: "a"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let idx = load_index(d.path()).unwrap();
         assert_eq!(idx.skills.len(), 1);
     }

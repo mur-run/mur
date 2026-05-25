@@ -11,8 +11,7 @@ const REGISTRY_REPO: &str = "mur-run/skill-registry";
 
 pub fn cmd_publish(path: &str) -> Result<()> {
     // 1. Read and validate the skill
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("read {}", path))?;
+    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path))?;
     let m = parse_canonical(&text)?;
     validate(&m)?;
 
@@ -25,7 +24,9 @@ pub fn cmd_publish(path: &str) -> Result<()> {
     if Command::new("gh").arg("--version").output().is_err() {
         bail!("GitHub CLI (`gh`) not found. Install from https://cli.github.com/");
     }
-    let auth_out = Command::new("gh").args(["auth", "status"]).output()
+    let auth_out = Command::new("gh")
+        .args(["auth", "status"])
+        .output()
         .context("check gh auth")?;
     if !auth_out.status.success() {
         bail!("`gh auth status` failed — please run `gh auth login` first");
@@ -43,8 +44,11 @@ pub fn cmd_publish(path: &str) -> Result<()> {
         println!("→ Forking {REGISTRY_REPO}...");
         let s = Command::new("gh")
             .args(["repo", "fork", REGISTRY_REPO, "--clone=false"])
-            .status().context("fork registry")?;
-        if !s.success() { bail!("failed to fork {REGISTRY_REPO}"); }
+            .status()
+            .context("fork registry")?;
+        if !s.success() {
+            bail!("failed to fork {REGISTRY_REPO}");
+        }
     }
 
     // 5. Clone fork, write skill, commit, push
@@ -53,20 +57,40 @@ pub fn cmd_publish(path: &str) -> Result<()> {
 
     println!("→ Cloning fork...");
     let s = Command::new("git")
-        .args(["clone", &format!("https://github.com/{fork_repo}.git"),
-               &*repo_dir.to_string_lossy()])
-        .status().context("clone fork")?;
-    if !s.success() { bail!("failed to clone fork"); }
+        .args([
+            "clone",
+            &format!("https://github.com/{fork_repo}.git"),
+            &*repo_dir.to_string_lossy(),
+        ])
+        .status()
+        .context("clone fork")?;
+    if !s.success() {
+        bail!("failed to clone fork");
+    }
 
     Command::new("git")
-        .args(["-C", &*repo_dir.to_string_lossy(), "remote", "add", "upstream",
-               &format!("https://github.com/{REGISTRY_REPO}.git")])
-        .status().ok();
+        .args([
+            "-C",
+            &*repo_dir.to_string_lossy(),
+            "remote",
+            "add",
+            "upstream",
+            &format!("https://github.com/{REGISTRY_REPO}.git"),
+        ])
+        .status()
+        .ok();
 
     let branch = format!("skill-{}", m.name);
     Command::new("git")
-        .args(["-C", &*repo_dir.to_string_lossy(), "checkout", "-b", &branch])
-        .status().context("create branch")?;
+        .args([
+            "-C",
+            &*repo_dir.to_string_lossy(),
+            "checkout",
+            "-b",
+            &branch,
+        ])
+        .status()
+        .context("create branch")?;
 
     let skill_dir = repo_dir.join("skills").join(&m.name).join("versions");
     std::fs::create_dir_all(&skill_dir)?;
@@ -78,18 +102,35 @@ pub fn cmd_publish(path: &str) -> Result<()> {
 
     Command::new("git")
         .args(["-C", &*repo_dir.to_string_lossy(), "add", "."])
-        .status().context("git add")?;
+        .status()
+        .context("git add")?;
     Command::new("git")
-        .args(["-C", &*repo_dir.to_string_lossy(), "commit",
-               "-m", &format!("feat: add {name} v{ver}", name=m.name, ver=m.version),
-               "-m", &format!("Publisher: {}\nSigned: true", m.publisher)])
-        .status().context("git commit")?;
+        .args([
+            "-C",
+            &*repo_dir.to_string_lossy(),
+            "commit",
+            "-m",
+            &format!("feat: add {name} v{ver}", name = m.name, ver = m.version),
+            "-m",
+            &format!("Publisher: {}\nSigned: true", m.publisher),
+        ])
+        .status()
+        .context("git commit")?;
 
     println!("→ Pushing branch...");
     let s = Command::new("git")
-        .args(["-C", &*repo_dir.to_string_lossy(), "push", "origin", &branch])
-        .status().context("git push")?;
-    if !s.success() { bail!("git push failed"); }
+        .args([
+            "-C",
+            &*repo_dir.to_string_lossy(),
+            "push",
+            "origin",
+            &branch,
+        ])
+        .status()
+        .context("git push")?;
+    if !s.success() {
+        bail!("git push failed");
+    }
 
     // 6. Create PR
     println!("→ Creating PR...");
@@ -117,16 +158,15 @@ pub fn cmd_publish(path: &str) -> Result<()> {
 }
 
 fn resolve_publisher_identity() -> Result<AgentIdentity> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow!("cannot determine home directory"))?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
     let key_path = home.join(".mur").join("publisher-identity.key");
     if key_path.exists() {
-        AgentIdentity::load(&home.join(".mur"))
-            .map_err(|e| anyhow!("load publisher identity: {e}"))
+        AgentIdentity::load(&home.join(".mur")).map_err(|e| anyhow!("load publisher identity: {e}"))
     } else {
         let identity = AgentIdentity::generate();
         std::fs::create_dir_all(key_path.parent().unwrap())?;
-        identity.save(&home.join(".mur"))
+        identity
+            .save(&home.join(".mur"))
             .map_err(|e| anyhow!("save publisher identity: {e}"))?;
         eprintln!("ℹ Generated new publisher identity at ~/.mur/");
         Ok(identity)
@@ -136,7 +176,8 @@ fn resolve_publisher_identity() -> Result<AgentIdentity> {
 fn current_gh_user() -> Result<String> {
     let out = Command::new("gh")
         .args(["api", "user", "--jq", ".login"])
-        .output().context("get gh user")?;
+        .output()
+        .context("get gh user")?;
     if !out.status.success() {
         bail!("failed to get GitHub username. Run `gh auth login` first");
     }

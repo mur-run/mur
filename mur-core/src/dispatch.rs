@@ -264,9 +264,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Model(args) => cmd::model::run(args)?,
         Commands::Agent { action } => run_agent(action).await?,
         Commands::Skill { action } => match action {
-            crate::cli::SkillAction::Validate { path, warnings_only } => {
-                cmd::skill_cmd::cmd_validate(&path, warnings_only)?
-            }
+            crate::cli::SkillAction::Validate {
+                path,
+                warnings_only,
+            } => cmd::skill_cmd::cmd_validate(&path, warnings_only)?,
             crate::cli::SkillAction::Fmt { path, to, write } => {
                 cmd::skill_cmd::cmd_fmt(&path, to.as_deref(), write)?
             }
@@ -276,9 +277,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::SkillAction::Search { query, local } => {
                 cmd::skill_cmd::cmd_search(&query, local)?
             }
-            crate::cli::SkillAction::Info { name, full } => {
-                cmd::skill_cmd::cmd_info(&name, full)?
-            }
+            crate::cli::SkillAction::Info { name, full } => cmd::skill_cmd::cmd_info(&name, full)?,
             crate::cli::SkillAction::Audit { name } => cmd::skill_cmd::cmd_audit(&name)?,
             crate::cli::SkillAction::Trust { name, level } => {
                 cmd::skill_cmd::cmd_trust(&name, &level)?
@@ -286,12 +285,8 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::SkillAction::Install { source } => {
                 cmd::skill_install::cmd_install(&source)?
             }
-            crate::cli::SkillAction::Publish { path } => {
-                cmd::skill_publish::cmd_publish(&path)?
-            }
-            crate::cli::SkillAction::Update { name } => {
-                cmd::skill_install::cmd_update(&name)?
-            }
+            crate::cli::SkillAction::Publish { path } => cmd::skill_publish::cmd_publish(&path)?,
+            crate::cli::SkillAction::Update { name } => cmd::skill_install::cmd_update(&name)?,
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
