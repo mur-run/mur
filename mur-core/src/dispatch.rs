@@ -304,6 +304,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 })
                 .await?
             }
+            crate::cli::SkillAction::FromPattern { name, polish } => {
+                cmd::skill_from_pattern::cmd_from_pattern(&name, polish).await?
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
