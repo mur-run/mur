@@ -2,9 +2,9 @@
 //! P0a only implements `run_sync` fully; streaming is P0b.
 
 use crate::llm::{LlmClient, LlmMessage, LlmRequest};
+use crate::skills::RuntimeSkills;
 use crate::skills::injector::inject_layer2;
 use crate::skills::trigger_matcher::{format_layer3, layer3_body, match_prompt};
-use crate::skills::RuntimeSkills;
 use crate::telemetry_writer::Event;
 use mur_common::a2a::{Message, MessagePart, Task, TaskState};
 use mur_common::config::SkillsConfig;
@@ -320,7 +320,11 @@ fn strip_lines_for(text: &str, names: &HashSet<&str>) -> String {
         return text.to_string();
     }
     text.lines()
-        .filter(|line| !names.iter().any(|n| line.contains(&format!("[Skill: {n} "))))
+        .filter(|line| {
+            !names
+                .iter()
+                .any(|n| line.contains(&format!("[Skill: {n} ")))
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

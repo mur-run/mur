@@ -332,7 +332,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                             client.clone(),
                             profile.system_prompt.clone(),
                             runtime_skills.clone(),
-                    skills_cfg.clone(),
+                            skills_cfg.clone(),
                         );
                         (r, Some(client))
                     }
@@ -366,7 +366,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                             client.clone(),
                             profile.system_prompt.clone(),
                             runtime_skills.clone(),
-                    skills_cfg.clone(),
+                            skills_cfg.clone(),
                         );
                         (r, Some(client))
                     }
