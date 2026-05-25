@@ -1,0 +1,28 @@
+name: mur-run
+version: 0.1.0
+publisher: human:mur
+description: "Run saved workflows with mur. Trigger: /mur-run, 'mur run', 'run workflow', or 'use the workflow'. Searches and executes step-by-step task sequences with variables and tools."
+category: workflow
+content:
+  abstract: |
+    Run saved workflows by name or semantic query. Handles variable
+    substitution, tool assignment, and step-by-step execution.
+  procedure:
+    variables:
+      - name: query
+        type: string
+        required: true
+        description: Workflow name or search query
+    steps:
+      - description: Run `mur run <name-or-query>` to find and output the workflow
+      - description: Read the Variables section, use defaults or ask user for required values
+      - description: Follow Steps in order using listed Tools
+      - description: Adapt steps as needed — workflows are guides, not rigid scripts
+      - description: If recording was active, suggest `mur session stop --analyze`
+tags: [mur, workflow, builtin]
+triggers:
+  - type: command
+    pattern: "/mur-run"
+  - type: keyword
+    pattern: "(mur run|run workflow|use the workflow)"
+priority: normal

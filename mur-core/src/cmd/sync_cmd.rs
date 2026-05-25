@@ -807,10 +807,10 @@ fn is_index_dirty(home: &std::path::Path) -> bool {
 /// Returns true if any skill was written.
 pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
     let skills: &[(&str, &str)] = &[
-        ("mur-context", include_str!("../mur_skill.md")),
-        ("mur-in", include_str!("../mur_in_skill.md")),
-        ("mur-out", include_str!("../mur_out_skill.md")),
-        ("mur-run", include_str!("../mur_workflow_skill.md")),
+        ("mur-context", include_str!("../skills/mur_context.yaml")),
+        ("mur-in", include_str!("../skills/mur_in.yaml")),
+        ("mur-out", include_str!("../skills/mur_out.yaml")),
+        ("mur-run", include_str!("../skills/mur_run.yaml")),
     ];
 
     let mur_skills_dir = home.join(".mur").join("skills");
@@ -832,11 +832,17 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
         }
     }
 
-    // Write canonical copies to ~/.mur/skills/<name>/SKILL.md
+    // Write canonical YAML to ~/.mur/skills/<name>/skill.yaml
+    // and render markdown to ~/.mur/skills/<name>/SKILL.md for AI tool compat.
     for (name, content) in skills {
         let dir = mur_skills_dir.join(name);
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("SKILL.md"), content)?;
+        // Canonical YAML — consumed by M2 SkillLoader
+        std::fs::write(dir.join("skill.yaml"), content)?;
+        // Markdown rendering — consumed by existing AI tool hooks
+        let md =
+            mur_common::skill::yaml_to_markdown(content).unwrap_or_else(|_| content.to_string());
+        std::fs::write(dir.join("SKILL.md"), md)?;
     }
 
     // Tool dirs to symlink into
