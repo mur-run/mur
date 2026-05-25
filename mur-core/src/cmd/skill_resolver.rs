@@ -100,8 +100,8 @@ fn load_from_path(path: &Path) -> Result<ResolvedNode, ResolveError> {
     let text = std::fs::read_to_string(path).map_err(|e| ResolveError::Other(e.into()))?;
     let m = parse_canonical(&text).map_err(|e| ResolveError::BadManifest(e.to_string()))?;
     validate(&m).map_err(|e| ResolveError::BadManifest(e.to_string()))?;
-    let v =
-        Version::parse(&m.version).map_err(|e| ResolveError::BadManifest(format!("version: {e}")))?;
+    let v = Version::parse(&m.version)
+        .map_err(|e| ResolveError::BadManifest(format!("version: {e}")))?;
     Ok(ResolvedNode {
         name: m.name.clone(),
         version: v,
@@ -124,11 +124,8 @@ fn pick_best(
         req: c.0.to_string(),
         available: versions.iter().map(|v| v.to_string()).collect(),
     })?;
-    let path = crate::cmd::skill_registry::skill_yaml_path(
-        &input.registry_dir,
-        name,
-        &pick.to_string(),
-    );
+    let path =
+        crate::cmd::skill_registry::skill_yaml_path(&input.registry_dir, name, &pick.to_string());
     load_from_path(&path)
 }
 
@@ -278,17 +275,15 @@ mod tests {
         write_skill(d.path(), "dep-d", "1.0.0", &[]);
         write_skill(d.path(), "dep-b", "1.0.0", &[("dep-d", "1.x")]);
         write_skill(d.path(), "dep-c", "1.0.0", &[("dep-d", "1.x")]);
-        write_skill(
-            d.path(),
-            "root",
-            "0.1.0",
-            &[("dep-b", "*"), ("dep-c", "*")],
-        );
+        write_skill(d.path(), "root", "0.1.0", &[("dep-b", "*"), ("dep-c", "*")]);
         let input = make_input(d.path());
         let nodes = resolve(&input, ResolveSource::RegistryLatest("root")).unwrap();
         // dep-d should appear exactly once
         let d_count = nodes.iter().filter(|n| n.name == "dep-d").count();
-        assert_eq!(d_count, 1, "diamond dep appeared {d_count} times, expected 1");
+        assert_eq!(
+            d_count, 1,
+            "diamond dep appeared {d_count} times, expected 1"
+        );
         // Total: root + b + c + d = 4
         assert_eq!(nodes.len(), 4);
     }
