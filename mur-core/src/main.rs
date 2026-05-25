@@ -40,6 +40,7 @@ mod session;
 #[allow(dead_code)]
 mod skill_gen;
 mod skill_lifecycle;
+mod skill_repair;
 mod skill_stats;
 #[cfg(feature = "sources")]
 mod sources;

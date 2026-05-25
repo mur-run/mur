@@ -38,6 +38,7 @@ pub mod retrieve;
 pub mod session;
 pub mod skill_gen;
 pub mod skill_lifecycle;
+pub mod skill_repair;
 pub mod skill_stats;
 pub mod sources;
 pub mod store;
