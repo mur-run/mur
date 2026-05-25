@@ -1,4 +1,4 @@
-//! Consolidation pass: dedup, contradiction, orphan detection (M5b).
+//! Consolidation pass: dedup, contradiction, orphan detection (M5b + M6c.1).
 //!
 //! Runs three read-only scans and optionally (`--apply`) mutates state.
 //! All findings are written to a JSONL report at
@@ -9,19 +9,41 @@ use chrono::Utc;
 use mur_common::skill::stats::SkillStats;
 use std::path::{Path, PathBuf};
 
+use crate::store::embedding::EmbeddingConfig;
+use crate::store::vector::VectorStore;
+
 pub mod contradiction;
 pub mod dedup;
 pub mod dedup_vec;
 pub mod orphan;
 
+#[derive(Debug, Clone)]
+pub enum ConsolidateMethod {
+    Jaccard,
+    Vector,
+    Both,
+}
+
+impl serde::Serialize for ConsolidateMethod {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Jaccard => s.serialize_str("jaccard"),
+            Self::Vector => s.serialize_str("vector"),
+            Self::Both => s.serialize_str("both"),
+        }
+    }
+}
+
 pub struct ConsolidateOptions {
     #[allow(dead_code)]
     pub dry_run: bool,
     pub apply: bool,
+    pub method: ConsolidateMethod,
 }
 
 #[derive(Debug)]
 pub struct ConsolidateReport {
+    pub method: ConsolidateMethod,
     pub duplicates: Vec<dedup::DuplicatePair>,
     pub contradictions: Vec<contradiction::ContradictionPair>,
     pub orphans: Vec<orphan::OrphanFinding>,
@@ -38,15 +60,33 @@ pub struct SkillView {
     pub embed_text: String,
 }
 
-pub fn run_consolidate(home: &Path, opts: &ConsolidateOptions) -> Result<ConsolidateReport> {
+pub async fn run_consolidate(
+    home: &Path,
+    embed_config: &EmbeddingConfig,
+    store: &dyn VectorStore,
+    opts: &ConsolidateOptions,
+) -> Result<ConsolidateReport> {
     let skills = load_all_with_stats(home)?;
     let mut report = ConsolidateReport {
+        method: opts.method.clone(),
         duplicates: Vec::new(),
         contradictions: Vec::new(),
         orphans: Vec::new(),
     };
 
-    dedup::scan(&skills, &mut report);
+    match &opts.method {
+        ConsolidateMethod::Jaccard => {
+            dedup::scan(&skills, &mut report);
+        }
+        ConsolidateMethod::Vector => {
+            dedup_vec::scan(&skills, embed_config, store, &mut report).await?;
+        }
+        ConsolidateMethod::Both => {
+            dedup::scan(&skills, &mut report);
+            dedup_vec::scan(&skills, embed_config, store, &mut report).await?;
+        }
+    }
+
     contradiction::scan(&skills, &mut report);
     orphan::scan(&skills, &mut report, Utc::now())?;
 
@@ -144,6 +184,13 @@ fn write_jsonl_report(home: &Path, report: &ConsolidateReport, applied: bool) ->
     let path = dir.join(format!("{today}.jsonl"));
 
     let mut lines = Vec::new();
+
+    // Header line with method + timestamp
+    lines.push(serde_json::json!({
+        "type": "header",
+        "method": report.method,
+        "started_at": Utc::now().to_rfc3339(),
+    }));
 
     for d in &report.duplicates {
         lines.push(serde_json::json!({

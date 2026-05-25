@@ -179,5 +179,15 @@ pub enum SkillAction {
         /// Apply changes (archive orphans, deprecate duplicates).
         #[arg(long)]
         apply: bool,
+        /// Dedup method: jaccard (default), vector, or both.
+        #[arg(long, value_enum, default_value_t = Method::Jaccard)]
+        method: Method,
     },
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum Method {
+    Jaccard,
+    Vector,
+    Both,
 }

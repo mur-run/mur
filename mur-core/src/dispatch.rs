@@ -365,9 +365,20 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::SkillAction::Archive { name, reason } => {
                 cmd::skill_archive::cmd_archive(&name, reason.as_deref())?
             }
-            crate::cli::SkillAction::Consolidate { dry_run, apply } => {
+            crate::cli::SkillAction::Consolidate { dry_run, apply, method } => {
                 let home = cmd::agent::resolve_mur_home()?;
-                cmd::skill_consolidate::cmd_consolidate(&home, dry_run, apply)?
+                let method = match method {
+                    crate::cli::skill::Method::Jaccard => {
+                        crate::skill_consolidate::ConsolidateMethod::Jaccard
+                    }
+                    crate::cli::skill::Method::Vector => {
+                        crate::skill_consolidate::ConsolidateMethod::Vector
+                    }
+                    crate::cli::skill::Method::Both => {
+                        crate::skill_consolidate::ConsolidateMethod::Both
+                    }
+                };
+                cmd::skill_consolidate::cmd_consolidate(&home, dry_run, apply, method).await?
             }
         },
         Commands::Exchange { action } => match action {
