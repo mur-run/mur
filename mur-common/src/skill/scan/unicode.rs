@@ -1,15 +1,11 @@
 use unicode_normalization::UnicodeNormalization;
 
 const BIDI_OVERRIDES: &[char] = &[
-    '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}',
-    '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
+    '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}', '\u{2068}',
+    '\u{2069}',
 ];
 
-const INVISIBLE_SEPARATORS: &[char] = &[
-    '\u{200B}', '\u{200C}', '\u{200D}',
-    '\u{2060}',
-    '\u{FEFF}',
-];
+const INVISIBLE_SEPARATORS: &[char] = &['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}'];
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct UnicodeFinding {
@@ -28,13 +24,22 @@ pub fn scan_unicode(input: &str) -> (String, Vec<UnicodeFinding>) {
     let mut findings = Vec::new();
     let nfc: String = input.nfc().collect();
     if nfc != input {
-        findings.push(UnicodeFinding { kind: UnicodeKind::NotNfc, codepoint: '\u{0}' });
+        findings.push(UnicodeFinding {
+            kind: UnicodeKind::NotNfc,
+            codepoint: '\u{0}',
+        });
     }
     for c in nfc.chars() {
         if BIDI_OVERRIDES.contains(&c) {
-            findings.push(UnicodeFinding { kind: UnicodeKind::BidiOverride, codepoint: c });
+            findings.push(UnicodeFinding {
+                kind: UnicodeKind::BidiOverride,
+                codepoint: c,
+            });
         } else if INVISIBLE_SEPARATORS.contains(&c) {
-            findings.push(UnicodeFinding { kind: UnicodeKind::InvisibleSeparator, codepoint: c });
+            findings.push(UnicodeFinding {
+                kind: UnicodeKind::InvisibleSeparator,
+                codepoint: c,
+            });
         }
     }
     (nfc, findings)

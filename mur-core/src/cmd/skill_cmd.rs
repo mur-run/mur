@@ -1,6 +1,6 @@
 //! `mur skill` command handlers.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use mur_common::skill::{
     parse_canonical, parse_legacy_markdown, parse_markdown, scan::scan_skill, serialize_canonical,
     serialize_markdown, validate,
@@ -40,7 +40,11 @@ pub fn cmd_fmt(path: &str, to: Option<&str>, write: bool) -> Result<()> {
         Some("md") => "md",
         Some(other) => bail!("unknown target format '{other}' (expected 'yaml' or 'md')"),
         None => {
-            if ext == "yaml" { "md" } else { "yaml" }
+            if ext == "yaml" {
+                "md"
+            } else {
+                "yaml"
+            }
         }
     };
     let out = match target {

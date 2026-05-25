@@ -59,7 +59,9 @@ pub fn parse_markdown(input: &str) -> Result<SkillManifest, ParseError> {
 
 fn split_frontmatter(input: &str) -> Result<(&str, &str), ParseError> {
     let trimmed = input.trim_start_matches('\u{feff}');
-    let trimmed = trimmed.strip_prefix("---").ok_or(ParseError::MissingFrontmatter)?;
+    let trimmed = trimmed
+        .strip_prefix("---")
+        .ok_or(ParseError::MissingFrontmatter)?;
     let trimmed = trimmed.strip_prefix('\n').unwrap_or(trimmed);
     let end = trimmed
         .find("\n---")
@@ -70,26 +72,43 @@ fn split_frontmatter(input: &str) -> Result<(&str, &str), ParseError> {
     Ok((frontmatter, body))
 }
 
-fn inject_content_from_body(value: &mut serde_yaml_ng::Value, body: &str) -> Result<(), ParseError> {
+fn inject_content_from_body(
+    value: &mut serde_yaml_ng::Value,
+    body: &str,
+) -> Result<(), ParseError> {
     use serde_yaml_ng::Value;
 
     if let Some(map) = value.as_mapping_mut() {
         if map.contains_key(Value::String("content".into())) {
             return Ok(()); // frontmatter already supplied content
         }
-        let abstract_text = body.lines().take(3).collect::<Vec<_>>().join("\n").trim().to_string();
+        let abstract_text = body
+            .lines()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string();
         let mut content = serde_yaml_ng::Mapping::new();
-        content.insert(Value::String("abstract".into()), Value::String(abstract_text));
+        content.insert(
+            Value::String("abstract".into()),
+            Value::String(abstract_text),
+        );
 
         if body.contains("## Steps") {
             let proc = build_procedure_from_steps(body);
             content.insert(Value::String("procedure".into()), proc);
         } else {
-            content.insert(Value::String("context".into()), Value::String(body.trim().to_string()));
+            content.insert(
+                Value::String("context".into()),
+                Value::String(body.trim().to_string()),
+            );
         }
         map.insert(Value::String("content".into()), Value::Mapping(content));
     } else {
-        return Err(ParseError::MalformedFrontmatter("frontmatter is not a mapping".into()));
+        return Err(ParseError::MalformedFrontmatter(
+            "frontmatter is not a mapping".into(),
+        ));
     }
     Ok(())
 }
@@ -115,7 +134,10 @@ fn build_procedure_from_steps(body: &str) -> serde_yaml_ng::Value {
                 })
             }) {
                 let mut step = Mapping::new();
-                step.insert(Value::String("description".into()), Value::String(rest.to_string()));
+                step.insert(
+                    Value::String("description".into()),
+                    Value::String(rest.to_string()),
+                );
                 steps.push(Value::Mapping(step));
             }
         }
@@ -175,9 +197,12 @@ pub fn parse_legacy_markdown(input: &str) -> Result<SkillManifest, ParseError> {
         .ok_or_else(|| ParseError::LegacyMarkdown("frontmatter is not a mapping".into()))?;
     use serde_yaml_ng::Value;
     let key = |k: &str| Value::String(k.into());
-    map.entry(key("version")).or_insert(Value::String("0.0.0".into()));
-    map.entry(key("publisher")).or_insert(Value::String("human:mur".into()));
-    map.entry(key("category")).or_insert(Value::String("context".into()));
+    map.entry(key("version"))
+        .or_insert(Value::String("0.0.0".into()));
+    map.entry(key("publisher"))
+        .or_insert(Value::String("human:mur".into()));
+    map.entry(key("category"))
+        .or_insert(Value::String("context".into()));
     inject_content_from_body(&mut value, body)?;
     let m: SkillManifest = serde_yaml_ng::from_value(value)?;
     Ok(m)
@@ -277,7 +302,10 @@ Does a thing.
     #[test]
     fn markdown_without_frontmatter_fails() {
         let md = "# just a heading\n";
-        assert!(matches!(parse_markdown(md), Err(ParseError::MissingFrontmatter)));
+        assert!(matches!(
+            parse_markdown(md),
+            Err(ParseError::MissingFrontmatter)
+        ));
     }
 
     #[test]
@@ -314,7 +342,8 @@ content:
 
     #[test]
     fn legacy_minimal_frontmatter_loads() {
-        let md = "---\nname: mur-context\ndescription: Background context\n---\n\n# MUR\n\nSome body.\n";
+        let md =
+            "---\nname: mur-context\ndescription: Background context\n---\n\n# MUR\n\nSome body.\n";
         let m = parse_legacy_markdown(md).unwrap();
         assert_eq!(m.name, "mur-context");
         assert_eq!(m.publisher, "human:mur");

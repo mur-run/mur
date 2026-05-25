@@ -45,11 +45,15 @@ impl std::fmt::Display for TrustStoreError {
 impl std::error::Error for TrustStoreError {}
 
 impl From<io::Error> for TrustStoreError {
-    fn from(e: io::Error) -> Self { TrustStoreError::Io(e) }
+    fn from(e: io::Error) -> Self {
+        TrustStoreError::Io(e)
+    }
 }
 
 impl From<serde_json::Error> for TrustStoreError {
-    fn from(e: serde_json::Error) -> Self { TrustStoreError::Parse(e) }
+    fn from(e: serde_json::Error) -> Self {
+        TrustStoreError::Parse(e)
+    }
 }
 
 impl SkillTrustStore {
@@ -184,7 +188,8 @@ mod tests {
         let mode = fs::metadata(SkillTrustStore::path(dir.path()))
             .unwrap()
             .permissions()
-            .mode() & 0o777;
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o600);
     }
 

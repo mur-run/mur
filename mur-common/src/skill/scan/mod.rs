@@ -7,10 +7,10 @@ pub mod injection;
 pub mod secrets;
 pub mod unicode;
 
-pub use executable::{ExecutableFinding, ExecutableKind, scan_executable};
-pub use injection::{InjectionFinding, scan_injection};
-pub use secrets::{SecretFinding, scan_secrets};
-pub use unicode::{UnicodeFinding, UnicodeKind, scan_unicode};
+pub use executable::{scan_executable, ExecutableFinding, ExecutableKind};
+pub use injection::{scan_injection, InjectionFinding};
+pub use secrets::{scan_secrets, SecretFinding};
+pub use unicode::{scan_unicode, UnicodeFinding, UnicodeKind};
 
 use crate::skill::manifest::SkillManifest;
 
@@ -37,16 +37,27 @@ impl ContentScanReport {
     pub fn human_summary(&self) -> Vec<String> {
         let mut out = Vec::new();
         for f in &self.unicode {
-            out.push(format!("unicode {:?}: U+{:04X}", f.kind, f.codepoint as u32));
+            out.push(format!(
+                "unicode {:?}: U+{:04X}",
+                f.kind, f.codepoint as u32
+            ));
         }
         for f in &self.secrets {
             out.push(format!("secret {}: {}", f.label, redact(&f.matched)));
         }
         for f in &self.executable {
-            out.push(format!("executable {:?}: {}", f.kind, truncate(&f.matched, 60)));
+            out.push(format!(
+                "executable {:?}: {}",
+                f.kind,
+                truncate(&f.matched, 60)
+            ));
         }
         for f in &self.injection {
-            out.push(format!("injection {}: {}", f.label, truncate(&f.matched, 60)));
+            out.push(format!(
+                "injection {}: {}",
+                f.label,
+                truncate(&f.matched, 60)
+            ));
         }
         out
     }
@@ -61,7 +72,11 @@ fn redact(s: &str) -> String {
 }
 
 fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n { s.into() } else { format!("{}…", &s[..n]) }
+    if s.len() <= n {
+        s.into()
+    } else {
+        format!("{}…", &s[..n])
+    }
 }
 
 /// Run all sub-scanners against the full skill text (manifest + body).
