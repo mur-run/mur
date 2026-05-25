@@ -57,12 +57,13 @@ pub fn cmd_skill_add(name: &str, source: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("skill source has no basename"))?;
 
     // Validate YAML skills before adding
-    if let Some(ext) = src.extension().and_then(|e| e.to_str()) {
-        if ext == "yaml" || ext == "yml" {
-            let text = fs::read_to_string(&src)?;
-            let m = mur_common::skill::parse_canonical(&text)?;
-            mur_common::skill::validate(&m).map_err(|e| anyhow!("skill validation failed: {e}"))?;
-        }
+    if let Some(ext) = src.extension().and_then(|e| e.to_str())
+        && (ext == "yaml" || ext == "yml")
+    {
+        let text = fs::read_to_string(&src)?;
+        let m = mur_common::skill::parse_canonical(&text)?;
+        mur_common::skill::validate(&m)
+            .map_err(|e| anyhow!("skill validation failed: {e}"))?;
     }
 
     let (path, mut profile) = load_profile_for_edit(name)?;
