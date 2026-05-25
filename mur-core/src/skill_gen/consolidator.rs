@@ -69,8 +69,9 @@ fn mechanical_merge(patches: &[Patch]) -> MechanicalMerge {
     let mut notes = Vec::new();
 
     // Prefer Success patches over Error ones when collapsing duplicates.
-    let (succ, err): (Vec<_>, Vec<_>) =
-        patches.iter().partition(|p| matches!(p.source, PatchSource::Success));
+    let (succ, err): (Vec<_>, Vec<_>) = patches
+        .iter()
+        .partition(|p| matches!(p.source, PatchSource::Success));
     let ordered: Vec<&Patch> = succ.into_iter().chain(err.into_iter()).collect();
 
     for p in ordered {
@@ -218,9 +219,7 @@ mod tests {
             .enable_time()
             .build()
             .unwrap();
-        let err = rt
-            .block_on(consolidate(vec![], &llm, None))
-            .unwrap_err();
+        let err = rt.block_on(consolidate(vec![], &llm, None)).unwrap_err();
         assert!(matches!(err, ConsolidateError::Empty));
     }
 
@@ -237,10 +236,7 @@ mod tests {
         let group = merged.step_groups.get(&key).unwrap();
         assert_eq!(group.len(), 2);
         // First entry is from Success (Success patches are ordered first by mechanical_merge).
-        assert!(matches!(
-            group[0].tool.as_deref(),
-            Some("browser.navigate")
-        ));
+        assert!(matches!(group[0].tool.as_deref(), Some("browser.navigate")));
     }
 
     #[tokio::test]

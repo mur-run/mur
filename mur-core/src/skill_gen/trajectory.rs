@@ -36,9 +36,7 @@ pub enum TurnKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Success,
-    Failure {
-        reason: String,
-    },
+    Failure { reason: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -67,8 +65,8 @@ pub fn parse_recording(jsonl: &str) -> Result<Vec<Trajectory>, ParseError> {
 
     let mut raw_events: Vec<RawEvent> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
-        let ev: RawEvent = serde_json::from_str(line)
-            .map_err(|e| ParseError::Json(i + 1, e.to_string()))?;
+        let ev: RawEvent =
+            serde_json::from_str(line).map_err(|e| ParseError::Json(i + 1, e.to_string()))?;
         raw_events.push(ev);
     }
 
@@ -106,9 +104,9 @@ pub fn parse_recording(jsonl: &str) -> Result<Vec<Trajectory>, ParseError> {
                 TurnKind::ToolResult { tool, ok }
             }
             Some("assistant") | Some("agent") => TurnKind::AgentMessage,
-            Some("error") => TurnKind::Error(
-                ev.content.clone().unwrap_or_else(|| "unknown error".into()),
-            ),
+            Some("error") => {
+                TurnKind::Error(ev.content.clone().unwrap_or_else(|| "unknown error".into()))
+            }
             _ => continue, // skip unknown event types
         };
 
@@ -186,10 +184,7 @@ mod tests {
 
     #[test]
     fn empty_input() {
-        assert!(matches!(
-            parse_recording(""),
-            Err(ParseError::Empty)
-        ));
+        assert!(matches!(parse_recording(""), Err(ParseError::Empty)));
     }
 
     #[test]

@@ -5,8 +5,8 @@ use mur_common::config::Config;
 use mur_common::error::LlmError;
 use mur_common::llm::LlmClient;
 use mur_common::skill::{
-    content_sha256, global_skill_dir, scan::scan_skill, serialize_canonical, write_to_dir,
-    SkillManifest, TrustLevel,
+    SkillManifest, TrustLevel, content_sha256, global_skill_dir, scan::scan_skill,
+    serialize_canonical, write_to_dir,
 };
 use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
 use std::path::Path;
@@ -79,8 +79,8 @@ pub async fn cmd_generate<L: LlmClient + 'static>(
     let content =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
 
-    let trajectories = crate::skill_gen::trajectory::parse_recording(&content)
-        .context("parse recording")?;
+    let trajectories =
+        crate::skill_gen::trajectory::parse_recording(&content).context("parse recording")?;
     if trajectories.is_empty() {
         bail!("recording produced zero trajectories");
     }
@@ -108,13 +108,10 @@ pub async fn cmd_generate<L: LlmClient + 'static>(
         analyst_failures
     );
 
-    let manifest = crate::skill_gen::consolidator::consolidate(
-        patches,
-        &*llm,
-        opts.name.as_deref(),
-    )
-    .await
-    .context("consolidate")?;
+    let manifest =
+        crate::skill_gen::consolidator::consolidate(patches, &*llm, opts.name.as_deref())
+            .await
+            .context("consolidate")?;
     eprintln!("Phase 3: '{}' v{}", manifest.name, manifest.version);
 
     if opts.dry_run {
@@ -145,9 +142,7 @@ pub async fn cmd_generate<L: LlmClient + 'static>(
             publisher: Some(manifest.publisher.clone()),
         },
     );
-    trust
-        .save(home)
-        .map_err(|e| anyhow!("save trust: {e}"))?;
+    trust.save(home).map_err(|e| anyhow!("save trust: {e}"))?;
     println!(
         "generated: {} v{} (Sandboxed)",
         manifest.name, manifest.version

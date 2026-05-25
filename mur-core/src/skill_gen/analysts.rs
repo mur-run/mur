@@ -95,10 +95,7 @@ pub async fn run_phase2<L: LlmClient + 'static>(
     out
 }
 
-async fn analyze_success<L: LlmClient>(
-    llm: &L,
-    traj: &Trajectory,
-) -> Result<Patch, AnalystError> {
+async fn analyze_success<L: LlmClient>(llm: &L, traj: &Trajectory) -> Result<Patch, AnalystError> {
     let prompt = format!("Trajectory (success):\n{}", trajectory_to_text(traj));
     let raw = llm.complete(&prompt, Some(SUCCESS_ANALYST_SYSTEM)).await?;
     let raw = strip_code_fences(&raw);
@@ -108,10 +105,7 @@ async fn analyze_success<L: LlmClient>(
     Ok(p)
 }
 
-async fn analyze_error<L: LlmClient>(
-    llm: &L,
-    traj: &Trajectory,
-) -> Result<Patch, AnalystError> {
+async fn analyze_error<L: LlmClient>(llm: &L, traj: &Trajectory) -> Result<Patch, AnalystError> {
     let mut transcript = format!("Trajectory (failure):\n{}\n", trajectory_to_text(traj));
     for round in 1..=ERROR_ANALYST_MAX_ROUNDS {
         let resp = llm
@@ -137,12 +131,10 @@ fn trajectory_to_text(t: &Trajectory) -> String {
             TurnKind::ToolCall { tool, .. } => {
                 s.push_str(&format!("[ToolCall:{}] {}\n", tool, turn.content))
             }
-            TurnKind::ToolResult { tool, ok } => {
-                s.push_str(&format!(
-                    "[ToolResult:{} ok={}] {}\n",
-                    tool, ok, turn.content
-                ))
-            }
+            TurnKind::ToolResult { tool, ok } => s.push_str(&format!(
+                "[ToolResult:{} ok={}] {}\n",
+                tool, ok, turn.content
+            )),
             TurnKind::Error(msg) => s.push_str(&format!("[Error] {}\n", msg)),
         }
     }
@@ -277,9 +269,7 @@ mod tests {
         // All Success trajectories to avoid ReAct ordering issues under concurrency.
         let json = r#"{"abstract_hint":"ok","procedure_steps":[],"triggers":[],"variables":[],"notes":[]}"#;
         let llm = mock_llm(vec![json, json, json, json, json]);
-        let trajs = (0..5)
-            .map(|_| make_trajectory(Outcome::Success))
-            .collect();
+        let trajs = (0..5).map(|_| make_trajectory(Outcome::Success)).collect();
         let results = run_phase2(llm, trajs, 2).await;
         assert_eq!(results.len(), 5);
         let ok_count = results.iter().filter(|r| r.is_ok()).count();
