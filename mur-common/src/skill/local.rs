@@ -1,6 +1,6 @@
 //! Local skill store helpers — list installed, resolve, remove, search, trust.
 
-use crate::skill::store::global_skill_dir;
+use crate::skill::store::{agent_skill_dir, global_skill_dir};
 use crate::skill::types::TrustLevel;
 use crate::skill::{SkillManifest, StoreError, read_from_dir};
 use crate::trust::skills::SkillTrustStore;
@@ -29,6 +29,34 @@ pub fn list_installed(mur_home: &Path) -> Result<Vec<String>, StoreError> {
 
 pub fn load_installed(mur_home: &Path, name: &str) -> Result<SkillManifest, StoreError> {
     read_from_dir(&global_skill_dir(mur_home, name))
+}
+
+pub fn list_installed_agent(mur_home: &Path, agent_name: &str) -> Result<Vec<String>, StoreError> {
+    let dir = agent_skill_dir(mur_home, agent_name);
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut names: Vec<_> = fs::read_dir(&dir)
+        .map_err(StoreError::Io)?
+        .filter_map(|e| {
+            let e = e.ok()?;
+            if e.file_type().ok()?.is_dir() {
+                e.file_name().to_str().map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+pub fn load_installed_agent(
+    mur_home: &Path,
+    agent_name: &str,
+    skill: &str,
+) -> Result<SkillManifest, StoreError> {
+    read_from_dir(&agent_skill_dir(mur_home, agent_name).join(skill))
 }
 
 pub fn installed_path(mur_home: &Path, name: &str) -> PathBuf {
@@ -163,5 +191,21 @@ tags: [test, {name}]
         write_to_dir(&global_skill_dir(dir.path(), "rm-me"), &sample("rm-me")).unwrap();
         remove_installed(dir.path(), "rm-me").unwrap();
         assert!(list_installed(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_installed_agent_finds_agent_skills() {
+        let dir = tempdir().unwrap();
+        let agent_dir = agent_skill_dir(dir.path(), "alice");
+        write_to_dir(&agent_dir.join("foo"), &sample("foo")).unwrap();
+        let names = list_installed_agent(dir.path(), "alice").unwrap();
+        assert_eq!(names, vec!["foo"]);
+    }
+
+    #[test]
+    fn list_installed_agent_empty_when_dir_missing() {
+        let dir = tempdir().unwrap();
+        let names = list_installed_agent(dir.path(), "nobody").unwrap();
+        assert!(names.is_empty());
     }
 }
