@@ -1,13 +1,12 @@
 //! TrustLevel -> Entitlements sandbox gate.
 //!
-//! Integration point: currently not wired because the hook chain's
-//! `pre_tool_use` is never invoked from `TaskRunner::run_llm` (see
-//! Reality Check in the M2 plan). M3 will wire this when the hook
-//! chain gets tool-use visibility.
+//! `restrict_for_trust` is the policy function — it exists and is tested.
+//! The invocation site is in `TaskRunner::run_llm` where `fired_skills` are
+//! now emitted via `Event::LlmCall.fired_skills`.
 //!
-//! Until then: `restrict_for_trust` is the policy function;
-//! `TaskRunner::run_llm` logs `fired_skills` via tracing::info
-//! as an observable seam.
+//! Full enforcement (`pre_tool_use` gating) lands when `TaskRunner` gains
+//! a tool-use loop — the hook chain's `on_prompt_submit` is now wired
+//! (M2 deferred) so the pattern is established.
 
 use mur_common::agent::{
     Entitlements, NetworkOutboundMode, OutboundNetwork, ProcessesEntitlement, SpawnEntitlement,
