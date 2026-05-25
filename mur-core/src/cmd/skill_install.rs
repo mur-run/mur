@@ -119,6 +119,7 @@ fn install_from_agent(home: &Path, agent_name: &str, skill_name: &str) -> Result
     }
 
     // 2. Pull — JSON-RPC `skills/get` to the source agent.
+    tracing::info!(skill = %skill_name, source = %agent_name, "pulling skill via A2A");
     use crate::a2a_dial::{DialMode, dial_method};
     use mur_common::skill::parse_canonical;
 

@@ -43,6 +43,9 @@ pub fn dial_method(
     params: Value,
     mode: DialMode,
 ) -> Result<Value> {
+    let _span = tracing::info_span!("a2a.dial", agent = %agent_name, method = %method).entered();
+    tracing::debug!(?mode, "dialing");
+
     let request_id = json!(1);
     let request = json!({
         "jsonrpc": "2.0",
