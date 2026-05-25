@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 pub mod contradiction;
 pub mod dedup;
+pub mod dedup_vec;
 pub mod orphan;
 
 pub struct ConsolidateOptions {
@@ -33,6 +34,8 @@ pub struct SkillView {
     pub triggers: Vec<String>,
     pub requires: Vec<String>,
     pub stats: SkillStats,
+    /// Canonical text for embedding (same format as skill_index::text::embed_manifest).
+    pub embed_text: String,
 }
 
 pub fn run_consolidate(home: &Path, opts: &ConsolidateOptions) -> Result<ConsolidateReport> {
@@ -65,11 +68,12 @@ fn load_all_with_stats(home: &Path) -> Result<Vec<SkillView>> {
         let stats = SkillStats::load(&stats_path)?
             .unwrap_or_else(|| SkillStats::new(&name, "unknown", "", Utc::now()));
 
-        // Load manifest for description/triggers/requires
+        // Load manifest for description/triggers/requires + embed text
         let manifest_path = home.join("skills").join(&name).join("skill.yaml");
-        let (description, triggers, requires) =
+        let (description, triggers, requires, embed_text) =
             if let Ok(content) = std::fs::read_to_string(&manifest_path) {
                 if let Ok(m) = mur_common::skill::parser::parse_canonical(&content) {
+                    let et = crate::skill_index::text::embed_manifest(&m);
                     (
                         m.description,
                         m.triggers
@@ -77,12 +81,13 @@ fn load_all_with_stats(home: &Path) -> Result<Vec<SkillView>> {
                             .filter_map(|t| t.pattern.clone())
                             .collect(),
                         m.requires.into_iter().map(|r| r.name).collect(),
+                        et,
                     )
                 } else {
-                    (String::new(), vec![], vec![])
+                    (String::new(), vec![], vec![], String::new())
                 }
             } else {
-                (String::new(), vec![], vec![])
+                (String::new(), vec![], vec![], String::new())
             };
 
         views.push(SkillView {
@@ -91,6 +96,7 @@ fn load_all_with_stats(home: &Path) -> Result<Vec<SkillView>> {
             triggers,
             requires,
             stats,
+            embed_text,
         });
     }
     Ok(views)
@@ -146,6 +152,7 @@ fn write_jsonl_report(home: &Path, report: &ConsolidateReport, applied: bool) ->
             "b": d.b,
             "similarity": d.similarity,
             "keeper": d.keeper,
+            "source": d.source,
             "applied": applied,
             "applied_at": Utc::now().to_rfc3339(),
         }));

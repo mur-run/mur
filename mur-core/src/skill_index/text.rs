@@ -1,7 +1,13 @@
-use mur_common::skill::manifest::Skill;
+use mur_common::skill::manifest::{Skill, SkillManifest};
 
-/// Build the canonical text we embed for a skill. Stable: changing this
-/// invalidates every embedded chunk and requires `mur skill reindex-vec`.
+/// Build the canonical text we embed for a skill from its full `Skill` wrapper.
+pub fn embed_text(skill: &Skill) -> String {
+    embed_manifest(&skill.manifest)
+}
+
+/// Build the canonical text from a `SkillManifest` alone (no wrapper needed).
+/// Stable: changing this invalidates every embedded chunk and requires
+/// `mur skill reindex-vec`.
 ///
 /// Format (newline-joined, no trailing newline):
 ///   <name>
@@ -12,8 +18,7 @@ use mur_common::skill::manifest::Skill;
 ///
 /// Order matters: name and description dominate the embedding, abstract
 /// adds semantic context, triggers cover keyword-match cases.
-pub fn embed_text(skill: &Skill) -> String {
-    let m = &skill.manifest;
+pub fn embed_manifest(m: &SkillManifest) -> String {
     let mut parts = vec![
         m.name.clone(),
         m.description.clone(),

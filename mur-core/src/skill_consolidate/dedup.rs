@@ -6,6 +6,20 @@ use crate::skill_consolidate::{ConsolidateReport, SkillView};
 
 const JACCARD_THRESHOLD: f64 = 0.85;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DedupSource {
+    Jaccard,
+    Vector,
+    Both,
+}
+
+impl Default for DedupSource {
+    fn default() -> Self {
+        Self::Jaccard
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DuplicatePair {
     pub a: String,
@@ -13,6 +27,8 @@ pub struct DuplicatePair {
     pub similarity: f64,
     pub keeper: String,
     pub kept_reason: KeeperReason,
+    #[serde(default)]
+    pub source: DedupSource,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
@@ -43,6 +59,7 @@ pub fn scan(skills: &[SkillView], report: &mut ConsolidateReport) {
                     similarity: sim,
                     keeper,
                     kept_reason: reason,
+                    source: DedupSource::Jaccard,
                 });
                 // Silence unused variable
                 let _ = loser;
@@ -91,7 +108,7 @@ fn is_inactive(stats: &mur_common::skill::stats::SkillStats) -> bool {
     )
 }
 
-fn select_keeper(a: &SkillView, b: &SkillView) -> (String, String, KeeperReason) {
+pub(crate) fn select_keeper(a: &SkillView, b: &SkillView) -> (String, String, KeeperReason) {
     use mur_common::skill::stats::LifecycleState;
 
     fn rank(s: LifecycleState) -> u8 {
