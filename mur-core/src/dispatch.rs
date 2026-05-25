@@ -307,6 +307,19 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::SkillAction::FromPattern { name, polish } => {
                 cmd::skill_from_pattern::cmd_from_pattern(&name, polish).await?
             }
+            crate::cli::SkillAction::Suggest {
+                max_sessions,
+                threshold,
+            } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                cmd::skill_suggest::cmd_suggest(
+                    &home,
+                    cmd::skill_suggest::SuggestOptions {
+                        max_sessions,
+                        threshold,
+                    },
+                )?
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
