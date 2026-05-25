@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
+mod a2a_dial;
 mod auth;
 mod bridge_keychain;
 mod capture;
