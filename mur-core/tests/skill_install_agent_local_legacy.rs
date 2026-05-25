@@ -1,6 +1,10 @@
-//! Integration test for `mur skill install agent://...` in the M4a
-//! single-home reality. The handler/dispatcher wire round-trip is
-//! exercised separately in M4b.
+//! Legacy M4a integration tests — these exercised the direct-read
+//! shortcut that M4b replaces with a wire dial. Kept for archaeology
+//! and as a quick smoke test when temporarily reverting to local-read
+//! for debugging. The current behavior is covered by
+//! `skill_install_agent_wire.rs`.
+
+#![allow(dead_code)]
 
 use mur_common::agent::AgentProfile;
 use mur_common::skill::{
@@ -25,6 +29,7 @@ fn write_profile(home: &std::path::Path, name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+#[ignore = "M4a-only"]
 fn agent_pull_installs_and_appends_transfer_chain() {
     let home = tempdir().unwrap();
 
@@ -88,6 +93,7 @@ content:
 }
 
 #[test]
+#[ignore = "M4a-only"]
 fn agent_url_rejects_missing_source_agent() {
     let home = tempdir().unwrap();
     let err = cmd_install(
@@ -100,6 +106,7 @@ fn agent_url_rejects_missing_source_agent() {
 }
 
 #[test]
+#[ignore = "M4a-only"]
 fn agent_url_rejects_missing_source_skill() {
     let home = tempdir().unwrap();
     write_profile(home.path(), "charlie");
@@ -117,6 +124,7 @@ fn agent_url_rejects_missing_source_skill() {
 }
 
 #[test]
+#[ignore = "M4a-only"]
 fn agent_url_skips_profile_register_without_caller() {
     let home = tempdir().unwrap();
     write_profile(home.path(), "dave");
