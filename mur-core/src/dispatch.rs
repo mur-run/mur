@@ -263,6 +263,15 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Edit { name, quick } => cmd::pattern::cmd_edit(&name, quick)?,
         Commands::Model(args) => cmd::model::run(args)?,
         Commands::Agent { action } => run_agent(action).await?,
+        Commands::Skill { action } => match action {
+            crate::cli::SkillAction::Validate {
+                path,
+                warnings_only,
+            } => crate::cmd::skill_cmd::cmd_validate(&path, warnings_only)?,
+            crate::cli::SkillAction::Fmt { path, to, write } => {
+                crate::cmd::skill_cmd::cmd_fmt(&path, to.as_deref(), write)?
+            }
+        },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
             ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,

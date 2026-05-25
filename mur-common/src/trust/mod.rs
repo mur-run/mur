@@ -6,6 +6,7 @@
 pub mod legacy;
 pub mod revocations;
 pub mod rotation;
+pub mod skills;
 
 pub use revocations::{RevocationsList, RevokedEntry};
 
