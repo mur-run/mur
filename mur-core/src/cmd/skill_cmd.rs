@@ -1,12 +1,13 @@
 //! `mur skill` command handlers.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use mur_common::skill::{
-    parse_canonical, parse_legacy_markdown, parse_markdown, scan::scan_skill, serialize_canonical,
-    serialize_markdown, validate,
+    local, parse_canonical, parse_legacy_markdown, parse_markdown, scan::scan_skill,
+    serialize_canonical, serialize_markdown, TrustLevel, validate,
 };
 use std::fs;
 use std::path::Path;
+use crate::cmd::agent::resolve_mur_home;
 
 pub fn cmd_validate(path: &str, warnings_only: bool) -> Result<()> {
     let m = read_any(path)?;
@@ -62,18 +63,38 @@ pub fn cmd_fmt(path: &str, to: Option<&str>, write: bool) -> Result<()> {
     Ok(())
 }
 
-// --- Stubs: M1a CRUD + search (Tasks 2-4) ---
+// --- M1a CRUD + search (Tasks 2-4) ---
 
 pub fn cmd_list() -> Result<()> {
-    anyhow::bail!("`mur skill list` not yet implemented (Task 2)")
+    let home = resolve_mur_home()?;
+    let names = local::list_installed(&home).context("list installed skills")?;
+    if names.is_empty() {
+        println!("(no skills installed)");
+        return Ok(());
+    }
+    for name in &names {
+        let level = local::get_trust_level(&home, name)
+            .unwrap_or(TrustLevel::Sandboxed);
+        println!("{name:30} [{level:?}]");
+    }
+    Ok(())
 }
 
-pub fn cmd_show(_name: &str) -> Result<()> {
-    anyhow::bail!("`mur skill show` not yet implemented (Task 2)")
+pub fn cmd_show(name: &str) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let m = local::load_installed(&home, name)
+        .map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let yaml = serialize_canonical(&m)?;
+    print!("{yaml}");
+    Ok(())
 }
 
-pub fn cmd_remove(_name: &str) -> Result<()> {
-    anyhow::bail!("`mur skill remove` not yet implemented (Task 2)")
+pub fn cmd_remove(name: &str) -> Result<()> {
+    let home = resolve_mur_home()?;
+    local::remove_installed(&home, name)
+        .map_err(|e| anyhow!("failed to remove '{name}': {e}"))?;
+    println!("removed: {name}");
+    Ok(())
 }
 
 pub fn cmd_search(_query: &str, _local: bool) -> Result<()> {
