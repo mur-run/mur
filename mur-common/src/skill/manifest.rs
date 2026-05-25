@@ -133,6 +133,17 @@ pub struct Trigger {
     pub pattern: Option<String>,
 }
 
+impl Trigger {
+    /// Returns the keyword string for `Keyword` triggers, `None` otherwise.
+    pub fn exact_keyword(&self) -> Option<&str> {
+        if matches!(self.kind, TriggerKind::Keyword) {
+            self.pattern.as_deref()
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Requirement {
     pub name: String,
