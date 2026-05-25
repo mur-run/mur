@@ -41,6 +41,7 @@ pub(crate) mod reindex;
 pub(crate) mod search;
 pub(crate) mod server_cmd;
 pub(crate) mod session;
+pub mod skill_archive;
 pub mod skill_cmd;
 pub mod skill_deps;
 pub mod skill_doctor;
@@ -53,8 +54,8 @@ pub mod skill_registry;
 #[allow(dead_code)]
 pub mod skill_resolver;
 pub mod skill_stats;
-pub mod skill_sweep;
 pub mod skill_suggest;
+pub mod skill_sweep;
 pub(crate) mod sleep;
 pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;

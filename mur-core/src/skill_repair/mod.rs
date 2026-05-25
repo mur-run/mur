@@ -38,6 +38,7 @@ pub struct RepairCtx<'a> {
 }
 
 pub trait Repair {
+    #[allow(dead_code)]
     fn check_id(&self) -> &'static str;
     fn applicable(&self, finding: &Finding) -> bool;
     fn run(&self, finding: &Finding, ctx: &RepairCtx, apply: bool) -> RepairOutcome;
@@ -103,10 +104,16 @@ pub fn print_repair_summary(report: &RepairReport, apply: bool) {
                 println!("  Fixed:     {} ({})", msg.skill_name, msg.check_id);
             }
             RepairOutcome::DryRun(detail) => {
-                println!("  DryRun:    {} ({}) — {detail}", msg.skill_name, msg.check_id);
+                println!(
+                    "  DryRun:    {} ({}) — {detail}",
+                    msg.skill_name, msg.check_id
+                );
             }
             RepairOutcome::Skipped(detail) => {
-                println!("  Skipped:   {} ({}) — {detail}", msg.skill_name, msg.check_id);
+                println!(
+                    "  Skipped:   {} ({}) — {detail}",
+                    msg.skill_name, msg.check_id
+                );
             }
             RepairOutcome::Failed(e) => {
                 println!("  Failed:    {} ({}) — {e}", msg.skill_name, msg.check_id);

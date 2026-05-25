@@ -163,4 +163,12 @@ pub enum SkillAction {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Archive a skill (M5b).
+    Archive {
+        /// Skill name.
+        name: String,
+        /// Reason for archival.
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
