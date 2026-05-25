@@ -59,6 +59,12 @@ pub struct SkillManifest {
     /// Evolution history — each entry records one generation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evolution_log: Vec<EvolutionEvent>,
+
+    /// Peer transfer provenance — each entry is `agent://<name>`.
+    /// Last entry is the immediate source; first entry is the original publisher.
+    /// Empty for registry-installed and locally-authored skills.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transfer_chain: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
