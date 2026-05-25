@@ -61,8 +61,7 @@ pub fn cmd_skill_add(name: &str, source: &str) -> Result<()> {
         if ext == "yaml" || ext == "yml" {
             let text = fs::read_to_string(&src)?;
             let m = mur_common::skill::parse_canonical(&text)?;
-            mur_common::skill::validate(&m)
-                .map_err(|e| anyhow!("skill validation failed: {e}"))?;
+            mur_common::skill::validate(&m).map_err(|e| anyhow!("skill validation failed: {e}"))?;
         }
     }
 

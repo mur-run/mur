@@ -1,8 +1,8 @@
 //! Local skill store helpers — list installed, resolve, remove, search, trust.
 
 use crate::skill::store::global_skill_dir;
-use crate::skill::{read_from_dir, SkillManifest, StoreError};
 use crate::skill::types::TrustLevel;
+use crate::skill::{SkillManifest, StoreError, read_from_dir};
 use crate::trust::skills::SkillTrustStore;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -48,7 +48,10 @@ pub fn remove_installed(mur_home: &Path, name: &str) -> Result<(), StoreError> {
     Ok(())
 }
 
-pub fn search_installed(mur_home: &Path, query: &str) -> Result<Vec<(String, SkillManifest)>, StoreError> {
+pub fn search_installed(
+    mur_home: &Path,
+    query: &str,
+) -> Result<Vec<(String, SkillManifest)>, StoreError> {
     let q = query.to_lowercase();
     let mut results = Vec::new();
     for name in list_installed(mur_home)? {
@@ -64,9 +67,15 @@ pub fn search_installed(mur_home: &Path, query: &str) -> Result<Vec<(String, Ski
     Ok(results)
 }
 
-pub fn set_trust_level(mur_home: &Path, name: &str, level: TrustLevel) -> Result<(), Box<dyn std::error::Error>> {
+pub fn set_trust_level(
+    mur_home: &Path,
+    name: &str,
+    level: TrustLevel,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut trust = SkillTrustStore::load(mur_home)?;
-    let keys: Vec<String> = trust.entries.iter()
+    let keys: Vec<String> = trust
+        .entries
+        .iter()
         .filter(|(_k, v)| v.name == name)
         .map(|(k, _)| k.clone())
         .collect();
@@ -79,7 +88,10 @@ pub fn set_trust_level(mur_home: &Path, name: &str, level: TrustLevel) -> Result
     Ok(())
 }
 
-pub fn get_trust_level(mur_home: &Path, name: &str) -> Result<TrustLevel, Box<dyn std::error::Error>> {
+pub fn get_trust_level(
+    mur_home: &Path,
+    name: &str,
+) -> Result<TrustLevel, Box<dyn std::error::Error>> {
     let trust = SkillTrustStore::load(mur_home)?;
     for entry in trust.entries.values() {
         if entry.name == name {
@@ -92,8 +104,8 @@ pub fn get_trust_level(mur_home: &Path, name: &str) -> Result<TrustLevel, Box<dy
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use crate::skill::{parse_canonical, write_to_dir};
+    use tempfile::tempdir;
 
     fn sample(name: &str) -> SkillManifest {
         parse_canonical(&format!(
@@ -106,7 +118,9 @@ content:
   abstract: hi
   context: body
 tags: [test, {name}]
-"#)).unwrap()
+"#
+        ))
+        .unwrap()
     }
 
     #[test]
@@ -119,13 +133,21 @@ tags: [test, {name}]
 
     #[test]
     fn empty_dir_returns_empty() {
-        assert!(list_installed(tempdir().unwrap().path()).unwrap().is_empty());
+        assert!(
+            list_installed(tempdir().unwrap().path())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn search_finds_by_name() {
         let dir = tempdir().unwrap();
-        write_to_dir(&global_skill_dir(dir.path(), "my-prices"), &sample("my-prices")).unwrap();
+        write_to_dir(
+            &global_skill_dir(dir.path(), "my-prices"),
+            &sample("my-prices"),
+        )
+        .unwrap();
         assert_eq!(search_installed(dir.path(), "price").unwrap().len(), 1);
     }
 
