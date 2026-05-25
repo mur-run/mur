@@ -55,6 +55,16 @@ pub fn cmd_skill_add(name: &str, source: &str) -> Result<()> {
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| anyhow!("skill source has no basename"))?;
+
+    // Validate YAML skills before adding
+    if let Some(ext) = src.extension().and_then(|e| e.to_str())
+        && (ext == "yaml" || ext == "yml")
+    {
+        let text = fs::read_to_string(&src)?;
+        let m = mur_common::skill::parse_canonical(&text)?;
+        mur_common::skill::validate(&m).map_err(|e| anyhow!("skill validation failed: {e}"))?;
+    }
+
     let (path, mut profile) = load_profile_for_edit(name)?;
 
     let agent_home = path.parent().unwrap_or(Path::new(""));
@@ -94,8 +104,16 @@ pub fn cmd_skill_show(name: &str, query: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("skill '{query}' not registered on '{name}'"))?;
     let agent_home = resolve_mur_home()?.join("agents").join(name);
     let file_path = agent_home.join(resolved);
-    let body =
-        fs::read_to_string(&file_path).with_context(|| format!("read {}", file_path.display()))?;
-    print!("{body}");
+    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if matches!(ext, "yaml" | "yml") {
+        let text = std::fs::read_to_string(&file_path)?;
+        let m = mur_common::skill::parse_canonical(&text)?;
+        let out = mur_common::skill::serialize_canonical(&m)?;
+        print!("{out}");
+    } else {
+        // Legacy .md — print raw
+        let body = std::fs::read_to_string(&file_path)?;
+        print!("{body}");
+    }
     Ok(())
 }
