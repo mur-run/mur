@@ -10,12 +10,10 @@
 //! prove they parse and validate plans correctly. See the
 //! `tests/coordination_conformance.rs` integration test for the 10-test suite.
 
-pub mod types;
-pub mod plan;
 pub mod conformance;
+pub mod plan;
+pub mod types;
 
-pub use types::{
-    ConformanceLevel, DeterminismMode, FailureCategory, Phase, RecoveryAction,
-};
-pub use plan::{Plan, Step};
 pub use conformance::{ConformanceAdapter, PlanLoadingSuite};
+pub use plan::{Plan, Step};
+pub use types::{ConformanceLevel, DeterminismMode, FailureCategory, Phase, RecoveryAction};

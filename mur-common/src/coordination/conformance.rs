@@ -99,6 +99,7 @@ struct PlanLoadingCase {
     toml: &'static str,
     should_pass: bool,
     /// If should_pass, also verify the parsed plan has the expected field values.
+    #[allow(clippy::type_complexity)]
     check_fields: Option<Box<dyn Fn(&Plan) -> Result<(), String>>>,
 }
 
@@ -406,13 +407,13 @@ depends_on = []
             let result = adapter.parse_and_validate(case.toml);
             match (case.should_pass, result) {
                 (true, Ok(ref plan)) => {
-                    if let Some(ref check) = case.check_fields {
-                        if let Err(err) = check(plan) {
-                            failures.push(TestFailure {
-                                test_name: case.name.to_string(),
-                                error: format!("field check failed: {}", err),
-                            });
-                        }
+                    if let Some(ref check) = case.check_fields
+                        && let Err(err) = check(plan)
+                    {
+                        failures.push(TestFailure {
+                            test_name: case.name.to_string(),
+                            error: format!("field check failed: {}", err),
+                        });
                     }
                 }
                 (true, Err(errs)) => {

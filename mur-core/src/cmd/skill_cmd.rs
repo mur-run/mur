@@ -1,6 +1,6 @@
 //! `mur skill` command handlers.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use mur_common::skill::{
     parse_canonical, parse_legacy_markdown, parse_markdown, scan::scan_skill, serialize_canonical,
     serialize_markdown, validate,

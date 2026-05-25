@@ -7,10 +7,10 @@ pub mod injection;
 pub mod secrets;
 pub mod unicode;
 
-pub use executable::{scan_executable, ExecutableFinding, ExecutableKind};
-pub use injection::{scan_injection, InjectionFinding};
-pub use secrets::{scan_secrets, SecretFinding};
-pub use unicode::{scan_unicode, UnicodeFinding, UnicodeKind};
+pub use executable::{ExecutableFinding, ExecutableKind, scan_executable};
+pub use injection::{InjectionFinding, scan_injection};
+pub use secrets::{SecretFinding, scan_secrets};
+pub use unicode::{UnicodeFinding, UnicodeKind, scan_unicode};
 
 use crate::skill::manifest::SkillManifest;
 

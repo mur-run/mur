@@ -840,8 +840,8 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
         // Canonical YAML — consumed by M2 SkillLoader
         std::fs::write(dir.join("skill.yaml"), content)?;
         // Markdown rendering — consumed by existing AI tool hooks
-        let md = mur_common::skill::yaml_to_markdown(content)
-            .unwrap_or_else(|_| content.to_string());
+        let md =
+            mur_common::skill::yaml_to_markdown(content).unwrap_or_else(|_| content.to_string());
         std::fs::write(dir.join("SKILL.md"), md)?;
     }
 
