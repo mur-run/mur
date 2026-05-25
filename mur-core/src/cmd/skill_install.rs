@@ -147,8 +147,8 @@ fn install_from_agent(home: &Path, agent_name: &str, skill_name: &str) -> Result
         .ok_or_else(|| {
             anyhow!("agent://{agent_name}/{skill_name}: response missing 'content_sha256'")
         })?;
-    let received_hash = content_hash_for_trust(&manifest)
-        .map_err(|e| anyhow!("hash received manifest: {e}"))?;
+    let received_hash =
+        content_hash_for_trust(&manifest).map_err(|e| anyhow!("hash received manifest: {e}"))?;
 
     // The sender's advertised hash must match what we just computed.
     // Otherwise the payload was tampered with in transit or the sender is

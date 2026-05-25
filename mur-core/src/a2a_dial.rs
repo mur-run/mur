@@ -62,9 +62,7 @@ pub fn dial_method(
             "agent '{agent_name}' is not running (no {})",
             lock_path.display()
         ),
-        (DialMode::ForceEphemeral, _) => {
-            dial_ephemeral(home, agent_name, &request, &request_id)
-        }
+        (DialMode::ForceEphemeral, _) => dial_ephemeral(home, agent_name, &request, &request_id),
         (_, true) => dial_socket(&lock_path, agent_name, &request, &request_id),
         (_, false) => dial_ephemeral(home, agent_name, &request, &request_id),
     }

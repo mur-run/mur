@@ -34,7 +34,11 @@ fn locate_runtime_binary() -> Option<PathBuf> {
     }
 }
 
-fn write_profile(home: &std::path::Path, name: &str, unix_sock: Option<&str>) -> std::path::PathBuf {
+fn write_profile(
+    home: &std::path::Path,
+    name: &str,
+    unix_sock: Option<&str>,
+) -> std::path::PathBuf {
     let dir = home.join("agents").join(name);
     std::fs::create_dir_all(&dir).unwrap();
     let mut profile = AgentProfile {
@@ -89,7 +93,10 @@ fn boot_runtime(home: &std::path::Path, agent: &str, runtime_bin: &str) -> Runti
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(found, "runtime did not write valid running.lock within 5s (sandbox may have killed it)");
+    assert!(
+        found,
+        "runtime did not write valid running.lock within 5s (sandbox may have killed it)"
+    );
     RuntimeGuard { child }
 }
 
