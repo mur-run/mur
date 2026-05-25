@@ -6,18 +6,13 @@ use crate::skill_consolidate::{ConsolidateReport, SkillView};
 
 const JACCARD_THRESHOLD: f64 = 0.85;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DedupSource {
+    #[default]
     Jaccard,
     Vector,
     Both,
-}
-
-impl Default for DedupSource {
-    fn default() -> Self {
-        Self::Jaccard
-    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

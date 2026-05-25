@@ -6,9 +6,9 @@
 
 use std::path::Path;
 
+use mur_common::config::Config;
 use mur_core::skill_index::SKILL_SOURCE_ID;
 use mur_core::store::vector::{VectorStore, factory::get_vector_store};
-use mur_common::config::Config;
 use tempfile::TempDir;
 
 fn test_embedding(dim: usize) -> Vec<f32> {

@@ -21,10 +21,7 @@ pub async fn cmd_reindex_vec(home: &Path, filter: Option<&str>, prune: bool) -> 
 
     // Filter by exact name match (glob support TBD if demand arises).
     let to_index: Vec<String> = if let Some(pat) = filter {
-        installed_names
-            .into_iter()
-            .filter(|n| n == pat)
-            .collect()
+        installed_names.into_iter().filter(|n| n == pat).collect()
     } else {
         installed_names
     };

@@ -92,15 +92,15 @@ fn dedup_combined(report: &mut ConsolidateReport) {
             .or_insert(p);
     }
     report.duplicates = by_pair.into_values().collect();
-    report.duplicates.sort_by(|a, b| {
-        a.a.cmp(&b.a).then_with(|| a.b.cmp(&b.b))
-    });
+    report
+        .duplicates
+        .sort_by(|a, b| a.a.cmp(&b.a).then_with(|| a.b.cmp(&b.b)));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::dedup::{DedupSource, DuplicatePair, KeeperReason};
     use super::super::ConsolidateReport;
+    use super::super::dedup::{DedupSource, DuplicatePair, KeeperReason};
     use super::*;
 
     fn duplicate(a: &str, b: &str, sim: f64, source: DedupSource) -> DuplicatePair {

@@ -370,10 +370,13 @@ fn try_embed_skill(home: &Path, name: &str, version: &str, manifest: &SkillManif
         Err(_) => return,
     };
     let result = handle.block_on(async {
-        let store = crate::store::vector::factory::get_vector_store(&cfg, &index_dir)
-            .await?;
+        let store = crate::store::vector::factory::get_vector_store(&cfg, &index_dir).await?;
         crate::skill_index::embed_manifest_and_upsert(
-            manifest, name, version, &embed_config, &*store,
+            manifest,
+            name,
+            version,
+            &embed_config,
+            &*store,
         )
         .await
     });

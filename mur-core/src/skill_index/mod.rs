@@ -19,7 +19,8 @@ pub async fn embed_and_upsert(
         &skill.manifest.version,
         config,
         store,
-    ).await
+    )
+    .await
 }
 
 /// Embed and upsert from a `SkillManifest` — useful during install when we

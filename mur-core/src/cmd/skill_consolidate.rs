@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::skill_consolidate::{ConsolidateOptions, ConsolidateMethod, run_consolidate};
+use crate::skill_consolidate::{ConsolidateMethod, ConsolidateOptions, run_consolidate};
 use crate::store::embedding::EmbeddingConfig;
 use crate::store::vector::factory::get_vector_store;
 
@@ -56,7 +56,10 @@ fn print_summary(report: &crate::skill_consolidate::ConsolidateReport, applied: 
     for d in &report.duplicates {
         println!(
             "  Duplicate: {} ≈ {} (sim={:.3}, keeper={}, source={})",
-            d.a, d.b, d.similarity, d.keeper,
+            d.a,
+            d.b,
+            d.similarity,
+            d.keeper,
             serde_json::to_string(&d.source).unwrap_or_default(),
         );
     }

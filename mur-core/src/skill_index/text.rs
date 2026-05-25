@@ -35,10 +35,10 @@ pub fn embed_manifest(m: &SkillManifest) -> String {
         parts.push(triggers.join(" "));
     }
 
-    if let Some(proc) = &m.content.procedure {
-        if let Some(first) = proc.steps.first() {
-            parts.push(first.description.clone());
-        }
+    if let Some(proc) = &m.content.procedure
+        && let Some(first) = proc.steps.first()
+    {
+        parts.push(first.description.clone());
     }
     parts.join("\n")
 }
@@ -74,18 +74,33 @@ mod tests {
 
     #[test]
     fn embed_manifest_basic_fields() {
-        let m = make_manifest("web-search", "Search the web", "Use this to find information online");
+        let m = make_manifest(
+            "web-search",
+            "Search the web",
+            "Use this to find information online",
+        );
         let text = embed_manifest(&m);
-        assert!(text.starts_with("web-search\nSearch the web\nUse this to find information online"));
+        assert!(
+            text.starts_with("web-search\nSearch the web\nUse this to find information online")
+        );
     }
 
     #[test]
     fn embed_manifest_includes_keyword_triggers_sorted() {
         let mut m = make_manifest("notify", "Send notifications", "Notify user");
         m.triggers = vec![
-            Trigger { kind: TriggerKind::Keyword, pattern: Some("alert".into()) },
-            Trigger { kind: TriggerKind::Command, pattern: Some("/run-cmd".into()) },
-            Trigger { kind: TriggerKind::Keyword, pattern: Some("ping".into()) },
+            Trigger {
+                kind: TriggerKind::Keyword,
+                pattern: Some("alert".into()),
+            },
+            Trigger {
+                kind: TriggerKind::Command,
+                pattern: Some("/run-cmd".into()),
+            },
+            Trigger {
+                kind: TriggerKind::Keyword,
+                pattern: Some("ping".into()),
+            },
         ];
         let text = embed_manifest(&m);
         // Only Keyword triggers, sorted: alert, ping
@@ -100,8 +115,14 @@ mod tests {
         m.content.procedure = Some(Procedure {
             variables: vec![],
             steps: vec![
-                ProcedureStep { description: "Check connectivity".into(), tool: None },
-                ProcedureStep { description: "Push to server".into(), tool: Some("rsync".into()) },
+                ProcedureStep {
+                    description: "Check connectivity".into(),
+                    tool: None,
+                },
+                ProcedureStep {
+                    description: "Push to server".into(),
+                    tool: Some("rsync".into()),
+                },
             ],
         });
         let text = embed_manifest(&m);

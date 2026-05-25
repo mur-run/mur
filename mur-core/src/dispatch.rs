@@ -369,7 +369,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::SkillAction::Archive { name, reason } => {
                 cmd::skill_archive::cmd_archive(&name, reason.as_deref())?
             }
-            crate::cli::SkillAction::Consolidate { dry_run, apply, method } => {
+            crate::cli::SkillAction::Consolidate {
+                dry_run,
+                apply,
+                method,
+            } => {
                 let home = cmd::agent::resolve_mur_home()?;
                 let method = match method {
                     crate::cli::skill::Method::Jaccard => {

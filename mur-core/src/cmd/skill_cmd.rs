@@ -97,7 +97,9 @@ pub fn cmd_remove(name: &str) -> Result<()> {
         handle.block_on(async {
             let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
             let index_dir = home.join("lance");
-            if let Ok(store) = crate::store::vector::factory::get_vector_store(&cfg, &index_dir).await {
+            if let Ok(store) =
+                crate::store::vector::factory::get_vector_store(&cfg, &index_dir).await
+            {
                 let _ = crate::skill_index::delete(name, &*store).await;
             }
         })
