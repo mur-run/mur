@@ -150,7 +150,10 @@ pub async fn polish_via_llm(
         cache_system: true,
         cache_user_prefix: None,
     };
-    let resp = backend.generate(req).await.context("polish LLM call failed")?;
+    let resp = backend
+        .generate(req)
+        .await
+        .context("polish LLM call failed")?;
 
     // Defensive: some backends still wrap JSON in fences even when told not to.
     let raw = resp.text.trim();
@@ -176,7 +179,10 @@ pub async fn polish_via_llm(
             })
             .collect();
         if !steps.is_empty() {
-            manifest.content.procedure = Some(Procedure { variables: vec![], steps });
+            manifest.content.procedure = Some(Procedure {
+                variables: vec![],
+                steps,
+            });
         }
     }
     if let Some(triggers) = v.get("triggers").and_then(|x| x.as_array()) {
@@ -216,20 +222,26 @@ pub async fn cmd_from_pattern_with_home(
 
     let patterns_dir = mur_home.join("patterns");
     let store = YamlStore::new(patterns_dir).context("open pattern store")?;
-    let pattern = store
-        .get(name)
-        .with_context(|| format!("pattern '{name}' not found in {}/patterns/", mur_home.display()))?;
+    let pattern = store.get(name).with_context(|| {
+        format!(
+            "pattern '{name}' not found in {}/patterns/",
+            mur_home.display()
+        )
+    })?;
 
     let mut manifest = pattern_to_skill(&pattern, polish)?;
 
     if polish {
-        use mur_common::config::Config;
         use crate::conversations::backend::factory;
+        use mur_common::config::Config;
 
         let cfg_path = mur_home.join("config.yaml");
         let cfg = Config::load_or_default(&cfg_path);
-        let backend = factory::build_for_stage(&cfg.conversations.ask.synthesize_backend(), "skill.from-pattern")
-            .context("build LLM backend for polish")?;
+        let backend = factory::build_for_stage(
+            &cfg.conversations.ask.synthesize_backend(),
+            "skill.from-pattern",
+        )
+        .context("build LLM backend for polish")?;
         polish_via_llm(&mut manifest, &pattern, backend.as_ref())
             .await
             .context("polish failed — re-run without --polish to install the unpolished skill")?;
@@ -255,8 +267,8 @@ pub async fn cmd_from_pattern_with_home(
     write_to_dir(&dir, &manifest).context("write skill manifest")?;
 
     let hash = content_sha256(&manifest).context("hash skill manifest")?;
-    let mut trust = SkillTrustStore::load(mur_home)
-        .map_err(|e| anyhow::anyhow!("load trust store: {e}"))?;
+    let mut trust =
+        SkillTrustStore::load(mur_home).map_err(|e| anyhow::anyhow!("load trust store: {e}"))?;
     trust.insert(
         hash,
         TrustEntry {
@@ -290,10 +302,16 @@ pub async fn cmd_from_pattern(name: &str, polish: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mur_common::pattern::{Content as PatternContent, Tags};
     use mur_common::knowledge::KnowledgeBase;
+    use mur_common::pattern::{Content as PatternContent, Tags};
 
-    fn make_pattern(name: &str, desc: &str, technical: &str, principle: &str, maturity: Maturity) -> Pattern {
+    fn make_pattern(
+        name: &str,
+        desc: &str,
+        technical: &str,
+        principle: &str,
+        maturity: Maturity,
+    ) -> Pattern {
         Pattern {
             base: KnowledgeBase {
                 name: name.into(),
@@ -332,7 +350,12 @@ mod tests {
 
     #[test]
     fn stable_pattern_produces_valid_manifest() {
-        let p = make_stable("git-push-flow", "Always pull before push", "Run git pull --rebase before git push", "Prefer rebase over merge to keep history linear");
+        let p = make_stable(
+            "git-push-flow",
+            "Always pull before push",
+            "Run git pull --rebase before git push",
+            "Prefer rebase over merge to keep history linear",
+        );
         let m = pattern_to_skill(&p, false).unwrap();
         validate(&m).unwrap();
         assert_eq!(m.name, "git-push-flow");
@@ -371,7 +394,11 @@ mod tests {
         let m = pattern_to_skill(&p, false).unwrap();
         let abs = &m.content.r#abstract;
         // Budget 250 + '…' = 251 chars max
-        assert!(abs.chars().count() <= 251, "got {} chars", abs.chars().count());
+        assert!(
+            abs.chars().count() <= 251,
+            "got {} chars",
+            abs.chars().count()
+        );
         assert!(abs.ends_with('…'));
     }
 
@@ -457,7 +484,12 @@ mod tests {
 
         // 1. Create a Stable pattern in tempdir.
         let store = YamlStore::new(home.path().join("patterns")).unwrap();
-        let p = make_stable("git-push-flow", "Always pull before push", "Run git pull --rebase before git push", "Prefer rebase over merge");
+        let p = make_stable(
+            "git-push-flow",
+            "Always pull before push",
+            "Run git pull --rebase before git push",
+            "Prefer rebase over merge",
+        );
         store.save(&p).unwrap();
 
         // 2. Run from-pattern (polish=false → no LLM call, no network).
@@ -475,7 +507,11 @@ mod tests {
 
         // 4. Trust entry is Sandboxed and tagged with the right publisher.
         let trust = SkillTrustStore::load(home.path()).unwrap();
-        let entry = trust.entries.values().find(|e| e.name == "git-push-flow").unwrap();
+        let entry = trust
+            .entries
+            .values()
+            .find(|e| e.name == "git-push-flow")
+            .unwrap();
         assert!(matches!(entry.level, TrustLevel::Sandboxed));
         assert_eq!(entry.publisher.as_deref(), Some("agent:from-pattern"));
     }

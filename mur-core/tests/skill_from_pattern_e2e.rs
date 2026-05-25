@@ -74,13 +74,7 @@ async fn promotes_stable_pattern_to_sandboxed_skill() {
 async fn rejects_draft_pattern() {
     let home = tempfile::tempdir().unwrap();
     let store = YamlStore::new(home.path().join("patterns")).unwrap();
-    let p = make_pattern(
-        "draft-thing",
-        "...",
-        "tech",
-        "princ",
-        Maturity::Draft,
-    );
+    let p = make_pattern("draft-thing", "...", "tech", "princ", Maturity::Draft);
     store.save(&p).unwrap();
 
     let err = cmd_from_pattern_with_home(home.path(), "draft-thing", false)
