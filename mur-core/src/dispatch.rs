@@ -287,6 +287,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
             crate::cli::SkillAction::Publish { path } => cmd::skill_publish::cmd_publish(&path)?,
             crate::cli::SkillAction::Update { name } => cmd::skill_install::cmd_update_cli(&name)?,
+            crate::cli::SkillAction::Deps { name } => cmd::skill_deps::cmd_deps_cli(&name)?,
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
