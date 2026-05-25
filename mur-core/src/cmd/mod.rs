@@ -43,6 +43,7 @@ pub(crate) mod server_cmd;
 pub(crate) mod session;
 pub mod skill_cmd;
 pub mod skill_deps;
+pub mod skill_generate;
 pub mod skill_install;
 pub(crate) mod skill_publish;
 pub mod skill_registry;
