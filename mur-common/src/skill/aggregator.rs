@@ -113,7 +113,14 @@ async fn flush(mur_home: &std::path::Path, deltas: &Mutex<HashMap<String, Delta>
             continue;
         }
         let path = SkillStats::path(mur_home, &skill_name);
-        let default = || SkillStats::new(&skill_name, &delta.skill_version, &delta.manifest_digest, Utc::now());
+        let default = || {
+            SkillStats::new(
+                &skill_name,
+                &delta.skill_version,
+                &delta.manifest_digest,
+                Utc::now(),
+            )
+        };
         let _ = SkillStats::merge_in_place(&path, default, |s| {
             // If manifest changed, reset counters but preserve pinned + state
             if s.is_stale(&delta.manifest_digest) {

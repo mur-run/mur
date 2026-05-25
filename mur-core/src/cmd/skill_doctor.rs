@@ -65,8 +65,10 @@ pub fn cmd_doctor(
 
     let home = resolve_mur_home()?;
     let now = Utc::now();
-    let installed_names: HashSet<String> =
-        list_installed(&home).unwrap_or_default().into_iter().collect();
+    let installed_names: HashSet<String> = list_installed(&home)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
 
     // Determine which skills to check
     let target_skills: Vec<String> = if names.is_empty() {
@@ -191,48 +193,42 @@ fn run_dependency_freshness(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
     };
 
     for req in &manifest.requires {
-        match &req {
-            Requirement { name, .. } => {
-                if ctx.installed_skills.contains(name) {
-                    // Dependency is installed — check version if constraint given
-                    let constraint = &req.version;
-                    if constraint != "*" {
-                        // Check if installed version satisfies the constraint
-                        if let Some(dep_manifest) = load_manifest(&ctx.home, name) {
-                            let installed_version = &dep_manifest.version;
-                            if let Ok(req_ver) = semver::VersionReq::parse(constraint) {
-                                if let Ok(inst_ver) = semver::Version::parse(installed_version) {
-                                    if !req_ver.matches(&inst_ver) {
-                                        findings.push(Finding {
-                                            check_id: "dependency-freshness".into(),
-                                            category: "deps".into(),
-                                            severity: Severity::Warn,
-                                            skill_name: skill_name.to_string(),
-                                            message: format!(
-                                                "Requires {name} {constraint} but {installed_version} is installed."
-                                            ),
-                                            remediation: Some(format!(
-                                                "mur skill update {name}"
-                                            )),
-                                            fixable: true,
-                                        });
-                                    }
-                                }
-                            }
-                        }
+        let Requirement { name, .. } = &req;
+        if ctx.installed_skills.contains(name) {
+            // Dependency is installed — check version if constraint given
+            let constraint = &req.version;
+            if constraint != "*" {
+                // Check if installed version satisfies the constraint
+                if let Some(dep_manifest) = load_manifest(&ctx.home, name) {
+                    let installed_version = &dep_manifest.version;
+                    if let Ok(req_ver) = semver::VersionReq::parse(constraint)
+                        && let Ok(inst_ver) = semver::Version::parse(installed_version)
+                        && !req_ver.matches(&inst_ver)
+                    {
+                        findings.push(Finding {
+                            check_id: "dependency-freshness".into(),
+                            category: "deps".into(),
+                            severity: Severity::Warn,
+                            skill_name: skill_name.to_string(),
+                            message: format!(
+                                "Requires {name} {constraint} but {installed_version} is installed."
+                            ),
+                            remediation: Some(format!("mur skill update {name}")),
+                            fixable: true,
+                        });
                     }
-                } else {
-                    findings.push(Finding {
-                        check_id: "dependency-freshness".into(),
-                        category: "deps".into(),
-                        severity: Severity::Fail,
-                        skill_name: skill_name.to_string(),
-                        message: format!("Required skill '{name}' is not installed."),
-                        remediation: Some(format!("mur skill install {name}")),
-                        fixable: true,
-                    });
                 }
             }
+        } else {
+            findings.push(Finding {
+                check_id: "dependency-freshness".into(),
+                category: "deps".into(),
+                severity: Severity::Fail,
+                skill_name: skill_name.to_string(),
+                message: format!("Required skill '{name}' is not installed."),
+                remediation: Some(format!("mur skill install {name}")),
+                fixable: true,
+            });
         }
     }
 
@@ -496,9 +492,9 @@ fn severity_icon(s: Severity) -> &'static str {
 fn severity_color(s: Severity, icon: &str) -> String {
     use std::fmt::Write;
     let code = match s {
-        Severity::Ok => "\x1b[32m",    // green
-        Severity::Warn => "\x1b[33m",   // yellow
-        Severity::Fail => "\x1b[31m",   // red
+        Severity::Ok => "\x1b[32m",      // green
+        Severity::Warn => "\x1b[33m",    // yellow
+        Severity::Fail => "\x1b[31m",    // red
         Severity::Unknown => "\x1b[36m", // cyan
     };
     let mut out = String::new();
@@ -509,11 +505,5 @@ fn severity_color(s: Severity, icon: &str) -> String {
 pub fn exit_code(findings: &[Finding], strict: bool) -> i32 {
     let any_fail = findings.iter().any(|f| f.severity == Severity::Fail);
     let any_warn = findings.iter().any(|f| f.severity == Severity::Warn);
-    if any_fail {
-        1
-    } else if strict && any_warn {
-        1
-    } else {
-        0
-    }
+    i32::from(any_fail || (strict && any_warn))
 }

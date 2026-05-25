@@ -277,9 +277,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::SkillAction::Search { query, local } => {
                 cmd::skill_cmd::cmd_search(&query, local)?
             }
-            crate::cli::SkillAction::Info { name, full, metrics } => {
-                cmd::skill_cmd::cmd_info(&name, full, metrics)?
-            }
+            crate::cli::SkillAction::Info {
+                name,
+                full,
+                metrics,
+            } => cmd::skill_cmd::cmd_info(&name, full, metrics)?,
             crate::cli::SkillAction::Audit { name } => cmd::skill_cmd::cmd_audit(&name)?,
             crate::cli::SkillAction::Trust { name, level } => {
                 cmd::skill_cmd::cmd_trust(&name, &level)?
@@ -338,15 +340,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                 )
                 .await?
             }
-            crate::cli::SkillAction::Stats { name } => {
-                cmd::skill_stats::cmd_stats(&name)?
-            }
+            crate::cli::SkillAction::Stats { name } => cmd::skill_stats::cmd_stats(&name)?,
             crate::cli::SkillAction::Pin { name, reason } => {
                 cmd::skill_stats::cmd_pin(&name, reason.as_deref())?
             }
-            crate::cli::SkillAction::Unpin { name } => {
-                cmd::skill_stats::cmd_unpin(&name)?
-            }
+            crate::cli::SkillAction::Unpin { name } => cmd::skill_stats::cmd_unpin(&name)?,
             crate::cli::SkillAction::ReindexStats { name, days_back } => {
                 cmd::skill_stats::cmd_reindex_stats(name.as_deref(), days_back).await?
             }
@@ -359,14 +357,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 apply,
             } => {
                 // M5a: read-only doctor. --fix and --apply are stubs.
-                cmd::skill_doctor::cmd_doctor(
-                    &names,
-                    &check,
-                    json,
-                    strict,
-                    fix,
-                    apply,
-                )?
+                cmd::skill_doctor::cmd_doctor(&names, &check, json, strict, fix, apply)?
             }
         },
         Commands::Exchange { action } => match action {

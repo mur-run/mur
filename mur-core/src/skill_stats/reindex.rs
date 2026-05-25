@@ -27,7 +27,9 @@ pub async fn reindex_stats(mur_home: &Path, opts: ReindexOptions) -> Result<Rein
     let mut trace_paths: Vec<_> = Vec::new();
     for d in 0..opts.days_back.max(1) {
         let day = today - chrono::Duration::days(d as i64);
-        let path = traces_dir.join(day.format("%Y-%m-%d").to_string()).with_extension("jsonl");
+        let path = traces_dir
+            .join(day.format("%Y-%m-%d").to_string())
+            .with_extension("jsonl");
         if path.exists() {
             trace_paths.push(path);
         }
@@ -124,23 +126,23 @@ pub async fn reindex_stats(mur_home: &Path, opts: ReindexOptions) -> Result<Rein
                     fresh.failure_count += 1;
                 }
                 // Update timestamps from the trace line
-                if let Some(ts) = val.get("ts").and_then(|v| v.as_str()) {
-                    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ts) {
-                        let utc = parsed.with_timezone(&Utc);
-                        fresh.last_used_at = Some(match fresh.last_used_at {
+                if let Some(ts) = val.get("ts").and_then(|v| v.as_str())
+                    && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ts)
+                {
+                    let utc = parsed.with_timezone(&Utc);
+                    fresh.last_used_at = Some(match fresh.last_used_at {
+                        Some(e) => e.max(utc),
+                        None => utc,
+                    });
+                    if outcome == "success" {
+                        fresh.last_success_at = Some(match fresh.last_success_at {
                             Some(e) => e.max(utc),
                             None => utc,
                         });
-                        if outcome == "success" {
-                            fresh.last_success_at = Some(match fresh.last_success_at {
-                                Some(e) => e.max(utc),
-                                None => utc,
-                            });
-                            fresh.first_successful_use_at = Some(match fresh.first_successful_use_at {
-                                Some(e) => e.min(utc),
-                                None => utc,
-                            });
-                        }
+                        fresh.first_successful_use_at = Some(match fresh.first_successful_use_at {
+                            Some(e) => e.min(utc),
+                            None => utc,
+                        });
                     }
                 }
             }

@@ -51,10 +51,7 @@ pub fn cmd_unpin(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_reindex_stats(
-    skill_filter: Option<&str>,
-    days_back: u32,
-) -> Result<()> {
+pub async fn cmd_reindex_stats(skill_filter: Option<&str>, days_back: u32) -> Result<()> {
     let home = resolve_mur_home()?;
     let report = crate::skill_stats::reindex::reindex_stats(
         &home,

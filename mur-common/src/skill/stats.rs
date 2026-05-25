@@ -107,8 +107,7 @@ impl SkillStats {
     pub fn load(path: &Path) -> Result<Option<Self>> {
         match std::fs::read_to_string(path) {
             Ok(s) => {
-                let stats: Self =
-                    serde_json::from_str(&s).context("deserialise stats.json")?;
+                let stats: Self = serde_json::from_str(&s).context("deserialise stats.json")?;
                 Ok(Some(stats))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -135,6 +134,7 @@ impl SkillStats {
         let mut lock_file = RwLock::new(
             OpenOptions::new()
                 .create(true)
+                .truncate(true)
                 .write(true)
                 .read(true)
                 .open(&lock_path)
@@ -145,8 +145,7 @@ impl SkillStats {
         let mut stats = Self::load(path)?.unwrap_or_else(default);
         merge_fn(&mut stats)?;
 
-        let tmp =
-            NamedTempFile::new_in(parent).context("create temp file for stats")?;
+        let tmp = NamedTempFile::new_in(parent).context("create temp file for stats")?;
         serde_json::to_writer_pretty(&tmp, &stats).context("serialise stats")?;
         tmp.persist(path).context("persist stats")?;
         Ok(())
@@ -167,7 +166,12 @@ impl SkillStats {
 
     /// Reset counters for a manifest change, preserving pinned state
     /// and first-success timestamp.
-    pub fn reset_for_new_manifest(&mut self, new_version: &str, new_digest: &str, now: DateTime<Utc>) {
+    pub fn reset_for_new_manifest(
+        &mut self,
+        new_version: &str,
+        new_digest: &str,
+        now: DateTime<Utc>,
+    ) {
         self.skill_version = new_version.to_string();
         self.manifest_digest = new_digest.to_string();
         self.usage_count = 0;
@@ -233,10 +237,14 @@ mod tests {
         assert_eq!(loaded.usage_count, 1);
 
         // Second merge: increment again
-        SkillStats::merge_in_place(&path, || panic!("default should not be called"), |s| {
-            s.usage_count += 2;
-            Ok(())
-        })
+        SkillStats::merge_in_place(
+            &path,
+            || panic!("default should not be called"),
+            |s| {
+                s.usage_count += 2;
+                Ok(())
+            },
+        )
         .unwrap();
 
         let loaded = SkillStats::load(&path).unwrap().unwrap();
@@ -254,24 +262,34 @@ mod tests {
         SkillStats::merge_in_place(&path, || dummy_stats(&skill_name), |_| Ok(())).unwrap();
 
         let t1 = thread::spawn(move || {
-            SkillStats::merge_in_place(&path, || panic!("default should not be called"), |s| {
-                s.usage_count += 1;
-                Ok(())
-            })
+            SkillStats::merge_in_place(
+                &path,
+                || panic!("default should not be called"),
+                |s| {
+                    s.usage_count += 1;
+                    Ok(())
+                },
+            )
             .unwrap();
         });
         let t2 = thread::spawn(move || {
-            SkillStats::merge_in_place(&path2, || panic!("default should not be called"), |s| {
-                s.usage_count += 2;
-                Ok(())
-            })
+            SkillStats::merge_in_place(
+                &path2,
+                || panic!("default should not be called"),
+                |s| {
+                    s.usage_count += 2;
+                    Ok(())
+                },
+            )
             .unwrap();
         });
 
         t1.join().unwrap();
         t2.join().unwrap();
 
-        let loaded = SkillStats::load(&_dir.path().join("test_skill").join("stats.json")).unwrap().unwrap();
+        let loaded = SkillStats::load(&_dir.path().join("test_skill").join("stats.json"))
+            .unwrap()
+            .unwrap();
         // Both increments should have committed (commutative counters)
         assert_eq!(loaded.usage_count, 3);
     }

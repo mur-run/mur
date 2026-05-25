@@ -226,7 +226,10 @@ pub(crate) async fn prepare_runtime(
                 let p = &n["params"];
                 let skill_name = p[MUR_SKILL_NAME].as_str().unwrap_or("").to_string();
                 let skill_version = p[MUR_SKILL_VERSION].as_str().unwrap_or("").to_string();
-                let manifest_digest = p[MUR_SKILL_MANIFEST_DIGEST].as_str().unwrap_or("").to_string();
+                let manifest_digest = p[MUR_SKILL_MANIFEST_DIGEST]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
                 let outcome = p[MUR_SKILL_OUTCOME].as_str().unwrap_or("not_evaluated");
                 let _duration_ms = p[MUR_SKILL_DURATION_MS].as_u64().unwrap_or(0);
                 if !skill_name.is_empty() {
