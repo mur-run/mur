@@ -117,7 +117,7 @@ pub fn cmd_search(query: &str, local_only: bool) -> Result<()> {
     Ok(())
 }
 
-// --- Stubs: M1b audit + trust (Tasks 5-6) ---
+// --- M1b audit + trust (Tasks 5-6) ---
 
 pub fn cmd_info(name: &str, full: bool) -> Result<()> {
     let home = resolve_mur_home()?;
@@ -138,12 +138,57 @@ pub fn cmd_info(name: &str, full: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_audit(_name: &str) -> Result<()> {
-    anyhow::bail!("`mur skill audit` not yet implemented (Task 6)")
+pub fn cmd_audit(name: &str) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let m = local::load_installed(&home, name)
+        .map_err(|_| anyhow!("skill '{name}' not installed"))?;
+
+    let report = scan_skill(&m)?;
+    if report.has_blocking_findings() {
+        eprintln!("Security findings:");
+        for line in report.human_summary() {
+            eprintln!("  {line}");
+        }
+    } else {
+        println!("Content scan: clean");
+    }
+
+    let hash = mur_common::skill::content_sha256(&m)?;
+    let trust = mur_common::trust::skills::SkillTrustStore::load(&home)
+        .map_err(|e| anyhow!("load trust store: {e}"))?;
+    match trust.lookup(&hash) {
+        Some(e) => println!("Trust: {:?} (publisher: {})", e.level, e.publisher.as_deref().unwrap_or("-")),
+        None => println!("No trust entry (defaults to Sandboxed)"),
+    }
+
+    println!("Audit complete for '{name}'");
+    Ok(())
 }
 
-pub fn cmd_trust(_name: &str, _level: &str) -> Result<()> {
-    anyhow::bail!("`mur skill trust` not yet implemented (Task 6)")
+pub fn cmd_trust(name: &str, level_str: &str) -> Result<()> {
+    let level = match level_str {
+        "sandboxed" => mur_common::skill::TrustLevel::Sandboxed,
+        "verified" => mur_common::skill::TrustLevel::Verified,
+        "trusted" => mur_common::skill::TrustLevel::Trusted,
+        other => bail!("invalid level '{other}' (expected: sandboxed | verified | trusted)"),
+    };
+    let home = resolve_mur_home()?;
+    let m = local::load_installed(&home, name)
+        .map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let hash = mur_common::skill::content_sha256(&m)?;
+
+    let mut trust = mur_common::trust::skills::SkillTrustStore::load(&home)
+        .map_err(|e| anyhow!("load trust store: {e}"))?;
+    trust.insert(hash, mur_common::trust::skills::TrustEntry {
+        name: name.to_string(),
+        version: m.version.clone(),
+        level,
+        installed_at: chrono::Utc::now().to_rfc3339(),
+        publisher: Some(m.publisher.clone()),
+    });
+    trust.save(&home).map_err(|e| anyhow!("save trust store: {e}"))?;
+    println!("Trust level for '{name}' set to {level:?}");
+    Ok(())
 }
 
 fn read_any(path: &str) -> Result<mur_common::skill::SkillManifest> {
