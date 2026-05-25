@@ -1,5 +1,6 @@
 //! MuR skill ecosystem — see `docs/superpowers/specs/2026-05-24-mur-skill-ecosystem-design.md`.
 
+pub mod aggregator;
 pub mod capability;
 pub mod constraint;
 pub mod evolution;
