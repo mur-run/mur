@@ -183,6 +183,14 @@ pub fn parse_legacy_markdown(input: &str) -> Result<SkillManifest, ParseError> {
     Ok(m)
 }
 
+/// Convenience: parse canonical YAML, serialise back to markdown.
+/// Used by `ensure_mur_skill` so built-in yaml skills produce
+/// AI-tool-consumable markdown at `SKILL.md`.
+pub fn yaml_to_markdown(yaml: &str) -> Result<String, ParseError> {
+    let m = parse_canonical(yaml)?;
+    serialize_markdown(&m)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +320,14 @@ content:
         assert_eq!(m.publisher, "human:mur");
         assert_eq!(m.version, "0.0.0");
         assert!(m.content.context.is_some());
+    }
+
+    #[test]
+    fn yaml_to_markdown_yields_consumable_md() {
+        let md = yaml_to_markdown(SAMPLE).unwrap();
+        assert!(md.starts_with("---"), "should start with frontmatter fence");
+        assert!(md.contains("# demo-skill"), "should contain heading");
+        assert!(md.contains("hello"), "should contain abstract");
+        assert!(md.contains("body"), "should contain context body");
     }
 }
