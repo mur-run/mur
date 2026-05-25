@@ -102,18 +102,39 @@ pub fn cmd_search(query: &str, local_only: bool) -> Result<()> {
     let local_results = local::search_installed(&home, query)
         .context("search installed")?;
 
-    if local_results.is_empty() {
-        println!("(no matching installed skills found)");
-        if !local_only {
-            eprintln!("hint: use `mur skill install <name>` to install from the registry");
+    if !local_results.is_empty() {
+        println!("Installed:");
+        for (name, m) in &local_results {
+            let level = local::get_trust_level(&home, name)
+                .unwrap_or(mur_common::skill::TrustLevel::Sandboxed);
+            println!("  {name:25} {:12?} {}", level, m.description);
         }
-        return Ok(());
     }
-    for (name, m) in &local_results {
-        let level = local::get_trust_level(&home, name)
-            .unwrap_or(mur_common::skill::TrustLevel::Sandboxed);
-        println!("{name:25} {:12?} {}", level, m.description);
+
+    if !local_only {
+        match crate::cmd::skill_registry::fetch_and_load(&home, crate::cmd::skill_registry::DEFAULT_REGISTRY) {
+            Ok((_dir, idx)) => {
+                let reg_results = crate::cmd::skill_registry::search_registry(&idx, query);
+                if !reg_results.is_empty() {
+                    if !local_results.is_empty() {
+                        println!();
+                    }
+                    println!("Registry:");
+                    for (name, entry) in reg_results {
+                        println!("  {name:25} registry    {} [v{}]", entry.description, entry.latest);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: registry search failed: {e}");
+            }
+        }
     }
+
+    if local_results.is_empty() && local_only {
+        println!("(no matching installed skills found)");
+    }
+
     Ok(())
 }
 
