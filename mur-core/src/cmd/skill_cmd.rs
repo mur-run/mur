@@ -62,6 +62,38 @@ pub fn cmd_fmt(path: &str, to: Option<&str>, write: bool) -> Result<()> {
     Ok(())
 }
 
+// --- Stubs: M1a CRUD + search (Tasks 2-4) ---
+
+pub fn cmd_list() -> Result<()> {
+    anyhow::bail!("`mur skill list` not yet implemented (Task 2)")
+}
+
+pub fn cmd_show(_name: &str) -> Result<()> {
+    anyhow::bail!("`mur skill show` not yet implemented (Task 2)")
+}
+
+pub fn cmd_remove(_name: &str) -> Result<()> {
+    anyhow::bail!("`mur skill remove` not yet implemented (Task 2)")
+}
+
+pub fn cmd_search(_query: &str, _local: bool) -> Result<()> {
+    anyhow::bail!("`mur skill search` not yet implemented (Task 3)")
+}
+
+// --- Stubs: M1b audit + trust (Tasks 5-6) ---
+
+pub fn cmd_info(_name: &str, _full: bool) -> Result<()> {
+    anyhow::bail!("`mur skill info` not yet implemented (Task 5)")
+}
+
+pub fn cmd_audit(_name: &str) -> Result<()> {
+    anyhow::bail!("`mur skill audit` not yet implemented (Task 6)")
+}
+
+pub fn cmd_trust(_name: &str, _level: &str) -> Result<()> {
+    anyhow::bail!("`mur skill trust` not yet implemented (Task 6)")
+}
+
 fn read_any(path: &str) -> Result<mur_common::skill::SkillManifest> {
     let text = fs::read_to_string(path).with_context(|| format!("read {path}"))?;
     let p = Path::new(path);
