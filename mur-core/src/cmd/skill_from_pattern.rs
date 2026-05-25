@@ -3,7 +3,12 @@
 use anyhow::{Context, Result, bail};
 use mur_common::knowledge::Maturity;
 use mur_common::pattern::Pattern;
-use mur_common::skill::{Category, Content, HostId, SkillManifest, validate};
+use mur_common::skill::{
+    Category, Content, HostId, Procedure, ProcedureStep, SkillManifest, Trigger, TriggerKind,
+    validate,
+};
+
+use crate::conversations::backend::{ChatBackend, ChatRequest};
 
 /// Layer 2 abstract budget. Pre-polish, the `principle` field is truncated to
 /// this on a UTF-8 char boundary. With `--polish`, the LLM gets the full
@@ -98,6 +103,101 @@ pub fn pattern_to_skill(pattern: &Pattern, polish: bool) -> Result<SkillManifest
     Ok(manifest)
 }
 
+const POLISH_MAX_TOKENS: u32 = 1024;
+const POLISH_MODEL: &str = "claude-sonnet-4-6";
+
+const POLISH_SYSTEM: &str = r#"
+You are a skill editor. Given a pattern extracted from agent behavior,
+produce a polished skill.yaml abstract and suggest procedure steps.
+
+The pattern's `technical` content describes what the agent actually did.
+The `principle` describes the higher-level rule.
+
+Output JSON only — no markdown fences, no prose:
+{
+  "abstract": "one-line polished abstract (≤200 chars)",
+  "procedure_steps": [
+    {"description": "step 1", "tool": "optional.tool.name"}
+  ],
+  "triggers": [{"type": "command", "pattern": "/suggested-trigger"}]
+}
+
+Rules:
+- The abstract must capture the pattern's principle at a higher level.
+- Procedure steps are derived from the technical content.
+- If the technical content is too vague, suggest at most 2 steps.
+"#;
+
+pub async fn polish_via_llm(
+    manifest: &mut SkillManifest,
+    pattern: &Pattern,
+    backend: &dyn ChatBackend,
+) -> Result<()> {
+    let (technical, principle) = extract_content(&pattern.content);
+
+    let user = format!(
+        "Pattern name: {}\nDescription: {}\nPrinciple: {}\nTechnical: {}",
+        pattern.name, pattern.description, principle, technical,
+    );
+
+    let req = ChatRequest {
+        model: POLISH_MODEL,
+        system: Some(POLISH_SYSTEM),
+        user: &user,
+        max_tokens: POLISH_MAX_TOKENS,
+        temperature: Some(0.2),
+        stop: vec![],
+        cache_system: true,
+        cache_user_prefix: None,
+    };
+    let resp = backend.generate(req).await.context("polish LLM call failed")?;
+
+    // Defensive: some backends still wrap JSON in fences even when told not to.
+    let raw = resp.text.trim();
+    let raw = raw
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    let v: serde_json::Value = serde_json::from_str(raw)
+        .with_context(|| format!("LLM did not return valid JSON; got: {raw:.200}"))?;
+
+    if let Some(a) = v.get("abstract").and_then(|x| x.as_str()) {
+        manifest.content.r#abstract = a.to_string();
+    }
+    if let Some(steps) = v.get("procedure_steps").and_then(|x| x.as_array()) {
+        let steps: Vec<ProcedureStep> = steps
+            .iter()
+            .filter_map(|s| {
+                Some(ProcedureStep {
+                    description: s.get("description")?.as_str()?.to_string(),
+                    tool: s.get("tool").and_then(|x| x.as_str()).map(String::from),
+                })
+            })
+            .collect();
+        if !steps.is_empty() {
+            manifest.content.procedure = Some(Procedure { variables: vec![], steps });
+        }
+    }
+    if let Some(triggers) = v.get("triggers").and_then(|x| x.as_array()) {
+        manifest.triggers = triggers
+            .iter()
+            .filter_map(|t| {
+                let kind = match t.get("type")?.as_str()? {
+                    "command" => TriggerKind::Command,
+                    "keyword" => TriggerKind::Keyword,
+                    _ => return None,
+                };
+                Some(Trigger {
+                    kind,
+                    pattern: t.get("pattern").and_then(|x| x.as_str()).map(String::from),
+                })
+            })
+            .collect();
+    }
+    Ok(())
+}
+
 /// Test- and lib-friendly entry point. All I/O is scoped under `mur_home`.
 ///
 /// When `polish=true` this function will make an LLM call (Task 3).
@@ -123,8 +223,19 @@ pub async fn cmd_from_pattern_with_home(
     let mut manifest = pattern_to_skill(&pattern, polish)?;
 
     if polish {
-        // Task 3 fills this in. Until then, surface clearly that --polish is a no-op.
-        eprintln!("note: --polish is not yet implemented — proceeding without polish");
+        use mur_common::config::Config;
+        use crate::conversations::backend::factory;
+
+        let cfg_path = mur_home.join("config.yaml");
+        let cfg = Config::load_or_default(&cfg_path);
+        let backend = factory::build_for_stage(&cfg.conversations.ask.synthesize_backend(), "skill.from-pattern")
+            .context("build LLM backend for polish")?;
+        polish_via_llm(&mut manifest, &pattern, backend.as_ref())
+            .await
+            .context("polish failed — re-run without --polish to install the unpolished skill")?;
+        // Polish mutated the manifest — re-validate before write.
+        mur_common::skill::validate(&manifest)
+            .context("polished skill manifest failed schema validation")?;
     }
 
     // Scan the (possibly-polished) manifest. Pattern-promoted skills always
