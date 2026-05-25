@@ -1575,8 +1575,17 @@ mod skill_card_tests {
         };
         let yaml = serde_yaml_ng::to_string(&entry).unwrap();
         assert!(yaml.contains("name: minimal"));
-        assert!(!yaml.contains("version:"), "empty version must be skipped: {yaml}");
-        assert!(!yaml.contains("publisher:"), "empty publisher must be skipped: {yaml}");
-        assert!(!yaml.contains("abstract:"), "empty abstract must be skipped: {yaml}");
+        assert!(
+            !yaml.contains("version:"),
+            "empty version must be skipped: {yaml}"
+        );
+        assert!(
+            !yaml.contains("publisher:"),
+            "empty publisher must be skipped: {yaml}"
+        );
+        assert!(
+            !yaml.contains("abstract:"),
+            "empty abstract must be skipped: {yaml}"
+        );
     }
 }

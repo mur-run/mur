@@ -28,8 +28,7 @@ impl SkillsGetHandler {
 #[async_trait]
 impl MethodHandler for SkillsGetHandler {
     async fn handle(&self, params: Option<Value>) -> Result<Value, HandlerError> {
-        let params = params
-            .ok_or_else(|| HandlerError::InvalidParams("missing params".into()))?;
+        let params = params.ok_or_else(|| HandlerError::InvalidParams("missing params".into()))?;
 
         let skill_name = params
             .get("skill")

@@ -4,8 +4,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::path::Path;
 
 use mur_common::skill::{
-    SkillLock, SkillManifest, TrustLevel, content_hash_for_trust, content_sha256,
-    global_skill_dir, lockfile, read_from_dir, scan::scan_skill, write_to_dir,
+    SkillLock, SkillManifest, TrustLevel, content_hash_for_trust, content_sha256, global_skill_dir,
+    lockfile, read_from_dir, scan::scan_skill, write_to_dir,
 };
 use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
 
@@ -18,14 +18,10 @@ pub fn cmd_install(home: &Path, registry_url: &str, source: &str) -> Result<()> 
     // M4a: agent://<agent-name>/<skill-name> — peer transfer pull.
     if let Some(rest) = source.strip_prefix("agent://") {
         let (agent_name, skill_name) = rest.split_once('/').ok_or_else(|| {
-            anyhow!(
-                "invalid agent:// URL '{source}' — expected agent://<agent-name>/<skill-name>"
-            )
+            anyhow!("invalid agent:// URL '{source}' — expected agent://<agent-name>/<skill-name>")
         })?;
         if agent_name.is_empty() || skill_name.is_empty() {
-            bail!(
-                "invalid agent:// URL '{source}' — agent name and skill name must be non-empty"
-            );
+            bail!("invalid agent:// URL '{source}' — agent name and skill name must be non-empty");
         }
         return install_from_agent(home, agent_name, skill_name);
     }
@@ -125,11 +121,10 @@ fn install_from_agent(home: &Path, agent_name: &str, skill_name: &str) -> Result
 
     // 2. Pull — read the skill directly from the shared local store.
     let source_dir = global_skill_dir(home, skill_name);
-    let mut manifest: SkillManifest = read_from_dir(&source_dir).map_err(|e| {
-        anyhow!("pull from agent://{agent_name}/{skill_name} failed: {e}")
-    })?;
-    let received_hash = content_hash_for_trust(&manifest)
-        .map_err(|e| anyhow!("hash source manifest: {e}"))?;
+    let mut manifest: SkillManifest = read_from_dir(&source_dir)
+        .map_err(|e| anyhow!("pull from agent://{agent_name}/{skill_name} failed: {e}"))?;
+    let received_hash =
+        content_hash_for_trust(&manifest).map_err(|e| anyhow!("hash source manifest: {e}"))?;
 
     // 3. Verify — content-based trust.
     let trust_level = resolve_agent_install_trust(home, &manifest, &received_hash)?;
@@ -152,8 +147,8 @@ fn install_from_agent(home: &Path, agent_name: &str, skill_name: &str) -> Result
     write_to_dir(&dir, &manifest).context("write installed skill")?;
 
     // 7. Record in trust store.
-    let trust_key = content_hash_for_trust(&manifest)
-        .map_err(|e| anyhow!("hash trust key: {e}"))?;
+    let trust_key =
+        content_hash_for_trust(&manifest).map_err(|e| anyhow!("hash trust key: {e}"))?;
     let mut trust = SkillTrustStore::load(home).map_err(|e| anyhow!("load trust: {e}"))?;
     trust.insert(
         trust_key,
@@ -245,8 +240,8 @@ fn register_in_profile(home: &Path, agent_name: &str, m: &SkillManifest) -> Resu
     let profile_path = home.join("agents").join(agent_name).join("profile.yaml");
     let text = std::fs::read_to_string(&profile_path)
         .with_context(|| format!("read {}", profile_path.display()))?;
-    let mut profile: mur_common::AgentProfile =
-        serde_yaml_ng::from_str(&text).with_context(|| format!("parse {}", profile_path.display()))?;
+    let mut profile: mur_common::AgentProfile = serde_yaml_ng::from_str(&text)
+        .with_context(|| format!("parse {}", profile_path.display()))?;
 
     let entry = SkillCardEntry {
         name: m.name.clone(),
@@ -346,8 +341,7 @@ content:
             ("agent://emptyskill/", "non-empty"),
         ];
         for (input, expected_substr) in cases {
-            let err = cmd_install(home.path(), "https://example.com/registry", input)
-                .unwrap_err();
+            let err = cmd_install(home.path(), "https://example.com/registry", input).unwrap_err();
             let msg = err.to_string();
             assert!(
                 msg.contains(expected_substr),
