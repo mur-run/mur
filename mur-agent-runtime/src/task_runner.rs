@@ -1,6 +1,7 @@
 //! Task state machine and orchestration (§8.3).
 //! P0a only implements `run_sync` fully; streaming is P0b.
 
+use crate::hooks::{HookChain, HookCtx, PromptView};
 use crate::llm::{LlmClient, LlmMessage, LlmRequest};
 use crate::skills::RuntimeSkills;
 use crate::skills::injector::inject_layer2;
@@ -12,6 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -45,6 +47,10 @@ pub struct TaskRunner {
     skills_cfg: SkillsConfig,
     recently_fired: Mutex<VecDeque<(u64, String)>>,
     turn_counter: AtomicU64,
+    cumulative_input_tokens: AtomicU64,
+    hook_chain: Option<Arc<HookChain>>,
+    hook_ctx: Option<HookCtx>,
+    hook_cancel: Option<CancellationToken>,
 }
 
 impl TaskRunner {
@@ -72,6 +78,10 @@ impl TaskRunner {
             skills_cfg: SkillsConfig::default(),
             recently_fired: Mutex::new(VecDeque::new()),
             turn_counter: AtomicU64::new(0),
+            cumulative_input_tokens: AtomicU64::new(0),
+            hook_chain: None,
+            hook_ctx: None,
+            hook_cancel: None,
         }
     }
 
@@ -92,6 +102,18 @@ impl TaskRunner {
 
     pub fn with_skills_cfg(mut self, cfg: SkillsConfig) -> Self {
         self.skills_cfg = cfg;
+        self
+    }
+
+    pub fn with_hook_chain(
+        mut self,
+        chain: Arc<HookChain>,
+        ctx: HookCtx,
+        cancel: CancellationToken,
+    ) -> Self {
+        self.hook_chain = Some(chain);
+        self.hook_ctx = Some(ctx);
+        self.hook_cancel = Some(cancel);
         self
     }
 
@@ -119,8 +141,20 @@ impl TaskRunner {
                 .collect()
         };
 
-        // M2 stub for context fill: 0.0 at boot. M3 wires honest token counting.
-        let ctx_fill: f64 = 0.0;
+        let ctx_fill = {
+            let cumulative = self.cumulative_input_tokens.load(Ordering::Relaxed);
+            let max = self
+                .skills_cfg
+                .adaptive
+                .as_ref()
+                .map(|a| a.model_max_context_tokens)
+                .unwrap_or(200_000);
+            if max == 0 {
+                0.0
+            } else {
+                (cumulative as f64 / max as f64).clamp(0.0, 1.0)
+            }
+        };
         let injection = inject_layer2(&skills.loaded, &self.skills_cfg, ctx_fill, &recently);
 
         let triggered = match_prompt(&skills.triggers, user_prompt);
@@ -255,7 +289,36 @@ impl TaskRunner {
         let prompt = text_of(input);
         let mut messages: Vec<LlmMessage> = Vec::new();
 
-        let (system, _fired) = self.assemble_system_prompt(&prompt);
+        let (system, fired) = self.assemble_system_prompt(&prompt);
+
+        // Apply hook chain on_prompt_submit if wired.
+        let system = if let (Some(chain), Some(ctx), Some(cancel)) =
+            (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
+        {
+            if cancel.is_cancelled() {
+                return error_message("cancelled before prompt submit");
+            }
+            let mut turn_ctx = ctx.clone();
+            turn_ctx.turn_id = self.turn_counter.load(Ordering::Relaxed);
+            let view = PromptView {
+                system: Some(system),
+                messages: vec![serde_json::json!({"role": input.role, "content": prompt})],
+            };
+            let patch = chain.on_prompt_submit(&turn_ctx, &view, cancel).await;
+            {
+                let mut s = view.system.unwrap_or_default();
+                if let Some(prefix) = patch.set_system_prefix {
+                    s = format!("{prefix}\n{s}");
+                }
+                if let Some(suffix) = patch.set_system_suffix {
+                    s = format!("{s}\n{suffix}");
+                }
+                s
+            }
+        } else {
+            system
+        };
+
         if !system.is_empty() {
             messages.push(LlmMessage {
                 role: "system".into(),
@@ -276,6 +339,9 @@ impl TaskRunner {
         match client.generate(req).await {
             Ok(resp) => {
                 let latency_ms = start.elapsed().as_millis() as u64;
+                let _prev = self
+                    .cumulative_input_tokens
+                    .fetch_add(resp.input_tokens, Ordering::Relaxed);
                 if let Some(tx) = &self.telemetry {
                     let _ = tx
                         .send(Event::LlmCall {
@@ -287,6 +353,7 @@ impl TaskRunner {
                             latency_ms,
                             cost_usd: 0.0,
                             provider: "ollama".into(),
+                            fired_skills: fired,
                         })
                         .await;
                 }
@@ -351,6 +418,15 @@ impl AsyncTaskHandle {
                 usage: None,
             })
         })
+    }
+}
+
+fn error_message(text: &str) -> Message {
+    Message {
+        role: "agent".into(),
+        parts: vec![MessagePart::Text {
+            text: text.to_string(),
+        }],
     }
 }
 

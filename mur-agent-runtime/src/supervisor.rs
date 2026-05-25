@@ -300,6 +300,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                     profile.system_prompt.clone(),
                     runtime_skills.clone(),
                     skills_cfg.clone(),
+                    Some(Arc::new(hook_chain.clone())),
+                    Some(hook_ctx.clone()),
+                    Some(hook_cancel.clone()),
                 );
                 (r, Some(client))
             }
@@ -333,6 +336,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                             profile.system_prompt.clone(),
                             runtime_skills.clone(),
                             skills_cfg.clone(),
+                            Some(Arc::new(hook_chain.clone())),
+                            Some(hook_ctx.clone()),
+                            Some(hook_cancel.clone()),
                         );
                         (r, Some(client))
                     }
@@ -367,6 +373,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                             profile.system_prompt.clone(),
                             runtime_skills.clone(),
                             skills_cfg.clone(),
+                            Some(Arc::new(hook_chain.clone())),
+                            Some(hook_ctx.clone()),
+                            Some(hook_cancel.clone()),
                         );
                         (r, Some(client))
                     }

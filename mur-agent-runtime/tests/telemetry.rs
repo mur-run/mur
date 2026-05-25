@@ -19,6 +19,7 @@ async fn llm_call_event_appends_jsonl_and_emits_notification() {
             latency_ms: 100,
             cost_usd: 0.0,
             provider: "ollama".into(),
+            fired_skills: vec![],
         })
         .await;
     writer.flush().await;
