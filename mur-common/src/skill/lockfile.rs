@@ -85,8 +85,7 @@ mod tests {
             installed_at: "2026-05-25T00:00:00Z".into(),
         };
         l.locked.insert("web-browsing".into(), "1.2.0".into());
-        l.locked
-            .insert("data-table-export".into(), "0.6.1".into());
+        l.locked.insert("data-table-export".into(), "0.6.1".into());
         l.write(d.path()).unwrap();
         let back = SkillLock::read(d.path()).unwrap();
         assert_eq!(back.locked["web-browsing"], "1.2.0");
@@ -96,11 +95,7 @@ mod tests {
     #[test]
     fn corrupt_yaml_returns_parse_err() {
         let d = tempdir().unwrap();
-        fs::write(
-            SkillLock::path(d.path()),
-            "this is :: not yaml :: at all",
-        )
-        .unwrap();
+        fs::write(SkillLock::path(d.path()), "this is :: not yaml :: at all").unwrap();
         assert!(matches!(
             SkillLock::read(d.path()),
             Err(LockfileError::Parse(_))

@@ -1,7 +1,7 @@
 //! `mur skill deps <name>` — print the resolved dependency tree from `skill.lock`.
 
 use anyhow::{Context, Result, bail};
-use mur_common::skill::{SkillLock, Requirement, global_skill_dir, local::load_installed};
+use mur_common::skill::{Requirement, SkillLock, global_skill_dir, local::load_installed};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;

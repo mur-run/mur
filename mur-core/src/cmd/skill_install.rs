@@ -3,10 +3,10 @@
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
-use mur_common::skill::{
-    content_sha256, global_skill_dir, scan::scan_skill, write_to_dir, TrustLevel,
-};
 use mur_common::skill::{SkillLock, lockfile};
+use mur_common::skill::{
+    TrustLevel, content_sha256, global_skill_dir, scan::scan_skill, write_to_dir,
+};
 use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
 
 use crate::cmd::agent::resolve_mur_home;
@@ -17,8 +17,8 @@ use crate::cmd::skill_resolver::{self, ResolveSource, ResolvedNode, ResolverInpu
 pub fn cmd_install(home: &Path, registry_url: &str, source: &str) -> Result<()> {
     let src_path = Path::new(source);
 
-    let (reg_dir, _idx) = skill_registry::fetch_and_load(home, registry_url)
-        .context("fetch registry")?;
+    let (reg_dir, _idx) =
+        skill_registry::fetch_and_load(home, registry_url).context("fetch registry")?;
 
     let input = ResolverInput {
         mur_home: home.to_path_buf(),
