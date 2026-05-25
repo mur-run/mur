@@ -359,6 +359,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 // M5a: read-only doctor. --fix and --apply are stubs.
                 cmd::skill_doctor::cmd_doctor(&names, &check, json, strict, fix, apply)?
             }
+            crate::cli::SkillAction::Sweep { name, dry_run } => {
+                cmd::skill_sweep::cmd_sweep(name.as_deref(), dry_run)?
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,

@@ -155,4 +155,12 @@ pub enum SkillAction {
         #[arg(long)]
         apply: bool,
     },
+    /// Run lifecycle sweep across installed skills (M5b).
+    Sweep {
+        /// Skill filter (exact name or glob, e.g. 'research-*').
+        name: Option<String>,
+        /// Preview transitions without writing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
