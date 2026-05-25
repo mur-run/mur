@@ -97,14 +97,45 @@ pub fn cmd_remove(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_search(_query: &str, _local: bool) -> Result<()> {
-    anyhow::bail!("`mur skill search` not yet implemented (Task 3)")
+pub fn cmd_search(query: &str, local_only: bool) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let local_results = local::search_installed(&home, query)
+        .context("search installed")?;
+
+    if local_results.is_empty() {
+        println!("(no matching installed skills found)");
+        if !local_only {
+            eprintln!("hint: use `mur skill install <name>` to install from the registry");
+        }
+        return Ok(());
+    }
+    for (name, m) in &local_results {
+        let level = local::get_trust_level(&home, name)
+            .unwrap_or(mur_common::skill::TrustLevel::Sandboxed);
+        println!("{name:25} {:12?} {}", level, m.description);
+    }
+    Ok(())
 }
 
 // --- Stubs: M1b audit + trust (Tasks 5-6) ---
 
-pub fn cmd_info(_name: &str, _full: bool) -> Result<()> {
-    anyhow::bail!("`mur skill info` not yet implemented (Task 5)")
+pub fn cmd_info(name: &str, full: bool) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let m = local::load_installed(&home, name)
+        .map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let level = local::get_trust_level(&home, name)
+        .unwrap_or(mur_common::skill::TrustLevel::Sandboxed);
+    println!("Name:        {}", m.name);
+    println!("Version:     {}", m.version);
+    println!("Publisher:   {}", m.publisher);
+    println!("Description: {}", m.description);
+    println!("Category:    {:?}", m.category);
+    println!("Tags:        {}", m.tags.join(", "));
+    println!("Trust Level: {level:?}");
+    if full {
+        println!("\n--- Abstract ---\n{}", m.content.r#abstract);
+    }
+    Ok(())
 }
 
 pub fn cmd_audit(_name: &str) -> Result<()> {
