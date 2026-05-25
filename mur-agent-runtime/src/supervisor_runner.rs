@@ -1,13 +1,23 @@
-//! Extracted helper: build a TaskRunner with skills + hook chain wired in.
-//! Keeps supervisor.rs under 800 lines per CLAUDE.md ceiling.
+//! Extracted helpers for supervisor.rs — keeps it under 800 lines per CLAUDE.md §4.
 
 use std::sync::Arc;
 
-use crate::hooks::{HookChain, HookCtx};
+use anyhow::Context;
+use tracing::warn;
+
+use crate::companion::clock::SystemClock;
+use crate::hooks::{HookChain, HookCtx, TelemetryEmitter};
 use crate::llm::LlmClient;
+use crate::llm::{anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient};
+use crate::profile::Profile;
+use crate::sandbox::reqwest_guard::HostGuard;
 use crate::skills::RuntimeSkills;
 use crate::task_runner::TaskRunner;
+use crate::telemetry_writer::{TelemetryWriter, WriterTelemetryEmitter};
+use mur_common::agent::NetworkOutboundMode;
 use mur_common::config::SkillsConfig;
+use mur_common::model::ModelEntry;
+use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 pub fn build_runner(
@@ -27,4 +37,224 @@ pub fn build_runner(
         runner = runner.with_hook_chain(chain, ctx, cancel);
     }
     Arc::new(runner)
+}
+
+/// Build the LLM-backed TaskRunner for a resolved model entry.
+/// Returns (runner, optional LLM client for companion sharing).
+pub async fn build_provider_runner(
+    force_echo: bool,
+    profile: &Profile,
+    runtime_skills: Arc<RuntimeSkills>,
+    skills_cfg: SkillsConfig,
+    hook_chain: &HookChain,
+    hook_ctx: &HookCtx,
+    hook_cancel: &CancellationToken,
+) -> anyhow::Result<(Arc<TaskRunner>, Option<Arc<dyn LlmClient>>)> {
+    if force_echo {
+        return Ok((Arc::new(TaskRunner::new_stub_echo()), None));
+    }
+
+    let resolved = crate::supervisor::resolve_model_entry(&profile.inner);
+    if let Err(ref e) = resolved {
+        warn!(error = %e, "model resolution failed; will fall back to echo");
+    }
+    let entry = resolved.unwrap_or_else(|_| ModelEntry {
+        provider: "echo".into(),
+        model: String::new(),
+        base_url: None,
+        secret: None,
+        capabilities: vec![],
+        params: serde_json::Value::Null,
+    });
+
+    let secret_value: Option<secrecy::SecretString> = match &entry.secret {
+        Some(s) => match s.resolve().await {
+            Ok(v) => Some(v),
+            Err(e) => {
+                warn!(error = %e, "secret resolution failed; falling back to echo");
+                None
+            }
+        },
+        None => None,
+    };
+
+    let outbound = &profile.inner.entitlements.network.outbound;
+    let host_guard = match outbound.mode {
+        NetworkOutboundMode::Unrestricted => HostGuard::unrestricted(),
+        NetworkOutboundMode::Restricted => HostGuard::restricted(outbound.allow_hosts.clone()),
+        NetworkOutboundMode::Off => HostGuard::off(),
+    };
+    let guarded_http = reqwest::ClientBuilder::new()
+        .dns_resolver(std::sync::Arc::new(host_guard))
+        .build()
+        .context("failed to build guarded HTTP client")?;
+
+    let build = |client: Arc<dyn LlmClient>| {
+        let r = crate::supervisor_runner::build_runner(
+            client.clone(),
+            profile.system_prompt.clone(),
+            runtime_skills.clone(),
+            skills_cfg.clone(),
+            Some(Arc::new(hook_chain.clone())),
+            Some(hook_ctx.clone()),
+            Some(hook_cancel.clone()),
+        );
+        (r, Some(client))
+    };
+
+    Ok(match entry.provider.as_str() {
+        "ollama" => {
+            let base = entry.base_url.clone().unwrap_or_else(|| {
+                std::env::var("OLLAMA_BASE_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
+            });
+            let client = Arc::new(OllamaClient::with_http_client(
+                base,
+                entry.model,
+                guarded_http,
+            ));
+            build(client)
+        }
+        "anthropic" => {
+            let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref() {
+                Ok(Arc::new(AnthropicClient::from_secret_string_with_http(
+                    key,
+                    entry.model.clone(),
+                    entry.base_url.clone(),
+                    guarded_http,
+                )))
+            } else {
+                AnthropicClient::from_agent_credentials_with_http(
+                    &profile.inner.name,
+                    entry.model.clone(),
+                    guarded_http,
+                )
+                .await
+                .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
+            };
+            match built {
+                Ok(client) => build(client),
+                Err(e) => {
+                    warn!(error = %e, "anthropic client unavailable; falling back to echo");
+                    (Arc::new(TaskRunner::new_stub_echo()), None)
+                }
+            }
+        }
+        "openai" => {
+            let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref() {
+                Ok(Arc::new(OpenAiClient::from_secret_string_with_http(
+                    key,
+                    entry.model.clone(),
+                    entry.base_url.clone(),
+                    guarded_http,
+                )))
+            } else {
+                OpenAiClient::from_agent_credentials_with_http(
+                    &profile.inner.name,
+                    entry.model.clone(),
+                    guarded_http,
+                )
+                .await
+                .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
+            };
+            match built {
+                Ok(client) => build(client),
+                Err(e) => {
+                    warn!(error = %e, "openai client unavailable; falling back to echo");
+                    (Arc::new(TaskRunner::new_stub_echo()), None)
+                }
+            }
+        }
+        other => {
+            warn!(provider = %other, "no LLM client implemented; falling back to echo");
+            (Arc::new(TaskRunner::new_stub_echo()), None)
+        }
+    })
+}
+
+/// Telemetry writer + notification routing + hook chain + skills loaded once at boot.
+pub(crate) async fn prepare_runtime(
+    agent_home: &std::path::Path,
+    profile: &Profile,
+    socket_enabled: bool,
+) -> anyhow::Result<(
+    TelemetryWriter,
+    tokio::sync::mpsc::Receiver<serde_json::Value>,
+    tokio::sync::mpsc::Receiver<serde_json::Value>,
+    HookChain,
+    HookCtx,
+    CancellationToken,
+    Arc<RuntimeSkills>,
+    SkillsConfig,
+)> {
+    let (writer, notif_rx) = TelemetryWriter::new(
+        agent_home.join("telemetry"),
+        profile.inner.name.clone(),
+        profile.inner.id.clone(),
+    )
+    .await?;
+
+    // Notification routing: Event → serde_json::Value channels for transports.
+    let (stdio_notif_tx, stdio_notif_rx) = tokio::sync::mpsc::channel(256);
+    let (sock_notif_tx, sock_notif_rx) = tokio::sync::mpsc::channel(256);
+    tokio::spawn(async move {
+        let mut rx = notif_rx;
+        while let Some(n) = rx.recv().await {
+            let v = serde_json::to_value(&n).unwrap_or_default();
+            if socket_enabled {
+                let _ = sock_notif_tx.send(v).await;
+            } else {
+                let _ = stdio_notif_tx.send(v).await;
+            }
+        }
+    });
+
+    let telemetry_emitter: Arc<dyn TelemetryEmitter> =
+        Arc::new(WriterTelemetryEmitter::new(writer.sender()));
+    let mur_home = std::env::var_os("MUR_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
+    let hook_chain = crate::hooks::builder::build_chain(&profile.inner, agent_home, &mur_home);
+    let mcp_server_binaries: Vec<std::path::PathBuf> = profile
+        .inner
+        .mcp_servers
+        .iter()
+        .filter_map(|s| {
+            s.command
+                .split_whitespace()
+                .next()
+                .map(std::path::PathBuf::from)
+        })
+        .collect();
+    let hook_ctx = HookCtx {
+        agent_name: profile.inner.name.clone(),
+        agent_uuid: profile.inner.id.clone(),
+        run_id: format!("supervisor-{}", uuid::Uuid::now_v7()),
+        clock: Arc::new(SystemClock),
+        telemetry: telemetry_emitter.clone(),
+        agent_home: agent_home.to_path_buf(),
+        turn_id: 0,
+        turn_flags: Vec::new(),
+        entitlements: profile.inner.entitlements.clone(),
+        mcp_server_binaries,
+    };
+    let hook_cancel = CancellationToken::new();
+    hook_chain
+        .on_startup(&hook_ctx, &profile.inner, &hook_cancel)
+        .await;
+
+    let skills_cfg = mur_common::config::Config::load_or_default(&mur_home).skills;
+    let loaded = mur_common::skill::loader::load_all(&mur_home, &profile.inner.name);
+    let runtime_skills = Arc::new(RuntimeSkills::build(loaded));
+
+    Ok((
+        writer,
+        stdio_notif_rx,
+        sock_notif_rx,
+        hook_chain,
+        hook_ctx,
+        hook_cancel,
+        runtime_skills,
+        skills_cfg,
+    ))
 }
