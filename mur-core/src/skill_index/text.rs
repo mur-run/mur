@@ -42,3 +42,78 @@ pub fn embed_manifest(m: &SkillManifest) -> String {
     }
     parts.join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mur_common::skill::manifest::{Content, Procedure, ProcedureStep, Trigger};
+    use mur_common::skill::types::TriggerKind;
+
+    fn make_manifest(name: &str, desc: &str, abstract_: &str) -> SkillManifest {
+        SkillManifest {
+            name: name.into(),
+            version: "1.0.0".into(),
+            publisher: "test".into(),
+            description: desc.into(),
+            category: mur_common::skill::types::Category::Context,
+            hosts: vec![],
+            content: Content {
+                r#abstract: abstract_.into(),
+                context: Some("context text".into()),
+                procedure: None,
+                command: None,
+            },
+            requires: vec![],
+            triggers: vec![],
+            tags: vec![],
+            priority: Default::default(),
+            evolution_log: vec![],
+            transfer_chain: vec![],
+        }
+    }
+
+    #[test]
+    fn embed_manifest_basic_fields() {
+        let m = make_manifest("web-search", "Search the web", "Use this to find information online");
+        let text = embed_manifest(&m);
+        assert!(text.starts_with("web-search\nSearch the web\nUse this to find information online"));
+    }
+
+    #[test]
+    fn embed_manifest_includes_keyword_triggers_sorted() {
+        let mut m = make_manifest("notify", "Send notifications", "Notify user");
+        m.triggers = vec![
+            Trigger { kind: TriggerKind::Keyword, pattern: Some("alert".into()) },
+            Trigger { kind: TriggerKind::Command, pattern: Some("/run-cmd".into()) },
+            Trigger { kind: TriggerKind::Keyword, pattern: Some("ping".into()) },
+        ];
+        let text = embed_manifest(&m);
+        // Only Keyword triggers, sorted: alert, ping
+        assert!(text.contains("alert ping"));
+        // Command trigger excluded
+        assert!(!text.contains("/run-cmd"));
+    }
+
+    #[test]
+    fn embed_manifest_includes_first_procedure_step() {
+        let mut m = make_manifest("deploy", "Deploy app", "Deployment workflow");
+        m.content.procedure = Some(Procedure {
+            variables: vec![],
+            steps: vec![
+                ProcedureStep { description: "Check connectivity".into(), tool: None },
+                ProcedureStep { description: "Push to server".into(), tool: Some("rsync".into()) },
+            ],
+        });
+        let text = embed_manifest(&m);
+        assert!(text.contains("Check connectivity"));
+        assert!(!text.contains("Push to server"));
+    }
+
+    #[test]
+    fn embed_manifest_no_triggers_no_procedure() {
+        let m = make_manifest("minimal", "Minimal skill", "Just the basics");
+        let text = embed_manifest(&m);
+        // Three parts: name, description, abstract — no trigger or procedure lines.
+        assert_eq!(text.matches('\n').count(), 2);
+    }
+}

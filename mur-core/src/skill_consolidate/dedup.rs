@@ -20,7 +20,7 @@ impl Default for DedupSource {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DuplicatePair {
     pub a: String,
     pub b: String,
@@ -31,7 +31,7 @@ pub struct DuplicatePair {
     pub source: DedupSource,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeeperReason {
     HigherLifecycle,

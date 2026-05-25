@@ -96,3 +96,110 @@ fn dedup_combined(report: &mut ConsolidateReport) {
         a.a.cmp(&b.a).then_with(|| a.b.cmp(&b.b))
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::dedup::{DedupSource, DuplicatePair, KeeperReason};
+    use super::super::ConsolidateReport;
+    use super::*;
+
+    fn duplicate(a: &str, b: &str, sim: f64, source: DedupSource) -> DuplicatePair {
+        DuplicatePair {
+            a: a.into(),
+            b: b.into(),
+            similarity: sim,
+            keeper: a.into(),
+            kept_reason: KeeperReason::Alphabetical,
+            source,
+        }
+    }
+
+    #[test]
+    fn dedup_combined_same_pair_becomes_both() {
+        let mut report = ConsolidateReport {
+            method: super::super::ConsolidateMethod::Both,
+            duplicates: vec![
+                duplicate("a", "b", 0.85, DedupSource::Jaccard),
+                duplicate("a", "b", 0.94, DedupSource::Vector),
+            ],
+            contradictions: vec![],
+            orphans: vec![],
+        };
+        dedup_combined(&mut report);
+        assert_eq!(report.duplicates.len(), 1);
+        let p = &report.duplicates[0];
+        assert_eq!(p.a, "a");
+        assert_eq!(p.b, "b");
+        assert_eq!(p.source, DedupSource::Both);
+        // Higher similarity (Vector: 0.94) wins.
+        assert!((p.similarity - 0.94).abs() < 0.001);
+    }
+
+    #[test]
+    fn dedup_combined_keeps_higher_similarity() {
+        let mut report = ConsolidateReport {
+            method: super::super::ConsolidateMethod::Both,
+            duplicates: vec![
+                duplicate("x", "y", 0.99, DedupSource::Jaccard),
+                duplicate("x", "y", 0.80, DedupSource::Vector),
+            ],
+            contradictions: vec![],
+            orphans: vec![],
+        };
+        dedup_combined(&mut report);
+        assert_eq!(report.duplicates.len(), 1);
+        assert!((report.duplicates[0].similarity - 0.99).abs() < 0.001);
+        assert_eq!(report.duplicates[0].source, DedupSource::Both);
+    }
+
+    #[test]
+    fn dedup_combined_disjoint_pairs_untouched() {
+        let mut report = ConsolidateReport {
+            method: super::super::ConsolidateMethod::Both,
+            duplicates: vec![
+                duplicate("a", "b", 0.90, DedupSource::Jaccard),
+                duplicate("c", "d", 0.93, DedupSource::Vector),
+            ],
+            contradictions: vec![],
+            orphans: vec![],
+        };
+        dedup_combined(&mut report);
+        assert_eq!(report.duplicates.len(), 2);
+        // Sorted by (a,b)
+        assert_eq!(report.duplicates[0].a, "a");
+        assert_eq!(report.duplicates[0].source, DedupSource::Jaccard);
+        assert_eq!(report.duplicates[1].a, "c");
+        assert_eq!(report.duplicates[1].source, DedupSource::Vector);
+    }
+
+    #[test]
+    fn dedup_combined_idempotent() {
+        let mut report = ConsolidateReport {
+            method: super::super::ConsolidateMethod::Both,
+            duplicates: vec![
+                duplicate("a", "b", 0.88, DedupSource::Jaccard),
+                duplicate("a", "b", 0.91, DedupSource::Vector),
+            ],
+            contradictions: vec![],
+            orphans: vec![],
+        };
+        dedup_combined(&mut report);
+        let first = report.duplicates.clone();
+        dedup_combined(&mut report);
+        assert_eq!(report.duplicates.len(), first.len());
+        assert_eq!(report.duplicates[0].source, first[0].source);
+        assert!((report.duplicates[0].similarity - first[0].similarity).abs() < 0.001);
+    }
+
+    #[test]
+    fn dedup_combined_empty_report() {
+        let mut report = ConsolidateReport {
+            method: super::super::ConsolidateMethod::Jaccard,
+            duplicates: vec![],
+            contradictions: vec![],
+            orphans: vec![],
+        };
+        dedup_combined(&mut report);
+        assert!(report.duplicates.is_empty());
+    }
+}
