@@ -175,12 +175,12 @@ pub async fn reindex_stats(mur_home: &Path, opts: ReindexOptions) -> Result<Rein
 }
 
 /// Simple glob matching for skill name filters.
-struct GlobPattern {
+pub struct GlobPattern {
     pattern: String,
 }
 
 impl GlobPattern {
-    fn matches(&self, name: &str) -> bool {
+    pub fn matches(&self, name: &str) -> bool {
         // Simple glob: * matches anything, ? matches single char
         let mut chars = self.pattern.chars().peekable();
         let name_chars: Vec<char> = name.chars().collect();
@@ -217,7 +217,7 @@ impl GlobPattern {
     }
 }
 
-fn glob_pattern(s: &str) -> GlobPattern {
+pub fn glob_pattern(s: &str) -> GlobPattern {
     GlobPattern {
         pattern: s.to_string(),
     }
