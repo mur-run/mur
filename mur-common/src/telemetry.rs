@@ -44,6 +44,8 @@ pub const MUR_TRIGGER_KIND: &str = "mur.trigger.kind";
 pub const MUR_A2A_PEER_PUBKEY: &str = "mur.a2a.peer.pubkey";
 pub const MUR_HOOK_NAME: &str = "mur.hook.name";
 pub const MUR_HOOK_PHASE: &str = "mur.hook.phase";
+pub const MUR_FIRED_SKILLS: &str = "mur.fired_skills";
+pub const MUR_EVENT_TYPE: &str = "mur.event.type";
 
 // ───── method names emitted on the JSON-RPC notification side-channel ─────
 pub const METHOD_LLM_CALL: &str = "telemetry/llm_call";
