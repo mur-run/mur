@@ -27,10 +27,12 @@ struct TelemetryLine {
     #[serde(rename = "message", default)]
     message: Option<String>,
     #[serde(rename = "kind", default)]
+    #[allow(dead_code)]
     kind: Option<String>,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SkillExecution {
     pub skill_name: String,
     pub task_id: String,
@@ -43,6 +45,7 @@ pub struct SkillExecution {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ToolCallRecord {
     pub tool: String,
     pub ok: bool,
@@ -81,34 +84,31 @@ pub fn read_skill_executions(
             if executions.len() >= max_entries {
                 break;
             }
-            if let Ok(tl) = serde_json::from_str::<TelemetryLine>(line) {
-                if tl.event_type.as_deref() == Some("telemetry/llm_call")
-                    && tl
-                        .fired_skills
-                        .as_ref()
-                        .map_or(false, |fs| fs.iter().any(|s| s == skill_name))
-                {
-                    executions.push(SkillExecution {
-                        skill_name: skill_name.to_string(),
-                        task_id: tl.task_id.unwrap_or_default(),
-                        model: tl.model.unwrap_or_default(),
-                        input_tokens: tl.input_tokens.unwrap_or(0),
-                        latency_ms: tl.latency_ms.unwrap_or(0),
-                        tool_calls: vec![],
-                        errors: vec![],
-                        was_successful: true,
-                    });
-                }
+            if let Ok(tl) = serde_json::from_str::<TelemetryLine>(line)
+                && tl.event_type.as_deref() == Some("telemetry/llm_call")
+                && tl
+                    .fired_skills
+                    .as_ref()
+                    .is_some_and(|fs| fs.iter().any(|s| s == skill_name))
+            {
+                executions.push(SkillExecution {
+                    skill_name: skill_name.to_string(),
+                    task_id: tl.task_id.unwrap_or_default(),
+                    model: tl.model.unwrap_or_default(),
+                    input_tokens: tl.input_tokens.unwrap_or(0),
+                    latency_ms: tl.latency_ms.unwrap_or(0),
+                    tool_calls: vec![],
+                    errors: vec![],
+                    was_successful: true,
+                });
             }
         }
     }
 
     // Second pass (forward): correlate tool calls + errors with task IDs.
     // Build a set of tracked task IDs from the found executions.
-    let tracked_tasks: std::collections::HashSet<String> = executions
-        .iter()
-        .map(|e| e.task_id.clone())
-        .collect();
+    let tracked_tasks: std::collections::HashSet<String> =
+        executions.iter().map(|e| e.task_id.clone()).collect();
 
     for entry in &files {
         let content = match std::fs::read_to_string(entry.path()) {
@@ -180,7 +180,9 @@ mod tests {
         write_telemetry(
             dir.path(),
             "2026-05-25.jsonl",
-            &[r#"{"mur.event.type":"telemetry/llm_call","mur.task.id":"t1","mur.fired_skills":["target-skill"],"gen_ai.usage.input_tokens":100,"gen_ai.request.model":"claude","latency_ms":1200}"#],
+            &[
+                r#"{"mur.event.type":"telemetry/llm_call","mur.task.id":"t1","mur.fired_skills":["target-skill"],"gen_ai.usage.input_tokens":100,"gen_ai.request.model":"claude","latency_ms":1200}"#,
+            ],
         );
         let result = read_skill_executions(dir.path(), "target-skill", 50).unwrap();
         assert_eq!(result.len(), 1);
@@ -195,7 +197,9 @@ mod tests {
         write_telemetry(
             dir.path(),
             "2026-05-25.jsonl",
-            &[r#"{"mur.event.type":"telemetry/llm_call","mur.task.id":"t1","mur.fired_skills":["other-skill"],"gen_ai.usage.input_tokens":50,"gen_ai.request.model":"claude","latency_ms":800}"#],
+            &[
+                r#"{"mur.event.type":"telemetry/llm_call","mur.task.id":"t1","mur.fired_skills":["other-skill"],"gen_ai.usage.input_tokens":50,"gen_ai.request.model":"claude","latency_ms":800}"#,
+            ],
         );
         let result = read_skill_executions(dir.path(), "target-skill", 50).unwrap();
         assert!(result.is_empty());
@@ -208,7 +212,11 @@ mod tests {
         for i in 1..=5 {
             lines.push(format!(r#"{{"mur.event.type":"telemetry/llm_call","mur.task.id":"t{i}","mur.fired_skills":["my-skill"],"gen_ai.usage.input_tokens":100,"gen_ai.request.model":"claude","latency_ms":1000}}"#));
         }
-        write_telemetry(dir.path(), "2026-05-25.jsonl", &lines.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        write_telemetry(
+            dir.path(),
+            "2026-05-25.jsonl",
+            &lines.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        );
         let result = read_skill_executions(dir.path(), "my-skill", 2).unwrap();
         assert_eq!(result.len(), 2);
     }

@@ -3,11 +3,11 @@
 //! Implements the closed loop: Create → Execute → Evaluate → Diagnose → Optimize → Repeat.
 
 use anyhow::{Context, Result};
+use mur_common::skill::scan::{ContentScanReport, scan_skill};
 use mur_common::skill::{
     EvolutionEvent, SkillManifest, global_skill_dir, parse_canonical, read_from_dir, validate,
     write_to_dir,
 };
-use mur_common::skill::scan::{ContentScanReport, scan_skill};
 
 use super::telemetry_reader::{SkillExecution, read_skill_executions};
 use crate::conversations::backend::{ChatBackend, ChatRequest};
@@ -165,10 +165,10 @@ pub async fn optimize_skill(
 
 fn bump_patch(version: &str) -> String {
     let parts: Vec<&str> = version.splitn(3, '.').collect();
-    if parts.len() == 3 {
-        if let Ok(patch) = parts[2].parse::<u32>() {
-            return format!("{}.{}.{}", parts[0], parts[1], patch + 1);
-        }
+    if parts.len() == 3
+        && let Ok(patch) = parts[2].parse::<u32>()
+    {
+        return format!("{}.{}.{}", parts[0], parts[1], patch + 1);
     }
     format!("{version}.1")
 }
@@ -183,6 +183,7 @@ fn score_executions(executions: &[SkillExecution]) -> f64 {
 
 // ─── Orchestrator ─────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub struct EvolutionResult {
     pub original_version: String,
     pub new_version: String,
@@ -249,7 +250,7 @@ pub async fn evolve_skill(
             for d in &diagnoses {
                 println!("  [{:?}] {} → {}", d.dimension, d.finding, d.suggested_fix);
             }
-            continue;
+            break;
         }
 
         let mut evolved = optimize_skill(&current, &diagnoses, llm).await?;
@@ -284,8 +285,7 @@ pub async fn evolve_skill(
             .context("write evolved skill")?;
 
         // Re-scan security.
-        let report: ContentScanReport =
-            scan_skill(&evolved).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let report: ContentScanReport = scan_skill(&evolved).map_err(|e| anyhow::anyhow!("{e}"))?;
         if report.has_blocking_findings() {
             eprintln!("warning: evolved skill has new security findings — staying Sandboxed");
         }
