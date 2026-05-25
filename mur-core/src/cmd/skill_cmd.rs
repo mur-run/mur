@@ -91,6 +91,18 @@ pub fn cmd_show(name: &str) -> Result<()> {
 pub fn cmd_remove(name: &str) -> Result<()> {
     let home = resolve_mur_home()?;
     local::remove_installed(&home, name).map_err(|e| anyhow!("failed to remove '{name}': {e}"))?;
+
+    // Best-effort: remove the skill's embedding from LanceDB.
+    let _ = tokio::runtime::Handle::try_current().map(|handle| {
+        handle.block_on(async {
+            let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+            let index_dir = home.join("lance");
+            if let Ok(store) = crate::store::vector::factory::get_vector_store(&cfg, &index_dir).await {
+                let _ = crate::skill_index::delete(name, &*store).await;
+            }
+        })
+    });
+
     println!("removed: {name}");
     Ok(())
 }
