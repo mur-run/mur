@@ -164,12 +164,12 @@ fn classify_outcome(turns: &[Turn]) -> Outcome {
         if let TurnKind::ToolResult { ok: false, .. } = &turns[i].kind {
             // Look ahead up to 2 turns for an Error
             for j in 1..=2 {
-                if let Some(turn) = turns.get(i + j) {
-                    if let TurnKind::Error(msg) = &turn.kind {
-                        return Outcome::Failure {
-                            reason: msg.clone(),
-                        };
-                    }
+                if let Some(TurnKind::Error(msg)) =
+                    turns.get(i + j).map(|t| &t.kind)
+                {
+                    return Outcome::Failure {
+                        reason: msg.clone(),
+                    };
                 }
             }
         }

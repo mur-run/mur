@@ -1,7 +1,7 @@
 //! Phase 2: parallel Success and Error analysts that transform trajectories into Patches.
 
 use crate::skill_gen::prompts::{ERROR_ANALYST_SYSTEM, SUCCESS_ANALYST_SYSTEM};
-use crate::skill_gen::trajectory::{Outcome, Trajectory, Turn, TurnKind};
+use crate::skill_gen::trajectory::{Outcome, Trajectory, TurnKind};
 use mur_common::error::LlmError;
 use mur_common::llm::LlmClient;
 use serde::{Deserialize, Serialize};
@@ -173,6 +173,7 @@ fn extract_patch_block(resp: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skill_gen::trajectory::Turn;
     use mur_common::error::LlmError;
     use std::collections::VecDeque;
     use std::sync::Mutex;

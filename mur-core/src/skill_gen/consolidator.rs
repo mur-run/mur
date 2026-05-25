@@ -72,7 +72,7 @@ fn mechanical_merge(patches: &[Patch]) -> MechanicalMerge {
     let (succ, err): (Vec<_>, Vec<_>) = patches
         .iter()
         .partition(|p| matches!(p.source, PatchSource::Success));
-    let ordered: Vec<&Patch> = succ.into_iter().chain(err.into_iter()).collect();
+    let ordered: Vec<&Patch> = succ.into_iter().chain(err).collect();
 
     for p in ordered {
         if let Some(h) = &p.abstract_hint {
