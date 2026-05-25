@@ -52,17 +52,6 @@ pub fn cmd_doctor(
     fix: bool,
     apply: bool,
 ) -> Result<()> {
-    if fix {
-        eprintln!(
-            "warning: --fix is accepted but not yet implemented (requires M5b). Showing findings only."
-        );
-    }
-    if apply {
-        eprintln!(
-            "warning: --apply requires --fix and M5b's repair engine. Showing findings only."
-        );
-    }
-
     let home = resolve_mur_home()?;
     let now = Utc::now();
     let installed_names: HashSet<String> = list_installed(&home)
@@ -137,6 +126,46 @@ pub fn cmd_doctor(
                 _ => {}
             }
         }
+    }
+
+    // ── Repair (M5b) ──
+    if fix {
+        let registry_url = std::env::var("MUR_SKILL_REGISTRY_URL")
+            .unwrap_or_else(|_| crate::cmd::skill_registry::DEFAULT_REGISTRY.to_string());
+        let repairs: Vec<Box<dyn crate::skill_repair::Repair>> = vec![
+            Box::new(crate::skill_repair::tool_availability::ToolAvailabilityRepair),
+            Box::new(crate::skill_repair::dep_freshness::DepFreshnessRepair),
+        ];
+        let repair_ctx = crate::skill_repair::RepairCtx {
+            home: &ctx.home,
+            registry_url: &registry_url,
+        };
+
+        // Confirmation prompt for destructive --apply (interactive only)
+        if apply {
+            let fixable = findings.iter().filter(|f| f.fixable).count();
+            if fixable > 0 {
+                use std::io::{self, IsTerminal, Write};
+                let is_tty = std::io::stdin().is_terminal();
+                if is_tty {
+                    print!(
+                        "About to repair {} fixable finding(s). Continue? [y/N] ",
+                        fixable
+                    );
+                    io::stdout().flush().ok();
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input).ok();
+                    if !input.trim().eq_ignore_ascii_case("y") {
+                        println!("Aborted.");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        let report = crate::skill_repair::run_repairs(&findings, apply, &repair_ctx, &repairs);
+        crate::skill_repair::print_repair_summary(&report, apply);
+        return Ok(());
     }
 
     let fmt = if json {
