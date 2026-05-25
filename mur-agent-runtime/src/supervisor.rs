@@ -3,13 +3,9 @@
 
 use anyhow::Context;
 
-use crate::companion::clock::SystemClock;
 use crate::entitlements::detect_warnings;
-use crate::hooks::{HookCtx, ShutdownReason, TelemetryEmitter};
+use crate::hooks::ShutdownReason;
 use crate::idle_scheduler::IdleScheduler;
-use crate::llm::{
-    LlmClient, anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient,
-};
 use crate::lock_file::{LockHandle, write_lock};
 use crate::multi_call::{DispatchError, extract_profile_name, verify_name_match};
 use crate::profile::Profile;
@@ -19,18 +15,16 @@ use crate::protocol::methods::{
     message_send::MessageSendHandler,
     tasks::{TasksCancelHandler, TasksGetHandler, TasksListHandler},
 };
-use crate::sandbox::reqwest_guard::HostGuard;
 use crate::scheduler::CronScheduler;
 #[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
 use crate::task_runner::TaskRunner;
-use crate::telemetry_writer::{Event, TelemetryWriter, WriterTelemetryEmitter};
+use crate::telemetry_writer::{Event, TelemetryWriter};
 use crate::transport::stdio::serve_stdio;
 use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
 use crate::transport::unix_socket::serve_unix;
 use crate::transport::webhook;
-use mur_common::agent::NetworkOutboundMode;
 use mur_common::identity::AgentIdentity;
 use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
 use std::path::PathBuf;
@@ -163,72 +157,24 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         }
     }
 
-    // 4. Spawn telemetry writer
-    let (writer, notif_rx) = TelemetryWriter::new(
-        agent_home.join("telemetry"),
-        profile.inner.name.clone(),
-        profile.inner.id.clone(),
-    )
-    .await?;
-
-    // 4a. Build the A1 config-driven hook chain.
-    //     Mandatory: TelemetryHook → B0SafetyHook (always).
-    //     Optional: LedgerHook / CompanionVoiceHook / VoiceInputHook
-    //     controlled by profile.hooks + auto-wire from feature flags.
-    let telemetry_emitter: Arc<dyn TelemetryEmitter> =
-        Arc::new(WriterTelemetryEmitter::new(writer.sender()));
-    let mur_home = std::env::var_os("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
-    let hook_chain = crate::hooks::builder::build_chain(&profile.inner, &agent_home, &mur_home);
-    // Resolve MCP server binary paths from `profile.mcp_servers[*].command`.
-    // Each `command` is a shell command line; the first whitespace-separated
-    // token is treated as the binary path. M7.7 (rule 11) reads these in
-    // `B0SafetyHook::on_startup` to verify codesign / signtool signatures.
-    let mcp_server_binaries: Vec<std::path::PathBuf> = profile
-        .inner
-        .mcp_servers
-        .iter()
-        .filter_map(|s| {
-            s.command
-                .split_whitespace()
-                .next()
-                .map(std::path::PathBuf::from)
-        })
-        .collect();
-    let hook_ctx = HookCtx {
-        agent_name: profile.inner.name.clone(),
-        agent_uuid: profile.inner.id.clone(),
-        run_id: format!("supervisor-{}", uuid::Uuid::now_v7()),
-        clock: Arc::new(SystemClock),
-        telemetry: telemetry_emitter.clone(),
-        agent_home: agent_home.clone(),
-        // Turn lifecycle wiring (incrementing turn_id per request,
-        // flowing turn_flags from on_prompt_submit through pre_tool_use)
-        // lands with the gate-hook integration in a follow-up milestone.
-        turn_id: 0,
-        turn_flags: Vec::new(),
-        // Snapshot of the agent's entitlements at supervisor start.
-        // M7.2 (B0 rule 5) reads this from `pre_tool_use` to gate
-        // process-spawn calls. Mutating entitlements at runtime is out
-        // of scope: the supervisor restarts on profile.yaml change.
-        entitlements: profile.inner.entitlements.clone(),
-        mcp_server_binaries,
-    };
-    let hook_cancel = tokio_util::sync::CancellationToken::new();
-    hook_chain
-        .on_startup(&hook_ctx, &profile.inner, &hook_cancel)
-        .await;
+    // 4–4a. Telemetry writer, hook chain, skills — extracted to prepare_runtime.
+    let socket_enabled = profile.inner.transport.socket.enabled
+        && profile.inner.transport.socket.bind.starts_with("unix://");
+    let (
+        writer,
+        stdio_notif_rx,
+        sock_notif_rx,
+        hook_chain,
+        hook_ctx,
+        hook_cancel,
+        runtime_skills,
+        skills_cfg,
+    ) = crate::supervisor_runner::prepare_runtime(&agent_home, &profile, socket_enabled).await?;
 
     // 5. Acquire running.lock
     let lock_path = agent_home.join("running.lock");
     let _lock_handle =
         LockHandle::acquire(&lock_path).map_err(|e| anyhow::anyhow!("already running ({e})"))?;
-
-    // M2: load skills once at boot
-    let skills_cfg = mur_common::config::Config::load_or_default(&mur_home).skills;
-    let loaded = mur_common::skill::loader::load_all(&mur_home, &profile.inner.name);
-    let runtime_skills = Arc::new(crate::skills::RuntimeSkills::build(loaded));
 
     // 6. Build dispatcher (shared Arc so multiple transports can read it)
     let profile_arc = Arc::new(profile.clone());
@@ -239,158 +185,20 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let force_echo = std::env::var_os("MUR_AGENT_FORCE_ECHO").is_some();
     // Track C1 (M-c1.0.2): refuse to construct an LLM client when the profile
     // declares `entitlements.llm.mode = off` — i.e. the agent is a bridge.
-    // Bridges relay chat-platform traffic to/from the A2A bus and must not
-    // dial a provider. The gate fails closed.
     crate::llm::build_client(&profile.inner)
         .map_err(|e| anyhow::anyhow!("supervisor refusing LLM construction: {e}"))?;
     // `llm_for_companion` carries the real LLM client (None when echo/stub) so
     // the companion subsystem can share the same provider without a second dial.
-    let (runner, llm_for_companion): (_, Option<Arc<dyn LlmClient>>) = if force_echo {
-        (Arc::new(TaskRunner::new_stub_echo()), None)
-    } else {
-        let resolved = resolve_model_entry(&profile.inner);
-        if let Err(ref e) = resolved {
-            tracing::warn!(error = %e, "model resolution failed; will fall back to echo");
-        }
-        let entry = resolved.unwrap_or_else(|_| mur_common::model::ModelEntry {
-            provider: "echo".into(),
-            model: String::new(),
-            base_url: None,
-            secret: None,
-            capabilities: vec![],
-            params: serde_json::Value::Null,
-        });
-        let secret_value: Option<secrecy::SecretString> = match &entry.secret {
-            Some(s) => match s.resolve().await {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    tracing::warn!(error = %e, "secret resolution failed; falling back to echo");
-                    None
-                }
-            },
-            None => None,
-        };
-
-        // B1 HostGuard: build a guarded reqwest::Client whose DNS resolver
-        // enforces the outbound host allowlist before the OS resolver is called.
-        let outbound = &profile.inner.entitlements.network.outbound;
-        let host_guard = match outbound.mode {
-            NetworkOutboundMode::Unrestricted => HostGuard::unrestricted(),
-            NetworkOutboundMode::Restricted => HostGuard::restricted(outbound.allow_hosts.clone()),
-            NetworkOutboundMode::Off => HostGuard::off(),
-        };
-        let guarded_http = reqwest::ClientBuilder::new()
-            .dns_resolver(std::sync::Arc::new(host_guard))
-            .build()
-            .context("failed to build guarded HTTP client")?;
-
-        match entry.provider.as_str() {
-            "ollama" => {
-                let base = entry.base_url.clone().unwrap_or_else(|| {
-                    std::env::var("OLLAMA_BASE_URL")
-                        .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
-                });
-                let client: Arc<dyn LlmClient> = Arc::new(OllamaClient::with_http_client(
-                    base,
-                    entry.model,
-                    guarded_http,
-                ));
-                let r = crate::supervisor_runner::build_runner(
-                    client.clone(),
-                    profile.system_prompt.clone(),
-                    runtime_skills.clone(),
-                    skills_cfg.clone(),
-                    Some(Arc::new(hook_chain.clone())),
-                    Some(hook_ctx.clone()),
-                    Some(hook_cancel.clone()),
-                );
-                (r, Some(client))
-            }
-            "anthropic" => {
-                // Precedence: registry SecretRef → per-agent OS keychain entry
-                // → ANTHROPIC_API_KEY env var. The keychain hop closes the
-                // gotcha where a stale shell-exported ANTHROPIC_API_KEY
-                // shadows an OAuth subscription token the user explicitly
-                // stored via `mur agent secret set`.
-                let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
-                {
-                    Ok(Arc::new(AnthropicClient::from_secret_string_with_http(
-                        key,
-                        entry.model.clone(),
-                        entry.base_url.clone(),
-                        guarded_http,
-                    )))
-                } else {
-                    AnthropicClient::from_agent_credentials_with_http(
-                        &profile.inner.name,
-                        entry.model.clone(),
-                        guarded_http,
-                    )
-                    .await
-                    .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
-                };
-                match built {
-                    Ok(client) => {
-                        let r = crate::supervisor_runner::build_runner(
-                            client.clone(),
-                            profile.system_prompt.clone(),
-                            runtime_skills.clone(),
-                            skills_cfg.clone(),
-                            Some(Arc::new(hook_chain.clone())),
-                            Some(hook_ctx.clone()),
-                            Some(hook_cancel.clone()),
-                        );
-                        (r, Some(client))
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "anthropic client unavailable; falling back to echo");
-                        (Arc::new(TaskRunner::new_stub_echo()), None)
-                    }
-                }
-            }
-            "openai" => {
-                let built: Result<Arc<dyn LlmClient>, _> = if let Some(key) = secret_value.as_ref()
-                {
-                    Ok(Arc::new(OpenAiClient::from_secret_string_with_http(
-                        key,
-                        entry.model.clone(),
-                        entry.base_url.clone(),
-                        guarded_http,
-                    )))
-                } else {
-                    OpenAiClient::from_agent_credentials_with_http(
-                        &profile.inner.name,
-                        entry.model.clone(),
-                        guarded_http,
-                    )
-                    .await
-                    .map(|c| Arc::new(c) as Arc<dyn LlmClient>)
-                };
-                match built {
-                    Ok(client) => {
-                        let r = crate::supervisor_runner::build_runner(
-                            client.clone(),
-                            profile.system_prompt.clone(),
-                            runtime_skills.clone(),
-                            skills_cfg.clone(),
-                            Some(Arc::new(hook_chain.clone())),
-                            Some(hook_ctx.clone()),
-                            Some(hook_cancel.clone()),
-                        );
-                        (r, Some(client))
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "openai client unavailable; falling back to echo");
-                        (Arc::new(TaskRunner::new_stub_echo()), None)
-                    }
-                }
-            }
-            other => {
-                tracing::warn!(provider = %other, "no LLM client implemented; falling back to echo");
-                (Arc::new(TaskRunner::new_stub_echo()), None)
-            }
-        }
-    };
+    let (runner, llm_for_companion) = crate::supervisor_runner::build_provider_runner(
+        force_echo,
+        &profile,
+        runtime_skills.clone(),
+        skills_cfg.clone(),
+        &hook_chain,
+        &hook_ctx,
+        &hook_cancel,
+    )
+    .await?;
     let dispatcher = Arc::new(build_dispatcher(&profile_arc, &runner));
 
     // 7. Transports
@@ -401,24 +209,6 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         tcp: None,
         webhook: None,
     };
-
-    // Decide how to route telemetry notifications. Socket (if present) gets
-    // them so every connected peer can subscribe; otherwise stdio does.
-    let socket_enabled = profile.inner.transport.socket.enabled
-        && profile.inner.transport.socket.bind.starts_with("unix://");
-    let (stdio_notif_tx, stdio_notif_rx) = tokio::sync::mpsc::channel(256);
-    let (sock_notif_tx, sock_notif_rx) = tokio::sync::mpsc::channel(256);
-
-    transport_tasks.push(tokio::spawn(async move {
-        let mut notif = notif_rx;
-        while let Some(n) = notif.recv().await {
-            if socket_enabled {
-                let _ = sock_notif_tx.send(n).await;
-            } else {
-                let _ = stdio_notif_tx.send(n).await;
-            }
-        }
-    }));
 
     #[cfg(unix)]
     if socket_enabled {
