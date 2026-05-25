@@ -1,6 +1,7 @@
 //! MuR skill ecosystem — see `docs/superpowers/specs/2026-05-24-mur-skill-ecosystem-design.md`.
 
 pub mod capability;
+pub mod evolution;
 pub mod constraint;
 pub mod hash;
 pub mod loader;
@@ -19,6 +20,7 @@ pub use capability::{Capability, CapabilityViolation, allowed_for, check_capabil
 pub use constraint::{Constraint, ConstraintError};
 pub use hash::{DriftStatus, content_sha256, ct_eq_hex, drift_status, sha256_hex};
 pub use loader::{LoadedSkill, SkillScope, load_all};
+pub use evolution::EvolutionEvent;
 pub use lockfile::{LockfileError, SkillLock};
 pub use manifest::*;
 pub use parser::{
