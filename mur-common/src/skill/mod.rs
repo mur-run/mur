@@ -2,6 +2,7 @@
 
 pub mod capability;
 pub mod constraint;
+pub mod evolution;
 pub mod hash;
 pub mod loader;
 pub mod local;
@@ -17,6 +18,7 @@ pub mod validate;
 
 pub use capability::{Capability, CapabilityViolation, allowed_for, check_capabilities};
 pub use constraint::{Constraint, ConstraintError};
+pub use evolution::EvolutionEvent;
 pub use hash::{DriftStatus, content_sha256, ct_eq_hex, drift_status, sha256_hex};
 pub use loader::{LoadedSkill, SkillScope, load_all};
 pub use lockfile::{LockfileError, SkillLock};

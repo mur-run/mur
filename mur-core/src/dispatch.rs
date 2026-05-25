@@ -320,6 +320,22 @@ pub async fn run(cli: Cli) -> Result<()> {
                     },
                 )?
             }
+            crate::cli::SkillAction::Evolve {
+                name,
+                dry_run,
+                max_iterations,
+            } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                cmd::skill_evolve::cmd_evolve(
+                    &home,
+                    cmd::skill_evolve::EvolveOptions {
+                        skill_name: name,
+                        dry_run,
+                        max_iterations,
+                    },
+                )
+                .await?
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
