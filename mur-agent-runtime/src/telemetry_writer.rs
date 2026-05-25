@@ -30,6 +30,8 @@ pub enum Event {
         latency_ms: u64,
         cost_usd: f64,
         provider: String,
+        /// Skill names triggered on this turn (M2 deferred).
+        fired_skills: Vec<String>,
     },
     ToolCall {
         trace_id: String,
@@ -207,6 +209,7 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             latency_ms,
             cost_usd,
             provider,
+            fired_skills: _,
         } => {
             params[GEN_AI_PROVIDER_NAME] = json!(provider);
             params[GEN_AI_REQUEST_MODEL] = json!(model);
