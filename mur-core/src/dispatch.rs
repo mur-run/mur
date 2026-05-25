@@ -277,7 +277,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::SkillAction::Search { query, local } => {
                 cmd::skill_cmd::cmd_search(&query, local)?
             }
-            crate::cli::SkillAction::Info { name, full } => cmd::skill_cmd::cmd_info(&name, full)?,
+            crate::cli::SkillAction::Info { name, full, metrics } => {
+                cmd::skill_cmd::cmd_info(&name, full, metrics)?
+            }
             crate::cli::SkillAction::Audit { name } => cmd::skill_cmd::cmd_audit(&name)?,
             crate::cli::SkillAction::Trust { name, level } => {
                 cmd::skill_cmd::cmd_trust(&name, &level)?

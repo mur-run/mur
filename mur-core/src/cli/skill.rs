@@ -36,6 +36,9 @@ pub enum SkillAction {
         name: String,
         #[arg(long)]
         full: bool,
+        /// Show runtime metrics (usage, confidence, lifecycle state).
+        #[arg(long)]
+        metrics: bool,
     },
     /// Run full security scan + signature check on an installed skill.
     Audit { name: String },
