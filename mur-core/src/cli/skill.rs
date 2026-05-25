@@ -86,4 +86,13 @@ pub enum SkillAction {
         #[arg(long)]
         polish: bool,
     },
+    /// Scan recent sessions for repeat task patterns (>=3 occurrences).
+    Suggest {
+        /// Max sessions to scan (default 20).
+        #[clap(long, default_value = "20")]
+        max_sessions: usize,
+        /// Min session count to flag a pattern (default 3).
+        #[clap(long, default_value = "3")]
+        threshold: usize,
+    },
 }
