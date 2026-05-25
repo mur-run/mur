@@ -46,9 +46,10 @@ base64 = "0.22.1"
 tar = "0.4.46"
 flate2 = "1.1.9"
 semver = "1"
+fd-lock = "4"
+tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
 
 [dev-dependencies]
-tempfile = "3"

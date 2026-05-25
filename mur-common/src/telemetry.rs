@@ -56,3 +56,10 @@ pub const METHOD_WARNING: &str = "telemetry/warning";
 pub const METHOD_TASK_PROGRESS: &str = "task/progress";
 pub const METHOD_HOOK_FIRED: &str = "telemetry/hook_fired";
 pub const METHOD_BRIDGE_ALIVE: &str = "telemetry/bridge_alive";
+pub const METHOD_SKILL_EXECUTED: &str = "mur.skill.executed";
+
+pub const MUR_SKILL_NAME: &str = "mur.skill.name";
+pub const MUR_SKILL_VERSION: &str = "mur.skill.version";
+pub const MUR_SKILL_OUTCOME: &str = "mur.skill.outcome";
+pub const MUR_SKILL_DURATION_MS: &str = "mur.skill.duration_ms";
+pub const MUR_SKILL_MANIFEST_DIGEST: &str = "mur.skill.manifest_digest";

@@ -143,7 +143,7 @@ pub fn cmd_search(query: &str, local_only: bool) -> Result<()> {
 
 // --- M1b audit + trust (Tasks 5-6) ---
 
-pub fn cmd_info(name: &str, full: bool) -> Result<()> {
+pub fn cmd_info(name: &str, full: bool, metrics: bool) -> Result<()> {
     let home = resolve_mur_home()?;
     let m =
         local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
@@ -159,6 +159,81 @@ pub fn cmd_info(name: &str, full: bool) -> Result<()> {
     if full {
         println!("\n--- Abstract ---\n{}", m.content.r#abstract);
     }
+    if metrics {
+        print_metrics(&home, name)?;
+    }
+    Ok(())
+}
+
+fn print_metrics(home: &Path, name: &str) -> Result<()> {
+    use mur_common::skill::lifecycle::next_state;
+    use mur_common::skill::stats::SkillStats;
+
+    let stats_path = SkillStats::path(home, name);
+    let stats = match SkillStats::load(&stats_path)? {
+        Some(s) => s,
+        None => {
+            println!("\nMetrics: (no stats — run `mur skill reindex-stats {name}`)");
+            return Ok(());
+        }
+    };
+
+    let now = chrono::Utc::now();
+    let proposed = next_state(&stats, now);
+
+    let success_rate = if stats.usage_count == 0 {
+        0.0
+    } else {
+        stats.success_count as f64 / stats.usage_count as f64 * 100.0
+    };
+
+    let half_life = mur_common::skill::lifecycle::half_life_days(stats.lifecycle_state);
+    let decayed = mur_common::skill::lifecycle::calculate_decay(
+        stats.anchor_confidence,
+        stats.last_success_at,
+        half_life,
+        now,
+    );
+
+    let last_used_str = stats
+        .last_used_at
+        .map(|t| {
+            let days = (now - t).num_days();
+            format!("{} ({} days ago)", t.format("%Y-%m-%d"), days)
+        })
+        .unwrap_or_else(|| "never".to_string());
+
+    let first_ok_str = stats
+        .first_successful_use_at
+        .map(|t| {
+            let days = (now - t).num_days();
+            format!("{} ({} days ago)", t.format("%Y-%m-%d"), days)
+        })
+        .unwrap_or_else(|| "never".to_string());
+
+    let proposed_note = if proposed != stats.lifecycle_state {
+        format!(" — proposed: {proposed:?} (promotion eligible after sweep)")
+    } else {
+        String::new()
+    };
+
+    println!("\nMetrics:");
+    println!(
+        "  state:       {:?}{}",
+        stats.lifecycle_state, proposed_note
+    );
+    println!("  pinned:      {}", if stats.pinned { "yes" } else { "no" });
+    println!(
+        "  usage:       {} (success {} / failure {} / rate {:.0}%)",
+        stats.usage_count, stats.success_count, stats.failure_count, success_rate
+    );
+    println!(
+        "  confidence:  {:.2}  (anchor {:.2}, decayed over {:.0}d half-life)",
+        decayed, stats.anchor_confidence, half_life
+    );
+    println!("  last used:   {last_used_str}");
+    println!("  first ok:    {first_ok_str}");
+
     Ok(())
 }
 

@@ -17,6 +17,11 @@ use crate::telemetry_writer::{TelemetryWriter, WriterTelemetryEmitter};
 use mur_common::agent::NetworkOutboundMode;
 use mur_common::config::SkillsConfig;
 use mur_common::model::ModelEntry;
+use mur_common::skill::aggregator::{StatsAggregator, StatsEvent};
+use mur_common::telemetry::{
+    METHOD_SKILL_EXECUTED, MUR_SKILL_DURATION_MS, MUR_SKILL_MANIFEST_DIGEST, MUR_SKILL_NAME,
+    MUR_SKILL_OUTCOME, MUR_SKILL_VERSION,
+};
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
@@ -197,23 +202,54 @@ pub(crate) async fn prepare_runtime(
     // Notification routing: Event → serde_json::Value channels for transports.
     let (stdio_notif_tx, stdio_notif_rx) = tokio::sync::mpsc::channel(256);
     let (sock_notif_tx, sock_notif_rx) = tokio::sync::mpsc::channel(256);
+
+    // M5a: stats aggregator — flushes skill execution counters to
+    // ~/.mur/skills/<name>/stats.json sidecars on a 64-event / 2 s tick.
+    let mur_home = std::env::var_os("MUR_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
+    let (stats_tx, stats_rx) = tokio::sync::mpsc::channel::<StatsEvent>(256);
+    let _stats_aggregator = StatsAggregator::spawn(mur_home.clone(), stats_rx);
+
     tokio::spawn(async move {
         let mut rx = notif_rx;
         while let Some(n) = rx.recv().await {
+            let method = n.get("method").and_then(|m| m.as_str()).unwrap_or("");
             let v = serde_json::to_value(&n).unwrap_or_default();
             if socket_enabled {
                 let _ = sock_notif_tx.send(v).await;
             } else {
                 let _ = stdio_notif_tx.send(v).await;
             }
+            // Fan-out: forward skill execution events to the stats aggregator.
+            if method == METHOD_SKILL_EXECUTED {
+                let p = &n["params"];
+                let skill_name = p[MUR_SKILL_NAME].as_str().unwrap_or("").to_string();
+                let skill_version = p[MUR_SKILL_VERSION].as_str().unwrap_or("").to_string();
+                let manifest_digest = p[MUR_SKILL_MANIFEST_DIGEST]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                let outcome = p[MUR_SKILL_OUTCOME].as_str().unwrap_or("not_evaluated");
+                let _duration_ms = p[MUR_SKILL_DURATION_MS].as_u64().unwrap_or(0);
+                if !skill_name.is_empty() {
+                    let _ = stats_tx
+                        .send(StatsEvent {
+                            skill_name,
+                            skill_version,
+                            manifest_digest,
+                            success: outcome == "success",
+                            failure: outcome == "failure",
+                            now: chrono::Utc::now(),
+                        })
+                        .await;
+                }
+            }
         }
     });
 
     let telemetry_emitter: Arc<dyn TelemetryEmitter> =
         Arc::new(WriterTelemetryEmitter::new(writer.sender()));
-    let mur_home = std::env::var_os("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
     let hook_chain = crate::hooks::builder::build_chain(&profile.inner, agent_home, &mur_home);
     let mcp_server_binaries: Vec<std::path::PathBuf> = profile
         .inner

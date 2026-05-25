@@ -36,6 +36,9 @@ pub enum SkillAction {
         name: String,
         #[arg(long)]
         full: bool,
+        /// Show runtime metrics (usage, confidence, lifecycle state).
+        #[arg(long)]
+        metrics: bool,
     },
     /// Run full security scan + signature check on an installed skill.
     Audit { name: String },
@@ -105,5 +108,51 @@ pub enum SkillAction {
         /// Max evolution iterations (default 3).
         #[clap(long, default_value = "3")]
         max_iterations: usize,
+    },
+    /// Show runtime statistics for an installed skill (M5a).
+    Stats {
+        /// Skill name.
+        name: String,
+    },
+    /// Pin a skill to prevent auto-demotion (M5a).
+    Pin {
+        /// Skill name.
+        name: String,
+        /// Reason for pinning.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Unpin a previously pinned skill (M5a).
+    Unpin {
+        /// Skill name.
+        name: String,
+    },
+    /// Rebuild stats sidecars from the JSONL trace log (M5a).
+    ReindexStats {
+        /// Skill filter (exact name or glob, e.g. 'research-*').
+        name: Option<String>,
+        /// Days of traces to scan (default 30).
+        #[arg(long, default_value = "30")]
+        days_back: u32,
+    },
+    /// Run health checks on installed skills (M5a read-only).
+    Doctor {
+        /// Skill name(s) or glob pattern(s) to check (default: all installed).
+        names: Vec<String>,
+        /// Only run specific checks (tools,deps,recency,failure-rate,api-drift).
+        #[arg(long, value_delimiter = ',')]
+        check: Vec<String>,
+        /// JSON output.
+        #[arg(long)]
+        json: bool,
+        /// CI-friendly mode where warnings exit 1.
+        #[arg(long)]
+        strict: bool,
+        /// Accepted for forward CLI stability; no-op in M5a.
+        #[arg(long)]
+        fix: bool,
+        /// Accepted for forward CLI stability; no-op in M5a.
+        #[arg(long)]
+        apply: bool,
     },
 }

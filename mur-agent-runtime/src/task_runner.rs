@@ -6,7 +6,7 @@ use crate::llm::{LlmClient, LlmMessage, LlmRequest};
 use crate::skills::RuntimeSkills;
 use crate::skills::injector::inject_layer2;
 use crate::skills::trigger_matcher::{format_layer3, layer3_body, match_prompt};
-use crate::telemetry_writer::Event;
+use crate::telemetry_writer::{Event, SkillOutcome};
 use mur_common::a2a::{Message, MessagePart, Task, TaskState};
 use mur_common::config::SkillsConfig;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -343,6 +343,28 @@ impl TaskRunner {
                     .cumulative_input_tokens
                     .fetch_add(resp.input_tokens, Ordering::Relaxed);
                 if let Some(tx) = &self.telemetry {
+                    // Emit per-skill SkillExecuted events (M5a). Outcome is
+                    // NotEvaluated because the M2 wiring doesn't track
+                    // per-skill success/failure; the aggregator infers from
+                    // LLM-call context.
+                    let skill_events: Vec<Event> = fired
+                        .iter()
+                        .filter_map(|name| {
+                            let loaded = self
+                                .skills
+                                .as_ref()
+                                .and_then(|s| s.loaded.iter().find(|l| &l.name == name))?;
+                            Some(Event::SkillExecuted {
+                                trace_id: task_id.to_string(),
+                                task_id: task_id.to_string(),
+                                skill_name: name.clone(),
+                                skill_version: loaded.manifest.version.clone(),
+                                manifest_digest: loaded.content_hash.clone(),
+                                outcome: SkillOutcome::NotEvaluated,
+                                duration_ms: latency_ms,
+                            })
+                        })
+                        .collect();
                     let _ = tx
                         .send(Event::LlmCall {
                             trace_id: task_id.to_string(),
@@ -356,6 +378,9 @@ impl TaskRunner {
                             fired_skills: fired,
                         })
                         .await;
+                    for ev in skill_events {
+                        let _ = tx.send(ev).await;
+                    }
                 }
                 Message {
                     role: "agent".into(),

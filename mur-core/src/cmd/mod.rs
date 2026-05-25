@@ -43,6 +43,7 @@ pub(crate) mod server_cmd;
 pub(crate) mod session;
 pub mod skill_cmd;
 pub mod skill_deps;
+pub mod skill_doctor;
 pub mod skill_evolve;
 pub mod skill_from_pattern;
 pub mod skill_generate;
@@ -51,6 +52,7 @@ pub(crate) mod skill_publish;
 pub mod skill_registry;
 #[allow(dead_code)]
 pub mod skill_resolver;
+pub mod skill_stats;
 pub mod skill_suggest;
 pub(crate) mod sleep;
 pub(crate) mod sync_cmd;
