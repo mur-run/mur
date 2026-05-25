@@ -84,6 +84,14 @@ pub enum LifecycleState {
     Archived,
 }
 
+/// Sidecar stats for an installed skill. **Not part of the signed manifest.**
+///
+/// Schema evolution policy: additive only. New fields MUST be marked
+/// `#[serde(default)]` so older `mur` builds reading newer files (and newer
+/// builds reading older files) parse cleanly without migration. M6+ author
+/// note: do not pre-reserve fields here without a producer — empty defaults
+/// create semantic ambiguity. Add fields when their callers exist.
+/// See `docs/superpowers/plans/2026-05-26-mur-skill-ecosystem-m6-scoping.md` §4.1.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillStats {
     pub schema_version: u32,

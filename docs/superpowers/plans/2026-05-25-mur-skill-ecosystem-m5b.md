@@ -58,6 +58,41 @@
 
 ---
 
+### Task 0 — Doc-only: `SkillStats` schema evolution policy
+
+**Files:** `mur-common/src/skill/stats.rs` (modify — doc comment only, no code change).
+
+M5b is the first sweep-driven persistent writer to `stats.json`. Pin the schema-evolution rules in code so M6+ authors do not pre-reserve fields without producers. Decision recorded in `docs/superpowers/plans/2026-05-26-mur-skill-ecosystem-m6-scoping.md` §4.1.
+
+- [ ] **Step 1: Add doc comment above `pub struct SkillStats`**
+
+```rust
+/// Sidecar stats for an installed skill. **Not part of the signed manifest.**
+///
+/// Schema evolution policy: additive only. New fields MUST be marked
+/// `#[serde(default)]` so older `mur` builds reading newer files (and newer
+/// builds reading older files) parse cleanly without migration. Do not
+/// pre-reserve fields without a producer — empty defaults create semantic
+/// ambiguity (\"never set\" vs \"set to empty\"). Add fields when their
+/// callers exist.
+/// See `docs/superpowers/plans/2026-05-26-mur-skill-ecosystem-m6-scoping.md` §4.1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillStats {
+    // ... existing fields unchanged
+}
+```
+
+- [ ] **Step 2: Commit**
+
+```
+git add mur-common/src/skill/stats.rs
+git commit -m "docs(skill): schema evolution policy for SkillStats sidecar"
+```
+
+Zero CI risk (comment-only). Lands in the M5b PR as the first commit so subsequent persistence work has the policy visible at review time.
+
+---
+
 ### Task 1 — Lifecycle sweep (`mur skill sweep`)
 
 **Files:** `mur-core/src/skill_lifecycle/{mod.rs,sweep.rs}` (new), `mur-core/src/cmd/skill_sweep.rs` (new), CLI wiring.
