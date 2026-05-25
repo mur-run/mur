@@ -98,6 +98,84 @@ pub fn pattern_to_skill(pattern: &Pattern, polish: bool) -> Result<SkillManifest
     Ok(manifest)
 }
 
+/// Test- and lib-friendly entry point. All I/O is scoped under `mur_home`.
+///
+/// When `polish=true` this function will make an LLM call (Task 3).
+/// Kept `async` so the CLI shim can `.await` it directly without spinning a
+/// nested runtime — `dispatch::run` is already async.
+pub async fn cmd_from_pattern_with_home(
+    mur_home: &std::path::Path,
+    name: &str,
+    polish: bool,
+) -> Result<()> {
+    use crate::store::yaml::YamlStore;
+    use mur_common::skill::{
+        TrustLevel, content_sha256, global_skill_dir, scan::scan_skill, write_to_dir,
+    };
+    use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
+
+    let patterns_dir = mur_home.join("patterns");
+    let store = YamlStore::new(patterns_dir).context("open pattern store")?;
+    let pattern = store
+        .get(name)
+        .with_context(|| format!("pattern '{name}' not found in {}/patterns/", mur_home.display()))?;
+
+    let mut manifest = pattern_to_skill(&pattern, polish)?;
+
+    if polish {
+        // Task 3 fills this in. Until then, surface clearly that --polish is a no-op.
+        eprintln!("note: --polish is not yet implemented — proceeding without polish");
+    }
+
+    // Scan the (possibly-polished) manifest. Pattern-promoted skills always
+    // land at Sandboxed regardless of findings, but findings still get
+    // surfaced so the user can decide whether to `mur skill trust` them up.
+    let report = scan_skill(&manifest).context("scan derived skill manifest")?;
+    if report.has_blocking_findings() {
+        let n = report.human_summary().len();
+        eprintln!(
+            "warning: derived skill has {n} blocking content finding(s) — staying Sandboxed.\n\
+             Run `mur skill audit {}` after install for details.",
+            manifest.name,
+        );
+    }
+
+    let dir = global_skill_dir(mur_home, &manifest.name);
+    write_to_dir(&dir, &manifest).context("write skill manifest")?;
+
+    let hash = content_sha256(&manifest).context("hash skill manifest")?;
+    let mut trust = SkillTrustStore::load(mur_home)
+        .map_err(|e| anyhow::anyhow!("load trust store: {e}"))?;
+    trust.insert(
+        hash,
+        TrustEntry {
+            name: manifest.name.clone(),
+            version: manifest.version.clone(),
+            level: TrustLevel::Sandboxed,
+            installed_at: chrono::Utc::now().to_rfc3339(),
+            publisher: Some(manifest.publisher.clone()),
+        },
+    );
+    trust
+        .save(mur_home)
+        .map_err(|e| anyhow::anyhow!("save trust store: {e}"))?;
+
+    println!(
+        "promoted: {} v{} (Sandboxed, from {:?})",
+        manifest.name, manifest.version, pattern.maturity
+    );
+    if !polish {
+        println!("hint: re-run with --polish for LLM-assisted abstract + procedure generation");
+    }
+    Ok(())
+}
+
+/// Production entry point. Thin shim — resolves `~/.mur` and delegates.
+pub async fn cmd_from_pattern(name: &str, polish: bool) -> Result<()> {
+    let home = crate::cmd::agent::resolve_mur_home()?;
+    cmd_from_pattern_with_home(&home, name, polish).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,5 +332,53 @@ mod tests {
         // Plain → principle empty → abstract falls back to description
         assert_eq!(m.content.r#abstract, "v1 pattern");
         assert_eq!(m.content.context.as_deref(), Some("just a string"));
+    }
+
+    // --- Integration tests (drive cmd_from_pattern_with_home) ---
+
+    use crate::store::yaml::YamlStore;
+    use mur_common::skill::{TrustLevel, read_from_dir, validate};
+    use mur_common::trust::skills::SkillTrustStore;
+
+    #[tokio::test]
+    async fn promotes_stable_pattern_to_sandboxed_skill() {
+        let home = tempfile::tempdir().unwrap();
+
+        // 1. Create a Stable pattern in tempdir.
+        let store = YamlStore::new(home.path().join("patterns")).unwrap();
+        let p = make_stable("git-push-flow", "Always pull before push", "Run git pull --rebase before git push", "Prefer rebase over merge");
+        store.save(&p).unwrap();
+
+        // 2. Run from-pattern (polish=false → no LLM call, no network).
+        cmd_from_pattern_with_home(home.path(), "git-push-flow", false)
+            .await
+            .unwrap();
+
+        // 3. Assert skill.yaml exists and validates.
+        let skill_dir = home.path().join("skills/git-push-flow");
+        assert!(skill_dir.join("skill.yaml").exists());
+        let m = read_from_dir(&skill_dir).unwrap();
+        validate(&m).unwrap();
+        assert_eq!(m.publisher, "agent:from-pattern");
+        assert_eq!(m.version, "0.1.0");
+
+        // 4. Trust entry is Sandboxed and tagged with the right publisher.
+        let trust = SkillTrustStore::load(home.path()).unwrap();
+        let entry = trust.entries.values().find(|e| e.name == "git-push-flow").unwrap();
+        assert!(matches!(entry.level, TrustLevel::Sandboxed));
+        assert_eq!(entry.publisher.as_deref(), Some("agent:from-pattern"));
+    }
+
+    #[tokio::test]
+    async fn rejects_draft_pattern() {
+        let home = tempfile::tempdir().unwrap();
+        let store = YamlStore::new(home.path().join("patterns")).unwrap();
+        let p = make_draft_pattern();
+        store.save(&p).unwrap();
+
+        let err = cmd_from_pattern_with_home(home.path(), "test-pattern", false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Stable or Canonical"));
     }
 }
