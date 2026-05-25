@@ -50,6 +50,7 @@ pub(crate) mod skill_publish;
 pub mod skill_registry;
 #[allow(dead_code)]
 pub mod skill_resolver;
+pub mod skill_suggest;
 pub(crate) mod sleep;
 pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;
