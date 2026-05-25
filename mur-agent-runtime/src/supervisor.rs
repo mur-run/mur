@@ -225,6 +225,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let _lock_handle =
         LockHandle::acquire(&lock_path).map_err(|e| anyhow::anyhow!("already running ({e})"))?;
 
+    // M2: load skills once at boot
+    let skills_cfg = mur_common::config::Config::load_or_default(&mur_home).skills;
+    let loaded = mur_common::skill::loader::load_all(&mur_home, &profile.inner.name);
+    let runtime_skills = Arc::new(crate::skills::RuntimeSkills::build(loaded));
+
     // 6. Build dispatcher (shared Arc so multiple transports can read it)
     let profile_arc = Arc::new(profile.clone());
     // E4: select runner backend based on profile.model.provider.
@@ -290,9 +295,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                     entry.model,
                     guarded_http,
                 ));
-                let r = Arc::new(
-                    TaskRunner::with_llm(client.clone())
-                        .with_system_prompt(profile.system_prompt.clone()),
+                let r = crate::supervisor_runner::build_runner(
+                    client.clone(),
+                    profile.system_prompt.clone(),
+                    runtime_skills.clone(),
+                    skills_cfg.clone(),
                 );
                 (r, Some(client))
             }
@@ -321,9 +328,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 };
                 match built {
                     Ok(client) => {
-                        let r = Arc::new(
-                            TaskRunner::with_llm(client.clone())
-                                .with_system_prompt(profile.system_prompt.clone()),
+                        let r = crate::supervisor_runner::build_runner(
+                            client.clone(),
+                            profile.system_prompt.clone(),
+                            runtime_skills.clone(),
+                    skills_cfg.clone(),
                         );
                         (r, Some(client))
                     }
@@ -353,9 +362,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 };
                 match built {
                     Ok(client) => {
-                        let r = Arc::new(
-                            TaskRunner::with_llm(client.clone())
-                                .with_system_prompt(profile.system_prompt.clone()),
+                        let r = crate::supervisor_runner::build_runner(
+                            client.clone(),
+                            profile.system_prompt.clone(),
+                            runtime_skills.clone(),
+                    skills_cfg.clone(),
                         );
                         (r, Some(client))
                     }
