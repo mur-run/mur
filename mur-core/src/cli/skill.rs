@@ -155,4 +155,29 @@ pub enum SkillAction {
         #[arg(long)]
         apply: bool,
     },
+    /// Run lifecycle sweep across installed skills (M5b).
+    Sweep {
+        /// Skill filter (exact name or glob, e.g. 'research-*').
+        name: Option<String>,
+        /// Preview transitions without writing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Archive a skill (M5b).
+    Archive {
+        /// Skill name.
+        name: String,
+        /// Reason for archival.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Run consolidation pass: dedup + contradiction + orphan (M5b).
+    Consolidate {
+        /// Preview findings without writing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply changes (archive orphans, deprecate duplicates).
+        #[arg(long)]
+        apply: bool,
+    },
 }

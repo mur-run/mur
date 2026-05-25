@@ -359,6 +359,16 @@ pub async fn run(cli: Cli) -> Result<()> {
                 // M5a: read-only doctor. --fix and --apply are stubs.
                 cmd::skill_doctor::cmd_doctor(&names, &check, json, strict, fix, apply)?
             }
+            crate::cli::SkillAction::Sweep { name, dry_run } => {
+                cmd::skill_sweep::cmd_sweep(name.as_deref(), dry_run)?
+            }
+            crate::cli::SkillAction::Archive { name, reason } => {
+                cmd::skill_archive::cmd_archive(&name, reason.as_deref())?
+            }
+            crate::cli::SkillAction::Consolidate { dry_run, apply } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                cmd::skill_consolidate::cmd_consolidate(&home, dry_run, apply)?
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,

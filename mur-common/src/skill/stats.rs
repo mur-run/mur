@@ -33,6 +33,14 @@ pub enum LifecycleState {
     Archived,
 }
 
+/// Sidecar stats for an installed skill. **Not part of the signed manifest.**
+///
+/// Schema evolution policy: additive only. New fields MUST be marked
+/// `#[serde(default)]` so older `mur` builds reading newer files (and newer
+/// builds reading older files) parse cleanly without migration. Do not
+/// pre-reserve fields without a producer — empty defaults create semantic
+/// ambiguity ("never set" vs "set to empty"). Add fields when their
+/// callers exist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillStats {
     pub schema_version: u32,
