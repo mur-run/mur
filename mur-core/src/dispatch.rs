@@ -288,6 +288,22 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::SkillAction::Publish { path } => cmd::skill_publish::cmd_publish(&path)?,
             crate::cli::SkillAction::Update { name } => cmd::skill_install::cmd_update_cli(&name)?,
             crate::cli::SkillAction::Deps { name } => cmd::skill_deps::cmd_deps_cli(&name)?,
+            crate::cli::SkillAction::Generate {
+                from_session,
+                name,
+                model,
+                dry_run,
+                parallel,
+            } => {
+                cmd::skill_generate::cmd_generate_cli(cmd::skill_generate::GenerateOptions {
+                    session_id: from_session,
+                    name,
+                    model_override: model,
+                    dry_run,
+                    max_parallel: parallel,
+                })
+                .await?
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,

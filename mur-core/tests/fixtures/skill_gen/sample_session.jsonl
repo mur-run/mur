@@ -1,0 +1,18 @@
+{"timestamp":1000,"type":"user","content":"find product prices"}
+{"timestamp":2000,"type":"tool_call","tool":"browser.navigate","content":"{\"url\":\"https://example.com\"}"}
+{"timestamp":3000,"type":"tool_result","tool":"browser.navigate","content":"ok"}
+{"timestamp":4000,"type":"tool_call","tool":"browser.extract","content":"{\"selector\":\".price\"}"}
+{"timestamp":5000,"type":"tool_result","tool":"browser.extract","content":"$99.99"}
+{"timestamp":6000,"type":"assistant","content":"The price is $99.99"}
+{"timestamp":7000,"type":"user","content":"find product prices for headphones"}
+{"timestamp":8000,"type":"tool_call","tool":"browser.navigate","content":"{\"url\":\"https://shop.example.com/headphones\"}"}
+{"timestamp":9000,"type":"tool_result","tool":"browser.navigate","content":"ok"}
+{"timestamp":10000,"type":"tool_call","tool":"browser.extract","content":"{\"selector\":\".price\"}"}
+{"timestamp":11000,"type":"tool_result","tool":"browser.extract","content":"$149.99"}
+{"timestamp":12000,"type":"assistant","content":"Headphones cost $149.99"}
+{"timestamp":13000,"type":"user","content":"compare prices across sites"}
+{"timestamp":14000,"type":"tool_call","tool":"browser.navigate","content":"{\"url\":\"https://other-shop.example.com\"}"}
+{"timestamp":15000,"type":"tool_result","tool":"browser.navigate","content":"ok"}
+{"timestamp":16000,"type":"tool_call","tool":"browser.extract","content":"{\"selector\":\".price\"}"}
+{"timestamp":17000,"type":"tool_result","tool":"browser.extract","content":"error: element not found"}
+{"timestamp":18000,"type":"error","content":"could not extract price from page"}

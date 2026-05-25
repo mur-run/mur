@@ -35,6 +35,7 @@ pub mod interactive;
 pub mod paths;
 pub mod retrieve;
 pub mod session;
+pub mod skill_gen;
 pub mod sources;
 pub mod store;
 pub mod sync;
