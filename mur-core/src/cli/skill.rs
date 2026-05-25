@@ -65,4 +65,17 @@ pub enum SkillAction {
         /// Name of installed skill.
         name: String,
     },
+    /// Generate a skill from a session recording.
+    Generate {
+        #[arg(long)]
+        from_session: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value = "4")]
+        parallel: usize,
+    },
 }
