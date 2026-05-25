@@ -27,7 +27,7 @@ use crate::transport::unix_socket::serve_unix;
 use crate::transport::webhook;
 use mur_common::identity::AgentIdentity;
 use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -59,6 +59,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     //    agent_home at the per-binary cache extraction dir, unless the
     //    operator overrides via MUR_AGENT_EXTERNAL_PROFILE.
     let embedded_override = std::env::var_os("MUR_AGENT_EXTERNAL_PROFILE").is_some();
+    let mur_home = std::env::var_os("MUR_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
     let agent_home = if crate::export::bin_embed::has_embedded_agent() && !embedded_override {
         match resolve_embedded_agent_home() {
             Ok(p) => p,
@@ -78,9 +81,6 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         };
-        let mur_home = std::env::var_os("MUR_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
         let candidate = mur_home.join("agents").join(&name);
         // Verify_name_match runs after profile load below for both branches.
         // Stash the argv0-derived name so the post-load check can use it.
@@ -199,7 +199,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         &hook_cancel,
     )
     .await?;
-    let dispatcher = Arc::new(build_dispatcher(&profile_arc, &runner));
+    let dispatcher = Arc::new(build_dispatcher(&profile_arc, &runner, &mur_home));
 
     // 7. Transports
     let mut transport_tasks = vec![];
@@ -491,7 +491,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_dispatcher(profile: &Arc<Profile>, runner: &Arc<TaskRunner>) -> Dispatcher {
+fn build_dispatcher(
+    profile: &Arc<Profile>,
+    runner: &Arc<TaskRunner>,
+    mur_home: &Path,
+) -> Dispatcher {
     let mut d = Dispatcher::new();
     d.register("agent/card", Box::new(CardHandler::new(profile.clone())));
     d.register(
@@ -506,6 +510,12 @@ fn build_dispatcher(profile: &Arc<Profile>, runner: &Arc<TaskRunner>) -> Dispatc
     d.register(
         "tasks/list",
         Box::new(TasksListHandler::new(runner.clone())),
+    );
+    d.register(
+        "skills/get",
+        Box::new(crate::protocol::methods::skills::SkillsGetHandler::new(
+            mur_home.to_path_buf(),
+        )),
     );
     d
 }

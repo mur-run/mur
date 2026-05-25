@@ -75,6 +75,20 @@ impl MethodHandler for CardHandler {
                 "traits": p.persona.traits,
             },
             "skills": p.skills.iter().map(|s| json!({"id": s})).collect::<Vec<_>>(),
+            "installed_skills": p.installed_skills.iter().map(|s| json!({
+                "name": s.name,
+                "version": s.version,
+                "publisher": s.publisher,
+                "description": s.description,
+                "category": s.category,
+                "tags": s.tags,
+                "triggers": s.triggers.iter().map(|t| json!({
+                    "type": t.kind,
+                    "pattern": t.pattern,
+                })).collect::<Vec<_>>(),
+                "abstract": s.abstract_text,
+                "transfer_chain": s.transfer_chain,
+            })).collect::<Vec<_>>(),
             "entitlements": p.entitlements,
         });
 

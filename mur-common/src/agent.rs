@@ -5,6 +5,44 @@ use crate::companion::{Formality, Relationship};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Skill metadata broadcast in the Agent Card (Layer 1 + Layer 2).
+///
+/// Populated by `mur skill install` (registry or agent:// URL). Distinct from
+/// `AgentProfile.skills`, which is the legacy per-agent-path list managed by
+/// `mur agent skill add`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct SkillCardEntry {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub publisher: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<SkillCardTrigger>,
+    /// Layer 2 abstract — injected at session start (~200 tokens).
+    /// On-disk YAML key is `abstract` (a Rust reserved word).
+    #[serde(default, skip_serializing_if = "String::is_empty", rename = "abstract")]
+    pub abstract_text: String,
+    /// Provenance chain copied from the installed manifest. Empty for
+    /// registry-installed skills.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transfer_chain: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct SkillCardTrigger {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pattern: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentProfile {
     pub schema: u32,
@@ -23,6 +61,11 @@ pub struct AgentProfile {
     pub mcp_servers: Vec<McpServerEntry>,
     #[serde(default)]
     pub skills: Vec<String>,
+    /// Skills installed via `mur skill install`. Distinct from `skills`
+    /// (which holds legacy per-agent paths from `mur agent skill add`).
+    /// Broadcast in the Agent Card alongside `skills`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub installed_skills: Vec<SkillCardEntry>,
     pub transport: TransportConfig,
     pub communication: CommunicationConfig,
     #[serde(default)]
@@ -1489,5 +1532,60 @@ mod federation_tests {
         let cfg = FederationConfig::default();
         assert_eq!(cfg.evidence_flush_interval_minutes, 0);
         assert!(cfg.snapshot_ref.is_none());
+    }
+}
+
+#[cfg(test)]
+mod skill_card_tests {
+    use super::*;
+
+    #[test]
+    fn installed_skills_default_to_empty_when_absent() {
+        let yaml = include_str!("../tests/fixtures/profile_p0a_minimal.yaml");
+        let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(p.installed_skills.is_empty());
+    }
+
+    #[test]
+    fn installed_skills_roundtrip_preserves_entries() {
+        let base = include_str!("../tests/fixtures/profile_p0a_minimal.yaml");
+        let yaml = format!(
+            "{base}installed_skills:\n  - name: s1\n    version: 1.0.0\n    publisher: human:d\n    description: desc\n    category: workflow\n    tags: [web]\n    triggers:\n      - type: command\n        pattern: /find\n    abstract: does things\n    transfer_chain:\n      - agent://alice\n"
+        );
+        let p: AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(p.installed_skills.len(), 1);
+        assert_eq!(p.installed_skills[0].name, "s1");
+        assert_eq!(p.installed_skills[0].abstract_text, "does things");
+        assert_eq!(p.installed_skills[0].transfer_chain, vec!["agent://alice"]);
+
+        let out = serde_yaml_ng::to_string(&p).unwrap();
+        assert!(out.contains("abstract: does things"));
+        assert!(out.contains("pattern: /find"));
+
+        let back: AgentProfile = serde_yaml_ng::from_str(&out).unwrap();
+        assert_eq!(p.installed_skills, back.installed_skills);
+    }
+
+    #[test]
+    fn installed_skills_minimal_entry_serializes_compactly() {
+        // A name-only entry must NOT emit empty string fields.
+        let entry = SkillCardEntry {
+            name: "minimal".into(),
+            ..Default::default()
+        };
+        let yaml = serde_yaml_ng::to_string(&entry).unwrap();
+        assert!(yaml.contains("name: minimal"));
+        assert!(
+            !yaml.contains("version:"),
+            "empty version must be skipped: {yaml}"
+        );
+        assert!(
+            !yaml.contains("publisher:"),
+            "empty publisher must be skipped: {yaml}"
+        );
+        assert!(
+            !yaml.contains("abstract:"),
+            "empty abstract must be skipped: {yaml}"
+        );
     }
 }

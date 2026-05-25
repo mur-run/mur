@@ -19,7 +19,9 @@ pub mod validate;
 pub use capability::{Capability, CapabilityViolation, allowed_for, check_capabilities};
 pub use constraint::{Constraint, ConstraintError};
 pub use evolution::EvolutionEvent;
-pub use hash::{DriftStatus, content_sha256, ct_eq_hex, drift_status, sha256_hex};
+pub use hash::{
+    DriftStatus, content_hash_for_trust, content_sha256, ct_eq_hex, drift_status, sha256_hex,
+};
 pub use loader::{LoadedSkill, SkillScope, load_all};
 pub use lockfile::{LockfileError, SkillLock};
 pub use manifest::*;
