@@ -17,6 +17,7 @@ use crate::cmd::agent::resolve_runtime_target;
 
 /// Strategy for reaching the target agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum DialMode {
     /// Use the running agent's socket if available, otherwise spawn an
     /// ephemeral runtime in stdio mode. Default for CLI use.
