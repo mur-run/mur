@@ -1,9 +1,10 @@
 //! `mur skill` command handlers.
 
-use anyhow::{Context, Result, bail};
+use crate::cmd::agent::resolve_mur_home;
+use anyhow::{Context, Result, anyhow, bail};
 use mur_common::skill::{
-    parse_canonical, parse_legacy_markdown, parse_markdown, scan::scan_skill, serialize_canonical,
-    serialize_markdown, validate,
+    TrustLevel, local, parse_canonical, parse_legacy_markdown, parse_markdown, scan::scan_skill,
+    serialize_canonical, serialize_markdown, validate,
 };
 use std::fs;
 use std::path::Path;
@@ -59,6 +60,167 @@ pub fn cmd_fmt(path: &str, to: Option<&str>, write: bool) -> Result<()> {
     } else {
         print!("{out}");
     }
+    Ok(())
+}
+
+// --- M1a CRUD + search (Tasks 2-4) ---
+
+pub fn cmd_list() -> Result<()> {
+    let home = resolve_mur_home()?;
+    let names = local::list_installed(&home).context("list installed skills")?;
+    if names.is_empty() {
+        println!("(no skills installed)");
+        return Ok(());
+    }
+    for name in &names {
+        let level = local::get_trust_level(&home, name).unwrap_or(TrustLevel::Sandboxed);
+        println!("{name:30} [{level:?}]");
+    }
+    Ok(())
+}
+
+pub fn cmd_show(name: &str) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let m =
+        local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let yaml = serialize_canonical(&m)?;
+    print!("{yaml}");
+    Ok(())
+}
+
+pub fn cmd_remove(name: &str) -> Result<()> {
+    let home = resolve_mur_home()?;
+    local::remove_installed(&home, name).map_err(|e| anyhow!("failed to remove '{name}': {e}"))?;
+    println!("removed: {name}");
+    Ok(())
+}
+
+pub fn cmd_search(query: &str, local_only: bool) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let local_results = local::search_installed(&home, query).context("search installed")?;
+
+    if !local_results.is_empty() {
+        println!("Installed:");
+        for (name, m) in &local_results {
+            let level = local::get_trust_level(&home, name)
+                .unwrap_or(mur_common::skill::TrustLevel::Sandboxed);
+            println!("  {name:25} {:12?} {}", level, m.description);
+        }
+    }
+
+    if !local_only {
+        match crate::cmd::skill_registry::fetch_and_load(
+            &home,
+            crate::cmd::skill_registry::DEFAULT_REGISTRY,
+        ) {
+            Ok((_dir, idx)) => {
+                let reg_results = crate::cmd::skill_registry::search_registry(&idx, query);
+                if !reg_results.is_empty() {
+                    if !local_results.is_empty() {
+                        println!();
+                    }
+                    println!("Registry:");
+                    for (name, entry) in reg_results {
+                        println!(
+                            "  {name:25} registry    {} [v{}]",
+                            entry.description, entry.latest
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: registry search failed: {e}");
+            }
+        }
+    }
+
+    if local_results.is_empty() && local_only {
+        println!("(no matching installed skills found)");
+    }
+
+    Ok(())
+}
+
+// --- M1b audit + trust (Tasks 5-6) ---
+
+pub fn cmd_info(name: &str, full: bool) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let m =
+        local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let level =
+        local::get_trust_level(&home, name).unwrap_or(mur_common::skill::TrustLevel::Sandboxed);
+    println!("Name:        {}", m.name);
+    println!("Version:     {}", m.version);
+    println!("Publisher:   {}", m.publisher);
+    println!("Description: {}", m.description);
+    println!("Category:    {:?}", m.category);
+    println!("Tags:        {}", m.tags.join(", "));
+    println!("Trust Level: {level:?}");
+    if full {
+        println!("\n--- Abstract ---\n{}", m.content.r#abstract);
+    }
+    Ok(())
+}
+
+pub fn cmd_audit(name: &str) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let m =
+        local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
+
+    let report = scan_skill(&m)?;
+    if report.has_blocking_findings() {
+        eprintln!("Security findings:");
+        for line in report.human_summary() {
+            eprintln!("  {line}");
+        }
+    } else {
+        println!("Content scan: clean");
+    }
+
+    let hash = mur_common::skill::content_sha256(&m)?;
+    let trust = mur_common::trust::skills::SkillTrustStore::load(&home)
+        .map_err(|e| anyhow!("load trust store: {e}"))?;
+    match trust.lookup(&hash) {
+        Some(e) => println!(
+            "Trust: {:?} (publisher: {})",
+            e.level,
+            e.publisher.as_deref().unwrap_or("-")
+        ),
+        None => println!("No trust entry (defaults to Sandboxed)"),
+    }
+
+    println!("Audit complete for '{name}'");
+    Ok(())
+}
+
+pub fn cmd_trust(name: &str, level_str: &str) -> Result<()> {
+    let level = match level_str {
+        "sandboxed" => mur_common::skill::TrustLevel::Sandboxed,
+        "verified" => mur_common::skill::TrustLevel::Verified,
+        "trusted" => mur_common::skill::TrustLevel::Trusted,
+        other => bail!("invalid level '{other}' (expected: sandboxed | verified | trusted)"),
+    };
+    let home = resolve_mur_home()?;
+    let m =
+        local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let hash = mur_common::skill::content_sha256(&m)?;
+
+    let mut trust = mur_common::trust::skills::SkillTrustStore::load(&home)
+        .map_err(|e| anyhow!("load trust store: {e}"))?;
+    trust.insert(
+        hash,
+        mur_common::trust::skills::TrustEntry {
+            name: name.to_string(),
+            version: m.version.clone(),
+            level,
+            installed_at: chrono::Utc::now().to_rfc3339(),
+            publisher: Some(m.publisher.clone()),
+        },
+    );
+    trust
+        .save(&home)
+        .map_err(|e| anyhow!("save trust store: {e}"))?;
+    println!("Trust level for '{name}' set to {level:?}");
     Ok(())
 }
 
