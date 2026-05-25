@@ -1,9 +1,9 @@
 //! End-to-end: install skills → boot-inject → trigger match → Layer-3 swap.
 //! Tests up to the injection assembly boundary.
 
+use mur_agent_runtime::skills::RuntimeSkills;
 use mur_agent_runtime::skills::injector::inject_layer2;
 use mur_agent_runtime::skills::trigger_matcher::{format_layer3, layer3_body, match_prompt};
-use mur_agent_runtime::skills::RuntimeSkills;
 use mur_common::config::SkillsConfig;
 use mur_common::skill::loader::load_all;
 use mur_common::skill::{parse_canonical, write_to_dir};
@@ -59,7 +59,12 @@ triggers:
     let runtime = RuntimeSkills::build(loaded);
 
     // (1) Layer 2 contains house-rules, not find-price (no session_start).
-    let inj = inject_layer2(&runtime.loaded, &SkillsConfig::default(), 0.0, &HashSet::new());
+    let inj = inject_layer2(
+        &runtime.loaded,
+        &SkillsConfig::default(),
+        0.0,
+        &HashSet::new(),
+    );
     assert!(inj.system_addendum.contains("house-rules"));
     assert!(!inj.system_addendum.contains("find-price"));
 
