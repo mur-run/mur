@@ -15,7 +15,7 @@ pub use hash::{DriftStatus, content_sha256, ct_eq_hex, drift_status, sha256_hex}
 pub use manifest::*;
 pub use parser::{
     ParseError, parse_canonical, parse_legacy_markdown, parse_markdown, serialize_canonical,
-    serialize_markdown,
+    serialize_markdown, yaml_to_markdown,
 };
 pub use sign::{sign_manifest, verify_manifest, SignError, SKILL_PAYLOAD_TYPE};
 pub use types::*;
