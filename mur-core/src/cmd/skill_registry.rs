@@ -80,9 +80,7 @@ pub fn available_versions(registry_dir: &Path, name: &str) -> Result<Vec<Version
         return Ok(vec![]);
     }
     let mut out = Vec::new();
-    for entry in
-        std::fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))?
-    {
+    for entry in std::fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
         let entry = entry?;
         if !entry.file_type()?.is_file() {
             continue;
