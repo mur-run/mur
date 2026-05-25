@@ -12,6 +12,7 @@ pub mod parser;
 pub mod registry;
 pub mod scan;
 pub mod sign;
+pub mod stats;
 pub mod store;
 pub mod types;
 pub mod validate;
@@ -25,6 +26,7 @@ pub use hash::{
 pub use loader::{LoadedSkill, SkillScope, load_all};
 pub use lockfile::{LockfileError, SkillLock};
 pub use manifest::*;
+pub use stats::{LifecycleState, SkillStats};
 pub use parser::{
     ParseError, parse_canonical, parse_legacy_markdown, parse_markdown, serialize_canonical,
     serialize_markdown, yaml_to_markdown,
