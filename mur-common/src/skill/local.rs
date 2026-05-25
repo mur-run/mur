@@ -55,13 +55,12 @@ pub fn search_installed(
     let q = query.to_lowercase();
     let mut results = Vec::new();
     for name in list_installed(mur_home)? {
-        if let Ok(m) = load_installed(mur_home, &name) {
-            if name.to_lowercase().contains(&q)
+        if let Ok(m) = load_installed(mur_home, &name)
+            && (name.to_lowercase().contains(&q)
                 || m.description.to_lowercase().contains(&q)
-                || m.tags.iter().any(|t| t.to_lowercase().contains(&q))
-            {
-                results.push((name, m));
-            }
+                || m.tags.iter().any(|t| t.to_lowercase().contains(&q)))
+        {
+            results.push((name, m));
         }
     }
     Ok(results)

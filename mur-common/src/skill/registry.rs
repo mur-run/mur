@@ -48,7 +48,7 @@ impl RegistryIndex {
             })
             .map(|(n, e)| (n.as_str(), e))
             .collect();
-        results.sort_by(|a, b| b.1.install_count.cmp(&a.1.install_count));
+        results.sort_by_key(|k| std::cmp::Reverse(k.1.install_count));
         results
     }
 }
