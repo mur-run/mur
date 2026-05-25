@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use mur_common::skill::registry::{RegistryIndex, RegistrySkillEntry};
+use semver::Version;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -71,6 +72,39 @@ pub fn skill_yaml_path(registry_dir: &Path, name: &str, version: &str) -> PathBu
         .join(format!("{version}.yaml"))
 }
 
+/// List the versions of `name` available in the registry cache.
+/// Returns sorted ascending. Returns `Ok(vec![])` if the skill dir doesn't exist.
+pub fn available_versions(registry_dir: &Path, name: &str) -> Result<Vec<Version>> {
+    let dir = registry_dir.join("skills").join(name).join("versions");
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut out = Vec::new();
+    for entry in
+        std::fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))?
+    {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let name_str = file_name.to_string_lossy();
+        let Some(stripped) = name_str.strip_suffix(".yaml") else {
+            continue;
+        };
+        match Version::parse(stripped) {
+            Ok(v) => out.push(v),
+            Err(e) => tracing::warn!(
+                file = %name_str,
+                error = %e,
+                "skipping non-semver version filename"
+            ),
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 pub fn search_registry<'a>(
     idx: &'a RegistryIndex,
     query: &str,
@@ -116,5 +150,41 @@ skills:
         let d = tempdir().unwrap();
         let p = skill_yaml_path(d.path(), "my-skill", "1.2.3");
         assert!(p.ends_with("skills/my-skill/versions/1.2.3.yaml"));
+    }
+
+    #[test]
+    fn available_versions_missing_dir() {
+        let d = tempdir().unwrap();
+        let vs = available_versions(d.path(), "nonexistent").unwrap();
+        assert!(vs.is_empty());
+    }
+
+    #[test]
+    fn available_versions_sorted() {
+        let d = tempdir().unwrap();
+        let versions_dir = d.path().join("skills/my-skill/versions");
+        fs::create_dir_all(&versions_dir).unwrap();
+        fs::write(versions_dir.join("1.0.0.yaml"), "").unwrap();
+        fs::write(versions_dir.join("0.9.0.yaml"), "").unwrap();
+        fs::write(versions_dir.join("2.0.0.yaml"), "").unwrap();
+        let vs = available_versions(d.path(), "my-skill").unwrap();
+        assert_eq!(
+            vs.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+            vec!["0.9.0", "1.0.0", "2.0.0"]
+        );
+    }
+
+    #[test]
+    fn available_versions_skips_non_semver() {
+        let d = tempdir().unwrap();
+        let versions_dir = d.path().join("skills/my-skill/versions");
+        fs::create_dir_all(&versions_dir).unwrap();
+        fs::write(versions_dir.join("1.0.0.yaml"), "").unwrap();
+        fs::write(versions_dir.join("not-a-version.yaml"), "").unwrap();
+        fs::write(versions_dir.join("2.0.0.yaml"), "").unwrap();
+        let vs = available_versions(d.path(), "my-skill").unwrap();
+        assert_eq!(vs.len(), 2);
+        assert_eq!(vs[0].to_string(), "1.0.0");
+        assert_eq!(vs[1].to_string(), "2.0.0");
     }
 }
