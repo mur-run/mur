@@ -38,6 +38,20 @@ pub struct Config {
     // --- E3 additions ---
     #[serde(default)]
     pub sleep_cycle: SleepCycleConfig,
+
+    // --- M2 additions ---
+    #[serde(default)]
+    pub skills: SkillsConfig,
+}
+
+impl Config {
+    /// Read from disk, falling back to defaults.
+    pub fn load_or_default(path: &std::path::Path) -> Self {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_yaml_ng::from_str(&s).ok())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1208,6 +1222,45 @@ timeout_secs: 60
 
 /// Configuration for the daemon-side sleep cycle (idle background learning).
 ///
+/// Skill injection configuration (M2 — runtime injection).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillsConfig {
+    pub max_skills_in_prompt: usize,
+    pub max_total_tokens: usize,
+    pub priority_order: Vec<String>,
+    pub adaptive: Option<AdaptiveSkillsConfig>,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            max_skills_in_prompt: 5,
+            max_total_tokens: 2000,
+            priority_order: vec!["agent".into(), "global".into()],
+            adaptive: Some(AdaptiveSkillsConfig::default()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AdaptiveSkillsConfig {
+    pub context_fill_decay: f64,
+    pub min_remaining_context_ratio: f64,
+    pub recent_fire_boost_turns: usize,
+}
+
+impl Default for AdaptiveSkillsConfig {
+    fn default() -> Self {
+        Self {
+            context_fill_decay: 1.5,
+            min_remaining_context_ratio: 0.20,
+            recent_fire_boost_turns: 5,
+        }
+    }
+}
+
 /// When enabled, the daemon fires a consolidation pipeline after the user has been
 /// idle for `idle_threshold_minutes` minutes (default 15). Opt-in only — off by default.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1445,5 +1498,24 @@ backend:
         let cfg = CompactConfig::default();
         let b = cfg.synthesize_abstractive_backend();
         assert_eq!(b.timeout_secs, Some(120));
+    }
+}
+
+#[cfg(test)]
+mod skills_config_tests {
+    use super::*;
+
+    #[test]
+    fn empty_yaml_hydrates_defaults() {
+        let cfg: Config = serde_yaml_ng::from_str("{}").unwrap();
+        assert_eq!(cfg.skills.max_skills_in_prompt, 5);
+        assert_eq!(cfg.skills.max_total_tokens, 2000);
+        assert!(cfg.skills.adaptive.is_some());
+    }
+
+    #[test]
+    fn load_or_default_missing_file_returns_default() {
+        let cfg = Config::load_or_default(std::path::Path::new("/nonexistent/config.yaml"));
+        assert_eq!(cfg.skills.max_skills_in_prompt, 5);
     }
 }
