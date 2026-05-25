@@ -100,6 +100,51 @@ pub(crate) async fn cmd_session_stop(analyze: bool, reflect: bool) -> Result<()>
                 run_reflect_curate(&recording_path, false)?;
             }
 
+            // M3b.3: quick suggestion scan after session stop.
+            if let Ok(home) = crate::cmd::agent::resolve_mur_home() {
+                let rec_dir = home.join("session").join("recordings");
+                if rec_dir.exists() {
+                    let mut paths: Vec<_> = std::fs::read_dir(&rec_dir)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
+                        .collect();
+                    paths.sort_by_key(|e| {
+                        std::cmp::Reverse(
+                            e.metadata()
+                                .and_then(|m| m.modified())
+                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                        )
+                    });
+                    paths.truncate(20);
+
+                    let mut fps = Vec::new();
+                    for entry in &paths {
+                        if let Ok(content) = std::fs::read_to_string(entry.path())
+                            && !content.trim().is_empty()
+                        {
+                            let id = entry
+                                .path()
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            fps.extend(crate::capture::emergence::extract_fingerprints(
+                                &content, &id,
+                            ));
+                        }
+                    }
+                    let candidates = crate::capture::emergence::detect_emergent(&fps, 3);
+                    if !candidates.is_empty() {
+                        eprintln!(
+                            "{} repeat pattern(s) detected — run `mur skill suggest` to generate skills",
+                            candidates.len(),
+                        );
+                    }
+                }
+            }
+
             // Auto-push to device sync if configured
             if let Ok(config) = crate::store::config::load_config()
                 && config.sync.auto
