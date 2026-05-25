@@ -81,13 +81,9 @@ pub enum RecoveryAction {
     /// Retry same agent, same step, same parameters.
     Retry,
     /// Re-route to a different capable agent.
-    Reroute {
-        reason: FailureCategory,
-    },
+    Reroute { reason: FailureCategory },
     /// Bubble to planner LLM for full re-planning.
-    Escalate {
-        reason: FailureCategory,
-    },
+    Escalate { reason: FailureCategory },
     /// Give up; emit workflow_failed.
     Abort,
 }
@@ -117,7 +113,7 @@ mod tests {
     #[test]
     fn test_phase_ordering() {
         use super::Phase;
-        let ordered = vec![
+        let ordered = [
             Phase::Plan,
             Phase::Design,
             Phase::Implement,
