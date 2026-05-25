@@ -1,0 +1,175 @@
+use mur_common::skill::TriggerKind;
+use mur_common::skill::loader::LoadedSkill;
+use mur_common::skill::types::TrustLevel;
+use regex::Regex;
+
+#[derive(Debug, Clone)]
+pub struct RegisteredTrigger {
+    pub skill_name: String,
+    pub pattern: TriggerPattern,
+    pub trust: TrustLevel,
+}
+
+#[derive(Debug, Clone)]
+pub enum TriggerPattern {
+    Command(String),
+    Keyword(Regex),
+}
+
+pub fn register_from(skills: &[LoadedSkill]) -> Vec<RegisteredTrigger> {
+    let mut out = Vec::new();
+    for s in skills {
+        for t in &s.manifest.triggers {
+            let p_opt = match (&t.kind, &t.pattern) {
+                (TriggerKind::Command, Some(p)) => Some(TriggerPattern::Command(p.clone())),
+                (TriggerKind::Keyword, Some(p)) => match Regex::new(p) {
+                    Ok(rx) => Some(TriggerPattern::Keyword(rx)),
+                    Err(e) => {
+                        tracing::warn!(
+                            skill = %s.name,
+                            pattern = %p,
+                            error = %e,
+                            "bad keyword regex"
+                        );
+                        None
+                    }
+                },
+                _ => None,
+            };
+            if let Some(pattern) = p_opt {
+                out.push(RegisteredTrigger {
+                    skill_name: s.name.clone(),
+                    pattern,
+                    trust: s.trust,
+                });
+            }
+        }
+    }
+    out
+}
+
+pub fn match_prompt<'a>(
+    triggers: &'a [RegisteredTrigger],
+    prompt: &str,
+) -> Vec<&'a RegisteredTrigger> {
+    triggers
+        .iter()
+        .filter(|t| match &t.pattern {
+            TriggerPattern::Command(cmd) => prompt.trim_start().starts_with(cmd),
+            TriggerPattern::Keyword(rx) => rx.is_match(prompt),
+        })
+        .collect()
+}
+
+pub fn layer3_body(manifest: &mur_common::skill::SkillManifest) -> Option<String> {
+    let c = &manifest.content;
+    if let Some(ctx) = &c.context {
+        return Some(ctx.clone());
+    }
+    if let Some(p) = &c.procedure {
+        return Some(
+            p.steps
+                .iter()
+                .map(|s| s.description.clone())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    c.command.clone()
+}
+
+pub fn format_layer3(skill_name: &str, trust: TrustLevel, body: &str) -> String {
+    format!(
+        "<skill-instruction source=\"{skill_name}\" trust=\"{trust:?}\">\n{body}\n</skill-instruction>"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mur_common::skill::loader::SkillScope;
+    use mur_common::skill::parse_canonical;
+
+    fn sample() -> LoadedSkill {
+        let yaml = r#"
+name: research
+version: 1.0.0
+publisher: human:t
+description: r
+category: context
+content:
+  abstract: Searches prices
+  context: "Full procedure: navigate, search, extract"
+triggers:
+  - type: command
+    pattern: /research
+  - type: keyword
+    pattern: "find prices"
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        LoadedSkill {
+            name: "research".into(),
+            manifest: m,
+            trust: TrustLevel::Verified,
+            scope: SkillScope::Global,
+            content_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn command_trigger_matches() {
+        let triggers = register_from(&[sample()]);
+        let matched = match_prompt(&triggers, "/research airpods");
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].skill_name, "research");
+    }
+
+    #[test]
+    fn keyword_trigger_matches() {
+        let triggers = register_from(&[sample()]);
+        let matched = match_prompt(&triggers, "can you find prices please?");
+        assert_eq!(matched.len(), 1);
+    }
+
+    #[test]
+    fn invalid_regex_is_skipped() {
+        let yaml = r#"
+name: bad-regex
+version: 1.0.0
+publisher: human:t
+description: r
+category: context
+content:
+  abstract: x
+  context: x
+triggers:
+  - type: keyword
+    pattern: "(unmatched["
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        let s = LoadedSkill {
+            name: "bad-regex".into(),
+            manifest: m,
+            trust: TrustLevel::Sandboxed,
+            scope: SkillScope::Global,
+            content_hash: String::new(),
+        };
+        let triggers = register_from(&[s]);
+        assert!(triggers.is_empty());
+    }
+
+    #[test]
+    fn format_layer3_produces_tag() {
+        let out = format_layer3("test", TrustLevel::Sandboxed, "do something");
+        assert!(out.starts_with("<skill-instruction source=\"test\" trust=\"Sandboxed\">"));
+        assert!(out.contains("do something"));
+        assert!(out.ends_with("</skill-instruction>"));
+    }
+
+    #[test]
+    fn layer3_body_extracts_context() {
+        let body = layer3_body(&sample().manifest);
+        assert!(body.is_some());
+        assert!(body.unwrap().contains("Full procedure"));
+    }
+}
