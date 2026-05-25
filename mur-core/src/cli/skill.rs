@@ -60,4 +60,9 @@ pub enum SkillAction {
         /// Name of installed skill to update.
         name: String,
     },
+    /// Print the resolved dependency tree for an installed skill.
+    Deps {
+        /// Name of installed skill.
+        name: String,
+    },
 }
