@@ -37,6 +37,7 @@ mod server;
 #[cfg(feature = "server")]
 mod server_agents;
 mod session;
+mod skill_consolidate;
 #[allow(dead_code)]
 mod skill_gen;
 mod skill_lifecycle;

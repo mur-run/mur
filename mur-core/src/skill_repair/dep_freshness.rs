@@ -40,20 +40,12 @@ impl Repair for DepFreshnessRepair {
             }
         } else if msg.contains("but") && msg.contains("is installed") {
             // "Requires <name> <constraint> but <installed> is installed."
-            let name = msg
-                .split_whitespace()
-                .nth(1)
-                .unwrap_or("")
-                .to_string();
+            let name = msg.split_whitespace().nth(1).unwrap_or("").to_string();
             if name.is_empty() {
                 return RepairOutcome::Skipped("could not parse dependency name".into());
             }
             if apply {
-                match crate::cmd::skill_install::cmd_install(
-                    ctx.home,
-                    ctx.registry_url,
-                    &name,
-                ) {
+                match crate::cmd::skill_install::cmd_install(ctx.home, ctx.registry_url, &name) {
                     Ok(()) => RepairOutcome::Fixed,
                     Err(e) => RepairOutcome::Failed(e),
                 }

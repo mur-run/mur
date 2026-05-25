@@ -56,16 +56,19 @@ fn repair_report_counts_correctly() {
     // Apply mode — dep_freshness will try to install (fails on /nonexistent)
     // We'll get Failed since the path doesn't exist
     let report2 = run_repairs(&findings, true, &ctx, &repairs);
-    assert_eq!(report2.fixed + report2.skipped + report2.failed, report2.outcomes.len());
+    assert_eq!(
+        report2.fixed + report2.skipped + report2.failed,
+        report2.outcomes.len()
+    );
 }
 
 #[test]
 fn tool_availability_always_skipped() {
     // tool_availability repair always returns Skipped (requires agent context)
     let finding = make_finding("test", "tool-availability", true);
-    let repairs: Vec<Box<dyn mur_core::skill_repair::Repair>> = vec![
-        Box::new(mur_core::skill_repair::tool_availability::ToolAvailabilityRepair),
-    ];
+    let repairs: Vec<Box<dyn mur_core::skill_repair::Repair>> = vec![Box::new(
+        mur_core::skill_repair::tool_availability::ToolAvailabilityRepair,
+    )];
     let home = Path::new("/nonexistent");
     let ctx = RepairCtx {
         home,

@@ -36,6 +36,7 @@ pub mod interactive;
 pub mod paths;
 pub mod retrieve;
 pub mod session;
+pub mod skill_consolidate;
 pub mod skill_gen;
 pub mod skill_lifecycle;
 pub mod skill_repair;

@@ -21,9 +21,6 @@ impl Repair for ToolAvailabilityRepair {
     }
 
     fn run(&self, finding: &Finding, _ctx: &RepairCtx, _apply: bool) -> RepairOutcome {
-        RepairOutcome::Skipped(format!(
-            "manual MCP install required: {}",
-            finding.message
-        ))
+        RepairOutcome::Skipped(format!("manual MCP install required: {}", finding.message))
     }
 }

@@ -3,7 +3,7 @@
 use chrono::{DateTime, Duration, Utc};
 use mur_common::skill::lifecycle::{calculate_decay, half_life_days};
 use mur_common::skill::stats::{LifecycleState, SkillStats};
-use mur_core::skill_lifecycle::sweep::{run_sweep, SweepOptions};
+use mur_core::skill_lifecycle::sweep::{SweepOptions, run_sweep};
 use std::fs;
 use tempfile::TempDir;
 
@@ -48,24 +48,26 @@ fn sweep_idempotent() {
     // Create 5 skills in various states
     let skill_names = &["alpha", "beta", "gamma", "delta", "epsilon"];
     let states = &[
-        LifecycleState::Draft,       // 3 successes → would promote to Emerging
-        LifecycleState::Emerging,    // 12 successes, 80% rate, 14d age → would hit Stable
-        LifecycleState::Stable,      // 40 successes, 90% rate, 40d age → would hit Canonical (if pinned)
-        LifecycleState::Stable,      // low success rate → would deprecate
-        LifecycleState::Archived,    // already archived → no change
+        LifecycleState::Draft,    // 3 successes → would promote to Emerging
+        LifecycleState::Emerging, // 12 successes, 80% rate, 14d age → would hit Stable
+        LifecycleState::Stable, // 40 successes, 90% rate, 40d age → would hit Canonical (if pinned)
+        LifecycleState::Stable, // low success rate → would deprecate
+        LifecycleState::Archived, // already archived → no change
     ];
 
     let configs = [
-        (3, 3, 5, 1, 1.0, false),   // Draft → Emerging: 3 successes
-        (12, 10, 14, 1, 1.0, false), // Emerging → Stable: 10 succ >= 10, 83% >= 60%, 14d >= 7d
-        (40, 35, 40, 1, 1.0, true),  // Stable → Canonical: pinned, 35 succ >= 30, 88% >= 80%, 40d >= 30d
+        (3, 3, 5, 1, 1.0, false),      // Draft → Emerging: 3 successes
+        (12, 10, 14, 1, 1.0, false),   // Emerging → Stable: 10 succ >= 10, 83% >= 60%, 14d >= 7d
+        (40, 35, 40, 1, 1.0, true), // Stable → Canonical: pinned, 35 succ >= 30, 88% >= 80%, 40d >= 30d
         (10, 2, 30, 10, 0.5, false), // Stable → Deprecated: 20% < 30%, usage >= 5
         (0, 0, 365, 365, 0.05, false), // Archived: stays
     ];
 
     for (i, name) in skill_names.iter().enumerate() {
         let (usage, succ, first, last, anchor, pinned) = configs[i];
-        let stats = make_stats(name, states[i], usage, succ, first, last, anchor, pinned, now);
+        let stats = make_stats(
+            name, states[i], usage, succ, first, last, anchor, pinned, now,
+        );
         write_stats(home, &stats);
     }
 
@@ -80,7 +82,10 @@ fn sweep_idempotent() {
     )
     .unwrap();
 
-    assert!(report1.examined >= 4, "expected at least 4 skills examined, got {report1:?}");
+    assert!(
+        report1.examined >= 4,
+        "expected at least 4 skills examined, got {report1:?}"
+    );
     assert!(
         !report1.transitions.is_empty(),
         "first sweep should produce transitions"
@@ -162,8 +167,12 @@ fn anchor_reset_on_promotion() {
 
     // Anchor should be the decayed value (~0.5 at one half-life), not 1.0.
     // on_promotion uses the OLD (Draft) half-life of 14 days.
-    let expected_decay =
-        calculate_decay(1.0, Some(now - Duration::days(14)), half_life_days(LifecycleState::Draft), now);
+    let expected_decay = calculate_decay(
+        1.0,
+        Some(now - Duration::days(14)),
+        half_life_days(LifecycleState::Draft),
+        now,
+    );
     assert!(
         loaded.anchor_confidence < 0.99,
         "anchor should be decayed ({expected_decay:.3}), not 1.0, got {}",

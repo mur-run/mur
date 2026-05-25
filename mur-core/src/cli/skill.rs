@@ -171,4 +171,13 @@ pub enum SkillAction {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Run consolidation pass: dedup + contradiction + orphan (M5b).
+    Consolidate {
+        /// Preview findings without writing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply changes (archive orphans, deprecate duplicates).
+        #[arg(long)]
+        apply: bool,
+    },
 }

@@ -86,8 +86,8 @@ fn classify_reason(
 }
 
 pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
-    let installed = mur_common::skill::local::list_installed(home)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let installed =
+        mur_common::skill::local::list_installed(home).map_err(|e| anyhow::anyhow!("{e}"))?;
     let mut report = SweepReport::default();
 
     for name in installed {
@@ -149,7 +149,8 @@ pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
                     from = ?current.lifecycle_state,
                     to = ?proposed,
                     reason = %reason,
-                ).in_scope(|| tracing::info!("transition persisted"));
+                )
+                .in_scope(|| tracing::info!("transition persisted"));
             }
         }
     }
