@@ -1,0 +1,146 @@
+//! Local skill store helpers — list installed, resolve, remove, search, trust.
+
+use crate::skill::store::global_skill_dir;
+use crate::skill::{read_from_dir, SkillManifest, StoreError};
+use crate::skill::types::TrustLevel;
+use crate::trust::skills::SkillTrustStore;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub fn list_installed(mur_home: &Path) -> Result<Vec<String>, StoreError> {
+    let skills_dir = mur_home.join("skills");
+    if !skills_dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut names: Vec<_> = fs::read_dir(&skills_dir)
+        .map_err(StoreError::Io)?
+        .filter_map(|e| {
+            let e = e.ok()?;
+            if e.file_type().ok()?.is_dir() {
+                e.file_name().to_str().map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+pub fn load_installed(mur_home: &Path, name: &str) -> Result<SkillManifest, StoreError> {
+    read_from_dir(&global_skill_dir(mur_home, name))
+}
+
+pub fn installed_path(mur_home: &Path, name: &str) -> PathBuf {
+    global_skill_dir(mur_home, name)
+}
+
+pub fn remove_installed(mur_home: &Path, name: &str) -> Result<(), StoreError> {
+    let dir = installed_path(mur_home, name);
+    if dir.exists() {
+        fs::remove_dir_all(&dir).map_err(StoreError::Io)?;
+    }
+    // Remove trust entry by name
+    if let Ok(mut trust) = SkillTrustStore::load(mur_home) {
+        trust.entries.retain(|_k, v| v.name != name);
+        let _ = trust.save(mur_home);
+    }
+    Ok(())
+}
+
+pub fn search_installed(mur_home: &Path, query: &str) -> Result<Vec<(String, SkillManifest)>, StoreError> {
+    let q = query.to_lowercase();
+    let mut results = Vec::new();
+    for name in list_installed(mur_home)? {
+        if let Ok(m) = load_installed(mur_home, &name) {
+            if name.to_lowercase().contains(&q)
+                || m.description.to_lowercase().contains(&q)
+                || m.tags.iter().any(|t| t.to_lowercase().contains(&q))
+            {
+                results.push((name, m));
+            }
+        }
+    }
+    Ok(results)
+}
+
+pub fn set_trust_level(mur_home: &Path, name: &str, level: TrustLevel) -> Result<(), Box<dyn std::error::Error>> {
+    let mut trust = SkillTrustStore::load(mur_home)?;
+    let keys: Vec<String> = trust.entries.iter()
+        .filter(|(_k, v)| v.name == name)
+        .map(|(k, _)| k.clone())
+        .collect();
+    for k in keys {
+        if let Some(e) = trust.entries.get_mut(&k) {
+            e.level = level;
+        }
+    }
+    trust.save(mur_home)?;
+    Ok(())
+}
+
+pub fn get_trust_level(mur_home: &Path, name: &str) -> Result<TrustLevel, Box<dyn std::error::Error>> {
+    let trust = SkillTrustStore::load(mur_home)?;
+    for entry in trust.entries.values() {
+        if entry.name == name {
+            return Ok(entry.level);
+        }
+    }
+    Ok(TrustLevel::Sandboxed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use crate::skill::{parse_canonical, write_to_dir};
+
+    fn sample(name: &str) -> SkillManifest {
+        parse_canonical(&format!(
+            r#"name: {name}
+version: 1.0.0
+publisher: human:t
+description: test skill for {name}
+category: context
+content:
+  abstract: hi
+  context: body
+tags: [test, {name}]
+"#)).unwrap()
+    }
+
+    #[test]
+    fn list_returns_installed() {
+        let dir = tempdir().unwrap();
+        write_to_dir(&global_skill_dir(dir.path(), "a"), &sample("a")).unwrap();
+        write_to_dir(&global_skill_dir(dir.path(), "b"), &sample("b")).unwrap();
+        assert_eq!(list_installed(dir.path()).unwrap(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn empty_dir_returns_empty() {
+        assert!(list_installed(tempdir().unwrap().path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_finds_by_name() {
+        let dir = tempdir().unwrap();
+        write_to_dir(&global_skill_dir(dir.path(), "my-prices"), &sample("my-prices")).unwrap();
+        assert_eq!(search_installed(dir.path(), "price").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn search_finds_by_tag() {
+        let dir = tempdir().unwrap();
+        write_to_dir(&global_skill_dir(dir.path(), "web"), &sample("web")).unwrap();
+        assert_eq!(search_installed(dir.path(), "test").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn remove_cleans_dir() {
+        let dir = tempdir().unwrap();
+        write_to_dir(&global_skill_dir(dir.path(), "rm-me"), &sample("rm-me")).unwrap();
+        remove_installed(dir.path(), "rm-me").unwrap();
+        assert!(list_installed(dir.path()).unwrap().is_empty());
+    }
+}
