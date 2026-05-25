@@ -48,7 +48,10 @@ pub fn scan_secrets(body: &str) -> Vec<SecretFinding> {
     let mut out = Vec::new();
     for (rx, label) in patterns() {
         for m in rx.find_iter(body) {
-            out.push(SecretFinding { label, matched: m.as_str().to_string() });
+            out.push(SecretFinding {
+                label,
+                matched: m.as_str().to_string(),
+            });
         }
     }
     out
