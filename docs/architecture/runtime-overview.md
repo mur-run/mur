@@ -177,6 +177,31 @@ Key modules:
 - **`mur-core/src/cmd/skill_from_pattern.rs`** — `mur skill from-pattern`: promote a Stable/Canonical pattern to a skill, with optional LLM polish.
 - **`mur-core/src/skill_index/`** — Vector embedding (LanceDB) and BM25 index for `mur skill search`.
 - **`mur-core/src/cmd/skill_registry.rs`** — Remote registry fetch + search.
+- **`mur-core/src/skill_llm/`** — LLM-augmented skill maintenance (M6c). Provides `maintenance_call()` with content-hash caching (30d TTL), per-day budget tracking ($0.50 default), and role-resolution from the model registry. Three LLM-backed checks: api-drift, coverage-gap, and contradiction adjudication.
+- **`mur-core/src/skill_traces/`** — Trace clustering helpers shared by api-drift and coverage-gap doctor checks (M6c).
+
+### Skill LLM Maintenance (M6c)
+
+Three LLM-augmented checks, all opt-in via `--llm`/`--llm-adjudicate`:
+
+| Check | CLI flag | Description |
+|-------|----------|-------------|
+| api-drift | `mur skill doctor --llm` | Compares skill procedure against recent trace tool usage; warns if the procedure has drifted from observed behavior |
+| coverage-gap | `mur skill doctor --llm` | Clusters repeated failures and asks the LLM what skill or step would unblock them |
+| contradiction adjudication | `mur skill consolidate --llm-adjudicate` | Takes rule-based contradiction pairs and asks the LLM: contradict, coexist, or duplicate? |
+
+**Configuration** (`~/.mur/config.yaml`):
+```yaml
+skill_llm:
+  per_call_token_cap: 1500    # max output tokens per call
+  per_day_usd_cap: 0.50       # daily budget cap
+  cache_ttl_days: 30           # content-hash cache TTL
+  model_ref: null              # explicit model key override (null = role resolution)
+```
+
+**Model role**: Use `mur model role set maintenance <model_key>` to dedicate a cheap model (e.g., Haiku) to maintenance. Falls back to `roles.chat` then the first chat-capable model.
+
+**Graceful degradation**: Every check degrades to its pre-M6c stub when no model is available. LLMs are an upgrade, never a hard dependency. Run `mur skill doctor --llm-status` to see the current state.
 
 ### Skill↔MCP Integration (v2.1)
 

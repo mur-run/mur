@@ -43,8 +43,10 @@ mod skill_gen;
 #[allow(dead_code)]
 mod skill_index;
 mod skill_lifecycle;
+mod skill_llm;
 mod skill_repair;
 mod skill_stats;
+mod skill_traces;
 #[cfg(feature = "sources")]
 mod sources;
 mod store;
