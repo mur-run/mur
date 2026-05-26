@@ -4,6 +4,7 @@
 //! with half-life decay, and cross-agent Jaccard consolidate.
 
 pub mod consolidate;
+pub mod credit;
 pub mod fitness;
 pub mod recombine;
 pub mod stats_agg;
