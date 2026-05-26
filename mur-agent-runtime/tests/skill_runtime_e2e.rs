@@ -6,7 +6,7 @@ use mur_agent_runtime::skills::injector::inject_layer2;
 use mur_agent_runtime::skills::trigger_matcher::{format_layer3, layer3_body, match_prompt};
 use mur_common::config::SkillsConfig;
 use mur_common::skill::loader::load_all;
-use mur_common::skill::{parse_canonical, write_to_dir};
+use mur_common::skill::{McpInventory, parse_canonical, write_to_dir};
 use std::collections::HashSet;
 use tempfile::tempdir;
 
@@ -81,6 +81,7 @@ triggers:
             .find(|s| s.name == "find-price")
             .unwrap()
             .manifest,
+        &McpInventory::default(),
     )
     .unwrap();
     let wrapped = format_layer3("find-price", matched[0].trust, &body);

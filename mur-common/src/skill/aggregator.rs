@@ -32,6 +32,7 @@ struct Delta {
     usage: u64,
     success: u64,
     failure: u64,
+    resolution_misses: u64,
     last_used_at: Option<DateTime<Utc>>,
     last_success_at: Option<DateTime<Utc>>,
     first_success_seen: Option<DateTime<Utc>>,
@@ -129,6 +130,7 @@ async fn flush(mur_home: &std::path::Path, deltas: &Mutex<HashMap<String, Delta>
             s.usage_count += delta.usage;
             s.success_count += delta.success;
             s.failure_count += delta.failure;
+            s.resolution_misses += delta.resolution_misses;
             if let Some(t) = delta.last_used_at {
                 s.last_used_at = Some(match s.last_used_at {
                     Some(existing) => existing.max(t),
