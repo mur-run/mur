@@ -171,3 +171,16 @@ pub fn read_idle_triggers(name: &str) -> Result<Vec<IdleTrigger>> {
     let (_path, profile) = load_profile_for_edit(name)?;
     Ok(profile.lifecycle.idle_triggers)
 }
+
+/// Register the `skill-propagate` idle trigger with idempotency (M7c).
+pub fn cmd_propagate_init(name: &str, after_secs: u64, cooldown_secs: u64) -> Result<()> {
+    let message = "propagate.run";
+    let existing = read_idle_triggers(name)?;
+    if existing.iter().any(|t| t.message == message) {
+        println!("skill-propagate trigger already registered for {name}");
+        return Ok(());
+    }
+    cmd_idle_add(name, after_secs, message, None, cooldown_secs, true)?;
+    println!("registered skill-propagate idle trigger for {name}");
+    Ok(())
+}

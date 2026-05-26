@@ -7,6 +7,7 @@ pub mod skill;
 
 pub use actions::*;
 pub use agent::*;
+pub use skill::IntentAction;
 pub use skill::SkillAction;
 
 use clap::{Parser, Subcommand};
