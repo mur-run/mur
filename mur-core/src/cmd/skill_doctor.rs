@@ -95,6 +95,7 @@ pub fn cmd_doctor(
         "api-drift",
         "mcp-requirements-coverage",
         "mcp-capability-available",
+        "intent-resolvable",
     ];
     let active_checks: Vec<&str> = if checks.is_empty() {
         all_checks.to_vec()
@@ -134,6 +135,9 @@ pub fn cmd_doctor(
                 }
                 "mcp-capability-available" => {
                     findings.extend(run_mcp_capability_available(&ctx, skill_name));
+                }
+                "intent-resolvable" => {
+                    findings.extend(run_intent_resolvable(&ctx, skill_name));
                 }
                 _ => {}
             }
@@ -668,6 +672,57 @@ fn run_mcp_capability_available(ctx: &DoctorCtx, skill_name: &str) -> Vec<Findin
     findings
 }
 
+fn run_intent_resolvable(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
+    let Some(manifest) = load_manifest(&ctx.home, skill_name) else {
+        return vec![Finding {
+            check_id: "intent-resolvable".into(),
+            category: "mcp".into(),
+            severity: Severity::Unknown,
+            skill_name: skill_name.to_string(),
+            message: "Cannot read manifest — unable to check intent resolvability.".into(),
+            remediation: None,
+            fixable: false,
+        }];
+    };
+
+    let Some(proc) = &manifest.content.procedure else {
+        return vec![];
+    };
+
+    let inventory = mur_common::skill::McpInventory::from_tool_names(
+        ctx.mcp_tools.clone().unwrap_or_default(),
+    );
+    let reqs = &manifest.mcp_requirements;
+
+    let mut findings = Vec::new();
+    for (idx, step) in proc.steps.iter().enumerate() {
+        if step.intent.is_none() {
+            continue;
+        }
+        match mur_common::skill::resolve_step(step, reqs, &inventory) {
+            mur_common::skill::Resolution::Unresolved { reason } => {
+                findings.push(Finding {
+                    check_id: "intent-resolvable".into(),
+                    category: "mcp".into(),
+                    severity: Severity::Warn,
+                    skill_name: skill_name.to_string(),
+                    message: format!(
+                        "step[{idx}] intent '{}' unresolvable: {reason}",
+                        step.intent.as_deref().unwrap_or("")
+                    ),
+                    remediation: Some(
+                        "Install an MCP server providing the required tool, or add a fallback."
+                            .into(),
+                    ),
+                    fixable: false,
+                });
+            }
+            _ => {}
+        }
+    }
+    findings
+}
+
 fn exit_code(findings: &[Finding], strict: bool) -> i32 {
     let any_fail = findings.iter().any(|f| f.severity == Severity::Fail);
     let any_warn = findings.iter().any(|f| f.severity == Severity::Warn);
@@ -930,5 +985,119 @@ content:
         let ctx = doctor_ctx_with_tools(&dir, vec!["browser.navigate".into()]);
         let findings = run_mcp_capability_available(&ctx, "simple-skill");
         assert!(findings.is_empty());
+    }
+
+    // ── intent-resolvable ──
+
+    #[test]
+    fn intent_resolvable_matched_by_inventory() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: intent-skill
+version: 1.0.0
+publisher: human:test
+description: Intent matched by inventory
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: Navigate
+        intent: web_navigate
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+"#;
+        write_skill(&dir, "intent-skill", yaml);
+        let ctx =
+            doctor_ctx_with_tools(&dir, vec!["browser.navigate".into(), "browser.click".into()]);
+        let findings = run_intent_resolvable(&ctx, "intent-skill");
+        assert!(
+            findings.is_empty(),
+            "expected no findings when intent matches, got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn intent_resolvable_warns_when_no_match() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: unresolvable-skill
+version: 1.0.0
+publisher: human:test
+description: Intent with no matching inventory
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: Navigate
+        intent: web_navigate
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+"#;
+        write_skill(&dir, "unresolvable-skill", yaml);
+        let ctx = doctor_ctx_with_tools(&dir, vec!["filesystem.read".into()]);
+        let findings = run_intent_resolvable(&ctx, "unresolvable-skill");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Warn);
+        assert!(findings[0].message.contains("web_navigate"));
+        assert!(findings[0].message.contains("unresolvable"));
+    }
+
+    #[test]
+    fn intent_resolvable_fallback_in_inventory_no_warning() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: fallback-skill
+version: 1.0.0
+publisher: human:test
+description: Intent resolved via fallback
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: Navigate
+        intent: web_navigate
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+    fallback: builtin-http
+"#;
+        write_skill(&dir, "fallback-skill", yaml);
+        let ctx = doctor_ctx_with_tools(&dir, vec!["builtin-http".into()]);
+        let findings = run_intent_resolvable(&ctx, "fallback-skill");
+        assert!(
+            findings.is_empty(),
+            "fallback in inventory should resolve, got {findings:?}"
+        );
+    }
+
+    #[test]
+    fn intent_resolvable_skips_steps_without_intent() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: literal-skill
+version: 1.0.0
+publisher: human:test
+description: Only literal tools, no intents
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: Navigate
+        tool: browser.navigate
+      - description: Search
+"#;
+        write_skill(&dir, "literal-skill", yaml);
+        let ctx = doctor_ctx_with_tools(&dir, vec![]);
+        let findings = run_intent_resolvable(&ctx, "literal-skill");
+        assert!(
+            findings.is_empty(),
+            "steps without intent should be skipped, got {findings:?}"
+        );
     }
 }
