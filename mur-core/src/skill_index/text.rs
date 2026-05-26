@@ -69,6 +69,7 @@ mod tests {
             priority: Default::default(),
             evolution_log: vec![],
             transfer_chain: vec![],
+            mcp_requirements: vec![],
         }
     }
 

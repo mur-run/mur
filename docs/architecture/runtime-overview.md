@@ -162,3 +162,51 @@ Submodules:
 
 - **Spec:** `docs/superpowers/specs/2026-04-29-mur-companion-phase-1-1-design.md`
 - **Plan:** `docs/superpowers/plans/2026-04-29-companion-phase-1-1-plan.md`
+
+---
+
+## Skills System
+
+Skills are installable agent capabilities packaged as YAML or Markdown manifests. Each skill lives under `~/.mur/skills/<name>/skill.yaml` (or `skill.md`). The CLI surface is `mur skill {validate,fmt,list,show,remove,search,info,audit,trust,from-pattern,doctor,consolidate,reindex-vec,reindex-stats}`.
+
+Key modules:
+
+- **`mur-common/src/skill/`** — Shared types and validation: `SkillManifest` (schema v2.1), `Skill` wrapper, `Content`, `Procedure`, `Trigger`, `Category`, `TrustLevel`, plus `scan_skill()` security scanning.
+- **`mur-core/src/cmd/skill_cmd.rs`** — `mur skill` CLI handlers (validate, fmt, list, show, remove, search, info, audit, trust).
+- **`mur-core/src/cmd/skill_doctor.rs`** — `mur skill doctor` checks: deprecated fields, missing abstract, untrusted skills, trigger coverage, MCP requirements coverage, MCP capability availability.
+- **`mur-core/src/cmd/skill_from_pattern.rs`** — `mur skill from-pattern`: promote a Stable/Canonical pattern to a skill, with optional LLM polish.
+- **`mur-core/src/skill_index/`** — Vector embedding (LanceDB) and BM25 index for `mur skill search`.
+- **`mur-core/src/cmd/skill_registry.rs`** — Remote registry fetch + search.
+
+### Skill↔MCP Integration (v2.1)
+
+Skills can declare MCP tool requirements via the `mcp_requirements` field, introduced in schema v2.1. This allows a skill manifest to specify which MCP tools it needs and what capability each tool provides, enabling the runtime to verify tool availability before execution (M6b).
+
+**Data model** (`mur-common/src/skill/mcp.rs`):
+
+- `SkillCapability` enum — `ReadFile | ListTools | Search | WriteFile | ExecuteSafe | NetworkHttp` (string-form serde, e.g. `"read_file"`).
+- `McpRequirement` struct — `tool_pattern` (glob), `capability` (SkillCapability), `fallback` (optional description for graceful degradation).
+
+Example manifest fragment:
+
+```yaml
+mcp_requirements:
+  - tool_pattern: "filesystem.read_*"
+    capability: read_file
+  - tool_pattern: "web.search"
+    capability: search
+    fallback: "Use built-in web search if MCP web tool unavailable"
+```
+
+**Validation** — `validate_requirements()` in `mur-common/src/skill/mcp.rs` checks glob syntax and rejects duplicate tool patterns. The main `validate()` function calls this for every manifest parse, returning `ValidationError::McpRequirements(idx, message)` on failure.
+
+**Doctor checks** (`mur-core/src/cmd/skill_doctor.rs`):
+
+| Check | Severity | What it does |
+|-------|----------|--------------|
+| `mcp-requirements-coverage` | Warn | Flags procedural skills whose steps reference dotted tool names (e.g. `filesystem.read_file`) but lack a matching `mcp_requirements` entry. |
+| `mcp-capability-available` | Warn/Unknown | Glob-matches each requirement's `tool_pattern` against the agent's configured MCP tools. Emits `Unknown` when run outside an agent context (no tool list available). Skills with a `fallback` are skipped. |
+
+**`mur skill show`** — When a skill has `mcp_requirements`, the command prints a formatted "MCP Requirements:" block after the YAML, listing each tool pattern with its capability and optional fallback.
+
+Execution-time enforcement of these requirements (resolving globs, checking tool availability, applying fallbacks) is deferred to M6b.

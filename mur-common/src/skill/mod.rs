@@ -10,6 +10,7 @@ pub mod loader;
 pub mod local;
 pub mod lockfile;
 pub mod manifest;
+pub mod mcp;
 pub mod parser;
 pub mod registry;
 pub mod scan;
@@ -18,6 +19,7 @@ pub mod stats;
 pub mod store;
 pub mod types;
 pub mod validate;
+pub mod version;
 
 pub use capability::{Capability, CapabilityViolation, allowed_for, check_capabilities};
 pub use constraint::{Constraint, ConstraintError};
@@ -31,6 +33,7 @@ pub use lifecycle::{
 pub use loader::{LoadedSkill, SkillScope, load_all};
 pub use lockfile::{LockfileError, SkillLock};
 pub use manifest::*;
+pub use mcp::{McpRequirement, ParseCapabilityError, SkillCapability, validate_requirements};
 pub use parser::{
     ParseError, parse_canonical, parse_legacy_markdown, parse_markdown, serialize_canonical,
     serialize_markdown, yaml_to_markdown,
@@ -40,3 +43,4 @@ pub use stats::{LifecycleState, SkillStats};
 pub use store::{StoreError, agent_skill_dir, global_skill_dir, read_from_dir, write_to_dir};
 pub use types::*;
 pub use validate::{ValidationError, validate};
+pub use version::{SKILL_MANIFEST_SCHEMA_VERSION, is_supported};

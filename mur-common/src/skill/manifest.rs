@@ -1,6 +1,7 @@
 //! Skill manifest — full serde representation of canonical `skill.yaml`.
 
 use super::evolution::EvolutionEvent;
+use super::mcp::McpRequirement;
 use super::types::{Category, ContentMode, HostId, Priority, TriggerKind, TrustLevel};
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +66,14 @@ pub struct SkillManifest {
     /// Empty for registry-installed and locally-authored skills.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transfer_chain: Vec<String>,
+
+    /// MCP tool capabilities this skill needs at runtime. Optional; absent
+    /// in M3-era v2.0 manifests. Added in schema v2.1.
+    ///
+    /// **Signature scope:** signed as part of the manifest. Changing
+    /// `mcp_requirements` invalidates an existing publisher signature.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_requirements: Vec<McpRequirement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
