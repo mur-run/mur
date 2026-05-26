@@ -12,7 +12,7 @@ use std::str::FromStr;
 
 /// MCP capabilities a skill may declare it requires. Mirrors the six
 /// capabilities defined in mur-commander's `engine/src/mcp/trust.rs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum SkillCapability {
     ReadFile,
     ListTools,
