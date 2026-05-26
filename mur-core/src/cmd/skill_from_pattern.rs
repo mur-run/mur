@@ -178,6 +178,8 @@ pub async fn polish_via_llm(
                 Some(ProcedureStep {
                     description: s.get("description")?.as_str()?.to_string(),
                     tool: s.get("tool").and_then(|x| x.as_str()).map(String::from),
+                    intent: None,
+                    tool_hint: None,
                 })
             })
             .collect();
