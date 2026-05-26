@@ -115,6 +115,16 @@ impl SkillStats {
         mur_home.join("skills").join(skill_name).join("stats.json")
     }
 
+    /// Per-agent stats path: <MUR_HOME>/agents/<agent>/skills/<name>/stats.json
+    pub fn path_agent(mur_home: &Path, agent: &str, skill_name: &str) -> PathBuf {
+        mur_home
+            .join("agents")
+            .join(agent)
+            .join("skills")
+            .join(skill_name)
+            .join("stats.json")
+    }
+
     /// Read the sidecar, or return `None` if absent. Lock-free — fine
     /// for read-mostly callers (doctor, info, stats). Concurrent writers
     /// going through `merge_in_place` will not corrupt the file because

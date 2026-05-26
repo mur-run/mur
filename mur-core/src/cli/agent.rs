@@ -230,6 +230,12 @@ pub enum AgentAction {
     },
     /// Migrate all agents from mur-agent-gui (v0) to mur-hub (v1). Idempotent.
     MigrateToHub,
+    /// List peer agents on this host
+    Peers {
+        /// Emit JSON instead of a human-readable table
+        #[arg(long)]
+        json: bool,
+    },
     /// Show version history for an agent's profile (requires versioned store)
     History {
         /// Agent name

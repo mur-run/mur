@@ -13,6 +13,7 @@ pub mod lockfile;
 pub mod manifest;
 pub mod mcp;
 pub mod parser;
+pub mod peers;
 pub mod registry;
 pub mod resolve;
 pub mod scan;

@@ -31,6 +31,7 @@ mod hub;
 mod install;
 mod lifecycle;
 mod mcp;
+mod peers;
 mod perm;
 mod prompt;
 mod reconnect;
@@ -58,6 +59,8 @@ pub use install::{cmd_inspect, cmd_install, cmd_uninstall};
 pub use lifecycle::{cmd_create, cmd_list, cmd_remove, cmd_rename, cmd_status, cmd_stop};
 #[allow(unused_imports)]
 pub use mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_list, cmd_mcp_remove, cmd_mcp_rename};
+#[allow(unused_imports)]
+pub use peers::cmd_peers;
 #[allow(unused_imports)]
 pub use perm::{
     cmd_perm_allow_host, cmd_perm_allow_read, cmd_perm_allow_spawn, cmd_perm_allow_write,
