@@ -133,6 +133,17 @@ pub struct Trigger {
     pub pattern: Option<String>,
 }
 
+impl Trigger {
+    /// Returns the keyword string for `Keyword` triggers, `None` otherwise.
+    pub fn exact_keyword(&self) -> Option<&str> {
+        if matches!(self.kind, TriggerKind::Keyword) {
+            self.pattern.as_deref()
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Requirement {
     pub name: String,
@@ -244,5 +255,44 @@ evolution_log:
         let m2: SkillManifest = serde_yaml_ng::from_str(&back).unwrap();
         assert_eq!(m2.evolution_log.len(), 1);
         assert_eq!(m2.evolution_log[0].generation, 0);
+    }
+
+    #[test]
+    fn exact_keyword_returns_pattern_for_keyword_triggers() {
+        let t = Trigger {
+            kind: TriggerKind::Keyword,
+            pattern: Some("search".into()),
+        };
+        assert_eq!(t.exact_keyword(), Some("search"));
+    }
+
+    #[test]
+    fn exact_keyword_returns_none_for_non_keyword_triggers() {
+        let t = Trigger {
+            kind: TriggerKind::Command,
+            pattern: Some("run".into()),
+        };
+        assert_eq!(t.exact_keyword(), None);
+
+        let t = Trigger {
+            kind: TriggerKind::SessionStart,
+            pattern: None,
+        };
+        assert_eq!(t.exact_keyword(), None);
+
+        let t = Trigger {
+            kind: TriggerKind::Manual,
+            pattern: None,
+        };
+        assert_eq!(t.exact_keyword(), None);
+    }
+
+    #[test]
+    fn exact_keyword_returns_none_when_pattern_is_none() {
+        let t = Trigger {
+            kind: TriggerKind::Keyword,
+            pattern: None,
+        };
+        assert_eq!(t.exact_keyword(), None);
     }
 }
