@@ -1,7 +1,9 @@
 //! Read-side: load canonical YAML then resolve aliases through IntentLookup.
 use std::fs;
 
-use mur_core::cross_agent::intent::canonical::{write_canonical_yaml, IntentCanonical, CanonicalEntry};
+use mur_core::cross_agent::intent::canonical::{
+    CanonicalEntry, IntentCanonical, write_canonical_yaml,
+};
 use mur_core::cross_agent::intent::inject_lookup::IntentLookup;
 use tempfile::tempdir;
 
@@ -17,7 +19,11 @@ fn resolves_aliases_from_yaml_file() {
         canonical: vec![
             CanonicalEntry {
                 canonical: "web_search".into(),
-                aliases: vec!["web_search".into(), "search_web".into(), "Web Search".into()],
+                aliases: vec![
+                    "web_search".into(),
+                    "search_web".into(),
+                    "Web Search".into(),
+                ],
                 count: 3,
             },
             CanonicalEntry {

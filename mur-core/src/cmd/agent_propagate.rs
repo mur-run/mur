@@ -76,7 +76,11 @@ fn emit_human(report: &PropagateReport, opts: &PropagateOptions) {
         for c in &report.installed {
             println!(
                 "  {:<22} v{}  ← agent://{}  (fitness {:.2}, n={})",
-                c.skill, c.source_version, c.source_agent, c.population_fitness, c.population_samples
+                c.skill,
+                c.source_version,
+                c.source_agent,
+                c.population_fitness,
+                c.population_samples
             );
         }
         println!();
@@ -88,11 +92,18 @@ fn emit_human(report: &PropagateReport, opts: &PropagateOptions) {
             .filter(|c| !report.installed.iter().any(|i| i.skill == c.skill))
             .collect();
         if !skipped.is_empty() {
-            println!("Skipped ({}) — below gates or already present:", skipped.len());
+            println!(
+                "Skipped ({}) — below gates or already present:",
+                skipped.len()
+            );
             for c in skipped {
                 println!(
                     "  {:<22} v{}  ← agent://{}  (fitness {:.2}, n={})",
-                    c.skill, c.source_version, c.source_agent, c.population_fitness, c.population_samples
+                    c.skill,
+                    c.source_version,
+                    c.source_agent,
+                    c.population_fitness,
+                    c.population_samples
                 );
             }
             println!();

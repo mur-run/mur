@@ -3,11 +3,11 @@
 use anyhow::{Context, Result, anyhow, bail};
 use std::path::Path;
 
+use mur_common::skill::credit::{CreditEntry, CreditEvidence, CreditKind};
 use mur_common::skill::{
     SkillLock, SkillManifest, TrustLevel, content_hash_for_trust, content_sha256, global_skill_dir,
     lockfile, scan::scan_skill, write_to_dir,
 };
-use mur_common::skill::credit::{CreditEntry, CreditEvidence, CreditKind};
 use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
 
 use crate::cmd::agent::resolve_mur_home;

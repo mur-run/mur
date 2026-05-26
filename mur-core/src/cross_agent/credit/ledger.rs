@@ -17,7 +17,10 @@ use mur_common::skill::credit::CreditEntry;
 use tracing::warn;
 
 pub fn ledger_path_for_agent(home: &Path, agent: &str) -> PathBuf {
-    home.join("agents").join(agent).join("credit").join("ledger.jsonl")
+    home.join("agents")
+        .join(agent)
+        .join("credit")
+        .join("ledger.jsonl")
 }
 
 pub fn append(home: &Path, agent: &str, entry: &CreditEntry) -> Result<()> {
@@ -112,7 +115,11 @@ mod tests {
     #[test]
     fn missing_ledger_yields_empty_vec() {
         let d = tempdir().unwrap();
-        assert!(read_for_skill(d.path(), "ghost", "anything").unwrap().is_empty());
+        assert!(
+            read_for_skill(d.path(), "ghost", "anything")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

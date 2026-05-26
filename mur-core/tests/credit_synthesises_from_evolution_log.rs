@@ -10,7 +10,11 @@ fn synthesises_mutator_entries_from_evolution_log() {
     let home = d.path();
 
     // Create an agent with a skill whose manifest has an evolution_log.
-    let skill_dir = home.join("agents").join("alice").join("skills").join("demo");
+    let skill_dir = home
+        .join("agents")
+        .join("alice")
+        .join("skills")
+        .join("demo");
     fs::create_dir_all(&skill_dir).unwrap();
 
     let manifest = r#"
@@ -61,7 +65,11 @@ fn no_evolution_log_yields_no_synthetic_entries() {
     let d = tempdir().unwrap();
     let home = d.path();
 
-    let skill_dir = home.join("agents").join("alice").join("skills").join("simple");
+    let skill_dir = home
+        .join("agents")
+        .join("alice")
+        .join("skills")
+        .join("simple");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
         skill_dir.join("skill.yaml"),

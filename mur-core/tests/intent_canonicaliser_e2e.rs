@@ -54,12 +54,13 @@ fn multiple_clusters_sorted_by_count() {
     let home = d.path();
 
     write_agent_profile(home, "alice");
-    write_skill_manifest(home, "alice", "s1", &[
-        "Web Search", "web_search", "Web Search",
-    ]);
-    write_skill_manifest(home, "alice", "s2", &[
-        "Run Tests", "run_tests",
-    ]);
+    write_skill_manifest(
+        home,
+        "alice",
+        "s1",
+        &["Web Search", "web_search", "Web Search"],
+    );
+    write_skill_manifest(home, "alice", "s2", &["Run Tests", "run_tests"]);
 
     let ic = build_canonical(home, "test").unwrap();
 
