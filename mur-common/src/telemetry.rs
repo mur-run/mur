@@ -58,6 +58,7 @@ pub const METHOD_HOOK_FIRED: &str = "telemetry/hook_fired";
 pub const METHOD_BRIDGE_ALIVE: &str = "telemetry/bridge_alive";
 pub const METHOD_SKILL_EXECUTED: &str = "mur.skill.executed";
 pub const METHOD_SKILL_INDEXED: &str = "mur.skill.indexed";
+pub const METHOD_SKILL_STEP_RESOLVED: &str = "mur.skill.step_resolved";
 
 pub const MUR_SKILL_NAME: &str = "mur.skill.name";
 pub const MUR_SKILL_VERSION: &str = "mur.skill.version";
