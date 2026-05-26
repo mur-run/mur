@@ -112,6 +112,15 @@ pub enum Event {
         dims: usize,
         duration_ms: u64,
     },
+    /// Emitted for non-literal skill step resolutions at inject time (M6b).
+    /// Literal resolutions (default path) are skipped to avoid telemetry flood.
+    SkillStepResolved {
+        skill_name: String,
+        step_index: usize,
+        intent: Option<String>,
+        picked_tool: Option<String>,
+        source: String,
+    },
 }
 
 pub struct TelemetryWriter {
@@ -360,6 +369,24 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             params["dims"] = json!(dims);
             params["duration_ms"] = json!(duration_ms);
             METHOD_SKILL_INDEXED
+        }
+        Event::SkillStepResolved {
+            skill_name,
+            step_index,
+            intent,
+            picked_tool,
+            source,
+        } => {
+            params[MUR_SKILL_NAME] = json!(skill_name);
+            params["step_index"] = json!(step_index);
+            if let Some(i) = intent {
+                params["intent"] = json!(i);
+            }
+            if let Some(t) = picked_tool {
+                params["picked_tool"] = json!(t);
+            }
+            params["source"] = json!(source);
+            METHOD_SKILL_STEP_RESOLVED
         }
     };
     params[MUR_EVENT_TYPE] = json!(method);

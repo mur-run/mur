@@ -1,6 +1,6 @@
 use mur_common::skill::manifest::ProcedureStep;
 use mur_common::skill::mcp::{McpRequirement, SkillCapability};
-use mur_core::skill_resolve::{resolve_step, McpInventory, Resolution};
+use mur_common::skill::{resolve_step, McpInventory, Resolution};
 
 fn step(tool: Option<&str>, intent: Option<&str>, hint: Option<&str>) -> ProcedureStep {
     ProcedureStep {

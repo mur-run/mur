@@ -1,6 +1,8 @@
 use mur_common::skill::TriggerKind;
 use mur_common::skill::loader::LoadedSkill;
+use mur_common::skill::manifest::ProcedureStep;
 use mur_common::skill::types::TrustLevel;
+use mur_common::skill::{McpInventory, Resolution};
 use regex::Regex;
 
 #[derive(Debug, Clone)]
@@ -61,7 +63,10 @@ pub fn match_prompt<'a>(
         .collect()
 }
 
-pub fn layer3_body(manifest: &mur_common::skill::SkillManifest) -> Option<String> {
+pub fn layer3_body(
+    manifest: &mur_common::skill::SkillManifest,
+    inventory: &McpInventory,
+) -> Option<String> {
     let c = &manifest.content;
     if let Some(ctx) = &c.context {
         return Some(ctx.clone());
@@ -70,12 +75,31 @@ pub fn layer3_body(manifest: &mur_common::skill::SkillManifest) -> Option<String
         return Some(
             p.steps
                 .iter()
-                .map(|s| s.description.clone())
+                .enumerate()
+                .map(|(i, step)| {
+                    let res =
+                        mur_common::skill::resolve_step(step, &manifest.mcp_requirements, inventory);
+                    render_step(i + 1, step, &res)
+                })
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
     }
     c.command.clone()
+}
+
+fn render_step(idx: usize, step: &ProcedureStep, res: &Resolution) -> String {
+    match res.picked_tool() {
+        Some(tool) => format!("{idx}. {} — tool: {tool}", step.description),
+        None => format!(
+            "{idx}. {} — (no tool available: {})",
+            step.description,
+            match res {
+                Resolution::Unresolved { reason } => reason.as_str(),
+                _ => "unknown",
+            }
+        ),
+    }
 }
 
 pub fn format_layer3(skill_name: &str, trust: TrustLevel, body: &str) -> String {
@@ -168,8 +192,29 @@ triggers:
 
     #[test]
     fn layer3_body_extracts_context() {
-        let body = layer3_body(&sample().manifest);
+        let body = layer3_body(&sample().manifest, &McpInventory::default());
         assert!(body.is_some());
         assert!(body.unwrap().contains("Full procedure"));
+    }
+
+    #[test]
+    fn layer3_body_renders_literal_tool_step() {
+        use mur_common::skill::parse_canonical;
+        let yaml = r#"
+name: test-skill
+version: 1.0.0
+publisher: human:t
+description: test
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: Navigate to page
+        tool: browser.navigate
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        let body = layer3_body(&m, &McpInventory::default()).unwrap();
+        assert!(body.contains("Navigate to page — tool: browser.navigate"));
     }
 }

@@ -7,6 +7,7 @@ use crate::skills::RuntimeSkills;
 use crate::skills::injector::inject_layer2;
 use crate::skills::trigger_matcher::{format_layer3, layer3_body, match_prompt};
 use crate::telemetry_writer::{Event, SkillOutcome};
+use mur_common::skill::McpInventory;
 use mur_common::a2a::{Message, MessagePart, Task, TaskState};
 use mur_common::config::SkillsConfig;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -165,7 +166,8 @@ impl TaskRunner {
             let Some(loaded) = skills.loaded.iter().find(|s| s.name == t.skill_name) else {
                 continue;
             };
-            let Some(body) = layer3_body(&loaded.manifest) else {
+            let inventory = McpInventory::default(); // TODO: wire to MCP registry
+            let Some(body) = layer3_body(&loaded.manifest, &inventory) else {
                 continue;
             };
             layer3.push('\n');
