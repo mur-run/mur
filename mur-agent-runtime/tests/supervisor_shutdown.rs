@@ -1,6 +1,5 @@
 use std::process::Stdio;
 use tempfile::TempDir;
-use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
 // Unix-only: exercises SIGTERM → supervisor shutdown → lock cleanup.
@@ -24,6 +23,7 @@ async fn sigterm_removes_running_lock_and_flushes_telemetry() {
     let bin = env!("CARGO_BIN_EXE_mur-agent-runtime");
     let mut child = Command::new(bin)
         .env("MUR_HOME", tmp.path())
+        .env("MUR_AGENT_FORCE_ECHO", "1")
         .args(["--profile", "agent_t", "start"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -34,18 +34,6 @@ async fn sigterm_removes_running_lock_and_flushes_telemetry() {
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
 
-    // Drain stdout continuously so the child's telemetry/json-rpc writes never
-    // block on a full pipe buffer — especially during shutdown when the test
-    // isn't reading synchronously.
-    let mut stdout_lines = tokio::io::BufReader::new(stdout).lines();
-    let stdout_task = tokio::spawn(async move {
-        let mut lines = Vec::new();
-        while let Ok(Some(line)) = stdout_lines.next_line().await {
-            lines.push(line);
-        }
-        lines
-    });
-
     // Drain stderr for debugging.
     let stderr_task = tokio::spawn(async move {
         let mut buf = Vec::new();
@@ -54,25 +42,48 @@ async fn sigterm_removes_running_lock_and_flushes_telemetry() {
         String::from_utf8_lossy(&buf).to_string()
     });
 
-    // Drive one request so we know the agent is fully up before SIGTERM.
+    // Drain stdout; signal via oneshot when we receive the agent/card response.
+    let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let stdout_task = tokio::spawn(async move {
+        let mut lines = Vec::new();
+        let mut reader = tokio::io::BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    let trimmed = line.trim().to_string();
+                    if trimmed.contains("\"result\"") {
+                        let _ = ready_tx.try_send(());
+                    }
+                    lines.push(trimmed);
+                }
+                Err(_) => break,
+            }
+        }
+        lines
+    });
+
+    // Send agent/card request to confirm the agent is fully booted.
     use tokio::io::AsyncWriteExt;
     stdin
         .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"agent/card\"}\n")
         .await
         .unwrap();
 
-    // Wait for the lock file — signals readiness sooner than reading stdout.
-    let mut attempts = 0;
-    while !lock_path.exists() && attempts < 50 {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        attempts += 1;
-    }
+    // Wait for the agent/card JSON-RPC response (skips telemetry lines).
+    // The response proves the stdio transport is alive. Signal handlers are
+    // installed BEFORE the transport spawns (supervisor.rs step 9→10), so
+    // SIGTERM will be caught.
+    tokio::time::timeout(std::time::Duration::from_secs(10), ready_rx.recv())
+        .await
+        .unwrap()
+        .expect("agent/card response not received before channel closed");
+
     assert!(lock_path.exists(), "running.lock should exist while up");
 
-    // Close stdin so serve_stdio sees EOF and exits its read loop, releasing
-    // the stdout writer before the shutdown path tries to flush telemetry.
-    // Without this, serve_stdio stays parked on stdin and the notification
-    // task may contend for stdout, causing an intermittent pipe deadlock.
+    // Close stdin so serve_stdio sees EOF, avoiding pipe contention during
+    // shutdown when the notification task may write to stdout.
     drop(stdin);
 
     #[cfg(unix)]
@@ -82,8 +93,8 @@ async fn sigterm_removes_running_lock_and_flushes_telemetry() {
 
     let exit_result = tokio::time::timeout(std::time::Duration::from_secs(15), child.wait()).await;
 
-    let _stdout = stdout_task.await.unwrap_or_default();
     let stderr_output = stderr_task.await.unwrap_or_default();
+    let _stdout = stdout_task.await.unwrap_or_default();
 
     let exit_status = exit_result.unwrap_or_else(|_| {
         let _ = child.start_kill();
