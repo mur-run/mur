@@ -42,6 +42,9 @@ struct DoctorCtx {
     home: PathBuf,
     now: DateTime<Utc>,
     installed_skills: HashSet<String>,
+    /// Available MCP tool names across all configured servers.
+    /// `None` means "no agent context" — the check reports Unknown.
+    mcp_tools: Option<Vec<String>>,
 }
 
 pub fn cmd_doctor(
@@ -91,6 +94,7 @@ pub fn cmd_doctor(
         "failure-rate",
         "api-drift",
         "mcp-requirements-coverage",
+        "mcp-capability-available",
     ];
     let active_checks: Vec<&str> = if checks.is_empty() {
         all_checks.to_vec()
@@ -102,6 +106,7 @@ pub fn cmd_doctor(
         home,
         now,
         installed_skills: installed_names,
+        mcp_tools: None, // wired to agent MCP registry in M6b
     };
 
     let mut findings: Vec<Finding> = Vec::new();
@@ -126,6 +131,9 @@ pub fn cmd_doctor(
                 }
                 "mcp-requirements-coverage" => {
                     findings.extend(run_mcp_requirements_coverage(&ctx, skill_name));
+                }
+                "mcp-capability-available" => {
+                    findings.extend(run_mcp_capability_available(&ctx, skill_name));
                 }
                 _ => {}
             }
@@ -594,7 +602,73 @@ fn severity_color(s: Severity, icon: &str) -> String {
     out
 }
 
-pub fn exit_code(findings: &[Finding], strict: bool) -> i32 {
+fn run_mcp_capability_available(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
+    let Some(manifest) = load_manifest(&ctx.home, skill_name) else {
+        return vec![Finding {
+            check_id: "mcp-capability-available".into(),
+            category: "mcp".into(),
+            severity: Severity::Unknown,
+            skill_name: skill_name.to_string(),
+            message: "Cannot read manifest — unable to check MCP capability availability.".into(),
+            remediation: None,
+            fixable: false,
+        }];
+    };
+
+    if manifest.mcp_requirements.is_empty() {
+        return vec![];
+    }
+
+    // Without agent context we can't enumerate available MCP tools.
+    // Wire to the agent's MCP server registry in M6b.
+    let Some(ref available) = ctx.mcp_tools else {
+        return vec![Finding {
+            check_id: "mcp-capability-available".into(),
+            category: "mcp".into(),
+            severity: Severity::Unknown,
+            skill_name: skill_name.to_string(),
+            message: "MCP capability-availability check requires agent context — \
+                     run from within an agent to check server availability."
+                .into(),
+            remediation: None,
+            fixable: false,
+        }];
+    };
+
+    let mut findings = Vec::new();
+    for (i, req) in manifest.mcp_requirements.iter().enumerate() {
+        // Skip requirements with a fallback.
+        if !req.fallback.is_empty() {
+            continue;
+        }
+        // Match glob pattern against available tools.
+        let Ok(glob) = globset::Glob::new(&req.tool_pattern) else {
+            continue;
+        };
+        let matcher = glob.compile_matcher();
+        let has_match = available.iter().any(|t| matcher.is_match(t));
+        if !has_match {
+            findings.push(Finding {
+                check_id: "mcp-capability-available".into(),
+                category: "mcp".into(),
+                severity: Severity::Warn,
+                skill_name: skill_name.to_string(),
+                message: format!(
+                    "mcp_requirements[{i}]: no MCP server provides tool matching \
+                     '{}' (capability {}, no fallback)",
+                    req.tool_pattern, req.capability
+                ),
+                remediation: Some(
+                    "Install an MCP server that provides this tool, or add a fallback.".into(),
+                ),
+                fixable: false,
+            });
+        }
+    }
+    findings
+}
+
+fn exit_code(findings: &[Finding], strict: bool) -> i32 {
     let any_fail = findings.iter().any(|f| f.severity == Severity::Fail);
     let any_warn = findings.iter().any(|f| f.severity == Severity::Warn);
     i32::from(any_fail || (strict && any_warn))
@@ -617,6 +691,16 @@ mod tests {
             home: dir.path().to_path_buf(),
             now: chrono::Utc::now(),
             installed_skills: std::collections::HashSet::new(),
+            mcp_tools: None,
+        }
+    }
+
+    fn doctor_ctx_with_tools(dir: &TempDir, tools: Vec<String>) -> DoctorCtx {
+        DoctorCtx {
+            home: dir.path().to_path_buf(),
+            now: chrono::Utc::now(),
+            installed_skills: std::collections::HashSet::new(),
+            mcp_tools: Some(tools),
         }
     }
 
@@ -709,6 +793,132 @@ content:
         write_skill(&dir, "no-tools", yaml);
         let ctx = doctor_ctx(&dir);
         let findings = run_mcp_requirements_coverage(&ctx, "no-tools");
+        assert!(findings.is_empty());
+    }
+
+    // ── mcp-capability-available ──
+
+    #[test]
+    fn capability_check_unknown_without_agent_context() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: mcp-skill
+version: 1.0.0
+publisher: human:test
+description: Skill with MCP requirements
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: test
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+"#;
+        write_skill(&dir, "mcp-skill", yaml);
+        let ctx = doctor_ctx(&dir); // mcp_tools = None
+        let findings = run_mcp_capability_available(&ctx, "mcp-skill");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].check_id, "mcp-capability-available");
+        assert_eq!(findings[0].severity, Severity::Unknown);
+    }
+
+    #[test]
+    fn capability_check_warns_when_no_match() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: browser-skill
+version: 1.0.0
+publisher: human:test
+description: Skill needing browser
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: test
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+"#;
+        write_skill(&dir, "browser-skill", yaml);
+        let ctx = doctor_ctx_with_tools(&dir, vec!["filesystem.read".into(), "search.google".into()]);
+        let findings = run_mcp_capability_available(&ctx, "browser-skill");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Warn);
+        assert!(findings[0].message.contains("browser.*"));
+    }
+
+    #[test]
+    fn capability_ok_when_glob_matches() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: browser-skill
+version: 1.0.0
+publisher: human:test
+description: Skill needing browser
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: test
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+"#;
+        write_skill(&dir, "browser-skill", yaml);
+        let ctx = doctor_ctx_with_tools(
+            &dir,
+            vec!["browser.navigate".into(), "browser.screenshot".into()],
+        );
+        let findings = run_mcp_capability_available(&ctx, "browser-skill");
+        assert!(findings.is_empty(), "expected no findings, got {findings:?}");
+    }
+
+    #[test]
+    fn capability_skips_fallback_requirement() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: fallback-skill
+version: 1.0.0
+publisher: human:test
+description: Skill with fallback
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: test
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+    fallback: builtin-http
+"#;
+        write_skill(&dir, "fallback-skill", yaml);
+        // No browser tools available — but fallback is set, so skip.
+        let ctx = doctor_ctx_with_tools(&dir, vec!["filesystem.read".into()]);
+        let findings = run_mcp_capability_available(&ctx, "fallback-skill");
+        assert!(findings.is_empty(), "fallback requirements should be skipped, got {findings:?}");
+    }
+
+    #[test]
+    fn capability_empty_requirements_no_finding() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: simple-skill
+version: 1.0.0
+publisher: human:test
+description: No MCP requirements
+category: context
+content:
+  abstract: test
+  context: body
+"#;
+        write_skill(&dir, "simple-skill", yaml);
+        let ctx = doctor_ctx_with_tools(&dir, vec!["browser.navigate".into()]);
+        let findings = run_mcp_capability_available(&ctx, "simple-skill");
         assert!(findings.is_empty());
     }
 }
