@@ -96,6 +96,9 @@ mod tests {
     fn unknown_kind_returns_error() {
         let raw = r#"{"ts":"2026-05-27T10:21:33Z","skill":"x","skill_version":"1.0.0","kind":"future_kind","agent":"alice","source":"human:alice"}"#;
         let result: Result<CreditEntry, _> = serde_json::from_str(raw);
-        assert!(result.is_err(), "unknown kind should fail to deserialize; reader code must filter at the line level");
+        assert!(
+            result.is_err(),
+            "unknown kind should fail to deserialize; reader code must filter at the line level"
+        );
     }
 }

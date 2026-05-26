@@ -536,11 +536,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     std::process::exit(code);
                 }
             }
-            crate::cli::SkillAction::Credit {
-                name,
-                agent,
-                json,
-            } => {
+            crate::cli::SkillAction::Credit { name, agent, json } => {
                 let home = cmd::agent::resolve_mur_home()?;
                 let agent_name = agent.unwrap_or_else(|| {
                     cmd::skill_install::caller_agent_name(&home)
@@ -559,7 +555,10 @@ pub async fn run(cli: Cli) -> Result<()> {
                 match action {
                     crate::cli::IntentAction::Canonicalise { dry_run, json } => {
                         cmd::skill_intent::cmd_intent_canonicalise(
-                            &home, &agent_name, dry_run, json,
+                            &home,
+                            &agent_name,
+                            dry_run,
+                            json,
                         )?
                     }
                     crate::cli::IntentAction::Show { json } => {
@@ -1055,7 +1054,13 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         } => {
             let home = cmd::agent::resolve_mur_home()?;
             cmd::agent_propagate::cmd_propagate(
-                &home, &name, dry_run, max, min_fitness, min_samples, json,
+                &home,
+                &name,
+                dry_run,
+                max,
+                min_fitness,
+                min_samples,
+                json,
             )?
         }
         AgentAction::History { name } => cmd::agent_history::cmd_agent_history(&name)?,
