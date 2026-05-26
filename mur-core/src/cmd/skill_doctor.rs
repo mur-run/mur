@@ -90,6 +90,7 @@ pub fn cmd_doctor(
         "execution-recency",
         "failure-rate",
         "api-drift",
+        "mcp-requirements-coverage",
     ];
     let active_checks: Vec<&str> = if checks.is_empty() {
         all_checks.to_vec()
@@ -122,6 +123,9 @@ pub fn cmd_doctor(
                 }
                 "api-drift" => {
                     findings.extend(run_api_drift(&ctx, skill_name));
+                }
+                "mcp-requirements-coverage" => {
+                    findings.extend(run_mcp_requirements_coverage(&ctx, skill_name));
                 }
                 _ => {}
             }
@@ -460,6 +464,65 @@ fn run_api_drift(_ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
     }]
 }
 
+fn run_mcp_requirements_coverage(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
+    let Some(manifest) = load_manifest(&ctx.home, skill_name) else {
+        return vec![Finding {
+            check_id: "mcp-requirements-coverage".into(),
+            category: "mcp".into(),
+            severity: Severity::Unknown,
+            skill_name: skill_name.to_string(),
+            message: "Cannot read manifest — unable to check MCP requirements coverage.".into(),
+            remediation: None,
+            fixable: false,
+        }];
+    };
+
+    // Only procedural skills can reference MCP tools in steps.
+    if manifest.content.mode() != Some(mur_common::skill::types::ContentMode::Workflow) {
+        return vec![];
+    }
+    // Already has explicit requirements — covered.
+    if !manifest.mcp_requirements.is_empty() {
+        return vec![];
+    }
+    let Some(proc) = &manifest.content.procedure else {
+        return vec![];
+    };
+
+    let referenced: Vec<&str> = proc
+        .steps
+        .iter()
+        .filter_map(|s| s.tool.as_deref())
+        .filter(|t| t.contains('.') && !t.starts_with("./") && !t.starts_with("../"))
+        .collect();
+
+    if referenced.is_empty() {
+        return vec![];
+    }
+
+    vec![Finding {
+        check_id: "mcp-requirements-coverage".into(),
+        category: "mcp".into(),
+        severity: Severity::Warn,
+        skill_name: skill_name.to_string(),
+        message: format!(
+            "procedural skill references {} dotted tool name(s) ({}) but declares no \
+             mcp_requirements — add an mcp_requirements block to declare the needed MCP capability",
+            referenced.len(),
+            referenced
+                .iter()
+                .take(3)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        remediation: Some(
+            "Add an mcp_requirements block mapping tool patterns to capabilities.".into(),
+        ),
+        fixable: false,
+    }]
+}
+
 // ── Output ──
 
 fn format_findings(findings: &[Finding], fmt: DoctorFormat, color: bool) -> Result<()> {
@@ -535,4 +598,117 @@ pub fn exit_code(findings: &[Finding], strict: bool) -> i32 {
     let any_fail = findings.iter().any(|f| f.severity == Severity::Fail);
     let any_warn = findings.iter().any(|f| f.severity == Severity::Warn);
     i32::from(any_fail || (strict && any_warn))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write_skill(dir: &TempDir, name: &str, yaml: &str) {
+        let skill_dir = dir.path().join("skills").join(name);
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("skill.yaml"), yaml).unwrap();
+    }
+
+    fn doctor_ctx(dir: &TempDir) -> DoctorCtx {
+        DoctorCtx {
+            home: dir.path().to_path_buf(),
+            now: chrono::Utc::now(),
+            installed_skills: std::collections::HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn coverage_workflow_with_dotted_tools_no_requirements() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: browser-skill
+version: 1.0.0
+publisher: human:test
+description: Skill with tool refs but no mcp_requirements
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: navigate
+        tool: browser.navigate
+      - description: search
+        tool: browser.search
+"#;
+        write_skill(&dir, "browser-skill", yaml);
+        let ctx = doctor_ctx(&dir);
+        let findings = run_mcp_requirements_coverage(&ctx, "browser-skill");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].check_id, "mcp-requirements-coverage");
+        assert_eq!(findings[0].severity, Severity::Warn);
+        assert!(findings[0].message.contains("browser.navigate"));
+    }
+
+    #[test]
+    fn coverage_workflow_with_requirements_no_finding() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: covered-skill
+version: 1.0.0
+publisher: human:test
+description: Skill with tool refs and mcp_requirements
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: navigate
+        tool: browser.navigate
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+"#;
+        write_skill(&dir, "covered-skill", yaml);
+        let ctx = doctor_ctx(&dir);
+        let findings = run_mcp_requirements_coverage(&ctx, "covered-skill");
+        assert!(findings.is_empty(), "expected no findings, got {findings:?}");
+    }
+
+    #[test]
+    fn coverage_context_mode_skipped() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: context-skill
+version: 1.0.0
+publisher: human:test
+description: Context skill with no procedure
+category: context
+content:
+  abstract: test
+  context: some context
+"#;
+        write_skill(&dir, "context-skill", yaml);
+        let ctx = doctor_ctx(&dir);
+        let findings = run_mcp_requirements_coverage(&ctx, "context-skill");
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn coverage_no_dotted_tools_no_finding() {
+        let dir = TempDir::new().unwrap();
+        let yaml = r#"
+name: no-tools
+version: 1.0.0
+publisher: human:test
+description: Workflow with no dotted tool refs
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: do something
+"#;
+        write_skill(&dir, "no-tools", yaml);
+        let ctx = doctor_ctx(&dir);
+        let findings = run_mcp_requirements_coverage(&ctx, "no-tools");
+        assert!(findings.is_empty());
+    }
 }
