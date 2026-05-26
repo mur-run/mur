@@ -492,6 +492,7 @@ fn consolidate_all_passes_integration() {
                 dry_run: false,
                 apply: false,
                 method: ConsolidateMethod::Jaccard,
+                llm_adjudicate: false,
             },
         ))
         .unwrap();
@@ -554,6 +555,7 @@ fn consolidate_apply_archives_orphans() {
                 dry_run: true,
                 apply: false,
                 method: ConsolidateMethod::Jaccard,
+                llm_adjudicate: false,
             },
         ))
         .unwrap();
@@ -574,6 +576,7 @@ fn consolidate_apply_archives_orphans() {
                 dry_run: false,
                 apply: true,
                 method: ConsolidateMethod::Jaccard,
+                llm_adjudicate: false,
             },
         ))
         .unwrap();

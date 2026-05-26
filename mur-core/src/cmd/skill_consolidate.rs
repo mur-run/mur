@@ -14,6 +14,7 @@ pub async fn cmd_consolidate(
     dry_run: bool,
     apply: bool,
     method: ConsolidateMethod,
+    llm_adjudicate: bool,
 ) -> Result<()> {
     if apply && std::io::stdin().is_terminal() {
         eprint!(
@@ -38,6 +39,7 @@ pub async fn cmd_consolidate(
         dry_run,
         apply: apply && !dry_run,
         method: method.clone(),
+        llm_adjudicate,
     };
     let report = run_consolidate(home, &embed_config, &*store, &opts).await?;
     print_summary(&report, apply);
@@ -64,8 +66,13 @@ fn print_summary(report: &crate::skill_consolidate::ConsolidateReport, applied: 
         );
     }
     for c in &report.contradictions {
+        let adj = c
+            .adjudication
+            .as_ref()
+            .map(|v| format!(" [adjudicated: {}]", v.as_str()))
+            .unwrap_or_default();
         println!(
-            "  Contradiction: {} vs {} on trigger '{}' — {}",
+            "  Contradiction: {} vs {} on trigger '{}' — {}{adj}",
             c.a, c.b, c.trigger, c.reason,
         );
     }

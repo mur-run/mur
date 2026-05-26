@@ -42,6 +42,10 @@ pub struct Config {
     // --- M2 additions ---
     #[serde(default)]
     pub skills: SkillsConfig,
+
+    // --- M6c additions ---
+    #[serde(default)]
+    pub skill_llm: SkillLlmConfig,
 }
 
 impl Config {
@@ -1297,6 +1301,49 @@ impl Default for SleepCycleConfig {
             enabled: false,
             idle_threshold_minutes: default_idle_threshold_minutes(),
             agent_idle_minutes: default_agent_idle_minutes(),
+        }
+    }
+}
+
+// ── M6c: LLM-augmented skill maintenance ─────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillLlmConfig {
+    /// Per-call output token cap.
+    #[serde(default = "default_per_call_token_cap")]
+    pub per_call_token_cap: u32,
+
+    /// Per-day USD cap for all maintenance LLM calls.
+    #[serde(default = "default_per_day_usd_cap")]
+    pub per_day_usd_cap: f64,
+
+    /// Cache TTL in days.
+    #[serde(default = "default_cache_ttl_days")]
+    pub cache_ttl_days: u32,
+
+    /// Optional explicit model key override. When `None`, role resolution picks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_ref: Option<String>,
+}
+
+fn default_per_call_token_cap() -> u32 {
+    1500
+}
+fn default_per_day_usd_cap() -> f64 {
+    0.50
+}
+fn default_cache_ttl_days() -> u32 {
+    30
+}
+
+impl Default for SkillLlmConfig {
+    fn default() -> Self {
+        Self {
+            per_call_token_cap: default_per_call_token_cap(),
+            per_day_usd_cap: default_per_day_usd_cap(),
+            cache_ttl_days: default_cache_ttl_days(),
+            model_ref: None,
         }
     }
 }
