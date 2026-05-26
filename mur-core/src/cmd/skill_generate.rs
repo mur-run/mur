@@ -145,6 +145,23 @@ pub async fn cmd_generate<L: LlmClient + 'static>(
         manifest.name, manifest.version
     );
     println!("review:    {}", dir.join("skill.yaml").display());
+
+    // M7c: append Author entry to credit ledger.
+    if let Ok(Some(caller)) = crate::cmd::skill_install::caller_agent_name(home) {
+        let entry = mur_common::skill::credit::CreditEntry {
+            ts: chrono::Utc::now(),
+            skill: manifest.name.clone(),
+            skill_version: manifest.version.clone(),
+            kind: mur_common::skill::credit::CreditKind::Author,
+            agent: caller.clone(),
+            evidence: None,
+            source: "agent:generator".to_string(),
+        };
+        if let Err(e) = crate::cross_agent::credit::ledger::append(home, &caller, &entry) {
+            tracing::warn!("credit ledger append failed at generate: {e}");
+        }
+    }
+
     Ok(manifest)
 }
 

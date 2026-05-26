@@ -291,6 +291,26 @@ pub async fn evolve_skill(
         }
 
         eprintln!("Evolved to v{new_version} (gen {generation}, score {quality_score:.2})");
+
+        // M7c: append Mutator entry to credit ledger.
+        if let Ok(Some(caller)) = crate::cmd::skill_install::caller_agent_name(home) {
+            let entry = mur_common::skill::credit::CreditEntry {
+                ts: chrono::Utc::now(),
+                skill: evolved.name.clone(),
+                skill_version: new_version.clone(),
+                kind: mur_common::skill::credit::CreditKind::Mutator,
+                agent: caller.clone(),
+                evidence: Some(mur_common::skill::credit::CreditEvidence::Mutator {
+                    from_version: current.version.clone(),
+                    diff_summary: changes.clone(),
+                }),
+                source: format!("human:{caller}"),
+            };
+            if let Err(e) = crate::cross_agent::credit::ledger::append(home, &caller, &entry) {
+                tracing::warn!("credit ledger append failed at evolve: {e}");
+            }
+        }
+
         current = evolved;
     }
 

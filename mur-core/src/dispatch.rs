@@ -536,6 +536,37 @@ pub async fn run(cli: Cli) -> Result<()> {
                     std::process::exit(code);
                 }
             }
+            crate::cli::SkillAction::Credit {
+                name,
+                agent,
+                json,
+            } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                let agent_name = agent.unwrap_or_else(|| {
+                    cmd::skill_install::caller_agent_name(&home)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "(global)".into())
+                });
+                cmd::skill_credit::cmd_credit(&home, &agent_name, &name, json)?
+            }
+            crate::cli::SkillAction::Intent(action) => {
+                let home = cmd::agent::resolve_mur_home()?;
+                let agent_name = cmd::skill_install::caller_agent_name(&home)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "(global)".into());
+                match action {
+                    crate::cli::IntentAction::Canonicalise { dry_run, json } => {
+                        cmd::skill_intent::cmd_intent_canonicalise(
+                            &home, &agent_name, dry_run, json,
+                        )?
+                    }
+                    crate::cli::IntentAction::Show { json } => {
+                        cmd::skill_intent::cmd_intent_show(&home, json)?
+                    }
+                }
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
@@ -1001,6 +1032,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentScheduleAction::IdleRemove { name, index } => {
                 cmd::agent_schedule::cmd_idle_remove(&name, index)?
             }
+            AgentScheduleAction::PropagateInit {
+                name,
+                after_secs,
+                cooldown_secs,
+            } => cmd::agent_schedule::cmd_propagate_init(&name, after_secs, cooldown_secs)?,
         },
         AgentAction::Hooks { action } => match action {
             AgentHooksAction::Show { name, json } => cmd::agent_hooks::cmd_hooks_show(&name, json)?,
@@ -1008,6 +1044,19 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::MigrateToHub => cmd::agent::cmd_migrate_to_hub()?,
         AgentAction::Peers { json } => {
             cmd::agent::cmd_peers(&cmd::agent::resolve_mur_home()?, json)?
+        }
+        AgentAction::Propagate {
+            name,
+            dry_run,
+            max,
+            min_fitness,
+            min_samples,
+            json,
+        } => {
+            let home = cmd::agent::resolve_mur_home()?;
+            cmd::agent_propagate::cmd_propagate(
+                &home, &name, dry_run, max, min_fitness, min_samples, json,
+            )?
         }
         AgentAction::History { name } => cmd::agent_history::cmd_agent_history(&name)?,
         AgentAction::Rollback { name, to } => cmd::agent_history::cmd_agent_rollback(&name, to)?,

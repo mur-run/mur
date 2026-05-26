@@ -3,6 +3,7 @@
 pub mod aggregator;
 pub mod capability;
 pub mod constraint;
+pub mod credit;
 pub mod evolution;
 pub mod gene;
 pub mod hash;
@@ -27,6 +28,7 @@ pub mod version;
 
 pub use capability::{Capability, CapabilityViolation, allowed_for, check_capabilities};
 pub use constraint::{Constraint, ConstraintError};
+pub use credit::{CreditEntry, CreditEvidence, CreditKind};
 pub use evolution::EvolutionEvent;
 pub use gene::{GeneDiff, McpGene, SkillGene, StepGene, TriggerGene};
 pub use hash::{

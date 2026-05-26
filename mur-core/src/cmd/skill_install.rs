@@ -7,11 +7,14 @@ use mur_common::skill::{
     SkillLock, SkillManifest, TrustLevel, content_hash_for_trust, content_sha256, global_skill_dir,
     lockfile, scan::scan_skill, write_to_dir,
 };
+use mur_common::skill::credit::{CreditEntry, CreditEvidence, CreditKind};
 use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
 
 use crate::cmd::agent::resolve_mur_home;
 use crate::cmd::skill_registry;
 use crate::cmd::skill_resolver::{self, ResolveSource, ResolvedNode, ResolverInput};
+use crate::cross_agent::credit::ledger as credit_ledger;
+use crate::cross_agent::propagate::InstallContext;
 
 /// Pure entry point — takes explicit home + registry_url. Used by tests and future M4 code.
 pub fn cmd_install(home: &Path, registry_url: &str, source: &str) -> Result<()> {
@@ -75,6 +78,99 @@ pub fn cmd_install(home: &Path, registry_url: &str, source: &str) -> Result<()> 
         try_embed_skill(home, &node.name, &node.version.to_string(), &node.manifest);
     }
 
+    Ok(())
+}
+
+/// Same as `cmd_install` but accepts an explicit `InstallContext` so the
+/// credit ledger can attribute the install correctly.
+///
+/// Used by `mur agent propagate` for auto-propagation; the public
+/// `cmd_install` wrapper passes `InstallContext::Manual`.
+pub fn cmd_install_ctx(
+    home: &Path,
+    registry_url: &str,
+    source: &str,
+    caller_agent: &str,
+    ctx: InstallContext,
+) -> Result<()> {
+    cmd_install(home, registry_url, source)?;
+
+    // Determine skill name + version for the ledger entry.
+    if let Some(rest) = source.strip_prefix("agent://") {
+        let (agent_name, skill_name) = rest
+            .split_once('/')
+            .ok_or_else(|| anyhow!("invalid agent:// URL: {source}"))?;
+        let dir = global_skill_dir(home, skill_name);
+        let manifest_path = dir.join("skill.yaml");
+        let version = std::fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|s| serde_yaml_ng::from_str::<SkillManifest>(&s).ok())
+            .map(|m| m.version)
+            .unwrap_or_else(|| "0.0.0".into());
+
+        let (evidence, kind) = match &ctx {
+            InstallContext::AutoPropagate {
+                source_fitness,
+                source_samples,
+            } => (
+                Some(CreditEvidence::Propagator {
+                    from_agent: agent_name.to_string(),
+                    fitness_at_install: *source_fitness,
+                    samples_at_install: *source_samples,
+                }),
+                CreditKind::Propagator,
+            ),
+            InstallContext::Manual => (
+                Some(CreditEvidence::Propagator {
+                    from_agent: agent_name.to_string(),
+                    fitness_at_install: 0.0,
+                    samples_at_install: 0,
+                }),
+                CreditKind::Propagator,
+            ),
+        };
+
+        let entry = CreditEntry {
+            ts: chrono::Utc::now(),
+            skill: skill_name.to_string(),
+            skill_version: version,
+            kind,
+            agent: caller_agent.to_string(),
+            evidence,
+            source: format!("agent://{agent_name}"),
+        };
+        if let Err(e) = credit_ledger::append(home, caller_agent, &entry) {
+            tracing::warn!("credit ledger append failed for {}: {e}", entry.skill);
+        }
+    } else {
+        // Registry or local install — Author kind on the calling agent.
+        let src_path = std::path::Path::new(source);
+        let (name, version) = if src_path.exists() && src_path.is_file() {
+            let bytes = std::fs::read(src_path)?;
+            let m: SkillManifest = serde_yaml_ng::from_slice(&bytes)?;
+            (m.name, m.version)
+        } else {
+            let dir = global_skill_dir(home, source);
+            let manifest_path = dir.join("skill.yaml");
+            let bytes = std::fs::read(&manifest_path)
+                .with_context(|| format!("read manifest at {}", manifest_path.display()))?;
+            let m: SkillManifest = serde_yaml_ng::from_slice(&bytes)?;
+            (m.name, m.version)
+        };
+
+        let entry = CreditEntry {
+            ts: chrono::Utc::now(),
+            skill: name,
+            skill_version: version,
+            kind: CreditKind::Author,
+            agent: caller_agent.to_string(),
+            evidence: None,
+            source: format!("human:{caller_agent}"),
+        };
+        if let Err(e) = credit_ledger::append(home, caller_agent, &entry) {
+            tracing::warn!("credit ledger append failed for {}: {e}", entry.skill);
+        }
+    }
     Ok(())
 }
 
@@ -264,7 +360,7 @@ fn resolve_agent_install_trust(
 }
 
 /// Resolve the agent that issued this install command.
-fn caller_agent_name(home: &Path) -> Result<Option<String>> {
+pub(crate) fn caller_agent_name(home: &Path) -> Result<Option<String>> {
     let Some(name) = std::env::var("MUR_AGENT_NAME").ok() else {
         return Ok(None);
     };

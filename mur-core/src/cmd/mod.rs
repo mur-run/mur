@@ -9,6 +9,7 @@ pub(crate) mod agent_history;
 pub mod agent_hooks;
 /// B0 M9.2 — install-time MCP hash + publisher prompt for `mur agent mcp add`.
 pub(crate) mod agent_mcp_pin;
+pub(crate) mod agent_propagate;
 pub(crate) mod agent_rekey;
 /// C4 — schedule add/list/remove/next CLI verbs.
 pub mod agent_schedule;
@@ -44,12 +45,14 @@ pub(crate) mod session;
 pub mod skill_archive;
 pub mod skill_cmd;
 pub mod skill_consolidate;
+pub mod skill_credit;
 pub mod skill_deps;
 pub mod skill_doctor;
 pub mod skill_evolve;
 pub mod skill_from_pattern;
 pub mod skill_generate;
 pub mod skill_install;
+pub mod skill_intent;
 pub(crate) mod skill_publish;
 pub mod skill_recombine;
 pub mod skill_registry;

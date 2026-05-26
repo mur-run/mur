@@ -246,6 +246,22 @@ Read-only aggregation of peer agent skill stats and per-agent fitness scoring. N
 
 Agent fitness uses a 7-day half-life decay on `last_used_at` (floor 0.1), configurable via `cross_agent.fitness.half_life_days` and `cross_agent.fitness.floor` in `config.yaml`. `mur agent card <name>` now includes a `Fitness` section.
 
-M7a is **read-only** on peer state — it never mutates another agent's skills. Mutation (gene model + propagation) lands in M7b/M7c. See `docs/superpowers/plans/2026-05-26-mur-skill-ecosystem-m7a.md` for the full plan.
+M7a is **read-only** on peer state — it never mutates another agent's skills. Mutation (gene model + propagation) landed in M7b/M7c. See `docs/superpowers/plans/2026-05-26-mur-skill-ecosystem-m7a.md` for the full plan.
+
+### Cross-Agent Propagation + Credit + Intent (M7c)
+
+Pull-side skill propagation, per-agent credit ledger, and host-level intent canonicalisation. New CLI surface:
+
+| Command | Description |
+|---------|-------------|
+| `mur agent propagate <name> [--dry-run] [--json]` | Pull high-fitness skills from peers (fitness-gated) |
+| `mur agent schedule propagate-init <name>` | Register `skill-propagate` idle trigger |
+| `mur skill credit <name> [--agent] [--json]` | Show contribution lineage across peers |
+| `mur skill intent canonicalise [--dry-run] [--json]` | Rebuild host-level canonical intent mapping |
+| `mur skill intent show [--json]` | Print current canonical intent mapping |
+
+Propagation uses three configurable gates (`min_samples`, `min_fitness`, `min_source_weight`) with a `max_per_sweep` cap. Credit entries (`author`, `mutator`, `recombiner`, `propagator`) are stored in per-agent append-only `credit/ledger.jsonl` files. The intent canonicaliser clusters `ProcedureStep::intent` strings by normalised form and writes the most-frequent spelling per cluster to `~/.mur/intent_canonical.yaml`.
+
+M7c preserves the M7a read-only invariant — propagation never mutates peer agent state. See `docs/superpowers/specs/2026-05-26-mur-skill-ecosystem-m7c-design.md`.
 
 Execution-time enforcement of these requirements (resolving globs, checking tool availability, applying fallbacks) is deferred to M6b.
