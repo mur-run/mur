@@ -13,6 +13,7 @@ use crate::store::embedding::EmbeddingConfig;
 use crate::store::vector::VectorStore;
 
 pub mod contradiction;
+pub mod contradiction_llm;
 pub mod dedup;
 pub mod dedup_vec;
 pub mod orphan;
@@ -39,6 +40,7 @@ pub struct ConsolidateOptions {
     pub dry_run: bool,
     pub apply: bool,
     pub method: ConsolidateMethod,
+    pub llm_adjudicate: bool,
 }
 
 #[derive(Debug)]
@@ -89,6 +91,11 @@ pub async fn run_consolidate(
 
     contradiction::scan(&skills, &mut report);
     orphan::scan(&skills, &mut report, Utc::now())?;
+
+    // LLM adjudication (M6c Task 5)
+    if opts.llm_adjudicate {
+        contradiction_llm::adjudicate(&mut report.contradictions, &skills, home).await;
+    }
 
     if opts.apply {
         apply_findings(home, &mut report)?;
@@ -211,6 +218,7 @@ fn write_jsonl_report(home: &Path, report: &ConsolidateReport, applied: bool) ->
             "b": c.b,
             "trigger": c.trigger,
             "reason": c.reason,
+            "adjudication": c.adjudication.as_ref().map(|v| v.as_str()),
             "applied": applied,
             "applied_at": Utc::now().to_rfc3339(),
         }));

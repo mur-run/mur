@@ -355,10 +355,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                 strict,
                 fix,
                 apply,
-            } => {
-                // M5a: read-only doctor. --fix and --apply are stubs.
-                cmd::skill_doctor::cmd_doctor(&names, &check, json, strict, fix, apply)?
-            }
+                llm,
+                llm_status,
+            } => cmd::skill_doctor::cmd_doctor(
+                &names, &check, json, strict, fix, apply, llm, llm_status,
+            )?,
             crate::cli::SkillAction::Sweep { name, dry_run } => {
                 cmd::skill_sweep::cmd_sweep(name.as_deref(), dry_run)?
             }
@@ -373,6 +374,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 dry_run,
                 apply,
                 method,
+                llm_adjudicate,
             } => {
                 let home = cmd::agent::resolve_mur_home()?;
                 let method = match method {
@@ -386,7 +388,14 @@ pub async fn run(cli: Cli) -> Result<()> {
                         crate::skill_consolidate::ConsolidateMethod::Both
                     }
                 };
-                cmd::skill_consolidate::cmd_consolidate(&home, dry_run, apply, method).await?
+                cmd::skill_consolidate::cmd_consolidate(
+                    &home,
+                    dry_run,
+                    apply,
+                    method,
+                    llm_adjudicate,
+                )
+                .await?
             }
         },
         Commands::Exchange { action } => match action {

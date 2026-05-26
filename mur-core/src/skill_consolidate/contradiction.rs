@@ -12,6 +12,27 @@ pub struct ContradictionPair {
     pub b: String,
     pub trigger: String,
     pub reason: String,
+    /// LLM adjudication verdict (populated when --llm-adjudicate is used).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjudication: Option<AdjudicationVerdict>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdjudicationVerdict {
+    Contradict,
+    Coexist,
+    Duplicate,
+}
+
+impl AdjudicationVerdict {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Contradict => "contradict",
+            Self::Coexist => "coexist",
+            Self::Duplicate => "duplicate",
+        }
+    }
 }
 
 pub fn scan(skills: &[SkillView], report: &mut ConsolidateReport) {
@@ -35,6 +56,7 @@ pub fn scan(skills: &[SkillView], report: &mut ConsolidateReport) {
                             "shared trigger '{}' — check for conflicting procedures",
                             ta
                         ),
+                        adjudication: None,
                     });
                     break; // one contradiction per pair is enough
                 }

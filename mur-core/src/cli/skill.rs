@@ -139,7 +139,7 @@ pub enum SkillAction {
     Doctor {
         /// Skill name(s) or glob pattern(s) to check (default: all installed).
         names: Vec<String>,
-        /// Only run specific checks (tools,deps,recency,failure-rate,api-drift).
+        /// Only run specific checks (tools,deps,recency,failure-rate,api-drift,coverage-gap,mcp-requirements-coverage,mcp-capability-available,intent-resolvable).
         #[arg(long, value_delimiter = ',')]
         check: Vec<String>,
         /// JSON output.
@@ -154,6 +154,12 @@ pub enum SkillAction {
         /// Accepted for forward CLI stability; no-op in M5a.
         #[arg(long)]
         apply: bool,
+        /// Enable LLM-augmented checks (api-drift, coverage-gap).
+        #[arg(long)]
+        llm: bool,
+        /// Show LLM maintenance status (model, budget, cache).
+        #[arg(long)]
+        llm_status: bool,
     },
     /// Run lifecycle sweep across installed skills (M5b).
     Sweep {
@@ -190,6 +196,9 @@ pub enum SkillAction {
         /// Dedup method: jaccard (default), vector, or both.
         #[arg(long, value_enum, default_value_t = Method::Jaccard)]
         method: Method,
+        /// Use LLM to adjudicate contradiction pairs.
+        #[arg(long)]
+        llm_adjudicate: bool,
     },
 }
 
