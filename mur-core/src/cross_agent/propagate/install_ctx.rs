@@ -3,6 +3,7 @@
 //! and evidence (M7c §3.5).
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum InstallContext {
     /// User typed `mur skill install ...` (or any non-propagate path).
     Manual,
@@ -14,6 +15,7 @@ pub enum InstallContext {
     },
 }
 
+#[allow(dead_code)]
 impl InstallContext {
     pub fn is_auto_propagate(&self) -> bool {
         matches!(self, InstallContext::AutoPropagate { .. })

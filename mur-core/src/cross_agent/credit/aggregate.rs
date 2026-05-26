@@ -59,9 +59,7 @@ pub fn build_credit_view(home: &Path, invoking_agent: &str, skill: &str) -> Resu
         let Ok(bytes) = std::fs::read(&manifest_path) else {
             continue;
         };
-        let Ok(m) =
-            serde_yaml_ng::from_slice::<mur_common::skill::SkillManifest>(&bytes)
-        else {
+        let Ok(m) = serde_yaml_ng::from_slice::<mur_common::skill::SkillManifest>(&bytes) else {
             continue;
         };
         for evt in &m.evolution_log {
@@ -75,10 +73,7 @@ pub fn build_credit_view(home: &Path, invoking_agent: &str, skill: &str) -> Resu
             let from_version =
                 previous_version(&m.evolution_log, &evt.version).unwrap_or_else(|| "?".to_string());
             entries.push(CreditEntry {
-                ts: evt
-                    .timestamp
-                    .parse()
-                    .unwrap_or_else(|_| chrono::Utc::now()),
+                ts: evt.timestamp.parse().unwrap_or_else(|_| chrono::Utc::now()),
                 skill: skill.to_string(),
                 skill_version: evt.version.clone(),
                 kind: CreditKind::Mutator,
@@ -93,17 +88,14 @@ pub fn build_credit_view(home: &Path, invoking_agent: &str, skill: &str) -> Resu
         }
     }
 
-    entries.sort_by(|a, b| a.ts.cmp(&b.ts));
+    entries.sort_by_key(|a| a.ts);
     Ok(CreditView {
         skill: skill.to_string(),
         entries,
     })
 }
 
-fn previous_version(
-    log: &[mur_common::skill::EvolutionEvent],
-    target: &str,
-) -> Option<String> {
+fn previous_version(log: &[mur_common::skill::EvolutionEvent], target: &str) -> Option<String> {
     let mut prior = None;
     for evt in log {
         if evt.version == target {

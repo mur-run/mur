@@ -66,8 +66,8 @@ pub fn build_canonical(home: &Path, generated_by: &str) -> Result<IntentCanonica
     }
 
     let mut canonical_entries: Vec<CanonicalEntry> = counts
-        .into_iter()
-        .map(|(_norm, originals)| {
+        .into_values()
+        .map(|originals| {
             let total: usize = originals.values().sum();
             let mut sorted: Vec<(String, usize)> = originals.into_iter().collect();
             sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));

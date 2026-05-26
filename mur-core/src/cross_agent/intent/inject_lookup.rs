@@ -11,11 +11,13 @@ use std::path::Path;
 use crate::cross_agent::intent::canonical::{IntentCanonical, normalise, read_canonical_yaml};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct IntentLookup {
     by_alias: HashMap<String, String>,
     by_norm: HashMap<String, String>,
 }
 
+#[allow(dead_code)]
 impl IntentLookup {
     pub fn empty() -> Self {
         Self {

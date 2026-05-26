@@ -12,19 +12,10 @@ use fs2::FileExt;
 
 use self::candidates::{Candidate, GateConfig, enumerate_candidates};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PropagateOptions {
     pub gates: GateConfig,
     pub dry_run: bool,
-}
-
-impl Default for PropagateOptions {
-    fn default() -> Self {
-        Self {
-            gates: GateConfig::default(),
-            dry_run: false,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -42,11 +33,11 @@ pub fn run_propagate(
 ) -> Result<PropagateReport> {
     let lock_path = lock_path_for_agent(home, invoking_agent);
     if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(true)
         .write(true)
         .open(&lock_path)
         .with_context(|| format!("open lock {}", lock_path.display()))?;

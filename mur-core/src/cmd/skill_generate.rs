@@ -155,7 +155,7 @@ pub async fn cmd_generate<L: LlmClient + 'static>(
             kind: mur_common::skill::credit::CreditKind::Author,
             agent: caller.clone(),
             evidence: None,
-            source: format!("agent:generator"),
+            source: "agent:generator".to_string(),
         };
         if let Err(e) = crate::cross_agent::credit::ledger::append(home, &caller, &entry) {
             tracing::warn!("credit ledger append failed at generate: {e}");
