@@ -242,6 +242,28 @@ pub enum SkillAction {
         #[arg(long)]
         json: bool,
     },
+    /// Host-level intent canonicalisation (M7c).
+    #[command(subcommand)]
+    Intent(IntentAction),
+}
+
+#[derive(Subcommand)]
+pub enum IntentAction {
+    /// Generate or update the host-level canonical intent mapping.
+    Canonicalise {
+        /// Preview the canonical mapping without writing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON instead of YAML.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the current canonical intent mapping.
+    Show {
+        /// Emit JSON instead of YAML.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]

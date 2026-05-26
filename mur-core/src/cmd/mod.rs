@@ -52,6 +52,7 @@ pub mod skill_evolve;
 pub mod skill_from_pattern;
 pub mod skill_generate;
 pub mod skill_install;
+pub mod skill_intent;
 pub(crate) mod skill_publish;
 pub mod skill_recombine;
 pub mod skill_registry;

@@ -7,6 +7,7 @@
 pub mod consolidate;
 pub mod credit;
 pub mod fitness;
+pub mod intent;
 pub mod propagate;
 pub mod recombine;
 pub mod stats_agg;

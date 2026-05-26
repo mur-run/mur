@@ -550,6 +550,23 @@ pub async fn run(cli: Cli) -> Result<()> {
                 });
                 cmd::skill_credit::cmd_credit(&home, &agent_name, &name, json)?
             }
+            crate::cli::SkillAction::Intent(action) => {
+                let home = cmd::agent::resolve_mur_home()?;
+                let agent_name = cmd::skill_install::caller_agent_name(&home)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "(global)".into());
+                match action {
+                    crate::cli::IntentAction::Canonicalise { dry_run, json } => {
+                        cmd::skill_intent::cmd_intent_canonicalise(
+                            &home, &agent_name, dry_run, json,
+                        )?
+                    }
+                    crate::cli::IntentAction::Show { json } => {
+                        cmd::skill_intent::cmd_intent_show(&home, json)?
+                    }
+                }
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
