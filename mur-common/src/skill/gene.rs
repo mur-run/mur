@@ -51,7 +51,11 @@ pub enum GeneError {
 
 impl SkillGene {
     pub fn from_manifest(m: &SkillManifest) -> Result<Self, GeneError> {
-        let proc = m.content.procedure.as_ref().ok_or(GeneError::NotProcedure)?;
+        let proc = m
+            .content
+            .procedure
+            .as_ref()
+            .ok_or(GeneError::NotProcedure)?;
 
         let triggers = m
             .triggers
@@ -164,15 +168,13 @@ pub struct GeneDiff {
 
 impl GeneDiff {
     pub fn between(a: &SkillGene, b: &SkillGene) -> Self {
-        let mut d = GeneDiff::default();
-
-        // Triggers — set diff
-        d.triggers_added = b.triggers.difference(&a.triggers).cloned().collect();
-        d.triggers_removed = a.triggers.difference(&b.triggers).cloned().collect();
-
-        // MCP — set diff
-        d.mcp_added = b.mcp.difference(&a.mcp).cloned().collect();
-        d.mcp_removed = a.mcp.difference(&b.mcp).cloned().collect();
+        let mut d = GeneDiff {
+            triggers_added: b.triggers.difference(&a.triggers).cloned().collect(),
+            triggers_removed: a.triggers.difference(&b.triggers).cloned().collect(),
+            mcp_added: b.mcp.difference(&a.mcp).cloned().collect(),
+            mcp_removed: a.mcp.difference(&b.mcp).cloned().collect(),
+            ..Default::default()
+        };
 
         // Requires — key-wise
         for (name, a_ver) in &a.requires {

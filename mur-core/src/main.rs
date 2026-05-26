@@ -15,8 +15,9 @@ mod cli;
 mod cmd;
 mod community;
 mod context_api;
-mod cross_agent;
 mod conversations;
+#[allow(dead_code)]
+mod cross_agent;
 mod daemon;
 mod dashboard;
 mod dispatch;

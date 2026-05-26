@@ -15,8 +15,8 @@ use chrono::Utc;
 use mur_common::skill::evolution::EvolutionEvent;
 use mur_common::skill::gene::SkillGene;
 use mur_common::skill::hash::content_sha256;
-use mur_common::skill::stats::LifecycleState;
 use mur_common::skill::manifest::SkillManifest;
+use mur_common::skill::stats::LifecycleState;
 use mur_common::skill::stats::SkillStats;
 use mur_common::skill::validate::validate;
 use std::path::{Path, PathBuf};
@@ -35,6 +35,7 @@ pub struct RecombineOptions {
 
 #[derive(Debug)]
 pub struct RecombineOutcome {
+    #[allow(dead_code)]
     pub manifest: SkillManifest,
     pub manifest_yaml: String,
     pub written_to: Option<PathBuf>,
@@ -68,11 +69,9 @@ pub async fn run_recombine(home: &Path, opts: &RecombineOptions) -> Result<Recom
     let manifest = match opts.strategy {
         RecombineStrategy::Union => union_or_intersection(&a, &b, true)?,
         RecombineStrategy::Intersection => union_or_intersection(&a, &b, false)?,
-        RecombineStrategy::Llm => {
-            llm::llm_recombine(home, &a.manifest, &b.manifest, &output_name)
-                .await
-                .map_err(|e| anyhow!("LLM strategy failed: {e}"))?
-        }
+        RecombineStrategy::Llm => llm::llm_recombine(home, &a.manifest, &b.manifest, &output_name)
+            .await
+            .map_err(|e| anyhow!("LLM strategy failed: {e}"))?,
     };
 
     // For Union/Intersection we synthesised a SkillGene-derived manifest; for
@@ -286,7 +285,12 @@ priority: normal
         let home = tmp.path();
         write_skill(home, "self", "a", &minimal_yaml("a", "/a", "i1", "do A"));
         write_skill(home, "self", "b", &minimal_yaml("b", "/b", "i2", "do B"));
-        write_skill(home, "self", "merged", &minimal_yaml("merged", "/m", "im", "exists"));
+        write_skill(
+            home,
+            "self",
+            "merged",
+            &minimal_yaml("merged", "/m", "im", "exists"),
+        );
 
         let opts = RecombineOptions {
             a_ref: peer_ref::parse_ref("a").unwrap(),

@@ -35,10 +35,8 @@ pub async fn llm_recombine(
     output_name: &str,
 ) -> Result<SkillManifest, LlmRecombineError> {
     // Resolve model
-    let registry = ModelRegistry::load_from(
-        &ModelRegistry::default_path().unwrap_or_default(),
-    )
-    .unwrap_or_default();
+    let registry = ModelRegistry::load_from(&ModelRegistry::default_path().unwrap_or_default())
+        .unwrap_or_default();
     let model = resolve_maintenance_model(&registry, None).ok_or(LlmRecombineError::NoModel)?;
 
     // Build prompt
@@ -97,15 +95,15 @@ Output:
 
 fn strip_code_fence(s: &str) -> String {
     let trimmed = s.trim();
-    if let Some(rest) = trimmed.strip_prefix("```yaml") {
-        if let Some(inner) = rest.trim_start_matches('\n').strip_suffix("```") {
-            return inner.trim_end().to_string();
-        }
+    if let Some(rest) = trimmed.strip_prefix("```yaml")
+        && let Some(inner) = rest.trim_start_matches('\n').strip_suffix("```")
+    {
+        return inner.trim_end().to_string();
     }
-    if let Some(rest) = trimmed.strip_prefix("```") {
-        if let Some(inner) = rest.trim_start_matches('\n').strip_suffix("```") {
-            return inner.trim_end().to_string();
-        }
+    if let Some(rest) = trimmed.strip_prefix("```")
+        && let Some(inner) = rest.trim_start_matches('\n').strip_suffix("```")
+    {
+        return inner.trim_end().to_string();
     }
     trimmed.to_string()
 }

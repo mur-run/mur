@@ -177,11 +177,13 @@ pub fn merge_semver(name: &str, a: &str, b: &str) -> Result<String, StrategyErro
     })?;
 
     let combined_str = format!("{a},{b}");
-    let combined: VersionReq = combined_str.parse().map_err(|_| StrategyError::DisjointSemver {
-        name: name.to_string(),
-        a: a.to_string(),
-        b: b.to_string(),
-    })?;
+    let combined: VersionReq = combined_str
+        .parse()
+        .map_err(|_| StrategyError::DisjointSemver {
+            name: name.to_string(),
+            a: a.to_string(),
+            b: b.to_string(),
+        })?;
 
     if !has_any_satisfying_version(&combined, &ca, &cb) {
         return Err(StrategyError::DisjointSemver {
@@ -414,11 +416,7 @@ mod intersection_tests {
 
     #[test]
     fn intersection_drops_unmatched_intent_steps() {
-        let a = gene_with(
-            vec![t("/x")],
-            vec![s("i1", "A1"), s("i2", "A2")],
-            vec![],
-        );
+        let a = gene_with(vec![t("/x")], vec![s("i1", "A1"), s("i2", "A2")], vec![]);
         let b = gene_with(vec![t("/x")], vec![s("i1", "B1")], vec![]);
         let out = intersection(&a, &b, &ctx(0.5, 0.5)).unwrap();
         assert_eq!(out.steps.len(), 1);

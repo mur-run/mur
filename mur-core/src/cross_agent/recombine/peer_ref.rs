@@ -63,11 +63,7 @@ pub struct LoadedSkillRef {
 /// Load manifest + stats for a `SkillRef`. `current_agent` is the invoking
 /// agent name and is used to resolve `agent: None` (local) refs to the
 /// invoker's per-agent skills directory.
-pub fn load_skill_ref(
-    home: &Path,
-    current_agent: &str,
-    r: &SkillRef,
-) -> Result<LoadedSkillRef> {
+pub fn load_skill_ref(home: &Path, current_agent: &str, r: &SkillRef) -> Result<LoadedSkillRef> {
     let agent_name = r.agent.as_deref().unwrap_or(current_agent);
     let agent_label = r.agent.clone().unwrap_or_else(|| "local".to_string());
 
@@ -87,8 +83,7 @@ pub fn load_skill_ref(
     }
 
     let yaml = std::fs::read_to_string(&manifest_path)?;
-    let manifest =
-        parse_canonical(&yaml).map_err(|e| anyhow!("parse {manifest_path:?}: {e}"))?;
+    let manifest = parse_canonical(&yaml).map_err(|e| anyhow!("parse {manifest_path:?}: {e}"))?;
 
     let stats_path = SkillStats::path_agent(home, agent_name, &r.skill);
     let stats = SkillStats::load(&stats_path)?

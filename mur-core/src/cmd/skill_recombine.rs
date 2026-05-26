@@ -7,6 +7,7 @@ use crate::cross_agent::recombine::{
     RecombineOptions, RecombineOutcome, RecombineStrategy, run_recombine,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_recombine(
     home: &Path,
     a: &str,
@@ -110,8 +111,6 @@ fn classify_error(msg: &str) -> i32 {
         4
     } else if msg.contains("already exists") {
         6
-    } else if msg.contains("disjoint semver") || msg.contains("validation") {
-        5
     } else {
         5
     }
