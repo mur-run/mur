@@ -1,6 +1,7 @@
 //! Schema validation enforced after parsing.
 
 use super::manifest::SkillManifest;
+use super::mcp;
 use super::types::{Category, ContentMode, TriggerKind};
 use std::fmt;
 
@@ -17,6 +18,8 @@ pub enum ValidationError {
     },
     TriggerMissingPattern(TriggerKind),
     EmptyAbstract,
+    /// Invalid mcp_requirements entry. Fields: index, message.
+    McpRequirements(usize, String),
 }
 
 impl fmt::Display for ValidationError {
@@ -45,6 +48,9 @@ impl fmt::Display for ValidationError {
             }
             TriggerMissingPattern(k) => write!(f, "trigger '{k:?}' requires a `pattern` field"),
             EmptyAbstract => write!(f, "content.abstract must not be empty"),
+            McpRequirements(idx, msg) => {
+                write!(f, "mcp_requirements[{idx}]: {msg}")
+            }
         }
     }
 }
@@ -87,6 +93,10 @@ pub fn validate(m: &SkillManifest) -> Result<(), ValidationError> {
         if matches!(t.kind, TriggerKind::Command | TriggerKind::Keyword) && t.pattern.is_none() {
             return Err(ValidationError::TriggerMissingPattern(t.kind));
         }
+    }
+
+    if let Err((idx, msg)) = mcp::validate_requirements(&m.mcp_requirements) {
+        return Err(ValidationError::McpRequirements(idx, msg));
     }
 
     Ok(())
@@ -208,6 +218,95 @@ content:
         assert!(matches!(
             validate(&m),
             Err(ValidationError::ContentModeMismatch { .. })
+        ));
+    }
+
+    // ── M6a: mcp_requirements ──
+
+    #[test]
+    fn valid_mcp_requirements_passes() {
+        let yaml = r#"
+name: demo
+version: 1.0.0
+publisher: human:test
+description: d
+category: workflow
+content:
+  abstract: hi
+  procedure:
+    steps:
+      - description: test
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        validate(&m).unwrap();
+    }
+
+    #[test]
+    fn empty_mcp_requirements_passes() {
+        let yaml = r#"
+name: demo
+version: 1.0.0
+publisher: human:test
+description: d
+category: context
+content:
+  abstract: hi
+  context: body
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        validate(&m).unwrap();
+    }
+
+    #[test]
+    fn rejects_duplicate_mcp_requirements() {
+        let yaml = r#"
+name: demo
+version: 1.0.0
+publisher: human:test
+description: d
+category: workflow
+content:
+  abstract: hi
+  procedure:
+    steps:
+      - description: test
+mcp_requirements:
+  - tool_pattern: "fs.*"
+    capability: read_file
+  - tool_pattern: "fs.*"
+    capability: read_file
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        assert!(matches!(
+            validate(&m),
+            Err(ValidationError::McpRequirements(1, _))
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_mcp_pattern() {
+        let yaml = r#"
+name: demo
+version: 1.0.0
+publisher: human:test
+description: d
+category: workflow
+content:
+  abstract: hi
+  procedure:
+    steps:
+      - description: test
+mcp_requirements:
+  - tool_pattern: ""
+    capability: read_file
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        assert!(matches!(
+            validate(&m),
+            Err(ValidationError::McpRequirements(0, _))
         ));
     }
 
