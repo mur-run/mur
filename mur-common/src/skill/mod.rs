@@ -4,6 +4,7 @@ pub mod aggregator;
 pub mod capability;
 pub mod constraint;
 pub mod evolution;
+pub mod gene;
 pub mod hash;
 pub mod inventory;
 pub mod lifecycle;
@@ -13,6 +14,7 @@ pub mod lockfile;
 pub mod manifest;
 pub mod mcp;
 pub mod parser;
+pub mod peers;
 pub mod registry;
 pub mod resolve;
 pub mod scan;
@@ -26,6 +28,7 @@ pub mod version;
 pub use capability::{Capability, CapabilityViolation, allowed_for, check_capabilities};
 pub use constraint::{Constraint, ConstraintError};
 pub use evolution::EvolutionEvent;
+pub use gene::{GeneDiff, McpGene, SkillGene, StepGene, TriggerGene};
 pub use hash::{
     DriftStatus, content_hash_for_trust, content_sha256, ct_eq_hex, drift_status, sha256_hex,
 };
