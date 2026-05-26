@@ -75,6 +75,12 @@ pub struct SkillStats {
     /// these stats have already absorbed. `mur skill reindex-stats`
     /// resumes from here.
     pub rebuilt_from_trace_through: Option<DateTime<Utc>>,
+
+    /// Count of inject-time `Resolution::Unresolved` outcomes for this skill.
+    /// A spike here means the skill declares intents that no longer match the
+    /// agent's MCP inventory — doctor's `intent-resolvable` check surfaces this.
+    #[serde(default)]
+    pub resolution_misses: u64,
 }
 
 impl SkillStats {
@@ -101,6 +107,7 @@ impl SkillStats {
             first_successful_use_at: None,
             anchor_confidence: 1.0,
             rebuilt_from_trace_through: None,
+            resolution_misses: 0,
         }
     }
 
