@@ -77,10 +77,7 @@ mcp_requirements:
         skill.manifest.mcp_requirements[0].capability.to_string(),
         "network_http"
     );
-    assert_eq!(
-        skill.manifest.mcp_requirements[1].fallback,
-        "builtin-touch"
-    );
+    assert_eq!(skill.manifest.mcp_requirements[1].fallback, "builtin-touch");
 
     // Round-trip
     let out = serde_yaml_ng::to_string(&skill).unwrap();
@@ -163,8 +160,5 @@ mcp_requirements:
 "#;
     let m: SkillManifest = serde_yaml_ng::from_str(yaml).unwrap();
     assert_eq!(m.mcp_requirements.len(), 1);
-    assert_eq!(
-        m.mcp_requirements[0].capability.to_string(),
-        "search"
-    );
+    assert_eq!(m.mcp_requirements[0].capability.to_string(), "search");
 }

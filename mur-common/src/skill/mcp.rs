@@ -119,10 +119,7 @@ pub fn validate_requirements(reqs: &[McpRequirement]) -> Result<(), (usize, Stri
         }
         // Validate glob syntax.
         if globset::Glob::new(&req.tool_pattern).is_err() {
-            return Err((
-                i,
-                format!("invalid glob pattern: '{}'", req.tool_pattern),
-            ));
+            return Err((i, format!("invalid glob pattern: '{}'", req.tool_pattern)));
         }
         let cap_str = req.capability.as_str();
         if !seen.insert((&req.tool_pattern, cap_str)) {
@@ -144,12 +141,30 @@ mod tests {
 
     #[test]
     fn parse_valid_capabilities() {
-        assert_eq!("read_file".parse::<SkillCapability>().unwrap(), SkillCapability::ReadFile);
-        assert_eq!("list_tools".parse::<SkillCapability>().unwrap(), SkillCapability::ListTools);
-        assert_eq!("search".parse::<SkillCapability>().unwrap(), SkillCapability::Search);
-        assert_eq!("write_file".parse::<SkillCapability>().unwrap(), SkillCapability::WriteFile);
-        assert_eq!("execute_safe".parse::<SkillCapability>().unwrap(), SkillCapability::ExecuteSafe);
-        assert_eq!("network_http".parse::<SkillCapability>().unwrap(), SkillCapability::NetworkHttp);
+        assert_eq!(
+            "read_file".parse::<SkillCapability>().unwrap(),
+            SkillCapability::ReadFile
+        );
+        assert_eq!(
+            "list_tools".parse::<SkillCapability>().unwrap(),
+            SkillCapability::ListTools
+        );
+        assert_eq!(
+            "search".parse::<SkillCapability>().unwrap(),
+            SkillCapability::Search
+        );
+        assert_eq!(
+            "write_file".parse::<SkillCapability>().unwrap(),
+            SkillCapability::WriteFile
+        );
+        assert_eq!(
+            "execute_safe".parse::<SkillCapability>().unwrap(),
+            SkillCapability::ExecuteSafe
+        );
+        assert_eq!(
+            "network_http".parse::<SkillCapability>().unwrap(),
+            SkillCapability::NetworkHttp
+        );
     }
 
     #[test]

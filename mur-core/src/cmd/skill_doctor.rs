@@ -753,7 +753,10 @@ mcp_requirements:
         write_skill(&dir, "covered-skill", yaml);
         let ctx = doctor_ctx(&dir);
         let findings = run_mcp_requirements_coverage(&ctx, "covered-skill");
-        assert!(findings.is_empty(), "expected no findings, got {findings:?}");
+        assert!(
+            findings.is_empty(),
+            "expected no findings, got {findings:?}"
+        );
     }
 
     #[test]
@@ -843,7 +846,8 @@ mcp_requirements:
     capability: network_http
 "#;
         write_skill(&dir, "browser-skill", yaml);
-        let ctx = doctor_ctx_with_tools(&dir, vec!["filesystem.read".into(), "search.google".into()]);
+        let ctx =
+            doctor_ctx_with_tools(&dir, vec!["filesystem.read".into(), "search.google".into()]);
         let findings = run_mcp_capability_available(&ctx, "browser-skill");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, Severity::Warn);
@@ -874,7 +878,10 @@ mcp_requirements:
             vec!["browser.navigate".into(), "browser.screenshot".into()],
         );
         let findings = run_mcp_capability_available(&ctx, "browser-skill");
-        assert!(findings.is_empty(), "expected no findings, got {findings:?}");
+        assert!(
+            findings.is_empty(),
+            "expected no findings, got {findings:?}"
+        );
     }
 
     #[test]
@@ -900,7 +907,10 @@ mcp_requirements:
         // No browser tools available — but fallback is set, so skip.
         let ctx = doctor_ctx_with_tools(&dir, vec!["filesystem.read".into()]);
         let findings = run_mcp_capability_available(&ctx, "fallback-skill");
-        assert!(findings.is_empty(), "fallback requirements should be skipped, got {findings:?}");
+        assert!(
+            findings.is_empty(),
+            "fallback requirements should be skipped, got {findings:?}"
+        );
     }
 
     #[test]
