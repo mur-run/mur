@@ -51,6 +51,7 @@ aho-corasick = "1"
 thiserror = { workspace = true }
 dirs = "6"
 tempfile = "3"
+globset = "0.4"
 sha2 = "0.10"
 hex = "0.4"
 regex = "1"
