@@ -340,7 +340,55 @@ pub async fn run(cli: Cli) -> Result<()> {
                 )
                 .await?
             }
-            crate::cli::SkillAction::Stats { name } => cmd::skill_stats::cmd_stats(&name)?,
+            crate::cli::SkillAction::Stats {
+                name,
+                all_agents,
+                json,
+            } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                if all_agents {
+                    let rows = crate::cross_agent::stats_agg::aggregate_skill_stats(&home, &name)?;
+                    if json {
+                        serde_json::to_writer_pretty(std::io::stdout(), &rows)?;
+                        println!();
+                    } else if rows.is_empty() {
+                        println!("No stats found for '{}' on any agent.", name);
+                    } else {
+                        println!(
+                            "{:<24} {:>8} {:>8} {:>8}  {:<10}  LAST USED",
+                            "AGENT", "USES", "OK", "FAIL", "LIFECYCLE",
+                        );
+                        for r in &rows {
+                            println!(
+                                "{:<24} {:>8} {:>8} {:>8}  {:<10}  {}",
+                                r.agent,
+                                r.usage_count,
+                                r.success_count,
+                                r.failure_count,
+                                r.lifecycle,
+                                r.last_used_at
+                                    .map(|d| d.to_rfc3339())
+                                    .unwrap_or_else(|| "-".into()),
+                            );
+                        }
+                        let total_uses: u64 = rows.iter().map(|r| r.usage_count).sum();
+                        let total_ok: u64 = rows.iter().map(|r| r.success_count).sum();
+                        let success_rate = if total_uses > 0 {
+                            total_ok as f64 / total_uses as f64
+                        } else {
+                            0.0
+                        };
+                        println!(
+                            "\nPopulation: {} agents, {} uses, {:.1}% success",
+                            rows.len(),
+                            total_uses,
+                            success_rate * 100.0,
+                        );
+                    }
+                } else {
+                    cmd::skill_stats::cmd_stats(&name)?;
+                }
+            }
             crate::cli::SkillAction::Pin { name, reason } => {
                 cmd::skill_stats::cmd_pin(&name, reason.as_deref())?
             }
@@ -375,27 +423,56 @@ pub async fn run(cli: Cli) -> Result<()> {
                 apply,
                 method,
                 llm_adjudicate,
+                cross_agent,
             } => {
                 let home = cmd::agent::resolve_mur_home()?;
-                let method = match method {
-                    crate::cli::skill::Method::Jaccard => {
-                        crate::skill_consolidate::ConsolidateMethod::Jaccard
+                if cross_agent {
+                    let report = crate::cross_agent::consolidate::run_consolidate_cross_agent(
+                        &home,
+                        apply && !dry_run,
+                    )?;
+                    let mode = if apply && !dry_run {
+                        "Applied"
+                    } else {
+                        "Dry-run"
+                    };
+                    println!(
+                        "Cross-agent consolidation report ({mode}): {} duplicate(s)",
+                        report.duplicates.len(),
+                    );
+                    for d in &report.duplicates {
+                        println!(
+                            "  Duplicate: {}:{} ≈ {}:{} (sim={:.3}, keeper={}:{})",
+                            d.a_agent,
+                            d.a_skill,
+                            d.b_agent,
+                            d.b_skill,
+                            d.similarity,
+                            d.keeper_agent,
+                            d.keeper_skill,
+                        );
                     }
-                    crate::cli::skill::Method::Vector => {
-                        crate::skill_consolidate::ConsolidateMethod::Vector
-                    }
-                    crate::cli::skill::Method::Both => {
-                        crate::skill_consolidate::ConsolidateMethod::Both
-                    }
-                };
-                cmd::skill_consolidate::cmd_consolidate(
-                    &home,
-                    dry_run,
-                    apply,
-                    method,
-                    llm_adjudicate,
-                )
-                .await?
+                } else {
+                    let method = match method {
+                        crate::cli::skill::Method::Jaccard => {
+                            crate::skill_consolidate::ConsolidateMethod::Jaccard
+                        }
+                        crate::cli::skill::Method::Vector => {
+                            crate::skill_consolidate::ConsolidateMethod::Vector
+                        }
+                        crate::cli::skill::Method::Both => {
+                            crate::skill_consolidate::ConsolidateMethod::Both
+                        }
+                    };
+                    cmd::skill_consolidate::cmd_consolidate(
+                        &home,
+                        dry_run,
+                        apply,
+                        method,
+                        llm_adjudicate,
+                    )
+                    .await?
+                }
             }
         },
         Commands::Exchange { action } => match action {
@@ -867,6 +944,9 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentHooksAction::Show { name, json } => cmd::agent_hooks::cmd_hooks_show(&name, json)?,
         },
         AgentAction::MigrateToHub => cmd::agent::cmd_migrate_to_hub()?,
+        AgentAction::Peers { json } => {
+            cmd::agent::cmd_peers(&cmd::agent::resolve_mur_home()?, json)?
+        }
         AgentAction::History { name } => cmd::agent_history::cmd_agent_history(&name)?,
         AgentAction::Rollback { name, to } => cmd::agent_history::cmd_agent_rollback(&name, to)?,
         AgentAction::Snapshot { action } => match action {

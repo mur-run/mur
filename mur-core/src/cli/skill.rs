@@ -113,6 +113,12 @@ pub enum SkillAction {
     Stats {
         /// Skill name.
         name: String,
+        /// Aggregate stats across all peer agents.
+        #[arg(long)]
+        all_agents: bool,
+        /// Emit JSON instead of a human-readable table.
+        #[arg(long)]
+        json: bool,
     },
     /// Pin a skill to prevent auto-demotion (M5a).
     Pin {
@@ -199,6 +205,9 @@ pub enum SkillAction {
         /// Use LLM to adjudicate contradiction pairs.
         #[arg(long)]
         llm_adjudicate: bool,
+        /// Run cross-agent duplicate scan across peer agents (M7a).
+        #[arg(long)]
+        cross_agent: bool,
     },
 }
 
