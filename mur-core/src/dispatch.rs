@@ -1009,6 +1009,19 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::Peers { json } => {
             cmd::agent::cmd_peers(&cmd::agent::resolve_mur_home()?, json)?
         }
+        AgentAction::Propagate {
+            name,
+            dry_run,
+            max,
+            min_fitness,
+            min_samples,
+            json,
+        } => {
+            let home = cmd::agent::resolve_mur_home()?;
+            cmd::agent_propagate::cmd_propagate(
+                &home, &name, dry_run, max, min_fitness, min_samples, json,
+            )?
+        }
         AgentAction::History { name } => cmd::agent_history::cmd_agent_history(&name)?,
         AgentAction::Rollback { name, to } => cmd::agent_history::cmd_agent_rollback(&name, to)?,
         AgentAction::Snapshot { action } => match action {

@@ -236,6 +236,26 @@ pub enum AgentAction {
         #[arg(long)]
         json: bool,
     },
+    /// Pull high-fitness skills from peers (M7c — pull-side propagation).
+    Propagate {
+        /// Agent name (required outside an agent runtime context)
+        name: String,
+        /// Scan and report; install nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Override propagate.max_per_sweep for this run.
+        #[arg(long)]
+        max: Option<usize>,
+        /// Override propagate.min_fitness.
+        #[arg(long)]
+        min_fitness: Option<f64>,
+        /// Override propagate.min_samples.
+        #[arg(long)]
+        min_samples: Option<u64>,
+        /// Emit JSON outcome.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show version history for an agent's profile (requires versioned store)
     History {
         /// Agent name
