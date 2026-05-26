@@ -69,6 +69,12 @@ pub fn cmd_install(home: &Path, registry_url: &str, source: &str) -> Result<()> 
     if order.len() > 1 {
         println!("  + {} transitive dependencies", order.len() - 1);
     }
+
+    // Best-effort: embed every installed skill for vector dedup.
+    for node in &order {
+        try_embed_skill(home, &node.name, &node.version.to_string(), &node.manifest);
+    }
+
     Ok(())
 }
 
@@ -222,6 +228,10 @@ fn install_from_agent(home: &Path, agent_name: &str, skill_name: &str) -> Result
             manifest.name
         );
     }
+
+    // Best-effort: embed for vector dedup.
+    try_embed_skill(home, &manifest.name, &manifest.version, &manifest);
+
     Ok(())
 }
 
@@ -343,6 +353,45 @@ pub fn cmd_update_cli(name: &str) -> Result<()> {
     let registry_url = std::env::var("MUR_SKILL_REGISTRY_URL")
         .unwrap_or_else(|_| skill_registry::DEFAULT_REGISTRY.to_string());
     cmd_update(&home, &registry_url, name)
+}
+
+/// Best-effort embedding after install. Failure is non-fatal — the skill is
+/// usable without an embedding (Jaccard path still works), and reindex-vec
+/// can backfill.
+fn try_embed_skill(home: &Path, name: &str, version: &str, manifest: &SkillManifest) {
+    use crate::store::embedding::EmbeddingConfig;
+
+    let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+    let embed_config = EmbeddingConfig::from_config(&cfg);
+    let index_dir = home.join("lance");
+
+    let handle = match tokio::runtime::Handle::try_current() {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let result = handle.block_on(async {
+        let store = crate::store::vector::factory::get_vector_store(&cfg, &index_dir).await?;
+        crate::skill_index::embed_manifest_and_upsert(
+            manifest,
+            name,
+            version,
+            &embed_config,
+            &*store,
+        )
+        .await
+    });
+
+    match result {
+        Ok(dims) => {
+            eprintln!("indexed skill '{name}': {dims}-dim embedding");
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: failed to index skill '{name}' for vector dedup: {e} \
+                 (run `mur skill reindex-vec` to backfill)"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

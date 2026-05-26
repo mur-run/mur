@@ -40,6 +40,8 @@ mod session;
 mod skill_consolidate;
 #[allow(dead_code)]
 mod skill_gen;
+#[allow(dead_code)]
+mod skill_index;
 mod skill_lifecycle;
 mod skill_repair;
 mod skill_stats;

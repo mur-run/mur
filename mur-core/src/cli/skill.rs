@@ -171,6 +171,14 @@ pub enum SkillAction {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Rebuild skill embedding index (M6c.1).
+    ReindexVec {
+        /// Optional skill name to reindex; all if omitted.
+        name: Option<String>,
+        /// Remove embeddings for skills no longer installed.
+        #[arg(long)]
+        prune: bool,
+    },
     /// Run consolidation pass: dedup + contradiction + orphan (M5b).
     Consolidate {
         /// Preview findings without writing.
@@ -179,5 +187,15 @@ pub enum SkillAction {
         /// Apply changes (archive orphans, deprecate duplicates).
         #[arg(long)]
         apply: bool,
+        /// Dedup method: jaccard (default), vector, or both.
+        #[arg(long, value_enum, default_value_t = Method::Jaccard)]
+        method: Method,
     },
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum Method {
+    Jaccard,
+    Vector,
+    Both,
 }
