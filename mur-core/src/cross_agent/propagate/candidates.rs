@@ -67,13 +67,11 @@ pub fn enumerate_candidates(
     let mut by_skill: std::collections::HashMap<String, Candidate> = Default::default();
 
     for peer in &peers {
-        let weight =
-            fitness(home, &peer.name, now, cfg.half_life_days, cfg.weight_floor)?.weight;
+        let weight = fitness(home, &peer.name, now, cfg.half_life_days, cfg.weight_floor)?.weight;
         if weight < cfg.min_source_weight {
             continue;
         }
-        let skills =
-            list_installed_agent(home, &peer.name).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let skills = list_installed_agent(home, &peer.name).map_err(|e| anyhow::anyhow!("{e}"))?;
         for skill in skills {
             if local_skills.contains(&skill) {
                 continue;

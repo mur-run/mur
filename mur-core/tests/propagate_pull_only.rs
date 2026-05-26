@@ -7,7 +7,10 @@ use tempfile::tempdir;
 
 fn fingerprint(dir: &Path) -> Vec<(String, u64)> {
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if entry.file_type().is_file() {
             let md = entry.metadata().unwrap();
             out.push((entry.path().display().to_string(), md.len()));
@@ -23,7 +26,11 @@ fn propagate_does_not_modify_peers() {
     let home = d.path();
 
     // Build peer "alice" with a skill and stats that would pass all gates.
-    let alice_skills = home.join("agents").join("alice").join("skills").join("research");
+    let alice_skills = home
+        .join("agents")
+        .join("alice")
+        .join("skills")
+        .join("research");
     fs::create_dir_all(&alice_skills).unwrap();
     fs::write(
         alice_skills.join("skill.yaml"),
@@ -32,7 +39,11 @@ fn propagate_does_not_modify_peers() {
     .unwrap();
 
     // Write SkillStats for alice's "research" skill with high success count.
-    let stats_dir = home.join("agents").join("alice").join("skills").join("research");
+    let stats_dir = home
+        .join("agents")
+        .join("alice")
+        .join("skills")
+        .join("research");
     fs::create_dir_all(&stats_dir).unwrap();
     let stats_json = serde_json::json!({
         "schema_version": 1,
@@ -53,7 +64,11 @@ fn propagate_does_not_modify_peers() {
         "rebuilt_from_trace_through": null,
         "resolution_misses": 0
     });
-    fs::write(stats_dir.join("stats.json"), serde_json::to_string(&stats_json).unwrap()).unwrap();
+    fs::write(
+        stats_dir.join("stats.json"),
+        serde_json::to_string(&stats_json).unwrap(),
+    )
+    .unwrap();
 
     // Create invoker "bob" with no skills.
     fs::create_dir_all(home.join("agents").join("bob").join("skills")).unwrap();

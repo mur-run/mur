@@ -31,10 +31,7 @@ fn emit_human(view: &CreditView) {
         .filter(|e| e.kind == CreditKind::Author)
         .collect();
     if !authors.is_empty() {
-        println!(
-            "Author{}:",
-            if authors.len() > 1 { "s" } else { "" }
-        );
+        println!("Author{}:", if authors.len() > 1 { "s" } else { "" });
         for e in &authors {
             println!(
                 "  {:<8} {}  source: {}",

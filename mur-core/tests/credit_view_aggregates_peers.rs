@@ -26,15 +26,30 @@ fn aggregates_entries_from_peers() {
 
     // Alice authored the skill.
     fs::create_dir_all(ledger_path_for_agent(home, "alice").parent().unwrap()).unwrap();
-    append(home, "alice", &entry("research", CreditKind::Author, "alice")).unwrap();
+    append(
+        home,
+        "alice",
+        &entry("research", CreditKind::Author, "alice"),
+    )
+    .unwrap();
 
     // Bob propagated it.
     fs::create_dir_all(ledger_path_for_agent(home, "bob").parent().unwrap()).unwrap();
-    append(home, "bob", &entry("research", CreditKind::Propagator, "bob")).unwrap();
+    append(
+        home,
+        "bob",
+        &entry("research", CreditKind::Propagator, "bob"),
+    )
+    .unwrap();
 
     // Charlie (invoker) evolved it.
     fs::create_dir_all(ledger_path_for_agent(home, "charlie").parent().unwrap()).unwrap();
-    append(home, "charlie", &entry("research", CreditKind::Mutator, "charlie")).unwrap();
+    append(
+        home,
+        "charlie",
+        &entry("research", CreditKind::Mutator, "charlie"),
+    )
+    .unwrap();
 
     let view = build_credit_view(home, "charlie", "research").unwrap();
 
