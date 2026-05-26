@@ -104,6 +104,14 @@ pub enum Event {
     BridgeAlive {
         bridge_id: String,
     },
+    /// Emitted when a skill is indexed into the LanceDB skill embedding store
+    /// (on install or reindex-vec).
+    SkillIndexed {
+        skill_name: String,
+        skill_version: String,
+        dims: usize,
+        duration_ms: u64,
+    },
 }
 
 pub struct TelemetryWriter {
@@ -340,6 +348,18 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
         Event::BridgeAlive { bridge_id } => {
             params["bridge_id"] = json!(bridge_id);
             METHOD_BRIDGE_ALIVE
+        }
+        Event::SkillIndexed {
+            skill_name,
+            skill_version,
+            dims,
+            duration_ms,
+        } => {
+            params[MUR_SKILL_NAME] = json!(skill_name);
+            params[MUR_SKILL_VERSION] = json!(skill_version);
+            params["dims"] = json!(dims);
+            params["duration_ms"] = json!(duration_ms);
+            METHOD_SKILL_INDEXED
         }
     };
     params[MUR_EVENT_TYPE] = json!(method);

@@ -1,10 +1,14 @@
 //! Consolidation tests: dedup + contradiction + orphan (M5b).
 
 use chrono::{Duration, Utc};
+use mur_common::config::Config;
 use mur_common::skill::stats::{LifecycleState, SkillStats};
 use mur_core::skill_consolidate::{
-    ConsolidateOptions, ConsolidateReport, SkillView, contradiction, dedup, orphan,
+    ConsolidateMethod, ConsolidateOptions, ConsolidateReport, SkillView, contradiction, dedup,
+    orphan,
 };
+use mur_core::store::embedding::EmbeddingConfig;
+use mur_core::store::vector::factory::get_vector_store;
 use std::fs;
 use tempfile::TempDir;
 
@@ -35,7 +39,23 @@ fn make_skill_view(
         triggers,
         requires,
         stats,
+        embed_text: String::new(),
     }
+}
+
+/// Setup minimal store for Jaccard-only consolidation tests.
+/// The store is not used by the Jaccard path, but the async API signature requires it.
+async fn jaccard_test_store(
+    dir: &std::path::Path,
+) -> (
+    EmbeddingConfig,
+    std::sync::Arc<dyn mur_core::store::vector::VectorStore>,
+) {
+    let mut cfg = Config::default();
+    cfg.embedding.dimensions = 1;
+    let embed_config = EmbeddingConfig::from_config(&cfg);
+    let store = get_vector_store(&cfg, dir).await.unwrap();
+    (embed_config, store)
 }
 
 #[test]
@@ -69,6 +89,7 @@ fn jaccard_dedup_near_identical_skills() {
     ];
 
     let mut report = ConsolidateReport {
+        method: ConsolidateMethod::Jaccard,
         duplicates: Vec::new(),
         contradictions: Vec::new(),
         orphans: Vec::new(),
@@ -123,6 +144,7 @@ fn jaccard_dissimilar_skills_no_match() {
     ];
 
     let mut report = ConsolidateReport {
+        method: ConsolidateMethod::Jaccard,
         duplicates: Vec::new(),
         contradictions: Vec::new(),
         orphans: Vec::new(),
@@ -166,6 +188,7 @@ fn inactive_skills_skipped_by_dedup() {
     ];
 
     let mut report = ConsolidateReport {
+        method: ConsolidateMethod::Jaccard,
         duplicates: Vec::new(),
         contradictions: Vec::new(),
         orphans: Vec::new(),
@@ -209,6 +232,7 @@ fn contradiction_on_shared_exact_trigger() {
     ];
 
     let mut report = ConsolidateReport {
+        method: ConsolidateMethod::Jaccard,
         duplicates: Vec::new(),
         contradictions: Vec::new(),
         orphans: Vec::new(),
@@ -254,6 +278,7 @@ fn glob_triggers_skipped_by_contradiction() {
     ];
 
     let mut report = ConsolidateReport {
+        method: ConsolidateMethod::Jaccard,
         duplicates: Vec::new(),
         contradictions: Vec::new(),
         orphans: Vec::new(),
@@ -297,6 +322,7 @@ fn orphan_detection() {
     ];
 
     let mut report = ConsolidateReport {
+        method: ConsolidateMethod::Jaccard,
         duplicates: Vec::new(),
         contradictions: Vec::new(),
         orphans: Vec::new(),
@@ -329,6 +355,7 @@ fn pinned_skills_not_orphans() {
     )];
 
     let mut report = ConsolidateReport {
+        method: ConsolidateMethod::Jaccard,
         duplicates: Vec::new(),
         contradictions: Vec::new(),
         orphans: Vec::new(),
@@ -450,14 +477,24 @@ fn consolidate_all_passes_integration() {
         fs::write(&stats_path, serde_json::to_string_pretty(&stats).unwrap()).unwrap();
     }
 
-    let report = mur_core::skill_consolidate::run_consolidate(
-        home,
-        &ConsolidateOptions {
-            dry_run: false,
-            apply: false,
-        },
-    )
-    .unwrap();
+    let store_dir = TempDir::new().unwrap();
+    let (embed_config, store) = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(jaccard_test_store(store_dir.path()));
+
+    let report = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(mur_core::skill_consolidate::run_consolidate(
+            home,
+            &embed_config,
+            store.as_ref(),
+            &ConsolidateOptions {
+                dry_run: false,
+                apply: false,
+                method: ConsolidateMethod::Jaccard,
+            },
+        ))
+        .unwrap();
 
     // Should find at least 1 duplicate (pricing-research ≈ pricing-research-v2)
     assert!(
@@ -502,14 +539,24 @@ fn consolidate_apply_archives_orphans() {
     fs::write(&stats_path, serde_json::to_string_pretty(&stats).unwrap()).unwrap();
 
     // Dry run first
-    let report_dry = mur_core::skill_consolidate::run_consolidate(
-        home,
-        &ConsolidateOptions {
-            dry_run: true,
-            apply: false,
-        },
-    )
-    .unwrap();
+    let store_dir = TempDir::new().unwrap();
+    let (embed_config, store) = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(jaccard_test_store(store_dir.path()));
+
+    let report_dry = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(mur_core::skill_consolidate::run_consolidate(
+            home,
+            &embed_config,
+            store.as_ref(),
+            &ConsolidateOptions {
+                dry_run: true,
+                apply: false,
+                method: ConsolidateMethod::Jaccard,
+            },
+        ))
+        .unwrap();
     assert!(report_dry.orphans.iter().any(|o| o.name == name));
 
     // Verify not archived yet (dry_run)
@@ -517,14 +564,19 @@ fn consolidate_apply_archives_orphans() {
     assert_eq!(after_dry.lifecycle_state, LifecycleState::Stable);
 
     // Apply
-    let report_apply = mur_core::skill_consolidate::run_consolidate(
-        home,
-        &ConsolidateOptions {
-            dry_run: false,
-            apply: true,
-        },
-    )
-    .unwrap();
+    let report_apply = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(mur_core::skill_consolidate::run_consolidate(
+            home,
+            &embed_config,
+            store.as_ref(),
+            &ConsolidateOptions {
+                dry_run: false,
+                apply: true,
+                method: ConsolidateMethod::Jaccard,
+            },
+        ))
+        .unwrap();
     assert!(report_apply.orphans.iter().any(|o| o.name == name));
 
     // Verify archived
