@@ -1,10 +1,12 @@
-//! Backward-compat tests for M6a schema evolution (v2.0 → v2.1).
+//! Backward-compat tests for schema evolution (v2.0 → v2.1 → v2.2).
 //!
-//! Verifies that M3-era v2.0 manifests load correctly with the new
-//! `mcp_requirements` field defaulting to empty, and that serialization
-//! is byte-identical so publisher signatures remain valid.
+//! Verifies that older manifests load correctly with new optional fields
+//! defaulting to empty, and that serialization is byte-identical so
+//! publisher signatures remain valid.
 
 use mur_common::skill::manifest::{Skill, SkillManifest};
+use mur_common::skill::validate;
+use mur_common::skill::parse_canonical;
 
 #[test]
 fn v20_manifest_loads_with_default_empty_requirements() {
@@ -141,6 +143,178 @@ mcp_requirements: []
         !out.contains("mcp_requirements"),
         "empty mcp_requirements should be skipped on serialization"
     );
+}
+
+// ── v2.2: intent + tool_hint ──
+
+#[test]
+fn v22_manifest_with_intent_and_hint_loads() {
+    let yaml = r#"
+name: intent-skill
+version: 1.0.0
+publisher: human:test
+description: Uses intent-based tool resolution
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: Navigate to search page
+        intent: web_navigate
+        tool_hint: browser.navigate
+      - description: Click first result
+        intent: web_click
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+"#;
+    let skill: Skill = serde_yaml_ng::from_str(yaml).unwrap();
+    let proc = skill.manifest.content.procedure.as_ref().unwrap();
+    assert_eq!(proc.steps.len(), 2);
+    assert_eq!(proc.steps[0].intent.as_deref(), Some("web_navigate"));
+    assert_eq!(proc.steps[0].tool_hint.as_deref(), Some("browser.navigate"));
+    assert_eq!(proc.steps[1].intent.as_deref(), Some("web_click"));
+    assert_eq!(proc.steps[1].tool_hint.as_deref(), None);
+
+    // Validate passes.
+    validate(&skill.manifest).unwrap();
+}
+
+#[test]
+fn v22_manifest_round_trips() {
+    let yaml = r#"
+name: intent-skill
+version: 1.0.0
+publisher: human:test
+description: Round-trip test
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: Navigate
+        intent: web_navigate
+        tool_hint: browser.navigate
+mcp_requirements:
+  - tool_pattern: "browser.*"
+    capability: network_http
+"#;
+    let skill: Skill = serde_yaml_ng::from_str(yaml).unwrap();
+    let out = serde_yaml_ng::to_string(&skill).unwrap();
+    let skill2: Skill = serde_yaml_ng::from_str(&out).unwrap();
+    let proc = skill2.manifest.content.procedure.as_ref().unwrap();
+    assert_eq!(proc.steps[0].intent.as_deref(), Some("web_navigate"));
+    assert_eq!(proc.steps[0].tool_hint.as_deref(), Some("browser.navigate"));
+}
+
+#[test]
+fn v22_manifest_without_intent_serializes_cleanly() {
+    // Steps with only description + tool (no intent) should not emit
+    // intent or tool_hint in the serialized output.
+    let yaml = r#"
+name: plain-step
+version: 1.0.0
+publisher: human:test
+description: Classic tool-only step
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: Navigate
+        tool: browser.navigate
+"#;
+    let skill: Skill = serde_yaml_ng::from_str(yaml).unwrap();
+    let out = serde_yaml_ng::to_string(&skill).unwrap();
+    assert!(!out.contains("intent"), "unexpected 'intent' in output: {out}");
+    assert!(!out.contains("tool_hint"), "unexpected 'tool_hint' in output: {out}");
+}
+
+#[test]
+fn v22_rejects_empty_intent() {
+    let yaml = r#"
+name: bad-intent
+version: 1.0.0
+publisher: human:test
+description: Empty intent
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: test
+        intent: ""
+"#;
+    let m = parse_canonical(yaml).unwrap();
+    let err = validate(&m).unwrap_err();
+    assert!(
+        err.to_string().contains("intent must not be empty"),
+        "expected 'intent must not be empty', got: {err}"
+    );
+}
+
+#[test]
+fn v22_rejects_empty_tool_hint() {
+    let yaml = r#"
+name: bad-hint
+version: 1.0.0
+publisher: human:test
+description: Empty tool_hint
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: test
+        tool_hint: ""
+"#;
+    let m = parse_canonical(yaml).unwrap();
+    let err = validate(&m).unwrap_err();
+    assert!(
+        err.to_string().contains("tool_hint must not be empty"),
+        "expected 'tool_hint must not be empty', got: {err}"
+    );
+}
+
+#[test]
+fn v22_step_with_only_tool_still_valid() {
+    // Pre-M6b steps (tool only, no intent) must still pass validation.
+    let yaml = r#"
+name: classic
+version: 1.0.0
+publisher: human:test
+description: Classic tool-only step
+category: workflow
+content:
+  abstract: test
+  procedure:
+    steps:
+      - description: Navigate
+        tool: browser.navigate
+"#;
+    let m = parse_canonical(yaml).unwrap();
+    validate(&m).unwrap(); // must not panic
+}
+
+#[test]
+fn v22_v20_byte_identical_round_trip_preserved() {
+    // v2.0 manifests must still round-trip byte-identically even after
+    // the v2.2 schema changes (no leaked fields).
+    let yaml = r#"
+name: legacy
+version: 1.0.0
+publisher: human:test
+description: A v2.0 manifest without mcp_requirements
+category: context
+content:
+  abstract: test
+  context: test context
+"#;
+    let skill: Skill = serde_yaml_ng::from_str(yaml).unwrap();
+    let out = serde_yaml_ng::to_string(&skill).unwrap();
+    let skill2: Skill = serde_yaml_ng::from_str(&out).unwrap();
+    let out2 = serde_yaml_ng::to_string(&skill2).unwrap();
+    assert_eq!(out, out2, "v2.0 byte-identical round-trip must hold across v2.2");
 }
 
 #[test]
