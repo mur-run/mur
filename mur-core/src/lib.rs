@@ -23,6 +23,7 @@ pub mod cmd;
 pub mod community;
 pub mod context_api;
 pub mod conversations;
+pub mod cross_agent;
 pub mod dashboard;
 pub mod discovery;
 pub mod evolve;

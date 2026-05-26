@@ -16,6 +16,7 @@ mod cmd;
 mod community;
 mod context_api;
 mod conversations;
+mod cross_agent;
 mod daemon;
 mod dashboard;
 mod dispatch;
