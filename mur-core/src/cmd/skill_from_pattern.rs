@@ -295,6 +295,23 @@ pub async fn cmd_from_pattern_with_home(
     if !polish {
         println!("hint: re-run with --polish for LLM-assisted abstract + procedure generation");
     }
+
+    // M7c: append Author entry to credit ledger.
+    if let Ok(Some(caller)) = crate::cmd::skill_install::caller_agent_name(mur_home) {
+        let entry = mur_common::skill::credit::CreditEntry {
+            ts: chrono::Utc::now(),
+            skill: manifest.name.clone(),
+            skill_version: manifest.version.clone(),
+            kind: mur_common::skill::credit::CreditKind::Author,
+            agent: caller.clone(),
+            evidence: None,
+            source: format!("human:{caller}"),
+        };
+        if let Err(e) = crate::cross_agent::credit::ledger::append(mur_home, &caller, &entry) {
+            tracing::warn!("credit ledger append failed at from-pattern: {e}");
+        }
+    }
+
     Ok(())
 }
 
