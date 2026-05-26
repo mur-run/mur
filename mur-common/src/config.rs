@@ -46,6 +46,10 @@ pub struct Config {
     // --- M6c additions ---
     #[serde(default)]
     pub skill_llm: SkillLlmConfig,
+
+    // --- M7a additions ---
+    #[serde(default)]
+    pub cross_agent: CrossAgentConfig,
 }
 
 impl Config {
@@ -1305,6 +1309,33 @@ impl Default for SleepCycleConfig {
     }
 }
 
+// ── M7a: Cross-agent observability ─────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CrossAgentConfig {
+    #[serde(default = "default_half_life_days")]
+    pub fitness_half_life_days: u32,
+    #[serde(default = "default_fitness_floor")]
+    pub fitness_floor: f64,
+}
+
+fn default_half_life_days() -> u32 {
+    7
+}
+fn default_fitness_floor() -> f64 {
+    0.1
+}
+
+impl Default for CrossAgentConfig {
+    fn default() -> Self {
+        Self {
+            fitness_half_life_days: default_half_life_days(),
+            fitness_floor: default_fitness_floor(),
+        }
+    }
+}
+
 // ── M6c: LLM-augmented skill maintenance ─────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1347,7 +1378,6 @@ impl Default for SkillLlmConfig {
         }
     }
 }
-
 #[cfg(test)]
 mod per_stage_backend_tests {
     use super::*;
