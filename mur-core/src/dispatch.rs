@@ -397,6 +397,32 @@ pub async fn run(cli: Cli) -> Result<()> {
                 )
                 .await?
             }
+            crate::cli::SkillAction::Recombine {
+                a,
+                b,
+                strategy,
+                name,
+                dry_run,
+                agent,
+                json,
+            } => {
+                use crate::cross_agent::recombine::RecombineStrategy;
+                let home = cmd::agent::resolve_mur_home()?;
+                let strategy = match strategy {
+                    crate::cli::skill::RecombineStrategyArg::Union => RecombineStrategy::Union,
+                    crate::cli::skill::RecombineStrategyArg::Intersection => {
+                        RecombineStrategy::Intersection
+                    }
+                    crate::cli::skill::RecombineStrategyArg::Llm => RecombineStrategy::Llm,
+                };
+                let code = cmd::skill_recombine::cmd_recombine(
+                    &home, &a, &b, strategy, name, dry_run, agent, json,
+                )
+                .await;
+                if code != 0 {
+                    std::process::exit(code);
+                }
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
