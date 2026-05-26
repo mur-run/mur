@@ -22,6 +22,7 @@ pub mod daemon;
 pub mod cmd;
 pub mod community;
 pub mod context_api;
+pub mod cross_agent;
 pub mod conversations;
 pub mod dashboard;
 pub mod discovery;
