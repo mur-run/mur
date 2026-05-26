@@ -536,6 +536,20 @@ pub async fn run(cli: Cli) -> Result<()> {
                     std::process::exit(code);
                 }
             }
+            crate::cli::SkillAction::Credit {
+                name,
+                agent,
+                json,
+            } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                let agent_name = agent.unwrap_or_else(|| {
+                    cmd::skill_install::caller_agent_name(&home)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "(global)".into())
+                });
+                cmd::skill_credit::cmd_credit(&home, &agent_name, &name, json)?
+            }
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,

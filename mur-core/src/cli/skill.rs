@@ -231,6 +231,17 @@ pub enum SkillAction {
         #[arg(long)]
         json: bool,
     },
+    /// Show the credit lineage for a skill (M7c).
+    Credit {
+        /// Skill name
+        name: String,
+        /// Invoking agent (defaults to current)
+        #[arg(long)]
+        agent: Option<String>,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]

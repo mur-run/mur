@@ -45,6 +45,7 @@ pub(crate) mod session;
 pub mod skill_archive;
 pub mod skill_cmd;
 pub mod skill_consolidate;
+pub mod skill_credit;
 pub mod skill_deps;
 pub mod skill_doctor;
 pub mod skill_evolve;
