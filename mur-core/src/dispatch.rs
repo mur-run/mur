@@ -3,7 +3,7 @@
 //! arm is a thin delegate into `cmd::*`. Keep new branches small — heavy
 //! logic belongs in `cmd::<feature>`.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::CommandFactory;
 
 use crate::cli::{
@@ -427,10 +427,45 @@ pub async fn run(cli: Cli) -> Result<()> {
             } => {
                 let home = cmd::agent::resolve_mur_home()?;
                 if cross_agent {
-                    let report = crate::cross_agent::consolidate::run_consolidate_cross_agent(
-                        &home,
-                        apply && !dry_run,
-                    )?;
+                    let cross_method = match method {
+                        crate::cli::skill::Method::Jaccard => {
+                            crate::cross_agent::consolidate::CrossAgentMethod::Jaccard
+                        }
+                        crate::cli::skill::Method::Vector => {
+                            crate::cross_agent::consolidate::CrossAgentMethod::Vector
+                        }
+                        crate::cli::skill::Method::Both => {
+                            crate::cross_agent::consolidate::CrossAgentMethod::Both
+                        }
+                    };
+                    let report = match &cross_method {
+                        crate::cross_agent::consolidate::CrossAgentMethod::Jaccard => {
+                            crate::cross_agent::consolidate::run_consolidate_cross_agent(
+                                &home,
+                                apply && !dry_run,
+                            )?
+                        }
+                        _ => {
+                            let cfg = mur_common::config::Config::load_or_default(
+                                &home.join("config.yaml"),
+                            );
+                            let embed_config =
+                                crate::store::embedding::EmbeddingConfig::from_config(&cfg);
+                            let index_dir = home.join("lance");
+                            let store =
+                                crate::store::vector::factory::get_vector_store(&cfg, &index_dir)
+                                    .await
+                                    .context("opening vector store")?;
+                            crate::cross_agent::consolidate::run_consolidate_cross_agent_with_method(
+                                &home,
+                                apply && !dry_run,
+                                cross_method,
+                                &embed_config,
+                                &*store,
+                            )
+                            .await?
+                        }
+                    };
                     let mode = if apply && !dry_run {
                         "Applied"
                     } else {
@@ -442,12 +477,13 @@ pub async fn run(cli: Cli) -> Result<()> {
                     );
                     for d in &report.duplicates {
                         println!(
-                            "  Duplicate: {}:{} ≈ {}:{} (sim={:.3}, keeper={}:{})",
+                            "  Duplicate: {}:{} ≈ {}:{} (sim={:.3}, src={}, keeper={}:{})",
                             d.a_agent,
                             d.a_skill,
                             d.b_agent,
                             d.b_skill,
                             d.similarity,
+                            serde_json::to_string(&d.similarity_source).unwrap_or_default(),
                             d.keeper_agent,
                             d.keeper_skill,
                         );

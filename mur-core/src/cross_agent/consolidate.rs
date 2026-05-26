@@ -1,8 +1,8 @@
-//! Cross-agent Jaccard consolidate (M7a Task 5).
+//! Cross-agent Jaccard + vector dedup (M7a Task 5 + Task 9).
 //!
-//! Reuses M5b's `dedup::tokens` / `dedup::jaccard` to find duplicate skills
-//! across peer agents. M7a is read-only on peer state — `--apply` only writes
-//! the cross-agent JSONL report.
+//! Reuses M5b's `dedup::tokens` / `dedup::jaccard` and M6c.1's vector scan
+//! to find duplicate skills across peer agents. M7a is read-only on peer
+//! state — `--apply` only writes the cross-agent JSONL report.
 
 use std::path::Path;
 
@@ -12,8 +12,18 @@ use mur_common::skill::peers::list_peer_agents;
 use mur_common::skill::stats::{LifecycleState, SkillStats};
 
 use crate::skill_consolidate::{SkillView, dedup};
+use crate::store::embedding::EmbeddingConfig;
+use crate::store::vector::VectorStore;
 
 const JACCARD_THRESHOLD: f64 = 0.85;
+
+/// Dedup method selector for cross-agent consolidate.
+#[derive(Debug, Clone)]
+pub enum CrossAgentMethod {
+    Jaccard,
+    Vector,
+    Both,
+}
 
 pub struct CrossAgentSkillView {
     pub view: SkillView,
@@ -29,6 +39,8 @@ pub struct CrossAgentDuplicatePair {
     pub similarity: f64,
     pub keeper_agent: String,
     pub keeper_skill: String,
+    #[serde(default)]
+    pub similarity_source: crate::skill_consolidate::dedup::DedupSource,
 }
 
 #[derive(Debug, Default)]
@@ -36,11 +48,44 @@ pub struct CrossAgentReport {
     pub duplicates: Vec<CrossAgentDuplicatePair>,
 }
 
+/// Synchronous entry point for Jaccard-only (backward-compatible with existing callers).
 pub fn run_consolidate_cross_agent(home: &Path, apply: bool) -> Result<CrossAgentReport> {
     let views = load_all_peer_views(home)?;
     let mut report = CrossAgentReport::default();
 
     scan_cross_agent_duplicates(&views, &mut report);
+
+    write_cross_agent_jsonl(home, &report, apply)?;
+
+    Ok(report)
+}
+
+/// Async entry point supporting vector / both methods.
+pub async fn run_consolidate_cross_agent_with_method(
+    home: &Path,
+    apply: bool,
+    method: CrossAgentMethod,
+    embed_config: &EmbeddingConfig,
+    store: &dyn VectorStore,
+) -> Result<CrossAgentReport> {
+    let views = load_all_peer_views(home)?;
+    let mut report = CrossAgentReport::default();
+
+    match &method {
+        CrossAgentMethod::Jaccard => {
+            scan_cross_agent_duplicates(&views, &mut report);
+        }
+        CrossAgentMethod::Vector => {
+            index_peer_skills(&views, embed_config, store).await?;
+            scan_cross_agent_vector(&views, embed_config, store, &mut report).await?;
+        }
+        CrossAgentMethod::Both => {
+            scan_cross_agent_duplicates(&views, &mut report);
+            index_peer_skills(&views, embed_config, store).await?;
+            scan_cross_agent_vector(&views, embed_config, store, &mut report).await?;
+            dedup_combined_cross_agent(&mut report);
+        }
+    }
 
     write_cross_agent_jsonl(home, &report, apply)?;
 
@@ -65,6 +110,8 @@ fn load_all_peer_views(home: &Path) -> Result<Vec<CrossAgentSkillView>> {
                 continue;
             };
 
+            let embed_text = crate::skill_index::text::embed_manifest(&m);
+
             let stats_path = SkillStats::path_agent(home, &peer.name, &skill_name);
             let stats = SkillStats::load(&stats_path)?
                 .unwrap_or_else(|| SkillStats::new(&skill_name, "unknown", "", chrono::Utc::now()));
@@ -75,7 +122,7 @@ fn load_all_peer_views(home: &Path) -> Result<Vec<CrossAgentSkillView>> {
                 triggers: m.triggers.into_iter().filter_map(|t| t.pattern).collect(),
                 requires: m.requires.into_iter().map(|r| r.name).collect(),
                 stats,
-                embed_text: String::new(),
+                embed_text,
             };
             out.push(CrossAgentSkillView {
                 view,
@@ -84,6 +131,120 @@ fn load_all_peer_views(home: &Path) -> Result<Vec<CrossAgentSkillView>> {
         }
     }
     Ok(out)
+}
+
+/// Index peer skill manifests into the vector store so vector search can find them.
+async fn index_peer_skills(
+    views: &[CrossAgentSkillView],
+    config: &EmbeddingConfig,
+    store: &dyn VectorStore,
+) -> anyhow::Result<()> {
+    for csv in views {
+        // Parse the manifest to get a proper SkillManifest for indexing.
+        // We re-parse here since we only have the SkillView at this point.
+        // The embed_text is already built; we regenerate it from the manifest
+        // for the chunk text to match the standard format.
+        let text_str = &csv.view.embed_text;
+        if text_str.is_empty() {
+            continue;
+        }
+        let vec = crate::store::embedding::embed(text_str, config).await?;
+
+        let chunk = crate::store::vector::EmbeddedChunk {
+            chunk_id: format!("skill:{}:{}", csv.view.name, csv.agent),
+            source_id: crate::skill_index::SKILL_SOURCE_ID.into(),
+            external_id: csv.view.name.clone(),
+            ordinal: 0,
+            text: text_str.clone(),
+            heading_path: vec![],
+            char_range: (0, 0),
+            updated_at: chrono::Utc::now(),
+            embedding: vec,
+        };
+        store.upsert(&[chunk]).await?;
+    }
+    Ok(())
+}
+
+/// Vector-based cross-agent duplicate scan.
+///
+/// Embeds each skill's text, searches the vector store for similar chunks,
+/// and reports pairs where different agents have semantically similar skills.
+async fn scan_cross_agent_vector(
+    views: &[CrossAgentSkillView],
+    config: &EmbeddingConfig,
+    store: &dyn VectorStore,
+    report: &mut CrossAgentReport,
+) -> anyhow::Result<()> {
+    use crate::skill_consolidate::dedup_vec::{COSINE_THRESHOLD, TOP_K};
+    use crate::store::vector::SearchFilter;
+
+    let filter = SearchFilter {
+        source_ids: Some(vec![crate::skill_index::SKILL_SOURCE_ID.into()]),
+        since: None,
+    };
+
+    // Track which pairs we've already reported to avoid duplicates from
+    // symmetric vector hits.
+    let mut seen: std::collections::HashSet<(String, String, String, String)> =
+        std::collections::HashSet::new();
+
+    for csv in views {
+        if csv.view.embed_text.is_empty() {
+            continue;
+        }
+        let q = crate::store::embedding::embed(&csv.view.embed_text, config).await?;
+        let hits = store.search(&q, TOP_K, &filter).await?;
+        for hit in hits {
+            if hit.score < COSINE_THRESHOLD {
+                continue;
+            }
+            // Find all peer views that match this external_id (skill name).
+            for other in views {
+                if other.view.name != hit.external_id {
+                    continue;
+                }
+                if other.agent == csv.agent {
+                    continue;
+                }
+                // Build canonical pair key (agent order, skill order).
+                let pair = if csv.agent < other.agent
+                    || (csv.agent == other.agent && csv.view.name < other.view.name)
+                {
+                    (
+                        csv.agent.clone(),
+                        csv.view.name.clone(),
+                        other.agent.clone(),
+                        other.view.name.clone(),
+                    )
+                } else {
+                    (
+                        other.agent.clone(),
+                        other.view.name.clone(),
+                        csv.agent.clone(),
+                        csv.view.name.clone(),
+                    )
+                };
+                if seen.contains(&pair) {
+                    continue;
+                }
+                seen.insert(pair.clone());
+
+                let (keeper_agent, keeper_skill) = select_keeper(csv, other);
+                report.duplicates.push(CrossAgentDuplicatePair {
+                    a_agent: pair.0,
+                    a_skill: pair.1,
+                    b_agent: pair.2,
+                    b_skill: pair.3,
+                    similarity: hit.score as f64,
+                    keeper_agent,
+                    keeper_skill,
+                    similarity_source: crate::skill_consolidate::dedup::DedupSource::Vector,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn scan_cross_agent_duplicates(views: &[CrossAgentSkillView], report: &mut CrossAgentReport) {
@@ -107,10 +268,46 @@ fn scan_cross_agent_duplicates(views: &[CrossAgentSkillView], report: &mut Cross
                     similarity: sim,
                     keeper_agent,
                     keeper_skill,
+                    similarity_source: crate::skill_consolidate::dedup::DedupSource::Jaccard,
                 });
             }
         }
     }
+}
+
+/// Collapse (a,b) pairs appearing under both Jaccard and Vector into a single entry
+/// with `similarity_source = Both`. Preserves the higher similarity score.
+fn dedup_combined_cross_agent(report: &mut CrossAgentReport) {
+    use crate::skill_consolidate::dedup::DedupSource;
+    use std::collections::HashMap;
+
+    let mut by_pair: HashMap<(String, String, String, String), CrossAgentDuplicatePair> =
+        HashMap::new();
+    for p in report.duplicates.drain(..) {
+        let key = (
+            p.a_agent.clone(),
+            p.a_skill.clone(),
+            p.b_agent.clone(),
+            p.b_skill.clone(),
+        );
+        by_pair
+            .entry(key)
+            .and_modify(|existing| {
+                if existing.similarity_source != p.similarity_source {
+                    existing.similarity_source = DedupSource::Both;
+                }
+                if p.similarity > existing.similarity {
+                    existing.similarity = p.similarity;
+                }
+            })
+            .or_insert(p);
+    }
+    report.duplicates = by_pair.into_values().collect();
+    report.duplicates.sort_by(|a, b| {
+        a.a_agent
+            .cmp(&b.a_agent)
+            .then_with(|| a.a_skill.cmp(&b.a_skill))
+    });
 }
 
 fn select_keeper(a: &CrossAgentSkillView, b: &CrossAgentSkillView) -> (String, String) {
@@ -159,6 +356,7 @@ fn write_cross_agent_jsonl(home: &Path, report: &CrossAgentReport, applied: bool
             "b_agent": d.b_agent,
             "b_skill": d.b_skill,
             "similarity": d.similarity,
+            "similarity_source": d.similarity_source,
             "keeper_agent": d.keeper_agent,
             "keeper_skill": d.keeper_skill,
             "applied": applied,
@@ -215,6 +413,39 @@ mod tests {
                 || (dup.a_agent == "bob" && dup.b_agent == "alice")
         );
         assert!(dup.similarity >= JACCARD_THRESHOLD);
+    }
+
+    #[test]
+    fn dedup_combined_cross_agent_merges_sources() {
+        let mut report = CrossAgentReport::default();
+        report.duplicates.push(CrossAgentDuplicatePair {
+            a_agent: "alice".into(),
+            a_skill: "s1".into(),
+            b_agent: "bob".into(),
+            b_skill: "s2".into(),
+            similarity: 0.88,
+            keeper_agent: "alice".into(),
+            keeper_skill: "s1".into(),
+            similarity_source: crate::skill_consolidate::dedup::DedupSource::Jaccard,
+        });
+        report.duplicates.push(CrossAgentDuplicatePair {
+            a_agent: "alice".into(),
+            a_skill: "s1".into(),
+            b_agent: "bob".into(),
+            b_skill: "s2".into(),
+            similarity: 0.94,
+            keeper_agent: "alice".into(),
+            keeper_skill: "s1".into(),
+            similarity_source: crate::skill_consolidate::dedup::DedupSource::Vector,
+        });
+        dedup_combined_cross_agent(&mut report);
+        assert_eq!(report.duplicates.len(), 1);
+        let p = &report.duplicates[0];
+        assert_eq!(
+            p.similarity_source,
+            crate::skill_consolidate::dedup::DedupSource::Both
+        );
+        assert!((p.similarity - 0.94).abs() < 0.001);
     }
 
     fn setup_agent_skill(home: &Path, agent: &str, skill_name: &str, description: &str) {
