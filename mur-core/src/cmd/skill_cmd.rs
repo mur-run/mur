@@ -104,6 +104,32 @@ pub fn cmd_show(name: &str) -> Result<()> {
             }
         }
     }
+
+    // Show procedure steps with intent/tool_hint when present.
+    if let Some(proc) = &m.content.procedure {
+        let has_intent = proc
+            .steps
+            .iter()
+            .any(|s| s.intent.is_some() || s.tool_hint.is_some());
+        if has_intent {
+            println!("\nProcedure:");
+            for (i, step) in proc.steps.iter().enumerate() {
+                println!("  {}. {}", i + 1, step.description);
+                if let Some(intent) = &step.intent {
+                    println!("       intent: {intent}");
+                }
+                if let Some(hint) = &step.tool_hint {
+                    println!("       tool_hint: {hint}");
+                }
+                match (&step.tool, &step.intent) {
+                    (Some(t), Some(_)) => println!("       tool (literal): {t}"),
+                    (Some(t), None) => println!("       tool: {t}"),
+                    (None, Some(_)) => println!("       (no literal tool)"),
+                    (None, None) => {}
+                }
+            }
+        }
+    }
     Ok(())
 }
 

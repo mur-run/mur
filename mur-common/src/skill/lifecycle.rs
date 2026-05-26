@@ -220,6 +220,7 @@ mod tests {
             first_successful_use_at: Some(now - Duration::days(first_ok_days_ago)),
             anchor_confidence: anchor,
             rebuilt_from_trace_through: None,
+            resolution_misses: 0,
         }
     }
 

@@ -119,10 +119,14 @@ mod tests {
                 ProcedureStep {
                     description: "Check connectivity".into(),
                     tool: None,
+                    intent: None,
+                    tool_hint: None,
                 },
                 ProcedureStep {
                     description: "Push to server".into(),
                     tool: Some("rsync".into()),
+                    intent: None,
+                    tool_hint: None,
                 },
             ],
         });

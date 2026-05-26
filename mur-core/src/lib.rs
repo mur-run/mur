@@ -41,6 +41,7 @@ pub mod skill_gen;
 pub mod skill_index;
 pub mod skill_lifecycle;
 pub mod skill_repair;
+pub mod skill_resolve;
 pub mod skill_stats;
 pub mod sources;
 pub mod store;

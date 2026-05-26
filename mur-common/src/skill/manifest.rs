@@ -130,8 +130,24 @@ pub struct Variable {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcedureStep {
     pub description: String,
+
+    /// Literal tool name. Pre-M6b behaviour: hard binding. Post-M6b: treated
+    /// as a hint when `intent` is also set; otherwise still a hard binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+
+    /// What the step is trying to accomplish. Free-form string, no central
+    /// taxonomy. Resolved at inject time against the agent's MCP inventory.
+    /// When set, the resolver prefers a tool whose name matches a glob in
+    /// `mcp_requirements` over the literal `tool` field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
+
+    /// Preferred tool name pattern (glob). Used as a tiebreaker among
+    /// resolver candidates. Falls back to literal `tool`, then to any
+    /// `mcp_requirements` match for the intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
