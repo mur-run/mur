@@ -83,8 +83,27 @@ pub fn cmd_show(name: &str) -> Result<()> {
     let home = resolve_mur_home()?;
     let m =
         local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
+
+    // Check mcp_requirements before moving the manifest
+    let has_mcp = !m.mcp_requirements.is_empty();
+
     let yaml = serialize_canonical(&m)?;
     print!("{yaml}");
+
+    if has_mcp {
+        println!("\nMCP Requirements:");
+        for req in &m.mcp_requirements {
+            let cap = &req.capability;
+            if req.fallback.is_empty() {
+                println!("  - {:<30} (capability: {cap})", req.tool_pattern);
+            } else {
+                println!(
+                    "  - {:<30} (capability: {cap}, fallback: {})",
+                    req.tool_pattern, req.fallback
+                );
+            }
+        }
+    }
     Ok(())
 }
 
