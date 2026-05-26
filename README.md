@@ -191,6 +191,11 @@ mur
 │   ├── show <name>    Show workflow details (--md for AI format)
 │   ├── search <q>     Semantic search workflows
 │   └── new <name>     Create a new workflow
+├── skill
+│   ├── install        Install a skill
+│   ├── list           List installed skills
+│   ├── show <name>    Show skill details
+│   └── recombine <a> <b>  Combine two skills into new draft (M7b)
 ├── run <query>        Find and output workflow as executable prompt
 ├── session
 │   ├── start          Start recording a session

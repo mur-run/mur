@@ -51,6 +51,7 @@ pub mod skill_from_pattern;
 pub mod skill_generate;
 pub mod skill_install;
 pub(crate) mod skill_publish;
+pub mod skill_recombine;
 pub mod skill_registry;
 pub mod skill_reindex_vec;
 #[allow(dead_code)]
