@@ -1001,6 +1001,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentScheduleAction::IdleRemove { name, index } => {
                 cmd::agent_schedule::cmd_idle_remove(&name, index)?
             }
+            AgentScheduleAction::PropagateInit {
+                name,
+                after_secs,
+                cooldown_secs,
+            } => cmd::agent_schedule::cmd_propagate_init(&name, after_secs, cooldown_secs)?,
         },
         AgentAction::Hooks { action } => match action {
             AgentHooksAction::Show { name, json } => cmd::agent_hooks::cmd_hooks_show(&name, json)?,

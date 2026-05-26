@@ -399,6 +399,18 @@ pub enum AgentScheduleAction {
         /// Trigger index to remove
         index: usize,
     },
+    /// Register the `skill-propagate` idle trigger with default settings.
+    /// Idempotent — running twice does not duplicate the trigger.
+    PropagateInit {
+        /// Agent name
+        name: String,
+        /// Idle seconds before firing (default 1800 = 30 min)
+        #[arg(long, default_value_t = 1800)]
+        after_secs: u64,
+        /// Cooldown between fires (default 7200 = 2 hr)
+        #[arg(long, default_value_t = 7200)]
+        cooldown_secs: u64,
+    },
 }
 
 #[derive(Subcommand, Debug)]
