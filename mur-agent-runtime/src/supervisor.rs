@@ -441,7 +441,18 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         warn!("companion is enabled but no LLM provider is configured; companion disabled");
     }
 
-    // 9. Drive stdio in the foreground so SIGTERM can unblock the process
+    // 9. Install signal handlers BEFORE spawning transports so SIGTERM
+    //    cannot kill the process before the handler is ready (race between
+    //    the multi-threaded tokio runtime's worker threads and this task).
+    #[cfg(unix)]
+    let (mut sigterm, mut sigint) = {
+        use tokio::signal::unix::{SignalKind, signal};
+        let sigterm = signal(SignalKind::terminate())?;
+        let sigint = signal(SignalKind::interrupt())?;
+        (sigterm, sigint)
+    };
+
+    // 10. Drive stdio in the foreground so SIGTERM can unblock the process
     //    even while stdin is idle.
     if profile.inner.transport.stdio {
         let d = dispatcher.clone();
@@ -450,12 +461,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         }));
     }
 
-    // 10. Wait for SIGTERM / SIGINT (or Ctrl-C on Windows)
+    // 11. Wait for SIGTERM / SIGINT (or Ctrl-C on Windows)
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut sigterm = signal(SignalKind::terminate())?;
-        let mut sigint = signal(SignalKind::interrupt())?;
         tokio::select! {
             _ = sigterm.recv() => info!("SIGTERM received"),
             _ = sigint.recv() => info!("SIGINT received"),
