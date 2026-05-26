@@ -187,6 +187,18 @@ jobs:
           APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      - name: Free disk space
+        run: |
+          df -h /
+          echo "::group::Cleaning up large pre-installed tools"
+          # Xcode simulators and runtimes are the biggest space hogs.
+          sudo rm -rf /Library/Developer/CoreSimulator || true
+          # Remove other large unused tools if they exist.
+          rm -rf ~/Library/Developer/Xcode/iOS\ DeviceSupport || true
+          rm -rf ~/Library/Developer/Xcode/watchOS\ DeviceSupport || true
+          echo "::endgroup::"
+          df -h /
+
       - name: Create DMG
         run: |
           mkdir dmg-root
