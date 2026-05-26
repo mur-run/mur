@@ -209,6 +209,28 @@ pub enum SkillAction {
         #[arg(long)]
         cross_agent: bool,
     },
+    /// Recombine two skills into a new Draft offspring on this agent.
+    Recombine {
+        /// First parent ref: `<name>` (local) or `agent://<peer>/<name>`.
+        a: String,
+        /// Second parent ref: `<name>` (local) or `agent://<peer>/<name>`.
+        b: String,
+        /// Combination strategy.
+        #[arg(long, value_enum, default_value_t = RecombineStrategyArg::Union)]
+        strategy: RecombineStrategyArg,
+        /// Output skill name. Default: `<a>-x-<b>`.
+        #[arg(long)]
+        name: Option<String>,
+        /// Print recombined manifest YAML to stdout without writing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Invoking agent (default: current agent from runtime context).
+        #[arg(long)]
+        agent: Option<String>,
+        /// Emit JSON outcome record instead of human text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -216,4 +238,11 @@ pub enum Method {
     Jaccard,
     Vector,
     Both,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum RecombineStrategyArg {
+    Union,
+    Intersection,
+    Llm,
 }

@@ -39,6 +39,28 @@ impl EvolutionEvent {
             timestamp: chrono::Utc::now().to_rfc3339(),
         }
     }
+
+    /// Constructor for M7b recombination events. `parent_a` and `parent_b`
+    /// are stringified `SkillRef`s (e.g. `local/foo` or `agent://bob/bar`).
+    pub fn recombined(
+        version: &str,
+        generation: u32,
+        parent_a: &str,
+        parent_b: &str,
+        strategy: &str,
+        output_skill: &str,
+    ) -> Self {
+        Self {
+            version: version.to_string(),
+            generation,
+            source: "agent:recombiner".into(),
+            changes: format!(
+                "recombine: a={parent_a}, b={parent_b}, strategy={strategy}, output={output_skill}"
+            ),
+            quality_score: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -64,6 +86,28 @@ mod tests {
         assert_eq!(event.source, "agent:evolver");
         assert_eq!(event.changes, "fixed tool name");
         assert_eq!(event.quality_score, Some(0.85));
+    }
+
+    #[test]
+    fn recombined_sets_recombiner_source_and_packs_metadata() {
+        let event = EvolutionEvent::recombined(
+            "0.1.0",
+            5,
+            "local/research-prices",
+            "agent://bob/lookup",
+            "union",
+            "combined-research",
+        );
+        assert_eq!(event.source, "agent:recombiner");
+        assert_eq!(event.version, "0.1.0");
+        assert_eq!(event.generation, 5);
+        assert!(event.changes.starts_with("recombine: "));
+        assert!(event.changes.contains("a=local/research-prices"));
+        assert!(event.changes.contains("b=agent://bob/lookup"));
+        assert!(event.changes.contains("strategy=union"));
+        assert!(event.changes.contains("output=combined-research"));
+        assert!(event.quality_score.is_none());
+        assert!(!event.timestamp.is_empty());
     }
 
     #[test]

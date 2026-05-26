@@ -5,4 +5,5 @@
 
 pub mod consolidate;
 pub mod fitness;
+pub mod recombine;
 pub mod stats_agg;
