@@ -234,4 +234,18 @@ mcp_requirements:
 
 **`mur skill show`** — When a skill has `mcp_requirements`, the command prints a formatted "MCP Requirements:" block after the YAML, listing each tool pattern with its capability and optional fallback.
 
+### Cross-Agent Observability (M7a)
+
+Read-only aggregation of peer agent skill stats and per-agent fitness scoring. New CLI surface:
+
+| Command | Description |
+|---------|-------------|
+| `mur agent peers [--json]` | List peer agents on this host |
+| `mur skill stats <name> --all-agents [--json]` | Aggregate skill stats across all peer agents |
+| `mur skill consolidate --cross-agent [--dry-run] [--apply]` | Cross-agent Jaccard duplicate scan; writes `_consolidation/cross-agent-<date>.jsonl` |
+
+Agent fitness uses a 7-day half-life decay on `last_used_at` (floor 0.1), configurable via `cross_agent.fitness.half_life_days` and `cross_agent.fitness.floor` in `config.yaml`. `mur agent card <name>` now includes a `Fitness` section.
+
+M7a is **read-only** on peer state — it never mutates another agent's skills. Mutation (gene model + propagation) lands in M7b/M7c. See `docs/superpowers/plans/2026-05-26-mur-skill-ecosystem-m7a.md` for the full plan.
+
 Execution-time enforcement of these requirements (resolving globs, checking tool availability, applying fallbacks) is deferred to M6b.

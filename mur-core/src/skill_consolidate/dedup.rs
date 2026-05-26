@@ -63,7 +63,7 @@ pub fn scan(skills: &[SkillView], report: &mut ConsolidateReport) {
     }
 }
 
-fn tokens(view: &SkillView) -> HashSet<String> {
+pub fn tokens(view: &SkillView) -> HashSet<String> {
     let mut set = HashSet::new();
     for word in view
         .name
@@ -83,7 +83,7 @@ fn tokens(view: &SkillView) -> HashSet<String> {
     set
 }
 
-fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
+pub fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
     if a.is_empty() && b.is_empty() {
         return 1.0;
     }
