@@ -77,8 +77,11 @@ pub fn layer3_body(
                 .iter()
                 .enumerate()
                 .map(|(i, step)| {
-                    let res =
-                        mur_common::skill::resolve_step(step, &manifest.mcp_requirements, inventory);
+                    let res = mur_common::skill::resolve_step(
+                        step,
+                        &manifest.mcp_requirements,
+                        inventory,
+                    );
                     render_step(i + 1, step, &res)
                 })
                 .collect::<Vec<_>>()

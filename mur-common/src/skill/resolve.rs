@@ -1,6 +1,6 @@
+use crate::skill::inventory::McpInventory;
 use crate::skill::manifest::ProcedureStep;
 use crate::skill::mcp::{McpRequirement, SkillCapability};
-use crate::skill::inventory::McpInventory;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
@@ -61,7 +61,9 @@ pub fn resolve_step(
     // Rule 1 — literal tool, no intent (pre-M6b path).
     if step.intent.is_none() {
         if let Some(t) = step.tool.as_deref() {
-            return Resolution::Literal { tool: t.to_string() };
+            return Resolution::Literal {
+                tool: t.to_string(),
+            };
         }
         return Resolution::Unresolved {
             reason: "step has neither tool nor intent".into(),
@@ -69,10 +71,10 @@ pub fn resolve_step(
     }
 
     // Rule 2 — tool_hint match.
-    if let Some(hint) = step.tool_hint.as_deref() {
-        if let Some(t) = match_in_inventory(hint, inventory) {
-            return Resolution::Hint { tool: t };
-        }
+    if let Some(hint) = step.tool_hint.as_deref()
+        && let Some(t) = match_in_inventory(hint, inventory)
+    {
+        return Resolution::Hint { tool: t };
     }
 
     // Rule 3 — intent_match via mcp_requirements globs.

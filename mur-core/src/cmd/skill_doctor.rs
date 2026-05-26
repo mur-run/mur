@@ -689,9 +689,8 @@ fn run_intent_resolvable(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
         return vec![];
     };
 
-    let inventory = mur_common::skill::McpInventory::from_tool_names(
-        ctx.mcp_tools.clone().unwrap_or_default(),
-    );
+    let inventory =
+        mur_common::skill::McpInventory::from_tool_names(ctx.mcp_tools.clone().unwrap_or_default());
     let reqs = &manifest.mcp_requirements;
 
     let mut findings = Vec::new();
@@ -699,25 +698,23 @@ fn run_intent_resolvable(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
         if step.intent.is_none() {
             continue;
         }
-        match mur_common::skill::resolve_step(step, reqs, &inventory) {
-            mur_common::skill::Resolution::Unresolved { reason } => {
-                findings.push(Finding {
-                    check_id: "intent-resolvable".into(),
-                    category: "mcp".into(),
-                    severity: Severity::Warn,
-                    skill_name: skill_name.to_string(),
-                    message: format!(
-                        "step[{idx}] intent '{}' unresolvable: {reason}",
-                        step.intent.as_deref().unwrap_or("")
-                    ),
-                    remediation: Some(
-                        "Install an MCP server providing the required tool, or add a fallback."
-                            .into(),
-                    ),
-                    fixable: false,
-                });
-            }
-            _ => {}
+        if let mur_common::skill::Resolution::Unresolved { reason } =
+            mur_common::skill::resolve_step(step, reqs, &inventory)
+        {
+            findings.push(Finding {
+                check_id: "intent-resolvable".into(),
+                category: "mcp".into(),
+                severity: Severity::Warn,
+                skill_name: skill_name.to_string(),
+                message: format!(
+                    "step[{idx}] intent '{}' unresolvable: {reason}",
+                    step.intent.as_deref().unwrap_or("")
+                ),
+                remediation: Some(
+                    "Install an MCP server providing the required tool, or add a fallback.".into(),
+                ),
+                fixable: false,
+            });
         }
     }
     findings
@@ -1009,8 +1006,10 @@ mcp_requirements:
     capability: network_http
 "#;
         write_skill(&dir, "intent-skill", yaml);
-        let ctx =
-            doctor_ctx_with_tools(&dir, vec!["browser.navigate".into(), "browser.click".into()]);
+        let ctx = doctor_ctx_with_tools(
+            &dir,
+            vec!["browser.navigate".into(), "browser.click".into()],
+        );
         let findings = run_intent_resolvable(&ctx, "intent-skill");
         assert!(
             findings.is_empty(),

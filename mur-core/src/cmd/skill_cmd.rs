@@ -107,7 +107,10 @@ pub fn cmd_show(name: &str) -> Result<()> {
 
     // Show procedure steps with intent/tool_hint when present.
     if let Some(proc) = &m.content.procedure {
-        let has_intent = proc.steps.iter().any(|s| s.intent.is_some() || s.tool_hint.is_some());
+        let has_intent = proc
+            .steps
+            .iter()
+            .any(|s| s.intent.is_some() || s.tool_hint.is_some());
         if has_intent {
             println!("\nProcedure:");
             for (i, step) in proc.steps.iter().enumerate() {

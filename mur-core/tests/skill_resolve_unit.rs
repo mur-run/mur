@@ -1,6 +1,6 @@
 use mur_common::skill::manifest::ProcedureStep;
 use mur_common::skill::mcp::{McpRequirement, SkillCapability};
-use mur_common::skill::{resolve_step, McpInventory, Resolution};
+use mur_common::skill::{McpInventory, Resolution, resolve_step};
 
 fn step(tool: Option<&str>, intent: Option<&str>, hint: Option<&str>) -> ProcedureStep {
     ProcedureStep {
@@ -244,16 +244,10 @@ fn unresolved_when_nothing_matches() {
 #[test]
 fn source_tags_are_correct() {
     assert_eq!(
-        Resolution::Literal {
-            tool: "x".into()
-        }
-        .source_tag(),
+        Resolution::Literal { tool: "x".into() }.source_tag(),
         "literal"
     );
-    assert_eq!(
-        Resolution::Hint { tool: "x".into() }.source_tag(),
-        "hint"
-    );
+    assert_eq!(Resolution::Hint { tool: "x".into() }.source_tag(), "hint");
     assert_eq!(
         Resolution::IntentMatch {
             tool: "x".into(),
@@ -284,10 +278,7 @@ fn source_tags_are_correct() {
 #[test]
 fn picked_tool_returns_tool_name() {
     assert_eq!(
-        Resolution::Literal {
-            tool: "a".into()
-        }
-        .picked_tool(),
+        Resolution::Literal { tool: "a".into() }.picked_tool(),
         Some("a")
     );
     assert_eq!(
@@ -303,10 +294,8 @@ fn picked_tool_returns_tool_name() {
 
 #[test]
 fn tool_hint_takes_priority_over_intent_match() {
-    let inv = McpInventory::from_tool_names(vec![
-        "browser.navigate".into(),
-        "browser.click".into(),
-    ]);
+    let inv =
+        McpInventory::from_tool_names(vec!["browser.navigate".into(), "browser.click".into()]);
     let reqs = vec![McpRequirement {
         tool_pattern: "browser.*".into(),
         capability: SkillCapability::NetworkHttp,

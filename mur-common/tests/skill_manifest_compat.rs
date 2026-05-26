@@ -5,8 +5,8 @@
 //! publisher signatures remain valid.
 
 use mur_common::skill::manifest::{Skill, SkillManifest};
-use mur_common::skill::validate;
 use mur_common::skill::parse_canonical;
+use mur_common::skill::validate;
 
 #[test]
 fn v20_manifest_loads_with_default_empty_requirements() {
@@ -226,8 +226,14 @@ content:
 "#;
     let skill: Skill = serde_yaml_ng::from_str(yaml).unwrap();
     let out = serde_yaml_ng::to_string(&skill).unwrap();
-    assert!(!out.contains("intent"), "unexpected 'intent' in output: {out}");
-    assert!(!out.contains("tool_hint"), "unexpected 'tool_hint' in output: {out}");
+    assert!(
+        !out.contains("intent"),
+        "unexpected 'intent' in output: {out}"
+    );
+    assert!(
+        !out.contains("tool_hint"),
+        "unexpected 'tool_hint' in output: {out}"
+    );
 }
 
 #[test]
@@ -314,7 +320,10 @@ content:
     let out = serde_yaml_ng::to_string(&skill).unwrap();
     let skill2: Skill = serde_yaml_ng::from_str(&out).unwrap();
     let out2 = serde_yaml_ng::to_string(&skill2).unwrap();
-    assert_eq!(out, out2, "v2.0 byte-identical round-trip must hold across v2.2");
+    assert_eq!(
+        out, out2,
+        "v2.0 byte-identical round-trip must hold across v2.2"
+    );
 }
 
 #[test]

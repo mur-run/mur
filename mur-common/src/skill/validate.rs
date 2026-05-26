@@ -102,21 +102,21 @@ pub fn validate(m: &SkillManifest) -> Result<(), ValidationError> {
     // Validate intent + tool_hint on procedure steps (v2.2).
     if let Some(proc) = &m.content.procedure {
         for (idx, step) in proc.steps.iter().enumerate() {
-            if let Some(hint) = &step.tool_hint {
-                if hint.is_empty() {
-                    return Err(ValidationError::McpRequirements(
-                        idx,
-                        "tool_hint must not be empty when present".into(),
-                    ));
-                }
+            if let Some(hint) = &step.tool_hint
+                && hint.is_empty()
+            {
+                return Err(ValidationError::McpRequirements(
+                    idx,
+                    "tool_hint must not be empty when present".into(),
+                ));
             }
-            if let Some(intent) = &step.intent {
-                if intent.is_empty() {
-                    return Err(ValidationError::McpRequirements(
-                        idx,
-                        "intent must not be empty when present".into(),
-                    ));
-                }
+            if let Some(intent) = &step.intent
+                && intent.is_empty()
+            {
+                return Err(ValidationError::McpRequirements(
+                    idx,
+                    "intent must not be empty when present".into(),
+                ));
             }
         }
     }

@@ -55,11 +55,7 @@ fn render_step_shows_tool_name() {
     // Simulates what layer3_body does.
     let s = step(Some("browser.navigate"), None, None);
     let r = resolve_step(&s, &[], &McpInventory::default());
-    let rendered = format!(
-        "1. {} — tool: {}",
-        s.description,
-        r.picked_tool().unwrap()
-    );
+    let rendered = format!("1. {} — tool: {}", s.description, r.picked_tool().unwrap());
     assert_eq!(rendered, "1. test step — tool: browser.navigate");
 }
 
