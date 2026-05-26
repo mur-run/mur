@@ -357,11 +357,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 apply,
                 llm,
                 llm_status,
-            } => {
-                cmd::skill_doctor::cmd_doctor(
-                    &names, &check, json, strict, fix, apply, llm, llm_status,
-                )?
-            }
+            } => cmd::skill_doctor::cmd_doctor(
+                &names, &check, json, strict, fix, apply, llm, llm_status,
+            )?,
             crate::cli::SkillAction::Sweep { name, dry_run } => {
                 cmd::skill_sweep::cmd_sweep(name.as_deref(), dry_run)?
             }
@@ -391,7 +389,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                     }
                 };
                 cmd::skill_consolidate::cmd_consolidate(
-                    &home, dry_run, apply, method, llm_adjudicate,
+                    &home,
+                    dry_run,
+                    apply,
+                    method,
+                    llm_adjudicate,
                 )
                 .await?
             }

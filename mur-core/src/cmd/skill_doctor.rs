@@ -89,6 +89,7 @@ impl LlmDoctorCtx {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_doctor(
     names: &[String],
     checks: &[String],
@@ -154,7 +155,11 @@ pub fn cmd_doctor(
     };
 
     // LLM context (lazy — only load if --llm is on)
-    let llm_ctx = if llm { Some(LlmDoctorCtx::load(&home)?) } else { None };
+    let llm_ctx = if llm {
+        Some(LlmDoctorCtx::load(&home)?)
+    } else {
+        None
+    };
 
     let ctx = DoctorCtx {
         home,
@@ -645,7 +650,9 @@ fn run_api_drift(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
                 message: format!(
                     "Skill LLM daily budget exhausted (${spent_usd:.4} / ${cap_usd:.4})."
                 ),
-                remediation: Some("Wait until tomorrow or increase per_day_usd_cap in config.".into()),
+                remediation: Some(
+                    "Wait until tomorrow or increase per_day_usd_cap in config.".into(),
+                ),
                 fixable: false,
             }]
         }
@@ -829,39 +836,38 @@ fn run_coverage_gap(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
             &llm_ctx.registry,
         ));
 
-        match result {
-            Ok(Some(body)) => {
-                if let Some(rec) = parse_gap_recommendation(&body) {
-                    match rec {
-                        GapRec::Extend { target, step, rationale } => {
-                            findings.push(Finding {
-                                check_id: "coverage-gap".into(),
-                                category: "coverage-gap".into(),
-                                severity: Severity::Warn,
-                                skill_name: skill_name.to_string(),
-                                message: format!(
-                                    "coverage-gap: extend '{target}' — {step}. {rationale}"
-                                ),
-                                remediation: Some(format!("Add step to {target}: {step}")),
-                                fixable: false,
-                            });
-                        }
-                        GapRec::New { step, rationale } => {
-                            findings.push(Finding {
-                                check_id: "coverage-gap".into(),
-                                category: "coverage-gap".into(),
-                                severity: Severity::Warn,
-                                skill_name: skill_name.to_string(),
-                                message: format!("coverage-gap: new skill needed — {step}. {rationale}"),
-                                remediation: Some(format!("Create a new skill: {step}")),
-                                fixable: false,
-                            });
-                        }
-                        GapRec::Ignore => {}
-                    }
+        if let Ok(Some(body)) = result
+            && let Some(rec) = parse_gap_recommendation(&body)
+        {
+            match rec {
+                GapRec::Extend {
+                    target,
+                    step,
+                    rationale,
+                } => {
+                    findings.push(Finding {
+                        check_id: "coverage-gap".into(),
+                        category: "coverage-gap".into(),
+                        severity: Severity::Warn,
+                        skill_name: skill_name.to_string(),
+                        message: format!("coverage-gap: extend '{target}' — {step}. {rationale}"),
+                        remediation: Some(format!("Add step to {target}: {step}")),
+                        fixable: false,
+                    });
                 }
+                GapRec::New { step, rationale } => {
+                    findings.push(Finding {
+                        check_id: "coverage-gap".into(),
+                        category: "coverage-gap".into(),
+                        severity: Severity::Warn,
+                        skill_name: skill_name.to_string(),
+                        message: format!("coverage-gap: new skill needed — {step}. {rationale}"),
+                        remediation: Some(format!("Create a new skill: {step}")),
+                        fixable: false,
+                    });
+                }
+                GapRec::Ignore => {}
             }
-            Ok(None) | Err(_) => {}
         }
     }
 
@@ -885,7 +891,9 @@ fn run_coverage_gap(ctx: &DoctorCtx, skill_name: &str) -> Vec<Finding> {
 }
 
 /// Cluster failures by a simple error-signature hash.
-fn cluster_by_error(traces: &[crate::skill_traces::SkillTrace]) -> Vec<(String, Vec<crate::skill_traces::SkillTrace>)> {
+fn cluster_by_error(
+    traces: &[crate::skill_traces::SkillTrace],
+) -> Vec<(String, Vec<crate::skill_traces::SkillTrace>)> {
     use std::collections::BTreeMap;
     let mut groups: BTreeMap<String, Vec<crate::skill_traces::SkillTrace>> = BTreeMap::new();
     for t in traces {
@@ -895,7 +903,7 @@ fn cluster_by_error(traces: &[crate::skill_traces::SkillTrace]) -> Vec<(String, 
         groups.entry(key).or_default().push(t.clone());
     }
     let mut result: Vec<_> = groups.into_iter().collect();
-    result.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    result.sort_by_key(|b| std::cmp::Reverse(b.1.len()));
     result
 }
 
@@ -905,30 +913,56 @@ fn build_skill_inventory(home: &Path) -> String {
     for name in installed.iter().take(30) {
         if let Some(manifest) = load_manifest(home, name) {
             let abstract_ = &manifest.content.r#abstract;
-            lines.push(format!("- {name}: {abstract_}", abstract_ = abstract_.chars().take(100).collect::<String>()));
+            lines.push(format!(
+                "- {name}: {abstract_}",
+                abstract_ = abstract_.chars().take(100).collect::<String>()
+            ));
         }
     }
     lines.join("\n")
 }
 
 enum GapRec {
-    Extend { target: String, step: String, rationale: String },
-    New { step: String, rationale: String },
+    Extend {
+        target: String,
+        step: String,
+        rationale: String,
+    },
+    New {
+        step: String,
+        rationale: String,
+    },
     Ignore,
 }
 
 fn parse_gap_recommendation(json: &str) -> Option<GapRec> {
     let v: serde_json::Value = serde_json::from_str(json.trim()).ok()?;
     let rec = v.get("recommendation")?.as_str()?;
-    let rationale = v.get("rationale").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let rationale = v
+        .get("rationale")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
     match rec {
         "extend" => {
             let target = v.get("target_skill")?.as_str()?.to_string();
-            let step = v.get("suggested_step").and_then(|x| x.as_str()).unwrap_or("").to_string();
-            Some(GapRec::Extend { target, step, rationale })
+            let step = v
+                .get("suggested_step")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(GapRec::Extend {
+                target,
+                step,
+                rationale,
+            })
         }
         "new" => {
-            let step = v.get("suggested_step").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let step = v
+                .get("suggested_step")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             Some(GapRec::New { step, rationale })
         }
         "ignore" => Some(GapRec::Ignore),
@@ -944,10 +978,8 @@ fn print_llm_status(home: &Path) -> Result<()> {
     )
     .unwrap_or_default();
 
-    let model_ref = crate::skill_llm::resolve_maintenance_model(
-        &registry,
-        skill_llm_cfg.model_ref.as_deref(),
-    );
+    let model_ref =
+        crate::skill_llm::resolve_maintenance_model(&registry, skill_llm_cfg.model_ref.as_deref());
 
     let (spent, _reserved) =
         crate::skill_llm::budget::current_usage(&home.join("skill_llm_budget.json"));
@@ -966,7 +998,10 @@ fn print_llm_status(home: &Path) -> Result<()> {
             println!("  model:        (none — set via `mur model role set maintenance <key>`)");
         }
     }
-    println!("  per-call cap: {} output tokens", skill_llm_cfg.per_call_token_cap);
+    println!(
+        "  per-call cap: {} output tokens",
+        skill_llm_cfg.per_call_token_cap
+    );
     println!("  per-day cap:  ${:.2}", skill_llm_cfg.per_day_usd_cap);
     println!("  spent today:  ${:.4}", spent);
     println!(

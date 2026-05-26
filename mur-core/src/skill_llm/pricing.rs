@@ -28,6 +28,7 @@ pub fn rates(provider: &str, model: &str) -> (f64, f64) {
 }
 
 /// Cheap heuristic: char-count / 4 → estimated tokens.
+#[allow(dead_code)]
 pub fn estimate_tokens(text: &str) -> u32 {
     (text.chars().count() as f64 / 4.0).ceil() as u32
 }

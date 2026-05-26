@@ -3,12 +3,9 @@
 //! Takes M5b's rule-based contradiction pairs and asks the LLM whether two
 //! skills actually contradict, coexist, or are duplicates.
 
-use super::contradiction::{AdjudicationVerdict, ContradictionPair};
 use super::SkillView;
-use crate::skill_llm::{
-    MaintenanceCtx, ModelRef, TokenBudget,
-    maintenance_call, resolve_maintenance_model,
-};
+use super::contradiction::{AdjudicationVerdict, ContradictionPair};
+use crate::skill_llm::{MaintenanceCtx, TokenBudget, maintenance_call, resolve_maintenance_model};
 use mur_common::model::ModelRegistry;
 use std::path::Path;
 
@@ -16,24 +13,17 @@ use std::path::Path;
 ///
 /// Each pair gets a separate LLM call. Pairs that can't be adjudicated
 /// (no model, budget exhausted, network error) are left unchanged.
-pub async fn adjudicate(
-    pairs: &mut [ContradictionPair],
-    skills: &[SkillView],
-    home: &Path,
-) {
+pub async fn adjudicate(pairs: &mut [ContradictionPair], skills: &[SkillView], home: &Path) {
     if pairs.is_empty() {
         return;
     }
 
     let config = crate::store::config::load_config().unwrap_or_default();
     let skill_llm_cfg = &config.skill_llm;
-    let registry = ModelRegistry::load_from(
-        &ModelRegistry::default_path().unwrap_or_default(),
-    )
-    .unwrap_or_default();
+    let registry = ModelRegistry::load_from(&ModelRegistry::default_path().unwrap_or_default())
+        .unwrap_or_default();
 
-    let Some(model_ref) =
-        resolve_maintenance_model(&registry, skill_llm_cfg.model_ref.as_deref())
+    let Some(model_ref) = resolve_maintenance_model(&registry, skill_llm_cfg.model_ref.as_deref())
     else {
         tracing::info!("no maintenance model configured; skipping LLM adjudication");
         return;
@@ -63,15 +53,7 @@ pub async fn adjudicate(
             .replace("{procedure_b}", procedure_b)
             .replace("{overlap_summary}", &pair.reason);
 
-        match maintenance_call(
-            &prompt,
-            &model_ref,
-            TokenBudget::DEFAULT,
-            &ctx,
-            &registry,
-        )
-        .await
-        {
+        match maintenance_call(&prompt, &model_ref, TokenBudget::DEFAULT, &ctx, &registry).await {
             Ok(Some(body)) => {
                 if let Some(verdict) = parse_adjudication(&body) {
                     pair.adjudication = Some(verdict);

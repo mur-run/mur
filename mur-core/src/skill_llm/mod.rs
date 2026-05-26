@@ -38,6 +38,7 @@ pub enum SkillLlmError {
     #[error("daily budget exhausted (${spent_usd:.4} / ${cap_usd:.4})")]
     BudgetExhausted { spent_usd: f64, cap_usd: f64 },
     #[error("model returned invalid response: {0}")]
+    #[allow(dead_code)]
     InvalidResponse(String),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -70,12 +71,12 @@ pub fn resolve_maintenance_model(
     registry: &ModelRegistry,
     model_ref_override: Option<&str>,
 ) -> Option<ModelRef> {
-    if let Some(key) = model_ref_override {
-        if registry.models.contains_key(key) {
-            return Some(ModelRef {
-                entry_key: key.to_string(),
-            });
-        }
+    if let Some(key) = model_ref_override
+        && registry.models.contains_key(key)
+    {
+        return Some(ModelRef {
+            entry_key: key.to_string(),
+        });
     }
     if let Some(role) = registry.resolve_role("maintenance") {
         return Some(ModelRef {
@@ -156,16 +157,14 @@ pub async fn maintenance_call(
 
     // Build backend + call
     let backend_cfg = backend_config_from_entry(&entry);
-    let backend = match crate::conversations::backend::factory::build_for_stage(
-        &backend_cfg,
-        "skill_llm",
-    ) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(target: "skill_llm", error = %e, "backend init failed");
-            return Ok(None);
-        }
-    };
+    let backend =
+        match crate::conversations::backend::factory::build_for_stage(&backend_cfg, "skill_llm") {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(target: "skill_llm", error = %e, "backend init failed");
+                return Ok(None);
+            }
+        };
 
     let req = crate::conversations::backend::ChatRequest {
         model: &backend_cfg.model,

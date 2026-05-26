@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::TokenBudget;
 
@@ -51,17 +51,17 @@ fn cache_path(key: &str) -> PathBuf {
     cache_path_at(&mur_home(), key)
 }
 
-fn cache_path_at(home: &PathBuf, key: &str) -> PathBuf {
+fn cache_path_at(home: &Path, key: &str) -> PathBuf {
     home.join("skill_llm_cache")
         .join(&key[..2.min(key.len())])
         .join(format!("{}.json", &key[2.min(key.len())..]))
 }
 
 pub(crate) fn mur_home() -> PathBuf {
-    if let Ok(p) = std::env::var("MUR_HOME") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
+    if let Ok(p) = std::env::var("MUR_HOME")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p);
     }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))

@@ -160,7 +160,6 @@ pub fn read_skill_executions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn write_telemetry(dir: &Path, filename: &str, lines: &[&str]) {
         let content = lines.join("\n");

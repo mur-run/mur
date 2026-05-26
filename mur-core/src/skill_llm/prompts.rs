@@ -18,6 +18,7 @@ pub const API_DRIFT_V1: &str = r#"You are a skill-maintenance assistant. Decide 
 }
 "#;
 
+#[allow(dead_code)]
 pub const API_DRIFT_VERSION: u32 = 1;
 
 pub const COVERAGE_GAP_V1: &str = r#"You are a skill-maintenance assistant. Given a cluster of repeated failures, determine whether an existing skill should be extended or a new skill is needed.
@@ -40,6 +41,7 @@ pub const COVERAGE_GAP_V1: &str = r#"You are a skill-maintenance assistant. Give
 }
 "#;
 
+#[allow(dead_code)]
 pub const COVERAGE_GAP_VERSION: u32 = 1;
 
 pub const CONTRADICTION_ADJUDICATE_V1: &str = r#"You are a skill-maintenance assistant. Two skills appear to overlap. Decide whether they contradict (one is wrong or duplicates the other) or coexist (they cover different cases).
@@ -60,4 +62,5 @@ pub const CONTRADICTION_ADJUDICATE_V1: &str = r#"You are a skill-maintenance ass
 }
 "#;
 
+#[allow(dead_code)]
 pub const CONTRADICTION_ADJUDICATE_VERSION: u32 = 1;

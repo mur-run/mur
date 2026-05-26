@@ -8,11 +8,13 @@ use chrono::{DateTime, Utc};
 #[derive(Debug, Clone)]
 pub struct SkillTrace {
     pub skill_name: String,
+    #[allow(dead_code)]
     pub skill_version: String,
     pub outcome: TraceOutcome,
     pub timestamp: DateTime<Utc>,
     pub tools_used: Vec<String>,
     pub error: Option<String>,
+    #[allow(dead_code)]
     pub trace_id: String,
 }
 
