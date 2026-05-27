@@ -47,9 +47,27 @@ fn build_menu(
     table: &[(&'static str, u32)],
     desired_kind: ModelKind,
 ) -> Vec<MenuRow> {
+    let other_table = match desired_kind {
+        ModelKind::Embedding => LLM_PREFERENCE,
+        ModelKind::Llm => EMBEDDING_PREFERENCE,
+        ModelKind::Unknown => &[],
+    };
     let mut filtered: Vec<&DiscoveredModel> = available
         .iter()
-        .filter(|m| m.kind == desired_kind || m.kind == ModelKind::Unknown)
+        .filter(|m| {
+            if m.kind == desired_kind {
+                return true;
+            }
+            if m.kind != ModelKind::Unknown {
+                return false;
+            }
+            // oMLX models all arrive as Unknown. Exclude them from this menu
+            // when the other table ranks them higher — an LLM model shouldn't
+            // appear in the embedding menu, and vice versa.
+            let this_rank = rank(&m.id, table);
+            let other_rank = rank(&m.id, other_table);
+            this_rank >= other_rank
+        })
         .collect();
     // Stable sort: highest-ranked first. Tie-breaking preserves insertion order.
     filtered.sort_by_key(|m| Reverse(rank(&m.id, table)));
