@@ -44,6 +44,81 @@ fn fallback_dims_for(id: &str) -> Option<usize> {
     }
 }
 
+fn apply_conversations_model(config: &mut mur_common::config::Config, model: &str) {
+    config.conversations.ask.model = model.to_string();
+    config.conversations.compact.extractive_model = model.to_string();
+    config.conversations.rollup.extractive_model = model.to_string();
+}
+
+fn select_conversations_models(
+    config: &mut mur_common::config::Config,
+    available: &[crate::discovery::DiscoveredModel],
+    default_model: &str,
+) -> Result<()> {
+    use crate::discovery::aggregate::build_llm_menu;
+
+    let llm_rows = build_llm_menu(available);
+    let best_local = llm_rows
+        .first()
+        .and_then(|r| r.model.as_ref())
+        .map(|m| m.id.as_str())
+        .unwrap_or(default_model);
+
+    if llm_rows.is_empty() {
+        apply_conversations_model(config, default_model);
+        return Ok(());
+    }
+
+    println!();
+    println!("Conversation models — compact / ask / rollup run locally even in cloud mode.");
+    println!("  1) Use {}  [recommended]", best_local);
+    println!("  2) Pick from discovered models");
+    println!("  3) Skip — keep defaults");
+    print!("Choose [1-3] (default: 1): ");
+    io::stdout().flush()?;
+
+    let mut s = String::new();
+    match io::stdin().read_line(&mut s) {
+        Ok(0) | Err(_) => return Ok(()),
+        Ok(_) => {}
+    }
+
+    match s.trim() {
+        "" | "1" => apply_conversations_model(config, best_local),
+        "2" => {
+            println!();
+            for (i, r) in llm_rows.iter().enumerate() {
+                println!("  {}) {}", i + 1, r.label);
+            }
+            print!("Choose [1-{}] (default: 1): ", llm_rows.len());
+            io::stdout().flush()?;
+            let mut s2 = String::new();
+            match io::stdin().read_line(&mut s2) {
+                Ok(0) | Err(_) => {
+                    apply_conversations_model(config, best_local);
+                    return Ok(());
+                }
+                Ok(_) => {}
+            }
+            let idx = s2
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|&n| n >= 1 && n <= llm_rows.len())
+                .map(|n| n - 1)
+                .unwrap_or(0);
+            let chosen = llm_rows[idx]
+                .model
+                .as_ref()
+                .map(|m| m.id.as_str())
+                .unwrap_or(best_local);
+            apply_conversations_model(config, chosen);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Select a local embedding model via discovery.
 ///
 /// `available` is the merged list of discovered models from
@@ -1034,6 +1109,18 @@ Run `mur learn` to extract new patterns from recent sessions.
             let available = discover_blocking(refresh_discovery)?;
             select_local_embedding(&mut config, &available)?;
 
+            // conversations — background tasks always use local models
+            {
+                use crate::discovery::aggregate::build_llm_menu;
+                let default_llm = build_llm_menu(&available)
+                    .into_iter()
+                    .next()
+                    .and_then(|r| r.model)
+                    .map(|m| m.id)
+                    .unwrap_or_else(|| mur_common::config::DEFAULT_LOCAL_LLM_MODEL.to_string());
+                select_conversations_models(&mut config, &available, &default_llm)?;
+            }
+
             crate::store::config::save_config(&config)?;
             let llm_display = if is_openrouter {
                 "openrouter"
@@ -1107,6 +1194,11 @@ Run `mur learn` to extract new patterns from recent sessions.
                 let wrote_llm = select_local_llm(&mut config, &available)?;
                 if wrote_llm {
                     select_local_embedding(&mut config, &available)?;
+
+                    // conversations — use the same local model
+                    let chosen_llm = config.llm.model.clone();
+                    select_conversations_models(&mut config, &available, &chosen_llm)?;
+
                     crate::store::config::save_config(&config)?;
                     println!(
                         "  \u{2713} Config: {}/{} (LLM) + {}/{} (search)",
