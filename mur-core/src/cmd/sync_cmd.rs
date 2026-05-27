@@ -51,11 +51,12 @@ pub(crate) async fn device_sync(
                     direction,
                     DeviceSyncDirection::Pull | DeviceSyncDirection::Both
                 )
-                && !quiet {
-                    eprintln!(
-                        "  ⚠ Cloud pattern sync skipped: no team ID. Pass --team <id> or set MUR_TEAM_ID."
-                    );
-                }
+                && !quiet
+            {
+                eprintln!(
+                    "  ⚠ Cloud pattern sync skipped: no team ID. Pass --team <id> or set MUR_TEAM_ID."
+                );
+            }
 
             match direction {
                 DeviceSyncDirection::Pull => {
@@ -380,11 +381,12 @@ pub(crate) async fn device_sync(
                                                 &device_os,
                                             )
                                             .await
-                                                && !quiet {
-                                                    eprintln!(
-                                                        "  ⚠ Pull during conflict resolution failed: {e}"
-                                                    );
-                                                }
+                                                && !quiet
+                                            {
+                                                eprintln!(
+                                                    "  ⚠ Pull during conflict resolution failed: {e}"
+                                                );
+                                            }
                                             let changes2 =
                                                 build_sync_changes(&patterns_dir, &manifest_path)?;
                                             if changes2.is_empty() {
@@ -849,15 +851,17 @@ fn update_manifest_after_push(
     if manifest_path.exists()
         && let Ok(old) = serde_json::from_str::<HashMap<String, serde_json::Value>>(
             &std::fs::read_to_string(manifest_path)?,
-        ) {
-            for (name, entry) in manifest.iter_mut() {
-                if let Some(old_entry) = old.get(name)
-                    && let Some(sid) = old_entry.get("server_id")
-                    && let Some(obj) = entry.as_object_mut() {
-                        obj.insert("server_id".into(), sid.clone());
-                    }
+        )
+    {
+        for (name, entry) in manifest.iter_mut() {
+            if let Some(old_entry) = old.get(name)
+                && let Some(sid) = old_entry.get("server_id")
+                && let Some(obj) = entry.as_object_mut()
+            {
+                obj.insert("server_id".into(), sid.clone());
             }
         }
+    }
 
     // Write merged manifest
     std::fs::write(manifest_path, serde_json::to_string(&manifest)?)?;
