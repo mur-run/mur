@@ -51,13 +51,11 @@ pub(crate) async fn device_sync(
                     direction,
                     DeviceSyncDirection::Pull | DeviceSyncDirection::Both
                 )
-            {
-                if !quiet {
+                && !quiet {
                     eprintln!(
                         "  ⚠ Cloud pattern sync skipped: no team ID. Pass --team <id> or set MUR_TEAM_ID."
                     );
                 }
-            }
 
             match direction {
                 DeviceSyncDirection::Pull => {
@@ -382,13 +380,11 @@ pub(crate) async fn device_sync(
                                                 &device_os,
                                             )
                                             .await
-                                            {
-                                                if !quiet {
+                                                && !quiet {
                                                     eprintln!(
                                                         "  ⚠ Pull during conflict resolution failed: {e}"
                                                     );
                                                 }
-                                            }
                                             let changes2 =
                                                 build_sync_changes(&patterns_dir, &manifest_path)?;
                                             if changes2.is_empty() {
@@ -850,21 +846,18 @@ fn update_manifest_after_push(
     }
 
     // Merge with existing manifest to preserve server_ids
-    if manifest_path.exists() {
-        if let Ok(old) = serde_json::from_str::<HashMap<String, serde_json::Value>>(
+    if manifest_path.exists()
+        && let Ok(old) = serde_json::from_str::<HashMap<String, serde_json::Value>>(
             &std::fs::read_to_string(manifest_path)?,
         ) {
             for (name, entry) in manifest.iter_mut() {
                 if let Some(old_entry) = old.get(name)
                     && let Some(sid) = old_entry.get("server_id")
-                {
-                    if let Some(obj) = entry.as_object_mut() {
+                    && let Some(obj) = entry.as_object_mut() {
                         obj.insert("server_id".into(), sid.clone());
                     }
-                }
             }
         }
-    }
 
     // Write merged manifest
     std::fs::write(manifest_path, serde_json::to_string(&manifest)?)?;
@@ -873,6 +866,7 @@ fn update_manifest_after_push(
 }
 
 /// One-shot pull for conflict resolution during push retry.
+#[allow(clippy::too_many_arguments)]
 async fn sync_pull_once(
     server_url: &str,
     team_id: &str,
