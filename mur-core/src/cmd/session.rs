@@ -150,7 +150,7 @@ pub(crate) async fn cmd_session_stop(analyze: bool, reflect: bool) -> Result<()>
                 && config.sync.auto
                 && config.sync.method != "local"
                 && let Err(e) =
-                    super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push)
+                    super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push, None)
                         .await
             {
                 eprintln!("  ⚠ Auto-push failed: {}", e);
@@ -326,7 +326,7 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
         && config.sync.auto
         && config.sync.method != "local"
         && let Err(e) =
-            super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push).await
+            super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push, None).await
     {
         eprintln!("  ⚠ Auto-push failed: {}", e);
     }

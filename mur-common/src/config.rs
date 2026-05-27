@@ -75,6 +75,10 @@ pub struct SyncConfig {
     /// Auto-sync on context pull / session stop
     #[serde(default)]
     pub auto: bool,
+
+    /// Default team ID for cloud sync (set on first successful sync)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
 }
 
 fn default_sync_method() -> String {

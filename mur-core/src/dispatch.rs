@@ -72,6 +72,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Sync {
             quiet,
             project,
+            team,
             action,
         } => {
             if let Some(action) = action {
@@ -79,7 +80,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     SyncAction::Status => cmd::sync_cmd::run_status()?,
                 }
             } else {
-                cmd::sync_cmd::cmd_sync(quiet, project).await?;
+                cmd::sync_cmd::cmd_sync(quiet, project, team.as_deref()).await?;
             }
         }
         Commands::Inject { query, project: _ } => cmd::inject_cmd::cmd_inject(&query).await?,
