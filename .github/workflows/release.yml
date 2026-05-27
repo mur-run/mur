@@ -203,7 +203,15 @@ jobs:
         run: |
           mkdir dmg-root
           cp mur-aarch64-apple-darwin.pkg dmg-root/
-          hdiutil create -volname "MUR" -srcfolder dmg-root -format UDZO mur-aarch64-apple-darwin.dmg
+          # hdiutil -srcfolder auto-sizes sometimes underestimates on CI runners.
+          # Use a two-step approach: create a generously-sized sparse image, mount
+          # it, copy files manually, then detach and convert.
+          hdiutil create -volname "MUR" -size 200m -fs HFS+ -layout NONE temp.sparseimage
+          hdiutil attach -nobrowse temp.sparseimage
+          cp -R dmg-root/* /Volumes/MUR/
+          hdiutil detach /Volumes/MUR
+          hdiutil convert temp.sparseimage -format UDZO -o mur-aarch64-apple-darwin.dmg
+          rm temp.sparseimage
 
       - name: Sign DMG
         run: |
