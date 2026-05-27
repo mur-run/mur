@@ -35,6 +35,7 @@ pub mod scope;
 pub mod secret;
 pub mod signal;
 pub mod skill;
+pub mod sync_types;
 pub mod telemetry;
 pub mod trust;
 pub mod variable;

@@ -32,7 +32,8 @@ pub(crate) async fn cmd_context(
         && config.sync.auto
         && config.sync.method != "local"
         && let Err(e) =
-            super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Pull).await
+            super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Pull, None)
+                .await
     {
         eprintln!("  ⚠ Auto-pull failed: {}", e);
     }

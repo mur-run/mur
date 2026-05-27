@@ -15,3 +15,5 @@ research/
 # `<repo>/.pdfium-bin/lib/`. Download from
 # https://github.com/bblanchon/pdfium-binaries/releases for your arch.
 /.pdfium-bin/
+.opencode/
+.superpowers/
