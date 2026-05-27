@@ -26,9 +26,32 @@ async fn llm_call_event_appends_jsonl_and_emits_notification() {
 
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let file_path = tmp.path().join(format!("{today}.jsonl"));
-    let contents = std::fs::read_to_string(&file_path).unwrap();
-    assert!(contents.contains("\"gen_ai.request.model\":\"llama3.2\""));
-    assert!(contents.contains("\"mur.agent.name\":\"agent_a\""));
+
+    // macOS CI fs can be slow; retry the read a few times.
+    let contents = {
+        let mut attempts = 0;
+        loop {
+            match std::fs::read_to_string(&file_path) {
+                Ok(c) if !c.is_empty() => break c,
+                _ if attempts < 10 => {
+                    attempts += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                _ => panic!(
+                    "telemetry file missing or empty after {attempts} retries: {}",
+                    file_path.display()
+                ),
+            }
+        }
+    };
+    assert!(
+        contents.contains("\"gen_ai.request.model\":\"llama3.2\""),
+        "expected gen_ai.request.model in telemetry file, got:\n{contents}"
+    );
+    assert!(
+        contents.contains("\"mur.agent.name\":\"agent_a\""),
+        "expected mur.agent.name in telemetry file, got:\n{contents}"
+    );
 
     let notif = out_rx.recv().await.unwrap();
     assert_eq!(notif["method"], json!("telemetry/llm_call"));
