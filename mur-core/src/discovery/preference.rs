@@ -6,7 +6,6 @@
 /// Both Ollama tag form (`name:size`) and HuggingFace id form
 /// (`mlx-community/Foo`) appear at equal score.
 pub const EMBEDDING_PREFERENCE: &[(&str, u32)] = &[
-    ("qwen3.5-embedding", 105), // future-proof
     ("Qwen3-Embedding-8B", 100),
     ("qwen3-embedding:8b", 100),
     ("Qwen3-Embedding-4B", 90),
@@ -82,17 +81,6 @@ mod tests {
     fn unknown_id_returns_zero() {
         assert_eq!(rank("randomuser/foo-base", EMBEDDING_PREFERENCE), 0);
         assert_eq!(rank("", EMBEDDING_PREFERENCE), 0);
-    }
-
-    #[test]
-    fn future_qwen35_embedding_wins() {
-        // When Alibaba ships qwen3.5-embedding, the prefix table should pick
-        // it over current SOTA without any code change.
-        assert_eq!(rank("qwen3.5-embedding:0.6b", EMBEDDING_PREFERENCE), 105);
-        assert!(
-            rank("qwen3.5-embedding:0.6b", EMBEDDING_PREFERENCE)
-                > rank("qwen3-embedding:8b", EMBEDDING_PREFERENCE)
-        );
     }
 
     #[test]
