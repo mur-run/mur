@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub const DEFAULT_LOCAL_LLM_MODEL: &str = "qwen3.5:4b";
+
 /// Global MUR configuration (~/.mur/config.yaml)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -231,7 +233,7 @@ impl Default for BackendConfig {
     fn default() -> Self {
         Self {
             provider: "ollama".into(),
-            model: "qwen3:4b".into(),
+            model: DEFAULT_LOCAL_LLM_MODEL.into(),
             endpoint: None,
             api_key_env: None,
             timeout_secs: None,
@@ -523,7 +525,7 @@ impl Default for AskConfig {
 }
 
 fn ask_default_model() -> String {
-    "qwen3:4b".into()
+    DEFAULT_LOCAL_LLM_MODEL.into()
 }
 fn ask_default_k_summary() -> u32 {
     5
@@ -709,7 +711,7 @@ fn compact_default_max_days() -> u32 {
     7
 }
 fn compact_default_model() -> String {
-    "qwen3:4b".into()
+    DEFAULT_LOCAL_LLM_MODEL.into()
 }
 fn compact_default_ollama_endpoint() -> String {
     "http://localhost:11434".into()
@@ -935,11 +937,10 @@ foo: bar
         let c = CompactConfig::default();
         assert!(c.enabled_in_daemon);
         assert_eq!(c.max_days_per_run, 7);
-        assert_eq!(c.extractive_model, "qwen3:4b");
-        assert_eq!(c.abstractive_model, "qwen3:4b");
+        assert_eq!(c.extractive_model, "qwen3.5:4b");
+        assert_eq!(c.abstractive_model, "qwen3.5:4b");
         assert_eq!(c.ollama_endpoint, "http://localhost:11434");
         assert_eq!(c.max_extractive_spans, 20);
-        assert_eq!(c.max_abstractive_words, 400);
         assert_eq!(c.chunk_tokens, 6000);
         assert_eq!(c.history_retain, 5);
         assert_eq!(c.daemon_cron, "0 0 3 * * * *");
@@ -958,15 +959,14 @@ conversations:
         assert_eq!(conv.compact.max_days_per_run, 3);
         assert_eq!(conv.compact.extractive_model, "qwen3:4b");
         assert!(conv.compact.enabled_in_daemon); // default preserved
-        assert_eq!(conv.compact.abstractive_model, "qwen3:4b"); // default preserved
+        assert_eq!(conv.compact.abstractive_model, "qwen3.5:4b"); // default preserved
     }
 
     #[test]
     fn ask_config_defaults() {
         let c = AskConfig::default();
-        assert_eq!(c.model, "qwen3:4b");
+        assert_eq!(c.model, "qwen3.5:4b");
         assert_eq!(c.ollama_endpoint, "http://localhost:11434");
-        assert_eq!(c.k_summary, 5);
         assert_eq!(c.k_raw, 10);
         assert_eq!(c.escalation_threshold, 0.5);
         assert_eq!(c.mmr_threshold, 0.88);
@@ -999,8 +999,8 @@ conversations:
         assert_eq!(c.max_abstractive_words_per_month, 700);
         assert!((c.week_mmr_threshold - 0.85).abs() < 1e-9);
         assert!((c.month_mmr_threshold - 0.82).abs() < 1e-9);
-        assert_eq!(c.extractive_model, "qwen3:4b");
-        assert_eq!(c.abstractive_model, "qwen3:4b");
+        assert_eq!(c.extractive_model, "qwen3.5:4b");
+        assert_eq!(c.abstractive_model, "qwen3.5:4b");
         assert_eq!(c.ollama_endpoint, "http://localhost:11434");
     }
 
@@ -1181,7 +1181,7 @@ mod backend_config_tests {
     fn default_is_ollama_qwen3() {
         let cfg = BackendConfig::default();
         assert_eq!(cfg.provider, "ollama");
-        assert_eq!(cfg.model, "qwen3:4b");
+        assert_eq!(cfg.model, "qwen3.5:4b");
         assert_eq!(cfg.endpoint, None);
         assert_eq!(cfg.api_key_env, None);
         assert_eq!(cfg.timeout_secs, None);

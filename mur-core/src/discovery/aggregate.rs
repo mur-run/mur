@@ -4,6 +4,8 @@
 use std::cmp::Reverse;
 use std::collections::HashSet;
 
+const MAX_PULL_SUGGESTIONS: usize = 3;
+
 use super::preference::{EMBEDDING_PREFERENCE, LLM_PREFERENCE, rank};
 use super::{DiscoveredModel, ModelKind};
 
@@ -99,7 +101,7 @@ fn build_menu(
         .map(|(p, s)| (*p, *s))
         .collect();
     suggestions.sort_by_key(|(_, s)| Reverse(*s));
-    for (prefix, _) in suggestions.iter().take(2) {
+    for (prefix, _) in suggestions.iter().take(MAX_PULL_SUGGESTIONS) {
         rows.push(MenuRow {
             kind: MenuRowKind::Pull,
             label: format!("[pull] {}", prefix),
@@ -139,8 +141,8 @@ mod tests {
     #[test]
     fn empty_input_yields_pull_suggestions_then_skip() {
         let rows = build_embedding_menu(&[]);
-        // 0 auto + 0 pulled + 2 [pull] + 1 skip
-        assert_eq!(rows.len(), 3);
+        // 0 auto + 0 pulled + 3 [pull] + 1 skip
+        assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].kind, MenuRowKind::Pull);
         assert_eq!(rows.last().unwrap().kind, MenuRowKind::Skip);
     }
