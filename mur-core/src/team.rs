@@ -61,7 +61,7 @@ pub async fn list_team_patterns(
     team_id: &str,
 ) -> Result<TeamListResponse> {
     let base = auth::server_url();
-    let url = format!("{}/api/v1/core/community/teams/{}/patterns", base, team_id);
+    let url = format!("{}/api/v1/core/teams/{}/patterns", base, team_id);
 
     let req = auth::auth_request(client, reqwest::Method::GET, &url).await?;
 
@@ -89,10 +89,7 @@ pub async fn share_to_team(
     tags: &[String],
 ) -> Result<TeamShareResponse> {
     let base = auth::server_url();
-    let url = format!(
-        "{}/api/v1/core/community/teams/{}/patterns/share",
-        base, team_id
-    );
+    let url = format!("{}/api/v1/core/teams/{}/patterns", base, team_id);
 
     let req = auth::auth_request(client, reqwest::Method::POST, &url).await?;
 
@@ -119,12 +116,11 @@ pub async fn share_to_team(
 /// Sync (pull) latest team patterns.
 pub async fn sync_team(client: &reqwest::Client, team_id: &str) -> Result<TeamSyncResponse> {
     let base = auth::server_url();
-    let url = format!("{}/api/v1/core/community/teams/{}/sync", base, team_id);
+    let url = format!("{}/api/v1/core/teams/{}/sync/pull?since=0", base, team_id);
 
-    let req = auth::auth_request(client, reqwest::Method::POST, &url).await?;
+    let req = auth::auth_request(client, reqwest::Method::GET, &url).await?;
 
     let resp = req
-        .json(&serde_json::json!({}))
         .send()
         .await
         .context("Failed to connect to mur server")?;

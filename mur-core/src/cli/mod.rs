@@ -69,6 +69,9 @@ pub enum Commands {
         /// Force project-aware sync (prioritize patterns matching project tags/language)
         #[arg(long)]
         project: bool,
+        /// Team ID for cloud sync (env: MUR_TEAM_ID)
+        #[arg(long, env = "MUR_TEAM_ID")]
+        team: Option<String>,
         #[command(subcommand)]
         action: Option<SyncAction>,
     },

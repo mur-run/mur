@@ -7,7 +7,21 @@ use crate::store::yaml::YamlStore;
 
 /// Run device sync (cloud API or git pull/commit/push) based on config.
 /// Returns Ok(()) on success, warns on failure but doesn't block.
-pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> Result<()> {
+fn resolve_team_id(
+    cli_team: Option<&str>,
+    config: &mur_common::config::SyncConfig,
+) -> Option<String> {
+    cli_team
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("MUR_TEAM_ID").ok())
+        .or_else(|| config.team_id.clone())
+}
+
+pub(crate) async fn device_sync(
+    quiet: bool,
+    direction: DeviceSyncDirection,
+    team: Option<&str>,
+) -> Result<()> {
     let config = crate::store::config::load_config()?;
 
     match config.sync.method.as_str() {
@@ -30,42 +44,83 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                 }
             };
 
+            // Resolve team ID for pattern sync (CLI > env > config)
+            let team_id = resolve_team_id(team, &config.sync);
+            if team_id.is_none()
+                && matches!(
+                    direction,
+                    DeviceSyncDirection::Pull | DeviceSyncDirection::Both
+                )
+                && !quiet
+            {
+                eprintln!(
+                    "  ⚠ Cloud pattern sync skipped: no team ID. Pass --team <id> or set MUR_TEAM_ID."
+                );
+            }
+
             match direction {
                 DeviceSyncDirection::Pull => {
-                    let url = format!("{}/api/sync/pull", server_url);
                     let device_id = crate::auth::get_device_id();
                     let device_name = crate::auth::get_device_name();
                     let device_os = crate::auth::get_device_os();
                     let client = reqwest::Client::new();
-                    let resp = client
-                        .get(&url)
-                        .timeout(std::time::Duration::from_secs(10))
-                        .header("Authorization", format!("Bearer {}", token))
-                        .header("X-Device-ID", &device_id)
-                        .header("X-Device-Name", &device_name)
-                        .header("X-Device-OS", &device_os)
-                        .send()
-                        .await;
-                    match resp {
-                        Ok(r) if r.status().is_success() => {
-                            let body = r.text().await.unwrap_or_default();
-                            if body.trim() != "{}" && !body.trim().is_empty() {
-                                apply_cloud_pull(&body, &mur_dir)?;
-                                if !quiet {
-                                    eprintln!("  ✓ Cloud pull complete.");
+
+                    // Pattern sync — team-scoped, versioned
+                    if let Some(ref tid) = team_id {
+                        let version_path = mur_dir.join(".sync_version");
+                        let local_version: i64 = std::fs::read_to_string(&version_path)
+                            .ok()
+                            .and_then(|s| s.trim().parse().ok())
+                            .unwrap_or(0);
+                        let pull_url = format!(
+                            "{}/api/v1/core/teams/{}/sync/pull?since={}",
+                            server_url, tid, local_version
+                        );
+                        let resp = client
+                            .get(&pull_url)
+                            .timeout(std::time::Duration::from_secs(10))
+                            .header("Authorization", format!("Bearer {}", token))
+                            .header("X-Device-ID", &device_id)
+                            .header("X-Device-Name", &device_name)
+                            .header("X-Device-OS", &device_os)
+                            .send()
+                            .await;
+                        match resp {
+                            Ok(r) if r.status().is_success() => {
+                                let body = r.text().await.unwrap_or_default();
+                                match serde_json::from_str::<mur_common::sync_types::SyncPullResponse>(
+                                    &body,
+                                ) {
+                                    Ok(pull) => {
+                                        apply_cloud_pull_v2(&pull, &mur_dir)?;
+                                        if let Err(e) =
+                                            std::fs::write(&version_path, pull.version.to_string())
+                                        {
+                                            tracing::warn!("Failed to write sync version: {e}");
+                                        }
+                                        if !quiet {
+                                            eprintln!(
+                                                "  ✓ Cloud pull complete (version {}).",
+                                                pull.version
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        if !quiet {
+                                            eprintln!("  ⚠ Cloud pull parse error: {e}");
+                                        }
+                                    }
                                 }
-                            } else if !quiet {
-                                eprintln!("  ✓ Already up to date.");
                             }
-                        }
-                        Ok(r) => {
-                            if !quiet {
-                                eprintln!("  ⚠ Cloud pull failed: HTTP {}", r.status());
+                            Ok(r) => {
+                                if !quiet {
+                                    eprintln!("  ⚠ Cloud pull failed: HTTP {}", r.status());
+                                }
                             }
-                        }
-                        Err(e) => {
-                            if !quiet {
-                                eprintln!("  ⚠ Cloud pull failed: {}", e);
+                            Err(e) => {
+                                if !quiet {
+                                    eprintln!("  ⚠ Cloud pull failed: {}", e);
+                                }
                             }
                         }
                     }
@@ -182,7 +237,7 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                     if !quiet {
                         eprintln!("  ☁ Pulling workflows...");
                     }
-                    let wf_url = format!("{}/api/v1/core/workflows", server_url);
+                    let wf_url = format!("{}/api/v1/workflows", server_url);
                     let wf_resp = client
                         .get(&wf_url)
                         .timeout(std::time::Duration::from_secs(10))
@@ -247,38 +302,167 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                     }
                 }
                 DeviceSyncDirection::Push => {
-                    let url = format!("{}/api/sync/push", server_url);
-                    let patterns_dir = mur_dir.join("patterns");
-                    let payload = build_cloud_push_payload(&patterns_dir)?;
                     let device_id = crate::auth::get_device_id();
                     let device_name = crate::auth::get_device_name();
                     let device_os = crate::auth::get_device_os();
                     let client = reqwest::Client::new();
-                    let resp = client
-                        .post(&url)
-                        .timeout(std::time::Duration::from_secs(15))
-                        .header("Authorization", format!("Bearer {}", token))
-                        .header("X-Device-ID", &device_id)
-                        .header("X-Device-Name", &device_name)
-                        .header("X-Device-OS", &device_os)
-                        .header("Content-Type", "application/json")
-                        .body(payload)
-                        .send()
-                        .await;
-                    match resp {
-                        Ok(r) if r.status().is_success() => {
+
+                    // Pattern push — team-scoped, optimistic concurrency
+                    if let Some(ref tid) = team_id {
+                        let patterns_dir = mur_dir.join("patterns");
+                        let manifest_path = mur_dir.join(".sync_manifest.json");
+                        let version_path = mur_dir.join(".sync_version");
+                        let local_version: i64 = std::fs::read_to_string(&version_path)
+                            .ok()
+                            .and_then(|s| s.trim().parse().ok())
+                            .unwrap_or(0);
+
+                        let changes = build_sync_changes(&patterns_dir, &manifest_path)?;
+                        if changes.is_empty() {
                             if !quiet {
-                                eprintln!("  ✓ Cloud push complete.");
+                                eprintln!("  ✓ Nothing to push (no changes).");
                             }
-                        }
-                        Ok(r) => {
-                            if !quiet {
-                                eprintln!("  ⚠ Cloud push failed: HTTP {}", r.status());
-                            }
-                        }
-                        Err(e) => {
-                            if !quiet {
-                                eprintln!("  ⚠ Cloud push failed: {}", e);
+                        } else {
+                            let push_url =
+                                format!("{}/api/v1/core/teams/{}/sync/push", server_url, tid);
+                            let req = mur_common::sync_types::SyncPushRequest {
+                                base_version: local_version,
+                                changes,
+                                force_local: false,
+                            };
+                            let body = serde_json::to_string(&req)?;
+                            let resp = client
+                                .post(&push_url)
+                                .timeout(std::time::Duration::from_secs(15))
+                                .header("Authorization", format!("Bearer {}", token))
+                                .header("X-Device-ID", &device_id)
+                                .header("X-Device-Name", &device_name)
+                                .header("X-Device-OS", &device_os)
+                                .header("Content-Type", "application/json")
+                                .body(body)
+                                .send()
+                                .await;
+                            match resp {
+                                Ok(r) if r.status().is_success() => {
+                                    let resp_body = r.text().await.unwrap_or_default();
+                                    match serde_json::from_str::<
+                                        mur_common::sync_types::SyncPushResponse,
+                                    >(&resp_body)
+                                    {
+                                        Ok(pr) if pr.ok => {
+                                            // Update manifest after successful push
+                                            update_manifest_after_push(
+                                                &patterns_dir,
+                                                &manifest_path,
+                                            )?;
+                                            if let Some(v) = pr.version {
+                                                let _ =
+                                                    std::fs::write(&version_path, v.to_string());
+                                            }
+                                            if !quiet {
+                                                eprintln!("  ✓ Cloud push complete.");
+                                            }
+                                        }
+                                        Ok(pr) if pr.conflict.unwrap_or(false) => {
+                                            // Pull latest, re-diff, retry once
+                                            if !quiet {
+                                                eprintln!(
+                                                    "  ↺ Conflict detected, pulling latest..."
+                                                );
+                                            }
+                                            if let Err(e) = sync_pull_once(
+                                                server_url,
+                                                tid,
+                                                &token,
+                                                &mur_dir,
+                                                &client,
+                                                &device_id,
+                                                &device_name,
+                                                &device_os,
+                                            )
+                                            .await
+                                                && !quiet
+                                            {
+                                                eprintln!(
+                                                    "  ⚠ Pull during conflict resolution failed: {e}"
+                                                );
+                                            }
+                                            let changes2 =
+                                                build_sync_changes(&patterns_dir, &manifest_path)?;
+                                            if changes2.is_empty() {
+                                                if !quiet {
+                                                    eprintln!(
+                                                        "  ✓ Resolved after pull (no remaining changes)."
+                                                    );
+                                                }
+                                            } else {
+                                                let sv = std::fs::read_to_string(&version_path)
+                                                    .ok()
+                                                    .and_then(|s| s.trim().parse().ok())
+                                                    .unwrap_or(0);
+                                                let req2 =
+                                                    mur_common::sync_types::SyncPushRequest {
+                                                        base_version: sv,
+                                                        changes: changes2,
+                                                        force_local: false,
+                                                    };
+                                                let body2 = serde_json::to_string(&req2)?;
+                                                let resp2 = client
+                                                    .post(&push_url)
+                                                    .timeout(std::time::Duration::from_secs(15))
+                                                    .header(
+                                                        "Authorization",
+                                                        format!("Bearer {}", token),
+                                                    )
+                                                    .header("X-Device-ID", &device_id)
+                                                    .header("X-Device-Name", &device_name)
+                                                    .header("X-Device-OS", &device_os)
+                                                    .header("Content-Type", "application/json")
+                                                    .body(body2)
+                                                    .send()
+                                                    .await;
+                                                match resp2 {
+                                                    Ok(r2) if r2.status().is_success() => {
+                                                        let _ = serde_json::from_str::<mur_common::sync_types::SyncPushResponse>(&r2.text().await.unwrap_or_default()).ok().and_then(|pr2| pr2.version).map(|v| std::fs::write(&version_path, v.to_string()));
+                                                        update_manifest_after_push(
+                                                            &patterns_dir,
+                                                            &manifest_path,
+                                                        )?;
+                                                        if !quiet {
+                                                            eprintln!(
+                                                                "  ✓ Push resolved after retry."
+                                                            );
+                                                        }
+                                                    }
+                                                    _ => {
+                                                        if !quiet {
+                                                            eprintln!(
+                                                                "  ⚠ Push retry failed; run `mur sync` to retry."
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            if !quiet {
+                                                eprintln!(
+                                                    "  ⚠ Cloud push failed: unexpected response"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(r) => {
+                                    if !quiet {
+                                        eprintln!("  ⚠ Cloud push failed: HTTP {}", r.status());
+                                    }
+                                }
+                                Err(e) => {
+                                    if !quiet {
+                                        eprintln!("  ⚠ Cloud push failed: {}", e);
+                                    }
+                                }
                             }
                         }
                     }
@@ -358,8 +542,8 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                     }
                 }
                 DeviceSyncDirection::Both => {
-                    Box::pin(device_sync(quiet, DeviceSyncDirection::Pull)).await?;
-                    Box::pin(device_sync(quiet, DeviceSyncDirection::Push)).await?;
+                    Box::pin(device_sync(quiet, DeviceSyncDirection::Pull, team)).await?;
+                    Box::pin(device_sync(quiet, DeviceSyncDirection::Push, team)).await?;
                 }
             }
         }
@@ -430,8 +614,8 @@ pub(crate) async fn device_sync(quiet: bool, direction: DeviceSyncDirection) -> 
                     }
                 }
                 DeviceSyncDirection::Both => {
-                    Box::pin(device_sync(quiet, DeviceSyncDirection::Pull)).await?;
-                    Box::pin(device_sync(quiet, DeviceSyncDirection::Push)).await?;
+                    Box::pin(device_sync(quiet, DeviceSyncDirection::Pull, team)).await?;
+                    Box::pin(device_sync(quiet, DeviceSyncDirection::Push, team)).await?;
                 }
             }
         }
@@ -499,85 +683,227 @@ fn run_git_in(dir: &std::path::Path, args: &[&str]) -> Result<String> {
     }
 }
 
-fn apply_cloud_pull(body: &str, mur_dir: &std::path::Path) -> Result<()> {
-    // Parse JSON response containing pattern YAML content keyed by name
-    let patterns: std::collections::HashMap<String, String> = serde_json::from_str(body)?;
+fn apply_cloud_pull_v2(
+    response: &mur_common::sync_types::SyncPullResponse,
+    mur_dir: &std::path::Path,
+) -> Result<()> {
     let patterns_dir = mur_dir.join("patterns");
     std::fs::create_dir_all(&patterns_dir)?;
-    for (name, yaml_content) in &patterns {
-        // Validate: reject path traversal attempts and empty names
-        if name.is_empty() || name.contains("..") || name.contains('\0') {
-            tracing::warn!("Skipping pattern with unsafe name: {:?}", name);
-            continue;
-        }
-        let safe_name = name.replace(['/', '\\', '.', '~'], "_");
-        if safe_name.is_empty() || safe_name.starts_with('-') {
-            tracing::warn!(
-                "Skipping pattern with invalid name after sanitization: {:?}",
-                name
-            );
+    for p in &response.patterns {
+        let safe_name = sanitize_pattern_name(&p.name);
+        if safe_name.is_empty() {
+            tracing::warn!("Skipping pattern with empty/invalid name: {:?}", p.name);
             continue;
         }
         let path = patterns_dir.join(format!("{}.yaml", safe_name));
-        // Final safety check: ensure path stays within patterns_dir
         if !path.starts_with(&patterns_dir) {
-            tracing::warn!("Path traversal detected for pattern: {:?}", name);
+            tracing::warn!("Path traversal detected for pattern: {:?}", p.name);
             continue;
         }
-        std::fs::write(&path, yaml_content)?;
+        if p.deleted {
+            let _ = std::fs::remove_file(&path);
+        } else {
+            std::fs::write(&path, &p.content)?;
+        }
     }
     Ok(())
 }
 
-fn build_cloud_push_payload(patterns_dir: &std::path::Path) -> Result<String> {
+fn sanitize_pattern_name(name: &str) -> String {
+    if name.is_empty() || name.contains("..") || name.contains('\0') {
+        return String::new();
+    }
+    let safe = name.replace(['/', '\\', '.', '~'], "_");
+    if safe.starts_with('-') {
+        String::new()
+    } else {
+        safe
+    }
+}
+
+/// Build change list for cloud push by comparing local patterns dir with
+/// the sync manifest (`~/.mur/.sync_manifest.json`).
+///
+/// Manifest format: `{ "name": { "server_id": "...", "version": 0, "content_hash": "..." } }`
+fn build_sync_changes(
+    patterns_dir: &std::path::Path,
+    manifest_path: &std::path::Path,
+) -> Result<Vec<mur_common::sync_types::PatternChange>> {
     use std::collections::HashMap;
+    use std::hash::{Hash, Hasher};
 
-    let mut map = HashMap::new();
-    let sync_state_path = patterns_dir
-        .parent()
-        .unwrap_or(patterns_dir)
-        .join(".sync_hashes.json");
+    let mut changes = Vec::new();
 
-    // Load previous sync hashes
-    let prev_hashes: HashMap<String, String> = if sync_state_path.exists() {
-        serde_json::from_str(&std::fs::read_to_string(&sync_state_path)?).unwrap_or_default()
+    // Load manifest
+    let manifest: HashMap<String, serde_json::Value> = if manifest_path.exists() {
+        serde_json::from_str(&std::fs::read_to_string(manifest_path)?).unwrap_or_default()
     } else {
         HashMap::new()
     };
 
-    let mut new_hashes = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
 
+    // Scan local patterns
     if patterns_dir.exists() {
         for entry in std::fs::read_dir(patterns_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
-                let name = path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let content = std::fs::read_to_string(&path)?;
-                // Simple hash for change detection
-                let hash = format!("{:x}", md5_simple(&content));
-                new_hashes.insert(name.clone(), hash.clone());
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let name = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let content = std::fs::read_to_string(&path)?;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            content.hash(&mut hasher);
+            let hash = format!("{:x}", hasher.finish());
 
-                // Only include if changed since last sync
-                if prev_hashes.get(&name).map(|h| h.as_str()) != Some(&hash) {
-                    map.insert(name, content);
+            seen.insert(name.clone());
+
+            match manifest.get(&name) {
+                Some(entry) => {
+                    let prev_hash = entry
+                        .get("content_hash")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if prev_hash != hash {
+                        changes.push(mur_common::sync_types::PatternChange {
+                            action: "update".into(),
+                            id: entry
+                                .get("server_id")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                            pattern: Some(mur_common::sync_types::PatternPayload {
+                                name: name.clone(),
+                                content,
+                            }),
+                        });
+                    }
+                }
+                None => {
+                    changes.push(mur_common::sync_types::PatternChange {
+                        action: "create".into(),
+                        id: None,
+                        pattern: Some(mur_common::sync_types::PatternPayload {
+                            name: name.clone(),
+                            content,
+                        }),
+                    });
                 }
             }
         }
     }
 
-    // Save new hashes for next sync
-    if let Ok(json) = serde_json::to_string(&new_hashes)
-        && let Err(e) = std::fs::write(&sync_state_path, json)
-    {
-        tracing::warn!("Failed to write sync hashes: {e}");
+    // Deleted patterns (in manifest but not on disk)
+    for (name, entry) in &manifest {
+        if !seen.contains(name) {
+            changes.push(mur_common::sync_types::PatternChange {
+                action: "delete".into(),
+                id: entry
+                    .get("server_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                pattern: None,
+            });
+        }
     }
 
-    Ok(serde_json::to_string(&map)?)
+    Ok(changes)
+}
+
+/// After a successful push, rebuild the sync manifest from local state.
+fn update_manifest_after_push(
+    patterns_dir: &std::path::Path,
+    manifest_path: &std::path::Path,
+) -> Result<()> {
+    use std::collections::HashMap;
+    use std::hash::{Hash, Hasher};
+
+    let mut manifest: HashMap<String, serde_json::Value> = HashMap::new();
+
+    if patterns_dir.exists() {
+        for entry in std::fs::read_dir(patterns_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let name = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            content.hash(&mut hasher);
+            let hash = format!("{:x}", hasher.finish());
+            let mut entry = serde_json::Map::new();
+            entry.insert("content_hash".into(), serde_json::Value::String(hash));
+            // Preserve server_id if known
+            manifest.insert(name, serde_json::Value::Object(entry));
+        }
+    }
+
+    // Merge with existing manifest to preserve server_ids
+    if manifest_path.exists()
+        && let Ok(old) = serde_json::from_str::<HashMap<String, serde_json::Value>>(
+            &std::fs::read_to_string(manifest_path)?,
+        )
+    {
+        for (name, entry) in manifest.iter_mut() {
+            if let Some(old_entry) = old.get(name)
+                && let Some(sid) = old_entry.get("server_id")
+                && let Some(obj) = entry.as_object_mut()
+            {
+                obj.insert("server_id".into(), sid.clone());
+            }
+        }
+    }
+
+    // Write merged manifest
+    std::fs::write(manifest_path, serde_json::to_string(&manifest)?)?;
+
+    Ok(())
+}
+
+/// One-shot pull for conflict resolution during push retry.
+#[allow(clippy::too_many_arguments)]
+async fn sync_pull_once(
+    server_url: &str,
+    team_id: &str,
+    token: &str,
+    mur_dir: &std::path::Path,
+    client: &reqwest::Client,
+    device_id: &str,
+    device_name: &str,
+    device_os: &str,
+) -> Result<()> {
+    let version_path = mur_dir.join(".sync_version");
+    let local_version: i64 = std::fs::read_to_string(&version_path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    let url = format!(
+        "{}/api/v1/core/teams/{}/sync/pull?since={}",
+        server_url, team_id, local_version
+    );
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("X-Device-ID", device_id)
+        .header("X-Device-Name", device_name)
+        .header("X-Device-OS", device_os)
+        .send()
+        .await?;
+    let body = resp.text().await?;
+    let pull: mur_common::sync_types::SyncPullResponse = serde_json::from_str(&body)?;
+    apply_cloud_pull_v2(&pull, mur_dir)?;
+    std::fs::write(&version_path, pull.version.to_string())?;
+    Ok(())
 }
 
 /// Simple hash for change detection (not cryptographic).
@@ -588,7 +914,7 @@ fn md5_simple(s: &str) -> u64 {
     hasher.finish()
 }
 
-pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
+pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str>) -> Result<()> {
     use crate::evolve::decay::apply_decay_all;
     use crate::evolve::maturity::apply_maturity_all;
     use crate::retrieve::scoring::score_and_rank;
@@ -599,7 +925,7 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool) -> Result<()> {
 
     // ─── Device sync first (cloud or git) ─────────────────────
     // Failures warn but don't block tool sync
-    if let Err(e) = device_sync(quiet, DeviceSyncDirection::Both).await
+    if let Err(e) = device_sync(quiet, DeviceSyncDirection::Both, team).await
         && !quiet
     {
         eprintln!("  ⚠ Device sync error: {}", e);
@@ -922,7 +1248,7 @@ async fn push_unsynced_workflows(server_url: &str, token: &str, quiet: bool) -> 
     let device_id = crate::auth::get_device_id();
     let device_name = crate::auth::get_device_name();
     let device_os = crate::auth::get_device_os();
-    let url = format!("{}/api/v1/core/workflows", server_url);
+    let url = format!("{}/api/v1/workflows", server_url);
 
     let mut pushed = 0usize;
     for entry in std::fs::read_dir(&workflows_dir)? {
