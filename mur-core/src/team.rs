@@ -89,10 +89,7 @@ pub async fn share_to_team(
     tags: &[String],
 ) -> Result<TeamShareResponse> {
     let base = auth::server_url();
-    let url = format!(
-        "{}/api/v1/core/teams/{}/patterns",
-        base, team_id
-    );
+    let url = format!("{}/api/v1/core/teams/{}/patterns", base, team_id);
 
     let req = auth::auth_request(client, reqwest::Method::POST, &url).await?;
 
