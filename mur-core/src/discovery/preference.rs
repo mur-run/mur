@@ -31,8 +31,6 @@ pub const LLM_PREFERENCE: &[(&str, u32)] = &[
     ("gemma4:e2b", 85),
     ("Qwen3-9B", 70),
     ("qwen3:9b", 70),
-    ("Qwen3-4B", 65),
-    ("qwen3:4b", 65),
     ("llama3.3", 60),
 ];
 
