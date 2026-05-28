@@ -360,10 +360,10 @@ mod tests {
 
     #[tokio::test]
     async fn three_retrievals_promote_a_note_from_draft_to_emerging() {
+        use crate::skill_lifecycle::sweep::{SweepOptions, run_sweep};
+        use crate::skill_stats::reindex::{ReindexOptions, reindex_stats};
         use chrono::{Duration, Utc};
         use mur_common::skill::stats::{LifecycleState, SkillStats};
-        use crate::skill_lifecycle::sweep::{run_sweep, SweepOptions};
-        use crate::skill_stats::reindex::{reindex_stats, ReindexOptions};
 
         let tmp = tempdir().unwrap();
         do_create(
