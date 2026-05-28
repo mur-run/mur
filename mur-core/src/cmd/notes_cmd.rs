@@ -58,6 +58,27 @@ pub fn do_create(
     Ok(written)
 }
 
+use crate::retrieve::scoring::{Scored, score_and_rank_generic};
+use crate::retrieve::skill_candidates::{LoadedSkill, load_skill_candidates};
+
+/// Search `~/.mur/skills/` for `category: note` skills matching `query`.
+/// Returns up to `limit` ranked results (Scored<LoadedSkill>).
+pub fn do_search(
+    mur_home: &Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<Scored<LoadedSkill>>> {
+    let skills_dir = mur_home.join("skills");
+    let all = load_skill_candidates(&skills_dir, mur_home)?;
+    let notes: Vec<LoadedSkill> = all
+        .into_iter()
+        .filter(|s| s.manifest.category == Category::Note)
+        .collect();
+    let mut ranked = score_and_rank_generic(query, notes);
+    ranked.truncate(limit);
+    Ok(ranked)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +124,74 @@ mod tests {
         // Uppercase letters violate validate_name (ascii_lowercase only).
         let err = do_create(tmp.path(), "BadName", "d", "body").unwrap_err();
         assert!(err.to_string().contains("validate") || err.to_string().contains("name"));
+    }
+
+    #[test]
+    fn do_search_filters_out_non_note_skills() {
+        use std::fs;
+        let tmp = tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+
+        // A genuine note (created via do_create).
+        do_create(tmp.path(), "deploy-fly", "Deploy to Fly.io", "# fly deploy steps").unwrap();
+
+        // A non-note (category: context) hand-written to the same skills dir.
+        let ctx_dir = skills_dir.join("context-thing");
+        fs::create_dir_all(&ctx_dir).unwrap();
+        fs::write(
+            ctx_dir.join("skill.yaml"),
+            "name: context-thing\nversion: 1.0.0\npublisher: human:test\n\
+             category: context\ndescription: deploy context\n\
+             content:\n  abstract: deploy fly\n  context: details\n",
+        )
+        .unwrap();
+
+        let ranked = do_search(tmp.path(), "deploy fly", 10).unwrap();
+        let names: Vec<_> = ranked.iter().map(|s| s.item.manifest.name.clone()).collect();
+        assert!(names.contains(&"deploy-fly".to_string()));
+        assert!(!names.contains(&"context-thing".to_string()));
+    }
+
+    #[test]
+    fn do_search_respects_limit_and_orders_by_score() {
+        let tmp = tempdir().unwrap();
+        do_create(
+            tmp.path(),
+            "rust-anyhow",
+            "Anyhow for rust apps",
+            "# anyhow\nuse anyhow for application errors",
+        )
+        .unwrap();
+        do_create(
+            tmp.path(),
+            "rust-thiserror",
+            "thiserror for libraries",
+            "# thiserror\nuse thiserror for library errors",
+        )
+        .unwrap();
+        do_create(
+            tmp.path(),
+            "unrelated-brew",
+            "homebrew update",
+            "# brew\nrun brew update weekly",
+        )
+        .unwrap();
+
+        let ranked = do_search(tmp.path(), "rust anyhow application errors", 2).unwrap();
+        assert!(ranked.len() <= 2);
+        assert_eq!(
+            ranked[0].item.manifest.name, "rust-anyhow",
+            "rust-anyhow should rank above rust-thiserror for this query"
+        );
+        if ranked.len() == 2 {
+            assert!(ranked[0].score >= ranked[1].score);
+        }
+    }
+
+    #[test]
+    fn do_search_returns_empty_when_no_notes_exist() {
+        let tmp = tempdir().unwrap();
+        let ranked = do_search(tmp.path(), "anything", 10).unwrap();
+        assert!(ranked.is_empty());
     }
 }
