@@ -18,12 +18,7 @@ const DEFAULT_PUBLISHER: &str = "human:local";
 /// Errors:
 /// - if the target skill directory already contains a `skill.yaml` (duplicate name)
 /// - if the resulting manifest fails `mur_common::skill::validate::validate`
-pub fn do_create(
-    mur_home: &Path,
-    name: &str,
-    description: &str,
-    body: &str,
-) -> Result<PathBuf> {
+pub fn do_create(mur_home: &Path, name: &str, description: &str, body: &str) -> Result<PathBuf> {
     let dir = global_skill_dir(mur_home, name);
     if dir.join("skill.yaml").exists() {
         bail!("note '{name}' already exists at {}", dir.display());
@@ -53,8 +48,8 @@ pub fn do_create(
     };
 
     validate(&manifest).with_context(|| format!("validate note '{name}'"))?;
-    let written = write_to_dir(&dir, &manifest)
-        .with_context(|| format!("write skill.yaml for '{name}'"))?;
+    let written =
+        write_to_dir(&dir, &manifest).with_context(|| format!("write skill.yaml for '{name}'"))?;
     Ok(written)
 }
 
@@ -67,8 +62,9 @@ use crate::retrieve::skill_candidates::{LoadedSkill, load_skill_candidates};
 /// Top-level `mur notes create` handler.
 pub fn cmd_create(name: &str, description: &str, body_file: Option<&Path>) -> Result<()> {
     let body = match body_file {
-        Some(p) => std::fs::read_to_string(p)
-            .with_context(|| format!("read body file {}", p.display()))?,
+        Some(p) => {
+            std::fs::read_to_string(p).with_context(|| format!("read body file {}", p.display()))?
+        }
         None => {
             let mut s = String::new();
             std::io::stdin()
@@ -105,11 +101,7 @@ pub fn cmd_search(query: &str, limit: usize) -> Result<()> {
 
 /// Search `~/.mur/skills/` for `category: note` skills matching `query`.
 /// Returns up to `limit` ranked results (Scored<LoadedSkill>).
-pub fn do_search(
-    mur_home: &Path,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<Scored<LoadedSkill>>> {
+pub fn do_search(mur_home: &Path, query: &str, limit: usize) -> Result<Vec<Scored<LoadedSkill>>> {
     let skills_dir = mur_home.join("skills");
     let all = load_skill_candidates(&skills_dir, mur_home)?;
     let notes: Vec<LoadedSkill> = all
@@ -175,7 +167,13 @@ mod tests {
         let skills_dir = tmp.path().join("skills");
 
         // A genuine note (created via do_create).
-        do_create(tmp.path(), "deploy-fly", "Deploy to Fly.io", "# fly deploy steps").unwrap();
+        do_create(
+            tmp.path(),
+            "deploy-fly",
+            "Deploy to Fly.io",
+            "# fly deploy steps",
+        )
+        .unwrap();
 
         // A non-note (category: context) hand-written to the same skills dir.
         let ctx_dir = skills_dir.join("context-thing");
@@ -189,7 +187,10 @@ mod tests {
         .unwrap();
 
         let ranked = do_search(tmp.path(), "deploy fly", 10).unwrap();
-        let names: Vec<_> = ranked.iter().map(|s| s.item.manifest.name.clone()).collect();
+        let names: Vec<_> = ranked
+            .iter()
+            .map(|s| s.item.manifest.name.clone())
+            .collect();
         assert!(names.contains(&"deploy-fly".to_string()));
         assert!(!names.contains(&"context-thing".to_string()));
     }
