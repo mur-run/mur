@@ -557,6 +557,27 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn create_then_list_and_show_compose() {
+        let tmp = tempdir().unwrap();
+        do_create(tmp.path(), "fly", "Deploy to fly", "# fly\nsteps").unwrap();
+        do_create(tmp.path(), "brew", "Brew tips", "# brew\nupdate").unwrap();
+
+        // list is sorted by name
+        let rows = do_list(tmp.path(), None, 10).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            vec!["brew", "fly"]
+        );
+        assert!(rows.iter().all(|r| r.maturity == LifecycleState::Draft));
+
+        // show returns the right body
+        let v = do_show(tmp.path(), "fly").unwrap();
+        assert_eq!(v.body, "# fly\nsteps");
+        assert_eq!(v.description, "Deploy to fly");
+    }
+
+    #[test]
     fn parse_maturity_is_case_insensitive_and_rejects_unknown() {
         assert_eq!(parse_maturity("Stable").unwrap(), LifecycleState::Stable);
         assert_eq!(parse_maturity("emerging").unwrap(), LifecycleState::Emerging);
