@@ -281,75 +281,46 @@ pub fn score_and_rank_with_scope_and_config(
 }
 
 /// Shared scoring logic: filter, score with a relevance function, sort, and budget-limit.
-fn score_and_rank_inner<F>(
+/// Generic over T: Retrievable so Pattern, Skill, and Note share one pipeline.
+fn score_and_rank_inner<T, F>(
     query_words: &[&str],
-    candidates: Vec<Pattern>,
+    candidates: Vec<T>,
     scope: Option<&ScopeContext>,
     project_language: Option<&str>,
     config: Option<&RetrievalConfig>,
     relevance_fn: F,
-) -> Vec<ScoredPattern>
+) -> Vec<Scored<T>>
 where
-    F: Fn(&[&str], &Pattern) -> f64,
+    T: Retrievable,
+    F: Fn(&[&str], &T) -> f64,
 {
     let score_floor = config.map_or(SCORE_FLOOR, |c| c.min_score);
     let max_patterns = config.map_or(MAX_PATTERNS, |c| c.max_patterns);
     let max_tokens = config.map_or(MAX_TOKENS, |c| c.max_tokens);
 
-    let mut scored: Vec<ScoredPattern> = candidates
+    let mut scored: Vec<Scored<T>> = candidates
         .into_iter()
-        .filter(|p| !p.lifecycle.muted)
-        .filter(|p| p.lifecycle.status == mur_common::pattern::LifecycleStatus::Active)
-        .map(|p| {
-            let relevance = relevance_fn(query_words, &p);
-            let recency = recency_score(&p);
-            let effectiveness = p.evidence.effectiveness();
-            let importance = p.importance;
-            let time_decay = time_decay_score(&p);
-            let content_len = p.content.as_text().len();
+        .filter(Retrievable::is_active)
+        .map(|item| {
+            let relevance = relevance_fn(query_words, &item);
+            let recency = recency_score_for(&item);
+            let effectiveness = item.effectiveness();
+            let importance = item.importance();
+            let time_decay = time_decay_score_for(&item);
+            let content_len = item.text().len();
             let length_norm = length_norm_score_from_len(content_len);
 
-            let scope_mult = if p.applies.projects.is_empty()
-                && p.applies.languages.is_empty()
-                && p.applies.tools.is_empty()
-            {
-                0.7
-            } else {
-                1.0
-            };
-
-            // Language mismatch penalty: if pattern specifies languages that
-            // don't match the current project, heavily penalize
-            let lang_mult = if let Some(proj_lang) = project_language {
-                if !p.applies.languages.is_empty() {
-                    let proj_lang_lower = proj_lang.to_lowercase();
-                    let matches = p
-                        .applies
-                        .languages
-                        .iter()
-                        .any(|l| l.to_lowercase() == proj_lang_lower);
-                    if matches { 1.2 } else { 0.05 }
-                } else {
-                    1.0 // pattern has no language restriction, neutral
-                }
-            } else {
-                1.0 // no project language detected, neutral
-            };
-
-            let base_score = (relevance * W_RELEVANCE
+            let weighted_sum = relevance * W_RELEVANCE
                 + recency * W_RECENCY
                 + effectiveness * W_EFFECTIVENESS
                 + importance * W_IMPORTANCE
                 + time_decay * W_TIME_DECAY
-                + length_norm * W_LENGTH_NORM)
-                * scope_mult;
+                + length_norm * W_LENGTH_NORM;
 
-            // Kind-aware boost: scope-aware preference/procedure boost
-            let kind_boost = kind_score_boost(&p, query_words, scope);
-            let score = (base_score + kind_boost) * lang_mult;
+            let score = item.adjust_score(weighted_sum, query_words, scope, project_language);
 
             Scored {
-                item: p,
+                item,
                 score,
                 relevance,
             }
@@ -357,11 +328,11 @@ where
         .filter(|sp| sp.score >= score_floor)
         .collect();
 
-    // Sort by score descending, with tier priority as tiebreaker
+    // Sort by score descending, with tier priority as tiebreaker.
     scored.sort_by(|a, b| {
         let score_diff = (a.score - b.score).abs();
         if score_diff < 0.05 {
-            tier_priority(&b.item.tier).cmp(&tier_priority(&a.item.tier))
+            tier_priority(&b.item.tier()).cmp(&tier_priority(&a.item.tier()))
         } else {
             b.score
                 .partial_cmp(&a.score)
@@ -369,21 +340,20 @@ where
         }
     });
 
-    // Budget: max patterns and max tokens
+    // Budget: max items and max tokens.
     let mut result = Vec::new();
     let mut token_count = 0;
     for sp in scored {
         if result.len() >= max_patterns {
             break;
         }
-        let est_tokens = sp.item.content.as_text().len() / 4;
+        let est_tokens = sp.item.text().len() / 4;
         if token_count + est_tokens > max_tokens && !result.is_empty() {
             break;
         }
         token_count += est_tokens;
         result.push(sp);
     }
-
     result
 }
 
@@ -414,12 +384,12 @@ impl LowerCache {
 }
 
 /// Keyword-based relevance (Phase 1, replaced by vector search in Phase 2).
-fn keyword_relevance(query_words: &[&str], pattern: &Pattern) -> f64 {
+fn keyword_relevance<T: Retrievable + ?Sized>(query_words: &[&str], item: &T) -> f64 {
     if query_words.is_empty() {
         return 0.0;
     }
 
-    let cache = LowerCache::from_item(pattern);
+    let cache = LowerCache::from_item(item);
     keyword_relevance_cached(query_words, &cache)
 }
 
@@ -469,15 +439,6 @@ fn time_decay_score_for<T: Retrievable + ?Sized>(item: &T) -> f64 {
     let last = item.last_activity().unwrap_or_else(|| item.created_at());
     let days = (Utc::now() - last).num_days().max(0) as f64;
     0.5 + 0.5 * (-days / half_life).exp()
-}
-
-// Pattern-typed shims preserved for the existing inner-scoring call sites;
-// removed in Task 6 when score_and_rank_inner becomes generic.
-fn recency_score(pattern: &Pattern) -> f64 {
-    recency_score_for(pattern)
-}
-fn time_decay_score(pattern: &Pattern) -> f64 {
-    time_decay_score_for(pattern)
 }
 
 /// Length normalization: 1 / (1 + 0.5 * log2(len / 500))
@@ -781,7 +742,7 @@ mod tests {
     fn test_recency_score_recent_is_high() {
         let p = make_pattern("recent", "content");
         // make_pattern sets last_injected to now, so recency should be ~1.0
-        let score = recency_score(&p);
+        let score = recency_score_for(&p);
         assert!(
             score > 0.9,
             "Recently injected pattern should have high recency, got {}",
@@ -794,7 +755,7 @@ mod tests {
         let mut p = make_pattern("old", "content");
         p.lifecycle.last_injected = Some(Utc::now() - chrono::Duration::days(60));
         p.evidence.last_validated = None;
-        let score = recency_score(&p);
+        let score = recency_score_for(&p);
         assert!(
             score < 0.1,
             "60-day-old pattern should have low recency, got {}",
