@@ -382,6 +382,9 @@ triggers:
                     category: note\ndescription: d\n\
                     content:\n  abstract: a\n  note: x\n  command: y\n";
         let m = parse_canonical(yaml).unwrap();
-        assert!(matches!(validate(&m), Err(ValidationError::MultipleContentModes)));
+        assert!(matches!(
+            validate(&m),
+            Err(ValidationError::MultipleContentModes)
+        ));
     }
 }
