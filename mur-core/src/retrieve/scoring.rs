@@ -94,7 +94,43 @@ impl Retrievable for Pattern {
         !self.lifecycle.muted
             && self.lifecycle.status == mur_common::pattern::LifecycleStatus::Active
     }
-    // adjust_score implemented in Task 5 (currently inherits identity default)
+    fn adjust_score(
+        &self,
+        weighted_sum: f64,
+        query_words: &[&str],
+        scope: Option<&ScopeContext>,
+        project_language: Option<&str>,
+    ) -> f64 {
+        let scope_mult = if self.applies.projects.is_empty()
+            && self.applies.languages.is_empty()
+            && self.applies.tools.is_empty()
+        {
+            0.7
+        } else {
+            1.0
+        };
+        let lang_mult = if let Some(proj_lang) = project_language {
+            if !self.applies.languages.is_empty() {
+                let proj_lang_lower = proj_lang.to_lowercase();
+                let matches = self
+                    .applies
+                    .languages
+                    .iter()
+                    .any(|l| l.to_lowercase() == proj_lang_lower);
+                if matches {
+                    1.2
+                } else {
+                    0.05
+                }
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        let kind_boost = kind_score_boost(self, query_words, scope);
+        (weighted_sum * scope_mult + kind_boost) * lang_mult
+    }
 }
 
 /// A retrieved item with its computed relevance score.
@@ -998,6 +1034,22 @@ mod tests {
         let weights = std::collections::HashMap::new();
         let out = score_sources(hits, &weights);
         assert_eq!(out[0].external_id, "new");
+    }
+
+    #[test]
+    fn pattern_adjust_score_preserves_scope_kind_lang_combination() {
+        use super::Retrievable;
+        let mut p = make_pattern("rust-error", "rust error body");
+        p.applies.languages = vec!["rust".into()];
+        let query_words = ["rust", "error"];
+        let scope = ScopeContext {
+            user: None,
+            platform: None,
+            task: None,
+        };
+        let weighted_sum = 0.42;
+        let adjusted = p.adjust_score(weighted_sum, &query_words, Some(&scope), Some("rust"));
+        assert!((adjusted - (0.42 * 1.0 + 0.0) * 1.2).abs() < 1e-9);
     }
 
     #[test]
