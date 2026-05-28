@@ -253,7 +253,7 @@ pub fn do_list(
     let mut rows: Vec<NoteListRow> = all
         .into_iter()
         .filter(|s| s.manifest.category == Category::Note)
-        .filter(|s| maturity.map_or(true, |m| s.stats.lifecycle_state == m))
+        .filter(|s| maturity.is_none_or(|m| s.stats.lifecycle_state == m))
         .map(|s| NoteListRow {
             name: s.manifest.name.clone(),
             maturity: s.stats.lifecycle_state,
@@ -488,9 +488,11 @@ mod tests {
         let tmp = tempdir().unwrap();
         do_create(tmp.path(), "n1", "d", "body").unwrap();
         // Fresh notes are Draft.
-        assert!(do_list(tmp.path(), Some(LifecycleState::Stable), 10)
-            .unwrap()
-            .is_empty());
+        assert!(
+            do_list(tmp.path(), Some(LifecycleState::Stable), 10)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             do_list(tmp.path(), Some(LifecycleState::Draft), 10)
                 .unwrap()
@@ -557,7 +559,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn create_then_list_and_show_compose() {
         let tmp = tempdir().unwrap();
         do_create(tmp.path(), "fly", "Deploy to fly", "# fly\nsteps").unwrap();
@@ -580,7 +581,10 @@ mod tests {
     #[test]
     fn parse_maturity_is_case_insensitive_and_rejects_unknown() {
         assert_eq!(parse_maturity("Stable").unwrap(), LifecycleState::Stable);
-        assert_eq!(parse_maturity("emerging").unwrap(), LifecycleState::Emerging);
+        assert_eq!(
+            parse_maturity("emerging").unwrap(),
+            LifecycleState::Emerging
+        );
         assert!(parse_maturity("bogus").is_err());
     }
 
