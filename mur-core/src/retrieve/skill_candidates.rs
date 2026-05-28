@@ -106,12 +106,17 @@ impl Retrievable for LoadedSkill {
     }
 
     fn text(&self) -> std::borrow::Cow<'_, str> {
-        // Pre-Note skills: abstract + description is the keyword/embed surface.
-        // Extended once ContentMode::Note (separate plan) lands.
-        std::borrow::Cow::Owned(format!(
+        // abstract + description is the base keyword/embed surface; note-mode
+        // skills append their markdown body so they rank on their content.
+        let mut s = format!(
             "{}\n{}",
             self.manifest.content.r#abstract, self.manifest.description
-        ))
+        );
+        if let Some(note) = &self.manifest.content.note {
+            s.push('\n');
+            s.push_str(note);
+        }
+        std::borrow::Cow::Owned(s)
     }
 
     fn tag_terms(&self) -> Vec<&str> {
@@ -380,5 +385,24 @@ mod tests {
         if ranked.len() > 1 {
             assert!(ranked[0].score > ranked[1].score);
         }
+    }
+
+    #[test]
+    fn text_includes_note_body_when_present() {
+        use mur_common::skill::manifest::Content;
+        use mur_common::skill::types::Category;
+
+        let mut s = fake_loaded("note-skill", Priority::Normal);
+        s.manifest.category = Category::Note;
+        s.manifest.content = Content {
+            r#abstract: "abstract line".into(),
+            context: None,
+            procedure: None,
+            command: None,
+            note: Some("the note body about rust errors".into()),
+        };
+        let text = s.text();
+        assert!(text.contains("abstract line"));
+        assert!(text.contains("the note body about rust errors"));
     }
 }
