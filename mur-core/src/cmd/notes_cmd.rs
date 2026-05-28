@@ -98,6 +98,15 @@ pub fn cmd_search(query: &str, limit: usize) -> Result<()> {
             sp.item.manifest.description
         );
     }
+
+    // Record a retrieval for each surfaced note so it accrues lifecycle usage.
+    // Best-effort: a trace-write failure must not fail the search.
+    let now = Utc::now();
+    for sp in &ranked {
+        if let Err(e) = record_retrieval(&home, &sp.item.manifest.name, now) {
+            tracing::warn!(note = %sp.item.manifest.name, error = %e, "record retrieval failed");
+        }
+    }
     Ok(())
 }
 
