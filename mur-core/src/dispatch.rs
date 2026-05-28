@@ -15,7 +15,21 @@ use crate::cli::{
     ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
     WorkflowAction,
 };
-use crate::{cmd, dashboard, verify};
+use crate::store::config as store_config;
+use crate::{cmd, dashboard, team, verify};
+
+/// Resolve an optional --team arg, falling back to config's default team.
+fn resolve_team_arg(arg: Option<String>) -> Result<String> {
+    if let Some(t) = arg {
+        return Ok(t);
+    }
+    let cfg = store_config::load_config()?;
+    cfg.sync.team_id.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No team specified. Pass --team <slug> or run `mur team use <slug>` to set a default."
+        )
+    })
+}
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -243,11 +257,27 @@ pub async fn run(cli: Cli) -> Result<()> {
             },
         },
         Commands::Team { action } => match action {
-            TeamAction::List { team } => cmd::community_cmd::cmd_team_list(&team).await?,
+            TeamAction::List { team } => match team {
+                Some(t) => {
+                    let client = reqwest::Client::new();
+                    let team_id = team::resolve_team_id(&client, &t).await?;
+                    cmd::community_cmd::cmd_team_list(&team_id).await?
+                }
+                None => cmd::community_cmd::cmd_team_list_mine().await?,
+            },
+            TeamAction::Use { team } => cmd::community_cmd::cmd_team_use(&team).await?,
             TeamAction::Share { name, team } => {
-                cmd::community_cmd::cmd_team_share(&name, &team).await?
+                let slug = resolve_team_arg(team)?;
+                let client = reqwest::Client::new();
+                let team_id = team::resolve_team_id(&client, &slug).await?;
+                cmd::community_cmd::cmd_team_share(&name, &team_id).await?
             }
-            TeamAction::Sync { team } => cmd::community_cmd::cmd_team_sync(&team).await?,
+            TeamAction::Sync { team } => {
+                let slug = resolve_team_arg(team)?;
+                let client = reqwest::Client::new();
+                let team_id = team::resolve_team_id(&client, &slug).await?;
+                cmd::community_cmd::cmd_team_sync(&team_id).await?
+            }
         },
         Commands::Login => cmd::misc::cmd_login().await?,
         Commands::Logout => cmd::misc::cmd_logout()?,
