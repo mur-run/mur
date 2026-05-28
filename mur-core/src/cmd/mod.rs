@@ -22,6 +22,7 @@ pub(crate) mod conversations_cmd;
 pub mod conversations_cost_report;
 pub(crate) mod deploy;
 pub mod doctor;
+pub mod notes_cmd;
 pub(crate) mod drafts;
 pub(crate) mod eval;
 pub(crate) mod evolve_cmd;
