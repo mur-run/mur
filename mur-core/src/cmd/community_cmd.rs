@@ -4,9 +4,9 @@ use mur_common::pattern::*;
 
 use crate::community;
 use crate::gep;
+use crate::store::config as store_config;
 use crate::store::yaml::YamlStore;
 use crate::team;
-use crate::store::config as store_config;
 
 pub(crate) async fn cmd_community_publish(name: &str) -> Result<()> {
     let store = YamlStore::default_store()?;

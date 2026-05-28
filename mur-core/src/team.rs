@@ -89,10 +89,7 @@ pub async fn list_user_teams(client: &reqwest::Client) -> Result<Vec<UserTeam>> 
         anyhow::bail!("List teams failed ({}): {}", status, body);
     }
 
-    let data: ListUserTeamsResponse = resp
-        .json()
-        .await
-        .context("Invalid list teams response")?;
+    let data: ListUserTeamsResponse = resp.json().await.context("Invalid list teams response")?;
     Ok(data.teams)
 }
 

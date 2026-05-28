@@ -15,8 +15,8 @@ use crate::cli::{
     ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
     WorkflowAction,
 };
-use crate::{cmd, dashboard, team, verify};
 use crate::store::config as store_config;
+use crate::{cmd, dashboard, team, verify};
 
 /// Resolve an optional --team arg, falling back to config's default team.
 fn resolve_team_arg(arg: Option<String>) -> Result<String> {
