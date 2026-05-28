@@ -34,11 +34,11 @@ impl fmt::Display for ValidationError {
             ),
             NoContentMode => write!(
                 f,
-                "content must populate exactly one of: context / procedure / command"
+                "content must populate exactly one of: context / procedure / command / note"
             ),
             MultipleContentModes => write!(
                 f,
-                "content must populate only one of: context / procedure / command"
+                "content must populate only one of: context / procedure / command / note"
             ),
             ContentModeMismatch { category, mode } => {
                 write!(
@@ -71,6 +71,7 @@ pub fn validate(m: &SkillManifest) -> Result<(), ValidationError> {
             m.content.context.is_some(),
             m.content.procedure.is_some(),
             m.content.command.is_some(),
+            m.content.note.is_some(),
         ]
         .iter()
         .filter(|b| **b)
@@ -172,6 +173,7 @@ fn mode_matches_category(cat: Category, mode: ContentMode) -> bool {
             | (Category::Command, ContentMode::Command)
             | (Category::Context, ContentMode::Context)
             | (Category::Meta, ContentMode::Context)
+            | (Category::Note, ContentMode::Note)
     )
 }
 
@@ -351,5 +353,35 @@ triggers:
             validate(&m),
             Err(ValidationError::TriggerMissingPattern(TriggerKind::Command))
         ));
+    }
+
+    #[test]
+    fn valid_note_manifest_passes() {
+        let yaml = "name: rust-notes\nversion: 1.0.0\npublisher: human:test\n\
+                    category: note\ndescription: d\n\
+                    content:\n  abstract: a\n  note: |\n    # body\n";
+        let m = parse_canonical(yaml).unwrap();
+        assert!(validate(&m).is_ok());
+    }
+
+    #[test]
+    fn note_category_with_context_mode_is_mismatch() {
+        let yaml = "name: rust-notes\nversion: 1.0.0\npublisher: human:test\n\
+                    category: note\ndescription: d\n\
+                    content:\n  abstract: a\n  context: c\n";
+        let m = parse_canonical(yaml).unwrap();
+        assert!(matches!(
+            validate(&m),
+            Err(ValidationError::ContentModeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn note_plus_command_is_multiple_modes() {
+        let yaml = "name: rust-notes\nversion: 1.0.0\npublisher: human:test\n\
+                    category: note\ndescription: d\n\
+                    content:\n  abstract: a\n  note: x\n  command: y\n";
+        let m = parse_canonical(yaml).unwrap();
+        assert!(matches!(validate(&m), Err(ValidationError::MultipleContentModes)));
     }
 }
