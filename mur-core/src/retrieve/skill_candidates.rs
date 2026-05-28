@@ -15,6 +15,7 @@ use super::scoring::Retrievable;
 /// A skill loaded together with its runtime stats. The retrieval pipeline
 /// scores `Vec<LoadedSkill>` through the generic `score_and_rank_inner`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct LoadedSkill {
     pub manifest: SkillManifest,
     pub stats: SkillStats,
@@ -27,6 +28,7 @@ pub struct LoadedSkill {
 /// single bad skill never poisons the corpus. Stats are loaded via
 /// `SkillStats::path(mur_home, name)`; if absent, a fresh `SkillStats` is
 /// constructed so the skill still scores (with `usage_count = 0`).
+#[allow(dead_code)]
 pub fn load_skill_candidates(skills_dir: &Path, mur_home: &Path) -> Result<Vec<LoadedSkill>> {
     let mut out = Vec::new();
     let entries = match std::fs::read_dir(skills_dir) {
@@ -75,6 +77,7 @@ pub fn load_skill_candidates(skills_dir: &Path, mur_home: &Path) -> Result<Vec<L
     Ok(out)
 }
 
+#[allow(dead_code)]
 fn priority_to_tier(p: Priority) -> Tier {
     match p {
         Priority::Critical => Tier::Core,
@@ -83,6 +86,7 @@ fn priority_to_tier(p: Priority) -> Tier {
     }
 }
 
+#[allow(dead_code)]
 fn priority_to_importance(p: Priority) -> f64 {
     match p {
         Priority::Critical => 1.0,
@@ -199,13 +203,19 @@ mod tests {
         let s = fake_loaded("alpha-skill", Priority::High);
         assert_eq!(s.name(), "alpha-skill");
         assert_eq!(s.description(), "desc for alpha-skill");
-        assert_eq!(&*s.text(), "abstract about alpha-skill\ndesc for alpha-skill");
+        assert_eq!(
+            &*s.text(),
+            "abstract about alpha-skill\ndesc for alpha-skill"
+        );
         assert_eq!(s.tag_terms(), vec!["alpha", "beta"]);
         assert_eq!(s.importance(), 0.8);
         assert_eq!(s.tier(), Tier::Project);
         assert!((s.effectiveness() - 0.75).abs() < 1e-9);
         assert!(s.is_active());
-        assert_eq!(s.decay_half_life_days(), Tier::Project.decay_half_life_days() as f64);
+        assert_eq!(
+            s.decay_half_life_days(),
+            Tier::Project.decay_half_life_days() as f64
+        );
         assert_eq!(s.last_activity(), s.stats.last_success_at);
     }
 
@@ -249,7 +259,10 @@ mod tests {
     fn adjust_score_is_identity_for_skills() {
         let s = fake_loaded("k", Priority::Normal);
         let scope = ScopeContext::default();
-        assert_eq!(s.adjust_score(0.42, &["q"], Some(&scope), Some("rust")), 0.42);
+        assert_eq!(
+            s.adjust_score(0.42, &["q"], Some(&scope), Some("rust")),
+            0.42
+        );
     }
 
     #[test]
@@ -301,7 +314,11 @@ mod tests {
         let tmp = tempdir().unwrap();
         let skills_dir = tmp.path().join("skills");
         fs::create_dir_all(skills_dir.join("broken")).unwrap();
-        fs::write(skills_dir.join("broken").join("skill.yaml"), "{ not valid yaml").unwrap();
+        fs::write(
+            skills_dir.join("broken").join("skill.yaml"),
+            "{ not valid yaml",
+        )
+        .unwrap();
 
         // Loader must not propagate the parse error; return Ok(empty).
         let loaded = load_skill_candidates(&skills_dir, tmp.path()).unwrap();

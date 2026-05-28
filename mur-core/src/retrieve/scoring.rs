@@ -241,10 +241,8 @@ pub fn score_and_rank(query: &str, candidates: Vec<Pattern>) -> Vec<ScoredPatter
 /// default scoring config. Mirrors `score_and_rank` for the generic case.
 ///
 /// Hybrid / scope-aware generic entries are added in later plans as needed.
-pub fn score_and_rank_generic<T: Retrievable>(
-    query: &str,
-    candidates: Vec<T>,
-) -> Vec<Scored<T>> {
+#[allow(dead_code)]
+pub fn score_and_rank_generic<T: Retrievable>(query: &str, candidates: Vec<T>) -> Vec<Scored<T>> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
     score_and_rank_inner(
