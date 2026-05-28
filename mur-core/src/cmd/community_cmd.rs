@@ -261,6 +261,31 @@ pub(crate) async fn cmd_community_pack_install(id: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn cmd_team_list_mine() -> Result<()> {
+    let client = reqwest::Client::new();
+    let teams = team::list_user_teams(&client).await?;
+
+    if teams.is_empty() {
+        println!("  You are not a member of any teams.");
+        println!("  Visit https://app.mur.run to create or join a team.");
+        return Ok(());
+    }
+
+    println!("  {:<36}  {:<25}  {:<15}  ROLE", "ID", "NAME", "SLUG");
+    println!("  {}", "-".repeat(88));
+    for t in &teams {
+        println!(
+            "  {:<36}  {:<25}  {:<15}  {}",
+            t.id,
+            truncate(&t.name, 25),
+            truncate(&t.slug, 15),
+            t.role,
+        );
+    }
+    println!();
+    Ok(())
+}
+
 pub(crate) async fn cmd_team_list(team_id: &str) -> Result<()> {
     let client = reqwest::Client::new();
     let resp = team::list_team_patterns(&client, team_id).await?;

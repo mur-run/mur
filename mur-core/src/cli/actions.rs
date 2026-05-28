@@ -371,23 +371,23 @@ pub enum CommunityAction {
 
 #[derive(Subcommand)]
 pub enum TeamAction {
-    /// List team patterns
+    /// List your teams (or patterns in a specific team)
     List {
-        /// Team ID
+        /// Team ID or slug (optional — lists your teams if omitted)
         #[arg(long, env = "MUR_TEAM_ID")]
-        team: String,
+        team: Option<String>,
     },
     /// Share a pattern to your team
     Share {
         /// Pattern name
         name: String,
-        /// Team ID
+        /// Team ID or slug
         #[arg(long, env = "MUR_TEAM_ID")]
         team: String,
     },
     /// Pull latest team patterns
     Sync {
-        /// Team ID
+        /// Team ID or slug
         #[arg(long, env = "MUR_TEAM_ID")]
         team: String,
     },

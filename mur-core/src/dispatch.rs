@@ -15,7 +15,7 @@ use crate::cli::{
     ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
     WorkflowAction,
 };
-use crate::{cmd, dashboard, verify};
+use crate::{cmd, dashboard, team, verify};
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -243,11 +243,24 @@ pub async fn run(cli: Cli) -> Result<()> {
             },
         },
         Commands::Team { action } => match action {
-            TeamAction::List { team } => cmd::community_cmd::cmd_team_list(&team).await?,
+            TeamAction::List { team } => match team {
+                Some(t) => {
+                    let client = reqwest::Client::new();
+                    let team_id = team::resolve_team_id(&client, &t).await?;
+                    cmd::community_cmd::cmd_team_list(&team_id).await?
+                }
+                None => cmd::community_cmd::cmd_team_list_mine().await?,
+            },
             TeamAction::Share { name, team } => {
-                cmd::community_cmd::cmd_team_share(&name, &team).await?
+                let client = reqwest::Client::new();
+                let team_id = team::resolve_team_id(&client, &team).await?;
+                cmd::community_cmd::cmd_team_share(&name, &team_id).await?
             }
-            TeamAction::Sync { team } => cmd::community_cmd::cmd_team_sync(&team).await?,
+            TeamAction::Sync { team } => {
+                let client = reqwest::Client::new();
+                let team_id = team::resolve_team_id(&client, &team).await?;
+                cmd::community_cmd::cmd_team_sync(&team_id).await?
+            }
         },
         Commands::Login => cmd::misc::cmd_login().await?,
         Commands::Logout => cmd::misc::cmd_logout()?,
