@@ -10,7 +10,7 @@ use mur_common::skill::manifest::SkillManifest;
 use mur_common::skill::stats::{LifecycleState, SkillStats};
 use mur_common::skill::types::Priority;
 
-use super::scoring::{Retrievable, ScopeContext};
+use super::scoring::Retrievable;
 
 /// A skill loaded together with its runtime stats. The retrieval pipeline
 /// scores `Vec<LoadedSkill>` through the generic `score_and_rank_inner`.
@@ -18,6 +18,61 @@ use super::scoring::{Retrievable, ScopeContext};
 pub struct LoadedSkill {
     pub manifest: SkillManifest,
     pub stats: SkillStats,
+}
+
+/// Scan `skills_dir` (typically `<mur_home>/skills/`) for skill directories
+/// and return a `LoadedSkill` for each parseable `skill.yaml`.
+///
+/// Malformed or missing manifests are skipped with a `tracing::warn` so a
+/// single bad skill never poisons the corpus. Stats are loaded via
+/// `SkillStats::path(mur_home, name)`; if absent, a fresh `SkillStats` is
+/// constructed so the skill still scores (with `usage_count = 0`).
+pub fn load_skill_candidates(skills_dir: &Path, mur_home: &Path) -> Result<Vec<LoadedSkill>> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(skills_dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(e.into()),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let yaml_path = path.join("skill.yaml");
+        if !yaml_path.is_file() {
+            continue;
+        }
+        let yaml = match std::fs::read_to_string(&yaml_path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(path = %yaml_path.display(), error = %e, "read skill.yaml failed");
+                continue;
+            }
+        };
+        let manifest = match mur_common::skill::parser::parse_canonical(&yaml) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(path = %yaml_path.display(), error = %e, "parse skill.yaml failed");
+                continue;
+            }
+        };
+
+        let stats_path = SkillStats::path(mur_home, &manifest.name);
+        let stats = match SkillStats::load(&stats_path) {
+            Ok(Some(s)) => s,
+            Ok(None) => SkillStats::new(&manifest.name, &manifest.version, "", Utc::now()),
+            Err(e) => {
+                tracing::warn!(path = %stats_path.display(), error = %e, "load skill stats failed; using fresh");
+                SkillStats::new(&manifest.name, &manifest.version, "", Utc::now())
+            }
+        };
+
+        out.push(LoadedSkill { manifest, stats });
+    }
+
+    Ok(out)
 }
 
 fn priority_to_tier(p: Priority) -> Tier {
@@ -104,6 +159,7 @@ impl Retrievable for LoadedSkill {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::retrieve::scoring::ScopeContext;
     use chrono::Duration;
     use mur_common::skill::manifest::Content;
     use mur_common::skill::types::Category;
@@ -194,5 +250,70 @@ mod tests {
         let s = fake_loaded("k", Priority::Normal);
         let scope = ScopeContext::default();
         assert_eq!(s.adjust_score(0.42, &["q"], Some(&scope), Some("rust")), 0.42);
+    }
+
+    #[test]
+    fn load_skill_candidates_reads_two_well_formed_skills() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        let mur_home = tmp.path();
+
+        // Write two well-formed skill directories.
+        for name in ["alpha", "beta"] {
+            let dir = skills_dir.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            let yaml = format!(
+                "name: {name}\nversion: 1.0.0\npublisher: human:test\n\
+                 description: desc for {name}\ncategory: context\n\
+                 content:\n  abstract: a\n  context: c\n"
+            );
+            fs::write(dir.join("skill.yaml"), yaml).unwrap();
+        }
+
+        let loaded = load_skill_candidates(&skills_dir, mur_home).unwrap();
+        let names: Vec<_> = loaded.iter().map(|s| s.name().to_string()).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"alpha".to_string()));
+        assert!(names.contains(&"beta".to_string()));
+    }
+
+    #[test]
+    fn load_skill_candidates_skips_directories_without_skill_yaml() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        fs::create_dir_all(skills_dir.join("not-a-skill")).unwrap();
+
+        let loaded = load_skill_candidates(&skills_dir, tmp.path()).unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn load_skill_candidates_skips_malformed_yaml_with_warning() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        fs::create_dir_all(skills_dir.join("broken")).unwrap();
+        fs::write(skills_dir.join("broken").join("skill.yaml"), "{ not valid yaml").unwrap();
+
+        // Loader must not propagate the parse error; return Ok(empty).
+        let loaded = load_skill_candidates(&skills_dir, tmp.path()).unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn load_skill_candidates_returns_empty_if_skills_dir_missing() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        let skills_dir = tmp.path().join("does-not-exist");
+        let loaded = load_skill_candidates(&skills_dir, tmp.path()).unwrap();
+        assert!(loaded.is_empty());
     }
 }
