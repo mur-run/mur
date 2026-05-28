@@ -998,6 +998,78 @@ mod tests {
     }
 
     #[test]
+    fn generic_scorer_works_for_non_pattern_retrievable() {
+        use super::Retrievable;
+        use chrono::{Duration, Utc};
+        use std::borrow::Cow;
+
+        struct FakeItem {
+            name: String,
+            description: String,
+            body: String,
+            importance: f64,
+        }
+        impl Retrievable for FakeItem {
+            fn name(&self) -> &str {
+                &self.name
+            }
+            fn description(&self) -> &str {
+                &self.description
+            }
+            fn text(&self) -> Cow<'_, str> {
+                Cow::Borrowed(&self.body)
+            }
+            fn tag_terms(&self) -> Vec<&str> {
+                vec![]
+            }
+            fn importance(&self) -> f64 {
+                self.importance
+            }
+            fn effectiveness(&self) -> f64 {
+                1.0
+            }
+            fn tier(&self) -> Tier {
+                Tier::Project
+            }
+            fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
+                Utc::now() - Duration::days(1)
+            }
+            fn last_activity(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+                Some(Utc::now() - Duration::days(1))
+            }
+            fn decay_half_life_days(&self) -> f64 {
+                90.0
+            }
+            fn is_active(&self) -> bool {
+                true
+            }
+        }
+
+        let items = vec![FakeItem {
+            name: "fly-deploy".into(),
+            description: "Deploy to Fly.io".into(),
+            body: "Run fly deploy in the project root.".into(),
+            importance: 0.8,
+        }];
+
+        let scored = score_and_rank_inner(
+            &["fly", "deploy"],
+            items,
+            None,
+            None,
+            None,
+            |words, item: &FakeItem| keyword_relevance(words, item),
+        );
+
+        assert!(
+            !scored.is_empty(),
+            "fake item should be retrievable through the generic path"
+        );
+        assert_eq!(scored[0].item.name, "fly-deploy");
+        assert!(scored[0].score > 0.0);
+    }
+
+    #[test]
     fn pattern_adjust_score_preserves_scope_kind_lang_combination() {
         use super::Retrievable;
         let mut p = make_pattern("rust-error", "rust error body");
