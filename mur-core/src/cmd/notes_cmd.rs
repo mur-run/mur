@@ -357,4 +357,63 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content.lines().count(), 2);
     }
+
+    #[tokio::test]
+    async fn three_retrievals_promote_a_note_from_draft_to_emerging() {
+        use chrono::{Duration, Utc};
+        use mur_common::skill::stats::{LifecycleState, SkillStats};
+        use crate::skill_lifecycle::sweep::{run_sweep, SweepOptions};
+        use crate::skill_stats::reindex::{reindex_stats, ReindexOptions};
+
+        let tmp = tempdir().unwrap();
+        do_create(
+            tmp.path(),
+            "rust-errors",
+            "Rust error handling",
+            "# body\nanyhow",
+        )
+        .unwrap();
+
+        // Surface the note three times.
+        let now = Utc::now();
+        for _ in 0..3 {
+            record_retrieval(tmp.path(), "rust-errors", now).unwrap();
+        }
+
+        // Reduce the trace into stats.
+        reindex_stats(
+            tmp.path(),
+            ReindexOptions {
+                skill_filter: Some("rust-errors".into()),
+                since: None,
+                days_back: 1,
+            },
+        )
+        .await
+        .unwrap();
+
+        let stats_path = SkillStats::path(tmp.path(), "rust-errors");
+        let before = SkillStats::load(&stats_path).unwrap().unwrap();
+        assert_eq!(before.usage_count, 3);
+        assert_eq!(before.success_count, 3);
+        assert_eq!(before.lifecycle_state, LifecycleState::Draft);
+
+        // Sweep with a future `now` so the 24h MIN_DWELL_HOURS gate passes.
+        run_sweep(
+            tmp.path(),
+            SweepOptions {
+                filter: Some("rust-errors".into()),
+                dry_run: false,
+                now: now + Duration::days(2),
+            },
+        )
+        .unwrap();
+
+        let after = SkillStats::load(&stats_path).unwrap().unwrap();
+        assert_eq!(
+            after.lifecycle_state,
+            LifecycleState::Emerging,
+            "3 retrievals + dwell should promote Draft -> Emerging (PROMOTE_DRAFT_USES=3)"
+        );
+    }
 }
