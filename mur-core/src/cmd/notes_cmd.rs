@@ -2,10 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use mur_common::skill::manifest::{Content, SkillManifest};
-use mur_common::skill::store::{global_skill_dir, write_to_dir};
+use mur_common::skill::stats::{LifecycleState, SkillStats};
+use mur_common::skill::store::{global_skill_dir, read_from_dir, write_to_dir};
 use mur_common::skill::types::{Category, Priority};
 use mur_common::skill::validate;
 use mur_common::telemetry::METHOD_NOTE_RETRIEVED;
@@ -151,6 +152,53 @@ pub fn record_retrieval(mur_home: &Path, skill_name: &str, now: DateTime<Utc>) -
     use std::io::Write;
     writeln!(f, "{}", serde_json::to_string(&line)?)?;
     Ok(())
+}
+
+/// One row of `mur notes list`.
+#[derive(Debug, Clone)]
+pub struct NoteListRow {
+    pub name: String,
+    pub maturity: LifecycleState,
+    pub description: String,
+}
+
+/// Parse a `--maturity` value (case-insensitive) into a `LifecycleState`.
+pub fn parse_maturity(s: &str) -> Result<LifecycleState> {
+    match s.to_lowercase().as_str() {
+        "draft" => Ok(LifecycleState::Draft),
+        "emerging" => Ok(LifecycleState::Emerging),
+        "stable" => Ok(LifecycleState::Stable),
+        "canonical" => Ok(LifecycleState::Canonical),
+        "deprecated" => Ok(LifecycleState::Deprecated),
+        "archived" => Ok(LifecycleState::Archived),
+        other => bail!(
+            "unknown maturity '{other}' \
+             (expected draft|emerging|stable|canonical|deprecated|archived)"
+        ),
+    }
+}
+
+/// List `category: note` skills, optionally filtered by maturity, sorted by name.
+pub fn do_list(
+    mur_home: &Path,
+    maturity: Option<LifecycleState>,
+    limit: usize,
+) -> Result<Vec<NoteListRow>> {
+    let skills_dir = mur_home.join("skills");
+    let all = load_skill_candidates(&skills_dir, mur_home)?;
+    let mut rows: Vec<NoteListRow> = all
+        .into_iter()
+        .filter(|s| s.manifest.category == Category::Note)
+        .filter(|s| maturity.map_or(true, |m| s.stats.lifecycle_state == m))
+        .map(|s| NoteListRow {
+            name: s.manifest.name.clone(),
+            maturity: s.stats.lifecycle_state,
+            description: s.manifest.description.clone(),
+        })
+        .collect();
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    rows.truncate(limit);
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -356,6 +404,63 @@ mod tests {
             .with_extension("jsonl");
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content.lines().count(), 2);
+    }
+
+    #[test]
+    fn do_list_returns_notes_sorted_by_name_with_maturity() {
+        let tmp = tempdir().unwrap();
+        do_create(tmp.path(), "zebra", "z note", "body").unwrap();
+        do_create(tmp.path(), "alpha", "a note", "body").unwrap();
+
+        let rows = do_list(tmp.path(), None, 10).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "alpha");
+        assert_eq!(rows[1].name, "zebra");
+        assert_eq!(rows[0].maturity, LifecycleState::Draft);
+    }
+
+    #[test]
+    fn do_list_filters_by_maturity() {
+        let tmp = tempdir().unwrap();
+        do_create(tmp.path(), "n1", "d", "body").unwrap();
+        // Fresh notes are Draft.
+        assert!(do_list(tmp.path(), Some(LifecycleState::Stable), 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            do_list(tmp.path(), Some(LifecycleState::Draft), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn do_list_excludes_non_note_skills() {
+        use std::fs;
+        let tmp = tempdir().unwrap();
+        do_create(tmp.path(), "real-note", "d", "body").unwrap();
+        let ctx = tmp.path().join("skills").join("ctx");
+        fs::create_dir_all(&ctx).unwrap();
+        fs::write(
+            ctx.join("skill.yaml"),
+            "name: ctx\nversion: 1.0.0\npublisher: human:test\n\
+             category: context\ndescription: d\ncontent:\n  abstract: a\n  context: c\n",
+        )
+        .unwrap();
+
+        let rows = do_list(tmp.path(), None, 10).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+            vec!["real-note"]
+        );
+    }
+
+    #[test]
+    fn parse_maturity_is_case_insensitive_and_rejects_unknown() {
+        assert_eq!(parse_maturity("Stable").unwrap(), LifecycleState::Stable);
+        assert_eq!(parse_maturity("emerging").unwrap(), LifecycleState::Emerging);
+        assert!(parse_maturity("bogus").is_err());
     }
 
     #[tokio::test]
