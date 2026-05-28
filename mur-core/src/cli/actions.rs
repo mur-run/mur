@@ -377,19 +377,24 @@ pub enum TeamAction {
         #[arg(long, env = "MUR_TEAM_ID")]
         team: Option<String>,
     },
+    /// Set the default team (saves to config so --team can be omitted)
+    Use {
+        /// Team slug or UUID
+        team: String,
+    },
     /// Share a pattern to your team
     Share {
         /// Pattern name
         name: String,
-        /// Team ID or slug
+        /// Team ID or slug (falls back to default set by `mur team use`)
         #[arg(long, env = "MUR_TEAM_ID")]
-        team: String,
+        team: Option<String>,
     },
     /// Pull latest team patterns
     Sync {
-        /// Team ID or slug
+        /// Team ID or slug (falls back to default set by `mur team use`)
         #[arg(long, env = "MUR_TEAM_ID")]
-        team: String,
+        team: Option<String>,
     },
 }
 

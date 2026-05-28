@@ -16,6 +16,20 @@ use crate::cli::{
     WorkflowAction,
 };
 use crate::{cmd, dashboard, team, verify};
+use crate::store::config as store_config;
+
+/// Resolve an optional --team arg, falling back to config's default team.
+fn resolve_team_arg(arg: Option<String>) -> Result<String> {
+    if let Some(t) = arg {
+        return Ok(t);
+    }
+    let cfg = store_config::load_config()?;
+    cfg.sync.team_id.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No team specified. Pass --team <slug> or run `mur team use <slug>` to set a default."
+        )
+    })
+}
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -251,14 +265,17 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
                 None => cmd::community_cmd::cmd_team_list_mine().await?,
             },
+            TeamAction::Use { team } => cmd::community_cmd::cmd_team_use(&team).await?,
             TeamAction::Share { name, team } => {
+                let slug = resolve_team_arg(team)?;
                 let client = reqwest::Client::new();
-                let team_id = team::resolve_team_id(&client, &team).await?;
+                let team_id = team::resolve_team_id(&client, &slug).await?;
                 cmd::community_cmd::cmd_team_share(&name, &team_id).await?
             }
             TeamAction::Sync { team } => {
+                let slug = resolve_team_arg(team)?;
                 let client = reqwest::Client::new();
-                let team_id = team::resolve_team_id(&client, &team).await?;
+                let team_id = team::resolve_team_id(&client, &slug).await?;
                 cmd::community_cmd::cmd_team_sync(&team_id).await?
             }
         },

@@ -6,6 +6,7 @@ use crate::community;
 use crate::gep;
 use crate::store::yaml::YamlStore;
 use crate::team;
+use crate::store::config as store_config;
 
 pub(crate) async fn cmd_community_publish(name: &str) -> Result<()> {
     let store = YamlStore::default_store()?;
@@ -258,6 +259,25 @@ pub(crate) async fn cmd_community_pack_install(id: &str) -> Result<()> {
         resp.patterns.len(),
         resp.pack.name
     );
+    Ok(())
+}
+
+pub(crate) async fn cmd_team_use(slug: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let team_id = team::resolve_team_id(&client, slug).await?;
+
+    let mut config = store_config::load_config()?;
+    config.sync.team_id = Some(team_id.clone());
+    store_config::save_config(&config)?;
+
+    // Show which team was selected
+    let teams = team::list_user_teams(&client).await?;
+    if let Some(t) = teams.iter().find(|t| t.id == team_id) {
+        println!("  Default team set to: {} ({})", t.name, t.slug);
+    } else {
+        println!("  Default team set to: {}", team_id);
+    }
+    println!("  Run `mur team sync` to pull patterns.");
     Ok(())
 }
 
