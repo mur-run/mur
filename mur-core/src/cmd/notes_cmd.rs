@@ -178,6 +178,34 @@ pub fn parse_maturity(s: &str) -> Result<LifecycleState> {
     }
 }
 
+/// A note rendered for `mur notes show`.
+#[derive(Debug, Clone)]
+pub struct NoteView {
+    pub name: String,
+    pub description: String,
+    pub maturity: LifecycleState,
+    pub body: String,
+}
+
+/// Load a single note for display. Errors if the skill is missing or not a note.
+pub fn do_show(mur_home: &Path, name: &str) -> Result<NoteView> {
+    let dir = global_skill_dir(mur_home, name);
+    let manifest = read_from_dir(&dir).map_err(|_| anyhow!("note '{name}' not found"))?;
+    if manifest.category != Category::Note {
+        bail!("'{name}' is not a note (category: {:?})", manifest.category);
+    }
+    let maturity = SkillStats::load(&SkillStats::path(mur_home, name))?
+        .map(|s| s.lifecycle_state)
+        .unwrap_or_default();
+    let body = manifest.content.note.clone().unwrap_or_default();
+    Ok(NoteView {
+        name: manifest.name,
+        description: manifest.description,
+        maturity,
+        body,
+    })
+}
+
 /// List `category: note` skills, optionally filtered by maturity, sorted by name.
 pub fn do_list(
     mur_home: &Path,
@@ -454,6 +482,42 @@ mod tests {
             rows.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
             vec!["real-note"]
         );
+    }
+
+    #[test]
+    fn do_show_returns_a_note_view() {
+        let tmp = tempdir().unwrap();
+        do_create(tmp.path(), "my-note", "My description", "# Heading\nprose").unwrap();
+
+        let v = do_show(tmp.path(), "my-note").unwrap();
+        assert_eq!(v.name, "my-note");
+        assert_eq!(v.description, "My description");
+        assert_eq!(v.body, "# Heading\nprose");
+        assert_eq!(v.maturity, LifecycleState::Draft);
+    }
+
+    #[test]
+    fn do_show_errors_for_missing_note() {
+        let tmp = tempdir().unwrap();
+        let err = do_show(tmp.path(), "nope").unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn do_show_errors_for_non_note_skill() {
+        use std::fs;
+        let tmp = tempdir().unwrap();
+        let ctx = tmp.path().join("skills").join("ctx");
+        fs::create_dir_all(&ctx).unwrap();
+        fs::write(
+            ctx.join("skill.yaml"),
+            "name: ctx\nversion: 1.0.0\npublisher: human:test\n\
+             category: context\ndescription: d\ncontent:\n  abstract: a\n  context: c\n",
+        )
+        .unwrap();
+
+        let err = do_show(tmp.path(), "ctx").unwrap_err();
+        assert!(err.to_string().contains("not a note"));
     }
 
     #[test]
