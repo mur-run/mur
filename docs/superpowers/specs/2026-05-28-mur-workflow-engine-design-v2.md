@@ -102,7 +102,8 @@ pub struct ProcedureStep {
     pub tool_hint: Option<String>,
 
     // ── NEW: DAG identity ──
-    pub id: String,                  // stable kebab id for edges (required; migration auto-assigns s1..sn by file position)
+    #[serde(default = "default_step_id")]  // "s0" default; migration assigns s1..sn by file position
+    pub id: String,
     #[serde(default)]
     pub depends_on: Vec<String>,     // ids that must complete first; empty = root
 
@@ -127,12 +128,17 @@ pub struct ProcedureStep {
 - *intent-mode*: `command` unset, `intent`/`tool` set → resolved against MCP
   inventory at inject time, executed by the agent (existing behaviour).
 
+**Backward-compat note.** `id` defaults to `"s0"` via `default_step_id()`, so
+existing manifests with `procedure` but no `id` field parse without error. The
+migration step (P7) assigns stable `s1..sn` ids by original file position
+*before* any consumer reads the skill — the default is a safety net, not the
+primary path. The DAG editor must generate unique ids for new steps.
+
 **DAG, not a line.** `order: u32` is **removed entirely**. Step ordering is
 derived from `depends_on` via topological sort; display order is the topo-sort
 result. The executor builds the graph, detects cycles, and runs independent
 branches concurrently. This matches GitHub Actions `needs:`, Argo, Airflow,
-Temporal. A linear chain is simply `s2.depends_on = [s1]`, `s3.depends_on = [s2]`. This matches GitHub Actions `needs:`, Argo, Airflow, Temporal.
-For display/back-compat, a linear chain is just `s2.depends_on = [s1]`, etc.
+Temporal. A linear chain is simply `s2.depends_on = [s1]`, `s3.depends_on = [s2]`.
 
 **JSON Schema.** Derive `schemars::JsonSchema` on `SkillManifest` and emit
 `mur skill schema --json` → `schema/skill.schema.json`. The Hub DAG editor uses
@@ -248,6 +254,22 @@ the strongest variable signal (`{{app_name}}`) and each recurrence raises the
 draft's `usage_count`/confidence. This is what turns 5 noisy sessions into 1
 high-confidence workflow — and it is where evolution earns its keep.
 
+**Algorithm (high-level):**
+1. **Normalize** each session's command sequence: strip literals (quoted strings,
+   paths, hostnames) → command skeletons (`fly deploy --app <STR>`).
+2. **Pairwise similarity** via n-gram Jaccard on the skeleton sequence
+   (bigrams over command+tool tuples; picks up order without strict alignment).
+3. **Cluster** with DBSCAN (eps tuned so identical-procedure sessions group;
+   exploration sessions become noise). Each cluster ≥ min_sessions (default 3)
+   becomes a candidate workflow.
+4. **Diff literals within the cluster** → candidate variables. A literal
+   position that varies across cluster members with low cardinality (≤5 distinct
+   values) is a strong variable signal; high-cardinality literals (UUIDs,
+   timestamps) are discarded.
+5. **Feed the cluster** (not a single session) to the Extract judge so it sees
+   the full variation, producing one consolidated draft skill with variables
+   pre-populated.
+
 **Notification** (unchanged from v1):
 ```
 💡 Repeatable workflow detected: "Deploy to Fly.io"
@@ -275,11 +297,20 @@ worlds.
 1. Load the `category: Workflow` skill.
 2. Build the step DAG from `depends_on`; topologically sort; detect cycles.
 3. Execute: command-mode steps run via the existing executor (exit-code gating,
-   retry, timeout, `needs_approval` prompt); intent-mode steps require the agent
-   runtime — in pure CLI they are **printed as instructions** (the resolved
-   intent/tool text) and marked skipped in the ledger, never silently dropped.
-4. Independent branches may run concurrently (reuse `pipeline.rs` parallel).
-5. Append one record to the run-ledger.
+   retry, timeout). Intent-mode steps require the agent runtime — in pure CLI
+   they are **printed as instructions** (the resolved intent/tool text) and
+   marked skipped in the ledger, never silently dropped.
+4. **Concurrent branches.** After topo-sort, group steps by rank (length of
+   longest path from root). Steps within the same rank share no dependency edges
+   and can execute concurrently. The executor spawns them via
+   `tokio::task::spawn` and awaits the rank before advancing to the next. This
+   is a proper task-graph executor; `pipeline.rs` (`,` parallel operator) is
+   not reused here — it stays for composing *multiple* skills at the CLI level.
+5. **`needs_approval` steps:** when stdin is a TTY, prompt the user and wait.
+   When non-TTY (cron, CI, agent-driven), auto-skip and mark the step
+   `skipped_approval` in the ledger. Pass `--yes` to auto-approve all
+   `needs_approval` steps in non-interactive runs.
+6. Append one record to the run-ledger.
 
 `pipeline.rs` (`|`/`&&`/`,`) stays for **composing multiple skills**; the new DAG
 is **within** one skill.
@@ -293,8 +324,16 @@ is **within** one skill.
 ```
 
 `env_class` distinguishes *workflow failure* from *environment failure*
-(network/credentials/missing-binary classified from stderr), so a flaky network
-does not falsely mark a workflow Broken.
+(network/credentials/missing-binary classified from stderr patterns), so a flaky
+network does not falsely mark a workflow Broken. Classification is heuristic;
+add a `confidence` field (0.0–1.0) and let the user override via
+`mur run --env-class workflow|env`. The Broken fast-path only triggers on
+`env_class == "workflow"` with confidence ≥ 0.8.
+
+**Single-machine assumption.** `runs.jsonl` is per-skill on the local machine.
+Multi-machine aggregation (e.g. a team member runs the same workflow on their
+laptop) is out of scope for v2. The ledger is append-only JSONL so future
+merge/ sync is straightforward: union the files, sort by `ts`, done.
 
 **Evolution = feed the ledger into the existing state machine.** A sweep reduces
 `runs.jsonl` → `SkillStats` (`usage_count`, `success_count`, `last_success_at`,
@@ -368,13 +407,14 @@ P4 was under-scoped in v1 (no ledger); P5/P6 were over-scoped (skill infra exist
 
 | Phase | Content | Est. |
 |---|---|---|
-| **P1: Clean slate** | Export 160 patterns → md; remove pattern pipeline; repoint inject/retrieve/sync; keep noise_filter | 2–3 d |
+| **P1a: Export + delete** | Export 160 patterns → md; remove pattern pipeline (emergence, fingerprinting, decay, maturity); keep noise_filter | 1–2 d |
+| **P1b: Repoint** | Repoint `inject/hook.rs`, `retrieve/`, `sync.rs` from Pattern to skill/workflow; verify no regressions | 2–3 d |
 | **P2: Schema + ledger** | Extend `ProcedureStep` (DAG + exec); JSON Schema emit; SessionEvent enrich; run-ledger + stats reducer | 1.5 wk |
-| **P3: Unified executor** | DAG topo-sort + concurrent branches; command/intent dispatch; `needs_approval`; wire run-ledger | 1 wk |
+| **P3: Unified executor** | DAG topo-sort + concurrent branches; command/intent dispatch; `needs_approval` + `--yes` flag; wire run-ledger | 1 wk |
 | **P4: Lifecycle wire-up** | Feed stats → `next_state`; Broken fast-path; Archived hard-delete sweep; move ALL thresholds to config (run-driven + existing `lifecycle.rs` `PROMOTE_*`/`DEMOTE_*` constants) | 3–4 d |
-| **P5: Extraction** | noise filter prep; LLM judge gate+extract; cross-session aggregation; notification | 1.5 wk |
-| **P6: Hub DAG editor** | graph view from schema; per-step form; variable mgmt; test-run in sandbox | 2 wk |
-| **P7: Migration + sharing** | `workflows/` → `skills/`; reuse existing registry/transfer for team share | 1 wk |
+| **P5: Extraction** | noise filter prep; LLM judge gate+extract; cross-session aggregation (normalize → Jaccard → DBSCAN → diff); notification | 1.5 wk |
+| **P6: Hub DAG editor** | graph view from schema; per-step form; variable mgmt; test-run in sandbox | 2–3 wk |
+| **P7: Migration + sharing** | `workflows/` → `skills/` (convert `order` → `depends_on`, `default_value` → `default`, dedupe against existing skills); reuse existing registry/transfer for team share | 1 wk |
 
 ## Resolved decisions
 
@@ -389,3 +429,15 @@ P4 was under-scoped in v1 (no ledger); P5/P6 were over-scoped (skill infra exist
 4. **All thresholds go to config in P4** — both the new run-driven ones and the
    existing hardcoded `lifecycle.rs` constants (`PROMOTE_*`, `DEMOTE_*`,
    `AUTO_ARCHIVE_*`), per Mandatory Rule #1.
+5. **`needs_approval` in non-TTY contexts:** auto-skip and mark `skipped_approval`
+   in the ledger. `--yes` flag auto-approves all. No silent dropping, no hanging
+   on a prompt that will never be answered.
+6. **Concurrent branches use a proper task-graph executor** (topo-sort → rank
+   grouping → `tokio::spawn` per rank), not `pipeline.rs` `,` operator.
+   `pipeline.rs` stays for CLI-level composition of multiple skills.
+7. **Migration converts `order` → `depends_on`:** for each existing workflow YAML
+   with `steps` using `order: u32`, sort by `order`, then emit
+   `s1.depends_on = [s0]`, `s2.depends_on = [s1]`, etc. Steps without `order`
+   (already DAG) pass through unchanged. Variables rename `default_value` →
+   `default` via serde alias. The migration is a `mur migrate --workflows` one-shot
+   that runs before any consumer reads from `~/.mur/skills/`.
