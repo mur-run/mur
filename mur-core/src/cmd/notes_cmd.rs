@@ -154,6 +154,42 @@ pub fn record_retrieval(mur_home: &Path, skill_name: &str, now: DateTime<Utc>) -
     Ok(())
 }
 
+/// Top-level `mur notes list` handler.
+pub fn cmd_list(maturity: Option<&str>, limit: usize) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let filter = maturity.map(parse_maturity).transpose()?;
+    let rows = do_list(&home, filter, limit)?;
+    if rows.is_empty() {
+        println!("No notes found.");
+        return Ok(());
+    }
+    for r in &rows {
+        println!(
+            "{:<40} {:<11} {}",
+            r.name,
+            format!("{:?}", r.maturity),
+            r.description
+        );
+    }
+    Ok(())
+}
+
+/// Top-level `mur notes show` handler.
+pub fn cmd_show(name: &str) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let view = do_show(&home, name)?;
+    println!("# {}", view.name);
+    println!("{}", view.description);
+    println!("maturity: {:?}\n", view.maturity);
+    println!("{}", view.body);
+
+    // Viewing a note is a retrieval — best-effort, never fail the read.
+    if let Err(e) = record_retrieval(&home, &view.name, Utc::now()) {
+        tracing::warn!(note = %view.name, error = %e, "record retrieval failed");
+    }
+    Ok(())
+}
+
 /// One row of `mur notes list`.
 #[derive(Debug, Clone)]
 pub struct NoteListRow {
