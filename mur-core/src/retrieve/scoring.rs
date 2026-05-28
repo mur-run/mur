@@ -1,5 +1,7 @@
 //! Multi-signal scoring pipeline for pattern retrieval.
 
+use std::borrow::Cow;
+
 use chrono::Utc;
 use mur_common::config::RetrievalConfig;
 use mur_common::pattern::{Origin, Pattern, PatternKind, Tier};
@@ -14,6 +16,85 @@ pub struct ScopeContext {
     pub platform: Option<String>,
     /// The task description — used to detect task-type queries for Procedure boost.
     pub task: Option<String>,
+}
+
+/// A retrievable knowledge item. The hybrid scorer is generic over this trait so
+/// `Pattern`, `Skill`, and (later) `Note` share one scoring pipeline.
+///
+/// Default `adjust_score` is the identity; `Pattern` overrides it to apply
+/// scope/language/kind boosts so existing Pattern behavior is preserved exactly.
+pub trait Retrievable {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn text(&self) -> Cow<'_, str>;
+    fn tag_terms(&self) -> Vec<&str>;
+    fn importance(&self) -> f64;
+    fn effectiveness(&self) -> f64;
+    fn tier(&self) -> Tier;
+    fn created_at(&self) -> chrono::DateTime<chrono::Utc>;
+    fn last_activity(&self) -> Option<chrono::DateTime<chrono::Utc>>;
+    fn decay_half_life_days(&self) -> f64;
+    /// Filter predicate: items where this returns false are dropped before scoring.
+    fn is_active(&self) -> bool;
+
+    /// Hook for item-specific score adjustment. Default: identity.
+    /// Pattern overrides to apply `scope_mult`, `kind_score_boost`, `lang_mult`.
+    fn adjust_score(
+        &self,
+        weighted_sum: f64,
+        _query_words: &[&str],
+        _scope: Option<&ScopeContext>,
+        _project_language: Option<&str>,
+    ) -> f64 {
+        weighted_sum
+    }
+}
+
+impl Retrievable for Pattern {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn text(&self) -> Cow<'_, str> {
+        self.content.as_text()
+    }
+    fn tag_terms(&self) -> Vec<&str> {
+        self.tags
+            .topics
+            .iter()
+            .chain(self.tags.languages.iter())
+            .map(String::as_str)
+            .collect()
+    }
+    fn importance(&self) -> f64 {
+        self.importance
+    }
+    fn effectiveness(&self) -> f64 {
+        self.evidence.effectiveness()
+    }
+    fn tier(&self) -> Tier {
+        self.tier
+    }
+    fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
+        self.created_at
+    }
+    fn last_activity(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.lifecycle
+            .last_injected
+            .or(self.evidence.last_validated)
+    }
+    fn decay_half_life_days(&self) -> f64 {
+        self.lifecycle
+            .decay_half_life
+            .unwrap_or_else(|| self.tier.decay_half_life_days()) as f64
+    }
+    fn is_active(&self) -> bool {
+        !self.lifecycle.muted
+            && self.lifecycle.status == mur_common::pattern::LifecycleStatus::Active
+    }
+    // adjust_score implemented in Task 5 (currently inherits identity default)
 }
 
 /// A pattern with its computed relevance score.
@@ -917,5 +998,20 @@ mod tests {
         let weights = std::collections::HashMap::new();
         let out = score_sources(hits, &weights);
         assert_eq!(out[0].external_id, "new");
+    }
+
+    #[test]
+    fn pattern_implements_retrievable_with_expected_accessors() {
+        use super::Retrievable;
+        let p = make_pattern("alpha", "alpha body");
+        assert_eq!(p.name(), "alpha");
+        assert_eq!(p.description(), p.description.as_str());
+        assert_eq!(&*p.text(), &*p.content.as_text());
+        assert_eq!(p.importance(), p.importance);
+        assert_eq!(p.effectiveness(), p.evidence.effectiveness());
+        assert_eq!(p.tier(), p.tier);
+        assert_eq!(p.created_at(), p.created_at);
+        assert!(p.is_active());
+        assert_eq!(p.decay_half_life_days(), p.tier.decay_half_life_days() as f64);
     }
 }
