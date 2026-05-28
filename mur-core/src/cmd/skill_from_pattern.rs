@@ -92,6 +92,7 @@ pub fn pattern_to_skill(pattern: &Pattern, polish: bool) -> Result<SkillManifest
             context: Some(technical),
             procedure: None,
             command: None,
+            note: None,
         },
         requires: vec![],
         tags,

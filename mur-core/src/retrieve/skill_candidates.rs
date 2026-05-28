@@ -181,6 +181,7 @@ mod tests {
                 context: Some(format!("body of {name}")),
                 procedure: None,
                 command: None,
+                note: None,
             },
             requires: vec![],
             tags: vec!["alpha".into(), "beta".into()],
