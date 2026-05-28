@@ -98,8 +98,11 @@ pub async fn reindex_stats(mur_home: &Path, opts: ReindexOptions) -> Result<Rein
                 if trimmed.is_empty() {
                     continue;
                 }
-                // Check for skill executed events
-                if !trimmed.contains("mur.skill.executed") {
+                // Count skill executions and note retrievals; both carry
+                // mur.skill.name + mur.skill.outcome.
+                if !trimmed.contains("mur.skill.executed")
+                    && !trimmed.contains("mur.note.retrieved")
+                {
                     continue;
                 }
                 let Ok(val): Result<serde_json::Value, _> = serde_json::from_str(trimmed) else {
@@ -250,5 +253,55 @@ mod tests {
         assert!(p.matches("test-a"));
         assert!(p.matches("test-1"));
         assert!(!p.matches("test-ab"));
+    }
+
+    #[tokio::test]
+    async fn reindex_counts_note_retrieval_events_as_usage_and_success() {
+        use chrono::Utc;
+        use mur_common::skill::stats::SkillStats;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let now = Utc::now();
+
+        // A note skill must exist on disk for reindex to consider it.
+        let dir = tmp.path().join("skills").join("my-note");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("skill.yaml"),
+            "name: my-note\nversion: 1.0.0\npublisher: human:test\n\
+             category: note\ndescription: d\ncontent:\n  abstract: a\n  note: b\n",
+        )
+        .unwrap();
+
+        // Three retrieval lines in today's trace file.
+        let traces_dir = tmp.path().join("traces");
+        std::fs::create_dir_all(&traces_dir).unwrap();
+        let trace_path = traces_dir
+            .join(now.format("%Y-%m-%d").to_string())
+            .with_extension("jsonl");
+        let line = format!(
+            "{{\"ts\":\"{}\",\"method\":\"mur.note.retrieved\",\
+             \"mur.skill.name\":\"my-note\",\"mur.skill.outcome\":\"success\"}}",
+            now.to_rfc3339()
+        );
+        std::fs::write(&trace_path, format!("{line}\n{line}\n{line}\n")).unwrap();
+
+        reindex_stats(
+            tmp.path(),
+            ReindexOptions {
+                skill_filter: Some("my-note".into()),
+                since: None,
+                days_back: 1,
+            },
+        )
+        .await
+        .unwrap();
+
+        let stats = SkillStats::load(&SkillStats::path(tmp.path(), "my-note"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.usage_count, 3);
+        assert_eq!(stats.success_count, 3);
     }
 }
