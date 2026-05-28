@@ -117,11 +117,7 @@ impl Retrievable for Pattern {
                     .languages
                     .iter()
                     .any(|l| l.to_lowercase() == proj_lang_lower);
-                if matches {
-                    1.2
-                } else {
-                    0.05
-                }
+                if matches { 1.2 } else { 0.05 }
             } else {
                 1.0
             }
@@ -1130,6 +1126,9 @@ mod tests {
         assert_eq!(p.tier(), p.tier);
         assert_eq!(p.created_at(), p.created_at);
         assert!(p.is_active());
-        assert_eq!(p.decay_half_life_days(), p.tier.decay_half_life_days() as f64);
+        assert_eq!(
+            p.decay_half_life_days(),
+            p.tier.decay_half_life_days() as f64
+        );
     }
 }
