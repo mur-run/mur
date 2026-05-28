@@ -97,13 +97,17 @@ impl Retrievable for Pattern {
     // adjust_score implemented in Task 5 (currently inherits identity default)
 }
 
-/// A pattern with its computed relevance score.
+/// A retrieved item with its computed relevance score.
 #[derive(Debug, Clone)]
-pub struct ScoredPattern {
-    pub pattern: Pattern,
+pub struct Scored<T> {
+    pub item: T,
     pub score: f64,
     pub relevance: f64,
 }
+
+/// Backward-compatible alias for existing call sites.
+/// New code should prefer `Scored<T>`.
+pub type ScoredPattern = Scored<Pattern>;
 
 /// Scoring weights (from PLAN.md)
 const W_RELEVANCE: f64 = 0.45;
@@ -308,8 +312,8 @@ where
             let kind_boost = kind_score_boost(&p, query_words, scope);
             let score = (base_score + kind_boost) * lang_mult;
 
-            ScoredPattern {
-                pattern: p,
+            Scored {
+                item: p,
                 score,
                 relevance,
             }
@@ -321,7 +325,7 @@ where
     scored.sort_by(|a, b| {
         let score_diff = (a.score - b.score).abs();
         if score_diff < 0.05 {
-            tier_priority(&b.pattern.tier).cmp(&tier_priority(&a.pattern.tier))
+            tier_priority(&b.item.tier).cmp(&tier_priority(&a.item.tier))
         } else {
             b.score
                 .partial_cmp(&a.score)
@@ -336,7 +340,7 @@ where
         if result.len() >= max_patterns {
             break;
         }
-        let est_tokens = sp.pattern.content.as_text().len() / 4;
+        let est_tokens = sp.item.content.as_text().len() / 4;
         if token_count + est_tokens > max_tokens && !result.is_empty() {
             break;
         }
@@ -619,7 +623,7 @@ mod tests {
         let p2 = make_pattern("rust-error-handling", "Use anyhow for Rust error handling");
         let results = score_and_rank("swift testing", vec![p1, p2]);
         assert!(!results.is_empty());
-        assert_eq!(results[0].pattern.name, "swift-testing");
+        assert_eq!(results[0].item.name, "swift-testing");
     }
 
     #[test]
@@ -703,7 +707,7 @@ mod tests {
         let results = score_and_rank("rust error", vec![p_name, p_content]);
         if results.len() >= 2 {
             assert_eq!(
-                results[0].pattern.name, "rust-error",
+                results[0].item.name, "rust-error",
                 "Name match should rank higher"
             );
         }
@@ -773,7 +777,7 @@ mod tests {
 
         let results = score_and_rank_hybrid("swift testing", vec![p1, p2], &vector_scores);
         assert!(!results.is_empty());
-        assert_eq!(results[0].pattern.name, "swift-testing");
+        assert_eq!(results[0].item.name, "swift-testing");
     }
 
     #[test]
@@ -793,7 +797,7 @@ mod tests {
         // Total token estimate should stay under MAX_TOKENS
         let total_tokens: usize = results
             .iter()
-            .map(|sp| sp.pattern.content.as_text().len() / 4)
+            .map(|sp| sp.item.content.as_text().len() / 4)
             .sum();
         assert!(
             total_tokens <= MAX_TOKENS || results.len() == 1,
@@ -815,8 +819,8 @@ mod tests {
         let results = score_and_rank("rust error", vec![p_session, p_core]);
         if results.len() >= 2 {
             // Core should be preferred as tiebreaker
-            let first_tier = &results[0].pattern.tier;
-            let second_tier = &results[1].pattern.tier;
+            let first_tier = &results[0].item.tier;
+            let second_tier = &results[1].item.tier;
             let score_diff = (results[0].score - results[1].score).abs();
             if score_diff < 0.05 {
                 assert_eq!(
@@ -994,6 +998,19 @@ mod tests {
         let weights = std::collections::HashMap::new();
         let out = score_sources(hits, &weights);
         assert_eq!(out[0].external_id, "new");
+    }
+
+    #[test]
+    fn scored_pattern_is_alias_of_scored_pattern_generic() {
+        fn _accepts_alias(_: ScoredPattern) {}
+        fn _accepts_generic(_: Scored<Pattern>) {}
+        let p = make_pattern("alpha", "alpha body");
+        let s: Scored<Pattern> = Scored {
+            item: p,
+            score: 1.0,
+            relevance: 1.0,
+        };
+        _accepts_alias(s);
     }
 
     #[test]

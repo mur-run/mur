@@ -1,6 +1,9 @@
 # MuR Notes — Personal Knowledge Management with Lifecycle
 
-> **Status:** Draft | **Date:** 2026-05-28 | **Depends on:** Workflow Engine v2 (pattern removal)
+> **Status:** Draft | **Date:** 2026-05-28 | **Depends on:** Workflow Engine v2
+> (`2026-05-28-mur-workflow-engine-design-v2.md`) — Pattern removal **and** the
+> shared Skill foundation (Category/ContentMode extension, unified event log,
+> stats reducer, `mur skill evolve`).
 
 ## Thesis
 
@@ -10,14 +13,77 @@ evidence tracking, hybrid retrieval, linking — is valuable and unique. Nobody 
 the 2026 PKM landscape (Karpathy's LLM Wiki, BrainDB, Vannevar, Obsidian
 plugins) offers true lifecycle management for personal notes.
 
-**v2 thesis (Workflow Engine):** A workflow is a Skill with `category: Workflow`.
+**v2 thesis (Workflow Engine):** A workflow is a `Skill` with `category: Workflow`
+whose `content.procedure` is executable.
 
-**This thesis (Notes):** A note is a Skill with `category: Note` — a
-human-curated, file-first knowledge artifact with a managed lifecycle. Same
-subsystem, same retrieve pipeline, same decay and evolution. The only thing
-Pattern did that Note doesn't is auto-inject into AI coding sessions (which
-never worked). What Note adds that Pattern lacked: human authorship, external
-tool interoperability, and an MCP query surface.
+**This thesis (Notes):** A note is a `Skill` with `category: Note` — a
+human-curated, file-first knowledge artifact with a managed lifecycle. **Same
+on-disk model, same `SkillStats`, same `next_state` lifecycle, same retrieve
+pipeline, same `mur skill evolve` sweep.** Workflow and Note are two *projections*
+of one knowledge object: Workflow is the *executable* projection (its usage signal
+is a run), Note is the *reference* projection (its usage signal is a retrieval).
+
+The only thing Pattern did that Note doesn't is auto-inject into AI coding
+sessions (which never worked). What Note adds that Pattern lacked: human
+authorship, external-tool interoperability (Obsidian export), and an MCP query
+surface.
+
+## Shared foundation (owned by Workflow Engine v2)
+
+Both specs build on **one** model. These elements are defined once in v2 and
+**reused, not re-invented, here**:
+
+| Element | Where it lives | Note's use of it |
+|---|---|---|
+| On-disk unit: `~/.mur/skills/<name>/` directory | v2 storage decision | A note is a skill directory with `category: note` |
+| `SkillStats` + its store (`new`/`path`/`load`/`merge_in_place`, **already implemented**) | `skill/stats.rs`, `cmd/skill_stats.rs` | Note reuses the existing persistence; only the event→stats reducer is new |
+| `next_state(stats, now)` lifecycle function + `LifecycleState` ladder | `skill/lifecycle.rs` | No new state machine; retrieval stats drive it |
+| Per-skill append-only `events.jsonl` → stats reducer | v2 Layer 4 (generalized from `runs.jsonl`) | Note appends a `retrieval` event; workflow appends a `run` event |
+| `mur skill evolve [--category …]` sweep | v2 Layer 4 | One sweep evolves notes and workflows alike |
+| Corpus vector index (LanceDB) | `store::vector::VectorStore` | Indexes all skills; category is a filter |
+| MCP `skill_search(query, category?)` | agent-runtime skill path | Note search is `category: note` filtered |
+
+**Storage decision (route 1, agreed).** The canonical source of truth is the
+per-skill directory `~/.mur/skills/<name>/`, **not** a separate `~/.mur/notes/`
+markdown tree. This keeps one source of truth, lets the workflow run-ledger live
+beside its skill, and reuses the existing skill store. **Obsidian compatibility
+becomes a derived export view** (`mur notes export --obsidian <vault>`), not a
+second canonical format. We trade "edit `~/.mur/notes/*.md` directly in Obsidian"
+(which had no coherent write-back story anyway) for a single, unambiguous source
+of truth.
+
+**Note body format (1a — body in `content`).** A note's prose lives **inside**
+the canonical `skill.yaml`, in a `content` field (a new `note`/`body` mode →
+`ContentMode::Note`), exactly as a context skill stores `content.context` and a
+workflow stores `content.procedure`. This is decisive for integrity:
+`content_sha256` (the basis of DSSE signing, drift detection, trust hash, and
+registry lookup) is computed over the whole manifest's canonical YAML. Body-in-
+`content` is covered **for free**; a sibling file would fall outside the signed
+hash, breaking the "inherits signing exactly as a Workflow does" promise and
+letting a pinned note's prose change without drift detection.
+
+The ergonomic cost of editing YAML-embedded markdown is already solved by the
+existing authoring surface: `parser.rs::parse_markdown` round-trips a
+markdown-frontmatter view (`---` YAML frontmatter + free markdown body) to/from
+canonical `skill.yaml` — its own doc comment states *"markdown is the
+human-authoring surface; canonical YAML remains source of truth on disk."* So:
+
+```
+~/.mur/skills/rust-error-handling/
+├── skill.yaml        ← manifest incl. content.note (the markdown body) — signed/hashed
+├── stats.yaml        ← SkillStats (lifecycle_state, usage_count, …)     [shared]
+└── events.jsonl      ← append-only usage log (retrieval events)         [shared]
+```
+
+- **Edit:** `mur notes edit` renders a SKILL.md view (frontmatter + clean
+  markdown), opens `$EDITOR`, re-serializes via `serialize_canonical`.
+- **Obsidian export:** `mur notes export --obsidian` emits the same SKILL.md view.
+- **Ingest:** `mur notes ingest` parses SKILL.md back via `parse_markdown`.
+
+One round-trip format (SKILL.md) serves editing, export, and ingest; the on-disk
+canonical stays single-file `skill.yaml`. (Minor follow-up: force block-scalar
+`|` output for multiline strings so `skill.yaml` git diffs stay clean — a shared
+serializer nicety, not a blocker, and not new to notes.)
 
 ## Market context (2026 Q1–Q2)
 
@@ -42,315 +108,371 @@ Three converging signals validate this direction:
    state machine (decay is search-ranking only, no promote/demote/archive).
 
 **Gap:** No competitor has maturity lifecycle (Draft → Emerging → Stable →
-Canonical → Deprecated → Archived). This is mur's differentiator.
+Canonical → Deprecated → Archived). This is mur's differentiator — and because a
+Note *is* a Skill, it inherits that lifecycle, hybrid retrieval, linking, signing,
+and peer sharing for free, exactly as a Workflow does.
 
 ## Architecture
 
 ```
-~/.mur/notes/                    ← Source of truth (markdown + YAML frontmatter)
-├── rust/
-│   ├── error-handling.md
-│   └── async-patterns.md
-├── deploy/
-│   └── fly-io-setup.md
+~/.mur/skills/                       ← Source of truth (one directory per skill)
+├── rust-error-handling/             ← category: note
+│   ├── skill.yaml                   ← incl. content.note (markdown body)
+│   ├── stats.yaml
+│   └── events.jsonl
+├── fly-io-deploy/                   ← category: workflow (v2)
+│   ├── skill.yaml
+│   ├── stats.yaml
+│   ├── events.jsonl                 ← run events
+│   └── runs.jsonl                   ← (v2 projection of events; see v2 spec)
 └── ...
 
         ↓ parse + embed (rebuildable)
 
 ┌─────────────────────────────┐
-│ SQLite (~/.mur/notes.db)    │  ← metadata index: tags, path, maturity, decay, mtime
-│                             │     fast filtering: "rust + stable, not deprecated"
+│ LanceDB (~/.mur/vectors/)   │  ← corpus vector index: hybrid BM25 + semantic
+│                             │     rebuildable from skill directories
 └─────────────────────────────┘
 
-┌─────────────────────────────┐
-│ LanceDB (~/.mur/vectors/)   │  ← vector index: hybrid BM25 + semantic search
-│                             │     rebuildable from markdown files
-└─────────────────────────────┘
+   (optional, deferred) SQLite corpus metadata index — see Storage layers
 
         ↓ expose via
 
-┌──────────┬──────────┬──────────┐
-│ MCP      │ CLI      │ Obsidian │
-│ server   │ search   │ vault    │
-└──────────┴──────────┴──────────┘
+┌──────────┬──────────┬───────────────────────┐
+│ MCP      │ CLI      │ Obsidian export view  │
+│ skill_*  │ mur notes│ (derived, not source) │
+└──────────┴──────────┴───────────────────────┘
 ```
 
 **Design rules:**
-- Files are the canonical source. SQLite and LanceDB are derivative indexes —
-  delete either, rebuild from files.
-- No schema migrations on SQLite. Schema changes → delete `.db`, rescan.
-- Obsidian-compatible: drop `~/.mur/notes/` into any Obsidian vault. Extra
-  YAML frontmatter fields are ignored by Obsidian but preserved.
+- The per-skill directory is canonical. LanceDB (and any SQLite index) are
+  derivative — delete either, rebuild from skill directories via `mur skill reindex`.
+- One source of truth. Obsidian interop is a *generated export*, never a second
+  canonical store.
+- No schema migrations on derivative indexes. Schema change → delete index, rescan.
 
 ## Data model
 
-### On-disk format: Markdown + YAML frontmatter
+A note reuses the existing `SkillManifest` with two foundation extensions
+(defined in v2, listed here for completeness):
 
-```markdown
----
-schema: 4
-name: rust-error-handling
-description: Rust 錯誤處理最佳實踐
-kind: reference
+1. `Category` gains a `Note` variant (currently `Context | Workflow | Command | Meta`).
+2. `ContentMode` gains a `Note` variant (currently `Context | Workflow | Command`);
+   `Content::mode()` returns `Note` when the note body is present.
+
+### On-disk `skill.yaml` (note-mode)
+
+```yaml
+schema: <skill manifest schema version>
+name: rust-error-handling           # kebab-case, unique id
+description: Rust 錯誤處理最佳實踐     # one-line summary (also the L2 abstract)
+category: note
+kind: reference                      # note-specific sub-kind (see NoteKind)
 tags: [rust, error-handling, patterns]
 tier: project
 importance: 0.8
-maturity: stable
-created_at: 2026-05-28T10:00:00Z
-updated_at: 2026-05-28T14:00:00Z
-decay:
-  last_active: 2026-05-28T14:00:00Z
 links:
   related: [rust-async-patterns]
   supersedes: []
-source_sessions: [session-abc123]
+created_at: 2026-05-28T10:00:00Z
+updated_at: 2026-05-28T14:00:00Z
+content:
+  abstract: Rust 錯誤處理最佳實踐
+  note: |                            # markdown body lives here → ContentMode::Note
+    # Rust Error Handling
+
+    ## Technical
+    使用 `anyhow` 處理應用層錯誤,`thiserror` 定義 library 錯誤類型。
+
+    ## Principle
+    不要在 library 層 leak `anyhow::Error`——呼叫方無法 match。
+# lifecycle_state / decay / usage live in stats.yaml, NOT here (manifest is signable & immutable)
+```
+
+### SKILL.md authoring/export view (derived, via `parse_markdown`)
+
+```markdown
+---
+name: rust-error-handling
+category: note
+kind: reference
+tags: [rust, error-handling, patterns]
 ---
 
 # Rust Error Handling
 
 ## Technical
-使用 `anyhow` 處理應用層錯誤，`thiserror` 定義 library 錯誤類型。
+使用 `anyhow` 處理應用層錯誤,`thiserror` 定義 library 錯誤類型。
 
 ## Principle
 不要在 library 層 leak `anyhow::Error`——呼叫方無法 match。
 ```
 
-### Rust struct (in-memory + parse)
+`mur notes edit` / `export` / `ingest` all use this round-trip view; the on-disk
+canonical remains the single-file `skill.yaml` above.
+
+### Rust types
+
+`kind` is the only note-specific manifest field. Everything else is shared
+`SkillManifest`.
 
 ```rust
-// mur-common/src/note.rs
-pub struct NoteManifest {
-    pub schema: u32,
-    pub name: String,                    // kebab-case, unique id
-    pub description: String,             // one-line summary
-    #[serde(default)]
-    pub kind: NoteKind,                  // reference | decision | fact | procedure | insight
-    #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub tier: Tier,                      // session | project | core (reused)
-    #[serde(default = "default_importance")]
-    pub importance: f64,
-    #[serde(default)]
-    pub maturity: Maturity,              // Draft | Emerging | Stable | Canonical | Deprecated | Archived
-    pub created_at: DateTime<Utc>,
-    #[serde(default = "Utc::now")]
-    pub updated_at: DateTime<Utc>,
-    #[serde(default)]
-    pub decay: DecayMeta,
-    #[serde(default)]
-    pub links: NoteLinks,
-    #[serde(default)]
-    pub source_sessions: Vec<String>,    // only populated when ingested by local LLM
-    // ── Body: everything after the `---` frontmatter fence, stored separately ──
-}
+// mur-common/src/skill/manifest.rs — add to the manifest
+#[serde(default, skip_serializing_if = "Option::is_none")]
+pub kind: Option<NoteKind>,          // only meaningful for category: note
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteKind {
     #[default]
     Reference,    // how-to, best practice, documentation
     Decision,     // architectural decision record
     Fact,         // server address, config value, known limitation
-    Procedure,    // step-by-step (may graduate to a Workflow skill)
+    Procedure,    // step-by-step (may graduate to a category: workflow skill)
     Insight,      // observation, analysis, learned lesson
-}
-
-pub struct Note {
-    pub manifest: NoteManifest,
-    pub body: String,                    // everything after the frontmatter
 }
 ```
 
-### Relationship to Skill
+The markdown body is stored in `content.note` inside `skill.yaml` (note mode of
+`Content`). The SKILL.md view is a derived authoring/export form, not a second
+canonical file.
 
-A `Note` and a `Workflow` are both `Skill` variants with different `category`
-values. They share:
-- Lifecycle state machine (`skill/lifecycle.rs`)
-- Decay (`Tier` half-lives)
-- Linking (`links.related`, `links.supersedes`)
-- Evidence tracking (usage count, success rate)
-- Vector indexing (LanceDB)
-- MCP exposure (agent-runtime skill path)
+### What `category: note` shares vs. specializes
 
-They differ in:
-- Note has no `procedure` (it's reference, not executable)
-- Note has `NoteKind`; Workflow has `FailureAction`/`RetryConfig`
-- Note body is free markdown; Workflow procedure is structured DAG steps
+Shares with every skill (incl. `category: workflow`):
+- `SkillStats` lifecycle state machine (`skill/stats.rs`, `skill/lifecycle.rs`)
+- Decay (`Tier` half-lives), linking (`links.related`, `links.supersedes`)
+- Evidence via the shared `events.jsonl` reducer
+- Vector indexing (LanceDB), MCP exposure, signing, registry, peer transfer
 
-### What we keep from Pattern
+Specializes:
+- Content is free markdown (`content.note`), not a structured `procedure` DAG
+- Carries `kind: NoteKind`; workflows carry `on_failure` / `retry` per step
+- Usage signal is a **retrieval** event, not a **run** event
+
+### What we keep from Pattern (route 1)
 
 | Component | Keep? | Notes |
 |---|---|---|
-| `KnowledgeBase` (name, desc, tier, importance, tags, applies, evidence, links, lifecycle, decay, maturity, scope, created_at) | Repurpose | Slim down to `NoteManifest` — drop `PatternKind` (replace with `NoteKind`), drop `confidence` (human-authored, not extracted), drop `Content::DualLayer` (free markdown instead) |
-| `Tier` + half-lives | Keep | session=14d, project=90d, core=365d |
-| `Maturity` + `LifecycleState` | Keep | Draft→Emerging→Stable→Canonical→Deprecated→Archived |
-| `Evidence` | Keep (simplified) | `retrieval_count`, `last_retrieved_at` instead of injection signals |
+| `KnowledgeBase` fields (name, desc, tier, importance, tags, links, created_at) | Fold into `SkillManifest` | Drop `PatternKind` (→ `NoteKind`), drop `confidence` (human-authored, not extracted — make it `Option`, left empty for notes), drop `Content::DualLayer` (free markdown in `content.note`) |
+| `Tier` + half-lives | Keep | session=14d, project=90d, core=365d (shared, exposed in config) |
+| `Maturity` / `LifecycleState` | Keep | Reuse `skill/lifecycle.rs` ladder verbatim |
+| `Evidence` | Replace | Superseded by `SkillStats` + `events.jsonl` (retrieval signal) |
 | `Links` | Keep | related, supersedes |
-| `DecayMeta` | Keep | last_active, half_life_override |
-| `capture/noise_filter.rs` | Keep | Repurposed for local LLM ingestion preprocessing |
-| `retrieve/` (scoring, gate, unified) | Keep | Hybrid BM25 + vector, recency boost, importance weighting |
-| `store/yaml.rs` | Replace | YAML → Markdown + frontmatter parser |
-| `store/lancedb.rs` | Keep | Vector index, rebuildable |
-| `inject/hook.rs` | Replace | Auto-inject → MCP server + CLI search |
-| `evolve/decay.rs`, `evolve/maturity.rs`, `evolve/lifecycle.rs` | Keep | Adapted to note retrieval signals |
-| `capture/emergence.rs` | **Remove** | LLM auto-extraction from sessions |
-| `capture/feedback.rs` | **Remove** | No injection = no feedback loop |
+| `capture/noise_filter.rs` | Keep | Repurposed for local-LLM ingestion preprocessing (shared with v2 extraction) |
+| `retrieve/` (scoring, gate, unified) | **Adapt** (not just keep) | The hybrid BM25+vector logic is reusable, but it is hard-typed to `Pattern` today (`ScoredPattern { pattern: Pattern }`, `score_and_rank_hybrid(Vec<Pattern>)`). Introduce a `Retrievable` trait (name, description, embed text, tier, importance, decay inputs) so Skill/Note and the transitional Pattern share one scorer. This is the most under-estimated migration in both specs — a type migration, not a repoint. |
+| `store/yaml.rs` | Reuse | The existing skill store writes `skill.yaml` with the body in `content.note` — no new file I/O, no `body.md` |
+| `store/lancedb.rs` | Keep | Corpus vector index, rebuildable |
+| `inject/hook.rs` | Replace | Auto-inject → MCP `skill_search` + CLI (shared with v2) |
+| `evolve/decay.rs`, `evolve/maturity.rs`, `evolve/lifecycle.rs` | Drop | Superseded by `skill/lifecycle.rs` + `mur skill evolve` |
+| `capture/emergence.rs`, `capture/feedback.rs` | **Remove** | LLM auto-extraction + injection feedback (no injection = no feedback loop) |
 | `inject/` (event, index, queue, stats) | **Remove** | Passive query, not active push |
-| `Pattern` type | **Remove** | Replaced by `Note` |
+| `Pattern` type | **Remove** | Replaced by `category: note` skills |
 
 ## Storage layers
 
 ### Layer 1: Filesystem (source of truth)
 
-- Path: `~/.mur/notes/<path-segments>/<name>.md`
-- Directory structure IS the category taxonomy. `rust/error-handling.md` has
-  implicit path `rust`.
-- Atomic writes: temp file + rename (same as current YAML store).
-- Git-friendly: plain text, diffable, mergeable.
+- Path: `~/.mur/skills/<name>/` (one directory per skill, all categories).
+- Note-mode keeps its markdown body in `content.note` inside `skill.yaml`; the
+  SKILL.md authoring/export view is derived via `parse_markdown`.
+- `tags` and an optional `path:`/topic field in the manifest carry the taxonomy
+  (route 1 has no directory-as-category tree — the corpus is flat under
+  `~/.mur/skills/`; grouping is by tag/topic, surfaced in CLI and the export view).
+- Atomic writes: temp file + rename (existing skill store behaviour).
+- Git-friendly: `skill.yaml` is plain text, diffable, mergeable (force block-scalar
+  output for the body keeps prose diffs clean).
 
-### Layer 2: SQLite (metadata index)
+### Layer 2: SQLite corpus metadata index (optional, deferred)
 
-- Path: `~/.mur/notes.db`
-- Schema: one table `notes` with columns for every filterable field
-  (name, path, kind, tier, maturity, importance, tags as JSON array,
-  created_at, updated_at, decay_last_active).
-- Purpose: fast `WHERE` queries without parsing 200 markdown files.
-- Rebuild: `mur notes reindex` — scans `~/.mur/notes/`, parses frontmatter,
-  upserts rows.
-- No migration: schema version stored as `PRAGMA user_version`. On mismatch,
+- **Not in the MVP.** At current corpus size (a handful of skills, ~160 patterns
+  to migrate) a directory scan is fast enough. Per Mandatory Rule #1, do not add
+  a second index until it earns its place.
+- When added, it indexes the **whole skill corpus** keyed by category
+  (`~/.mur/skills.db`), not a notes-only table. Purpose: fast `WHERE` filtering
+  (`category = note AND maturity = stable`) without parsing every directory.
+- Rebuild: `mur skill reindex`. No migration: `PRAGMA user_version` mismatch →
   delete and rebuild.
 
 ### Layer 3: LanceDB (vector index)
 
-- Existing `store::vector::VectorStore` trait; `LanceDbStore` impl.
-- Embedding model: `nomic-embed-text-v1.5` via Ollama (local, free).
-- Embedding input: `name + "\n" + description + "\n" + body` (truncated to
-  512 tokens).
+- Existing `store::vector::VectorStore` trait; `LanceDbStore` impl; corpus-wide.
+- Embedding: reuse the existing configurable embedder (`store/embedding.rs`):
+  provider + model come from `config.embedding` (Ollama default; current default
+  model `qwen3-embedding:0.6b`). **Do not hardcode a model** (Mandatory Rule #1).
+- **Dimension consistency:** notes MUST embed with the same model/dimensions as
+  the rest of the skill corpus, or hybrid search across categories breaks.
+  Changing the model is a corpus-wide reindex, never a notes-only change.
+- Embedding input (note): `name + "\n" + description + "\n" + body` (truncated per
+  `config.embedding` limit).
 - Hybrid scoring: vector similarity (0.7) + BM25 keyword (0.3), fused via RRF.
-- Max results: 10. Recency boost: ×1.2 for notes active in last 7 days.
+- Max results: 10. Recency boost: ×1.2 for skills active in last 7 days.
 
 ## Retrieval
 
-### CLI
+### CLI (`mur notes` = `category: note` convenience facade over `mur skill`)
 
 ```
-mur notes search "rust error handling"
+mur notes search "rust error handling"   # = mur skill search --category note
 mur notes show <name>
 mur notes list --kind decision --maturity stable
-mur notes edit <name>            # opens $EDITOR
+mur notes edit <name>            # SKILL.md view in $EDITOR, round-trips to skill.yaml
 mur notes create --kind reference
 mur notes archive <name>
-mur notes reindex                # rebuild SQLite + LanceDB from files
+mur notes export --obsidian <vault>      # derived flat-markdown view
+mur skill reindex                        # rebuild LanceDB (+ SQLite if enabled) — shared
+mur skill evolve --category note         # lifecycle sweep — shared
 ```
 
-### MCP server
+`mur notes` is a thin facade; reindex and evolve are **shared** `mur skill`
+commands, not note-private, so notes and workflows evolve through one path.
 
-Expose as MCP tools so AI assistants (Claude Code, Cursor, etc.) can search,
-read, and create notes during sessions:
+### MCP server (unified surface)
+
+Expose one search surface with a category filter, plus note-create:
 
 ```
-mcp__mur__notes_search(query, kind?, maturity?, limit?)
-mcp__mur__notes_read(name)
-mcp__mur__notes_create(name, description, kind, body, tags?)
-mcp__mur__notes_link(from, to, relationship)
+mcp__mur__skill_search(query, category?, kind?, maturity?, limit?)
+mcp__mur__skill_read(name)
+mcp__mur__note_create(name, description, kind, body, tags?)
+mcp__mur__note_link(from, to, relationship)
 ```
 
-The MCP server is a thin wrapper around the existing agent-runtime skill
-injection path — notes are just `category: Note` skills.
+`notes_search` / `notes_read` may exist as thin aliases that pin
+`category: note`, but the canonical tools are category-filtered `skill_*`. The
+server is a thin wrapper around the existing agent-runtime skill path — notes are
+just `category: note` skills.
 
-### Obsidian / external tools
+### Obsidian / external tools (derived export)
 
-`~/.mur/notes/` is a valid Obsidian vault root. Users can:
-- Open it directly as an Obsidian vault
-- Symlink it into an existing vault
-- Use any markdown editor
-
-mur does not compete with Obsidian — it adds a lifecycle layer and an AI query
-surface *on top of* the same markdown files.
+`mur notes export --obsidian <vault>` writes flat `SKILL.md` files
+(frontmatter + body) into the target vault. The export is read-oriented: edits
+made in Obsidian are not written back to `~/.mur/skills/` automatically. To bring
+external edits in, `mur notes ingest <file>` (post-MVP, see below) re-imports a
+markdown file as a note. mur does not compete with Obsidian — it adds a lifecycle
+layer and an AI query surface on top of the same content, exposed as a vault view.
 
 ## Lifecycle (the differentiator)
 
-Reuse `skill/lifecycle.rs` with note-specific signals:
+Reuse `skill/lifecycle.rs` and `SkillStats` unchanged. The note-specific part is
+only *what counts as a use*: a **retrieval** (CLI/MCP read) appends a
+`{"ts": …, "kind": "retrieval"}` line to the skill's shared `events.jsonl`. The
+stats reducer turns that into `usage_count` / `last_success_at`, and
+`next_state(stats, now)` does the rest — the same ladder workflows use.
 
-| State | Condition |
+| State | Note condition (via shared ladder) |
 |---|---|
 | **Draft** | Default. Newly created, not yet validated. |
-| **Emerging** | Retrieved ≥ 3 times. Promising. |
-| **Stable** | Retrieved ≥ 10 times, last active < 30d. Trusted. |
-| **Canonical** | Pinned by user. Never auto-demoted. |
+| **Emerging** | Retrieved ≥ `PROMOTE_DRAFT_USES` (default 3). |
+| **Stable** | Retrieved ≥ `PROMOTE_EMERGING_USES` (default 10), rate/age gates met. |
+| **Canonical** | `pinned` by user. Never auto-demoted. |
 | **Deprecated** | No retrieval in 90d, OR user explicitly deprecates. |
-| **Archived** | Deprecated + 180d no activity. Candidate for deletion. |
+| **Archived** | Decay + age past threshold. Candidate for hard-delete sweep. |
 
-**Decay:** `last_active` is updated on every retrieval. Tier half-lives
-determine decay rate (session=14d, project=90d, core=365d). Importance decays
-by `0.5 ^ (days_since_last_active / half_life_days)`.
+**Retrieval has no failure.** A retrieval always "succeeds", so for a note every
+event increments both `usage_count` and `success_count` (`success_rate == 1.0`).
+The promotion ladder therefore degenerates to **count + age** (the rate gates
+auto-pass), and the `success_rate < 0.3` deprecation rule **never fires** for
+notes — note demotion is driven only by decay+age (`AUTO_ARCHIVE_*`) or manual
+deprecate. This is intentional; it must be explicit so an implementer does not
+invent a "note failure" signal. `SkillStats::anchor_confidence` (the decaying
+quantity, default 1.0) is seeded from the note's `importance` at create time.
 
-**Promotion/demotion sweep:** `mur notes evolve` (runnable manually or via
-cron). Sweeps all notes, updates maturity based on retrieval stats, decays
-importance, flags candidates for archival.
+**Why append-only events, not write-on-read.** The first draft mutated
+`last_active` on every retrieval. Appending to `events.jsonl` instead avoids
+read-path write contention, matches the workflow run-ledger exactly, and lets
+the shared reducer compute stats lazily during `mur skill evolve`.
+
+**Decay:** Tier half-lives (session=14d, project=90d, core=365d) determine the
+rate; `importance` decays by `0.5 ^ (days_since_last_active / half_life_days)`.
+Thresholds live in config (shared with v2 P4).
 
 **Contradiction detection** (post-MVP): optional nightly sweep via local LLM.
 Two notes with high similarity but conflicting conclusions → flag for user
-review. Inspired by BrainDB's five contradiction strategies.
+review. Inspired by BrainDB's contradiction strategies.
 
 ## Local LLM integration (post-MVP)
 
 A local LLM (Ollama, 7B+) can assist with:
 
-1. **Ingest:** `mur notes ingest <file>` — reads a raw document, extracts
-   structured notes with frontmatter, writes them into `~/.mur/notes/`.
+1. **Ingest:** `mur notes ingest <file>` — reads a raw document (or an
+   Obsidian-edited export), extracts structured notes with frontmatter, writes
+   them as `category: note` skills.
 2. **Consolidate:** detects near-duplicate notes, suggests merges.
 3. **Contradiction detection:** nightly sweep for conflicting claims.
-4. **Summarize:** `mur notes summarize <name>` — regenerates description from body.
+4. **Summarize:** `mur notes summarize <name>` — regenerates `description` from body.
 
 All LLM features are **optional**. Manual `mur notes create` requires no LLM.
-The gate is: if `ollama list` returns no models, LLM features are disabled
-with a clear message ("install Ollama and pull a model to enable AI features").
+Gate: if `ollama list` returns no models, LLM features are disabled with a clear
+message ("install Ollama and pull a model to enable AI features").
+
+`source_sessions` (which sessions a note was extracted from) is **only** populated
+by the LLM ingest path. Since ingest is post-MVP, the field is omitted from the
+MVP manifest and added with the ingest feature, rather than carried as a dead
+field.
 
 ## Migration from Patterns
 
-1. Export all 160 patterns to `~/.mur/exported-patterns/<name>.md` (markdown
-   with frontmatter).
-2. Delete `~/.mur/patterns/`, `~/.mur/fingerprints.jsonl`.
-3. Remove pattern pipeline code (emergence, fingerprinting, feedback, inject).
-4. Create `~/.mur/notes/` directory with a README.md explaining the new system.
-5. Users manually promote exported patterns they want to keep:
-   `cp ~/.mur/exported-patterns/rust-error-handling.md ~/.mur/notes/rust/`
-6. Run `mur notes reindex` to build SQLite + LanceDB indexes.
+Aligned with v2's Pattern-removal sequence (v2 owns the removal; this owns the
+note bootstrap):
+
+1. v2 exports all 160 patterns to `~/.mur/exported-patterns/<name>.md` (markdown
+   with frontmatter) before deleting `~/.mur/patterns/` and the pattern pipeline.
+2. Users manually promote exported patterns worth keeping by importing them as
+   notes: `mur notes ingest ~/.mur/exported-patterns/rust-error-handling.md`
+   (or, pre-ingest, hand-create the `~/.mur/skills/<name>/` directory).
+3. `mur skill reindex` rebuilds the LanceDB index.
 
 No automatic migration. The old patterns are code-convention-focused and most
-have low value as general reference notes. Let the user curate.
+have low value as general reference notes — let the user curate.
 
 ## Development phases
 
-| Phase | Content | Est. |
-|---|---|---|
-| **P1: Schema + storage** | `NoteManifest` struct; markdown frontmatter parser; SQLite metadata index; file watcher (mtime → reindex changed files) | 1 wk |
-| **P2: CLI** | `mur notes {search, show, list, create, edit, archive, reindex, evolve}` | 1 wk |
-| **P3: Retrieve** | Adapt existing hybrid retrieval (LanceDB + BM25) for notes; RRF fusion; recency/importance weighting | 3–4 d |
-| **P4: Lifecycle** | Adapt `skill/lifecycle.rs` for note retrieval signals; `mur notes evolve` sweep; decay + promotion/demotion | 3–4 d |
-| **P5: MCP server** | Expose `notes_search`, `notes_read`, `notes_create`, `notes_link` as MCP tools via agent-runtime skill path | 3–4 d |
-| **P6: Local LLM (P2)** | Ingest, consolidate, contradiction detection, summarize — all gated on Ollama availability | 1 wk |
-| **P7: Migration** | Pattern export → md; pattern pipeline removal (from Workflow Engine v2 P1); `~/.mur/notes/` bootstrap | 1–2 d |
+P1–P4 deliver a working CLI note system without LLM dependency. They depend on
+the **shared foundation** landing first (v2 P1–P4: Pattern removal, Category/
+ContentMode extension, `events.jsonl` + stats reducer, `mur skill evolve`).
 
-Total: ~5 weeks to full feature set. P1–P4 deliver a working CLI note system
-without LLM dependency. P5 adds AI assistant integration. P6 adds LLM smarts.
+| Phase | Content | Est. | Depends on |
+|---|---|---|---|
+| **N1: Note schema** | `category: note`, `ContentMode::Note`, `content.note` body field, `NoteKind`; extend `parse_markdown`/`serialize_canonical` for the note SKILL.md round-trip (no new file I/O) | 3–4 d | v2 Category/ContentMode + skill store |
+| **N2: CLI facade** | `mur notes {search, show, list, create, edit, archive}` over `mur skill`; `mur notes export --obsidian` | 1 wk | N1, v2 corpus index |
+| **N3: Retrieve** | Implement `Retrievable` for `Note`; reuse hybrid retrieval (LanceDB + BM25 + RRF); recency/importance weighting | 2–3 d | N1, v2 `Retrievable` trait (P1b) |
+| **N4: Lifecycle wire-up** | Retrieval → `events.jsonl`; rely on shared stats reducer + `next_state` + `mur skill evolve --category note` | 2–3 d | v2 events/stats/evolve |
+| **N5: MCP** | `skill_search(category?)`, `skill_read`, `note_create`, `note_link` via agent-runtime skill path | 3–4 d | v2 MCP skill path |
+| **N6: Local LLM (P2)** | ingest, consolidate, contradiction detection, summarize — gated on Ollama | 1 wk | N1–N5 |
+
+Total incremental over the shared foundation: ~3.5 weeks to full feature set.
 
 ## Resolved decisions
 
-1. **Markdown + YAML frontmatter is the canonical format.** Not SQLite, not
-   plain YAML. Markdown is human-readable, Obsidian-compatible, git-diffable.
-2. **SQLite is a derivative index, not source of truth.** Delete and rebuild
-   from files at any time.
+1. **Route 1 storage (agreed).** Canonical source of truth is the per-skill
+   directory `~/.mur/skills/<name>/`. No separate `~/.mur/notes/` tree. Obsidian
+   is a derived export view, not a second canonical format.
+2. **Note body lives in `content.note` inside `skill.yaml`** (route 1a), not a
+   sibling file. Decisive reason: `content_sha256` (DSSE signing, drift detection,
+   trust hash, registry lookup) hashes the whole manifest's canonical YAML — body-
+   in-`content` is signed/drift-covered for free, identical to a workflow
+   `procedure`; a sibling file falls outside the hash. Authoring ergonomics come
+   from the existing `parse_markdown` SKILL.md round-trip, not from a second
+   canonical file.
 3. **No automatic injection.** Notes are passive reference material queried on
-   demand via CLI or MCP. The `inject/` module is removed entirely.
-4. **Local LLM is optional.** All core features work without one. LLM features
-   are gated on Ollama availability.
-5. **No automatic migration from Patterns.** Export as archive; user curates
-   what to promote.
-6. **Notes and Workflows are both Skills** (`category: Note` / `category:
-   Workflow`). They share lifecycle, decay, linking, retrieval, and MCP
-   exposure. They differ in content shape (free markdown vs. structured DAG).
-7. **Tier half-lives and maturity ladder are exposed in config** (per Mandatory
-   Rule #1, shared with Workflow Engine v2 P4).
+   demand via CLI or MCP. The `inject/` push modules are removed.
+4. **Lifecycle is shared, not re-implemented.** Notes reuse `SkillStats` +
+   `skill/lifecycle.rs` + the shared `events.jsonl` reducer + `mur skill evolve`.
+   A note "use" is a retrieval event; a workflow "use" is a run event.
+5. **`mur notes` is a facade.** Category-private convenience commands wrap shared
+   `mur skill` machinery (reindex/evolve are shared, not note-private).
+6. **Unified MCP surface.** `skill_search(category?)` is canonical; `notes_*` are
+   optional aliases.
+7. **SQLite metadata index is deferred** and, when added, is corpus-wide
+   (all categories), not notes-only.
+8. **`confidence` becomes `Option`, left empty for notes** (extraction artifact,
+   meaningful only for v2's extracted workflows).
+9. **`source_sessions` ships with the LLM ingest feature**, not the MVP.
+10. **No automatic migration from Patterns.** v2 exports as archive; user curates
+    what to promote via `mur notes ingest`.
+11. **Notes and Workflows are both Skills** (`category: note` / `category:
+    workflow`) — two projections of one knowledge object, sharing lifecycle,
+    decay, linking, retrieval, signing, peer transfer, and MCP exposure, differing
+    only in content shape (free markdown vs. structured DAG) and usage signal
+    (retrieval vs. run).

@@ -47,13 +47,13 @@ pub(super) async fn search_patterns(
         .into_iter()
         .take(req.limit)
         .map(|sp| SearchResult {
-            name: sp.pattern.name.clone(),
-            description: sp.pattern.description.clone(),
+            name: sp.item.name.clone(),
+            description: sp.item.description.clone(),
             score: sp.score,
             relevance: sp.relevance,
-            tier: format!("{:?}", sp.pattern.tier).to_lowercase(),
-            maturity: format!("{:?}", sp.pattern.maturity).to_lowercase(),
-            confidence: sp.pattern.confidence,
+            tier: format!("{:?}", sp.item.tier).to_lowercase(),
+            maturity: format!("{:?}", sp.item.maturity).to_lowercase(),
+            confidence: sp.item.confidence,
         })
         .collect();
 

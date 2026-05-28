@@ -512,7 +512,7 @@ pub fn explain_why(pattern: &Pattern, store: &YamlStore) -> Result<()> {
 
         if let Some(pos) = results
             .iter()
-            .position(|sp| sp.pattern.name == pattern.name)
+            .position(|sp| sp.item.name == pattern.name)
         {
             println!();
             println!(

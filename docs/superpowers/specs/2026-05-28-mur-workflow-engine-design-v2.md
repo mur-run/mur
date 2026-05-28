@@ -60,7 +60,12 @@ The v1 state-machine map collapses onto the existing one:
 
 ## What is actually missing (the real work)
 
-1. **Run-ledger** — the only true foundation gap. (§ Layer 4)
+1. **Run-ledger + the event→stats reducer** — the foundation gap. Note that
+   `SkillStats` *persistence* already exists (`skill/stats.rs`
+   `new`/`path`/`load`/`merge_in_place`; `cmd/skill_stats.rs`); what is missing is
+   (a) reducing a per-skill append-only event log into `SkillStats` and (b) a
+   sweep that persists the `next_state` result. The gap is narrower than "build a
+   ledger from scratch". (§ Layer 4)
 2. **Executable + DAG fields on `ProcedureStep`** — `id`, `depends_on`, `command`,
    `on_failure`, `retry`, `timeout_secs`, `needs_approval`. (§ Schema)
 3. **JSON Schema generation** for the Hub DAG editor. (§ Schema)
@@ -85,6 +90,17 @@ Session Recording ──→ Extraction ──→ category:Workflow Skill ──�
 A `category: Workflow` skill whose steps are all command-mode is a classic
 runnable workflow. One with intent-mode steps is an agent procedure. Same type,
 same lifecycle, same disclosure, same registry. There is one knowledge unit.
+
+**Sibling projection: Notes.** `category: Note` (see
+`2026-05-28-mur-notes-design.md`) is the *reference* projection of the same
+knowledge object: free-markdown content instead of an executable `procedure`, and
+a **retrieval** usage signal instead of a **run**. It reuses everything this spec
+builds — `SkillStats`, `next_state`, the per-skill event log, the stats reducer,
+`mur skill evolve`, the corpus index, and the MCP `skill_search` surface. The
+shared additions this spec must therefore make category-agnostic, not
+workflow-private: (1) the `Category`/`ContentMode` enums gain a `Note` variant;
+(2) the run-ledger is one *projection* of a per-skill `events.jsonl`; (3)
+`mur skill evolve` and the corpus index/search work across categories.
 
 ### Schema: executable DAG steps
 
@@ -315,11 +331,14 @@ worlds.
 `pipeline.rs` (`|`/`&&`/`,`) stays for **composing multiple skills**; the new DAG
 is **within** one skill.
 
-**Run-ledger (THE missing foundation).** Append-only, one file per skill:
+**Run-ledger (THE missing foundation).** Append-only, one file per skill. It is
+the *workflow projection* of a per-skill `events.jsonl`: a workflow appends a
+`run` event, a note (sibling spec) appends a `retrieval` event, and both feed the
+same stats reducer. The run projection records:
 
 ```
-~/.mur/skills/<name>/runs.jsonl
-{"ts": 1730000000, "exit_code": 0, "duration_ms": 8421,
+~/.mur/skills/<name>/runs.jsonl   (run events; sibling: retrieval events for notes)
+{"ts": 1730000000, "kind": "run", "exit_code": 0, "duration_ms": 8421,
  "failed_step": null, "env_class": "ok", "trigger": "manual"}
 ```
 
@@ -338,7 +357,10 @@ merge/ sync is straightforward: union the files, sort by `ts`, done.
 **Evolution = feed the ledger into the existing state machine.** A sweep reduces
 `runs.jsonl` → `SkillStats` (`usage_count`, `success_count`, `last_success_at`,
 `first_successful_use_at`, …) and calls the existing
-`skill::lifecycle::next_state(stats, now)`. No new state machine.
+`skill::lifecycle::next_state(stats, now)`. No new state machine. The sweep is
+the category-agnostic `mur skill evolve [--category …]` — it reduces every
+skill's `events.jsonl` (run events for workflows, retrieval events for notes)
+through one reducer, so notes and workflows evolve through one path.
 
 Two small additions to `lifecycle.rs`:
 - **Broken fast-path**: N consecutive `env_class == "workflow"` failures →
@@ -389,6 +411,12 @@ Carried from v1, with corrections from the audit:
 **Add**
 - `ProcedureStep` DAG/executable fields + JSON Schema emit.
 - Run-ledger + stats reducer + Broken fast-path.
+- **Category-agnostic foundation (shared with Notes):** `Note` variant on
+  `Category`/`ContentMode` (extend `Content::mode()` from a 3-tuple to a 4-tuple
+  and update `validate`'s "exactly one content mode" rule + all exhaustive match
+  sites); the run-ledger as a projection of per-skill `events.jsonl`; `mur skill
+  evolve` and the corpus index/`skill_search` made category-aware. Notes
+  (`2026-05-28-mur-notes-design.md`) depends on this.
 - LLM judge (gate + extract) + cross-session aggregation.
 - Hub DAG editor.
 - Migration: `~/.mur/workflows/` → `~/.mur/skills/`; Pattern export.
@@ -408,11 +436,12 @@ P4 was under-scoped in v1 (no ledger); P5/P6 were over-scoped (skill infra exist
 | Phase | Content | Est. |
 |---|---|---|
 | **P1a: Export + delete** | Export 160 patterns → md; remove pattern pipeline (emergence, fingerprinting, decay, maturity); keep noise_filter | 1–2 d |
-| **P1b: Repoint** | Repoint `inject/hook.rs`, `retrieve/`, `sync.rs` from Pattern to skill/workflow; verify no regressions | 2–3 d |
+| **P1b: Repoint** | Repoint `inject/hook.rs`, `sync.rs`; **`retrieve/` is hard-typed to `Pattern`** (`ScoredPattern`, `score_and_rank_hybrid(Vec<Pattern>)`) — introduce a `Retrievable` trait so Skill/Note + transitional Pattern share one scorer (a type migration, not a repoint); verify no regressions | 4–6 d |
 | **P2: Schema + ledger** | Extend `ProcedureStep` (DAG + exec); JSON Schema emit; SessionEvent enrich; run-ledger + stats reducer | 1.5 wk |
 | **P3: Unified executor** | DAG topo-sort + concurrent branches; command/intent dispatch; `needs_approval` + `--yes` flag; wire run-ledger | 1 wk |
 | **P4: Lifecycle wire-up** | Feed stats → `next_state`; Broken fast-path; Archived hard-delete sweep; move ALL thresholds to config (run-driven + existing `lifecycle.rs` `PROMOTE_*`/`DEMOTE_*` constants) | 3–4 d |
-| **P5: Extraction** | noise filter prep; LLM judge gate+extract; cross-session aggregation (normalize → Jaccard → DBSCAN → diff); notification | 1.5 wk |
+| **P5a: Manual + single-session extract** | noise filter prep; manual `mur-in`/`mur-out` → draft `category: Workflow` skill; LLM judge gate+extract on one session; notification. Delivers value at cold-start with no clustering | 1 wk |
+| **P5b: Cross-session aggregation** | normalize → n-gram Jaccard → DBSCAN cluster → literal-diff variables → one consolidated draft. **Defer until real session volume exists** — DBSCAN needs density that cold-start lacks | 1 wk |
 | **P6: Hub DAG editor** | graph view from schema; per-step form; variable mgmt; test-run in sandbox | 2–3 wk |
 | **P7: Migration + sharing** | `workflows/` → `skills/` (convert `order` → `depends_on`, `default_value` → `default`, dedupe against existing skills); reuse existing registry/transfer for team share | 1 wk |
 
@@ -434,7 +463,13 @@ P4 was under-scoped in v1 (no ledger); P5/P6 were over-scoped (skill infra exist
    on a prompt that will never be answered.
 6. **Concurrent branches use a proper task-graph executor** (topo-sort → rank
    grouping → `tokio::spawn` per rank), not `pipeline.rs` `,` operator.
-   `pipeline.rs` stays for CLI-level composition of multiple skills.
+   `pipeline.rs` stays for CLI-level composition of multiple skills. The DAG
+   topology is new, but the per-step `FailureAction::{Abort,Skip,Retry}` handling,
+   retry/timeout, and `tokio::spawn` pattern are **lifted from
+   `executor/pipeline.rs`** (already implemented there, ~lines 204-219), not
+   rewritten — which requires `FailureAction`/`RetryConfig` to have moved into
+   `skill::manifest` first (P2), since `pipeline.rs` imports them from
+   `workflow.rs` today.
 7. **Migration converts `order` → `depends_on`:** for each existing workflow YAML
    with `steps` using `order: u32`, sort by `order`, then emit
    `s1.depends_on = [s0]`, `s2.depends_on = [s1]`, etc. Steps without `order`
