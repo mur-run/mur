@@ -316,4 +316,51 @@ mod tests {
         let loaded = load_skill_candidates(&skills_dir, tmp.path()).unwrap();
         assert!(loaded.is_empty());
     }
+
+    #[test]
+    fn end_to_end_ranks_loaded_skills_via_generic_scorer() {
+        use crate::retrieve::scoring::score_and_rank_generic;
+        use std::fs;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        let mur_home = tmp.path();
+
+        // alpha: matches query "deploy" in abstract and description.
+        fs::create_dir_all(skills_dir.join("deploy-fly")).unwrap();
+        fs::write(
+            skills_dir.join("deploy-fly").join("skill.yaml"),
+            "name: deploy-fly\nversion: 1.0.0\npublisher: human:test\n\
+             description: deploy to Fly.io\ncategory: context\n\
+             priority: high\ntags: [deploy, fly]\n\
+             content:\n  abstract: how to deploy a Rust app to Fly.io\n  context: details\n",
+        )
+        .unwrap();
+
+        // beta: unrelated keyword content.
+        fs::create_dir_all(skills_dir.join("brew-update")).unwrap();
+        fs::write(
+            skills_dir.join("brew-update").join("skill.yaml"),
+            "name: brew-update\nversion: 1.0.0\npublisher: human:test\n\
+             description: keep homebrew current\ncategory: context\n\
+             priority: normal\ntags: [brew, mac]\n\
+             content:\n  abstract: run brew update weekly\n  context: details\n",
+        )
+        .unwrap();
+
+        let candidates = load_skill_candidates(&skills_dir, mur_home).unwrap();
+        assert_eq!(candidates.len(), 2);
+
+        let ranked = score_and_rank_generic("deploy fly rust", candidates);
+        assert!(
+            !ranked.is_empty(),
+            "deploy query should rank at least the deploy-fly skill"
+        );
+        assert_eq!(ranked[0].item.name(), "deploy-fly");
+        // If brew-update made it past the score floor, it must rank below deploy-fly.
+        if ranked.len() > 1 {
+            assert!(ranked[0].score > ranked[1].score);
+        }
+    }
 }
