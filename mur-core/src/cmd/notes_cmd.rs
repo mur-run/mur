@@ -236,4 +236,40 @@ mod tests {
         let ranked = do_search(tmp.path(), "anything", 10).unwrap();
         assert!(ranked.is_empty());
     }
+
+    #[test]
+    fn end_to_end_create_two_notes_then_search_returns_them_ranked() {
+        let tmp = tempdir().unwrap();
+
+        do_create(
+            tmp.path(),
+            "fly-deploy",
+            "Deploy a Rust app to Fly.io",
+            "# Deploy Steps\n1. cargo build --release\n2. fly deploy",
+        )
+        .unwrap();
+
+        do_create(
+            tmp.path(),
+            "brew-tips",
+            "Homebrew maintenance",
+            "# Brew\nRun brew update weekly to keep formulae fresh.",
+        )
+        .unwrap();
+
+        let ranked = do_search(tmp.path(), "deploy rust fly", 10).unwrap();
+        assert!(
+            !ranked.is_empty(),
+            "search should find at least the deploy note"
+        );
+        assert_eq!(ranked[0].item.manifest.name, "fly-deploy");
+        // brew-tips may or may not pass the score floor; if it did, it must rank below.
+        if ranked.len() > 1 {
+            assert!(ranked[0].score > ranked[1].score);
+        }
+
+        // Re-running create with the same name fails — proves duplicate detection survives a real flow.
+        let err = do_create(tmp.path(), "fly-deploy", "x", "y").unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+    }
 }
