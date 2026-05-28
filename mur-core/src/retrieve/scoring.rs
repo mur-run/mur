@@ -416,30 +416,28 @@ fn keyword_relevance_cached(query_words: &[&str], cache: &LowerCache) -> f64 {
     }
 }
 
-/// Recency score: exp(-days / 14)
-fn recency_score(pattern: &Pattern) -> f64 {
-    let last = pattern
-        .lifecycle
-        .last_injected
-        .or(pattern.evidence.last_validated)
-        .unwrap_or(pattern.created_at);
+/// Recency score: exp(-days / 14). Generic over Retrievable.
+fn recency_score_for<T: Retrievable + ?Sized>(item: &T) -> f64 {
+    let last = item.last_activity().unwrap_or_else(|| item.created_at());
     let days = (Utc::now() - last).num_days().max(0) as f64;
     (-days / 14.0).exp()
 }
 
-/// Time decay: 0.5 + 0.5 * exp(-days / half_life)
-fn time_decay_score(pattern: &Pattern) -> f64 {
-    let half_life = pattern
-        .lifecycle
-        .decay_half_life
-        .unwrap_or_else(|| pattern.tier.decay_half_life_days()) as f64;
-    let last = pattern
-        .lifecycle
-        .last_injected
-        .or(pattern.evidence.last_validated)
-        .unwrap_or(pattern.created_at);
+/// Time decay: 0.5 + 0.5 * exp(-days / half_life). Generic over Retrievable.
+fn time_decay_score_for<T: Retrievable + ?Sized>(item: &T) -> f64 {
+    let half_life = item.decay_half_life_days();
+    let last = item.last_activity().unwrap_or_else(|| item.created_at());
     let days = (Utc::now() - last).num_days().max(0) as f64;
     0.5 + 0.5 * (-days / half_life).exp()
+}
+
+// Pattern-typed shims preserved for the existing inner-scoring call sites;
+// removed in Task 6 when score_and_rank_inner becomes generic.
+fn recency_score(pattern: &Pattern) -> f64 {
+    recency_score_for(pattern)
+}
+fn time_decay_score(pattern: &Pattern) -> f64 {
+    time_decay_score_for(pattern)
 }
 
 /// Length normalization: 1 / (1 + 0.5 * log2(len / 500))
@@ -996,6 +994,17 @@ mod tests {
         let weights = std::collections::HashMap::new();
         let out = score_sources(hits, &weights);
         assert_eq!(out[0].external_id, "new");
+    }
+
+    #[test]
+    fn recency_and_decay_use_retrievable_accessors() {
+        use chrono::{Duration, Utc};
+        let mut p = make_pattern("alpha", "alpha body");
+        p.lifecycle.last_injected = Some(Utc::now() - Duration::days(1));
+        let r_generic = recency_score_for(&p as &dyn Retrievable);
+        let d_generic = time_decay_score_for(&p as &dyn Retrievable);
+        assert!((r_generic - 0.93_f64).abs() < 0.02);
+        assert!(d_generic > 0.5 && d_generic <= 1.0);
     }
 
     #[test]
