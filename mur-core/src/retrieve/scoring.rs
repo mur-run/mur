@@ -357,19 +357,17 @@ struct LowerCache {
 }
 
 impl LowerCache {
-    fn from_pattern(pattern: &Pattern) -> Self {
-        let tags_text: String = pattern
-            .tags
-            .topics
+    fn from_item<T: Retrievable + ?Sized>(item: &T) -> Self {
+        let tags_text: String = item
+            .tag_terms()
             .iter()
-            .chain(pattern.tags.languages.iter())
             .map(|t| t.to_lowercase())
             .collect::<Vec<_>>()
             .join(" ");
         Self {
-            name: pattern.name.to_lowercase(),
-            description: pattern.description.to_lowercase(),
-            content: pattern.content.as_text().to_lowercase(),
+            name: item.name().to_lowercase(),
+            description: item.description().to_lowercase(),
+            content: item.text().to_lowercase(),
             tags_text,
         }
     }
@@ -381,7 +379,7 @@ fn keyword_relevance(query_words: &[&str], pattern: &Pattern) -> f64 {
         return 0.0;
     }
 
-    let cache = LowerCache::from_pattern(pattern);
+    let cache = LowerCache::from_item(pattern);
     keyword_relevance_cached(query_words, &cache)
 }
 
@@ -998,6 +996,15 @@ mod tests {
         let weights = std::collections::HashMap::new();
         let out = score_sources(hits, &weights);
         assert_eq!(out[0].external_id, "new");
+    }
+
+    #[test]
+    fn lower_cache_builds_from_retrievable_with_lowered_fields() {
+        let p = make_pattern("AlphaBeta", "AlphaBeta Body Content");
+        let cache = LowerCache::from_item(&p);
+        assert_eq!(cache.name, "alphabeta");
+        assert!(cache.description.chars().all(|c| !c.is_uppercase()));
+        assert!(cache.content.chars().all(|c| !c.is_uppercase()));
     }
 
     #[test]
