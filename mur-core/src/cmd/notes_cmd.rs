@@ -58,8 +58,50 @@ pub fn do_create(
     Ok(written)
 }
 
+use std::io::Read;
+
+use super::agent::resolve_mur_home;
 use crate::retrieve::scoring::{Scored, score_and_rank_generic};
 use crate::retrieve::skill_candidates::{LoadedSkill, load_skill_candidates};
+
+/// Top-level `mur notes create` handler.
+pub fn cmd_create(name: &str, description: &str, body_file: Option<&Path>) -> Result<()> {
+    let body = match body_file {
+        Some(p) => std::fs::read_to_string(p)
+            .with_context(|| format!("read body file {}", p.display()))?,
+        None => {
+            let mut s = String::new();
+            std::io::stdin()
+                .read_to_string(&mut s)
+                .context("read body from stdin")?;
+            s
+        }
+    };
+    let home = resolve_mur_home()?;
+    let path = do_create(&home, name, description, &body)?;
+    println!("Created note '{}' at {}", name, path.display());
+    Ok(())
+}
+
+/// Top-level `mur notes search` handler.
+pub fn cmd_search(query: &str, limit: usize) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let ranked = do_search(&home, query, limit)?;
+    if ranked.is_empty() {
+        println!("No notes match '{query}'.");
+        return Ok(());
+    }
+    for (i, sp) in ranked.iter().enumerate() {
+        println!(
+            "{:>2}. {:<40} score={:.3}  {}",
+            i + 1,
+            sp.item.manifest.name,
+            sp.score,
+            sp.item.manifest.description
+        );
+    }
+    Ok(())
+}
 
 /// Search `~/.mur/skills/` for `category: note` skills matching `query`.
 /// Returns up to `limit` ranked results (Scored<LoadedSkill>).
