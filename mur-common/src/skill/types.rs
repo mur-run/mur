@@ -38,6 +38,7 @@ pub enum Category {
     Workflow,
     Command,
     Meta,
+    Note,
 }
 
 /// Exactly one content mode is populated; see spec §3.2.3.
@@ -47,6 +48,7 @@ pub enum ContentMode {
     Context,
     Workflow,
     Command,
+    Note,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -87,5 +89,21 @@ mod tests {
     #[test]
     fn host_id_default_is_all() {
         assert_eq!(HostId::default(), HostId::All);
+    }
+
+    #[test]
+    fn note_category_serialises_lowercase_and_roundtrips() {
+        let yaml = serde_yaml_ng::to_string(&Category::Note).unwrap();
+        assert_eq!(yaml.trim(), "note");
+        let parsed: Category = serde_yaml_ng::from_str("note").unwrap();
+        assert_eq!(parsed, Category::Note);
+    }
+
+    #[test]
+    fn note_content_mode_serialises_lowercase_and_roundtrips() {
+        let yaml = serde_yaml_ng::to_string(&ContentMode::Note).unwrap();
+        assert_eq!(yaml.trim(), "note");
+        let parsed: ContentMode = serde_yaml_ng::from_str("note").unwrap();
+        assert_eq!(parsed, ContentMode::Note);
     }
 }
