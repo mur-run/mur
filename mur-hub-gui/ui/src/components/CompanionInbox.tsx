@@ -105,7 +105,14 @@ export function CompanionInbox({ agentName }: Props) {
               </span>
             </div>
             <p className="inbox-body">{msg.body}</p>
-            {isUnread && (
+            {isUnread && msg.situation === "workflow_nudge" && (
+              <div className="inbox-actions">
+                <button onClick={() => ack(msg.id, "good")}>Save it</button>
+                <button onClick={() => ack(msg.id, "snooze")}>Not now</button>
+                <button onClick={() => ack(msg.id, "dismiss")}>No thanks</button>
+              </div>
+            )}
+            {isUnread && msg.situation !== "workflow_nudge" && (
               <div className="inbox-actions">
                 <button onClick={() => ack(msg.id, "good")} title="Good">👍</button>
                 <button onClick={() => ack(msg.id, "bad")} title="Bad">👎</button>
@@ -115,9 +122,13 @@ export function CompanionInbox({ agentName }: Props) {
             {!isUnread && (
               <span className="inbox-acked">
                 {msg.response.value === "good"
-                  ? "👍 Acknowledged"
+                  ? msg.situation === "workflow_nudge"
+                    ? "💾 Saved"
+                    : "👍 Acknowledged"
                   : msg.response.value === "bad"
                   ? "👎 Noted"
+                  : msg.response.value === "snooze"
+                  ? "⏳ Snoozed"
                   : "🚫 Dismissed"}
               </span>
             )}
