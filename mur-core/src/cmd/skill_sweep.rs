@@ -12,6 +12,7 @@ pub fn cmd_sweep(filter: Option<&str>, dry_run: bool) -> Result<()> {
             filter: filter.map(str::to_string),
             dry_run,
             now: chrono::Utc::now(),
+            require_human_curation_before_stable: true,
         },
     )?;
 

@@ -636,6 +636,7 @@ mod tests {
                 filter: Some("rust-errors".into()),
                 dry_run: false,
                 now: now + Duration::days(2),
+                require_human_curation_before_stable: true,
             },
         )
         .unwrap();
