@@ -72,7 +72,7 @@ pub(crate) async fn cmd_inject(query: &str) -> Result<()> {
         .unwrap_or_default();
     let mut injected_patterns: Vec<Pattern> = Vec::new();
     for sp in results {
-        let mut p = sp.pattern;
+        let mut p = sp.item;
         if p.lifecycle.status == LifecycleStatus::Archived {
             continue;
         }

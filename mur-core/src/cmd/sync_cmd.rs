@@ -978,7 +978,7 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
         if project_aware {
             let detected_lang = capture::starter::detect_language_name(&cwd);
             for sp in &mut scored {
-                let p = &sp.pattern;
+                let p = &sp.item;
                 // Boost patterns that explicitly list this project
                 if p.applies
                     .projects
@@ -1013,7 +1013,7 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
         let top: Vec<Pattern> = scored
             .into_iter()
             .take(target.max_patterns)
-            .map(|sp| sp.pattern)
+            .map(|sp| sp.item)
             .collect();
 
         if top.is_empty() {

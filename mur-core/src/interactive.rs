@@ -510,10 +510,7 @@ pub fn explain_why(pattern: &Pattern, store: &YamlStore) -> Result<()> {
         let total_candidates = all_patterns.len();
         let results: Vec<ScoredPattern> = score_and_rank(&query, all_patterns);
 
-        if let Some(pos) = results
-            .iter()
-            .position(|sp| sp.pattern.name == pattern.name)
-        {
+        if let Some(pos) = results.iter().position(|sp| sp.item.name == pattern.name) {
             println!();
             println!(
                 "  Combined rank: #{} of {} candidates (query: \"{}\")",

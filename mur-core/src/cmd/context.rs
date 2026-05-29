@@ -231,7 +231,7 @@ pub(crate) async fn cmd_context(
 
     let mut injected_patterns: Vec<Pattern> = Vec::new();
     for sp in results {
-        let mut p = sp.pattern;
+        let mut p = sp.item;
         if p.lifecycle.status == LifecycleStatus::Archived {
             continue;
         }

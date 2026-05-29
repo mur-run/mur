@@ -1,5 +1,7 @@
 //! Multi-signal scoring pipeline for pattern retrieval.
 
+use std::borrow::Cow;
+
 use chrono::Utc;
 use mur_common::config::RetrievalConfig;
 use mur_common::pattern::{Origin, Pattern, PatternKind, Tier};
@@ -16,13 +18,128 @@ pub struct ScopeContext {
     pub task: Option<String>,
 }
 
-/// A pattern with its computed relevance score.
+/// A retrievable knowledge item. The hybrid scorer is generic over this trait so
+/// `Pattern`, `Skill`, and (later) `Note` share one scoring pipeline.
+///
+/// Default `adjust_score` is the identity; `Pattern` overrides it to apply
+/// scope/language/kind boosts so existing Pattern behavior is preserved exactly.
+pub trait Retrievable {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn text(&self) -> Cow<'_, str>;
+    fn tag_terms(&self) -> Vec<&str>;
+    fn importance(&self) -> f64;
+    fn effectiveness(&self) -> f64;
+    fn tier(&self) -> Tier;
+    fn created_at(&self) -> chrono::DateTime<chrono::Utc>;
+    fn last_activity(&self) -> Option<chrono::DateTime<chrono::Utc>>;
+    fn decay_half_life_days(&self) -> f64;
+    /// Filter predicate: items where this returns false are dropped before scoring.
+    fn is_active(&self) -> bool;
+
+    /// Hook for item-specific score adjustment. Default: identity.
+    /// Pattern overrides to apply `scope_mult`, `kind_score_boost`, `lang_mult`.
+    fn adjust_score(
+        &self,
+        weighted_sum: f64,
+        _query_words: &[&str],
+        _scope: Option<&ScopeContext>,
+        _project_language: Option<&str>,
+    ) -> f64 {
+        weighted_sum
+    }
+}
+
+impl Retrievable for Pattern {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn text(&self) -> Cow<'_, str> {
+        self.content.as_text()
+    }
+    fn tag_terms(&self) -> Vec<&str> {
+        self.tags
+            .topics
+            .iter()
+            .chain(self.tags.languages.iter())
+            .map(String::as_str)
+            .collect()
+    }
+    fn importance(&self) -> f64 {
+        self.importance
+    }
+    fn effectiveness(&self) -> f64 {
+        self.evidence.effectiveness()
+    }
+    fn tier(&self) -> Tier {
+        self.tier
+    }
+    fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
+        self.created_at
+    }
+    fn last_activity(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.lifecycle
+            .last_injected
+            .or(self.evidence.last_validated)
+    }
+    fn decay_half_life_days(&self) -> f64 {
+        self.lifecycle
+            .decay_half_life
+            .unwrap_or_else(|| self.tier.decay_half_life_days()) as f64
+    }
+    fn is_active(&self) -> bool {
+        !self.lifecycle.muted
+            && self.lifecycle.status == mur_common::pattern::LifecycleStatus::Active
+    }
+    fn adjust_score(
+        &self,
+        weighted_sum: f64,
+        query_words: &[&str],
+        scope: Option<&ScopeContext>,
+        project_language: Option<&str>,
+    ) -> f64 {
+        let scope_mult = if self.applies.projects.is_empty()
+            && self.applies.languages.is_empty()
+            && self.applies.tools.is_empty()
+        {
+            0.7
+        } else {
+            1.0
+        };
+        let lang_mult = if let Some(proj_lang) = project_language {
+            if !self.applies.languages.is_empty() {
+                let proj_lang_lower = proj_lang.to_lowercase();
+                let matches = self
+                    .applies
+                    .languages
+                    .iter()
+                    .any(|l| l.to_lowercase() == proj_lang_lower);
+                if matches { 1.2 } else { 0.05 }
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        let kind_boost = kind_score_boost(self, query_words, scope);
+        (weighted_sum * scope_mult + kind_boost) * lang_mult
+    }
+}
+
+/// A retrieved item with its computed relevance score.
 #[derive(Debug, Clone)]
-pub struct ScoredPattern {
-    pub pattern: Pattern,
+pub struct Scored<T> {
+    pub item: T,
     pub score: f64,
     pub relevance: f64,
 }
+
+/// Backward-compatible alias for existing call sites.
+/// New code should prefer `Scored<T>`.
+pub type ScoredPattern = Scored<Pattern>;
 
 /// Scoring weights (from PLAN.md)
 const W_RELEVANCE: f64 = 0.45;
@@ -160,75 +277,46 @@ pub fn score_and_rank_with_scope_and_config(
 }
 
 /// Shared scoring logic: filter, score with a relevance function, sort, and budget-limit.
-fn score_and_rank_inner<F>(
+/// Generic over T: Retrievable so Pattern, Skill, and Note share one pipeline.
+fn score_and_rank_inner<T, F>(
     query_words: &[&str],
-    candidates: Vec<Pattern>,
+    candidates: Vec<T>,
     scope: Option<&ScopeContext>,
     project_language: Option<&str>,
     config: Option<&RetrievalConfig>,
     relevance_fn: F,
-) -> Vec<ScoredPattern>
+) -> Vec<Scored<T>>
 where
-    F: Fn(&[&str], &Pattern) -> f64,
+    T: Retrievable,
+    F: Fn(&[&str], &T) -> f64,
 {
     let score_floor = config.map_or(SCORE_FLOOR, |c| c.min_score);
     let max_patterns = config.map_or(MAX_PATTERNS, |c| c.max_patterns);
     let max_tokens = config.map_or(MAX_TOKENS, |c| c.max_tokens);
 
-    let mut scored: Vec<ScoredPattern> = candidates
+    let mut scored: Vec<Scored<T>> = candidates
         .into_iter()
-        .filter(|p| !p.lifecycle.muted)
-        .filter(|p| p.lifecycle.status == mur_common::pattern::LifecycleStatus::Active)
-        .map(|p| {
-            let relevance = relevance_fn(query_words, &p);
-            let recency = recency_score(&p);
-            let effectiveness = p.evidence.effectiveness();
-            let importance = p.importance;
-            let time_decay = time_decay_score(&p);
-            let content_len = p.content.as_text().len();
+        .filter(Retrievable::is_active)
+        .map(|item| {
+            let relevance = relevance_fn(query_words, &item);
+            let recency = recency_score_for(&item);
+            let effectiveness = item.effectiveness();
+            let importance = item.importance();
+            let time_decay = time_decay_score_for(&item);
+            let content_len = item.text().len();
             let length_norm = length_norm_score_from_len(content_len);
 
-            let scope_mult = if p.applies.projects.is_empty()
-                && p.applies.languages.is_empty()
-                && p.applies.tools.is_empty()
-            {
-                0.7
-            } else {
-                1.0
-            };
-
-            // Language mismatch penalty: if pattern specifies languages that
-            // don't match the current project, heavily penalize
-            let lang_mult = if let Some(proj_lang) = project_language {
-                if !p.applies.languages.is_empty() {
-                    let proj_lang_lower = proj_lang.to_lowercase();
-                    let matches = p
-                        .applies
-                        .languages
-                        .iter()
-                        .any(|l| l.to_lowercase() == proj_lang_lower);
-                    if matches { 1.2 } else { 0.05 }
-                } else {
-                    1.0 // pattern has no language restriction, neutral
-                }
-            } else {
-                1.0 // no project language detected, neutral
-            };
-
-            let base_score = (relevance * W_RELEVANCE
+            let weighted_sum = relevance * W_RELEVANCE
                 + recency * W_RECENCY
                 + effectiveness * W_EFFECTIVENESS
                 + importance * W_IMPORTANCE
                 + time_decay * W_TIME_DECAY
-                + length_norm * W_LENGTH_NORM)
-                * scope_mult;
+                + length_norm * W_LENGTH_NORM;
 
-            // Kind-aware boost: scope-aware preference/procedure boost
-            let kind_boost = kind_score_boost(&p, query_words, scope);
-            let score = (base_score + kind_boost) * lang_mult;
+            let score = item.adjust_score(weighted_sum, query_words, scope, project_language);
 
-            ScoredPattern {
-                pattern: p,
+            Scored {
+                item,
                 score,
                 relevance,
             }
@@ -236,11 +324,11 @@ where
         .filter(|sp| sp.score >= score_floor)
         .collect();
 
-    // Sort by score descending, with tier priority as tiebreaker
+    // Sort by score descending, with tier priority as tiebreaker.
     scored.sort_by(|a, b| {
         let score_diff = (a.score - b.score).abs();
         if score_diff < 0.05 {
-            tier_priority(&b.pattern.tier).cmp(&tier_priority(&a.pattern.tier))
+            tier_priority(&b.item.tier()).cmp(&tier_priority(&a.item.tier()))
         } else {
             b.score
                 .partial_cmp(&a.score)
@@ -248,21 +336,20 @@ where
         }
     });
 
-    // Budget: max patterns and max tokens
+    // Budget: max items and max tokens.
     let mut result = Vec::new();
     let mut token_count = 0;
     for sp in scored {
         if result.len() >= max_patterns {
             break;
         }
-        let est_tokens = sp.pattern.content.as_text().len() / 4;
+        let est_tokens = sp.item.text().len() / 4;
         if token_count + est_tokens > max_tokens && !result.is_empty() {
             break;
         }
         token_count += est_tokens;
         result.push(sp);
     }
-
     result
 }
 
@@ -276,31 +363,29 @@ struct LowerCache {
 }
 
 impl LowerCache {
-    fn from_pattern(pattern: &Pattern) -> Self {
-        let tags_text: String = pattern
-            .tags
-            .topics
+    fn from_item<T: Retrievable + ?Sized>(item: &T) -> Self {
+        let tags_text: String = item
+            .tag_terms()
             .iter()
-            .chain(pattern.tags.languages.iter())
             .map(|t| t.to_lowercase())
             .collect::<Vec<_>>()
             .join(" ");
         Self {
-            name: pattern.name.to_lowercase(),
-            description: pattern.description.to_lowercase(),
-            content: pattern.content.as_text().to_lowercase(),
+            name: item.name().to_lowercase(),
+            description: item.description().to_lowercase(),
+            content: item.text().to_lowercase(),
             tags_text,
         }
     }
 }
 
 /// Keyword-based relevance (Phase 1, replaced by vector search in Phase 2).
-fn keyword_relevance(query_words: &[&str], pattern: &Pattern) -> f64 {
+fn keyword_relevance<T: Retrievable + ?Sized>(query_words: &[&str], item: &T) -> f64 {
     if query_words.is_empty() {
         return 0.0;
     }
 
-    let cache = LowerCache::from_pattern(pattern);
+    let cache = LowerCache::from_item(item);
     keyword_relevance_cached(query_words, &cache)
 }
 
@@ -337,28 +422,17 @@ fn keyword_relevance_cached(query_words: &[&str], cache: &LowerCache) -> f64 {
     }
 }
 
-/// Recency score: exp(-days / 14)
-fn recency_score(pattern: &Pattern) -> f64 {
-    let last = pattern
-        .lifecycle
-        .last_injected
-        .or(pattern.evidence.last_validated)
-        .unwrap_or(pattern.created_at);
+/// Recency score: exp(-days / 14). Generic over Retrievable.
+fn recency_score_for<T: Retrievable + ?Sized>(item: &T) -> f64 {
+    let last = item.last_activity().unwrap_or_else(|| item.created_at());
     let days = (Utc::now() - last).num_days().max(0) as f64;
     (-days / 14.0).exp()
 }
 
-/// Time decay: 0.5 + 0.5 * exp(-days / half_life)
-fn time_decay_score(pattern: &Pattern) -> f64 {
-    let half_life = pattern
-        .lifecycle
-        .decay_half_life
-        .unwrap_or_else(|| pattern.tier.decay_half_life_days()) as f64;
-    let last = pattern
-        .lifecycle
-        .last_injected
-        .or(pattern.evidence.last_validated)
-        .unwrap_or(pattern.created_at);
+/// Time decay: 0.5 + 0.5 * exp(-days / half_life). Generic over Retrievable.
+fn time_decay_score_for<T: Retrievable + ?Sized>(item: &T) -> f64 {
+    let half_life = item.decay_half_life_days();
+    let last = item.last_activity().unwrap_or_else(|| item.created_at());
     let days = (Utc::now() - last).num_days().max(0) as f64;
     0.5 + 0.5 * (-days / half_life).exp()
 }
@@ -542,7 +616,7 @@ mod tests {
         let p2 = make_pattern("rust-error-handling", "Use anyhow for Rust error handling");
         let results = score_and_rank("swift testing", vec![p1, p2]);
         assert!(!results.is_empty());
-        assert_eq!(results[0].pattern.name, "swift-testing");
+        assert_eq!(results[0].item.name, "swift-testing");
     }
 
     #[test]
@@ -626,7 +700,7 @@ mod tests {
         let results = score_and_rank("rust error", vec![p_name, p_content]);
         if results.len() >= 2 {
             assert_eq!(
-                results[0].pattern.name, "rust-error",
+                results[0].item.name, "rust-error",
                 "Name match should rank higher"
             );
         }
@@ -664,7 +738,7 @@ mod tests {
     fn test_recency_score_recent_is_high() {
         let p = make_pattern("recent", "content");
         // make_pattern sets last_injected to now, so recency should be ~1.0
-        let score = recency_score(&p);
+        let score = recency_score_for(&p);
         assert!(
             score > 0.9,
             "Recently injected pattern should have high recency, got {}",
@@ -677,7 +751,7 @@ mod tests {
         let mut p = make_pattern("old", "content");
         p.lifecycle.last_injected = Some(Utc::now() - chrono::Duration::days(60));
         p.evidence.last_validated = None;
-        let score = recency_score(&p);
+        let score = recency_score_for(&p);
         assert!(
             score < 0.1,
             "60-day-old pattern should have low recency, got {}",
@@ -696,7 +770,7 @@ mod tests {
 
         let results = score_and_rank_hybrid("swift testing", vec![p1, p2], &vector_scores);
         assert!(!results.is_empty());
-        assert_eq!(results[0].pattern.name, "swift-testing");
+        assert_eq!(results[0].item.name, "swift-testing");
     }
 
     #[test]
@@ -716,7 +790,7 @@ mod tests {
         // Total token estimate should stay under MAX_TOKENS
         let total_tokens: usize = results
             .iter()
-            .map(|sp| sp.pattern.content.as_text().len() / 4)
+            .map(|sp| sp.item.content.as_text().len() / 4)
             .sum();
         assert!(
             total_tokens <= MAX_TOKENS || results.len() == 1,
@@ -738,8 +812,8 @@ mod tests {
         let results = score_and_rank("rust error", vec![p_session, p_core]);
         if results.len() >= 2 {
             // Core should be preferred as tiebreaker
-            let first_tier = &results[0].pattern.tier;
-            let second_tier = &results[1].pattern.tier;
+            let first_tier = &results[0].item.tier;
+            let second_tier = &results[1].item.tier;
             let score_diff = (results[0].score - results[1].score).abs();
             if score_diff < 0.05 {
                 assert_eq!(
@@ -917,5 +991,144 @@ mod tests {
         let weights = std::collections::HashMap::new();
         let out = score_sources(hits, &weights);
         assert_eq!(out[0].external_id, "new");
+    }
+
+    #[test]
+    fn generic_scorer_works_for_non_pattern_retrievable() {
+        use super::Retrievable;
+        use chrono::{Duration, Utc};
+        use std::borrow::Cow;
+
+        struct FakeItem {
+            name: String,
+            description: String,
+            body: String,
+            importance: f64,
+        }
+        impl Retrievable for FakeItem {
+            fn name(&self) -> &str {
+                &self.name
+            }
+            fn description(&self) -> &str {
+                &self.description
+            }
+            fn text(&self) -> Cow<'_, str> {
+                Cow::Borrowed(&self.body)
+            }
+            fn tag_terms(&self) -> Vec<&str> {
+                vec![]
+            }
+            fn importance(&self) -> f64 {
+                self.importance
+            }
+            fn effectiveness(&self) -> f64 {
+                1.0
+            }
+            fn tier(&self) -> Tier {
+                Tier::Project
+            }
+            fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
+                Utc::now() - Duration::days(1)
+            }
+            fn last_activity(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+                Some(Utc::now() - Duration::days(1))
+            }
+            fn decay_half_life_days(&self) -> f64 {
+                90.0
+            }
+            fn is_active(&self) -> bool {
+                true
+            }
+        }
+
+        let items = vec![FakeItem {
+            name: "fly-deploy".into(),
+            description: "Deploy to Fly.io".into(),
+            body: "Run fly deploy in the project root.".into(),
+            importance: 0.8,
+        }];
+
+        let scored = score_and_rank_inner(
+            &["fly", "deploy"],
+            items,
+            None,
+            None,
+            None,
+            |words, item: &FakeItem| keyword_relevance(words, item),
+        );
+
+        assert!(
+            !scored.is_empty(),
+            "fake item should be retrievable through the generic path"
+        );
+        assert_eq!(scored[0].item.name, "fly-deploy");
+        assert!(scored[0].score > 0.0);
+    }
+
+    #[test]
+    fn pattern_adjust_score_preserves_scope_kind_lang_combination() {
+        use super::Retrievable;
+        let mut p = make_pattern("rust-error", "rust error body");
+        p.applies.languages = vec!["rust".into()];
+        let query_words = ["rust", "error"];
+        let scope = ScopeContext {
+            user: None,
+            platform: None,
+            task: None,
+        };
+        let weighted_sum = 0.42;
+        let adjusted = p.adjust_score(weighted_sum, &query_words, Some(&scope), Some("rust"));
+        assert!((adjusted - (0.42 * 1.0 + 0.0) * 1.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scored_pattern_is_alias_of_scored_pattern_generic() {
+        fn _accepts_alias(_: ScoredPattern) {}
+        fn _accepts_generic(_: Scored<Pattern>) {}
+        let p = make_pattern("alpha", "alpha body");
+        let s: Scored<Pattern> = Scored {
+            item: p,
+            score: 1.0,
+            relevance: 1.0,
+        };
+        _accepts_alias(s);
+    }
+
+    #[test]
+    fn recency_and_decay_use_retrievable_accessors() {
+        use chrono::{Duration, Utc};
+        let mut p = make_pattern("alpha", "alpha body");
+        p.lifecycle.last_injected = Some(Utc::now() - Duration::days(1));
+        let r_generic = recency_score_for(&p as &dyn Retrievable);
+        let d_generic = time_decay_score_for(&p as &dyn Retrievable);
+        assert!((r_generic - 0.93_f64).abs() < 0.02);
+        assert!(d_generic > 0.5 && d_generic <= 1.0);
+    }
+
+    #[test]
+    fn lower_cache_builds_from_retrievable_with_lowered_fields() {
+        let p = make_pattern("AlphaBeta", "AlphaBeta Body Content");
+        let cache = LowerCache::from_item(&p);
+        assert_eq!(cache.name, "alphabeta");
+        assert!(cache.description.chars().all(|c| !c.is_uppercase()));
+        assert!(cache.content.chars().all(|c| !c.is_uppercase()));
+    }
+
+    #[test]
+    fn pattern_implements_retrievable_with_expected_accessors() {
+        use super::Retrievable;
+        let p = make_pattern("alpha", "alpha body");
+        assert_eq!(p.name(), "alpha");
+        assert_eq!(p.description(), p.description.as_str());
+        assert_eq!(&*p.text(), &*p.content.as_text());
+        assert_eq!(p.importance(), p.importance);
+        assert_eq!(p.effectiveness(), p.evidence.effectiveness());
+        assert_eq!(p.tier(), p.tier);
+        assert_eq!(p.created_at(), p.created_at);
+        assert!(p.is_active());
+        assert_eq!(
+            p.decay_half_life_days(),
+            p.tier.decay_half_life_days() as f64
+        );
     }
 }

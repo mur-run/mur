@@ -121,8 +121,8 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
 
     let injected: Vec<_> = score_and_rank(&query, patterns)
         .into_iter()
-        .filter(|sp| sp.pattern.lifecycle.status != LifecycleStatus::Archived)
-        .map(|sp| sp.pattern)
+        .filter(|sp| sp.item.lifecycle.status != LifecycleStatus::Archived)
+        .map(|sp| sp.item)
         .collect();
 
     let budget = match effective_tier {
@@ -197,8 +197,8 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
 
     let injected: Vec<_> = score_and_rank(query, patterns)
         .into_iter()
-        .filter(|sp| sp.pattern.lifecycle.status != LifecycleStatus::Archived)
-        .map(|sp| sp.pattern)
+        .filter(|sp| sp.item.lifecycle.status != LifecycleStatus::Archived)
+        .map(|sp| sp.item)
         .collect();
 
     const L2_BUDGET: usize = 2000;
