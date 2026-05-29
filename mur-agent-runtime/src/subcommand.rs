@@ -33,7 +33,10 @@ mod tests {
     #[test]
     fn equals_form() {
         let a = args(&["mur-agent-runtime", "--model=anthropic_opus_4_7"]);
-        assert_eq!(flag_value(&a, "--model"), Some("anthropic_opus_4_7".to_string()));
+        assert_eq!(
+            flag_value(&a, "--model"),
+            Some("anthropic_opus_4_7".to_string())
+        );
     }
 
     #[test]
