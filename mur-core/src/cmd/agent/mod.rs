@@ -31,6 +31,7 @@ mod hub;
 mod install;
 mod lifecycle;
 mod mcp;
+mod model_resolve;
 mod peers;
 mod perm;
 mod prompt;
