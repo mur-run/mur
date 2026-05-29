@@ -221,6 +221,7 @@ pub fn build_manifest_from_profile(profile: &AgentProfile, mur_version: &str) ->
         commander: None,
         deployment: None,
         assignment: None,
+        model_hint: None, // placeholder; Task 3 replaces with classify()
     }
 }
 
