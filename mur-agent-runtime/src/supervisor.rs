@@ -62,7 +62,17 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let mur_home = std::env::var_os("MUR_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
-    let agent_home = if crate::export::bin_embed::has_embedded_agent() && !embedded_override {
+    let argv: Vec<String> = std::env::args().collect();
+    let load_path = crate::subcommand::flag_value(&argv, "--load");
+    let agent_home = if let Some(path) = load_path {
+        match load_muragent_and_home(&path, &mur_home) {
+            Ok(home) => home,
+            Err(e) => {
+                eprintln!("error[load]: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else if crate::export::bin_embed::has_embedded_agent() && !embedded_override {
         match resolve_embedded_agent_home() {
             Ok(p) => p,
             Err(e) => {
@@ -97,13 +107,20 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // surfaces on stderr via the chained previous hook.
     crate::crashlog::install_panic_hook(agent_home.clone());
 
-    let profile = match Profile::load(&agent_home) {
+    let mut profile = match Profile::load(&agent_home) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error[profile_invalid]: {e}");
             std::process::exit(1);
         }
     };
+    // Non-interactive model rebind for headless/server use (§7.5). Honored
+    // by build_provider_runner via resolve_model_entry, which prefers
+    // model_ref over the inline model: block.
+    if let Some(model_ref) = crate::subcommand::flag_value(&argv, "--model") {
+        info!(model_ref = %model_ref, "overriding model binding from --model");
+        profile.inner.model_ref = Some(model_ref);
+    }
     if let Some(expected) = std::env::var_os("MUR_RUNTIME_EXPECTED_NAME") {
         let expected = expected.to_string_lossy().into_owned();
         if let Err(e) = verify_name_match(&expected, &profile.inner.name) {
@@ -630,6 +647,25 @@ fn resolve_embedded_agent_home() -> anyhow::Result<PathBuf> {
     {
         anyhow::bail!("embedded-agent feature not compiled in")
     }
+}
+
+/// `--load` path: install a `.muragent` into `mur_home/agents/<slug>` (reusing
+/// the shared installer — validation, trust, extraction) and return that home.
+/// Stashes the slug as the expected name so the post-load name check passes.
+fn load_muragent_and_home(path: &str, mur_home: &Path) -> anyhow::Result<PathBuf> {
+    use mur_common::muragent::installer;
+    use mur_common::muragent::reader::MuragentArchive;
+
+    let archive = MuragentArchive::read(Path::new(path))
+        .map_err(|e| anyhow::anyhow!("read .muragent at {path}: {e}"))?;
+    let outcome = installer::install(&archive, mur_home, "cli")
+        .map_err(|e| anyhow::anyhow!("install .muragent: {e}"))?;
+    let slug = outcome.manifest.agent.slug.clone();
+    // SAFETY: single-threaded startup, before any tokio tasks spawn.
+    unsafe {
+        std::env::set_var("MUR_RUNTIME_EXPECTED_NAME", &slug);
+    }
+    Ok(mur_home.join("agents").join(&slug))
 }
 
 fn read_flag_profile_from_args() -> anyhow::Result<String> {
