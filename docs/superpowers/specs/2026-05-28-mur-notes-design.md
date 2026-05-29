@@ -476,3 +476,61 @@ Total incremental over the shared foundation: ~3.5 weeks to full feature set.
     decay, linking, retrieval, signing, peer transfer, and MCP exposure, differing
     only in content shape (free markdown vs. structured DAG) and usage signal
     (retrieval vs. run).
+
+## Amendment 2026-05-29 — negative retrieval signals + drift defense
+
+Source: `2026-05-29-skill-strategy-market-analysis.md`. Fixes the "retrieval has no
+failure" degeneracy and adopts the shared contradiction sweep from Workflow v2
+Amendment A2.
+
+### B1 — Negative signals so the rate gate re-engages
+
+The original design pins `success_rate == 1.0` for notes (every retrieval
+"succeeds"), so the promotion ladder degenerates to count+age and the
+`success_rate < 0.3` deprecation rule never fires. Against model-native memory
+(ChatGPT/Claude memory) this is a real weakness: a low-value note that merely gets
+*read* a lot still climbs to Stable. Introduce **negative retrieval events** so
+usefulness — not raw reads — drives the ladder.
+
+1. **Event outcomes** on the existing `events.jsonl` (no new file):
+   ```jsonc
+   {"ts": …, "kind": "retrieval", "outcome": "used"}        // default — counts positive
+   {"ts": …, "kind": "retrieval", "outcome": "dismissed"}   // surfaced, user/agent rejected
+   {"ts": …, "kind": "retrieval", "outcome": "not_adopted"} // read but not cited downstream
+   {"ts": …, "kind": "retrieval", "outcome": "superseded"}  // a newer note links supersedes→this
+   ```
+
+2. **Signal sources:**
+   - `mur notes show <name> --not-helpful` → `dismissed` (explicit CLI).
+   - MCP `skill_read` whose result the agent does not cite within the turn →
+     `not_adopted` (runtime emits it; best-effort, low weight).
+   - Creating `links.supersedes: [old]` auto-appends a `superseded` event to
+     `old`'s log (deterministic, strongest negative signal).
+
+3. **Reducer change — `usefulness_rate`** replaces the always-1.0 success rate for
+   notes:
+   ```
+   usefulness_rate = positive / total      // positive = outcome=="used"
+   ```
+   Maps onto the existing `success_rate` slot, so `next_state()` is unchanged and
+   the `success_rate < DEMOTE_RATE` deprecation rule re-engages for notes. Decay+age
+   demotion stays as a second path. `dismissed`/`not_adopted` weights are config
+   (`config.note.signal.*`), per Mandatory Rule #1.
+
+This keeps Resolved Decision #4 (shared lifecycle, no new state machine) — it only
+redefines *what a note "use" counts as*, from "any read" to "a read that helped."
+
+### B2 — Contradiction detection is now shared, not note-private
+
+Notes' post-MVP contradiction sweep is **promoted to the shared governance layer**
+(Workflow v2 Amendment A2.2 / new P8): high vector similarity + LLM-judged
+conflicting conclusion → `links.conflicts_with`, surfaced via `mur skill audit`.
+Notes consume it for free; remove the duplicate note-only design in the "Local LLM
+integration" section and point it at the shared sweep. Still local-LLM gated.
+
+### B3 — Phase deltas
+
+| Phase | Change |
+|---|---|
+| N4 (Lifecycle wire-up) | Add negative `outcome` field + `usefulness_rate` to the shared reducer; auto-emit `superseded` on supersedes-link creation. |
+| N6 (Local LLM) | Contradiction detection removed from here → consumes shared P8 sweep. |
