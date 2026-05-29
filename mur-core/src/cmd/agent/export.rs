@@ -6,7 +6,7 @@
 //! separately in `dispatch.rs` (the `gui` format never reaches this fn).
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use mur_common::AgentProfile;
@@ -17,6 +17,15 @@ use mur_common::muragent::writer::{MuragentWriter, build_manifest_from_profile};
 use super::resolve_mur_home;
 
 pub fn cmd_export(name: &str, out: &str, format: &str) -> Result<()> {
+    if matches!(format, "bin" | "gui") {
+        bail!(
+            "--format={format} is no longer supported.\n\
+             Export a portable .muragent (the default) and share that one file:\n  \
+             mur agent export {name} -o {name}.muragent\n\
+             Recipients open it with the MuR Hub app, or run it headless with:\n  \
+             mur-agent-runtime --load {name}.muragent"
+        );
+    }
     let mur_home = resolve_mur_home()?;
     let agent_home = mur_home.join("agents").join(name);
     if !agent_home.exists() {
@@ -28,8 +37,7 @@ pub fn cmd_export(name: &str, out: &str, format: &str) -> Result<()> {
             mur_agent_runtime::export::pkg::export_to_pkg(&agent_home, Path::new(out))?;
             println!("Exported '{name}' to {out}");
         }
-        "bin" => export_bin(name, &agent_home, Path::new(out))?,
-        other => bail!("unsupported export format '{other}' (use muragent, pkg, bin, or gui)"),
+        other => bail!("unsupported export format '{other}' (use muragent or pkg)"),
     }
     Ok(())
 }
@@ -157,40 +165,6 @@ fn is_secretful(t: &NotificationTarget) -> bool {
     )
 }
 
-/// Drive `cargo build -p mur-agent-runtime --release --features=embedded-agent`
-/// with MUR_EXPORT_AGENT_DIR=<agent_home>, then copy the built binary to `out`.
-fn export_bin(name: &str, agent_home: &Path, out: &Path) -> Result<()> {
-    let target_dir = std::env::temp_dir().join(format!("mur-export-{name}-{}", std::process::id()));
-    fs::create_dir_all(&target_dir).with_context(|| format!("create {}", target_dir.display()))?;
-
-    let manifest_dir = locate_runtime_manifest_dir().context("locate mur-agent-runtime crate")?;
-
-    let status = std::process::Command::new("cargo")
-        .args([
-            "build",
-            "--release",
-            "--features=embedded-agent",
-            "--manifest-path",
-        ])
-        .arg(manifest_dir.join("Cargo.toml"))
-        .env("MUR_EXPORT_AGENT_DIR", agent_home)
-        .env("CARGO_TARGET_DIR", &target_dir)
-        .status()
-        .context("invoke cargo build")?;
-    if !status.success() {
-        bail!("cargo build failed: {status}");
-    }
-    let built = target_dir.join("release").join(if cfg!(windows) {
-        "mur-agent-runtime.exe"
-    } else {
-        "mur-agent-runtime"
-    });
-    fs::copy(&built, out)
-        .with_context(|| format!("copy {} -> {}", built.display(), out.display()))?;
-    println!("Built self-contained agent binary at {}", out.display());
-    Ok(())
-}
-
 #[cfg(test)]
 mod sanitize_tests {
     use super::*;
@@ -230,22 +204,13 @@ mod sanitize_tests {
         assert_eq!(hint.tier, mur_common::muragent::manifest::ModelTier::Frontier);
         assert!(!hint.local_capable);
     }
-}
 
-fn locate_runtime_manifest_dir() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("MUR_AGENT_RUNTIME_MANIFEST_DIR") {
-        return Ok(PathBuf::from(p));
-    }
-    let exe = std::env::current_exe().context("current_exe")?;
-    let mut cur = exe.parent().map(|p| p.to_path_buf());
-    while let Some(d) = cur {
-        let candidate = d.join("mur-agent-runtime").join("Cargo.toml");
-        if candidate.exists() {
-            return Ok(d.join("mur-agent-runtime"));
+    #[test]
+    fn removed_formats_redirect() {
+        for fmt in ["bin", "gui"] {
+            let err = cmd_export("coach", "/tmp/out", fmt).unwrap_err().to_string();
+            assert!(err.contains(".muragent"), "fmt {fmt}: {err}");
+            assert!(err.contains("--load"), "fmt {fmt}: {err}");
         }
-        cur = d.parent().map(|p| p.to_path_buf());
     }
-    bail!(
-        "could not locate mur-agent-runtime crate (set MUR_AGENT_RUNTIME_MANIFEST_DIR to override)"
-    )
 }

@@ -971,35 +971,8 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 cmd::agent::cmd_perm_set_limit(&name, &key, value)?
             }
         },
-        AgentAction::Export {
-            name,
-            out,
-            format,
-            theme,
-            icon,
-            clone_identity,
-            skip_notarize,
-        } => {
-            if format == "gui" {
-                use std::path::PathBuf;
-                let mur_home = mur_core::paths::mur_root(None);
-                let agent_home = mur_home.join("agents").join(&name);
-                if !agent_home.exists() {
-                    anyhow::bail!("agent '{name}' not found at {}", agent_home.display());
-                }
-                let opts = cmd::agent_export_gui::ExportGuiOptions {
-                    agent_name: name.clone(),
-                    agent_home,
-                    out: PathBuf::from(&out),
-                    theme,
-                    icon: icon.map(PathBuf::from),
-                    clone_identity,
-                    skip_notarize,
-                };
-                cmd::agent_export_gui::run(opts)?;
-            } else {
-                cmd::agent::cmd_export(&name, &out, &format)?;
-            }
+        AgentAction::Export { name, out, format, .. } => {
+            cmd::agent::cmd_export(&name, &out, &format)?;
         }
         AgentAction::Install { path } => cmd::agent::cmd_install(std::path::Path::new(&path))?,
         AgentAction::Uninstall { name, purge } => cmd::agent::cmd_uninstall(&name, purge)?,
