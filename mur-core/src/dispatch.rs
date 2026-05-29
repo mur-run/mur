@@ -607,6 +607,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::notes::NotesAction::Search { query, limit } => {
                 cmd::notes_cmd::cmd_search(&query, limit)?
             }
+            crate::cli::notes::NotesAction::List { maturity, limit } => {
+                cmd::notes_cmd::cmd_list(maturity.as_deref(), limit)?
+            }
+            crate::cli::notes::NotesAction::Show { name } => cmd::notes_cmd::cmd_show(&name)?,
         },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
