@@ -25,6 +25,8 @@ pub mod doctor;
 pub(crate) mod drafts;
 pub(crate) mod eval;
 pub(crate) mod evolve_cmd;
+#[allow(dead_code)]
+pub mod fleet_sync;
 pub(crate) mod hook;
 pub(crate) mod init;
 pub(crate) mod init_daemon;
