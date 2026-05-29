@@ -1,5 +1,6 @@
 pub mod gate;
 pub mod scoring;
+pub mod skill_candidates;
 
 // ---------- P1.3: sources retrieve (gated behind "sources" feature) ----------
 
