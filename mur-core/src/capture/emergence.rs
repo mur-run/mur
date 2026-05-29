@@ -16,6 +16,7 @@ use std::sync::LazyLock;
 
 /// A candidate pattern detected from recurring cross-session behaviors.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct EmergentCandidate {
     /// Merged description of the behavior
     pub behavior: String,

@@ -295,6 +295,7 @@ pub(crate) fn cmd_learn_cross(min_projects: usize, dry_run: bool) -> Result<()> 
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) fn cmd_emerge(threshold: usize, dry_run: bool) -> Result<()> {
     use crate::capture::emergence::{detect_emergent, load_fingerprints, prune_fingerprints};
 

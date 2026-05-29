@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! GEP (Gene Evolution Protocol) — treats patterns as "genes" that evolve
 //! through mutation, crossover, and selection.
 

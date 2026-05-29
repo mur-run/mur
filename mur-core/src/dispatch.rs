@@ -10,10 +10,9 @@ use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
     AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
     AgentWebhookAction, ChatAction, Cli, Commands, CommunityAction, ConversationsAction,
-    DeployAction, DraftsAction, EvalAction, EvolveAction, ExchangeAction, FeedbackAction,
-    GepAction, HookEvent, InternalsAction, LearnAction, MurmurdAction, PackAction, PatternAction,
-    ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
-    WorkflowAction,
+    DeployAction, DraftsAction, EvalAction, ExchangeAction, HookEvent, InternalsAction,
+    LearnAction, MurmurdAction, PackAction, ProjectAction, ScheduleAction, SessionAction,
+    SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -33,7 +32,6 @@ fn resolve_team_arg(arg: Option<String>) -> Result<String> {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Commands::New { diagram } => cmd::pattern::cmd_new(diagram)?,
         Commands::Search {
             query,
             source,
@@ -56,16 +54,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Stats => cmd::misc::cmd_stats()?,
         Commands::Doctor => cmd::misc::cmd_doctor()?,
-        Commands::Pin { name } => cmd::pattern::cmd_set_lifecycle(&name, "pin")?,
-        Commands::Mute { name } => cmd::pattern::cmd_set_lifecycle(&name, "mute")?,
-        Commands::Boost { name, amount } => cmd::pattern::cmd_boost(&name, amount)?,
-        Commands::Feedback { action } => match action {
-            FeedbackAction::Helpful { name } => cmd::pattern::cmd_feedback(&name, true)?,
-            FeedbackAction::Unhelpful { name } => cmd::pattern::cmd_feedback(&name, false)?,
-            FeedbackAction::Auto { file, dry_run } => {
-                cmd::pattern::cmd_feedback_auto(file, dry_run)?
-            }
-        },
         Commands::Gc { auto } => cmd::misc::cmd_gc(auto)?,
 
         Commands::Learn { action } => match action {
@@ -115,16 +103,6 @@ pub async fn run(cli: Cli) -> Result<()> {
             fail_fast,
             prompt,
         } => cmd::workflow::cmd_workflow_run(&query, fail_fast, prompt).await?,
-        Commands::Pattern { action } => match action {
-            PatternAction::Show { name } => cmd::pattern::cmd_pattern_show(&name)?,
-            PatternAction::History { name } => cmd::pattern_history::cmd_pattern_history(&name)?,
-            PatternAction::Diff { name, v1, v2 } => {
-                cmd::pattern_history::cmd_pattern_diff(&name, v1, v2)?
-            }
-            PatternAction::Rollback { name, to } => {
-                cmd::pattern_history::cmd_pattern_rollback(&name, to)?
-            }
-        },
         Commands::Workflow { action } => match action {
             WorkflowAction::List => cmd::workflow::cmd_workflow_list()?,
             WorkflowAction::Schedule { action } => match action {
@@ -158,35 +136,6 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
         }
         Commands::Update { check } => cmd::update::cmd_update(check)?,
-        Commands::Promote { name, tier } => cmd::pattern::cmd_promote(&name, &tier)?,
-        Commands::Deprecate { name } => cmd::pattern::cmd_deprecate(&name)?,
-        Commands::Links { name } => cmd::pattern::cmd_links(&name)?,
-        Commands::Evolve {
-            dry_run,
-            force,
-            consolidate,
-            action,
-        } => {
-            if let Some(action) = action {
-                match action {
-                    EvolveAction::Compose { create } => {
-                        cmd::evolve_cmd::cmd_evolve_compose(create)?
-                    }
-                    EvolveAction::Cooccurrence { min } => {
-                        cmd::evolve_cmd::cmd_evolve_cooccurrence(min)?
-                    }
-                }
-            } else if consolidate {
-                cmd::evolve_cmd::cmd_consolidate(dry_run)?;
-            } else {
-                cmd::evolve_cmd::cmd_evolve(dry_run, force)?;
-            }
-        }
-        Commands::Gep { action } => match action {
-            GepAction::Evolve => cmd::community_cmd::cmd_gep_evolve()?,
-            GepAction::Status => cmd::community_cmd::cmd_gep_status()?,
-        },
-        Commands::Emerge { threshold, dry_run } => cmd::learn::cmd_emerge(threshold, dry_run)?,
         Commands::Suggest {
             create,
             accept,
@@ -294,11 +243,6 @@ pub async fn run(cli: Cli) -> Result<()> {
             open,
             readonly,
         } => cmd::server_cmd::cmd_serve(port, open, readonly).await?,
-        Commands::Why { name: _ } => {
-            eprintln!("# Pattern→Skill migration in progress — `mur why` is being migrated.");
-            eprintln!("# Use `mur skill show <name>` to inspect a skill.");
-        }
-        Commands::Edit { name, quick } => cmd::pattern::cmd_edit(&name, quick)?,
         Commands::Model(args) => cmd::model::run(args)?,
         Commands::Agent { action } => run_agent(action).await?,
         Commands::Skill { action } => match action {

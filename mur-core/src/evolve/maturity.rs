@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Maturity promotion and demotion for patterns.
 //!
 //! Maturity levels: Draft → Emerging → Stable → Canonical

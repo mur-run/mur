@@ -149,11 +149,13 @@ impl YamlStore {
     }
 
     /// Get the assets directory for a pattern (e.g. ~/.mur/patterns/<name>/).
+    #[allow(dead_code)]
     pub fn pattern_assets_dir(&self, name: &str) -> PathBuf {
         self.patterns_dir.join(name)
     }
 
     /// Ensure the assets directory exists for a pattern.
+    #[allow(dead_code)]
     pub fn ensure_assets_dir(&self, name: &str) -> Result<PathBuf> {
         let dir = self.pattern_assets_dir(name);
         fs::create_dir_all(&dir)
@@ -163,6 +165,7 @@ impl YamlStore {
 
     /// Copy a diagram file into the pattern's assets directory.
     /// Returns the relative path (from patterns dir) and detected format.
+    #[allow(dead_code)]
     pub fn copy_diagram_to_assets(
         &self,
         pattern_name: &str,

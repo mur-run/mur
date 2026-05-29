@@ -24,12 +24,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Create a new pattern interactively
-    New {
-        /// Path to a diagram file to attach (mermaid, plantuml)
-        #[arg(long)]
-        diagram: Option<String>,
-    },
     /// Search patterns + sources (unified).
     Search {
         /// Search query
@@ -104,53 +98,11 @@ pub enum Commands {
         #[arg(long)]
         prompt: bool,
     },
-    /// Report pattern feedback
-    Feedback {
-        #[command(subcommand)]
-        action: FeedbackAction,
-    },
-
     /// Garbage collect low-quality patterns
     Gc {
         /// Auto-archive without prompting
         #[arg(long)]
         auto: bool,
-    },
-    /// Pin a pattern (never auto-deprecated)
-    Pin {
-        /// Pattern name
-        name: String,
-    },
-    /// Mute a pattern (skip injection)
-    Mute {
-        /// Pattern name
-        name: String,
-    },
-    /// Boost a pattern's importance
-    Boost {
-        /// Pattern name
-        name: String,
-        /// Amount to boost (default: 0.1)
-        #[arg(long, default_value = "0.1")]
-        amount: f64,
-    },
-    /// Promote a pattern's tier
-    Promote {
-        /// Pattern name
-        name: String,
-        /// Target tier (project/core)
-        #[arg(long, default_value = "project")]
-        tier: String,
-    },
-    /// Deprecate a pattern manually
-    Deprecate {
-        /// Pattern name
-        name: String,
-    },
-    /// View and manage individual patterns
-    Pattern {
-        #[command(subcommand)]
-        action: PatternAction,
     },
     /// Manage workflows
     Workflow {
@@ -169,39 +121,6 @@ pub enum Commands {
         /// Only check whether a newer version exists; don't install
         #[arg(long)]
         check: bool,
-    },
-    /// Show pattern connections
-    Links {
-        /// Pattern name
-        name: String,
-    },
-    /// Run decay + maturity evaluation
-    Evolve {
-        /// Preview changes without saving
-        #[arg(long)]
-        dry_run: bool,
-        /// Run even if recently evolved
-        #[arg(long)]
-        force: bool,
-        /// Run full consolidation (dedup, contradiction, promotion, decay, archival)
-        #[arg(long)]
-        consolidate: bool,
-        #[command(subcommand)]
-        action: Option<EvolveAction>,
-    },
-    /// Gene Evolution Protocol
-    Gep {
-        #[command(subcommand)]
-        action: GepAction,
-    },
-    /// Detect emergent patterns from cross-session behaviors
-    Emerge {
-        /// Minimum number of sessions for a behavior to be considered emergent
-        #[arg(long, default_value = "3")]
-        threshold: usize,
-        /// Preview candidates without creating patterns
-        #[arg(long)]
-        dry_run: bool,
     },
     /// Show workflow composition & decomposition suggestions and pending nudges.
     Suggest {
@@ -283,19 +202,6 @@ pub enum Commands {
         /// Read-only mode (reject all write operations)
         #[arg(long)]
         readonly: bool,
-    },
-    /// Explain why a pattern was (or would be) injected
-    Why {
-        /// Pattern name
-        name: String,
-    },
-    /// View and edit a pattern with preview and diff
-    Edit {
-        /// Pattern name
-        name: String,
-        /// Quick inline field edit (skip $EDITOR)
-        #[arg(long)]
-        quick: bool,
     },
     /// Import/export patterns in MKEF (MUR Knowledge Exchange Format)
     Exchange {

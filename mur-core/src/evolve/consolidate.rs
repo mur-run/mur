@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Memory consolidation — orchestrates dedup, contradiction detection,
 //! promotion, decay, and archival in a single pass.
 

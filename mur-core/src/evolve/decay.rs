@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Time-based confidence decay for patterns.
 //!
 //! Confidence decays exponentially: `confidence * 0.5^(days_inactive / half_life)`

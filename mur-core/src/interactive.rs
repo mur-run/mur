@@ -37,6 +37,7 @@ impl Template {
         ]
     }
 
+    #[allow(dead_code)]
     pub fn label(&self) -> &'static str {
         match self {
             Template::Insight => "Insight      (observation or lesson)",
@@ -115,6 +116,7 @@ fn templates_dir() -> PathBuf {
 
 /// Run the guided interactive pattern creation flow.
 /// Returns the name of the created pattern, or None if cancelled.
+#[allow(dead_code)]
 pub fn interactive_new(store: &YamlStore) -> Result<Option<String>> {
     println!();
     println!("  {} Create New Pattern", style("*").cyan().bold());
@@ -274,6 +276,7 @@ pub fn interactive_new(store: &YamlStore) -> Result<Option<String>> {
 }
 
 /// Generate a kebab-case name from a description.
+#[allow(dead_code)]
 fn generate_name(description: &str) -> String {
     let stop_words = [
         "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
@@ -302,6 +305,7 @@ fn generate_name(description: &str) -> String {
 // ─── Edit preview ──────────────────────────────────────────────────
 
 /// Show a preview of a pattern before editing.
+#[allow(dead_code)]
 pub fn show_edit_preview(pattern: &Pattern) {
     let maturity_label = format!("{:?}", pattern.maturity);
     let tier_label = format!("{:?}", pattern.tier);
@@ -344,6 +348,7 @@ pub fn show_edit_preview(pattern: &Pattern) {
 }
 
 /// Show a diff between old and new pattern state.
+#[allow(dead_code)]
 pub fn show_edit_diff(old: &Pattern, new: &Pattern) {
     let mut changes = Vec::new();
 

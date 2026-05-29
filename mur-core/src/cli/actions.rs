@@ -92,51 +92,6 @@ pub enum LearnAction {
 }
 
 #[derive(Subcommand)]
-pub enum FeedbackAction {
-    /// Mark a pattern as helpful
-    Helpful { name: String },
-    /// Mark a pattern as unhelpful
-    Unhelpful { name: String },
-    /// Auto-analyze session transcript against injected patterns
-    Auto {
-        /// Path to session transcript (reads stdin if omitted)
-        #[arg(long)]
-        file: Option<String>,
-        /// Preview changes without saving
-        #[arg(long)]
-        dry_run: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum PatternAction {
-    /// Show a pattern by name (with attachments)
-    Show { name: String },
-    /// Show version history for a pattern
-    History {
-        /// Pattern name
-        name: String,
-    },
-    /// Show diff between two pattern versions (defaults: current vs previous)
-    Diff {
-        /// Pattern name
-        name: String,
-        /// First version number (default: previous)
-        v1: Option<u32>,
-        /// Second version number (default: current)
-        v2: Option<u32>,
-    },
-    /// Roll back a pattern to a prior version (creates a new commit)
-    Rollback {
-        /// Pattern name
-        name: String,
-        /// Version number to restore
-        #[arg(long)]
-        to: u32,
-    },
-}
-
-#[derive(Subcommand)]
 pub enum InternalsAction {
     /// Rebuild the versioned-store history index from git log (recovery only)
     RebuildIndex {
@@ -152,30 +107,6 @@ pub enum InternalsAction {
         /// Git arguments (e.g. `log --oneline -10`)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum GepAction {
-    /// Run one GEP evolution generation
-    Evolve,
-    /// Show population fitness statistics
-    Status,
-}
-
-#[derive(Subcommand)]
-pub enum EvolveAction {
-    /// Show workflow composition suggestions from co-occurrence patterns
-    Compose {
-        /// Auto-create suggested workflows as drafts
-        #[arg(long)]
-        create: bool,
-    },
-    /// Show the pattern co-occurrence matrix
-    Cooccurrence {
-        /// Minimum count to display a pair
-        #[arg(long, default_value = "2")]
-        min: u32,
     },
 }
 
