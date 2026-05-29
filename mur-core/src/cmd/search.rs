@@ -130,7 +130,7 @@ async fn existing_pattern_search_names(query: &str) -> anyhow::Result<Vec<(Strin
     let scored = score_and_rank(query, patterns);
     let results = scored
         .into_iter()
-        .map(|sp| (sp.pattern.name.clone(), sp.score))
+        .map(|sp| (sp.item.name.clone(), sp.score))
         .collect();
     Ok(results)
 }
