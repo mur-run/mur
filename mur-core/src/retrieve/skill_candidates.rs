@@ -195,6 +195,7 @@ mod tests {
             evolution_log: vec![],
             transfer_chain: vec![],
             mcp_requirements: vec![],
+            provenance: Default::default(),
         };
         let mut stats = SkillStats::new(name, "1.0.0", "", Utc::now() - Duration::days(2));
         stats.usage_count = 4;

@@ -2,7 +2,7 @@
 
 use super::evolution::EvolutionEvent;
 use super::mcp::McpRequirement;
-use super::types::{Category, ContentMode, HostId, Priority, TriggerKind, TrustLevel};
+use super::types::{Category, ContentMode, HostId, Priority, Provenance, TriggerKind, TrustLevel};
 use serde::{Deserialize, Serialize};
 
 /// Top-level skill — wraps the manifest with security metadata that lives
@@ -39,6 +39,11 @@ pub struct SkillManifest {
     pub publisher: String,
     pub description: String,
     pub category: Category,
+
+    /// Origin of this skill. Defaults to `Human` so every existing manifest
+    /// (which has no `provenance:` key) parses as human-authored.
+    #[serde(default)]
+    pub provenance: Provenance,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hosts: Vec<HostId>,
