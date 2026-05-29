@@ -35,6 +35,8 @@ pub fn cmd_install(path: &Path) -> Result<()> {
     println!("  trust:       {:?}", outcome.trust_level);
     println!("  fingerprint: {}", outcome.fingerprint_hex);
     println!("  words:       {}", outcome.fingerprint_words);
+
+    maybe_resolve_model(&mur_home, &outcome.manifest.agent.slug, &archive)?;
     Ok(())
 }
 
@@ -117,4 +119,106 @@ pub fn cmd_inspect(path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn maybe_resolve_model(mur_home: &Path, slug: &str, archive: &MuragentArchive) -> Result<()> {
+    use crate::cmd::agent::model_resolve::{apply_model_choice, detect_hardware};
+    use mur_common::model_resolve::{Recommendation, recommend};
+
+    let manifest_yaml = archive
+        .get_str("manifest.yaml")
+        .context("read manifest.yaml")?;
+    let manifest: MuragentManifest = serde_yaml_ng::from_str(manifest_yaml)?;
+    let hint = manifest.model_hint.clone();
+    let hw = detect_hardware();
+    let rec = recommend(hint.as_ref(), &hw);
+
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        println!(
+            "  model: {} — set one with `mur model add` then run the agent with --model <ref>",
+            match rec {
+                Recommendation::Local => "local recommended (Ollama/MLX)",
+                Recommendation::Cloud => "cloud model recommended",
+                Recommendation::CloudOrSmallerLocal => "cloud or a smaller local model",
+                Recommendation::NeutralMenu => "choose a backend",
+            }
+        );
+        return Ok(());
+    }
+
+    println!("\nThis agent needs a model backend (no weights are bundled).");
+    if let Some(h) = &hint {
+        println!(
+            "  Authored for: {}/{} (tier {:?})",
+            h.provider, h.name, h.tier
+        );
+    }
+    let choice = prompt_model_choice(&rec, hint.as_ref())?;
+    if let Some(choice) = choice {
+        let key = apply_model_choice(mur_home, slug, &choice)?;
+        println!("  bound model_ref = {key}");
+    } else {
+        println!("  skipped — set one later with `mur model add`");
+    }
+    Ok(())
+}
+
+fn prompt_model_choice(
+    rec: &mur_common::model_resolve::Recommendation,
+    hint: Option<&mur_common::muragent::manifest::ModelHint>,
+) -> Result<Option<crate::cmd::agent::model_resolve::ModelChoice>> {
+    use crate::cmd::agent::model_resolve::ModelChoice;
+    use mur_common::model_resolve::Recommendation;
+    use std::io::Write;
+
+    let default_local = hint.map(|h| (h.provider.clone(), h.name.clone()));
+    let prompt = match rec {
+        Recommendation::Local => "Pull a local model now? [Y/n] ",
+        Recommendation::Cloud | Recommendation::CloudOrSmallerLocal => {
+            "Paste an API key for a cloud model? [y/N] "
+        }
+        Recommendation::NeutralMenu => "Configure a model now? [y/N] ",
+    };
+    print!("{prompt}");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let yes = matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes" | "");
+
+    if matches!(rec, Recommendation::Local)
+        && yes
+        && let Some((provider, model)) = default_local
+    {
+        return Ok(Some(ModelChoice {
+            provider,
+            model,
+            base_url: None,
+            secret: None,
+        }));
+    }
+    if !yes {
+        return Ok(None);
+    }
+    let provider = read_field("  provider (e.g. anthropic): ")?;
+    let model = read_field("  model (e.g. claude-opus-4-7): ")?;
+    let secret = read_field("  secret ref (e.g. env:ANTHROPIC_API_KEY): ")?;
+    Ok(Some(ModelChoice {
+        provider,
+        model,
+        base_url: None,
+        secret: if secret.is_empty() {
+            None
+        } else {
+            Some(secret)
+        },
+    }))
+}
+
+fn read_field(prompt: &str) -> Result<String> {
+    use std::io::Write;
+    print!("{prompt}");
+    std::io::stdout().flush().ok();
+    let mut s = String::new();
+    std::io::stdin().read_line(&mut s)?;
+    Ok(s.trim().to_string())
 }

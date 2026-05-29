@@ -42,6 +42,18 @@ pub fn cmd_export(name: &str, out: &str, format: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resolve an installed agent's home and export it to `out` as a `.muragent`.
+/// Public so the Hub "Share" command (mur-hub-gui) can reuse the exact CLI path.
+#[allow(dead_code)]
+pub fn export_agent_to_muragent(name: &str, out: &Path) -> Result<()> {
+    let mur_home = resolve_mur_home()?;
+    let agent_home = mur_home.join("agents").join(name);
+    if !agent_home.exists() {
+        bail!("agent '{name}' not found");
+    }
+    export_muragent(name, &agent_home, out)
+}
+
 fn export_muragent(name: &str, agent_home: &Path, out: &Path) -> Result<()> {
     let profile_path = agent_home.join("profile.yaml");
     let profile_yaml = fs::read_to_string(&profile_path)
@@ -217,5 +229,25 @@ mod sanitize_tests {
             assert!(err.contains(".muragent"), "fmt {fmt}: {err}");
             assert!(err.contains("--load"), "fmt {fmt}: {err}");
         }
+    }
+
+    #[test]
+    fn export_entry_point_writes_muragent() {
+        use mur_common::identity::AgentIdentity;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path().join("agents").join("coach");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut p = mur_common::AgentProfile::default_for_tests();
+        p.name = "coach".into();
+        std::fs::write(
+            home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+        AgentIdentity::generate().save(&home).unwrap();
+
+        let out = tmp.path().join("coach.muragent");
+        export_muragent("coach", &home, &out).unwrap();
+        assert!(out.exists(), ".muragent written");
     }
 }
