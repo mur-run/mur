@@ -329,6 +329,7 @@ fn situation_to_slug(s: &mur_common::companion::Situation) -> &'static str {
         Situation::GentleCheckIn => "gentle_check_in",
         Situation::ShareQuote => "share_quote",
         Situation::ShareLink => "share_link",
+        Situation::WorkflowNudge => "workflow_nudge",
     }
 }
 

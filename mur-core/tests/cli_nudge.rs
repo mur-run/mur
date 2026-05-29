@@ -142,3 +142,80 @@ fn end_to_end_detect_accept_no_resurface() {
     // 5. Draft workflow exists
     assert!(wf_store.exists("my-workflow"));
 }
+
+#[test]
+fn phase2_end_to_end_deliver_ack_drain() {
+    let mur = tempfile::tempdir().unwrap();
+
+    // 1. Create a companion-enabled agent profile.
+    let mut prof = mur_common::agent::AgentProfile::default_for_tests();
+    prof.companion.enabled = true;
+    let agent_dir = mur.path().join("agents/test-agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    std::fs::write(
+        agent_dir.join("profile.yaml"),
+        serde_yaml_ng::to_string(&prof).unwrap(),
+    )
+    .unwrap();
+
+    // 2. Seed a ledger with a surfaced candidate (snapshot present).
+    let c = cand("phase2", "phase2-workflow");
+    let mut ledger = NudgeLedger::default();
+    NudgeEmitter::emit_pending(&mut ledger, &[c.clone()], chrono::Utc::now());
+    ledger
+        .save(&NudgeLedger::default_path_in(mur.path()))
+        .unwrap();
+
+    // 3. Deliver the candidate to the agent inbox.
+    let n =
+        mur_core::nudge::companion::deliver_nudges_to_companions(mur.path(), &[c.clone()], "en")
+            .unwrap();
+    assert_eq!(n, 1);
+    let inbox_file = agent_dir.join("companion/inbox/nudge_phase2.md");
+    assert!(inbox_file.exists());
+
+    // 4. Simulate GUI ack: rewrite response to "good".
+    let content = std::fs::read_to_string(&inbox_file).unwrap();
+    let new_content = content.replace("<unset>", "good");
+    std::fs::write(&inbox_file, &new_content).unwrap();
+
+    // 5. Drain → draft created, ledger Accepted, inbox file consumed.
+    let wf_dir = mur.path().join("workflows");
+    let wf_store = mur_core::store::workflow_yaml::WorkflowYamlStore::new(wf_dir.clone()).unwrap();
+    let applied = mur_core::nudge::companion::drain_nudge_responses_in(mur.path(), &|cand| {
+        mur_core::cmd::workflow::create_draft_workflow_in(
+            &wf_store,
+            &cand.suggested_name,
+            &cand.title,
+            "",
+            &cand.evidence_session_ids,
+        )
+    })
+    .unwrap();
+    assert_eq!(applied, 1);
+
+    // Verify ledger → Accepted.
+    let ledger = NudgeLedger::load(&NudgeLedger::default_path_in(mur.path())).unwrap();
+    assert!(matches!(
+        ledger.get("phase2").unwrap().state,
+        NudgeState::Accepted
+    ));
+
+    // Verify draft workflow created.
+    assert!(wf_store.exists("phase2-workflow"));
+
+    // Verify inbox file consumed.
+    assert!(!inbox_file.exists());
+
+    // 6. Re-deliver same candidate → write_nudge_inbox is idempotent
+    //    but the consumed file was removed. Re-deliver recreates it;
+    //    the ledger filter in record_nudges_for_candidates prevents
+    //    accepted candidates from being surfaced again upstream.
+    let n2 =
+        mur_core::nudge::companion::deliver_nudges_to_companions(mur.path(), &[c.clone()], "en")
+            .unwrap();
+    assert_eq!(n2, 1); // deliver doesn't check ledger; file was consumed
+    // But filter_actionable excludes it:
+    let actionable = ledger.filter_actionable(&[c], chrono::Utc::now(), 10);
+    assert!(actionable.is_empty());
+}
