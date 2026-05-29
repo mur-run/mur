@@ -236,6 +236,25 @@ pub fn score_and_rank(query: &str, candidates: Vec<Pattern>) -> Vec<ScoredPatter
     score_and_rank_with_scope(query, candidates, None, None)
 }
 
+/// Public generic entry point: score and rank any `Vec<T>` where
+/// `T: Retrievable`. Keyword-only relevance, no scope, no project_language,
+/// default scoring config. Mirrors `score_and_rank` for the generic case.
+///
+/// Hybrid / scope-aware generic entries are added in later plans as needed.
+#[allow(dead_code)]
+pub fn score_and_rank_generic<T: Retrievable>(query: &str, candidates: Vec<T>) -> Vec<Scored<T>> {
+    let query_lower = query.to_lowercase();
+    let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+    score_and_rank_inner(
+        &query_words,
+        candidates,
+        None,
+        None,
+        None,
+        |words, item: &T| keyword_relevance(words, item),
+    )
+}
+
 /// Score with keyword-only relevance, using config-driven retrieval parameters.
 pub fn score_and_rank_with_config(
     query: &str,
@@ -1130,5 +1149,18 @@ mod tests {
             p.decay_half_life_days(),
             p.tier.decay_half_life_days() as f64
         );
+    }
+
+    #[test]
+    fn score_and_rank_generic_ranks_pattern_corpus_like_score_and_rank() {
+        let p1 = make_pattern("alpha", "alpha body about deploy");
+        let p2 = make_pattern("beta", "beta body about something else");
+        let generic = score_and_rank_generic("alpha deploy", vec![p1.clone(), p2.clone()]);
+        let legacy = score_and_rank("alpha deploy", vec![p1, p2]);
+        assert_eq!(generic.len(), legacy.len());
+        for (g, l) in generic.iter().zip(legacy.iter()) {
+            assert_eq!(g.item.name, l.item.name);
+            assert!((g.score - l.score).abs() < 1e-9);
+        }
     }
 }
