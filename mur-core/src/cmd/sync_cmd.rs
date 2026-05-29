@@ -628,7 +628,7 @@ pub(crate) async fn device_sync(
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum DeviceSyncDirection {
+pub enum DeviceSyncDirection {
     Pull,
     Push,
     Both,
