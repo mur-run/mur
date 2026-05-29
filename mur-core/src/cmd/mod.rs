@@ -25,6 +25,8 @@ pub mod doctor;
 pub(crate) mod drafts;
 pub(crate) mod eval;
 pub(crate) mod evolve_cmd;
+#[allow(dead_code)]
+pub mod fleet_sync;
 pub(crate) mod hook;
 pub(crate) mod init;
 pub(crate) mod init_daemon;
@@ -65,7 +67,6 @@ pub mod skill_stats;
 pub mod skill_suggest;
 pub mod skill_sweep;
 pub(crate) mod sleep;
-pub mod fleet_sync;
 pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;
 pub(crate) mod update;
