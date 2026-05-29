@@ -65,6 +65,7 @@ pub mod skill_stats;
 pub mod skill_suggest;
 pub mod skill_sweep;
 pub(crate) mod sleep;
+pub(crate) mod fleet_sync;
 pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;
 pub(crate) mod update;
