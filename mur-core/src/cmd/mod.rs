@@ -35,6 +35,7 @@ pub(crate) mod learn;
 pub(crate) mod misc;
 pub(crate) mod model;
 pub(crate) mod murmurd;
+pub mod notes_cmd;
 pub(crate) mod pattern;
 pub(crate) mod pattern_history;
 pub(crate) mod project;

@@ -3,6 +3,7 @@
 
 pub mod actions;
 pub mod agent;
+pub mod notes;
 pub mod skill;
 
 pub use actions::*;
@@ -304,6 +305,11 @@ pub enum Commands {
     Skill {
         #[command(subcommand)]
         action: SkillAction,
+    },
+    /// Manage notes — category:note skills with markdown bodies.
+    Notes {
+        #[command(subcommand)]
+        action: notes::NotesAction,
     },
     /// Manage shared model registry (~/.mur/models.yaml)
     Model(cmd::model::ModelArgs),

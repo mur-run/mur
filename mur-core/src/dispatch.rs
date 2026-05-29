@@ -598,6 +598,16 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
         },
+        Commands::Notes { action } => match action {
+            crate::cli::notes::NotesAction::Create {
+                name,
+                description,
+                body_file,
+            } => cmd::notes_cmd::cmd_create(&name, &description, body_file.as_deref())?,
+            crate::cli::notes::NotesAction::Search { query, limit } => {
+                cmd::notes_cmd::cmd_search(&query, limit)?
+            }
+        },
         Commands::Exchange { action } => match action {
             ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
             ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,
