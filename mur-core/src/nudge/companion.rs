@@ -58,6 +58,46 @@ pub fn write_nudge_inbox(
     Ok(file)
 }
 
+/// Write each candidate to every companion-enabled agent's inbox.
+/// Returns the number of (agent × candidate) messages written.
+pub fn deliver_nudges_to_companions(
+    mur_dir: &Path,
+    candidates: &[WorkflowCandidate],
+    locale: &str,
+) -> Result<usize> {
+    let agents_dir = mur_dir.join("agents");
+    if !agents_dir.exists() || candidates.is_empty() {
+        return Ok(0);
+    }
+    let mut written = 0;
+    for entry in std::fs::read_dir(&agents_dir)? {
+        let dir = entry?.path();
+        let profile = dir.join("profile.yaml");
+        if !profile.is_file() {
+            continue;
+        }
+        let body = std::fs::read_to_string(&profile)?;
+        let prof: mur_common::agent::AgentProfile = match serde_yaml_ng::from_str(&body) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if !prof.companion.enabled {
+            continue;
+        }
+        let inbox = dir.join("companion").join("inbox");
+        let loc = if prof.companion.locale.is_empty() {
+            locale
+        } else {
+            &prof.companion.locale
+        };
+        for c in candidates {
+            write_nudge_inbox(&inbox, c, loc)?;
+            written += 1;
+        }
+    }
+    Ok(written)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +143,34 @@ mod tests {
         assert!(s.trim_end().ends_with(">>> response: <unset>"));
         // idempotent: second write for same id is a no-op (already exists)
         assert!(write_nudge_inbox(&inbox, &c, "en").is_ok());
+    }
+
+    #[test]
+    fn deliver_writes_to_enabled_agent_inboxes_only() {
+        let mur = tempfile::tempdir().unwrap();
+        // Build minimal profiles using default_for_tests + companion block.
+        let mut prof = mur_common::agent::AgentProfile::default_for_tests();
+        let base_yaml = serde_yaml_ng::to_string(&prof).unwrap();
+        // agent "on": profile with companion.enabled = true
+        prof.companion.enabled = true;
+        let on_yaml = serde_yaml_ng::to_string(&prof).unwrap();
+        // agent "off": profile with companion.enabled = false
+        prof.companion.enabled = false;
+        let off_yaml = serde_yaml_ng::to_string(&prof).unwrap();
+        let on_dir = mur.path().join("agents/on");
+        std::fs::create_dir_all(&on_dir).unwrap();
+        std::fs::write(on_dir.join("profile.yaml"), on_yaml).unwrap();
+        let off_dir = mur.path().join("agents/off");
+        std::fs::create_dir_all(&off_dir).unwrap();
+        std::fs::write(off_dir.join("profile.yaml"), off_yaml).unwrap();
+        let c = cand();
+        let n = deliver_nudges_to_companions(mur.path(), &[c], "en").unwrap();
+        assert_eq!(n, 1); // only the "on" agent got it
+        assert!(on_dir
+            .join("companion/inbox/nudge_abc123.md")
+            .exists());
+        assert!(!off_dir
+            .join("companion/inbox/nudge_abc123.md")
+            .exists());
     }
 }
