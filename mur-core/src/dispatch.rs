@@ -442,6 +442,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::SkillAction::Sweep { name, dry_run } => {
                 cmd::skill_sweep::cmd_sweep(name.as_deref(), dry_run)?
             }
+            crate::cli::SkillAction::Curate { name } => cmd::skill_curate::cmd_curate(&name)?,
             crate::cli::SkillAction::ReindexVec { name, prune } => {
                 let home = cmd::agent::resolve_mur_home()?;
                 cmd::skill_reindex_vec::cmd_reindex_vec(&home, name.as_deref(), prune).await?

@@ -48,6 +48,7 @@ pub fn do_create(mur_home: &Path, name: &str, description: &str, body: &str) -> 
         evolution_log: vec![],
         transfer_chain: vec![],
         mcp_requirements: vec![],
+        provenance: Default::default(),
     };
 
     validate(&manifest).with_context(|| format!("validate note '{name}'"))?;
@@ -635,6 +636,7 @@ mod tests {
                 filter: Some("rust-errors".into()),
                 dry_run: false,
                 now: now + Duration::days(2),
+                require_human_curation_before_stable: true,
             },
         )
         .unwrap();

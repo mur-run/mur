@@ -81,6 +81,14 @@ pub struct SkillStats {
     /// agent's MCP inventory — doctor's `intent-resolvable` check surfaces this.
     #[serde(default)]
     pub resolution_misses: u64,
+
+    /// Timestamp of the most recent human curation event
+    /// (`mur.skill.curated`). `None` until a human has reviewed an
+    /// LLM-extracted skill. Opens the provenance gate (see
+    /// `lifecycle::cap_for_provenance`). `#[serde(default)]` keeps older
+    /// stats files parsing.
+    #[serde(default)]
+    pub curated_at: Option<DateTime<Utc>>,
 }
 
 impl SkillStats {
@@ -108,6 +116,7 @@ impl SkillStats {
             anchor_confidence: 1.0,
             rebuilt_from_trace_through: None,
             resolution_misses: 0,
+            curated_at: None,
         }
     }
 
@@ -372,5 +381,19 @@ mod tests {
         assert!(stats.pinned);
         assert_eq!(stats.lifecycle_state, LifecycleState::Canonical);
         assert!(stats.first_successful_use_at.is_some());
+    }
+
+    #[test]
+    fn curated_at_defaults_to_none_and_is_backward_compatible() {
+        // A SkillStats JSON written before this field existed must still parse.
+        let legacy = r#"{
+            "schema_version": 1, "skill_name": "x", "skill_version": "1",
+            "manifest_digest": "d", "lifecycle_state": "draft",
+            "lifecycle_changed_at": "2026-01-01T00:00:00Z", "pinned": false,
+            "usage_count": 0, "success_count": 0, "failure_count": 0,
+            "anchor_confidence": 1.0
+        }"#;
+        let s: SkillStats = serde_json::from_str(legacy).unwrap();
+        assert_eq!(s.curated_at, None);
     }
 }

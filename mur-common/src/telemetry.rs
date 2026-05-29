@@ -64,6 +64,10 @@ pub const METHOD_SKILL_STEP_RESOLVED: &str = "mur.skill.step_resolved";
 /// `reindex_stats` as a usage + success so retrieval drives the note lifecycle.
 pub const METHOD_NOTE_RETRIEVED: &str = "mur.note.retrieved";
 
+/// Emitted by `mur skill curate` — a human reviewed an LLM-extracted skill.
+/// Reduced into `SkillStats::curated_at`; opens the A1 provenance gate.
+pub const METHOD_SKILL_CURATED: &str = "mur.skill.curated";
+
 pub const MUR_SKILL_NAME: &str = "mur.skill.name";
 pub const MUR_SKILL_VERSION: &str = "mur.skill.version";
 pub const MUR_SKILL_OUTCOME: &str = "mur.skill.outcome";
