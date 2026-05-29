@@ -44,6 +44,15 @@ pub struct McpServerView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ModelHintView {
+    pub provider: String,
+    pub name: String,
+    pub tier: String, // "small" | "mid" | "frontier"
+    pub min_ram_gb: u32,
+    pub local_capable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TrustStatus {
     /// First time this pubkey has been seen on this host.
@@ -82,6 +91,8 @@ pub struct MuragentInspection {
 
     // What this agent will do (per §7.2 rule 5)
     pub permissions: DeclaredPermissions,
+    /// Model the agent was authored against, for first-run resolution (§7.1).
+    pub model_hint: Option<ModelHintView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -309,5 +320,12 @@ fn build_inspection(
         fingerprint_words,
         author_keyid,
         permissions,
+        model_hint: manifest.model_hint.as_ref().map(|h| ModelHintView {
+            provider: h.provider.clone(),
+            name: h.name.clone(),
+            tier: format!("{:?}", h.tier).to_lowercase(),
+            min_ram_gb: h.min_ram_gb,
+            local_capable: h.local_capable,
+        }),
     })
 }
