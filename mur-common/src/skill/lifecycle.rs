@@ -221,6 +221,7 @@ mod tests {
             anchor_confidence: anchor,
             rebuilt_from_trace_through: None,
             resolution_misses: 0,
+            curated_at: None,
         }
     }
 
