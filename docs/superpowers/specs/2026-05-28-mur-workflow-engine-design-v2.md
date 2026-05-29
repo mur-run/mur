@@ -476,3 +476,83 @@ P4 was under-scoped in v1 (no ledger); P5/P6 were over-scoped (skill infra exist
    (already DAG) pass through unchanged. Variables rename `default_value` →
    `default` via serde alias. The migration is a `mur migrate --workflows` one-shot
    that runs before any consumer reads from `~/.mur/skills/`.
+
+## Amendment 2026-05-29 — extraction→governance rebalance + drift defense
+
+Source: `2026-05-29-skill-strategy-market-analysis.md`. Two external findings move
+the value center of gravity away from extraction and toward governance:
+
+- **SkillsBench (arXiv 2604.01687):** LLM-authored skills deliver **+0.0pp** over a
+  no-skill baseline; human-curated skills deliver **+16.2pp**. This is the same
+  mechanism that killed Pattern (`injection_count == 0`) — it is an industry-wide
+  result, not a mur bug.
+- **Library Drift (arXiv 2605.19576):** across 20+ self-evolving skill systems,
+  lifecycle management (versioning, conflict detection, **outcome-driven
+  retirement**) is "largely neglected"; ungated accumulation degrades retrieval and
+  pushes agents *below* the no-skill baseline. As models get cheaper at emitting
+  skills, drift accelerates — so governance is the part of this spec that *appreciates*
+  as models improve.
+
+### A1 — LLM extraction stays advisory; promotion requires human curation
+
+The LLM judge (Layer 2 gate+extract) and cross-session aggregation (P5b) produce
+**candidates**, never auto-trusted skills. Concretely:
+
+1. **`provenance` on the manifest** (new, category-agnostic):
+   ```rust
+   // mur-common/src/skill/manifest.rs
+   #[derive(…, Default)]
+   #[serde(rename_all = "lowercase")]
+   pub enum Provenance { #[default] Human, Llm, Hybrid }  // hybrid = llm-extracted then human-edited
+
+   #[serde(default)]
+   pub provenance: Provenance,
+   ```
+   Extracted skills enter as `Llm`; the first human accept/edit flips them to
+   `Hybrid`.
+
+2. **Curation gate in `lifecycle.rs`** (config, not hardcoded — Mandatory Rule #1):
+   ```yaml
+   skill:
+     lifecycle:
+       require_human_curation_before_stable: true   # gate Stable on provenance != Llm
+   ```
+   When true, a `provenance == Llm` skill **cannot promote past `Emerging`** no
+   matter how good its run stats look — it needs ≥1 human curation event
+   (`{"kind":"curate"}` appended to `events.jsonl`) first. This makes the
+   +0.0pp/+16.2pp gap a structural invariant, not a hope.
+
+3. **P5b reclassified** from "extraction" to "suggestion." DBSCAN clustering emits
+   a ranked candidate list surfaced through the existing `[Accept & edit]`
+   notification; it never writes a skill directory without a human accept. Stays
+   deferred until session volume exists. Rationale: fuzzy cross-session matching is
+   exactly the part improving models commoditize — do not over-engineer DBSCAN.
+
+### A2 — Drift defense as a first-class, outcome-driven feature
+
+Library Drift's central prescription is **retire on measured per-task
+contribution**, not on age alone. Two additions:
+
+1. **`mur skill audit`** (the "AUDIT" op from *Memory as Metabolism*) — a read-only
+   report over the corpus:
+   - stale skills (no successful run / no retrieval since `audit.stale_days`),
+   - low-contribution skills (`success_count == 0` at `usage_count ≥ N`),
+   - conflicting skills (see A2.2),
+   - `provenance == Llm` skills stuck below Stable (curation backlog).
+   Output drives a `--fix` mode that proposes deprecate/archive actions for
+   confirmation. Thresholds in `config.skill.audit.*`.
+
+2. **Contradiction detection — pulled forward** from the Notes post-MVP into the
+   shared governance layer (it serves workflows too: two procedures that claim to
+   do the same thing with conflicting steps). Mechanism: nightly/on-demand sweep,
+   high vector similarity + LLM-judged conflicting conclusion → record a link
+   `links.conflicts_with: [<name>]` and surface in `mur skill audit`. Local-LLM
+   gated (skip if `ollama list` empty), per the Notes spec's optional-LLM rule.
+
+### A3 — Phase deltas
+
+| Phase | Change |
+|---|---|
+| P4 (Lifecycle wire-up) | Add `Provenance` field + the `require_human_curation_before_stable` gate. Add per-skill **contribution** to the stats reducer (so deprecation is outcome-driven, not age-only). |
+| P5b | Reclassified extraction→suggestion; remains deferred; emits candidates only. |
+| **P8 (new): Drift defense** | `mur skill audit` (+`--fix`); `links.conflicts_with`; contradiction sweep (local-LLM gated). Est. 1 wk. Shared with Notes. |
