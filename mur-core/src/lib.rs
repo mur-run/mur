@@ -34,6 +34,7 @@ pub mod federation;
 pub mod gep;
 pub mod inject;
 pub mod interactive;
+pub mod nudge;
 pub mod paths;
 pub mod retrieve;
 pub mod session;
