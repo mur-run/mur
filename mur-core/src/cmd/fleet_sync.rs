@@ -1,7 +1,7 @@
 //! Fleet-sync (Pro) — manifest management, change builders, apply, push/pull.
 //! See spec: `docs/superpowers/specs/2026-05-29-fleet-sync-pro-design.md`.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use mur_common::identity::AgentIdentity;
 use mur_common::model::ModelRegistry;
 use mur_common::sync_types::{FleetChange, FleetEntity, FleetEntityType};
@@ -320,6 +320,42 @@ pub async fn fleet_push(
     }
     anyhow::bail!("fleet push exhausted retries")
 }
+
+/// CLI entry point for `mur sync fleet`. Checks Pro entitlement, then
+/// pushes and/or pulls each fleet entity type.
+pub async fn fleet_sync_cmd(direction: DeviceSyncDirection, force_local: bool) -> Result<()> {
+    let server_url = crate::auth::server_url();
+    let tokens = crate::auth::load_tokens().context("not signed in — run `mur login` first")?;
+    let plan = crate::auth::fetch_effective_plan(&server_url, &tokens.access_token).await?;
+    if !crate::auth::plan_allows_fleet(&plan) {
+        bail!("fleet sync requires a Pro plan (current: {plan}). Upgrade at https://app.mur.run");
+    }
+    let mur_dir = mur_common::trust::mur_home();
+    use mur_common::sync_types::FleetEntityType::*;
+    for etype in [AgentProfile, ModelBinding] {
+        if matches!(
+            direction,
+            DeviceSyncDirection::Pull | DeviceSyncDirection::Both
+        ) {
+            let r = fleet_pull(&server_url, &tokens.access_token, &mur_dir, etype).await?;
+            for id in &r.unresolved_secrets {
+                eprintln!("  ⚠ {id}: secret not resolvable on this device (agent will run unbound)");
+            }
+        }
+        if matches!(
+            direction,
+            DeviceSyncDirection::Push | DeviceSyncDirection::Both
+        ) {
+            let v = fleet_push(&server_url, &tokens.access_token, &mur_dir, etype, force_local)
+                .await?;
+            eprintln!("  pushed {etype:?} (version {v})");
+        }
+    }
+    Ok(())
+}
+
+/// Re-export for CLI dispatch.
+pub use crate::cmd::sync_cmd::DeviceSyncDirection;
 
 #[cfg(test)]
 mod tests {
