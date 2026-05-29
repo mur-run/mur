@@ -26,11 +26,12 @@ use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 mod apply;
 mod comm;
-mod export;
+pub mod export;
 mod hub;
 mod install;
 mod lifecycle;
 mod mcp;
+pub mod model_resolve;
 mod peers;
 mod perm;
 mod prompt;
