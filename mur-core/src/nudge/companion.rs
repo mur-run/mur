@@ -1,8 +1,8 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use crate::nudge::candidate::WorkflowCandidate;
 use crate::nudge::NudgeDecision;
+use crate::nudge::candidate::WorkflowCandidate;
 
 /// Message id namespace so the response drain can recognize nudge replies.
 pub const NUDGE_ID_PREFIX: &str = "nudge:";
@@ -26,11 +26,7 @@ pub fn nudge_body(c: &WorkflowCandidate, _locale: &str) -> String {
 /// Write a nudge as a companion inbox `.md` (same frontmatter format as the
 /// runtime's write_inbox_md). Returns the path. No-op (Ok) if a file for this
 /// id already exists (create_new semantics).
-pub fn write_nudge_inbox(
-    inbox_dir: &Path,
-    c: &WorkflowCandidate,
-    locale: &str,
-) -> Result<PathBuf> {
+pub fn write_nudge_inbox(inbox_dir: &Path, c: &WorkflowCandidate, locale: &str) -> Result<PathBuf> {
     let id = nudge_msg_id(&c.id);
     // Sanitize the ':' in the id for the filesystem.
     let filename = format!("{}.md", id.replace(':', "_"));
@@ -249,12 +245,8 @@ mod tests {
         let c = cand();
         let n = deliver_nudges_to_companions(mur.path(), &[c], "en").unwrap();
         assert_eq!(n, 1); // only the "on" agent got it
-        assert!(on_dir
-            .join("companion/inbox/nudge_abc123.md")
-            .exists());
-        assert!(!off_dir
-            .join("companion/inbox/nudge_abc123.md")
-            .exists());
+        assert!(on_dir.join("companion/inbox/nudge_abc123.md").exists());
+        assert!(!off_dir.join("companion/inbox/nudge_abc123.md").exists());
     }
 
     #[test]
@@ -266,7 +258,9 @@ mod tests {
         let c = cand();
         let mut ledger = NudgeLedger::default();
         NudgeEmitter::emit_pending(&mut ledger, &[c.clone()], chrono::Utc::now());
-        ledger.save(&NudgeLedger::default_path_in(mur.path())).unwrap();
+        ledger
+            .save(&NudgeLedger::default_path_in(mur.path()))
+            .unwrap();
 
         let mut prof = mur_common::agent::AgentProfile::default_for_tests();
         prof.companion.enabled = true;
@@ -282,11 +276,7 @@ mod tests {
             "---\nid: nudge:abc123\nsituation: workflow_nudge\ntemplate_id: nudge\nlocale: en\ngenerated_at: {}\n---\n\nbody\n\n>>> response: good",
             chrono::Utc::now().to_rfc3339()
         );
-        std::fs::write(
-            agent_dir.join("companion/inbox/nudge_abc123.md"),
-            &inbox_md,
-        )
-        .unwrap();
+        std::fs::write(agent_dir.join("companion/inbox/nudge_abc123.md"), &inbox_md).unwrap();
         // 3. Run the drain
         let created = std::cell::Cell::new(false);
         let applied = drain_nudge_responses_in(mur.path(), &|c| {
@@ -299,9 +289,10 @@ mod tests {
         assert!(created.get());
         // 4. Verify ledger state and file consumed
         let l = NudgeLedger::load(&NudgeLedger::default_path_in(mur.path())).unwrap();
-        assert!(matches!(l.get("abc123").unwrap().state, NudgeState::Accepted));
-        assert!(!agent_dir
-            .join("companion/inbox/nudge_abc123.md")
-            .exists());
+        assert!(matches!(
+            l.get("abc123").unwrap().state,
+            NudgeState::Accepted
+        ));
+        assert!(!agent_dir.join("companion/inbox/nudge_abc123.md").exists());
     }
 }
