@@ -175,7 +175,7 @@ fn retrieve_with_config(
     let mut injection_ids = Vec::new();
 
     for sp in &scored {
-        let kind_str = match sp.pattern.effective_kind() {
+        let kind_str = match sp.item.effective_kind() {
             PatternKind::Technical => "technical",
             PatternKind::Preference => "preference",
             PatternKind::Fact => "fact",
@@ -183,13 +183,13 @@ fn retrieve_with_config(
             PatternKind::Behavioral => "behavioral",
         };
         response_patterns.push(ScoredPatternResponse {
-            name: sp.pattern.name.clone(),
-            description: sp.pattern.description.clone(),
+            name: sp.item.name.clone(),
+            description: sp.item.description.clone(),
             score: sp.score,
             kind: kind_str.to_string(),
         });
-        injection_ids.push(sp.pattern.name.clone());
-        format_patterns.push(sp.pattern.clone());
+        injection_ids.push(sp.item.name.clone());
+        format_patterns.push(sp.item.clone());
     }
 
     // Format within token budget

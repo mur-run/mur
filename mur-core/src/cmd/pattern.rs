@@ -215,7 +215,7 @@ pub(crate) fn cmd_search(query: &str) -> Result<()> {
 
     println!("🔍 Found {} patterns for \"{}\":\n", results.len(), query);
     for sp in &results {
-        let p = &sp.pattern;
+        let p = &sp.item;
         let tier_icon = match p.tier {
             Tier::Session => "📝",
             Tier::Project => "📁",

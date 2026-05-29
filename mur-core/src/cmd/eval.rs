@@ -337,7 +337,7 @@ fn run_retrieval_eval(format: &str) -> Result<i32> {
         let scored = score_and_rank_with_config(query, patterns.clone(), &config);
         let rank = scored
             .iter()
-            .position(|sp| sp.pattern.name == *expected)
+            .position(|sp| sp.item.name == *expected)
             .map(|i| i + 1);
         let hit = rank.is_some();
         if hit {
