@@ -5,6 +5,7 @@
 use chrono::{DateTime, Duration, Utc};
 
 use crate::skill::stats::{LifecycleState, SkillStats};
+use crate::skill::types::Provenance;
 
 pub const MIN_CONFIDENCE: f64 = 0.05;
 pub const AUTO_ARCHIVE_CONFIDENCE: f64 = 0.10;
@@ -129,6 +130,28 @@ pub fn next_state(stats: &SkillStats, now: DateTime<Utc>) -> LifecycleState {
         LifecycleState::Emerging
     } else {
         LifecycleState::Draft
+    }
+}
+
+/// Cap a proposed lifecycle state for LLM-authored, uncurated skills.
+///
+/// PURE. The promotion ladder (`next_state`) is provenance-blind; this
+/// applies the A1 curation gate on top: an `Llm` skill that no human has
+/// curated cannot rise above `Emerging`, no matter how good its run stats
+/// look. `Human`/`Hybrid` skills, curated skills, and a disabled gate all
+/// pass `proposed` through unchanged. States at or below `Emerging` are
+/// never raised.
+pub fn cap_for_provenance(
+    proposed: LifecycleState,
+    provenance: Provenance,
+    curated: bool,
+    gate_enabled: bool,
+) -> LifecycleState {
+    let gated = gate_enabled && provenance == Provenance::Llm && !curated;
+    if gated && rank(proposed) > rank(LifecycleState::Emerging) {
+        LifecycleState::Emerging
+    } else {
+        proposed
     }
 }
 
@@ -357,5 +380,43 @@ mod tests {
         // Decayed value from a 1.0 anchor with 0 successes and no last_success
         // → MIN_CONFIDENCE since last_success is None
         assert!(stats.anchor_confidence <= old_anchor);
+    }
+
+    #[test]
+    fn cap_blocks_llm_uncurated_above_emerging() {
+        // Stable proposed, LLM, not curated, gate on → capped to Emerging.
+        assert_eq!(
+            cap_for_provenance(LifecycleState::Stable, Provenance::Llm, false, true),
+            LifecycleState::Emerging
+        );
+        // Canonical likewise capped.
+        assert_eq!(
+            cap_for_provenance(LifecycleState::Canonical, Provenance::Llm, false, true),
+            LifecycleState::Emerging
+        );
+    }
+
+    #[test]
+    fn cap_is_noop_for_human_curated_or_disabled() {
+        // Human authorship → never gated.
+        assert_eq!(
+            cap_for_provenance(LifecycleState::Stable, Provenance::Human, false, true),
+            LifecycleState::Stable
+        );
+        // LLM but curated → gate open.
+        assert_eq!(
+            cap_for_provenance(LifecycleState::Stable, Provenance::Llm, true, true),
+            LifecycleState::Stable
+        );
+        // Gate disabled by config → no cap.
+        assert_eq!(
+            cap_for_provenance(LifecycleState::Canonical, Provenance::Llm, false, false),
+            LifecycleState::Canonical
+        );
+        // At or below Emerging → unchanged even when gated.
+        assert_eq!(
+            cap_for_provenance(LifecycleState::Draft, Provenance::Llm, false, true),
+            LifecycleState::Draft
+        );
     }
 }
