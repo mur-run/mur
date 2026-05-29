@@ -2,10 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use mur_common::skill::manifest::{Content, SkillManifest};
-use mur_common::skill::store::{global_skill_dir, write_to_dir};
+use mur_common::skill::stats::{LifecycleState, SkillStats};
+use mur_common::skill::store::{global_skill_dir, read_from_dir, write_to_dir};
 use mur_common::skill::types::{Category, Priority};
 use mur_common::skill::validate;
 use mur_common::telemetry::METHOD_NOTE_RETRIEVED;
@@ -151,6 +152,117 @@ pub fn record_retrieval(mur_home: &Path, skill_name: &str, now: DateTime<Utc>) -
     use std::io::Write;
     writeln!(f, "{}", serde_json::to_string(&line)?)?;
     Ok(())
+}
+
+/// Top-level `mur notes list` handler.
+pub fn cmd_list(maturity: Option<&str>, limit: usize) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let filter = maturity.map(parse_maturity).transpose()?;
+    let rows = do_list(&home, filter, limit)?;
+    if rows.is_empty() {
+        println!("No notes found.");
+        return Ok(());
+    }
+    for r in &rows {
+        println!(
+            "{:<40} {:<11} {}",
+            r.name,
+            format!("{:?}", r.maturity),
+            r.description
+        );
+    }
+    Ok(())
+}
+
+/// Top-level `mur notes show` handler.
+pub fn cmd_show(name: &str) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let view = do_show(&home, name)?;
+    println!("# {}", view.name);
+    println!("{}", view.description);
+    println!("maturity: {:?}\n", view.maturity);
+    println!("{}", view.body);
+
+    // Viewing a note is a retrieval — best-effort, never fail the read.
+    if let Err(e) = record_retrieval(&home, &view.name, Utc::now()) {
+        tracing::warn!(note = %view.name, error = %e, "record retrieval failed");
+    }
+    Ok(())
+}
+
+/// One row of `mur notes list`.
+#[derive(Debug, Clone)]
+pub struct NoteListRow {
+    pub name: String,
+    pub maturity: LifecycleState,
+    pub description: String,
+}
+
+/// Parse a `--maturity` value (case-insensitive) into a `LifecycleState`.
+pub fn parse_maturity(s: &str) -> Result<LifecycleState> {
+    match s.to_lowercase().as_str() {
+        "draft" => Ok(LifecycleState::Draft),
+        "emerging" => Ok(LifecycleState::Emerging),
+        "stable" => Ok(LifecycleState::Stable),
+        "canonical" => Ok(LifecycleState::Canonical),
+        "deprecated" => Ok(LifecycleState::Deprecated),
+        "archived" => Ok(LifecycleState::Archived),
+        other => bail!(
+            "unknown maturity '{other}' \
+             (expected draft|emerging|stable|canonical|deprecated|archived)"
+        ),
+    }
+}
+
+/// A note rendered for `mur notes show`.
+#[derive(Debug, Clone)]
+pub struct NoteView {
+    pub name: String,
+    pub description: String,
+    pub maturity: LifecycleState,
+    pub body: String,
+}
+
+/// Load a single note for display. Errors if the skill is missing or not a note.
+pub fn do_show(mur_home: &Path, name: &str) -> Result<NoteView> {
+    let dir = global_skill_dir(mur_home, name);
+    let manifest = read_from_dir(&dir).map_err(|_| anyhow!("note '{name}' not found"))?;
+    if manifest.category != Category::Note {
+        bail!("'{name}' is not a note (category: {:?})", manifest.category);
+    }
+    let maturity = SkillStats::load(&SkillStats::path(mur_home, name))?
+        .map(|s| s.lifecycle_state)
+        .unwrap_or_default();
+    let body = manifest.content.note.clone().unwrap_or_default();
+    Ok(NoteView {
+        name: manifest.name,
+        description: manifest.description,
+        maturity,
+        body,
+    })
+}
+
+/// List `category: note` skills, optionally filtered by maturity, sorted by name.
+pub fn do_list(
+    mur_home: &Path,
+    maturity: Option<LifecycleState>,
+    limit: usize,
+) -> Result<Vec<NoteListRow>> {
+    let skills_dir = mur_home.join("skills");
+    let all = load_skill_candidates(&skills_dir, mur_home)?;
+    let mut rows: Vec<NoteListRow> = all
+        .into_iter()
+        .filter(|s| s.manifest.category == Category::Note)
+        .filter(|s| maturity.is_none_or(|m| s.stats.lifecycle_state == m))
+        .map(|s| NoteListRow {
+            name: s.manifest.name.clone(),
+            maturity: s.stats.lifecycle_state,
+            description: s.manifest.description.clone(),
+        })
+        .collect();
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    rows.truncate(limit);
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -356,6 +468,124 @@ mod tests {
             .with_extension("jsonl");
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content.lines().count(), 2);
+    }
+
+    #[test]
+    fn do_list_returns_notes_sorted_by_name_with_maturity() {
+        let tmp = tempdir().unwrap();
+        do_create(tmp.path(), "zebra", "z note", "body").unwrap();
+        do_create(tmp.path(), "alpha", "a note", "body").unwrap();
+
+        let rows = do_list(tmp.path(), None, 10).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "alpha");
+        assert_eq!(rows[1].name, "zebra");
+        assert_eq!(rows[0].maturity, LifecycleState::Draft);
+    }
+
+    #[test]
+    fn do_list_filters_by_maturity() {
+        let tmp = tempdir().unwrap();
+        do_create(tmp.path(), "n1", "d", "body").unwrap();
+        // Fresh notes are Draft.
+        assert!(
+            do_list(tmp.path(), Some(LifecycleState::Stable), 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            do_list(tmp.path(), Some(LifecycleState::Draft), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn do_list_excludes_non_note_skills() {
+        use std::fs;
+        let tmp = tempdir().unwrap();
+        do_create(tmp.path(), "real-note", "d", "body").unwrap();
+        let ctx = tmp.path().join("skills").join("ctx");
+        fs::create_dir_all(&ctx).unwrap();
+        fs::write(
+            ctx.join("skill.yaml"),
+            "name: ctx\nversion: 1.0.0\npublisher: human:test\n\
+             category: context\ndescription: d\ncontent:\n  abstract: a\n  context: c\n",
+        )
+        .unwrap();
+
+        let rows = do_list(tmp.path(), None, 10).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+            vec!["real-note"]
+        );
+    }
+
+    #[test]
+    fn do_show_returns_a_note_view() {
+        let tmp = tempdir().unwrap();
+        do_create(tmp.path(), "my-note", "My description", "# Heading\nprose").unwrap();
+
+        let v = do_show(tmp.path(), "my-note").unwrap();
+        assert_eq!(v.name, "my-note");
+        assert_eq!(v.description, "My description");
+        assert_eq!(v.body, "# Heading\nprose");
+        assert_eq!(v.maturity, LifecycleState::Draft);
+    }
+
+    #[test]
+    fn do_show_errors_for_missing_note() {
+        let tmp = tempdir().unwrap();
+        let err = do_show(tmp.path(), "nope").unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn do_show_errors_for_non_note_skill() {
+        use std::fs;
+        let tmp = tempdir().unwrap();
+        let ctx = tmp.path().join("skills").join("ctx");
+        fs::create_dir_all(&ctx).unwrap();
+        fs::write(
+            ctx.join("skill.yaml"),
+            "name: ctx\nversion: 1.0.0\npublisher: human:test\n\
+             category: context\ndescription: d\ncontent:\n  abstract: a\n  context: c\n",
+        )
+        .unwrap();
+
+        let err = do_show(tmp.path(), "ctx").unwrap_err();
+        assert!(err.to_string().contains("not a note"));
+    }
+
+    #[test]
+    fn create_then_list_and_show_compose() {
+        let tmp = tempdir().unwrap();
+        do_create(tmp.path(), "fly", "Deploy to fly", "# fly\nsteps").unwrap();
+        do_create(tmp.path(), "brew", "Brew tips", "# brew\nupdate").unwrap();
+
+        // list is sorted by name
+        let rows = do_list(tmp.path(), None, 10).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            vec!["brew", "fly"]
+        );
+        assert!(rows.iter().all(|r| r.maturity == LifecycleState::Draft));
+
+        // show returns the right body
+        let v = do_show(tmp.path(), "fly").unwrap();
+        assert_eq!(v.body, "# fly\nsteps");
+        assert_eq!(v.description, "Deploy to fly");
+    }
+
+    #[test]
+    fn parse_maturity_is_case_insensitive_and_rejects_unknown() {
+        assert_eq!(parse_maturity("Stable").unwrap(), LifecycleState::Stable);
+        assert_eq!(
+            parse_maturity("emerging").unwrap(),
+            LifecycleState::Emerging
+        );
+        assert!(parse_maturity("bogus").is_err());
     }
 
     #[tokio::test]

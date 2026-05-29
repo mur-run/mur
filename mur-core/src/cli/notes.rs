@@ -29,4 +29,21 @@ pub enum NotesAction {
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
+
+    /// List notes, optionally filtered by maturity.
+    List {
+        /// Filter by lifecycle maturity: draft|emerging|stable|canonical|deprecated|archived.
+        #[arg(long)]
+        maturity: Option<String>,
+
+        /// Maximum notes to print.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+
+    /// Print a single note's body and maturity (records a retrieval).
+    Show {
+        /// The note name.
+        name: String,
+    },
 }
