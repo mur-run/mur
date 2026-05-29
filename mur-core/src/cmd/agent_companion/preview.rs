@@ -354,8 +354,9 @@ fn parse_situation_slug(slug: &str) -> Result<Situation> {
         "gentle_check_in" => Ok(Situation::GentleCheckIn),
         "share_quote" => Ok(Situation::ShareQuote),
         "share_link" => Ok(Situation::ShareLink),
+        "workflow_nudge" => Ok(Situation::WorkflowNudge),
         other => anyhow::bail!(
-            "unknown situation `{other}`; valid values: morning_greeting, gentle_check_in, share_quote, share_link"
+            "unknown situation `{other}`; valid values: morning_greeting, gentle_check_in, share_quote, share_link, workflow_nudge"
         ),
     }
 }
@@ -366,6 +367,7 @@ fn situation_to_slug(s: &Situation) -> &'static str {
         Situation::GentleCheckIn => "gentle_check_in",
         Situation::ShareQuote => "share_quote",
         Situation::ShareLink => "share_link",
+        Situation::WorkflowNudge => "workflow_nudge",
     }
 }
 
