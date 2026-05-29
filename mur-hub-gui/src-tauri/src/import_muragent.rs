@@ -22,6 +22,7 @@ use mur_common::muragent::manifest::{MuragentManifest, Surface};
 use mur_common::muragent::reader::MuragentArchive;
 use mur_common::muragent::validator;
 use mur_common::trust::{self, TrustLevel, TrustStore};
+use mur_core::cmd::agent::model_resolve::ModelChoice;
 use mur_gui_core::autostart;
 use serde::Serialize;
 
@@ -328,4 +329,55 @@ fn build_inspection(
             local_capable: h.local_capable,
         }),
     })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolutionView {
+    pub hint: Option<ModelHintView>,
+    pub total_ram_gb: u32,
+    pub apple_silicon: bool,
+    pub ollama_present: bool,
+    pub recommendation: String,
+}
+
+#[tauri::command]
+pub fn model_resolution_view(path: String) -> Result<ResolutionView, String> {
+    use mur_common::muragent::manifest::ModelHint;
+    use mur_common::model_resolve::{Recommendation, recommend};
+    use mur_core::cmd::agent::model_resolve::detect_hardware;
+
+    let archive = MuragentArchive::read(Path::new(&path)).map_err(|e| e.to_string())?;
+    let manifest_yaml = archive.get_str("manifest.yaml").map_err(|e| e.to_string())?;
+    let manifest: MuragentManifest =
+        serde_yaml_ng::from_str(manifest_yaml).map_err(|e| e.to_string())?;
+    let hw = detect_hardware();
+    let hint: Option<ModelHint> = manifest.model_hint.clone();
+    let rec = match recommend(hint.as_ref(), &hw) {
+        Recommendation::Local => "local",
+        Recommendation::Cloud => "cloud",
+        Recommendation::CloudOrSmallerLocal => "cloud_or_smaller_local",
+        Recommendation::NeutralMenu => "neutral_menu",
+    };
+    Ok(ResolutionView {
+        hint: hint.map(|h| ModelHintView {
+            provider: h.provider,
+            name: h.name,
+            tier: format!("{:?}", h.tier).to_lowercase(),
+            min_ram_gb: h.min_ram_gb,
+            local_capable: h.local_capable,
+        }),
+        total_ram_gb: hw.total_ram_gb,
+        apple_silicon: hw.apple_silicon,
+        ollama_present: hw.ollama_present,
+        recommendation: rec.to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn apply_agent_model(slug: String, choice: ModelChoice) -> Result<String, String> {
+    use mur_core::cmd::agent::model_resolve::apply_model_choice;
+    use mur_common::trust;
+
+    let mur_home = trust::mur_home();
+    apply_model_choice(&mur_home, &slug, &choice).map_err(|e| e.to_string())
 }

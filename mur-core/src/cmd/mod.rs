@@ -1,4 +1,4 @@
-pub(crate) mod agent;
+pub mod agent;
 pub mod agent_companion;
 /// B0 M11.4 — eval-harness JSONL → markdown report aggregator.
 pub(crate) mod agent_eval;
