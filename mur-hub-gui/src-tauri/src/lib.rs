@@ -6,6 +6,7 @@
 //! M-h5: pet windows — pet_spawn_at/close/reposition/return_to_hub/list/get_expression.
 
 pub mod companion;
+pub mod export_muragent;
 pub mod import_muragent;
 pub mod onboarding;
 pub mod pet;
@@ -295,6 +296,9 @@ pub fn run() {
             preset::import_preset_url,
             import_muragent::inspect_muragent_file,
             import_muragent::install_muragent_file,
+            import_muragent::model_resolution_view,
+            import_muragent::apply_agent_model,
+            export_muragent::export_muragent_file,
             companion::companion_bridge_pending,
             companion::companion_bridge_subscribe,
             companion::companion_bridge_unsubscribe,
