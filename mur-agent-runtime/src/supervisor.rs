@@ -107,13 +107,20 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // surfaces on stderr via the chained previous hook.
     crate::crashlog::install_panic_hook(agent_home.clone());
 
-    let profile = match Profile::load(&agent_home) {
+    let mut profile = match Profile::load(&agent_home) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error[profile_invalid]: {e}");
             std::process::exit(1);
         }
     };
+    // Non-interactive model rebind for headless/server use (§7.5). Honored
+    // by build_provider_runner via resolve_model_entry, which prefers
+    // model_ref over the inline model: block.
+    if let Some(model_ref) = crate::subcommand::flag_value(&argv, "--model") {
+        info!(model_ref = %model_ref, "overriding model binding from --model");
+        profile.inner.model_ref = Some(model_ref);
+    }
     if let Some(expected) = std::env::var_os("MUR_RUNTIME_EXPECTED_NAME") {
         let expected = expected.to_string_lossy().into_owned();
         if let Err(e) = verify_name_match(&expected, &profile.inner.name) {
