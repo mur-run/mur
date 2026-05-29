@@ -1080,7 +1080,7 @@ mod tests {
     #[test]
     fn nudge_config_defaults() {
         let c = NudgeConfig::default();
-        assert!(!c.enabled);
+        assert!(c.enabled);
         assert_eq!(c.daily_cap, 3);
         assert_eq!(c.snooze_days, 7);
         assert_eq!(c.threshold, 3);
@@ -1353,8 +1353,8 @@ impl Default for SleepCycleConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NudgeConfig {
-    /// Master switch. Default off; Phase 2 (companion surface) flips the default.
-    #[serde(default)]
+    /// Master switch. Default on — Phase 2 companion surface is live.
+    #[serde(default = "default_nudge_enabled")]
     pub enabled: bool,
     #[serde(default = "default_nudge_daily_cap")]
     pub daily_cap: u32,
@@ -1364,6 +1364,9 @@ pub struct NudgeConfig {
     pub threshold: usize,
 }
 
+fn default_nudge_enabled() -> bool {
+    true
+}
 fn default_nudge_daily_cap() -> u32 {
     3
 }
@@ -1377,7 +1380,7 @@ fn default_nudge_threshold() -> usize {
 impl Default for NudgeConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             daily_cap: default_nudge_daily_cap(),
             snooze_days: default_nudge_snooze_days(),
             threshold: default_nudge_threshold(),
