@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::nudge::candidate::WorkflowCandidate;
+use crate::nudge::NudgeDecision;
 
 /// Message id namespace so the response drain can recognize nudge replies.
 pub const NUDGE_ID_PREFIX: &str = "nudge:";
@@ -98,6 +99,88 @@ pub fn deliver_nudges_to_companions(
     Ok(written)
 }
 
+fn signal_to_decision(sig: &str) -> Option<NudgeDecision> {
+    match sig {
+        "good" => Some(NudgeDecision::Accept),
+        "dismiss" | "bad" => Some(NudgeDecision::Dismiss),
+        "snooze" => Some(NudgeDecision::Snooze),
+        _ => None,
+    }
+}
+
+/// Parse the frontmatter `id:` and the `>>> response:` value from an inbox `.md`.
+fn parse_id_and_response(text: &str) -> (Option<String>, Option<String>) {
+    let id = text
+        .lines()
+        .find(|l| l.starts_with("id: "))
+        .map(|l| l.trim_start_matches("id: ").trim().to_string());
+    let resp = text
+        .lines()
+        .find(|l| l.starts_with(">>> response: "))
+        .map(|l| l.trim_start_matches(">>> response: ").trim().to_string());
+    (id, resp)
+}
+
+/// Scan all companion inboxes for answered nudge messages, apply each decision
+/// to the nudge ledger, and consume the file. Returns count applied.
+pub fn drain_nudge_responses_in(
+    mur_dir: &Path,
+    create: &dyn Fn(&WorkflowCandidate) -> anyhow::Result<()>,
+) -> anyhow::Result<usize> {
+    use crate::nudge::{NudgeEmitter, NudgeLedger};
+
+    let config_path = crate::store::yaml::default_mur_dir().join("config.yaml");
+    let cfg = mur_common::config::Config::load_or_default(&config_path);
+    let ledger_path = NudgeLedger::default_path_in(mur_dir);
+    let mut ledger = NudgeLedger::load(&ledger_path)?;
+    let now = chrono::Utc::now();
+    let mut applied = 0;
+    let agents = mur_dir.join("agents");
+    if !agents.exists() {
+        return Ok(0);
+    }
+    for agent in std::fs::read_dir(&agents)? {
+        let inbox = agent?.path().join("companion").join("inbox");
+        if !inbox.is_dir() {
+            continue;
+        }
+        for f in std::fs::read_dir(&inbox)? {
+            let path = f?.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)?;
+            let (id, resp) = parse_id_and_response(&text);
+            let (Some(id), Some(resp)) = (id, resp) else {
+                continue;
+            };
+            if resp == "<unset>" {
+                continue;
+            }
+            let Some(cand_id) = candidate_id_from_msg(&id) else {
+                continue;
+            };
+            let Some(decision) = signal_to_decision(&resp) else {
+                continue;
+            };
+            NudgeEmitter::apply_decision(
+                &mut ledger,
+                &cand_id,
+                decision,
+                cfg.nudge.snooze_days,
+                now,
+                create,
+            )?;
+            std::fs::remove_file(&path).ok(); // consume
+            applied += 1;
+        }
+    }
+    if applied > 0 {
+        ledger.save(&ledger_path)?;
+    }
+    Ok(applied)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +253,54 @@ mod tests {
             .join("companion/inbox/nudge_abc123.md")
             .exists());
         assert!(!off_dir
+            .join("companion/inbox/nudge_abc123.md")
+            .exists());
+    }
+
+    #[test]
+    fn drain_applies_accept_and_creates_draft() {
+        use crate::nudge::{NudgeEmitter, NudgeLedger, NudgeState};
+
+        let mur = tempfile::tempdir().unwrap();
+        // 1. Seed nudge ledger with a surfaced candidate "abc123" (snapshot present)
+        let c = cand();
+        let mut ledger = NudgeLedger::default();
+        NudgeEmitter::emit_pending(&mut ledger, &[c.clone()], chrono::Utc::now());
+        ledger.save(&NudgeLedger::default_path_in(mur.path())).unwrap();
+
+        let mut prof = mur_common::agent::AgentProfile::default_for_tests();
+        prof.companion.enabled = true;
+        let agent_dir = mur.path().join("agents/test-agent");
+        std::fs::create_dir_all(agent_dir.join("companion/inbox")).unwrap();
+        std::fs::write(
+            agent_dir.join("profile.yaml"),
+            serde_yaml_ng::to_string(&prof).unwrap(),
+        )
+        .unwrap();
+        // 2. Write a nudge inbox md with ">>> response: good"
+        let inbox_md = format!(
+            "---\nid: nudge:abc123\nsituation: workflow_nudge\ntemplate_id: nudge\nlocale: en\ngenerated_at: {}\n---\n\nbody\n\n>>> response: good",
+            chrono::Utc::now().to_rfc3339()
+        );
+        std::fs::write(
+            agent_dir.join("companion/inbox/nudge_abc123.md"),
+            &inbox_md,
+        )
+        .unwrap();
+        // 3. Run the drain
+        let created = std::cell::Cell::new(false);
+        let applied = drain_nudge_responses_in(mur.path(), &|c| {
+            assert_eq!(c.suggested_name, "test-commit-push");
+            created.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(applied, 1);
+        assert!(created.get());
+        // 4. Verify ledger state and file consumed
+        let l = NudgeLedger::load(&NudgeLedger::default_path_in(mur.path())).unwrap();
+        assert!(matches!(l.get("abc123").unwrap().state, NudgeState::Accepted));
+        assert!(!agent_dir
             .join("companion/inbox/nudge_abc123.md")
             .exists());
     }
