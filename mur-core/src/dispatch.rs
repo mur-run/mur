@@ -294,7 +294,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             open,
             readonly,
         } => cmd::server_cmd::cmd_serve(port, open, readonly).await?,
-        Commands::Why { name } => cmd::inject_cmd::cmd_why(&name)?,
+        Commands::Why { name: _ } => {
+            eprintln!("# Pattern→Skill migration in progress — `mur why` is being migrated.");
+            eprintln!("# Use `mur skill show <name>` to inspect a skill.");
+        }
         Commands::Edit { name, quick } => cmd::pattern::cmd_edit(&name, quick)?,
         Commands::Model(args) => cmd::model::run(args)?,
         Commands::Agent { action } => run_agent(action).await?,
