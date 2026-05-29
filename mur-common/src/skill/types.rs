@@ -41,6 +41,21 @@ pub enum Category {
     Note,
 }
 
+/// Where a skill came from. Drives the curation gate: `Llm`-authored skills
+/// cannot auto-promote past `Emerging` until a human curates them
+/// (amendment A1, `2026-05-28-mur-workflow-engine-design-v2.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Provenance {
+    /// Hand-authored by a person. Default — no gate.
+    #[default]
+    Human,
+    /// Produced by the LLM extraction judge. Gated until curated.
+    Llm,
+    /// LLM-extracted, then human-reviewed/edited. No gate.
+    Hybrid,
+}
+
 /// Exactly one content mode is populated; see spec §3.2.3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -105,5 +120,16 @@ mod tests {
         assert_eq!(yaml.trim(), "note");
         let parsed: ContentMode = serde_yaml_ng::from_str("note").unwrap();
         assert_eq!(parsed, ContentMode::Note);
+    }
+
+    #[test]
+    fn provenance_defaults_to_human_and_roundtrips() {
+        // Default is Human (a skill is human-authored unless stated otherwise).
+        assert_eq!(Provenance::default(), Provenance::Human);
+        // Serializes lowercase, like Category.
+        let yaml = serde_yaml_ng::to_string(&Provenance::Llm).unwrap();
+        assert_eq!(yaml.trim(), "llm");
+        let parsed: Provenance = serde_yaml_ng::from_str("hybrid").unwrap();
+        assert_eq!(parsed, Provenance::Hybrid);
     }
 }
