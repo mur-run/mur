@@ -47,6 +47,16 @@ fn export_muragent(name: &str, agent_home: &Path, out: &Path) -> Result<()> {
     let mur_version = env!("CARGO_PKG_VERSION");
     let mut manifest = build_manifest_from_profile(&profile, mur_version);
 
+    // If the agent binds via model_ref, the inline-derived hint may be a
+    // stale default — override it from the registry entry (§7.1).
+    if let Some(model_ref) = profile.model_ref.as_deref() {
+        let reg_path = mur_common::model::ModelRegistry::default_path()?;
+        let registry = mur_common::model::ModelRegistry::load_from(&reg_path)?;
+        if let Some(hint) = model_hint_from_ref(model_ref, &registry) {
+            manifest.model_hint = Some(hint);
+        }
+    }
+
     let mut export_profile = profile.clone();
     let removed = sanitize_profile_for_export(&mut export_profile);
     manifest.sanitized.removed_fields = removed;
@@ -124,6 +134,19 @@ fn sanitize_profile_for_export(profile: &mut AgentProfile) -> Vec<String> {
     removed
 }
 
+/// Resolve a `model_ref` against a registry into a `ModelHint`. Returns
+/// `None` when the registry has no such entry (the inline-derived hint
+/// then stands).
+fn model_hint_from_ref(
+    model_ref: &str,
+    registry: &mur_common::model::ModelRegistry,
+) -> Option<mur_common::muragent::manifest::ModelHint> {
+    registry
+        .models
+        .get(model_ref)
+        .map(|e| mur_common::muragent::model_class::classify(&e.provider, &e.model))
+}
+
 fn is_secretful(t: &NotificationTarget) -> bool {
     matches!(
         t,
@@ -183,6 +206,29 @@ mod sanitize_tests {
             removed.iter().any(|r| r == "model_ref"),
             "removed list must record model_ref, got {removed:?}"
         );
+    }
+
+    #[test]
+    fn model_hint_override_uses_registry_entry() {
+        use mur_common::model::{ModelEntry, ModelRegistry};
+        let reg = ModelRegistry {
+            schema_version: 1,
+            models: std::collections::BTreeMap::from([(
+                "anthropic_opus_4_7".to_string(),
+                ModelEntry {
+                    provider: "anthropic".into(),
+                    model: "claude-opus-4-7".into(),
+                    base_url: None,
+                    secret: None,
+                    capabilities: vec![],
+                    params: serde_json::Value::Null,
+                },
+            )]),
+            roles: Default::default(),
+        };
+        let hint = model_hint_from_ref("anthropic_opus_4_7", &reg).expect("resolved");
+        assert_eq!(hint.tier, mur_common::muragent::manifest::ModelTier::Frontier);
+        assert!(!hint.local_capable);
     }
 }
 
