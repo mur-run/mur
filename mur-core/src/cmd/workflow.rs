@@ -665,34 +665,17 @@ pub(crate) fn cmd_suggest(create: bool) -> Result<()> {
                         s.suggested_name
                     );
                 } else {
-                    // Create a draft workflow from the suggestion
-                    let wf = mur_common::workflow::Workflow {
-                        base: KnowledgeBase {
-                            name: s.suggested_name.clone(),
-                            description: format!(
-                                "Auto-suggested workflow from {} co-occurring patterns",
-                                s.patterns.len()
-                            ),
-                            content: Content::Plain(format!(
-                                "Combines patterns: {}",
-                                s.patterns.join(", ")
-                            )),
-                            tags: collect_tags_from_patterns(&s.patterns, &patterns),
-                            ..Default::default()
-                        },
-                        steps: vec![],
-                        variables: vec![],
-                        source_sessions: vec![],
-                        trigger: s.suggested_trigger.clone(),
-                        tools: vec![],
-                        published_version: 0,
-                        permission: Default::default(),
-                        schedule: None,
-                        id: None,
-                        notify: None,
-                        requires: vec![],
-                    };
-                    workflow_store.save(&wf)?;
+                    let description = format!(
+                        "Auto-suggested workflow from {} co-occurring patterns",
+                        s.patterns.len()
+                    );
+                    create_draft_workflow_in(
+                        &workflow_store,
+                        &s.suggested_name,
+                        &description,
+                        &s.suggested_trigger,
+                        &[],
+                    )?;
                     println!("     -> Created draft workflow: {}", s.suggested_name);
 
                     // Add cross-reference: link each source pattern to this workflow
@@ -1000,4 +983,75 @@ pub(crate) fn cmd_schedule_enable(name: &str, enable: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Build and save a draft Workflow. Shared by `mur suggest --create` and nudge-accept.
+pub(crate) fn create_draft_workflow_in(
+    store: &crate::store::workflow_yaml::WorkflowYamlStore,
+    name: &str,
+    description: &str,
+    trigger: &str,
+    source_sessions: &[String],
+) -> anyhow::Result<()> {
+    if store.exists(name) {
+        return Ok(()); // idempotent: don't clobber an existing workflow
+    }
+    let base = KnowledgeBase {
+        name: name.to_string(),
+        description: description.to_string(),
+        content: Content::Plain(trigger.to_string()),
+        maturity: mur_common::knowledge::Maturity::Draft,
+        ..Default::default()
+    };
+    let wf = mur_common::workflow::Workflow {
+        base,
+        steps: vec![],
+        variables: vec![],
+        source_sessions: source_sessions.to_vec(),
+        trigger: trigger.to_string(),
+        tools: vec![],
+        published_version: 0,
+        permission: Default::default(),
+        schedule: None,
+        id: None,
+        notify: None,
+        requires: vec![],
+    };
+    store.save(&wf)
+}
+
+/// Convenience over the default store.
+pub(crate) fn create_draft_workflow(
+    name: &str,
+    description: &str,
+    trigger: &str,
+    source_sessions: &[String],
+) -> anyhow::Result<()> {
+    let store = crate::store::workflow_yaml::WorkflowYamlStore::default_store()?;
+    create_draft_workflow_in(&store, name, description, trigger, source_sessions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_draft_workflow_persists_draft() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store =
+            crate::store::workflow_yaml::WorkflowYamlStore::new(tmp.path().join("workflows"))
+                .unwrap();
+        create_draft_workflow_in(
+            &store,
+            "test-then-commit",
+            "Run tests then commit",
+            "after editing code",
+            &["s1".into(), "s2".into()],
+        )
+        .unwrap();
+        assert!(store.exists("test-then-commit"));
+        let wf = store.get("test-then-commit").unwrap();
+        assert_eq!(wf.base.maturity, mur_common::knowledge::Maturity::Draft);
+        assert_eq!(wf.trigger, "after editing code");
+    }
 }
