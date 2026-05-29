@@ -117,6 +117,10 @@ fn sanitize_profile_for_export(profile: &mut AgentProfile) -> Vec<String> {
         removed.push("transport.socket.auth".to_string());
         profile.transport.socket.auth = None;
     }
+    if profile.model_ref.is_some() {
+        removed.push("model_ref".to_string());
+        profile.model_ref = None;
+    }
     removed
 }
 
@@ -162,6 +166,24 @@ fn export_bin(name: &str, agent_home: &Path, out: &Path) -> Result<()> {
         .with_context(|| format!("copy {} -> {}", built.display(), out.display()))?;
     println!("Built self-contained agent binary at {}", out.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod sanitize_tests {
+    use super::*;
+    use mur_common::AgentProfile;
+
+    #[test]
+    fn sanitize_strips_model_ref() {
+        let mut p = AgentProfile::default_for_tests();
+        p.model_ref = Some("anthropic_opus_4_7".into());
+        let removed = sanitize_profile_for_export(&mut p);
+        assert!(p.model_ref.is_none(), "model_ref must be stripped");
+        assert!(
+            removed.iter().any(|r| r == "model_ref"),
+            "removed list must record model_ref, got {removed:?}"
+        );
+    }
 }
 
 fn locate_runtime_manifest_dir() -> Result<PathBuf> {
