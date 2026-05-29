@@ -6,13 +6,14 @@ use super::agent::resolve_mur_home;
 
 pub fn cmd_sweep(filter: Option<&str>, dry_run: bool) -> Result<()> {
     let home = resolve_mur_home()?;
+    let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
     let report = crate::skill_lifecycle::sweep::run_sweep(
         &home,
         crate::skill_lifecycle::sweep::SweepOptions {
             filter: filter.map(str::to_string),
             dry_run,
             now: chrono::Utc::now(),
-            require_human_curation_before_stable: true,
+            require_human_curation_before_stable: cfg.skills.require_human_curation_before_stable,
         },
     )?;
 

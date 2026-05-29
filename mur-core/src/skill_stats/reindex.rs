@@ -347,20 +347,31 @@ mod tests {
             today.to_rfc3339()
         );
         std::fs::write(
-            traces.join(today.format("%Y-%m-%d").to_string()).with_extension("jsonl"),
+            traces
+                .join(today.format("%Y-%m-%d").to_string())
+                .with_extension("jsonl"),
             format!("{line}\n"),
         )
         .unwrap();
 
         reindex_stats(
             home,
-            ReindexOptions { skill_filter: Some("my-skill".into()), since: None, days_back: 1 },
+            ReindexOptions {
+                skill_filter: Some("my-skill".into()),
+                since: None,
+                days_back: 1,
+            },
         )
         .await
         .unwrap();
 
-        let stats = SkillStats::load(&SkillStats::path(home, "my-skill")).unwrap().unwrap();
-        assert!(stats.curated_at.is_some(), "curated event should set curated_at");
+        let stats = SkillStats::load(&SkillStats::path(home, "my-skill"))
+            .unwrap()
+            .unwrap();
+        assert!(
+            stats.curated_at.is_some(),
+            "curated event should set curated_at"
+        );
         assert_eq!(stats.usage_count, 0, "curation is not a usage");
         assert_eq!(stats.success_count, 0);
     }

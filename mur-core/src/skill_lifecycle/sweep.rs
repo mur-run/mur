@@ -225,7 +225,9 @@ mod tests {
         )
         .unwrap();
 
-        let after = SkillStats::load(&SkillStats::path(home, "deploy")).unwrap().unwrap();
+        let after = SkillStats::load(&SkillStats::path(home, "deploy"))
+            .unwrap()
+            .unwrap();
         assert_eq!(
             after.lifecycle_state,
             LifecycleState::Emerging,

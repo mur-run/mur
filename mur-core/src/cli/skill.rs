@@ -209,6 +209,12 @@ pub enum SkillAction {
         #[arg(long)]
         cross_agent: bool,
     },
+    /// Record a human curation event for an LLM-extracted skill, so it can
+    /// promote past Emerging (amendment A1).
+    Curate {
+        /// Skill name to curate.
+        name: String,
+    },
     /// Recombine two skills into a new Draft offspring on this agent.
     Recombine {
         /// First parent ref: `<name>` (local) or `agent://<peer>/<name>`.
