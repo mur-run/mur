@@ -631,6 +631,12 @@ pub(crate) fn cmd_suggest(create: bool, accept: Option<&str>, dismiss: Option<&s
         return cmd_suggest_dismiss(id);
     }
 
+    // Drain companion nudge responses before listing pending.
+    let _ = crate::nudge::companion::drain_nudge_responses_in(
+        &crate::store::yaml::default_mur_dir(),
+        &|c| create_draft_workflow(&c.suggested_name, &c.title, "", &c.evidence_session_ids),
+    );
+
     use evolve::compose::suggest_workflows_with_patterns;
     use evolve::cooccurrence::CooccurrenceMatrix;
     use evolve::decompose::{analyze_workflow_for_extraction, extract_pattern_from_step};
