@@ -221,7 +221,10 @@ pub fn build_manifest_from_profile(profile: &AgentProfile, mur_version: &str) ->
         commander: None,
         deployment: None,
         assignment: None,
-        model_hint: None, // placeholder; Task 3 replaces with classify()
+        model_hint: Some(crate::muragent::model_class::classify(
+            &profile.model.provider,
+            &profile.model.name,
+        )),
     }
 }
 
@@ -247,5 +250,19 @@ mod tests {
 
         assert!(out.exists());
         assert!(out.metadata().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn manifest_carries_model_hint_from_inline_binding() {
+        let mut profile = AgentProfile::default_for_tests();
+        profile.model = crate::agent::ModelConfig {
+            provider: "ollama".into(),
+            name: "llama3.2:3b".into(),
+            params: Default::default(),
+        };
+        let m = build_manifest_from_profile(&profile, "1.0.0");
+        let hint = m.model_hint.expect("model_hint populated");
+        assert_eq!(hint.tier, crate::muragent::manifest::ModelTier::Small);
+        assert!(hint.local_capable);
     }
 }
