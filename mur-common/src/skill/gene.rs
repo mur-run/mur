@@ -255,6 +255,7 @@ mod tests {
                     steps,
                 }),
                 command: None,
+                note: None,
             },
             requires: vec![],
             tags: vec![],

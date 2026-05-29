@@ -62,6 +62,7 @@ mod tests {
                 context: Some("context text".into()),
                 procedure: None,
                 command: None,
+                note: None,
             },
             requires: vec![],
             triggers: vec![],

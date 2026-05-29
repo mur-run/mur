@@ -90,6 +90,11 @@ pub struct Content {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+
+    /// Note mode (category: note): free markdown body, stored inline in the
+    /// canonical skill.yaml per the 1a storage decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 impl Content {
@@ -98,10 +103,12 @@ impl Content {
             self.context.is_some(),
             self.procedure.is_some(),
             self.command.is_some(),
+            self.note.is_some(),
         ) {
-            (true, false, false) => Some(ContentMode::Context),
-            (false, true, false) => Some(ContentMode::Workflow),
-            (false, false, true) => Some(ContentMode::Command),
+            (true, false, false, false) => Some(ContentMode::Context),
+            (false, true, false, false) => Some(ContentMode::Workflow),
+            (false, false, true, false) => Some(ContentMode::Command),
+            (false, false, false, true) => Some(ContentMode::Note),
             _ => None,
         }
     }
@@ -224,6 +231,7 @@ priority: normal
             context: Some("ctx".into()),
             procedure: None,
             command: None,
+            note: None,
         };
         assert_eq!(c.mode(), Some(ContentMode::Context));
     }
@@ -235,6 +243,31 @@ priority: normal
             context: None,
             procedure: None,
             command: None,
+            note: None,
+        };
+        assert_eq!(c.mode(), None);
+    }
+
+    #[test]
+    fn mode_returns_note_when_only_note_populated() {
+        let c = Content {
+            r#abstract: "a".into(),
+            context: None,
+            procedure: None,
+            command: None,
+            note: Some("# body".into()),
+        };
+        assert_eq!(c.mode(), Some(ContentMode::Note));
+    }
+
+    #[test]
+    fn mode_returns_none_when_note_and_context_both_populated() {
+        let c = Content {
+            r#abstract: "a".into(),
+            context: Some("ctx".into()),
+            procedure: None,
+            command: None,
+            note: Some("# body".into()),
         };
         assert_eq!(c.mode(), None);
     }
