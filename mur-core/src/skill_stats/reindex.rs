@@ -102,6 +102,7 @@ pub async fn reindex_stats(mur_home: &Path, opts: ReindexOptions) -> Result<Rein
                 // mur.skill.name + mur.skill.outcome.
                 if !trimmed.contains("mur.skill.executed")
                     && !trimmed.contains("mur.note.retrieved")
+                    && !trimmed.contains("mur.skill.curated")
                 {
                     continue;
                 }
@@ -116,6 +117,21 @@ pub async fn reindex_stats(mur_home: &Path, opts: ReindexOptions) -> Result<Rein
                     continue;
                 }
                 lines_consumed += 1;
+
+                // A curation event records human review, not a usage. Set the
+                // watermark and skip the usage/outcome accounting below.
+                if trimmed.contains("mur.skill.curated") {
+                    if let Some(ts) = val.get("ts").and_then(|v| v.as_str())
+                        && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(ts)
+                    {
+                        let utc = parsed.with_timezone(&Utc);
+                        fresh.curated_at = Some(match fresh.curated_at {
+                            Some(e) => e.max(utc),
+                            None => utc,
+                        });
+                    }
+                    continue;
+                }
 
                 let outcome = val
                     .get("mur.skill.outcome")
@@ -165,6 +181,9 @@ pub async fn reindex_stats(mur_home: &Path, opts: ReindexOptions) -> Result<Rein
             }
             if fresh.first_successful_use_at.is_some() {
                 existing.first_successful_use_at = fresh.first_successful_use_at;
+            }
+            if fresh.curated_at.is_some() {
+                existing.curated_at = fresh.curated_at;
             }
             existing.rebuilt_from_trace_through = Some(today);
             Ok(())
@@ -303,5 +322,57 @@ mod tests {
             .unwrap();
         assert_eq!(stats.usage_count, 3);
         assert_eq!(stats.success_count, 3);
+    }
+
+    #[tokio::test]
+    async fn reindex_sets_curated_at_without_counting_usage() {
+        use mur_common::skill::stats::SkillStats;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+
+        // Minimal installed skill dir so reindex enumerates it.
+        std::fs::create_dir_all(home.join("skills").join("my-skill")).unwrap();
+        std::fs::write(
+            home.join("skills").join("my-skill").join("skill.yaml"),
+            "name: my-skill\nversion: \"1\"\npublisher: me\ndescription: d\ncategory: note\nprovenance: llm\ncontent:\n  abstract: a\n  note: \"b\"\n",
+        )
+        .unwrap();
+
+        // One curated event in today's trace log.
+        let today = chrono::Utc::now();
+        let traces = home.join("traces");
+        std::fs::create_dir_all(&traces).unwrap();
+        let line = format!(
+            "{{\"ts\":\"{}\",\"method\":\"mur.skill.curated\",\"mur.skill.name\":\"my-skill\"}}",
+            today.to_rfc3339()
+        );
+        std::fs::write(
+            traces
+                .join(today.format("%Y-%m-%d").to_string())
+                .with_extension("jsonl"),
+            format!("{line}\n"),
+        )
+        .unwrap();
+
+        reindex_stats(
+            home,
+            ReindexOptions {
+                skill_filter: Some("my-skill".into()),
+                since: None,
+                days_back: 1,
+            },
+        )
+        .await
+        .unwrap();
+
+        let stats = SkillStats::load(&SkillStats::path(home, "my-skill"))
+            .unwrap()
+            .unwrap();
+        assert!(
+            stats.curated_at.is_some(),
+            "curated event should set curated_at"
+        );
+        assert_eq!(stats.usage_count, 0, "curation is not a usage");
+        assert_eq!(stats.success_count, 0);
     }
 }

@@ -1230,6 +1230,12 @@ timeout_secs: 60
         let parsed: BackendConfig = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed, original);
     }
+
+    #[test]
+    fn skills_config_curation_gate_defaults_on() {
+        let c = SkillsConfig::default();
+        assert!(c.require_human_curation_before_stable);
+    }
 }
 
 /// Configuration for the daemon-side sleep cycle (idle background learning).
@@ -1242,6 +1248,16 @@ pub struct SkillsConfig {
     pub max_total_tokens: usize,
     pub priority_order: Vec<String>,
     pub adaptive: Option<AdaptiveSkillsConfig>,
+
+    /// When true (default), LLM-authored skills cannot auto-promote past
+    /// `Emerging` until a human curates them (amendment A1). Set false to
+    /// let LLM-extracted skills promote on run stats alone.
+    #[serde(default = "default_require_human_curation")]
+    pub require_human_curation_before_stable: bool,
+}
+
+fn default_require_human_curation() -> bool {
+    true
 }
 
 impl Default for SkillsConfig {
@@ -1251,6 +1267,7 @@ impl Default for SkillsConfig {
             max_total_tokens: 2000,
             priority_order: vec!["agent".into(), "global".into()],
             adaptive: Some(AdaptiveSkillsConfig::default()),
+            require_human_curation_before_stable: default_require_human_curation(),
         }
     }
 }

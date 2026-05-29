@@ -78,6 +78,7 @@ fn sweep_idempotent() {
             filter: None,
             dry_run: false,
             now,
+            require_human_curation_before_stable: true,
         },
     )
     .unwrap();
@@ -98,6 +99,7 @@ fn sweep_idempotent() {
             filter: None,
             dry_run: false,
             now,
+            require_human_curation_before_stable: true,
         },
     )
     .unwrap();
@@ -151,6 +153,7 @@ fn anchor_reset_on_promotion() {
             filter: None,
             dry_run: false,
             now,
+            require_human_curation_before_stable: true,
         },
     )
     .unwrap();
