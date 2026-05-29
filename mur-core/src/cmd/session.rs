@@ -155,6 +155,25 @@ pub(crate) async fn cmd_session_stop(analyze: bool, reflect: bool) -> Result<()>
                             "💡 Noticed {} repeated workflow(s). Review with `mur suggest`.",
                             surfaced.len()
                         );
+                        // Deliver to companion-enabled agents' inboxes.
+                        let ledger_path = crate::nudge::NudgeLedger::default_path();
+                        if let Ok(ledger) = crate::nudge::NudgeLedger::load(&ledger_path) {
+                            let surfaced_cands: Vec<_> = surfaced
+                                .iter()
+                                .filter_map(|id| {
+                                    ledger.get(id).and_then(|r| r.candidate.clone())
+                                })
+                                .collect();
+                            if let Ok(n) = crate::nudge::companion::deliver_nudges_to_companions(
+                                &crate::store::yaml::default_mur_dir(),
+                                &surfaced_cands,
+                                "en",
+                            ) {
+                                if n > 0 {
+                                    eprintln!("  📬 {n} nudge(s) sent to your companion (or run `mur suggest`).");
+                                }
+                            }
+                        }
                     }
                 }
             }
