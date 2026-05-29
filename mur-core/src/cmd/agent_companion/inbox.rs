@@ -18,12 +18,14 @@ pub struct InboxArgs {
 pub struct AckArgs {
     pub name: String,
     pub msg_id: String,
-    #[arg(long, conflicts_with_all = ["bad", "dismiss"])]
+    #[arg(long, conflicts_with_all = ["bad", "dismiss", "snooze"])]
     pub good: bool,
-    #[arg(long, conflicts_with_all = ["good", "dismiss"])]
+    #[arg(long, conflicts_with_all = ["good", "dismiss", "snooze"])]
     pub bad: bool,
-    #[arg(long, conflicts_with_all = ["good", "bad"])]
+    #[arg(long, conflicts_with_all = ["good", "bad", "snooze"])]
     pub dismiss: bool,
+    #[arg(long, conflicts_with_all = ["good", "bad", "dismiss"])]
+    pub snooze: bool,
 }
 
 // ── Domain types ───────────────────────────────────────────────────────────
@@ -90,8 +92,10 @@ pub async fn run_ack(args: AckArgs) -> Result<()> {
         "bad"
     } else if args.dismiss {
         "dismiss"
+    } else if args.snooze {
+        "snooze"
     } else {
-        anyhow::bail!("one of --good, --bad, --dismiss is required");
+        anyhow::bail!("one of --good, --bad, --dismiss, --snooze is required");
     };
 
     let agent_home = super::util::agent_home_for(&args.name)?;
@@ -119,6 +123,7 @@ fn ack_at(agent_home: &Path, msg_id: &str, signal: &str) -> Result<()> {
         "good" => mur_common::companion::Signal::Positive,
         "bad" => mur_common::companion::Signal::Negative,
         "dismiss" => mur_common::companion::Signal::Dismiss,
+        "snooze" => mur_common::companion::Signal::Dismiss,
         _ => unreachable!(),
     };
     let event = mur_agent_runtime::companion::telemetry::OutboxEvent::UserSignal {
