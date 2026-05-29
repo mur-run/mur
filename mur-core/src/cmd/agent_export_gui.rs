@@ -4,6 +4,9 @@
 //!
 //! Phase list mirrors the spec § 8.2:
 //!
+//! Retired from CLI dispatch (--format=gui redirects to .muragent), preserved
+//! as a reference for the Plan 3 Hub distribution pipeline.
+//!
 //! | # | Phase             | Description                                 |
 //! |---|-------------------|---------------------------------------------|
 //! | 1 | prereq_check      | `cmd::doctor::checks_for("gui")` fail-fast  |
@@ -25,6 +28,8 @@
 //! upgrades these to OpenTelemetry spans.
 //!
 //! See spec: `docs/superpowers/specs/2026-04-29-mur-agent-gui-export-design.md`
+
+#![allow(dead_code)]
 
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::bundle::{BundleMode, EmbeddedMetadata};
