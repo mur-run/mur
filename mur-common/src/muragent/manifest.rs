@@ -29,6 +29,9 @@ pub struct MuragentManifest {
     /// Reserved for future specs; v1 must ignore.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignment: Option<serde_json::Value>,
+    /// Model backend hint for the recipient's first-run resolution (§7.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_hint: Option<ModelHint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +51,27 @@ pub struct AgentRef {
     pub bundle_id: String,
     pub url_scheme: String,
     pub original_uuid: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTier {
+    Small,
+    Mid,
+    Frontier,
+}
+
+/// Declares what kind of model the agent was authored against, so the
+/// recipient's first-run wizard can resolve a backend (no weights travel).
+/// See spec §7.1.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelHint {
+    pub provider: String,
+    pub name: String,
+    pub tier: ModelTier,
+    #[serde(default)]
+    pub min_ram_gb: u32,
+    pub local_capable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -180,5 +204,39 @@ impl MuragentManifest {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod model_hint_tests {
+    use super::*;
+
+    #[test]
+    fn manifest_round_trips_without_model_hint() {
+        let yaml = "\
+schema: mur-agent/2
+exported_at: '2026-05-29T00:00:00Z'
+exporter: { mur_version: 1.0.0, tool: mur }
+agent: { slug: coach, display_name: Coach, bundle_id: run.mur.agent.coach, url_scheme: muragent-coach, original_uuid: u1 }
+required_surfaces: [hub]
+icon: {}
+";
+        let m: MuragentManifest = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(m.model_hint.is_none());
+    }
+
+    #[test]
+    fn model_hint_serializes_and_parses() {
+        let hint = ModelHint {
+            provider: "ollama".into(),
+            name: "llama3.2:3b".into(),
+            tier: ModelTier::Small,
+            min_ram_gb: 8,
+            local_capable: true,
+        };
+        let s = serde_yaml_ng::to_string(&hint).unwrap();
+        let back: ModelHint = serde_yaml_ng::from_str(&s).unwrap();
+        assert_eq!(hint, back);
+        assert!(s.contains("tier: small"));
     }
 }
