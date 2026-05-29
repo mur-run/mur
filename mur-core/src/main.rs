@@ -33,6 +33,8 @@ mod federation;
 mod gep;
 mod inject;
 mod interactive;
+#[allow(dead_code, unused_imports)]
+mod nudge;
 mod paths;
 mod retrieve;
 mod server;

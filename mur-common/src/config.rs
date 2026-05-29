@@ -52,6 +52,10 @@ pub struct Config {
     // --- M7a additions ---
     #[serde(default)]
     pub cross_agent: CrossAgentConfig,
+
+    // --- nudge additions ---
+    #[serde(default)]
+    pub nudge: NudgeConfig,
 }
 
 impl Config {
@@ -1074,6 +1078,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nudge_config_defaults() {
+        let c = NudgeConfig::default();
+        assert!(!c.enabled);
+        assert_eq!(c.daily_cap, 3);
+        assert_eq!(c.snooze_days, 7);
+        assert_eq!(c.threshold, 3);
+    }
+
+    #[test]
+    fn config_has_nudge_section_with_defaults() {
+        let c: Config = serde_yaml_ng::from_str("{}").unwrap();
+        assert_eq!(c.nudge.daily_cap, 3);
+    }
+
+    #[test]
     fn storage_config_default_is_lancedb() {
         let c = StorageConfig::default();
         assert_eq!(c.vector_backend, "lancedb");
@@ -1326,6 +1345,42 @@ impl Default for SleepCycleConfig {
             enabled: false,
             idle_threshold_minutes: default_idle_threshold_minutes(),
             agent_idle_minutes: default_agent_idle_minutes(),
+        }
+    }
+}
+
+// ── Nudge config ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NudgeConfig {
+    /// Master switch. Default off; Phase 2 (companion surface) flips the default.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_nudge_daily_cap")]
+    pub daily_cap: u32,
+    #[serde(default = "default_nudge_snooze_days")]
+    pub snooze_days: u32,
+    #[serde(default = "default_nudge_threshold")]
+    pub threshold: usize,
+}
+
+fn default_nudge_daily_cap() -> u32 {
+    3
+}
+fn default_nudge_snooze_days() -> u32 {
+    7
+}
+fn default_nudge_threshold() -> usize {
+    3
+}
+
+impl Default for NudgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            daily_cap: default_nudge_daily_cap(),
+            snooze_days: default_nudge_snooze_days(),
+            threshold: default_nudge_threshold(),
         }
     }
 }
