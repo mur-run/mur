@@ -971,7 +971,9 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 cmd::agent::cmd_perm_set_limit(&name, &key, value)?
             }
         },
-        AgentAction::Export { name, out, format, .. } => {
+        AgentAction::Export {
+            name, out, format, ..
+        } => {
             cmd::agent::cmd_export(&name, &out, &format)?;
         }
         AgentAction::Install { path } => cmd::agent::cmd_install(std::path::Path::new(&path))?,

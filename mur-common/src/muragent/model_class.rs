@@ -4,14 +4,29 @@
 
 use crate::muragent::manifest::{ModelHint, ModelTier};
 
-const LOCAL_PROVIDERS: &[&str] =
-    &["ollama", "mlx", "llamacpp", "llama_cpp", "localai", "lmstudio"];
-const CLOUD_PROVIDERS: &[&str] = &[
-    "anthropic", "openai", "google", "gemini", "mistral", "groq", "cohere",
-    "deepseek", "xai", "openrouter",
+const LOCAL_PROVIDERS: &[&str] = &[
+    "ollama",
+    "mlx",
+    "llamacpp",
+    "llama_cpp",
+    "localai",
+    "lmstudio",
 ];
-const SMALL_MARKERS: &[&str] =
-    &["1b", "1.5b", "2b", "3b", "mini", "nano", "haiku", "flash", "small", "tiny"];
+const CLOUD_PROVIDERS: &[&str] = &[
+    "anthropic",
+    "openai",
+    "google",
+    "gemini",
+    "mistral",
+    "groq",
+    "cohere",
+    "deepseek",
+    "xai",
+    "openrouter",
+];
+const SMALL_MARKERS: &[&str] = &[
+    "1b", "1.5b", "2b", "3b", "mini", "nano", "haiku", "flash", "small", "tiny",
+];
 const LARGE_LOCAL_MARKERS: &[&str] = &["70b", "72b", "405b", "mixtral", "command-r-plus"];
 
 /// Map a model binding to a `ModelHint`. Local providers classify by size

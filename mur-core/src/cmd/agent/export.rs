@@ -201,14 +201,19 @@ mod sanitize_tests {
             roles: Default::default(),
         };
         let hint = model_hint_from_ref("anthropic_opus_4_7", &reg).expect("resolved");
-        assert_eq!(hint.tier, mur_common::muragent::manifest::ModelTier::Frontier);
+        assert_eq!(
+            hint.tier,
+            mur_common::muragent::manifest::ModelTier::Frontier
+        );
         assert!(!hint.local_capable);
     }
 
     #[test]
     fn removed_formats_redirect() {
         for fmt in ["bin", "gui"] {
-            let err = cmd_export("coach", "/tmp/out", fmt).unwrap_err().to_string();
+            let err = cmd_export("coach", "/tmp/out", fmt)
+                .unwrap_err()
+                .to_string();
             assert!(err.contains(".muragent"), "fmt {fmt}: {err}");
             assert!(err.contains("--load"), "fmt {fmt}: {err}");
         }
