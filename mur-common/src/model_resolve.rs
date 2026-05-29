@@ -43,13 +43,21 @@ mod tests {
         ModelHint {
             provider: "p".into(),
             name: "n".into(),
-            tier: if local { ModelTier::Small } else { ModelTier::Frontier },
+            tier: if local {
+                ModelTier::Small
+            } else {
+                ModelTier::Frontier
+            },
             min_ram_gb: min_ram,
             local_capable: local,
         }
     }
     fn hw(ram: u32) -> Hardware {
-        Hardware { total_ram_gb: ram, apple_silicon: true, ollama_present: true }
+        Hardware {
+            total_ram_gb: ram,
+            apple_silicon: true,
+            ollama_present: true,
+        }
     }
 
     #[test]
@@ -58,11 +66,17 @@ mod tests {
     }
     #[test]
     fn frontier_is_cloud() {
-        assert_eq!(recommend(Some(&hint(false, 0)), &hw(16)), Recommendation::Cloud);
+        assert_eq!(
+            recommend(Some(&hint(false, 0)), &hw(16)),
+            Recommendation::Cloud
+        );
     }
     #[test]
     fn local_with_enough_ram_is_local() {
-        assert_eq!(recommend(Some(&hint(true, 8)), &hw(16)), Recommendation::Local);
+        assert_eq!(
+            recommend(Some(&hint(true, 8)), &hw(16)),
+            Recommendation::Local
+        );
     }
     #[test]
     fn local_without_ram_is_cloud_or_smaller() {
