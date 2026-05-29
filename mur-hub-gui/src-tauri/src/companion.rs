@@ -95,7 +95,7 @@ pub fn companion_bridge_unsubscribe(
 /// Acknowledge a message (rewrite `>>> response: <unset>` → `>>> response: <signal>`).
 #[tauri::command]
 pub fn companion_ack(agent: String, msg_id: String, signal: String) -> Result<(), String> {
-    if !matches!(signal.as_str(), "good" | "bad" | "dismiss") {
+    if !matches!(signal.as_str(), "good" | "bad" | "dismiss" | "snooze") {
         return Err(format!("unknown signal `{signal}`"));
     }
     let path = agent_inbox(&agent).join(format!("{msg_id}.md"));
