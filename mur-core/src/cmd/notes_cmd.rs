@@ -3,10 +3,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use chrono::{DateTime, Utc};
 use mur_common::skill::manifest::{Content, SkillManifest};
 use mur_common::skill::store::{global_skill_dir, write_to_dir};
 use mur_common::skill::types::{Category, Priority};
 use mur_common::skill::validate;
+use mur_common::telemetry::METHOD_NOTE_RETRIEVED;
 
 /// Author identity stamped onto notes created via the local CLI.
 /// Plan-marker: later plans may swap this for a config-driven value.
@@ -96,6 +98,15 @@ pub fn cmd_search(query: &str, limit: usize) -> Result<()> {
             sp.item.manifest.description
         );
     }
+
+    // Record a retrieval for each surfaced note so it accrues lifecycle usage.
+    // Best-effort: a trace-write failure must not fail the search.
+    let now = Utc::now();
+    for sp in &ranked {
+        if let Err(e) = record_retrieval(&home, &sp.item.manifest.name, now) {
+            tracing::warn!(note = %sp.item.manifest.name, error = %e, "record retrieval failed");
+        }
+    }
     Ok(())
 }
 
@@ -111,6 +122,35 @@ pub fn do_search(mur_home: &Path, query: &str, limit: usize) -> Result<Vec<Score
     let mut ranked = score_and_rank_generic(query, notes);
     ranked.truncate(limit);
     Ok(ranked)
+}
+
+/// Append a retrieval event for `skill_name` to today's trace log so the stats
+/// reducer (`reindex_stats`) counts it as a successful usage. The trace log is
+/// the source of truth for stats, so retrievals are recorded here rather than
+/// written directly to the stats sidecar (which `reindex-stats` would overwrite).
+pub fn record_retrieval(mur_home: &Path, skill_name: &str, now: DateTime<Utc>) -> Result<()> {
+    let traces_dir = mur_home.join("traces");
+    std::fs::create_dir_all(&traces_dir)
+        .with_context(|| format!("create {}", traces_dir.display()))?;
+    let path = traces_dir
+        .join(now.format("%Y-%m-%d").to_string())
+        .with_extension("jsonl");
+
+    let line = serde_json::json!({
+        "ts": now.to_rfc3339(),
+        "method": METHOD_NOTE_RETRIEVED,
+        "mur.skill.name": skill_name,
+        "mur.skill.outcome": "success",
+    });
+
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    use std::io::Write;
+    writeln!(f, "{}", serde_json::to_string(&line)?)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -272,5 +312,108 @@ mod tests {
         // Re-running create with the same name fails — proves duplicate detection survives a real flow.
         let err = do_create(tmp.path(), "fly-deploy", "x", "y").unwrap_err();
         assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn record_retrieval_appends_a_countable_trace_line() {
+        use chrono::Utc;
+        let tmp = tempdir().unwrap();
+        let now = Utc::now();
+
+        record_retrieval(tmp.path(), "my-note", now).unwrap();
+
+        let path = tmp
+            .path()
+            .join("traces")
+            .join(now.format("%Y-%m-%d").to_string())
+            .with_extension("jsonl");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("mur.note.retrieved"));
+
+        let line = content.lines().next().unwrap();
+        let val: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            val.get("mur.skill.name").and_then(|v| v.as_str()),
+            Some("my-note")
+        );
+        assert_eq!(
+            val.get("mur.skill.outcome").and_then(|v| v.as_str()),
+            Some("success")
+        );
+    }
+
+    #[test]
+    fn record_retrieval_appends_not_overwrites() {
+        use chrono::Utc;
+        let tmp = tempdir().unwrap();
+        let now = Utc::now();
+        record_retrieval(tmp.path(), "n", now).unwrap();
+        record_retrieval(tmp.path(), "n", now).unwrap();
+        let path = tmp
+            .path()
+            .join("traces")
+            .join(now.format("%Y-%m-%d").to_string())
+            .with_extension("jsonl");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content.lines().count(), 2);
+    }
+
+    #[tokio::test]
+    async fn three_retrievals_promote_a_note_from_draft_to_emerging() {
+        use crate::skill_lifecycle::sweep::{SweepOptions, run_sweep};
+        use crate::skill_stats::reindex::{ReindexOptions, reindex_stats};
+        use chrono::{Duration, Utc};
+        use mur_common::skill::stats::{LifecycleState, SkillStats};
+
+        let tmp = tempdir().unwrap();
+        do_create(
+            tmp.path(),
+            "rust-errors",
+            "Rust error handling",
+            "# body\nanyhow",
+        )
+        .unwrap();
+
+        // Surface the note three times.
+        let now = Utc::now();
+        for _ in 0..3 {
+            record_retrieval(tmp.path(), "rust-errors", now).unwrap();
+        }
+
+        // Reduce the trace into stats.
+        reindex_stats(
+            tmp.path(),
+            ReindexOptions {
+                skill_filter: Some("rust-errors".into()),
+                since: None,
+                days_back: 1,
+            },
+        )
+        .await
+        .unwrap();
+
+        let stats_path = SkillStats::path(tmp.path(), "rust-errors");
+        let before = SkillStats::load(&stats_path).unwrap().unwrap();
+        assert_eq!(before.usage_count, 3);
+        assert_eq!(before.success_count, 3);
+        assert_eq!(before.lifecycle_state, LifecycleState::Draft);
+
+        // Sweep with a future `now` so the 24h MIN_DWELL_HOURS gate passes.
+        run_sweep(
+            tmp.path(),
+            SweepOptions {
+                filter: Some("rust-errors".into()),
+                dry_run: false,
+                now: now + Duration::days(2),
+            },
+        )
+        .unwrap();
+
+        let after = SkillStats::load(&stats_path).unwrap().unwrap();
+        assert_eq!(
+            after.lifecycle_state,
+            LifecycleState::Emerging,
+            "3 retrievals + dwell should promote Draft -> Emerging (PROMOTE_DRAFT_USES=3)"
+        );
     }
 }
