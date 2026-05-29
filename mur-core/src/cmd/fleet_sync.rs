@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 pub(crate) type FleetManifest = BTreeMap<String, FleetManifestEntry>;
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
-pub(crate) struct FleetManifestEntry {
+pub struct FleetManifestEntry {
     pub(crate) content_hash: String,
     #[serde(default)]
     pub(crate) version: i64,
@@ -155,8 +155,7 @@ fn profile_slug(body: &str) -> String {
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes)
-        .with_context(|| format!("write {}", tmp.display()))?;
+    std::fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
@@ -188,10 +187,10 @@ fn apply_model_bindings(
         };
         let entry: mur_common::model::ModelEntry = serde_yaml_ng::from_str(body)?;
         // Best-effort check: flag env-var refs that don't resolve locally.
-        if let Some(mur_common::secret::SecretRef::Env(var)) = &entry.secret {
-            if std::env::var(var).is_err() {
-                report.unresolved_secrets.push(e.logical_id.clone());
-            }
+        if let Some(mur_common::secret::SecretRef::Env(var)) = &entry.secret
+            && std::env::var(var).is_err()
+        {
+            report.unresolved_secrets.push(e.logical_id.clone());
         }
         reg.models.insert(e.logical_id.clone(), entry);
         report.written += 1;
@@ -217,11 +216,7 @@ fn manifest_path(mur_dir: &Path, etype: FleetEntityType) -> PathBuf {
     mur_dir.join(format!(".fleet_manifest_{}.json", etype.path_segment()))
 }
 
-fn update_fleet_manifest(
-    path: &Path,
-    changes: &[FleetChange],
-    version: i64,
-) -> Result<()> {
+fn update_fleet_manifest(path: &Path, changes: &[FleetChange], version: i64) -> Result<()> {
     let mut manifest = load_manifest(path);
     for c in changes {
         manifest.insert(
@@ -283,11 +278,7 @@ pub async fn fleet_push(
         }
     };
     let client = reqwest::Client::new();
-    let url = format!(
-        "{}/api/v1/core/fleet/{}",
-        base,
-        etype.path_segment()
-    );
+    let url = format!("{}/api/v1/core/fleet/{}", base, etype.path_segment());
     let mut base_version = read_version(mur_dir, etype);
 
     for attempt in 0..2 {
@@ -339,15 +330,23 @@ pub async fn fleet_sync_cmd(direction: DeviceSyncDirection, force_local: bool) -
         ) {
             let r = fleet_pull(&server_url, &tokens.access_token, &mur_dir, etype).await?;
             for id in &r.unresolved_secrets {
-                eprintln!("  ⚠ {id}: secret not resolvable on this device (agent will run unbound)");
+                eprintln!(
+                    "  ⚠ {id}: secret not resolvable on this device (agent will run unbound)"
+                );
             }
         }
         if matches!(
             direction,
             DeviceSyncDirection::Push | DeviceSyncDirection::Both
         ) {
-            let v = fleet_push(&server_url, &tokens.access_token, &mur_dir, etype, force_local)
-                .await?;
+            let v = fleet_push(
+                &server_url,
+                &tokens.access_token,
+                &mur_dir,
+                etype,
+                force_local,
+            )
+            .await?;
             eprintln!("  pushed {etype:?} (version {v})");
         }
     }
@@ -420,13 +419,9 @@ mod tests {
             deleted: false,
             payload: Some("id: agent-scout\nname: scout\n".into()),
         };
-        let report =
-            apply_fleet_pull(mur.path(), FleetEntityType::AgentProfile, &[ent]).unwrap();
+        let report = apply_fleet_pull(mur.path(), FleetEntityType::AgentProfile, &[ent]).unwrap();
 
-        assert!(mur
-            .path()
-            .join("agents/scout/profile.yaml")
-            .exists());
+        assert!(mur.path().join("agents/scout/profile.yaml").exists());
         assert!(mur.path().join("agents/scout/identity.key").exists());
         assert_eq!(report.written, 1);
     }
