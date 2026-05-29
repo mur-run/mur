@@ -6,10 +6,12 @@ async fn fetch_effective_plan_reads_me() {
     let server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/api/v1/core/auth/me"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "effective_plan": "pro",
-            "trial_active": false
-        })))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "effective_plan": "pro",
+                "trial_active": false
+            })),
+        )
         .mount(&server)
         .await;
 
@@ -47,9 +49,10 @@ async fn fleet_push_resolves_conflict_then_succeeds() {
     // First push → conflict
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v1/core/fleet/agent_profile"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({"ok": false, "conflict": true}),
-        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": false, "conflict": true})),
+        )
         .up_to_n_times(1)
         .mount(&server)
         .await;
@@ -57,18 +60,20 @@ async fn fleet_push_resolves_conflict_then_succeeds() {
     // Pull → one entity at version 4
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/api/v1/core/fleet/agent_profile"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({"entities": [], "version": 4}),
-        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"entities": [], "version": 4})),
+        )
         .mount(&server)
         .await;
 
     // Retry push → success
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v1/core/fleet/agent_profile"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({"ok": true, "version": 5}),
-        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": true, "version": 5})),
+        )
         .up_to_n_times(1)
         .mount(&server)
         .await;
@@ -93,11 +98,9 @@ async fn missing_secret_ref_is_degraded_not_fatal() {
     let mur = tmp.path();
 
     wiremock::Mock::given(wiremock::matchers::method("GET"))
-        .and(wiremock::matchers::path(
-            "/api/v1/core/fleet/model_binding",
-        ))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({
+        .and(wiremock::matchers::path("/api/v1/core/fleet/model_binding"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "entities": [{
                     "logical_id": "gpt5",
                     "content_hash": "h",
@@ -106,8 +109,8 @@ async fn missing_secret_ref_is_degraded_not_fatal() {
                     "payload": "provider: openai\nmodel: gpt-5\nsecret: env:MUR_NEVER_SET_XYZ\n"
                 }],
                 "version": 1
-            }),
-        ))
+            })),
+        )
         .mount(&server)
         .await;
 
