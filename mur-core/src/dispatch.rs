@@ -187,7 +187,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             GepAction::Status => cmd::community_cmd::cmd_gep_status()?,
         },
         Commands::Emerge { threshold, dry_run } => cmd::learn::cmd_emerge(threshold, dry_run)?,
-        Commands::Suggest { create } => cmd::workflow::cmd_suggest(create)?,
+        Commands::Suggest {
+            create,
+            accept,
+            dismiss,
+        } => cmd::workflow::cmd_suggest(create, accept.as_deref(), dismiss.as_deref())?,
         Commands::Context {
             quiet,
             compact,
