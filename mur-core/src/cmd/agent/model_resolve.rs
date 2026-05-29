@@ -77,11 +77,7 @@ pub fn apply_model_choice(mur_home: &Path, slug: &str, choice: &ModelChoice) -> 
             provider: choice.provider.clone(),
             model: choice.model.clone(),
             base_url: choice.base_url.clone(),
-            secret: choice
-                .secret
-                .as_deref()
-                .map(|s| s.parse())
-                .transpose()?,
+            secret: choice.secret.as_deref().map(|s| s.parse()).transpose()?,
             capabilities: vec![],
             params: serde_json::Value::Null,
         },
@@ -147,10 +143,9 @@ mod tests {
         let key = apply_model_choice(&mur_home, "coach", &choice).unwrap();
         assert_eq!(key, "ollama_llama3_2_3b");
 
-        let reloaded: mur_common::AgentProfile = serde_yaml_ng::from_str(
-            &std::fs::read_to_string(home.join("profile.yaml")).unwrap(),
-        )
-        .unwrap();
+        let reloaded: mur_common::AgentProfile =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(home.join("profile.yaml")).unwrap())
+                .unwrap();
         assert_eq!(reloaded.model_ref.as_deref(), Some("ollama_llama3_2_3b"));
     }
 }
