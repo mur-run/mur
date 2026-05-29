@@ -203,11 +203,17 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Show workflow composition & decomposition suggestions
+    /// Show workflow composition & decomposition suggestions and pending nudges.
     Suggest {
         /// Auto-create suggested workflows/patterns as drafts
         #[arg(long)]
         create: bool,
+        /// Accept a pending nudge by id -> create its draft workflow
+        #[arg(long, value_name = "ID")]
+        accept: Option<String>,
+        /// Dismiss a pending nudge by id (never re-surfaces)
+        #[arg(long, value_name = "ID")]
+        dismiss: Option<String>,
     },
     /// Terminal dashboard
     Dashboard,

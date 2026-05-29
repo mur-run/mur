@@ -27,7 +27,7 @@ pub struct NudgeRecord {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NudgeLedger {
     #[serde(default)]
-    records: BTreeMap<String, NudgeRecord>,
+    pub records: BTreeMap<String, NudgeRecord>,
 }
 
 impl NudgeLedger {
@@ -53,29 +53,23 @@ impl NudgeLedger {
         self.records.get(id)
     }
     pub fn set_state(&mut self, id: &str, state: NudgeState, now: DateTime<Utc>) {
-        let rec = self
-            .records
-            .entry(id.to_string())
-            .or_insert(NudgeRecord {
-                state: NudgeState::Surfaced,
-                last_ts: now.to_rfc3339(),
-                surface_count: 0,
-                candidate: None,
-            });
+        let rec = self.records.entry(id.to_string()).or_insert(NudgeRecord {
+            state: NudgeState::Surfaced,
+            last_ts: now.to_rfc3339(),
+            surface_count: 0,
+            candidate: None,
+        });
         rec.state = state;
         rec.last_ts = now.to_rfc3339();
     }
     /// Mark a candidate Surfaced (storing its snapshot) and bump surface_count.
     pub fn mark_surfaced(&mut self, c: &WorkflowCandidate, now: DateTime<Utc>) {
-        let rec = self
-            .records
-            .entry(c.id.clone())
-            .or_insert(NudgeRecord {
-                state: NudgeState::Surfaced,
-                last_ts: now.to_rfc3339(),
-                surface_count: 0,
-                candidate: None,
-            });
+        let rec = self.records.entry(c.id.clone()).or_insert(NudgeRecord {
+            state: NudgeState::Surfaced,
+            last_ts: now.to_rfc3339(),
+            surface_count: 0,
+            candidate: None,
+        });
         rec.state = NudgeState::Surfaced;
         rec.last_ts = now.to_rfc3339();
         rec.surface_count += 1;
@@ -150,14 +144,9 @@ mod tests {
             },
             now,
         );
-        assert!(l
-            .filter_actionable(&[cand("a")], now, 10)
-            .is_empty());
+        assert!(l.filter_actionable(&[cand("a")], now, 10).is_empty());
         let later = now + Duration::days(4);
-        assert_eq!(
-            l.filter_actionable(&[cand("a")], later, 10).len(),
-            1
-        );
+        assert_eq!(l.filter_actionable(&[cand("a")], later, 10).len(), 1);
     }
 
     #[test]
