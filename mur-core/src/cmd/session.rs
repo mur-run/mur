@@ -142,6 +142,20 @@ pub(crate) async fn cmd_session_stop(analyze: bool, reflect: bool) -> Result<()>
                             candidates.len(),
                         );
                     }
+
+                    // Nudge hook: filter through ledger and surface actionable nudges.
+                    let nudge_candidates: Vec<_> = candidates
+                        .iter()
+                        .map(crate::nudge::WorkflowCandidate::from_emergent)
+                        .collect();
+                    if let Ok(surfaced) = record_nudges_for_candidates(&nudge_candidates)
+                        && !surfaced.is_empty()
+                    {
+                        eprintln!(
+                            "💡 Noticed {} repeated workflow(s). Review with `mur suggest`.",
+                            surfaced.len()
+                        );
+                    }
                 }
             }
 
@@ -1367,4 +1381,23 @@ pub(crate) async fn cmd_session_reflect(dry_run: bool) -> anyhow::Result<()> {
     };
     run_reflect_curate(&entry.path(), dry_run)?;
     Ok(())
+}
+
+/// Filter candidates through the nudge ledger and mark the actionable ones
+/// Surfaced. Returns the ids that were surfaced (for the CLI hint).
+pub(crate) fn record_nudges_for_candidates(
+    candidates: &[crate::nudge::WorkflowCandidate],
+) -> anyhow::Result<Vec<String>> {
+    let config_path = crate::store::yaml::default_mur_dir().join("config.yaml");
+    let cfg = mur_common::config::Config::load_or_default(&config_path);
+    if !cfg.nudge.enabled || candidates.is_empty() {
+        return Ok(vec![]);
+    }
+    let path = crate::nudge::NudgeLedger::default_path();
+    let mut ledger = crate::nudge::NudgeLedger::load(&path)?;
+    let now = chrono::Utc::now();
+    let actionable = ledger.filter_actionable(candidates, now, cfg.nudge.daily_cap);
+    crate::nudge::NudgeEmitter::emit_pending(&mut ledger, &actionable, now);
+    ledger.save(&path)?;
+    Ok(actionable.into_iter().map(|c| c.id).collect())
 }
