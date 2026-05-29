@@ -342,12 +342,14 @@ pub struct ResolutionView {
 
 #[tauri::command]
 pub fn model_resolution_view(path: String) -> Result<ResolutionView, String> {
-    use mur_common::muragent::manifest::ModelHint;
     use mur_common::model_resolve::{Recommendation, recommend};
+    use mur_common::muragent::manifest::ModelHint;
     use mur_core::cmd::agent::model_resolve::detect_hardware;
 
     let archive = MuragentArchive::read(Path::new(&path)).map_err(|e| e.to_string())?;
-    let manifest_yaml = archive.get_str("manifest.yaml").map_err(|e| e.to_string())?;
+    let manifest_yaml = archive
+        .get_str("manifest.yaml")
+        .map_err(|e| e.to_string())?;
     let manifest: MuragentManifest =
         serde_yaml_ng::from_str(manifest_yaml).map_err(|e| e.to_string())?;
     let hw = detect_hardware();
@@ -375,8 +377,8 @@ pub fn model_resolution_view(path: String) -> Result<ResolutionView, String> {
 
 #[tauri::command]
 pub fn apply_agent_model(slug: String, choice: ModelChoice) -> Result<String, String> {
-    use mur_core::cmd::agent::model_resolve::apply_model_choice;
     use mur_common::trust;
+    use mur_core::cmd::agent::model_resolve::apply_model_choice;
 
     let mur_home = trust::mur_home();
     apply_model_choice(&mur_home, &slug, &choice).map_err(|e| e.to_string())

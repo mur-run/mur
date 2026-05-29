@@ -185,7 +185,8 @@ fn prompt_model_choice(
     std::io::stdin().read_line(&mut line)?;
     let yes = matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes" | "");
 
-    if matches!(rec, Recommendation::Local) && yes
+    if matches!(rec, Recommendation::Local)
+        && yes
         && let Some((provider, model)) = default_local
     {
         return Ok(Some(ModelChoice {
