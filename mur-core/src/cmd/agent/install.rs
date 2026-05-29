@@ -121,13 +121,9 @@ pub fn cmd_inspect(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn maybe_resolve_model(
-    mur_home: &Path,
-    slug: &str,
-    archive: &MuragentArchive,
-) -> Result<()> {
-    use mur_common::model_resolve::{Recommendation, recommend};
+fn maybe_resolve_model(mur_home: &Path, slug: &str, archive: &MuragentArchive) -> Result<()> {
     use crate::cmd::agent::model_resolve::{apply_model_choice, detect_hardware};
+    use mur_common::model_resolve::{Recommendation, recommend};
 
     let manifest_yaml = archive
         .get_str("manifest.yaml")
@@ -171,9 +167,9 @@ fn prompt_model_choice(
     rec: &mur_common::model_resolve::Recommendation,
     hint: Option<&mur_common::muragent::manifest::ModelHint>,
 ) -> Result<Option<crate::cmd::agent::model_resolve::ModelChoice>> {
-    use std::io::Write;
-    use mur_common::model_resolve::Recommendation;
     use crate::cmd::agent::model_resolve::ModelChoice;
+    use mur_common::model_resolve::Recommendation;
+    use std::io::Write;
 
     let default_local = hint.map(|h| (h.provider.clone(), h.name.clone()));
     let prompt = match rec {
@@ -187,20 +183,17 @@ fn prompt_model_choice(
     std::io::stdout().flush().ok();
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
-    let yes = matches!(
-        line.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes" | ""
-    );
+    let yes = matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes" | "");
 
-    if matches!(rec, Recommendation::Local) && yes {
-        if let Some((provider, model)) = default_local {
-            return Ok(Some(ModelChoice {
-                provider,
-                model,
-                base_url: None,
-                secret: None,
-            }));
-        }
+    if matches!(rec, Recommendation::Local) && yes
+        && let Some((provider, model)) = default_local
+    {
+        return Ok(Some(ModelChoice {
+            provider,
+            model,
+            base_url: None,
+            secret: None,
+        }));
     }
     if !yes {
         return Ok(None);
@@ -212,7 +205,11 @@ fn prompt_model_choice(
         provider,
         model,
         base_url: None,
-        secret: if secret.is_empty() { None } else { Some(secret) },
+        secret: if secret.is_empty() {
+            None
+        } else {
+            Some(secret)
+        },
     }))
 }
 

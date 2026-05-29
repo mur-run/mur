@@ -44,6 +44,7 @@ pub fn cmd_export(name: &str, out: &str, format: &str) -> Result<()> {
 
 /// Resolve an installed agent's home and export it to `out` as a `.muragent`.
 /// Public so the Hub "Share" command (mur-hub-gui) can reuse the exact CLI path.
+#[allow(dead_code)]
 pub fn export_agent_to_muragent(name: &str, out: &Path) -> Result<()> {
     let mur_home = resolve_mur_home()?;
     let agent_home = mur_home.join("agents").join(name);
