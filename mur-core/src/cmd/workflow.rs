@@ -622,7 +622,15 @@ pub(crate) fn cmd_workflow_install(name: &str, team: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn cmd_suggest(create: bool) -> Result<()> {
+pub(crate) fn cmd_suggest(create: bool, accept: Option<&str>, dismiss: Option<&str>) -> Result<()> {
+    // ─── Nudge accept/dismiss (early exit) ────────────────────────────
+    if let Some(id) = accept {
+        return cmd_suggest_accept(id);
+    }
+    if let Some(id) = dismiss {
+        return cmd_suggest_dismiss(id);
+    }
+
     use evolve::compose::suggest_workflows_with_patterns;
     use evolve::cooccurrence::CooccurrenceMatrix;
     use evolve::decompose::{analyze_workflow_for_extraction, extract_pattern_from_step};
@@ -735,12 +743,97 @@ pub(crate) fn cmd_suggest(create: bool) -> Result<()> {
         }
     }
 
+    // ─── Part 3: Pending nudges ───────────────────────────────────────
+
+    let nudge_path = crate::nudge::NudgeLedger::default_path();
+    if let Ok(ledger) = crate::nudge::NudgeLedger::load(&nudge_path) {
+        let now = chrono::Utc::now();
+        let mut pending: Vec<(&String, &crate::nudge::NudgeRecord, &str)> = Vec::new();
+        for (id, rec) in &ledger.records {
+            let status = match &rec.state {
+                crate::nudge::NudgeState::Surfaced => "surfaced",
+                crate::nudge::NudgeState::Snoozed { until } => {
+                    let expired = chrono::DateTime::parse_from_rfc3339(until)
+                        .map(|u| now >= u.with_timezone(&chrono::Utc))
+                        .unwrap_or(true);
+                    if expired {
+                        "snoozed-expired"
+                    } else {
+                        continue;
+                    }
+                }
+                _ => continue,
+            };
+            pending.push((id, rec, status));
+        }
+
+        if !pending.is_empty() {
+            println!("── Pending Workflow Nudges ──\n");
+            for (id, rec, status) in &pending {
+                let short_id = if id.len() > 8 { &id[..8] } else { id };
+                let title = rec
+                    .candidate
+                    .as_ref()
+                    .map(|c| c.title.as_str())
+                    .unwrap_or("(unknown)");
+                let sessions = rec.candidate.as_ref().map(|c| c.session_count).unwrap_or(0);
+                println!(
+                    "  [{}] {} (seen in {} sessions) [{}]",
+                    short_id, title, sessions, status
+                );
+            }
+            println!();
+            println!("  Accept:  mur suggest --accept <id>");
+            println!("  Dismiss: mur suggest --dismiss <id>");
+            println!();
+        }
+    }
+
     // ─── Summary ─────────────────────────────────────────────────────
 
     if !create && (!suggestions.is_empty() || !workflows.is_empty()) {
         println!("Run `mur suggest --create` to auto-create suggested items as drafts.");
     }
 
+    Ok(())
+}
+
+pub(crate) fn cmd_suggest_accept(id: &str) -> Result<()> {
+    let config_path = crate::store::yaml::default_mur_dir().join("config.yaml");
+    let cfg = mur_common::config::Config::load_or_default(&config_path);
+    let path = crate::nudge::NudgeLedger::default_path();
+    let mut ledger = crate::nudge::NudgeLedger::load(&path)?;
+    crate::nudge::NudgeEmitter::apply_decision(
+        &mut ledger,
+        id,
+        crate::nudge::NudgeDecision::Accept,
+        cfg.nudge.snooze_days,
+        chrono::Utc::now(),
+        &|c| create_draft_workflow(&c.suggested_name, &c.title, "", &c.evidence_session_ids),
+    )?;
+    ledger.save(&path)?;
+    println!(
+        "✓ Saved workflow draft from nudge {}. Run it with `mur run <name>`.",
+        id
+    );
+    Ok(())
+}
+
+pub(crate) fn cmd_suggest_dismiss(id: &str) -> Result<()> {
+    let config_path = crate::store::yaml::default_mur_dir().join("config.yaml");
+    let cfg = mur_common::config::Config::load_or_default(&config_path);
+    let path = crate::nudge::NudgeLedger::default_path();
+    let mut ledger = crate::nudge::NudgeLedger::load(&path)?;
+    crate::nudge::NudgeEmitter::apply_decision(
+        &mut ledger,
+        id,
+        crate::nudge::NudgeDecision::Dismiss,
+        cfg.nudge.snooze_days,
+        chrono::Utc::now(),
+        &|_| Ok(()),
+    )?;
+    ledger.save(&path)?;
+    println!("✓ Dismissed nudge {}.", id);
     Ok(())
 }
 
@@ -986,7 +1079,7 @@ pub(crate) fn cmd_schedule_enable(name: &str, enable: bool) -> Result<()> {
 }
 
 /// Build and save a draft Workflow. Shared by `mur suggest --create` and nudge-accept.
-pub(crate) fn create_draft_workflow_in(
+pub fn create_draft_workflow_in(
     store: &crate::store::workflow_yaml::WorkflowYamlStore,
     name: &str,
     description: &str,
@@ -1021,7 +1114,7 @@ pub(crate) fn create_draft_workflow_in(
 }
 
 /// Convenience over the default store.
-pub(crate) fn create_draft_workflow(
+pub fn create_draft_workflow(
     name: &str,
     description: &str,
     trigger: &str,

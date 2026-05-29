@@ -71,7 +71,7 @@ pub(crate) mod update;
 #[allow(dead_code)]
 pub(crate) mod var;
 pub(crate) mod verify;
-pub(crate) mod workflow;
+pub mod workflow;
 
 #[cfg(feature = "sources")]
 pub(crate) mod source_cmd;
