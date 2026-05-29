@@ -6,7 +6,7 @@
 //! separately in `dispatch.rs` (the `gui` format never reaches this fn).
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use mur_common::AgentProfile;
@@ -17,6 +17,15 @@ use mur_common::muragent::writer::{MuragentWriter, build_manifest_from_profile};
 use super::resolve_mur_home;
 
 pub fn cmd_export(name: &str, out: &str, format: &str) -> Result<()> {
+    if matches!(format, "bin" | "gui") {
+        bail!(
+            "--format={format} is no longer supported.\n\
+             Export a portable .muragent (the default) and share that one file:\n  \
+             mur agent export {name} -o {name}.muragent\n\
+             Recipients open it with the MuR Hub app, or run it headless with:\n  \
+             mur-agent-runtime --load {name}.muragent"
+        );
+    }
     let mur_home = resolve_mur_home()?;
     let agent_home = mur_home.join("agents").join(name);
     if !agent_home.exists() {
@@ -28,8 +37,7 @@ pub fn cmd_export(name: &str, out: &str, format: &str) -> Result<()> {
             mur_agent_runtime::export::pkg::export_to_pkg(&agent_home, Path::new(out))?;
             println!("Exported '{name}' to {out}");
         }
-        "bin" => export_bin(name, &agent_home, Path::new(out))?,
-        other => bail!("unsupported export format '{other}' (use muragent, pkg, bin, or gui)"),
+        other => bail!("unsupported export format '{other}' (use muragent or pkg)"),
     }
     Ok(())
 }
@@ -46,6 +54,16 @@ fn export_muragent(name: &str, agent_home: &Path, out: &Path) -> Result<()> {
 
     let mur_version = env!("CARGO_PKG_VERSION");
     let mut manifest = build_manifest_from_profile(&profile, mur_version);
+
+    // If the agent binds via model_ref, the inline-derived hint may be a
+    // stale default — override it from the registry entry (§7.1).
+    if let Some(model_ref) = profile.model_ref.as_deref() {
+        let reg_path = mur_common::model::ModelRegistry::default_path()?;
+        let registry = mur_common::model::ModelRegistry::load_from(&reg_path)?;
+        if let Some(hint) = model_hint_from_ref(model_ref, &registry) {
+            manifest.model_hint = Some(hint);
+        }
+    }
 
     let mut export_profile = profile.clone();
     let removed = sanitize_profile_for_export(&mut export_profile);
@@ -117,7 +135,24 @@ fn sanitize_profile_for_export(profile: &mut AgentProfile) -> Vec<String> {
         removed.push("transport.socket.auth".to_string());
         profile.transport.socket.auth = None;
     }
+    if profile.model_ref.is_some() {
+        removed.push("model_ref".to_string());
+        profile.model_ref = None;
+    }
     removed
+}
+
+/// Resolve a `model_ref` against a registry into a `ModelHint`. Returns
+/// `None` when the registry has no such entry (the inline-derived hint
+/// then stands).
+fn model_hint_from_ref(
+    model_ref: &str,
+    registry: &mur_common::model::ModelRegistry,
+) -> Option<mur_common::muragent::manifest::ModelHint> {
+    registry
+        .models
+        .get(model_ref)
+        .map(|e| mur_common::muragent::model_class::classify(&e.provider, &e.model))
 }
 
 fn is_secretful(t: &NotificationTarget) -> bool {
@@ -130,54 +165,57 @@ fn is_secretful(t: &NotificationTarget) -> bool {
     )
 }
 
-/// Drive `cargo build -p mur-agent-runtime --release --features=embedded-agent`
-/// with MUR_EXPORT_AGENT_DIR=<agent_home>, then copy the built binary to `out`.
-fn export_bin(name: &str, agent_home: &Path, out: &Path) -> Result<()> {
-    let target_dir = std::env::temp_dir().join(format!("mur-export-{name}-{}", std::process::id()));
-    fs::create_dir_all(&target_dir).with_context(|| format!("create {}", target_dir.display()))?;
+#[cfg(test)]
+mod sanitize_tests {
+    use super::*;
+    use mur_common::AgentProfile;
 
-    let manifest_dir = locate_runtime_manifest_dir().context("locate mur-agent-runtime crate")?;
-
-    let status = std::process::Command::new("cargo")
-        .args([
-            "build",
-            "--release",
-            "--features=embedded-agent",
-            "--manifest-path",
-        ])
-        .arg(manifest_dir.join("Cargo.toml"))
-        .env("MUR_EXPORT_AGENT_DIR", agent_home)
-        .env("CARGO_TARGET_DIR", &target_dir)
-        .status()
-        .context("invoke cargo build")?;
-    if !status.success() {
-        bail!("cargo build failed: {status}");
+    #[test]
+    fn sanitize_strips_model_ref() {
+        let mut p = AgentProfile::default_for_tests();
+        p.model_ref = Some("anthropic_opus_4_7".into());
+        let removed = sanitize_profile_for_export(&mut p);
+        assert!(p.model_ref.is_none(), "model_ref must be stripped");
+        assert!(
+            removed.iter().any(|r| r == "model_ref"),
+            "removed list must record model_ref, got {removed:?}"
+        );
     }
-    let built = target_dir.join("release").join(if cfg!(windows) {
-        "mur-agent-runtime.exe"
-    } else {
-        "mur-agent-runtime"
-    });
-    fs::copy(&built, out)
-        .with_context(|| format!("copy {} -> {}", built.display(), out.display()))?;
-    println!("Built self-contained agent binary at {}", out.display());
-    Ok(())
-}
 
-fn locate_runtime_manifest_dir() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("MUR_AGENT_RUNTIME_MANIFEST_DIR") {
-        return Ok(PathBuf::from(p));
+    #[test]
+    fn model_hint_override_uses_registry_entry() {
+        use mur_common::model::{ModelEntry, ModelRegistry};
+        let reg = ModelRegistry {
+            schema_version: 1,
+            models: std::collections::BTreeMap::from([(
+                "anthropic_opus_4_7".to_string(),
+                ModelEntry {
+                    provider: "anthropic".into(),
+                    model: "claude-opus-4-7".into(),
+                    base_url: None,
+                    secret: None,
+                    capabilities: vec![],
+                    params: serde_json::Value::Null,
+                },
+            )]),
+            roles: Default::default(),
+        };
+        let hint = model_hint_from_ref("anthropic_opus_4_7", &reg).expect("resolved");
+        assert_eq!(
+            hint.tier,
+            mur_common::muragent::manifest::ModelTier::Frontier
+        );
+        assert!(!hint.local_capable);
     }
-    let exe = std::env::current_exe().context("current_exe")?;
-    let mut cur = exe.parent().map(|p| p.to_path_buf());
-    while let Some(d) = cur {
-        let candidate = d.join("mur-agent-runtime").join("Cargo.toml");
-        if candidate.exists() {
-            return Ok(d.join("mur-agent-runtime"));
+
+    #[test]
+    fn removed_formats_redirect() {
+        for fmt in ["bin", "gui"] {
+            let err = cmd_export("coach", "/tmp/out", fmt)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(".muragent"), "fmt {fmt}: {err}");
+            assert!(err.contains("--load"), "fmt {fmt}: {err}");
         }
-        cur = d.parent().map(|p| p.to_path_buf());
     }
-    bail!(
-        "could not locate mur-agent-runtime crate (set MUR_AGENT_RUNTIME_MANIFEST_DIR to override)"
-    )
 }
