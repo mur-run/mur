@@ -16,6 +16,7 @@ pub mod executable_ban;
 pub mod installer;
 pub mod jcs_canonical;
 pub mod manifest;
+pub mod model_class;
 pub mod reader;
 pub mod statement;
 pub mod validator;
