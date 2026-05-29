@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Post-session feedback analyzer.
 //!
 //! After an AI CLI session ends, analyze whether injected patterns were

@@ -164,9 +164,6 @@ pub async fn run(cli: Cli) -> Result<()> {
             SessionAction::Push { id, all } => {
                 cmd::session::cmd_session_push(id.as_deref(), all).await?
             }
-            SessionAction::Reflect { dry_run } => {
-                cmd::session::cmd_session_reflect(dry_run).await?
-            }
         },
         Commands::Dashboard => {
             dashboard::render_dashboard()?;
@@ -562,7 +559,14 @@ pub async fn run(cli: Cli) -> Result<()> {
             verify::set_known_commands(known);
             cmd::verify::cmd_verify(file.as_deref(), all)?
         }
-        Commands::Import { file, dry_run } => cmd::misc::cmd_import(file, dry_run)?,
+        Commands::Import {
+            file: _,
+            dry_run: _,
+        } => {
+            eprintln!(
+                "# `mur import` has been removed. Use `mur notes ingest <file>` once notes are available."
+            );
+        }
         Commands::In { source } => cmd::session::cmd_in(&source).await?,
         Commands::Out { action, force } => cmd::session::cmd_out(action.as_deref(), force).await?,
         Commands::Push { dry_run } => {

@@ -229,15 +229,6 @@ pub enum SessionAction {
         #[arg(long)]
         all: bool,
     },
-    /// Reflect + curate the last session transcript (E2).
-    ///
-    /// Runs the Reflector+Curator pipeline on the most recent recording:
-    /// updates pattern confidence and evidence signals based on usage signals.
-    Reflect {
-        /// Preview changes without saving to the pattern store.
-        #[arg(long)]
-        dry_run: bool,
-    },
 }
 
 #[derive(Subcommand)]
