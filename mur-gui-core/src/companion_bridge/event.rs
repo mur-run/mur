@@ -57,7 +57,7 @@ pub fn parse_str(raw: &str) -> Result<BridgeEvent> {
     let response_value = response_line.trim();
     let response = if response_value == "<unset>" {
         BridgeResponse::Unset
-    } else if matches!(response_value, "good" | "bad" | "dismiss") {
+    } else if matches!(response_value, "good" | "bad" | "dismiss" | "snooze") {
         BridgeResponse::Signal(response_value.to_string())
     } else {
         bail!("unrecognized response value: {response_value}");
@@ -95,6 +95,13 @@ mod tests {
         let s = SAMPLE.replace("<unset>", "good");
         let ev = parse_str(&s).unwrap();
         assert_eq!(ev.response, BridgeResponse::Signal("good".into()));
+    }
+
+    #[test]
+    fn parses_snooze_response() {
+        let s = SAMPLE.replace("<unset>", "snooze");
+        let ev = parse_str(&s).unwrap();
+        assert_eq!(ev.response, BridgeResponse::Signal("snooze".into()));
     }
 
     #[test]
