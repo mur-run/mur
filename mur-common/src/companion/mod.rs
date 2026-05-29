@@ -31,6 +31,22 @@ pub enum Situation {
     GentleCheckIn,
     ShareQuote,
     ShareLink,
+    WorkflowNudge,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workflow_nudge_situation_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&Situation::WorkflowNudge).unwrap(),
+            "\"workflow_nudge\""
+        );
+        let back: Situation = serde_json::from_str("\"workflow_nudge\"").unwrap();
+        assert_eq!(back, Situation::WorkflowNudge);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

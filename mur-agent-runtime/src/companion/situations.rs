@@ -7,14 +7,15 @@ use mur_common::companion::Situation;
 use rand::RngCore;
 use rand::distributions::{Distribution, WeightedIndex};
 
-/// Returns weights for `(morning_greeting, gentle_check_in, share_quote, share_link)`
-/// at the given hour. `None` means quiet hours (no situation eligible).
-fn weights_by_hour(hour: u32) -> Option<[f32; 4]> {
+/// Returns weights for `(morning_greeting, gentle_check_in, share_quote, share_link, workflow_nudge)`
+/// at the given hour. WorkflowNudge is never picked by the proactive rhythm (0.0 weight).
+/// `None` means quiet hours (no situation eligible).
+fn weights_by_hour(hour: u32) -> Option<[f32; 5]> {
     match hour {
-        6..=9 => Some([0.6, 0.0, 0.4, 0.0]),
-        10..=13 => Some([0.0, 0.4, 0.2, 0.4]),
-        14..=17 => Some([0.0, 0.5, 0.0, 0.5]),
-        18..=21 => Some([0.0, 0.0, 0.6, 0.4]),
+        6..=9 => Some([0.6, 0.0, 0.4, 0.0, 0.0]),
+        10..=13 => Some([0.0, 0.4, 0.2, 0.4, 0.0]),
+        14..=17 => Some([0.0, 0.5, 0.0, 0.5, 0.0]),
+        18..=21 => Some([0.0, 0.0, 0.6, 0.4, 0.0]),
         _ => None, // 22:00–06:00 → quiet
     }
 }
@@ -40,6 +41,7 @@ pub fn pick_for_hour<R: RngCore>(
         1 => Situation::GentleCheckIn,
         2 => Situation::ShareQuote,
         3 => Situation::ShareLink,
+        4 => Situation::WorkflowNudge,
         _ => unreachable!(),
     })
 }
