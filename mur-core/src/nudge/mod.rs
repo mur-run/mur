@@ -5,3 +5,5 @@ pub mod ledger;
 pub mod emitter;
 
 pub use candidate::{CandidateSource, EmergenceSource, WorkflowCandidate};
+pub use emitter::{NudgeDecision, NudgeEmitter};
+pub use ledger::{NudgeLedger, NudgeRecord, NudgeState};
