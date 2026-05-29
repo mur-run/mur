@@ -425,3 +425,30 @@ mod tests {
         assert_eq!(parsed.user_id, None);
     }
 }
+
+// ── Fleet sync Pro entitlement ──────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct MeResponse {
+    effective_plan: String,
+}
+
+/// GET /api/v1/core/auth/me and return the user's effective plan
+/// ("free" | "trial" | "pro" | "team" | "enterprise").
+pub async fn fetch_effective_plan(base: &str, token: &str) -> anyhow::Result<String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/v1/core/auth/me", base))
+        .bearer_auth(token)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<MeResponse>()
+        .await?;
+    Ok(resp.effective_plan)
+}
+
+/// True when the plan permits Pro features (fleet sync).
+pub fn plan_allows_fleet(plan: &str) -> bool {
+    matches!(plan, "pro" | "team" | "enterprise")
+}
