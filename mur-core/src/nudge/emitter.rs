@@ -1,6 +1,6 @@
 use crate::nudge::candidate::WorkflowCandidate;
 use crate::nudge::ledger::{NudgeLedger, NudgeState};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Duration, Utc};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -83,14 +83,9 @@ mod tests {
     fn dismiss_decision_updates_ledger() {
         let mut l = NudgeLedger::default();
         NudgeEmitter::emit_pending(&mut l, &[cand("a")], Utc::now());
-        NudgeEmitter::apply_decision(
-            &mut l,
-            "a",
-            NudgeDecision::Dismiss,
-            7,
-            Utc::now(),
-            &|_c| Ok(()),
-        )
+        NudgeEmitter::apply_decision(&mut l, "a", NudgeDecision::Dismiss, 7, Utc::now(), &|_c| {
+            Ok(())
+        })
         .unwrap();
         assert!(matches!(l.get("a").unwrap().state, NudgeState::Dismissed));
     }
@@ -100,18 +95,11 @@ mod tests {
         let mut l = NudgeLedger::default();
         NudgeEmitter::emit_pending(&mut l, &[cand("a")], Utc::now());
         let created = std::cell::Cell::new(false);
-        NudgeEmitter::apply_decision(
-            &mut l,
-            "a",
-            NudgeDecision::Accept,
-            7,
-            Utc::now(),
-            &|c| {
-                assert_eq!(c.suggested_name, "test-then-commit");
-                created.set(true);
-                Ok(())
-            },
-        )
+        NudgeEmitter::apply_decision(&mut l, "a", NudgeDecision::Accept, 7, Utc::now(), &|c| {
+            assert_eq!(c.suggested_name, "test-then-commit");
+            created.set(true);
+            Ok(())
+        })
         .unwrap();
         assert!(created.get());
         assert!(matches!(l.get("a").unwrap().state, NudgeState::Accepted));

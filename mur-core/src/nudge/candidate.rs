@@ -1,4 +1,4 @@
-use crate::capture::emergence::{detect_emergent, EmergentCandidate};
+use crate::capture::emergence::{EmergentCandidate, detect_emergent};
 use mur_common::event::BehaviorFingerprint;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
