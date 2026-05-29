@@ -11,8 +11,8 @@ use crate::cli::{
     AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
     AgentWebhookAction, ChatAction, Cli, Commands, CommunityAction, ConversationsAction,
     DeployAction, DraftsAction, EvalAction, ExchangeAction, HookEvent, InternalsAction,
-    LearnAction, MurmurdAction, PackAction, ProjectAction, ScheduleAction, SessionAction,
-    SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    MurmurdAction, PackAction, ProjectAction, ScheduleAction, SessionAction, SleepAction,
+    SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -56,21 +56,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Doctor => cmd::misc::cmd_doctor()?,
         Commands::Gc { auto } => cmd::misc::cmd_gc(auto)?,
 
-        Commands::Learn { action } => match action {
-            LearnAction::Extract {
-                file,
-                fingerprint,
-                llm,
-            } => {
-                cmd::learn::cmd_learn_extract(file, fingerprint, llm).await?;
-            }
-            LearnAction::Cross {
-                min_projects,
-                dry_run,
-            } => {
-                cmd::learn::cmd_learn_cross(min_projects, dry_run)?;
-            }
-        },
         Commands::Sync {
             quiet,
             project,

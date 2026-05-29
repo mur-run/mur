@@ -47,11 +47,6 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Learn from sessions
-    Learn {
-        #[command(subcommand)]
-        action: LearnAction,
-    },
     /// Show statistics and effectiveness
     Stats,
     /// Check MUR setup and configuration health

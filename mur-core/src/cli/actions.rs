@@ -68,30 +68,6 @@ pub enum ExchangeAction {
 }
 
 #[derive(Subcommand)]
-pub enum LearnAction {
-    /// Extract patterns from a session transcript
-    Extract {
-        #[arg(short, long)]
-        file: Option<String>,
-        /// Also extract and save behavior fingerprints for emergence detection
-        #[arg(long)]
-        fingerprint: bool,
-        /// Use LLM to analyze transcript and extract patterns
-        #[arg(long)]
-        llm: bool,
-    },
-    /// Analyze patterns across projects to find universal patterns
-    Cross {
-        /// Minimum number of projects a pattern must be used in for auto-promotion
-        #[arg(long, default_value = "3")]
-        min_projects: usize,
-        /// Preview changes without saving
-        #[arg(long)]
-        dry_run: bool,
-    },
-}
-
-#[derive(Subcommand)]
 pub enum InternalsAction {
     /// Rebuild the versioned-store history index from git log (recovery only)
     RebuildIndex {
