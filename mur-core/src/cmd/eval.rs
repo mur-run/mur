@@ -1,13 +1,12 @@
 use anyhow::{Result, bail};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use mur_common::config::RetrievalConfig;
-use mur_common::knowledge::{KnowledgeBase, Maturity};
+use mur_common::knowledge::KnowledgeBase;
 use mur_common::pattern::{Content, Pattern, Tier};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::evolve::maturity::evaluate_maturity;
 use crate::federation::snapshot::read_snapshot_ref;
 use crate::retrieve::scoring::score_and_rank_with_config;
 use crate::store::yaml::YamlStore;
@@ -399,6 +398,7 @@ fn run_retrieval_eval(format: &str) -> Result<i32> {
     Ok(if pass { 0 } else { 1 })
 }
 
+#[allow(dead_code)]
 fn new_pattern(name: &str) -> Pattern {
     Pattern {
         base: KnowledgeBase {
@@ -415,108 +415,12 @@ fn new_pattern(name: &str) -> Pattern {
 }
 
 fn run_maturity_eval(_format: &str) -> Result<i32> {
-    let now = Utc::now();
-    let mut results: Vec<(&'static str, bool, String)> = Vec::new();
-
-    // ── Test 1: Draft baseline ──────────────────────────────────────────
-    // New pattern with default evidence → maturity stays Draft (evaluate returns None)
-    {
-        let p = new_pattern("draft-baseline");
-        let outcome = evaluate_maturity(&p, now);
-        let pass = p.maturity == Maturity::Draft && outcome.is_none();
-        let detail = if pass {
-            String::new()
-        } else {
-            format!("expected Draft/None, got {:?}/{:?}", p.maturity, outcome)
-        };
-        results.push(("draft baseline", pass, detail));
-    }
-
-    // ── Test 2: Emerging promotion ──────────────────────────────────────
-    // Draft pattern with injection_count >= 3 and override_signals == 0 → Emerging
-    {
-        let mut p = new_pattern("emerging-promotion");
-        p.maturity = Maturity::Draft;
-        p.evidence.injection_count = 3;
-        p.evidence.success_signals = 3;
-        p.evidence.override_signals = 0;
-
-        let outcome = evaluate_maturity(&p, now);
-        let pass = outcome == Some(Maturity::Emerging);
-        let detail = if pass {
-            String::new()
-        } else {
-            format!("expected Some(Emerging), got {:?}", outcome)
-        };
-        results.push(("emerging promotion", pass, detail));
-    }
-
-    // ── Test 3: Stable promotion ────────────────────────────────────────
-    // Emerging pattern: injection_count >= 10, effectiveness >= 0.6, age >= 7 days → Stable
-    {
-        let mut p = new_pattern("stable-promotion");
-        p.maturity = Maturity::Emerging;
-        p.evidence.injection_count = 10;
-        // effectiveness = 8/(8+2) = 0.8 >= 0.6
-        p.evidence.success_signals = 8;
-        p.evidence.override_signals = 2;
-        // age = 10 days >= 7
-        p.created_at = now - Duration::days(10);
-
-        let outcome = evaluate_maturity(&p, now);
-        let pass = outcome == Some(Maturity::Stable);
-        let detail = if pass {
-            String::new()
-        } else {
-            format!("expected Some(Stable), got {:?}", outcome)
-        };
-        results.push(("stable promotion", pass, detail));
-    }
-
-    // ── Test 4: No-op at Stable ─────────────────────────────────────────
-    // Stable pattern with insufficient signals for Canonical and good enough
-    // effectiveness to avoid demotion → stays Stable (evaluate returns None)
-    {
-        let mut p = new_pattern("stable-noop");
-        p.maturity = Maturity::Stable;
-        // effectiveness = 7/(7+3) = 0.7 >= 0.4 (no demotion)
-        p.evidence.success_signals = 7;
-        p.evidence.override_signals = 3;
-        p.evidence.injection_count = 5; // < 30 (no promotion to Canonical)
-        p.lifecycle.pinned = false;
-        // recent activity so not considered inactive
-        p.lifecycle.last_injected = Some(now);
-        p.created_at = now - Duration::days(10);
-
-        let outcome = evaluate_maturity(&p, now);
-        let pass = outcome.is_none();
-        let detail = if pass {
-            String::new()
-        } else {
-            format!("expected None (no-op), got {:?}", outcome)
-        };
-        results.push(("no-op at stable", pass, detail));
-    }
-
-    // ── Report ───────────────────────────────────────────────────────────
-    let total = results.len();
-    let passed = results.iter().filter(|(_, ok, _)| *ok).count();
-    let all_pass = passed == total;
-
     println!("mur eval — maturity suite");
     println!("{}", "═".repeat(30));
-    for (name, ok, detail) in &results {
-        if *ok {
-            println!("  ✓ {name}");
-        } else {
-            println!("  ✗ {name}: {detail}");
-        }
-    }
-    println!("{}", "─".repeat(30));
-    let status = if all_pass { "PASS" } else { "FAIL" };
-    println!("maturity: {passed}/{total}  {status}");
-
-    Ok(if all_pass { 0 } else { 1 })
+    println!(
+        "maturity suite not available (Pattern maturity removed — skills use skill/lifecycle.rs)"
+    );
+    Ok(0)
 }
 
 #[cfg(test)]

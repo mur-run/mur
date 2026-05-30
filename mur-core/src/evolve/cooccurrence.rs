@@ -81,6 +81,7 @@ impl CooccurrenceMatrix {
     }
 
     /// Get all pairs with their counts.
+    #[allow(dead_code)]
     pub fn all_pairs(&self) -> Vec<((String, String), u32)> {
         self.pairs
             .iter()

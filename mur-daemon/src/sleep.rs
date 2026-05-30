@@ -1,15 +1,13 @@
 //! Daemon-side sleep cycle — fires after `idle_threshold_minutes` of no events,
-//! drains the Signal inbox into the pattern store, then consolidates.
+//! drains the Signal inbox into the pattern store.
 
 use anyhow::Result;
-use mur_core::evolve::consolidate::consolidate;
 use mur_core::store::config::load_config;
 use mur_core::store::yaml::YamlStore;
 use mur_core::sync::inbox::Inbox;
 
 /// Run one sleep-cycle pass:
 /// 1. Drain `~/.mur/inbox/` → apply all pending Signals to patterns.
-/// 2. Consolidate (dedup, decay, maturity promotion).
 ///
 /// Best-effort — errors are logged but never propagate to the event loop.
 pub fn run_sleep_cycle() {
@@ -28,15 +26,6 @@ fn try_run_sleep_cycle() -> Result<()> {
             report.applied,
             report.skipped,
             report.errors.len()
-        );
-    }
-    let consolidation = consolidate(&store, false)?;
-    if consolidation.patterns_scanned > 0 {
-        eprintln!(
-            "murmurd sleep-cycle: consolidated {} patterns (decayed={} archived={})",
-            consolidation.patterns_scanned,
-            consolidation.patterns_decayed,
-            consolidation.patterns_archived,
         );
     }
     Ok(())

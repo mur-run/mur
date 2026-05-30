@@ -68,75 +68,6 @@ pub enum ExchangeAction {
 }
 
 #[derive(Subcommand)]
-pub enum LearnAction {
-    /// Extract patterns from a session transcript
-    Extract {
-        #[arg(short, long)]
-        file: Option<String>,
-        /// Also extract and save behavior fingerprints for emergence detection
-        #[arg(long)]
-        fingerprint: bool,
-        /// Use LLM to analyze transcript and extract patterns
-        #[arg(long)]
-        llm: bool,
-    },
-    /// Analyze patterns across projects to find universal patterns
-    Cross {
-        /// Minimum number of projects a pattern must be used in for auto-promotion
-        #[arg(long, default_value = "3")]
-        min_projects: usize,
-        /// Preview changes without saving
-        #[arg(long)]
-        dry_run: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum FeedbackAction {
-    /// Mark a pattern as helpful
-    Helpful { name: String },
-    /// Mark a pattern as unhelpful
-    Unhelpful { name: String },
-    /// Auto-analyze session transcript against injected patterns
-    Auto {
-        /// Path to session transcript (reads stdin if omitted)
-        #[arg(long)]
-        file: Option<String>,
-        /// Preview changes without saving
-        #[arg(long)]
-        dry_run: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum PatternAction {
-    /// Show a pattern by name (with attachments)
-    Show { name: String },
-    /// Show version history for a pattern
-    History {
-        /// Pattern name
-        name: String,
-    },
-    /// Show diff between two pattern versions (defaults: current vs previous)
-    Diff {
-        /// Pattern name
-        name: String,
-        /// First version number (default: previous)
-        v1: Option<u32>,
-        /// Second version number (default: current)
-        v2: Option<u32>,
-    },
-    /// Roll back a pattern to a prior version (creates a new commit)
-    Rollback {
-        /// Pattern name
-        name: String,
-        /// Version number to restore
-        #[arg(long)]
-        to: u32,
-    },
-}
-
-#[derive(Subcommand)]
 pub enum InternalsAction {
     /// Rebuild the versioned-store history index from git log (recovery only)
     RebuildIndex {
@@ -152,30 +83,6 @@ pub enum InternalsAction {
         /// Git arguments (e.g. `log --oneline -10`)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum GepAction {
-    /// Run one GEP evolution generation
-    Evolve,
-    /// Show population fitness statistics
-    Status,
-}
-
-#[derive(Subcommand)]
-pub enum EvolveAction {
-    /// Show workflow composition suggestions from co-occurrence patterns
-    Compose {
-        /// Auto-create suggested workflows as drafts
-        #[arg(long)]
-        create: bool,
-    },
-    /// Show the pattern co-occurrence matrix
-    Cooccurrence {
-        /// Minimum count to display a pair
-        #[arg(long, default_value = "2")]
-        min: u32,
     },
 }
 
@@ -321,15 +228,6 @@ pub enum SessionAction {
         /// Push all unsynced sessions
         #[arg(long)]
         all: bool,
-    },
-    /// Reflect + curate the last session transcript (E2).
-    ///
-    /// Runs the Reflector+Curator pipeline on the most recent recording:
-    /// updates pattern confidence and evidence signals based on usage signals.
-    Reflect {
-        /// Preview changes without saving to the pattern store.
-        #[arg(long)]
-        dry_run: bool,
     },
 }
 

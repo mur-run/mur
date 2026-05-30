@@ -24,7 +24,6 @@ pub(crate) mod deploy;
 pub mod doctor;
 pub(crate) mod drafts;
 pub(crate) mod eval;
-pub(crate) mod evolve_cmd;
 #[allow(dead_code)]
 pub mod fleet_sync;
 pub(crate) mod hook;
@@ -39,7 +38,6 @@ pub(crate) mod model;
 pub(crate) mod murmurd;
 pub mod notes_cmd;
 pub(crate) mod pattern;
-pub(crate) mod pattern_history;
 pub(crate) mod project;
 pub(crate) mod reindex;
 pub(crate) mod search;
@@ -78,6 +76,7 @@ pub mod workflow;
 #[cfg(feature = "sources")]
 pub(crate) mod source_cmd;
 
+#[allow(dead_code)]
 pub(crate) fn read_multiline() -> anyhow::Result<String> {
     let mut lines = Vec::new();
     loop {

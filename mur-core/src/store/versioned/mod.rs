@@ -37,6 +37,7 @@ pub struct PatternRevision {
     pub sha: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
     pub version: u32,
@@ -80,6 +81,7 @@ impl VersionedYamlStore {
     ///
     /// No-op fast path: if the serialised YAML is byte-identical to what
     /// is on disk, returns the current revision without a new commit.
+    #[allow(dead_code)]
     pub fn save_pattern(&mut self, pattern: &Pattern, reason: &str) -> Result<PatternRevision> {
         let name = &pattern.name;
         let pattern_rel = PathBuf::from("patterns").join(format!("{name}.yaml"));
@@ -153,11 +155,13 @@ impl VersionedYamlStore {
     }
 
     /// Current version from the index. O(1).
+    #[allow(dead_code)]
     pub fn current_version(&self, name: &str) -> u32 {
         self.index.current_version_of(name)
     }
 
     /// Full version history for `name` read from the index (FIN-3).
+    #[allow(dead_code)]
     pub fn history(&self, name: &str) -> Result<Vec<HistoryEntry>> {
         let pi = match self.index.patterns.get(name) {
             Some(p) => p,
@@ -179,6 +183,7 @@ impl VersionedYamlStore {
 
     /// Roll back `name` to `to_version` by re-applying the archived YAML
     /// as a new commit. No history rewriting.
+    #[allow(dead_code)]
     pub fn rollback_pattern(&mut self, name: &str, to_version: u32) -> Result<PatternRevision> {
         let archive = self
             .root

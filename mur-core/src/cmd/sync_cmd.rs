@@ -915,8 +915,6 @@ fn md5_simple(s: &str) -> u64 {
 }
 
 pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str>) -> Result<()> {
-    use crate::evolve::decay::apply_decay_all;
-    use crate::evolve::maturity::apply_maturity_all;
     use crate::retrieve::scoring::score_and_rank;
     use inject::sync::{default_targets, generate_sync_content, write_sync_file};
 
@@ -932,11 +930,6 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
     }
 
     let store = YamlStore::default_store()?;
-    let now = chrono::Utc::now();
-
-    // Run decay + maturity before syncing
-    let _ = apply_decay_all(&store, now)?;
-    let _ = apply_maturity_all(&store, now)?;
 
     let patterns = store.list_all()?;
 

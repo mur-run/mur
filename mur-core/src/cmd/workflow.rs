@@ -637,9 +637,7 @@ pub(crate) fn cmd_suggest(create: bool, accept: Option<&str>, dismiss: Option<&s
         &|c| create_draft_workflow(&c.suggested_name, &c.title, "", &c.evidence_session_ids),
     );
 
-    use evolve::compose::suggest_workflows_with_patterns;
     use evolve::cooccurrence::CooccurrenceMatrix;
-    use evolve::decompose::{analyze_workflow_for_extraction, extract_pattern_from_step};
 
     let pattern_store = YamlStore::default_store()?;
     let workflow_store = WorkflowYamlStore::default_store()?;
@@ -655,99 +653,11 @@ pub(crate) fn cmd_suggest(create: bool, accept: Option<&str>, dismiss: Option<&s
     println!("── Co-occurrence Data ──");
     println!("  Tracked pairs: {}", matrix.pair_count());
 
-    let suggestions = suggest_workflows_with_patterns(&matrix, 5, &patterns);
+    // Part 1: Co-occurrence data shown above (composition suggestions removed with Pattern system)
 
-    if suggestions.is_empty() {
-        println!("  No workflow composition suggestions yet.");
-        println!("  (Need 3+ patterns co-occurring 5+ times)");
-    } else {
-        println!("\n── Workflow Composition Suggestions ──\n");
-        for (i, s) in suggestions.iter().enumerate() {
-            println!(
-                "  {}. {} (score: {})",
-                i + 1,
-                s.suggested_name,
-                s.cooccurrence_score,
-            );
-            println!("     Patterns: {}", s.patterns.join(", "));
-            println!("     Trigger: {}", s.suggested_trigger);
-
-            if create {
-                if workflow_store.exists(&s.suggested_name) {
-                    println!(
-                        "     -> Workflow '{}' already exists, skipping.",
-                        s.suggested_name
-                    );
-                } else {
-                    let description = format!(
-                        "Auto-suggested workflow from {} co-occurring patterns",
-                        s.patterns.len()
-                    );
-                    create_draft_workflow_in(
-                        &workflow_store,
-                        &s.suggested_name,
-                        &description,
-                        &s.suggested_trigger,
-                        &[],
-                    )?;
-                    println!("     -> Created draft workflow: {}", s.suggested_name);
-
-                    // Add cross-reference: link each source pattern to this workflow
-                    for pname in &s.patterns {
-                        if let Ok(mut p) = pattern_store.get(pname)
-                            && !p.links.workflows.contains(&s.suggested_name)
-                        {
-                            p.base.links.workflows.push(s.suggested_name.clone());
-                            let _ = pattern_store.save(&p);
-                        }
-                    }
-                }
-            }
-            println!();
-        }
-    }
-
-    // ─── Part 2: Workflow decomposition into patterns ────────────────
-
-    if !workflows.is_empty() {
-        println!("── Decomposition Candidates ──\n");
-
-        let mut any_candidates = false;
-        for wf in &workflows {
-            let candidates = analyze_workflow_for_extraction(wf, &patterns);
-            if candidates.is_empty() {
-                continue;
-            }
-            any_candidates = true;
-
-            println!("  Workflow: {} ({} candidates)", wf.name, candidates.len());
-            for c in &candidates {
-                println!("    Step {}: \"{}\"", c.step_index + 1, c.step_description,);
-                println!("      -> Pattern: {}", c.suggested_pattern_name);
-                println!("      Reason: {}", c.reason);
-
-                if create {
-                    if pattern_store.exists(&c.suggested_pattern_name) {
-                        println!(
-                            "      -> Pattern '{}' already exists, skipping.",
-                            c.suggested_pattern_name
-                        );
-                    } else if let Some(pattern) = extract_pattern_from_step(wf, c.step_index) {
-                        pattern_store.save(&pattern)?;
-                        println!(
-                            "      -> Created draft pattern: {}",
-                            c.suggested_pattern_name
-                        );
-                    }
-                }
-            }
-            println!();
-        }
-
-        if !any_candidates {
-            println!("  No decomposition candidates found in existing workflows.");
-        }
-    }
+    // ─── Part 2 (removed): Workflow decomposition into patterns ──────────────
+    // Pattern decomposition removed — skills use skill/lifecycle.rs evolve path.
+    let _ = (&patterns, &workflows, create);
 
     // ─── Part 3: Pending nudges ───────────────────────────────────────
 
@@ -797,7 +707,7 @@ pub(crate) fn cmd_suggest(create: bool, accept: Option<&str>, dismiss: Option<&s
 
     // ─── Summary ─────────────────────────────────────────────────────
 
-    if !create && (!suggestions.is_empty() || !workflows.is_empty()) {
+    if !create && !workflows.is_empty() {
         println!("Run `mur suggest --create` to auto-create suggested items as drafts.");
     }
 
@@ -844,6 +754,7 @@ pub(crate) fn cmd_suggest_dismiss(id: &str) -> Result<()> {
 }
 
 /// Collect tags from a set of pattern names.
+#[allow(dead_code)]
 pub(crate) fn collect_tags_from_patterns(
     names: &[String],
     patterns: &[Pattern],
