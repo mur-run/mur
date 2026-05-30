@@ -29,6 +29,7 @@ mod evolve;
 mod executor;
 mod extract;
 mod extract_llm;
+#[allow(dead_code)]
 mod federation;
 mod gep;
 mod inject;
@@ -54,6 +55,7 @@ mod skill_traces;
 #[cfg(feature = "sources")]
 mod sources;
 mod store;
+#[allow(dead_code)]
 mod sync;
 mod team;
 mod update;
