@@ -4,7 +4,6 @@ use mur_common::knowledge::KnowledgeBase;
 use mur_common::pattern::*;
 
 use crate::community;
-use crate::gep;
 use crate::store::config as store_config;
 use crate::store::yaml::YamlStore;
 use crate::team;
@@ -421,82 +420,6 @@ pub(crate) async fn cmd_team_sync(team_id: &str) -> Result<()> {
         resp.patterns.len(),
         team_id
     );
-    Ok(())
-}
-
-pub(crate) fn cmd_gep_evolve() -> Result<()> {
-    let store = YamlStore::default_store()?;
-    let patterns = store.list_all()?;
-
-    if patterns.is_empty() {
-        println!("  No patterns to evolve.");
-        return Ok(());
-    }
-
-    let before_stats = gep::population_stats(&patterns);
-    println!(
-        "  Before: {} patterns, avg fitness {:.3}",
-        before_stats.count, before_stats.avg_fitness
-    );
-
-    // Use neutral feedback for evolution (the mutation step still recomputes fitness)
-    let evolved = gep::evolve_generation(&patterns, &[]);
-
-    // Save evolved patterns
-    let mut updated = 0;
-    for ep in &evolved {
-        // Only save if the pattern name matches an existing one (skip crossover children)
-        if store.exists(&ep.name) {
-            store.save(ep)?;
-            updated += 1;
-        }
-    }
-
-    let after_stats = gep::population_stats(&evolved);
-    println!(
-        "  After:  {} patterns, avg fitness {:.3}",
-        after_stats.count, after_stats.avg_fitness
-    );
-    println!("  Updated {} patterns.", updated);
-    Ok(())
-}
-
-pub(crate) fn cmd_gep_status() -> Result<()> {
-    let store = YamlStore::default_store()?;
-    let patterns = store.list_all()?;
-
-    if patterns.is_empty() {
-        println!("  No patterns in store.");
-        return Ok(());
-    }
-
-    let stats = gep::population_stats(&patterns);
-    println!("  GEP Population Status");
-    println!("  ─────────────────────");
-    println!("  Patterns:           {}", stats.count);
-    println!("  Avg fitness:        {:.3}", stats.avg_fitness);
-    println!("  Max fitness:        {:.3}", stats.max_fitness);
-    println!("  Min fitness:        {:.3}", stats.min_fitness);
-    println!("  Avg effectiveness:  {:.3}", stats.avg_effectiveness);
-
-    // Show top 5 by fitness
-    let genes: Vec<gep::GepGene> = patterns
-        .iter()
-        .map(|p| gep::GepGene::from_pattern(p.clone()))
-        .collect();
-    let top = gep::select(&genes, 5);
-    if !top.is_empty() {
-        println!("\n  Top patterns by fitness:");
-        for g in &top {
-            println!(
-                "    {:<30} fitness={:.3}  effectiveness={:.3}",
-                g.pattern.name,
-                g.fitness,
-                g.pattern.evidence.effectiveness()
-            );
-        }
-    }
-
     Ok(())
 }
 

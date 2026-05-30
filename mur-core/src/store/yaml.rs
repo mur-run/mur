@@ -126,6 +126,7 @@ impl YamlStore {
     }
 
     /// Move a pattern to the archive directory.
+    #[allow(dead_code)]
     pub fn archive(&self, name: &str) -> Result<bool> {
         let src = self.pattern_path(name);
         if !src.exists() {
