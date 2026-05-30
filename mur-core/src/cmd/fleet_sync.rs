@@ -695,8 +695,16 @@ mod tests {
 
         // Both events should be present and deduplicated correctly
         assert_eq!(merged.len(), 2);
-        assert!(merged.iter().any(|e| matches!(e, SkillEvent::Retrieval { .. })));
-        assert!(merged.iter().any(|e| matches!(e, SkillEvent::Execution { .. })));
+        assert!(
+            merged
+                .iter()
+                .any(|e| matches!(e, SkillEvent::Retrieval { .. }))
+        );
+        assert!(
+            merged
+                .iter()
+                .any(|e| matches!(e, SkillEvent::Execution { .. }))
+        );
     }
 
     #[test]
@@ -712,7 +720,10 @@ mod tests {
         for skill_name in &["skill-1", "skill-2"] {
             let skill_dir = local_skills_dir.join(skill_name);
             std::fs::create_dir_all(&skill_dir).unwrap();
-            let yaml = format!("name: {}\nversion: 1.0.0\npublisher: human:test\ndescription: test\ncategory: workflow\ncontent:\n  abstract: test skill\n", skill_name);
+            let yaml = format!(
+                "name: {}\nversion: 1.0.0\npublisher: human:test\ndescription: test\ncategory: workflow\ncontent:\n  abstract: test skill\n",
+                skill_name
+            );
             std::fs::write(skill_dir.join("skill.yaml"), yaml).unwrap();
 
             // Add events to skill-1

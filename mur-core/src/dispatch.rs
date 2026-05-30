@@ -71,9 +71,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                     } => {
                         let direction = direction.unwrap_or(crate::cli::FleetSyncDir::Both);
                         let device_sync_dir = match direction {
-                            crate::cli::FleetSyncDir::Pull => cmd::sync_cmd::DeviceSyncDirection::Pull,
-                            crate::cli::FleetSyncDir::Push => cmd::sync_cmd::DeviceSyncDirection::Push,
-                            crate::cli::FleetSyncDir::Both => cmd::sync_cmd::DeviceSyncDirection::Both,
+                            crate::cli::FleetSyncDir::Pull => {
+                                cmd::sync_cmd::DeviceSyncDirection::Pull
+                            }
+                            crate::cli::FleetSyncDir::Push => {
+                                cmd::sync_cmd::DeviceSyncDirection::Push
+                            }
+                            crate::cli::FleetSyncDir::Both => {
+                                cmd::sync_cmd::DeviceSyncDirection::Both
+                            }
                         };
                         cmd::fleet_sync::fleet_sync_cmd(device_sync_dir, force_local).await?
                     }
