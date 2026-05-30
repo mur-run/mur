@@ -1,8 +1,6 @@
 use anyhow::Result;
 use std::io::{self, Write};
 
-use crate::store::yaml::YamlStore;
-
 /// Drive an async future from a sync caller that's already inside the
 /// `mur-main` multi-threaded tokio runtime (see `main.rs::main`).
 ///
@@ -892,55 +890,6 @@ Run `mur learn` to extract new patterns from recent sessions.
     // with the pattern system (feedback, create, search, etc.)
     if install_hooks {
         let _ = super::sync_cmd::ensure_mur_skill(&home);
-    }
-
-    // ─── Step C12: Scan for existing AI tool rules ────────────────
-    if let Ok(cwd) = std::env::current_dir() {
-        use crate::capture::import;
-
-        let detected_files = import::detect_files(&cwd);
-        if !detected_files.is_empty() {
-            println!();
-            println!("  Scanning for existing AI tool rules...");
-
-            let mut file_summaries = Vec::new();
-            let mut all_candidates = Vec::new();
-            for path in &detected_files {
-                if let Ok(candidates) = import::extract_from_file(path) {
-                    let filename = path.file_name().unwrap_or_default().to_string_lossy();
-                    file_summaries.push(format!("{} ({} rules)", filename, candidates.len()));
-                    all_candidates.extend(candidates);
-                }
-            }
-
-            if !all_candidates.is_empty() {
-                for summary in &file_summaries {
-                    println!("     Found: {}", summary);
-                }
-
-                print!("\n  Import as MUR patterns? [Y/n] ");
-                io::stdout().flush()?;
-                let mut import_answer = String::new();
-                io::stdin().read_line(&mut import_answer)?;
-                let import_answer = import_answer.trim().to_lowercase();
-                let do_import =
-                    import_answer.is_empty() || import_answer == "y" || import_answer == "yes";
-
-                if do_import {
-                    let store = YamlStore::default_store()?;
-                    let existing: std::collections::HashSet<String> =
-                        store.list_names()?.into_iter().collect();
-                    let patterns = import::candidates_to_patterns(all_candidates, &existing);
-                    let count = patterns.len();
-                    for pattern in &patterns {
-                        store.save(pattern)?;
-                    }
-                    println!("  Imported {} patterns (Project tier)", count);
-                    println!();
-                    println!("  These patterns now work across ALL your AI tools.");
-                }
-            }
-        }
     }
 
     // ─── Step G: Interactive LLM/Embedding setup ─────────────────

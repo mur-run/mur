@@ -16,6 +16,7 @@ use std::sync::LazyLock;
 
 /// A candidate pattern detected from recurring cross-session behaviors.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct EmergentCandidate {
     /// Merged description of the behavior
     pub behavior: String,
@@ -544,6 +545,7 @@ pub fn load_fingerprints() -> anyhow::Result<Vec<BehaviorFingerprint>> {
 }
 
 /// Prune fingerprints older than `max_age_days`, rewriting the JSONL file.
+#[allow(dead_code)]
 pub fn prune_fingerprints(max_age_days: i64) -> anyhow::Result<usize> {
     let path = fingerprints_path();
     if !path.exists() {
