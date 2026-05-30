@@ -51,8 +51,8 @@ curl -fsSL https://mur.run/install.sh | sh
 # Interactive setup — configures embeddings, hooks, and sync targets
 mur init
 
-# Create your first pattern
-mur new "prefer-swift-testing"
+# Search your skill library
+mur search "testing patterns"
 
 # Sync to all your AI tools (Claude Code, Gemini CLI, Cursor, etc.)
 mur sync
@@ -172,20 +172,13 @@ Workflows support:
 ```
 mur
 ├── init               Interactive setup wizard
-├── new <name>         Create a new pattern
 ├── search <query>     Semantic + keyword hybrid search
 ├── inject             Inject matching patterns into context
 ├── context            Preview what would be injected
-├── sync               Sync patterns to all AI tools + auto-reindex
+├── sync               Sync skills to all AI tools + auto-reindex
 ├── serve              Start the web dashboard
-├── stats              Pattern library statistics
-├── evolve             Run maturity promotion/demotion cycle
-├── emerge             Detect cross-session emergence clusters
-├── suggest            Composition / decomposition suggestions
-├── feedback
-│   ├── auto           Post-session contradiction detection
-│   ├── helpful        Mark last injection as helpful
-│   └── unhelpful      Mark last injection as unhelpful
+├── stats              Skill library statistics
+├── suggest            Skill suggestion & composition
 ├── workflow
 │   ├── list           List all workflows
 │   ├── show <name>    Show workflow details (--md for AI format)
@@ -195,6 +188,7 @@ mur
 │   ├── install        Install a skill
 │   ├── list           List installed skills
 │   ├── show <name>    Show skill details
+│   ├── from-pattern   Migrate legacy patterns to skills (deprecated)
 │   └── recombine <a> <b>  Combine two skills into new draft (M7b)
 ├── run <query>        Find and output workflow as executable prompt
 ├── session
@@ -203,18 +197,12 @@ mur
 │   ├── record         Record an event
 │   ├── status         Current session status
 │   └── list           List past sessions
-├── learn extract      Extract patterns from AI transcripts
 ├── exchange
-│   ├── import         Import pattern file (MKEF format)
-│   └── export         Export pattern to MKEF
-├── pattern show       Show pattern details
-├── gc                 Garbage collect expired patterns
-├── pin / mute / boost Pattern management shortcuts
-├── promote            Manually promote maturity
-├── deprecate          Deprecate a pattern
+│   ├── import         Import skill file
+│   └── export         Export skill to MKEF
+├── gc                 Garbage collect expired skills
 ├── reindex            Rebuild vector search index
-├── links              Show pattern links
-└── community          Browse community patterns
+└── community          Browse community skills
 ```
 
 ## Semantic Search
