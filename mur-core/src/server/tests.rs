@@ -323,12 +323,17 @@ async fn test_search() {
     let tmp = tempfile::tempdir().unwrap();
     let state = test_state(&tmp);
 
-    let store = YamlStore::new(state.patterns_dir.clone()).unwrap();
-    let mut p = make_test_pattern("rust-error-handling");
-    p.description = "Use thiserror for library errors".to_string();
-    p.content = Content::Plain("rust error handling with anyhow and thiserror".to_string());
-    p.tags.topics = vec!["rust".into(), "error".into()];
-    store.save(&p).unwrap();
+    // Seed a skill in the skills_dir (search now reads skills, not patterns)
+    let skill_dir = state.skills_dir().join("rust-error-handling");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("skill.yaml"),
+        "name: rust-error-handling\nversion: 1.0.0\npublisher: human:t\n\
+         description: Use thiserror for library errors\ncategory: context\n\
+         content:\n  abstract: rust error handling with anyhow and thiserror\n\
+         tags:\n  - rust\n  - error\n",
+    )
+    .unwrap();
 
     let app = build_router(state);
 

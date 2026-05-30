@@ -109,6 +109,14 @@ impl AppState {
     pub(super) fn pipeline_store(&self) -> Result<PipelineYamlStore, AppError> {
         PipelineYamlStore::new(self.pipelines_dir.clone()).map_err(AppError::Internal)
     }
+
+    /// `~/.mur/skills/` derived from `patterns_dir` sibling.
+    pub(super) fn skills_dir(&self) -> std::path::PathBuf {
+        self.patterns_dir
+            .parent()
+            .unwrap_or(&self.patterns_dir)
+            .join("skills")
+    }
 }
 
 // ─── Error type ────────────────────────────────────────────────────
