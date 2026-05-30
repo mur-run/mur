@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use mur_common::agent::{PatternFilter, SnapshotRef};
 use mur_common::pattern::Pattern;
+use sha2::{Digest, Sha256};
 
 /// Filter `patterns` according to `filter` and return matching subset,
 /// sorted by importance descending, capped at `filter.max_count`.
@@ -144,6 +145,101 @@ fn get_knowledge_head_sha() -> Result<String> {
     Ok(full_sha[..12].to_string())
 }
 
+// ── Skill snapshot ───────────────────────────────────────────────────
+
+/// Filter for skill snapshots. Mirrors `PatternFilter` for skill queries.
+#[derive(Debug, Default, Clone)]
+pub struct SkillFilter {
+    pub categories: Vec<String>,
+    pub max_count: usize,
+}
+
+impl SkillFilter {
+    pub fn new(categories: Vec<String>, max_count: usize) -> Self {
+        Self {
+            categories,
+            max_count,
+        }
+    }
+}
+
+/// Return value from `pull_skill_snapshot`.
+#[derive(Debug, Clone)]
+pub struct SkillSnapshot {
+    pub head: String,
+}
+
+/// Pull a skill snapshot for `agent_name`:
+/// 1. Load all `skill.yaml` files from `~/.mur/skills/`.
+/// 2. Apply the filter (categories, max_count).
+/// 3. Copy matching `skill.yaml` files to `~/.mur/agents/<agent>/skills_cache/<name>/skill.yaml`.
+/// 4. Write a `.snapshot-ref` file with the set of skill names.
+/// 5. Return the SkillSnapshot.
+pub fn pull_skill_snapshot(agent_name: &str, filter: &SkillFilter) -> Result<SkillSnapshot> {
+    let mur_home = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
+        .join(".mur");
+    pull_skill_snapshot_from(agent_name, filter, &mur_home)
+}
+
+pub fn pull_skill_snapshot_from(
+    agent_name: &str,
+    filter: &SkillFilter,
+    mur_home: &std::path::Path,
+) -> Result<SkillSnapshot> {
+    let skills_dir = mur_home.join("skills");
+    let cache_dir = mur_home
+        .join("agents")
+        .join(agent_name)
+        .join("skills_cache");
+    std::fs::create_dir_all(&cache_dir)?;
+
+    let mut matched: Vec<(String, String)> = Vec::new(); // (name, yaml_content)
+    if skills_dir.exists() {
+        for entry in std::fs::read_dir(&skills_dir)? {
+            let path = entry?.path();
+            let skill_yaml = path.join("skill.yaml");
+            if !skill_yaml.is_file() {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let content = std::fs::read_to_string(&skill_yaml)?;
+            // Category filter
+            if !filter.categories.is_empty() {
+                let in_cat = filter
+                    .categories
+                    .iter()
+                    .any(|c| content.contains(c.as_str()));
+                if !in_cat {
+                    continue;
+                }
+            }
+            matched.push((name, content));
+        }
+    }
+
+    if filter.max_count > 0 {
+        matched.truncate(filter.max_count);
+    }
+
+    let mut hasher = Sha256::new();
+    for (name, content) in &matched {
+        let dest_dir = cache_dir.join(name);
+        std::fs::create_dir_all(&dest_dir)?;
+        std::fs::write(dest_dir.join("skill.yaml"), content)?;
+        hasher.update(name.as_bytes());
+        hasher.update(content.as_bytes());
+    }
+
+    let head = format!("{:x}", hasher.finalize());
+    std::fs::write(cache_dir.join(".snapshot-ref"), &head)?;
+    Ok(SkillSnapshot { head })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +325,33 @@ lifecycle: {{}}
         let content = std::fs::read_to_string(dir.path().join(".snapshot-ref")).unwrap();
         let back: SnapshotRef = serde_yaml_ng::from_str(&content).unwrap();
         assert_eq!(snap, back);
+    }
+
+    #[test]
+    fn pull_skill_snapshot_writes_cache_and_returns_ref() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        // Stub two skills
+        for name in ["skill-a", "skill-b"] {
+            let d = dir.path().join("skills").join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(
+                d.join("skill.yaml"),
+                format!("name: {name}\nversion: 1.0.0\ncategory: context\n"),
+            )
+            .unwrap();
+        }
+        let filter = SkillFilter {
+            categories: vec!["context".into()],
+            max_count: 10,
+        };
+        let snap =
+            pull_skill_snapshot_from("test-agent", &filter, dir.path()).unwrap();
+        let cache_dir = dir.path().join("agents/test-agent/skills_cache");
+        assert!(cache_dir.exists());
+        // at least one .yaml in the cache
+        let entries: Vec<_> = std::fs::read_dir(&cache_dir).unwrap().collect();
+        assert!(!entries.is_empty());
+        assert!(!snap.head.is_empty());
     }
 }
