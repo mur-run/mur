@@ -225,8 +225,19 @@ impl Inbox {
                 store.save(payload)?;
                 Ok(true)
             }
+            SignalTarget::NewDraftSkill { payload } => {
+                // Never overwrite a skill the user may have edited
+                use mur_common::skill::global_skill_dir;
+                let skill_dir = global_skill_dir(&self.mur_home, &payload.name);
+                if skill_dir.join("skill.yaml").exists() {
+                    return Ok(false);
+                }
+                std::fs::create_dir_all(&skill_dir)?;
+                mur_common::skill::write_to_dir(&skill_dir, payload)?;
+                Ok(true)
+            }
             // Skill-targeted signals are handled by apply_skill_signals.
-            SignalTarget::Skill { .. } | SignalTarget::NewDraftSkill { .. } => Ok(false),
+            SignalTarget::Skill { .. } => Ok(false),
         }
     }
 

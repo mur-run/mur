@@ -35,6 +35,7 @@ mod pipelines;
 mod search;
 mod sessions;
 mod signals;
+mod skills;
 mod stats;
 mod workflows;
 
@@ -53,6 +54,7 @@ use sessions::{
     patch_session,
 };
 use signals::batch_signals;
+use skills::{create_skill, delete_skill, get_skill, list_skills, update_skill};
 use stats::{get_links, get_stats, get_tags};
 use workflows::{
     create_workflow, delete_workflow, extract_workflow_from_session, get_workflow, list_workflows,
@@ -194,6 +196,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/patterns/{id}", get(get_pattern))
         .route("/api/v1/patterns/{id}", put(update_pattern))
         .route("/api/v1/patterns/{id}", delete(delete_pattern))
+        // Skills CRUD
+        .route("/api/v1/skills", get(list_skills))
+        .route("/api/v1/skills", post(create_skill))
+        .route("/api/v1/skills/{name}", get(get_skill))
+        .route("/api/v1/skills/{name}", put(update_skill))
+        .route("/api/v1/skills/{name}", delete(delete_skill))
         // Workflows CRUD
         .route("/api/v1/workflows", get(list_workflows))
         .route("/api/v1/workflows", post(create_workflow))

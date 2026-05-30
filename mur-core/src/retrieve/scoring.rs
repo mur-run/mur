@@ -129,6 +129,9 @@ impl Retrievable for Pattern {
     }
 }
 
+#[allow(dead_code)]
+pub type ScoredSkill = Scored<crate::retrieve::skill_candidates::LoadedSkill>;
+
 /// A retrieved item with its computed relevance score.
 #[derive(Debug, Clone)]
 pub struct Scored<T> {
