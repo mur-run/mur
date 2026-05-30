@@ -372,9 +372,7 @@ pub fn format_workflow_entry(workflow: &Workflow, index: usize) -> String {
 /// Format scored skills and workflows for injection. Mirrors
 /// `format_unified_injection_with_store` but for the skill corpus.
 pub fn format_skills_for_injection(
-    skills: &[crate::retrieve::scoring::Scored<
-        crate::retrieve::skill_candidates::LoadedSkill,
-    >],
+    skills: &[crate::retrieve::scoring::Scored<crate::retrieve::skill_candidates::LoadedSkill>],
     workflows: &[Workflow],
     max_tokens: usize,
 ) -> String {

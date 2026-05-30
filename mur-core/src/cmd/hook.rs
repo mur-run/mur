@@ -115,8 +115,7 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
 
     // Degraded-mode / cold-start fallback: synchronous skill retrieval
     let mur_dir = mur_common::trust::mur_home();
-    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir)
-        .unwrap_or_default();
+    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
@@ -186,8 +185,7 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
     }
 
     let mur_dir = mur_common::trust::mur_home();
-    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir)
-        .unwrap_or_default();
+    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
@@ -227,8 +225,7 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
     let _ = enqueue(&event);
 
     let mur_dir = mur_common::trust::mur_home();
-    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir)
-        .unwrap_or_default();
+    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
 
     let project = std::env::current_dir()
         .ok()
