@@ -41,10 +41,7 @@ impl Inbox {
 
     /// Open an inbox at `dir`, using the given `mur_home` for skill resolution
     /// (rather than deriving it from `dir.parent()`).
-    pub fn new_with_mur_home(
-        dir: impl AsRef<Path>,
-        mur_home: impl AsRef<Path>,
-    ) -> Result<Self> {
+    pub fn new_with_mur_home(dir: impl AsRef<Path>, mur_home: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
         Ok(Self {
@@ -251,9 +248,7 @@ impl Inbox {
                 continue;
             };
             let Ok(signal) = serde_yaml::from_str::<Signal>(&text) else {
-                report
-                    .errors
-                    .push(format!("parse error: {}", p.display()));
+                report.errors.push(format!("parse error: {}", p.display()));
                 continue;
             };
             if seen.contains(&signal.id) {
@@ -276,9 +271,7 @@ impl Inbox {
                     let _ = std::fs::remove_file(&p);
                 }
                 Err(e) => {
-                    report
-                        .errors
-                        .push(format!("{}: {e}", p.display()));
+                    report.errors.push(format!("{}: {e}", p.display()));
                 }
             }
         }
@@ -324,7 +317,10 @@ impl Inbox {
             &stats_path,
             || SkillStats::new(name, "unknown", "", chrono::Utc::now()),
             |s| {
-                mur_common::skill::event_log::apply_new_events_to_stats(s, &[event.clone()]);
+                mur_common::skill::event_log::apply_new_events_to_stats(
+                    s,
+                    std::slice::from_ref(&event),
+                );
                 Ok(())
             },
         )?;
@@ -654,7 +650,9 @@ mod tests {
     #[test]
     fn skill_execution_signal_appends_event_and_updates_stats() {
         use mur_common::skill::event_log::read_events;
-        use mur_common::{Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope, SignalKind, SignalTarget};
+        use mur_common::{
+            Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope, SignalKind, SignalTarget,
+        };
         use uuid::Uuid;
 
         let dir = tempdir().unwrap();
@@ -692,15 +690,12 @@ mod tests {
         let report = inbox.apply_skill_signals().unwrap();
         assert_eq!(report.applied, 1);
 
-        let events =
-            read_events(&dir.path().join("skills/test-skill/events.jsonl")).unwrap();
+        let events = read_events(&dir.path().join("skills/test-skill/events.jsonl")).unwrap();
         assert_eq!(events.len(), 1);
-        assert!(
-            matches!(
-                events[0],
-                mur_common::skill::event_log::SkillEvent::Execution { ref outcome, .. }
-                if outcome == "success"
-            )
-        );
+        assert!(matches!(
+            events[0],
+            mur_common::skill::event_log::SkillEvent::Execution { ref outcome, .. }
+            if outcome == "success"
+        ));
     }
 }

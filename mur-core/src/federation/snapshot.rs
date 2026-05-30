@@ -345,8 +345,7 @@ lifecycle: {{}}
             categories: vec!["context".into()],
             max_count: 10,
         };
-        let snap =
-            pull_skill_snapshot_from("test-agent", &filter, dir.path()).unwrap();
+        let snap = pull_skill_snapshot_from("test-agent", &filter, dir.path()).unwrap();
         let cache_dir = dir.path().join("agents/test-agent/skills_cache");
         assert!(cache_dir.exists());
         // at least one .yaml in the cache

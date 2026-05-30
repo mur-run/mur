@@ -382,10 +382,7 @@ fn update_fleet_manifest(path: &Path, changes: &[FleetChange], version: i64) -> 
 /// For skill entities, also persist the events_tail so future pushes
 /// can detect new-event-only deltas without a content_hash change.
 fn update_skill_events_tail(manifest: &mut FleetManifest, mur_dir: &Path, skill_name: &str) {
-    let events_path = mur_dir
-        .join("skills")
-        .join(skill_name)
-        .join("events.jsonl");
+    let events_path = mur_dir.join("skills").join(skill_name).join("events.jsonl");
     let tail = std::fs::read_to_string(&events_path)
         .unwrap_or_default()
         .lines()

@@ -220,10 +220,7 @@ impl SyncClient {
         cursor: Option<&str>,
     ) -> Result<PendingSkillDraftsResponse> {
         let url = match cursor {
-            Some(c) => format!(
-                "{}/api/v1/core/skills/pending?since={}",
-                self.base_url, c
-            ),
+            Some(c) => format!("{}/api/v1/core/skills/pending?since={}", self.base_url, c),
             None => format!("{}/api/v1/core/skills/pending", self.base_url),
         };
         self.http
@@ -576,12 +573,10 @@ mod tests {
         let mock = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/core/skills/pending"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "drafts": [{"id": "d1", "payload": "{\"name\":\"foo\"}", "origin_context": "chat"}],
-                    "next_cursor": null
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "drafts": [{"id": "d1", "payload": "{\"name\":\"foo\"}", "origin_context": "chat"}],
+                "next_cursor": null
+            })))
             .mount(&mock)
             .await;
 

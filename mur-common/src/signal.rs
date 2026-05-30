@@ -94,9 +94,7 @@ pub enum SignalTarget {
     /// Refers to an installed skill by name.
     Skill { name: String, scope: Scope },
     /// Carries a fully-formed SkillManifest as a draft proposal.
-    NewDraftSkill {
-        payload: Box<SkillManifest>,
-    },
+    NewDraftSkill { payload: Box<SkillManifest> },
 }
 
 /// What happened to the target.

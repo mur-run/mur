@@ -134,11 +134,9 @@ async fn missing_secret_ref_is_degraded_not_fatal() {
 
 #[cfg(test)]
 mod skill_fleet_tests {
-    use mur_common::skill::event_log::{append_event, read_events, SkillEvent};
-    use mur_core::cmd::fleet_sync::{
-        apply_fleet_pull, build_fleet_skill_changes, FleetManifest,
-    };
+    use mur_common::skill::event_log::{SkillEvent, append_event, read_events};
     use mur_common::sync_types::FleetEntity;
+    use mur_core::cmd::fleet_sync::{FleetManifest, apply_fleet_pull, build_fleet_skill_changes};
     use tempfile::tempdir;
 
     fn write_skill(dir: &std::path::Path, name: &str, yaml: &str) {
@@ -239,8 +237,7 @@ mod skill_fleet_tests {
         );
         write_event(dev.path(), "idem-skill", &make_retrieval("device-a"));
 
-        let changes =
-            build_fleet_skill_changes(dev.path(), &FleetManifest::default()).unwrap();
+        let changes = build_fleet_skill_changes(dev.path(), &FleetManifest::default()).unwrap();
         let ent = FleetEntity {
             logical_id: "idem-skill".into(),
             content_hash: changes[0].content_hash.clone(),
@@ -263,8 +260,7 @@ mod skill_fleet_tests {
         )
         .unwrap();
 
-        let events =
-            read_events(&dev.path().join("skills/idem-skill/events.jsonl")).unwrap();
+        let events = read_events(&dev.path().join("skills/idem-skill/events.jsonl")).unwrap();
         assert_eq!(events.len(), 1);
     }
 }

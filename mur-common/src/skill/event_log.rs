@@ -44,9 +44,9 @@ impl SkillEvent {
             Self::Retrieval { ts, device_id } => {
                 format!("{}:retrieval:{}", ts.timestamp_micros(), device_id)
             }
-            Self::Execution {
-                ts, device_id, ..
-            } => format!("{}:execution:{}", ts.timestamp_micros(), device_id),
+            Self::Execution { ts, device_id, .. } => {
+                format!("{}:execution:{}", ts.timestamp_micros(), device_id)
+            }
             Self::Dismissed { ts, device_id } => {
                 format!("{}:dismissed:{}", ts.timestamp_micros(), device_id)
             }
@@ -67,7 +67,10 @@ impl SkillEvent {
 }
 
 pub fn event_log_path(mur_home: &Path, skill_name: &str) -> PathBuf {
-    mur_home.join("skills").join(skill_name).join("events.jsonl")
+    mur_home
+        .join("skills")
+        .join(skill_name)
+        .join("events.jsonl")
 }
 
 pub fn append_event(path: &Path, event: &SkillEvent) -> Result<()> {
@@ -119,29 +122,15 @@ pub fn apply_new_events_to_stats(stats: &mut SkillStats, new_events: &[SkillEven
         match event {
             SkillEvent::Retrieval { ts, .. } => {
                 stats.usage_count += 1;
-                stats.last_used_at = Some(
-                    stats
-                        .last_used_at
-                        .map(|e| e.max(*ts))
-                        .unwrap_or(*ts),
-                );
+                stats.last_used_at = Some(stats.last_used_at.map(|e| e.max(*ts)).unwrap_or(*ts));
             }
             SkillEvent::Execution { ts, outcome, .. } => {
                 stats.usage_count += 1;
-                stats.last_used_at = Some(
-                    stats
-                        .last_used_at
-                        .map(|e| e.max(*ts))
-                        .unwrap_or(*ts),
-                );
+                stats.last_used_at = Some(stats.last_used_at.map(|e| e.max(*ts)).unwrap_or(*ts));
                 if outcome == "success" {
                     stats.success_count += 1;
-                    stats.last_success_at = Some(
-                        stats
-                            .last_success_at
-                            .map(|e| e.max(*ts))
-                            .unwrap_or(*ts),
-                    );
+                    stats.last_success_at =
+                        Some(stats.last_success_at.map(|e| e.max(*ts)).unwrap_or(*ts));
                     if stats.first_successful_use_at.is_none() {
                         stats.first_successful_use_at = Some(*ts);
                     }
@@ -164,8 +153,7 @@ mod tests {
     }
 
     fn retrieval(ts_offset_secs: i64) -> SkillEvent {
-        let base =
-            chrono::DateTime::from_timestamp(1_748_000_000 + ts_offset_secs, 0).unwrap();
+        let base = chrono::DateTime::from_timestamp(1_748_000_000 + ts_offset_secs, 0).unwrap();
         SkillEvent::Retrieval {
             ts: base,
             device_id: device(),
@@ -173,8 +161,7 @@ mod tests {
     }
 
     fn exec_ok(ts_offset_secs: i64) -> SkillEvent {
-        let base =
-            chrono::DateTime::from_timestamp(1_748_000_000 + ts_offset_secs, 0).unwrap();
+        let base = chrono::DateTime::from_timestamp(1_748_000_000 + ts_offset_secs, 0).unwrap();
         SkillEvent::Execution {
             ts: base,
             device_id: device(),
@@ -185,8 +172,7 @@ mod tests {
     }
 
     fn exec_fail(ts_offset_secs: i64) -> SkillEvent {
-        let base =
-            chrono::DateTime::from_timestamp(1_748_000_000 + ts_offset_secs, 0).unwrap();
+        let base = chrono::DateTime::from_timestamp(1_748_000_000 + ts_offset_secs, 0).unwrap();
         SkillEvent::Execution {
             ts: base,
             device_id: device(),

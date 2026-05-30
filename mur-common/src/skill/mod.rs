@@ -1,10 +1,10 @@
 //! MuR skill ecosystem — see `docs/superpowers/specs/2026-05-24-mur-skill-ecosystem-design.md`.
 
 pub mod aggregator;
-pub mod event_log;
 pub mod capability;
 pub mod constraint;
 pub mod credit;
+pub mod event_log;
 pub mod evolution;
 pub mod gene;
 pub mod hash;
@@ -30,6 +30,10 @@ pub mod version;
 pub use capability::{Capability, CapabilityViolation, allowed_for, check_capabilities};
 pub use constraint::{Constraint, ConstraintError};
 pub use credit::{CreditEntry, CreditEvidence, CreditKind};
+pub use event_log::{
+    SkillEvent, append_event, apply_new_events_to_stats, event_log_path, parse_events_jsonl,
+    read_events, union_events,
+};
 pub use evolution::EvolutionEvent;
 pub use gene::{GeneDiff, McpGene, SkillGene, StepGene, TriggerGene};
 pub use hash::{
@@ -50,10 +54,6 @@ pub use parser::{
 pub use resolve::{Resolution, resolve_step};
 pub use sign::{SKILL_PAYLOAD_TYPE, SignError, sign_manifest, verify_manifest};
 pub use stats::{LifecycleState, SkillStats};
-pub use event_log::{
-    append_event, apply_new_events_to_stats, event_log_path, parse_events_jsonl, read_events,
-    union_events, SkillEvent,
-};
 pub use store::{StoreError, agent_skill_dir, global_skill_dir, read_from_dir, write_to_dir};
 pub use types::*;
 pub use validate::{ValidationError, validate};
