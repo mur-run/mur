@@ -1,0 +1,256 @@
+//! Per-skill append-only event log (`~/.mur/skills/<name>/events.jsonl`).
+//! Each line is a JSON-serialized `SkillEvent`. Used by fleet-sync for
+//! set-union merge of evolved usage state across devices.
+
+use crate::skill::stats::SkillStats;
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SkillEvent {
+    Retrieval {
+        ts: DateTime<Utc>,
+        device_id: String,
+    },
+    Execution {
+        ts: DateTime<Utc>,
+        device_id: String,
+        /// "success" | "failure"
+        outcome: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<String>,
+    },
+    Dismissed {
+        ts: DateTime<Utc>,
+        device_id: String,
+    },
+    Superseded {
+        ts: DateTime<Utc>,
+        device_id: String,
+    },
+}
+
+impl SkillEvent {
+    /// Stable key for set-dedup: timestamp-micros + kind + device.
+    pub fn dedup_key(&self) -> String {
+        match self {
+            Self::Retrieval { ts, device_id } => {
+                format!("{}:retrieval:{}", ts.timestamp_micros(), device_id)
+            }
+            Self::Execution {
+                ts, device_id, ..
+            } => format!("{}:execution:{}", ts.timestamp_micros(), device_id),
+            Self::Dismissed { ts, device_id } => {
+                format!("{}:dismissed:{}", ts.timestamp_micros(), device_id)
+            }
+            Self::Superseded { ts, device_id } => {
+                format!("{}:superseded:{}", ts.timestamp_micros(), device_id)
+            }
+        }
+    }
+
+    pub fn ts(&self) -> DateTime<Utc> {
+        match self {
+            Self::Retrieval { ts, .. }
+            | Self::Execution { ts, .. }
+            | Self::Dismissed { ts, .. }
+            | Self::Superseded { ts, .. } => *ts,
+        }
+    }
+}
+
+pub fn event_log_path(mur_home: &Path, skill_name: &str) -> PathBuf {
+    mur_home.join("skills").join(skill_name).join("events.jsonl")
+}
+
+pub fn append_event(path: &Path, event: &SkillEvent) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let line = serde_json::to_string(event)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(f, "{line}")?;
+    Ok(())
+}
+
+pub fn read_events(path: &Path) -> Result<Vec<SkillEvent>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => parse_events_jsonl(&s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(anyhow::Error::from(e)),
+    }
+}
+
+pub fn parse_events_jsonl(raw: &str) -> Result<Vec<SkillEvent>> {
+    raw.lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| serde_json::from_str(l).map_err(anyhow::Error::from))
+        .collect()
+}
+
+/// Set-union of two event logs, deduped by `dedup_key`, sorted by timestamp.
+/// Commutative and idempotent.
+pub fn union_events(mut a: Vec<SkillEvent>, b: Vec<SkillEvent>) -> Vec<SkillEvent> {
+    let seen: HashSet<String> = a.iter().map(|e| e.dedup_key()).collect();
+    for event in b {
+        if !seen.contains(&event.dedup_key()) {
+            a.push(event);
+        }
+    }
+    a.sort_by_key(|e| e.ts());
+    a
+}
+
+/// Apply a slice of new events to an existing `SkillStats`, updating only
+/// usage counters. Lifecycle state, pinned, and anchor_confidence are
+/// preserved — they are managed by the lifecycle module, not by events.
+pub fn apply_new_events_to_stats(stats: &mut SkillStats, new_events: &[SkillEvent]) {
+    for event in new_events {
+        match event {
+            SkillEvent::Retrieval { ts, .. } => {
+                stats.usage_count += 1;
+                stats.last_used_at = Some(
+                    stats
+                        .last_used_at
+                        .map(|e| e.max(*ts))
+                        .unwrap_or(*ts),
+                );
+            }
+            SkillEvent::Execution { ts, outcome, .. } => {
+                stats.usage_count += 1;
+                stats.last_used_at = Some(
+                    stats
+                        .last_used_at
+                        .map(|e| e.max(*ts))
+                        .unwrap_or(*ts),
+                );
+                if outcome == "success" {
+                    stats.success_count += 1;
+                    stats.last_success_at = Some(
+                        stats
+                            .last_success_at
+                            .map(|e| e.max(*ts))
+                            .unwrap_or(*ts),
+                    );
+                    if stats.first_successful_use_at.is_none() {
+                        stats.first_successful_use_at = Some(*ts);
+                    }
+                } else {
+                    stats.failure_count += 1;
+                }
+            }
+            SkillEvent::Dismissed { .. } | SkillEvent::Superseded { .. } => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn device() -> String {
+        "dev-a".into()
+    }
+
+    fn retrieval(ts_offset_secs: i64) -> SkillEvent {
+        let base =
+            chrono::DateTime::from_timestamp(1_748_000_000 + ts_offset_secs, 0).unwrap();
+        SkillEvent::Retrieval {
+            ts: base,
+            device_id: device(),
+        }
+    }
+
+    fn exec_ok(ts_offset_secs: i64) -> SkillEvent {
+        let base =
+            chrono::DateTime::from_timestamp(1_748_000_000 + ts_offset_secs, 0).unwrap();
+        SkillEvent::Execution {
+            ts: base,
+            device_id: device(),
+            outcome: "success".into(),
+            error: None,
+            step: None,
+        }
+    }
+
+    fn exec_fail(ts_offset_secs: i64) -> SkillEvent {
+        let base =
+            chrono::DateTime::from_timestamp(1_748_000_000 + ts_offset_secs, 0).unwrap();
+        SkillEvent::Execution {
+            ts: base,
+            device_id: device(),
+            outcome: "failure".into(),
+            error: Some("oops".into()),
+            step: None,
+        }
+    }
+
+    #[test]
+    fn append_then_read_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        append_event(&path, &retrieval(0)).unwrap();
+        append_event(&path, &exec_ok(1)).unwrap();
+        let events = read_events(&path).unwrap();
+        assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn union_deduplicates_identical_events() {
+        let a = vec![retrieval(0), exec_ok(1)];
+        let b = vec![exec_ok(1), exec_fail(2)];
+        let merged = union_events(a, b);
+        assert_eq!(merged.len(), 3); // dedup exec_ok(1)
+    }
+
+    #[test]
+    fn union_is_commutative() {
+        let a = vec![retrieval(0), exec_ok(1)];
+        let b = vec![exec_ok(1), exec_fail(2)];
+        let ab = union_events(a.clone(), b.clone());
+        let ba = union_events(b, a);
+        let ab_keys: Vec<_> = ab.iter().map(|e| e.dedup_key()).collect();
+        let ba_keys: Vec<_> = ba.iter().map(|e| e.dedup_key()).collect();
+        assert_eq!(ab_keys, ba_keys);
+    }
+
+    #[test]
+    fn apply_new_events_updates_counters() {
+        use crate::skill::stats::SkillStats;
+        use chrono::Utc;
+        let mut stats = SkillStats::new("test-skill", "1.0.0", "digest", Utc::now());
+        let events = vec![exec_ok(1), exec_fail(2), retrieval(3)];
+        apply_new_events_to_stats(&mut stats, &events);
+        assert_eq!(stats.usage_count, 3);
+        assert_eq!(stats.success_count, 1);
+        assert_eq!(stats.failure_count, 1);
+        assert!(stats.last_success_at.is_some());
+        assert!(stats.first_successful_use_at.is_some());
+    }
+
+    #[test]
+    fn read_events_returns_empty_for_missing_file() {
+        let dir = tempdir().unwrap();
+        let events = read_events(&dir.path().join("missing.jsonl")).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn parse_events_jsonl_handles_multiline() {
+        let raw = "{\"kind\":\"retrieval\",\"ts\":\"2026-05-30T00:00:00Z\",\"device_id\":\"d\"}\n\
+                   {\"kind\":\"retrieval\",\"ts\":\"2026-05-30T00:01:00Z\",\"device_id\":\"d\"}\n";
+        let events = parse_events_jsonl(raw).unwrap();
+        assert_eq!(events.len(), 2);
+    }
+}
