@@ -81,14 +81,6 @@ pub enum SkillAction {
         #[arg(long, default_value = "4")]
         parallel: usize,
     },
-    /// Promote a Stable/Canonical pattern to a skill.
-    FromPattern {
-        /// Pattern name in ~/.mur/patterns/
-        name: String,
-        /// Optional LLM polish pass
-        #[arg(long)]
-        polish: bool,
-    },
     /// Scan recent sessions for repeat task patterns (>=3 occurrences).
     Suggest {
         /// Max sessions to scan (default 20).
