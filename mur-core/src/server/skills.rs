@@ -30,7 +30,9 @@ pub(super) async fn list_skills(
     if let Ok(entries) = std::fs::read_dir(&skills_dir) {
         for entry in entries.filter_map(Result::ok) {
             let path = entry.path();
-            if path.is_dir() && let Ok(skill) = read_from_dir(&path) {
+            if path.is_dir()
+                && let Ok(skill) = read_from_dir(&path)
+            {
                 skills.push(skill);
             }
         }
@@ -61,7 +63,12 @@ pub(super) async fn get_skill(
 
     // Count total skills for response metadata
     let count = std::fs::read_dir(&skills_dir)
-        .map(|entries| entries.filter_map(Result::ok).filter(|e| e.path().is_dir()).count())
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|e| e.path().is_dir())
+                .count()
+        })
         .unwrap_or(0);
 
     Ok(wrap(skill, count))
