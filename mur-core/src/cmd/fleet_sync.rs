@@ -17,6 +17,10 @@ pub struct FleetManifestEntry {
     pub(crate) content_hash: String,
     #[serde(default)]
     pub(crate) version: i64,
+    /// For skill entities: line-count of events.jsonl at last push.
+    /// Old manifest entries default to 0 (backward compatible).
+    #[serde(default)]
+    pub(crate) events_tail: u64,
 }
 
 pub(crate) fn load_manifest(path: &Path) -> FleetManifest {
