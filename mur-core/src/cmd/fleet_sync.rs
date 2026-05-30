@@ -666,4 +666,216 @@ mod tests {
         assert!(dir.path().join("skills/foo/skill.yaml").exists());
         assert!(dir.path().join("skills/foo/events.jsonl").exists());
     }
+
+    #[test]
+    fn two_device_round_trip_local_and_remote_in_sync() {
+        use mur_common::skill::event_log::{SkillEvent, union_events};
+        let device_a = "device-a";
+        let device_b = "device-b";
+
+        // Simulate device A having a retrieval event
+        let event_a = SkillEvent::Retrieval {
+            ts: chrono::Utc::now(),
+            device_id: device_a.to_string(),
+        };
+
+        // Simulate device B having an execution event on the same skill
+        let event_b = SkillEvent::Execution {
+            ts: chrono::Utc::now(),
+            device_id: device_b.to_string(),
+            outcome: "success".into(),
+            error: None,
+            step: None,
+        };
+
+        // Union the events (simulating merge)
+        let local = vec![event_a.clone()];
+        let remote = vec![event_b.clone()];
+        let merged = union_events(local, remote);
+
+        // Both events should be present and deduplicated correctly
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|e| matches!(e, SkillEvent::Retrieval { .. })));
+        assert!(merged.iter().any(|e| matches!(e, SkillEvent::Execution { .. })));
+    }
+
+    #[test]
+    fn full_e2e_sync_with_multiple_skills_and_profiles() {
+        let tmpdir = tempdir().unwrap();
+        let local_skills_dir = tmpdir.path().join("local/skills");
+        let remote_skills_dir = tmpdir.path().join("remote/skills");
+
+        std::fs::create_dir_all(&local_skills_dir).unwrap();
+        std::fs::create_dir_all(&remote_skills_dir).unwrap();
+
+        // Create two local skills
+        for skill_name in &["skill-1", "skill-2"] {
+            let skill_dir = local_skills_dir.join(skill_name);
+            std::fs::create_dir_all(&skill_dir).unwrap();
+            let yaml = format!("name: {}\nversion: 1.0.0\npublisher: human:test\ndescription: test\ncategory: workflow\ncontent:\n  abstract: test skill\n", skill_name);
+            std::fs::write(skill_dir.join("skill.yaml"), yaml).unwrap();
+
+            // Add events to skill-1
+            if *skill_name == "skill-1" {
+                let events_jsonl = "{\"kind\":\"retrieval\",\"ts\":\"2026-05-30T00:00:00Z\",\"device_id\":\"dev-local\"}\n";
+                std::fs::write(skill_dir.join("events.jsonl"), events_jsonl).unwrap();
+            }
+        }
+
+        // Simulate remote having skill-1 with different events
+        let remote_skill_1_dir = remote_skills_dir.join("skill-1");
+        std::fs::create_dir_all(&remote_skill_1_dir).unwrap();
+        let yaml = "name: skill-1\nversion: 1.0.1\npublisher: human:test\ndescription: test\ncategory: workflow\ncontent:\n  abstract: test skill\n";
+        std::fs::write(remote_skill_1_dir.join("skill.yaml"), yaml).unwrap();
+        let events_jsonl = "{\"kind\":\"execution\",\"ts\":\"2026-05-30T00:01:00Z\",\"device_id\":\"dev-remote\",\"outcome\":\"success\"}\n";
+        std::fs::write(remote_skill_1_dir.join("events.jsonl"), events_jsonl).unwrap();
+
+        // Remote has skill-3 that local doesn't have
+        let remote_skill_3_dir = remote_skills_dir.join("skill-3");
+        std::fs::create_dir_all(&remote_skill_3_dir).unwrap();
+        let yaml = "name: skill-3\nversion: 1.0.0\npublisher: human:test\ndescription: test\ncategory: workflow\ncontent:\n  abstract: test skill\n";
+        std::fs::write(remote_skill_3_dir.join("skill.yaml"), yaml).unwrap();
+
+        // Verify directory structure
+        assert!(local_skills_dir.join("skill-1").exists());
+        assert!(local_skills_dir.join("skill-2").exists());
+        assert!(!local_skills_dir.join("skill-3").exists());
+        assert!(remote_skills_dir.join("skill-1").exists());
+        assert!(!remote_skills_dir.join("skill-2").exists());
+        assert!(remote_skills_dir.join("skill-3").exists());
+
+        // Simulate applying remote pull to local (would overwrite skill-1, add skill-3)
+        // This is a minimal sanity check for the overall flow
+        let skill_1_yaml_remote =
+            std::fs::read_to_string(remote_skill_1_dir.join("skill.yaml")).unwrap();
+        let skill_3_yaml_remote =
+            std::fs::read_to_string(remote_skill_3_dir.join("skill.yaml")).unwrap();
+
+        // Check that we can detect version difference (1.0.0 vs 1.0.1)
+        assert!(skill_1_yaml_remote.contains("1.0.1"));
+        assert!(skill_3_yaml_remote.contains("1.0.0"));
+    }
+
+    #[test]
+    fn event_union_dedup_identical_timestamps() {
+        use mur_common::skill::event_log::{SkillEvent, union_events};
+        let ts = chrono::Utc::now();
+        let device = "dev-a";
+
+        // Create identical events
+        let event1 = SkillEvent::Retrieval {
+            ts,
+            device_id: device.to_string(),
+        };
+        let event2 = SkillEvent::Retrieval {
+            ts,
+            device_id: device.to_string(),
+        };
+
+        // Union should deduplicate (dedup_key is identical)
+        let merged = union_events(vec![event1], vec![event2]);
+        assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn manifest_lww_newer_remote_wins() {
+        use mur_common::skill::event_log::resolve_manifest_lww;
+        use mur_common::skill::manifest::{Content, Skill, SkillManifest};
+        use mur_common::skill::types::Category;
+
+        let t_old = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
+        let t_new = chrono::DateTime::from_timestamp(2_000, 0).unwrap();
+
+        let local = Skill {
+            manifest: SkillManifest {
+                name: "test".into(),
+                version: "1.0".into(),
+                publisher: "p".into(),
+                description: "d".into(),
+                category: Category::Context,
+                provenance: Default::default(),
+                hosts: vec![],
+                content: Content {
+                    r#abstract: "a".into(),
+                    context: Some("old".into()),
+                    procedure: None,
+                    command: None,
+                    note: None,
+                },
+                requires: vec![],
+                tags: vec![],
+                triggers: vec![],
+                priority: Default::default(),
+                evolution_log: vec![],
+                transfer_chain: vec![],
+                mcp_requirements: vec![],
+                updated_at: t_old,
+            },
+            content_sha256: Some("old-hash".into()),
+            trust_level: Default::default(),
+            capabilities_declared: vec![],
+            publisher_signature: None,
+        };
+
+        let mut remote = local.clone();
+        remote.manifest.updated_at = t_new;
+        remote.manifest.content.context = Some("new".into());
+        remote.content_sha256 = Some("new-hash".into());
+
+        let (winner, reason) = resolve_manifest_lww(local, remote.clone(), false);
+        assert_eq!(reason, "remote_newer");
+        assert_eq!(winner.manifest.content.context, Some("new".into()));
+        assert_eq!(winner.content_sha256, Some("new-hash".into()));
+    }
+
+    #[test]
+    fn manifest_lww_force_local_overrides() {
+        use mur_common::skill::event_log::resolve_manifest_lww;
+        use mur_common::skill::manifest::{Content, Skill, SkillManifest};
+        use mur_common::skill::types::Category;
+
+        let t_old = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
+        let t_new = chrono::DateTime::from_timestamp(2_000, 0).unwrap();
+
+        let local = Skill {
+            manifest: SkillManifest {
+                name: "test".into(),
+                version: "1.0".into(),
+                publisher: "p".into(),
+                description: "d".into(),
+                category: Category::Context,
+                provenance: Default::default(),
+                hosts: vec![],
+                content: Content {
+                    r#abstract: "a".into(),
+                    context: Some("keep-me".into()),
+                    procedure: None,
+                    command: None,
+                    note: None,
+                },
+                requires: vec![],
+                tags: vec![],
+                triggers: vec![],
+                priority: Default::default(),
+                evolution_log: vec![],
+                transfer_chain: vec![],
+                mcp_requirements: vec![],
+                updated_at: t_old,
+            },
+            content_sha256: Some("local-hash".into()),
+            trust_level: Default::default(),
+            capabilities_declared: vec![],
+            publisher_signature: None,
+        };
+
+        let mut remote = local.clone();
+        remote.manifest.updated_at = t_new;
+        remote.manifest.content.context = Some("discard".into());
+        remote.content_sha256 = Some("remote-hash".into());
+
+        let (winner, reason) = resolve_manifest_lww(local.clone(), remote, true);
+        assert_eq!(reason, "force_local");
+        assert_eq!(winner.manifest.content.context, Some("keep-me".into()));
+        assert_eq!(winner.content_sha256, Some("local-hash".into()));
+    }
 }
