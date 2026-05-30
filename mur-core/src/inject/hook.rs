@@ -369,6 +369,48 @@ pub fn format_workflow_entry(workflow: &Workflow, index: usize) -> String {
     s
 }
 
+/// Format scored skills and workflows for injection. Mirrors
+/// `format_unified_injection_with_store` but for the skill corpus.
+pub fn format_skills_for_injection(
+    skills: &[crate::retrieve::scoring::Scored<crate::retrieve::skill_candidates::LoadedSkill>],
+    workflows: &[Workflow],
+    max_tokens: usize,
+) -> String {
+    if skills.is_empty() && workflows.is_empty() {
+        return String::new();
+    }
+    let mut output = String::from("## Relevant skills from your learning history\n\n");
+    let mut token_count = output.len() / 4;
+    let mut index = 1;
+    for scored in skills {
+        let s = &scored.item.manifest;
+        let body = match &s.content.context {
+            Some(ctx) if !ctx.is_empty() => format!("{}\n\n{}", s.content.r#abstract, ctx),
+            _ => s.content.r#abstract.clone(),
+        };
+        let entry = format!("### {}. {}\n{}\n", index, s.description, body.trim());
+        let entry_tokens = entry.len() / 4;
+        if token_count + entry_tokens > max_tokens && index > 1 {
+            break;
+        }
+        output.push_str(&entry);
+        output.push('\n');
+        token_count += entry_tokens;
+        index += 1;
+    }
+    for workflow in workflows {
+        let entry = format_workflow_entry(workflow, index);
+        let entry_tokens = entry.len() / 4;
+        if token_count + entry_tokens > max_tokens && index > 1 {
+            break;
+        }
+        output.push_str(&entry);
+        token_count += entry_tokens;
+        index += 1;
+    }
+    output.trim_end().to_string()
+}
+
 /// Format both patterns and workflows for unified injection.
 #[allow(dead_code)] // Used by tests and as public API
 pub fn format_unified_injection(

@@ -272,9 +272,6 @@ pub async fn run(cli: Cli) -> Result<()> {
                 })
                 .await?
             }
-            crate::cli::SkillAction::FromPattern { name, polish } => {
-                cmd::skill_from_pattern::cmd_from_pattern(&name, polish).await?
-            }
             crate::cli::SkillAction::Suggest {
                 max_sessions,
                 threshold,

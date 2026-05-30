@@ -133,6 +133,36 @@ pub fn build(patterns: &[Pattern], project: Option<&str>) -> CapabilityIndex {
     }
 }
 
+/// Build a capability index from the skill corpus.
+pub fn build_from_skills(
+    skills: &[crate::retrieve::skill_candidates::LoadedSkill],
+    project: Option<&str>,
+) -> CapabilityIndex {
+    use mur_common::skill::stats::LifecycleState;
+    let mut entries: Vec<(f64, CapabilityEntry)> = skills
+        .iter()
+        .filter(|s| s.stats.lifecycle_state != LifecycleState::Archived)
+        .map(|s| {
+            (
+                s.stats.anchor_confidence,
+                CapabilityEntry {
+                    name: s.manifest.name.clone(),
+                    description: s.manifest.description.clone(),
+                },
+            )
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.name.cmp(&b.1.name))
+    });
+    CapabilityIndex {
+        entries: entries.into_iter().map(|(_, e)| e).collect(),
+        project: project.map(str::to_owned),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
