@@ -11,17 +11,17 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// `{ logical_id: { content_hash, version } }` keyed per entity type.
-pub(crate) type FleetManifest = BTreeMap<String, FleetManifestEntry>;
+pub type FleetManifest = BTreeMap<String, FleetManifestEntry>;
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 pub struct FleetManifestEntry {
-    pub(crate) content_hash: String,
+    pub content_hash: String,
     #[serde(default)]
-    pub(crate) version: i64,
+    pub version: i64,
     /// For skill entities: line-count of events.jsonl at last push.
     /// Old manifest entries default to 0 (backward compatible).
     #[serde(default)]
-    pub(crate) events_tail: u64,
+    pub events_tail: u64,
 }
 
 pub(crate) fn load_manifest(path: &Path) -> FleetManifest {
