@@ -11,6 +11,7 @@ use mur_common::skill::stats::{LifecycleState, SkillStats};
 use mur_common::skill::types::Priority;
 
 use super::scoring::Retrievable;
+use crate::inject::hook::{InjectedItem, KindGroup};
 
 /// A skill loaded together with its runtime stats. The retrieval pipeline
 /// scores `Vec<LoadedSkill>` through the generic `score_and_rank_inner`.
@@ -19,6 +20,34 @@ use super::scoring::Retrievable;
 pub struct LoadedSkill {
     pub manifest: SkillManifest,
     pub stats: SkillStats,
+}
+
+impl LoadedSkill {
+    /// Convert this skill into an `InjectedItem` for the injection formatting pipeline.
+    pub fn to_injected_item(&self) -> InjectedItem {
+        let content_text = self
+            .manifest
+            .content
+            .context
+            .as_deref()
+            .or(self.manifest.content.note.as_deref())
+            .or(self.manifest.content.command.as_deref())
+            .unwrap_or(&self.manifest.content.r#abstract)
+            .to_string();
+        let kind_group = match self.manifest.category {
+            mur_common::skill::types::Category::Context
+            | mur_common::skill::types::Category::Meta
+            | mur_common::skill::types::Category::Note => KindGroup::Knowledge,
+            mur_common::skill::types::Category::Workflow => KindGroup::Procedures,
+            mur_common::skill::types::Category::Command => KindGroup::Procedures,
+        };
+        InjectedItem {
+            name: self.manifest.name.clone(),
+            description: self.manifest.description.clone(),
+            content_text,
+            kind_group,
+        }
+    }
 }
 
 /// Scan `skills_dir` (typically `<mur_home>/skills/`) for skill directories
