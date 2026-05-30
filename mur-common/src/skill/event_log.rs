@@ -1,7 +1,12 @@
 //! Per-skill append-only event log (`~/.mur/skills/<name>/events.jsonl`).
 //! Each line is a JSON-serialized `SkillEvent`. Used by fleet-sync for
 //! set-union merge of evolved usage state across devices.
+//!
+//! Also provides manifest conflict resolution via Last-Writer-Wins (LWW)
+//! for fleet-sync: when two devices have divergent manifests, the one
+//! with the later `updated_at` timestamp wins.
 
+use crate::skill::manifest::Skill;
 use crate::skill::stats::SkillStats;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -143,6 +148,23 @@ pub fn apply_new_events_to_stats(stats: &mut SkillStats, new_events: &[SkillEven
     }
 }
 
+/// Resolve manifest conflict via Last-Writer-Wins (LWW).
+/// Returns the winning skill and the reason (local_wins, remote_wins, or force_local).
+pub fn resolve_manifest_lww(
+    local: Skill,
+    remote: Skill,
+    force_local: bool,
+) -> (Skill, &'static str) {
+    if force_local {
+        return (local, "force_local");
+    }
+    if remote.manifest.updated_at > local.manifest.updated_at {
+        (remote, "remote_newer")
+    } else {
+        (local, "local_newer_or_equal")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +260,97 @@ mod tests {
                    {\"kind\":\"retrieval\",\"ts\":\"2026-05-30T00:01:00Z\",\"device_id\":\"d\"}\n";
         let events = parse_events_jsonl(raw).unwrap();
         assert_eq!(events.len(), 2);
+    }
+
+    #[test]
+    fn manifest_lww_prefers_remote_when_newer() {
+        use crate::skill::manifest::{Skill, SkillManifest, Content};
+        use crate::skill::types::Category;
+        let t1 = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
+        let t2 = chrono::DateTime::from_timestamp(2_000, 0).unwrap();
+
+        let mut local = Skill {
+            manifest: SkillManifest {
+                name: "test".into(),
+                version: "1.0".into(),
+                publisher: "p".into(),
+                description: "d".into(),
+                category: Category::Context,
+                provenance: Default::default(),
+                hosts: vec![],
+                content: Content {
+                    r#abstract: "a".into(),
+                    context: Some("c".into()),
+                    procedure: None,
+                    command: None,
+                    note: None,
+                },
+                requires: vec![],
+                tags: vec![],
+                triggers: vec![],
+                priority: Default::default(),
+                evolution_log: vec![],
+                transfer_chain: vec![],
+                mcp_requirements: vec![],
+                updated_at: t1,
+            },
+            content_sha256: Some("hash".into()),
+            trust_level: Default::default(),
+            capabilities_declared: vec![],
+            publisher_signature: None,
+        };
+
+        let mut remote = local.clone();
+        remote.manifest.updated_at = t2;
+
+        let (winner, reason) = resolve_manifest_lww(local, remote, false);
+        assert_eq!(reason, "remote_newer");
+        assert_eq!(winner.manifest.updated_at, t2);
+    }
+
+    #[test]
+    fn manifest_lww_respects_force_local() {
+        use crate::skill::manifest::{Skill, SkillManifest, Content};
+        use crate::skill::types::Category;
+        let t1 = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
+        let t2 = chrono::DateTime::from_timestamp(2_000, 0).unwrap();
+
+        let local = Skill {
+            manifest: SkillManifest {
+                name: "test".into(),
+                version: "1.0".into(),
+                publisher: "p".into(),
+                description: "d".into(),
+                category: Category::Context,
+                provenance: Default::default(),
+                hosts: vec![],
+                content: Content {
+                    r#abstract: "a".into(),
+                    context: Some("c".into()),
+                    procedure: None,
+                    command: None,
+                    note: None,
+                },
+                requires: vec![],
+                tags: vec![],
+                triggers: vec![],
+                priority: Default::default(),
+                evolution_log: vec![],
+                transfer_chain: vec![],
+                mcp_requirements: vec![],
+                updated_at: t1,
+            },
+            content_sha256: Some("hash".into()),
+            trust_level: Default::default(),
+            capabilities_declared: vec![],
+            publisher_signature: None,
+        };
+
+        let mut remote = local.clone();
+        remote.manifest.updated_at = t2;
+
+        let (winner, reason) = resolve_manifest_lww(local.clone(), remote, true);
+        assert_eq!(reason, "force_local");
+        assert_eq!(winner.manifest.updated_at, t1);
     }
 }
