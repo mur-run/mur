@@ -176,6 +176,12 @@ mur
 ├── inject             Inject matching patterns into context
 ├── context            Preview what would be injected
 ├── sync               Sync skills to all AI tools + auto-reindex
+│   ├── status         Show sync status (queue depths, last fetch)
+│   └── fleet          Sync profiles + skills across devices (Pro)
+│       ├── pull       Pull from remote to local
+│       ├── push       Push from local to remote
+│       ├── both       Two-way sync (push then pull)
+│       └── [--force-local] Override local on conflict
 ├── serve              Start the web dashboard
 ├── stats              Skill library statistics
 ├── suggest            Skill suggestion & composition
@@ -310,6 +316,31 @@ mur sync
 # Auto-inject before each AI session (via shell hooks)
 mur init --hooks
 ```
+
+## Fleet Sync (Pro)
+
+Sync your skills and agent profiles across multiple devices. Fleet Sync uses event-union merge for usage statistics and Last-Writer-Wins (LWW) for manifest conflicts — so your local and remote copies stay in sync even with concurrent edits.
+
+```bash
+# Pull remote skills and profiles to local device
+mur sync fleet pull
+
+# Push local skills and profiles to remote server
+mur sync fleet push
+
+# Two-way sync (push first, then pull)
+mur sync fleet both
+
+# Override local version on conflict
+mur sync fleet pull --force-local
+```
+
+Fleet Sync:
+- **Event-union merge** — Deduplicates skill usage events (retrievals, executions, dismissals) across devices
+- **Manifest conflict resolution** — Newer manifest wins by timestamp; `--force-local` to keep local version
+- **Pro feature** — Requires an active Pro subscription for server-side fleet storage
+- **Skill corpus** — Syncs all installed skills with their event logs and metadata
+- **Agent profiles** — Syncs agent names, custom instructions, and model bindings
 
 ## Privacy & Security
 
