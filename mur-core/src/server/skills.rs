@@ -28,14 +28,10 @@ pub(super) async fn list_skills(
 
     let mut skills = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&skills_dir) {
-        for entry in entries {
-            if let Ok(en) = entry {
-                let path = en.path();
-                if path.is_dir() {
-                    if let Ok(skill) = read_from_dir(&path) {
-                        skills.push(skill);
-                    }
-                }
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() && let Ok(skill) = read_from_dir(&path) {
+                skills.push(skill);
             }
         }
     }
@@ -64,16 +60,9 @@ pub(super) async fn get_skill(
         .map_err(|_| AppError::NotFound(format!("Skill '{}' not found", name)))?;
 
     // Count total skills for response metadata
-    let mut count = 0;
-    if let Ok(entries) = std::fs::read_dir(&skills_dir) {
-        for entry in entries {
-            if let Ok(en) = entry {
-                if en.path().is_dir() {
-                    count += 1;
-                }
-            }
-        }
-    }
+    let count = std::fs::read_dir(&skills_dir)
+        .map(|entries| entries.filter_map(Result::ok).filter(|e| e.path().is_dir()).count())
+        .unwrap_or(0);
 
     Ok(wrap(skill, count))
 }
