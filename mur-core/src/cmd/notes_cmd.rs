@@ -49,6 +49,7 @@ pub fn do_create(mur_home: &Path, name: &str, description: &str, body: &str) -> 
         transfer_chain: vec![],
         mcp_requirements: vec![],
         provenance: Default::default(),
+        updated_at: chrono::Utc::now(),
     };
 
     validate(&manifest).with_context(|| format!("validate note '{name}'"))?;

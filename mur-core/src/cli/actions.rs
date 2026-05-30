@@ -314,6 +314,21 @@ pub enum PackAction {
 pub enum SyncAction {
     /// Show sync status (outbox/inbox queue depths, last fetch time)
     Status,
+    /// Sync agent profiles + skills across devices (Pro feature)
+    Fleet {
+        #[arg(value_parser = clap::builder::EnumValueParser::<FleetSyncDir>::new())]
+        direction: Option<FleetSyncDir>,
+        /// Override local version on conflict
+        #[arg(long)]
+        force_local: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum FleetSyncDir {
+    Pull,
+    Push,
+    Both,
 }
 
 #[derive(Subcommand)]

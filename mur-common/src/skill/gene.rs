@@ -265,6 +265,7 @@ mod tests {
             transfer_chain: vec![],
             mcp_requirements: vec![],
             provenance: Default::default(),
+            updated_at: chrono::Utc::now(),
         }
     }
 

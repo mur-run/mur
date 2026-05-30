@@ -3,6 +3,7 @@
 use super::evolution::EvolutionEvent;
 use super::mcp::McpRequirement;
 use super::types::{Category, ContentMode, HostId, Priority, Provenance, TriggerKind, TrustLevel};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Top-level skill — wraps the manifest with security metadata that lives
@@ -79,6 +80,12 @@ pub struct SkillManifest {
     /// `mcp_requirements` invalidates an existing publisher signature.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_requirements: Vec<McpRequirement>,
+
+    /// Timestamp of last modification (for fleet-sync LWW). Used by
+    /// `resolve_manifest_lww()` for conflict resolution. Defaults to the Unix epoch
+    /// on deserialization if absent (for backwards compat with unsigned skills).
+    #[serde(default)]
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
