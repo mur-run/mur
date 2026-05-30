@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::skill::manifest::SkillManifest;
 use crate::{Actor, Pattern, Scope};
 
 // ─── FROZEN SCHEMA — v1 ──────────────────────────────────────────────────
@@ -90,6 +91,10 @@ pub enum SignalTarget {
     /// Carries a fully-formed Pattern as a draft proposal (Channel 2/3).
     /// Boxed to keep the enum variant sizes comparable.
     NewDraftPattern { payload: Box<Pattern> },
+    /// Refers to an installed skill by name.
+    Skill { name: String, scope: Scope },
+    /// Carries a fully-formed SkillManifest as a draft proposal.
+    NewDraftSkill { payload: Box<SkillManifest> },
 }
 
 /// What happened to the target.
@@ -106,6 +111,15 @@ pub enum SignalKind {
     AutoFixApplied { step: String },
     /// Proposal to add a new pattern. (Channel 2 — chat extraction, Channel 3 — procedural)
     NewPatternProposal { origin_context: String },
+    /// Skill execution succeeded. (Channel 1)
+    SkillExecutionSuccess,
+    /// Skill execution failed. (Channel 1)
+    SkillExecutionFailure { error: String },
+    /// Proposal to add a new skill. (Channel 2 / Channel 3)
+    NewDraftSkill {
+        payload: Box<SkillManifest>,
+        origin_context: String,
+    },
 }
 
 #[cfg(test)]
@@ -311,5 +325,33 @@ scope: { kind: personal }
     #[test]
     fn schema_version_constant() {
         assert_eq!(SIGNAL_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn signal_target_skill_roundtrips() {
+        let t = SignalTarget::Skill {
+            name: "my-skill".into(),
+            scope: Scope::Personal,
+        };
+        let s = serde_json::to_string(&t).unwrap();
+        assert!(s.contains("\"kind\":\"skill\""), "got: {s}");
+        let back: SignalTarget = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, SignalTarget::Skill { .. }));
+    }
+
+    #[test]
+    fn signal_kind_new_draft_skill_roundtrips() {
+        let k = SignalKind::NewDraftSkill {
+            payload: Box::new(
+                serde_json::from_str::<SkillManifest>(
+                    r#"{"name":"x","version":"1","publisher":"human:t","description":"d","category":"context","content":{"abstract":"a"}}"#,
+                )
+                .unwrap(),
+            ),
+            origin_context: "test".into(),
+        };
+        let s = serde_json::to_string(&k).unwrap();
+        let back: SignalKind = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, SignalKind::NewDraftSkill { .. }));
     }
 }

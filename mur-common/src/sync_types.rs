@@ -72,6 +72,7 @@ pub struct WorkflowListResponse {
 pub enum FleetEntityType {
     AgentProfile,
     ModelBinding,
+    Skill,
 }
 
 impl FleetEntityType {
@@ -80,6 +81,7 @@ impl FleetEntityType {
         match self {
             Self::AgentProfile => "agent_profile",
             Self::ModelBinding => "model_binding",
+            Self::Skill => "skill",
         }
     }
 }
@@ -133,6 +135,17 @@ pub struct FleetPullResponse {
     pub version: i64,
 }
 
+/// Combined fleet payload for one skill directory.
+/// - `manifest_yaml`: raw `skill.yaml` (synced via LWW on `content_sha256`).
+/// - `events_jsonl`: raw `events.jsonl` content (set-union merge on conflict).
+/// - `content_sha256`: sha-256 of `manifest_yaml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillFleetPayload {
+    pub manifest_yaml: String,
+    pub events_jsonl: String,
+    pub content_sha256: String,
+}
+
 #[cfg(test)]
 mod fleet_tests {
     use super::*;
@@ -163,5 +176,26 @@ mod fleet_tests {
             serde_json::to_string(&FleetEntityType::ModelBinding).unwrap(),
             "\"model_binding\""
         );
+    }
+
+    #[test]
+    fn skill_entity_type_roundtrips() {
+        let s = serde_json::to_string(&FleetEntityType::Skill).unwrap();
+        assert_eq!(s, r#""skill""#);
+        let back: FleetEntityType = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, FleetEntityType::Skill);
+        assert_eq!(FleetEntityType::Skill.path_segment(), "skill");
+    }
+
+    #[test]
+    fn skill_fleet_payload_roundtrips() {
+        let p = SkillFleetPayload {
+            manifest_yaml: "name: foo\n".into(),
+            events_jsonl: "{\"kind\":\"retrieval\"}\n".into(),
+            content_sha256: "abc123".into(),
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        let back: SkillFleetPayload = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.content_sha256, "abc123");
     }
 }

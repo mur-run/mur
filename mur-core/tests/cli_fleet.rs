@@ -129,3 +129,138 @@ async fn missing_secret_ref_is_degraded_not_fatal() {
     );
     assert!(mur.join("models.yaml").exists());
 }
+
+// ── Skill fleet tests ────────────────────────────────────────────────
+
+#[cfg(test)]
+mod skill_fleet_tests {
+    use mur_common::skill::event_log::{SkillEvent, append_event, read_events};
+    use mur_common::sync_types::FleetEntity;
+    use mur_core::cmd::fleet_sync::{FleetManifest, apply_fleet_pull, build_fleet_skill_changes};
+    use tempfile::tempdir;
+
+    fn write_skill(dir: &std::path::Path, name: &str, yaml: &str) {
+        let d = dir.join("skills").join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("skill.yaml"), yaml).unwrap();
+    }
+
+    fn write_event(dir: &std::path::Path, name: &str, ev: &SkillEvent) {
+        let path = dir.join("skills").join(name).join("events.jsonl");
+        append_event(&path, ev).unwrap();
+    }
+
+    fn make_retrieval(device: &str) -> SkillEvent {
+        SkillEvent::Retrieval {
+            ts: chrono::DateTime::from_timestamp(1_748_100_000, 0).unwrap(),
+            device_id: device.into(),
+        }
+    }
+
+    #[test]
+    fn two_device_usage_histories_converge() {
+        // Device A: has skill-alpha with 1 retrieval from device-a
+        let device_a = tempdir().unwrap();
+        write_skill(
+            device_a.path(),
+            "skill-alpha",
+            "name: skill-alpha\nversion: 1.0.0\n",
+        );
+        write_event(device_a.path(), "skill-alpha", &make_retrieval("device-a"));
+
+        // Device B: has skill-alpha with 1 retrieval from device-b (different device)
+        let device_b = tempdir().unwrap();
+        write_skill(
+            device_b.path(),
+            "skill-alpha",
+            "name: skill-alpha\nversion: 1.0.0\n",
+        );
+        let ts_b = chrono::DateTime::from_timestamp(1_748_200_000, 0).unwrap();
+        write_event(
+            device_b.path(),
+            "skill-alpha",
+            &SkillEvent::Retrieval {
+                ts: ts_b,
+                device_id: "device-b".into(),
+            },
+        );
+
+        // Simulate: Device B pushes its state as a fleet entity, Device A pulls it.
+        let changes_b =
+            build_fleet_skill_changes(device_b.path(), &FleetManifest::default()).unwrap();
+        assert_eq!(changes_b.len(), 1);
+
+        let ent = FleetEntity {
+            logical_id: "skill-alpha".into(),
+            content_hash: changes_b[0].content_hash.clone(),
+            version: 1,
+            deleted: false,
+            payload: changes_b[0].payload.clone(),
+        };
+
+        // Apply device B's entity to device A.
+        apply_fleet_pull(
+            device_a.path(),
+            mur_common::sync_types::FleetEntityType::Skill,
+            &[ent],
+        )
+        .unwrap();
+
+        // Device A's events.jsonl should now have BOTH retrievals.
+        let events = read_events(&device_a.path().join("skills/skill-alpha/events.jsonl")).unwrap();
+        assert_eq!(
+            events.len(),
+            2,
+            "expected 2 events after merge, got {}",
+            events.len()
+        );
+
+        // stats.json should reflect combined usage.
+        let stats = mur_common::skill::stats::SkillStats::load(
+            &mur_common::skill::stats::SkillStats::path(device_a.path(), "skill-alpha"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            stats.usage_count, 1,
+            "only net-new event should increment (1 from B, A's own counted separately)"
+        );
+    }
+
+    #[test]
+    fn event_union_is_idempotent_on_repull() {
+        let dev = tempdir().unwrap();
+        write_skill(
+            dev.path(),
+            "idem-skill",
+            "name: idem-skill\nversion: 1.0.0\n",
+        );
+        write_event(dev.path(), "idem-skill", &make_retrieval("device-a"));
+
+        let changes = build_fleet_skill_changes(dev.path(), &FleetManifest::default()).unwrap();
+        let ent = FleetEntity {
+            logical_id: "idem-skill".into(),
+            content_hash: changes[0].content_hash.clone(),
+            version: 1,
+            deleted: false,
+            payload: changes[0].payload.clone(),
+        };
+
+        // Pull twice — should not duplicate events.
+        apply_fleet_pull(
+            dev.path(),
+            mur_common::sync_types::FleetEntityType::Skill,
+            &[ent.clone()],
+        )
+        .unwrap();
+        apply_fleet_pull(
+            dev.path(),
+            mur_common::sync_types::FleetEntityType::Skill,
+            &[ent],
+        )
+        .unwrap();
+
+        let events = read_events(&dev.path().join("skills/idem-skill/events.jsonl")).unwrap();
+        assert_eq!(events.len(), 1);
+    }
+}
