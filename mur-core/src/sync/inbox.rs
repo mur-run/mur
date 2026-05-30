@@ -15,6 +15,7 @@ use crate::store::yaml::YamlStore;
 /// Evidence updates to patterns via [`YamlStore`].
 pub struct Inbox {
     dir: PathBuf,
+    mur_home: PathBuf,
 }
 
 /// Summary of an [`Inbox::apply_all`] run.
@@ -27,10 +28,29 @@ pub struct ApplyReport {
 
 impl Inbox {
     /// Open an inbox rooted at the given directory (creates it if missing).
+    /// Derives `mur_home` as the parent of `dir` (e.g. `~/.mur/inbox` → `~/.mur`).
     pub fn new(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
-        Ok(Self { dir })
+        let mur_home = dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("inbox dir has no parent"))?
+            .to_path_buf();
+        Ok(Self { dir, mur_home })
+    }
+
+    /// Open an inbox at `dir`, using the given `mur_home` for skill resolution
+    /// (rather than deriving it from `dir.parent()`).
+    pub fn new_with_mur_home(
+        dir: impl AsRef<Path>,
+        mur_home: impl AsRef<Path>,
+    ) -> Result<Self> {
+        let dir = dir.as_ref().to_path_buf();
+        std::fs::create_dir_all(&dir)?;
+        Ok(Self {
+            dir,
+            mur_home: mur_home.as_ref().to_path_buf(),
+        })
     }
 
     /// Open the default inbox at `$HOME/.mur/inbox/`.
@@ -192,6 +212,10 @@ impl Inbox {
                         // Pattern-targeted NewPatternProposal is a shape mismatch.
                         return Ok(false);
                     }
+                    // Skill signals are handled by apply_skill_signals.
+                    SignalKind::SkillExecutionSuccess
+                    | SignalKind::SkillExecutionFailure { .. }
+                    | SignalKind::NewDraftSkill { .. } => return Ok(false),
                 }
                 store.save(&pattern)?;
                 Ok(true)
@@ -204,7 +228,107 @@ impl Inbox {
                 store.save(payload)?;
                 Ok(true)
             }
+            // Skill-targeted signals are handled by apply_skill_signals.
+            SignalTarget::Skill { .. } | SignalTarget::NewDraftSkill { .. } => Ok(false),
         }
+    }
+
+    /// Apply all skill-targeted signals in the inbox. Mutates `events.jsonl`
+    /// and `stats.json` for each target skill.
+    pub fn apply_skill_signals(&self) -> Result<ApplyReport> {
+        use mur_common::{Signal, SignalTarget};
+
+        let mut report = ApplyReport::default();
+        let mut seen = self.load_seen_ids();
+        let mut newly_seen: Vec<uuid::Uuid> = Vec::new();
+
+        for entry in std::fs::read_dir(&self.dir)? {
+            let p = entry?.path();
+            if !is_inbox_yaml(&p) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            let Ok(signal) = serde_yaml::from_str::<Signal>(&text) else {
+                report
+                    .errors
+                    .push(format!("parse error: {}", p.display()));
+                continue;
+            };
+            if seen.contains(&signal.id) {
+                let _ = std::fs::remove_file(&p);
+                report.skipped += 1;
+                continue;
+            }
+            let target_is_skill = matches!(signal.target, SignalTarget::Skill { .. });
+            if !target_is_skill {
+                continue; // handled by apply_all (pattern branch)
+            }
+            match self.apply_skill_one(&signal) {
+                Ok(true) => {
+                    report.applied += 1;
+                    newly_seen.push(signal.id);
+                    let _ = std::fs::remove_file(&p);
+                }
+                Ok(false) => {
+                    report.skipped += 1;
+                    let _ = std::fs::remove_file(&p);
+                }
+                Err(e) => {
+                    report
+                        .errors
+                        .push(format!("{}: {e}", p.display()));
+                }
+            }
+        }
+        seen.extend(newly_seen.iter().copied());
+        self.save_seen_ids(&seen)?;
+        Ok(report)
+    }
+
+    fn apply_skill_one(&self, signal: &mur_common::Signal) -> Result<bool> {
+        use mur_common::skill::event_log::{SkillEvent, append_event, event_log_path};
+        use mur_common::skill::stats::SkillStats;
+        use mur_common::{SignalKind, SignalTarget};
+
+        let SignalTarget::Skill { name, .. } = &signal.target else {
+            return Ok(false);
+        };
+        // Skill must be installed locally; skip if not.
+        let skill_dir = self.mur_home.join("skills").join(name);
+        if !skill_dir.join("skill.yaml").exists() {
+            return Ok(false);
+        }
+        let event = match &signal.kind {
+            SignalKind::SkillExecutionSuccess => SkillEvent::Execution {
+                ts: signal.emitted_at,
+                device_id: "remote".into(),
+                outcome: "success".into(),
+                error: None,
+                step: None,
+            },
+            SignalKind::SkillExecutionFailure { error } => SkillEvent::Execution {
+                ts: signal.emitted_at,
+                device_id: "remote".into(),
+                outcome: "failure".into(),
+                error: Some(error.clone()),
+                step: None,
+            },
+            _ => return Ok(false),
+        };
+        let events_path = event_log_path(&self.mur_home, name);
+        append_event(&events_path, &event)?;
+        let stats_path = SkillStats::path(&self.mur_home, name);
+        SkillStats::merge_in_place(
+            &stats_path,
+            || SkillStats::new(name, "unknown", "", chrono::Utc::now()),
+            |s| {
+                mur_common::skill::event_log::apply_new_events_to_stats(s, &[event.clone()]);
+                Ok(())
+            },
+        )?;
+        Ok(true)
     }
 }
 
@@ -525,5 +649,58 @@ mod tests {
         let p = store.get("p1").unwrap();
         // Still only 1 success signal — not incremented twice
         assert_eq!(p.evidence.success_signals, 1);
+    }
+
+    #[test]
+    fn skill_execution_signal_appends_event_and_updates_stats() {
+        use mur_common::skill::event_log::read_events;
+        use mur_common::{Actor, ActorSource, SIGNAL_SCHEMA_VERSION, Scope, SignalKind, SignalTarget};
+        use uuid::Uuid;
+
+        let dir = tempdir().unwrap();
+        // Stub skill.yaml so the skill exists
+        let skill_dir = dir.path().join("skills/test-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("skill.yaml"),
+            "name: test-skill\nversion: 1.0.0\n",
+        )
+        .unwrap();
+
+        let inbox_dir = dir.path().join("inbox");
+        let inbox = Inbox::new_with_mur_home(&inbox_dir, dir.path()).unwrap();
+
+        let signal = mur_common::Signal {
+            id: Uuid::new_v4(),
+            schema_version: SIGNAL_SCHEMA_VERSION,
+            emitted_at: chrono::Utc::now(),
+            actor: Actor {
+                source: ActorSource::CommanderDaemon,
+                native_id: "a".into(),
+                display_name: None,
+                resolved_user_id: None,
+            },
+            target: SignalTarget::Skill {
+                name: "test-skill".into(),
+                scope: Scope::Personal,
+            },
+            kind: SignalKind::SkillExecutionSuccess,
+            scope: Scope::Personal,
+            confidence: 1.0,
+        };
+        inbox.receive(&signal).unwrap();
+        let report = inbox.apply_skill_signals().unwrap();
+        assert_eq!(report.applied, 1);
+
+        let events =
+            read_events(&dir.path().join("skills/test-skill/events.jsonl")).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(
+                events[0],
+                mur_common::skill::event_log::SkillEvent::Execution { ref outcome, .. }
+                if outcome == "success"
+            )
+        );
     }
 }
