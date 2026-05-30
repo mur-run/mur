@@ -72,6 +72,21 @@ pub struct DraftsPendingResponse {
     pub next_cursor: Option<String>,
 }
 
+/// One pending skill draft from `GET /api/v1/core/skills/pending`.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SkillDraft {
+    pub id: String,
+    /// Raw SkillManifest JSON from the server.
+    pub payload: String,
+    pub origin_context: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PendingSkillDraftsResponse {
+    pub drafts: Vec<SkillDraft>,
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct RejectDraftRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,6 +211,54 @@ impl SyncClient {
             .with_context(|| format!("POST {url}"))?
             .error_for_status()
             .with_context(|| "ack non-2xx")?;
+        Ok(())
+    }
+
+    /// Fetch a page of pending skill drafts proposed by peers.
+    pub async fn fetch_pending_skill_drafts(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<PendingSkillDraftsResponse> {
+        let url = match cursor {
+            Some(c) => format!("{}/api/v1/core/skills/pending?since={}", self.base_url, c),
+            None => format!("{}/api/v1/core/skills/pending", self.base_url),
+        };
+        self.http
+            .get(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?
+            .error_for_status()
+            .with_context(|| "fetch_pending_skill_drafts non-2xx")?
+            .json()
+            .await
+            .map_err(anyhow::Error::from)
+    }
+
+    /// Acknowledge (accept) a pending skill draft by id.
+    pub async fn ack_skill_draft(&self, id: &str) -> Result<()> {
+        let url = format!("{}/api/v1/core/skills/{}/ack", self.base_url, id);
+        self.http
+            .post(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?
+            .error_for_status()
+            .with_context(|| "ack_skill_draft non-2xx")?;
+        Ok(())
+    }
+
+    /// Reject a pending skill draft by id.
+    pub async fn reject_skill_draft(&self, id: &str, reason: &str) -> Result<()> {
+        let url = format!("{}/api/v1/core/skills/{}/reject", self.base_url, id);
+        self.http
+            .post(&url)
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({ "reason": reason }))
+            .send()
+            .await?
+            .error_for_status()
+            .with_context(|| "reject_skill_draft non-2xx")?;
         Ok(())
     }
 }
@@ -503,5 +566,36 @@ mod tests {
         let err = c.reject_draft(id, None).await.unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("not found"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn fetch_pending_skill_drafts_parses_response() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/core/skills/pending"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "drafts": [{"id": "d1", "payload": "{\"name\":\"foo\"}", "origin_context": "chat"}],
+                "next_cursor": null
+            })))
+            .mount(&mock)
+            .await;
+
+        let c = SyncClient::new(mock.uri(), "tok").unwrap();
+        let r = c.fetch_pending_skill_drafts(None).await.unwrap();
+        assert_eq!(r.drafts.len(), 1);
+        assert_eq!(r.drafts[0].id, "d1");
+    }
+
+    #[tokio::test]
+    async fn ack_skill_draft_sends_post() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/core/skills/d1/ack"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+
+        let c = SyncClient::new(mock.uri(), "tok").unwrap();
+        c.ack_skill_draft("d1").await.unwrap();
     }
 }
