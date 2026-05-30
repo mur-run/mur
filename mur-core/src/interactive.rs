@@ -11,7 +11,8 @@ use dialoguer::{Confirm, Input, Select};
 use mur_common::knowledge::KnowledgeBase;
 use mur_common::pattern::*;
 
-use crate::retrieve::scoring::{ScoredPattern, score_and_rank};
+use crate::retrieve::scoring::score_and_rank_generic;
+use crate::retrieve::skill_candidates::load_skill_candidates;
 use crate::store::yaml::YamlStore;
 
 // ─── Templates ─────────────────────────────────────────────────────
@@ -37,7 +38,6 @@ impl Template {
         ]
     }
 
-    #[allow(dead_code)]
     pub fn label(&self) -> &'static str {
         match self {
             Template::Insight => "Insight      (observation or lesson)",
@@ -116,7 +116,6 @@ fn templates_dir() -> PathBuf {
 
 /// Run the guided interactive pattern creation flow.
 /// Returns the name of the created pattern, or None if cancelled.
-#[allow(dead_code)]
 pub fn interactive_new(store: &YamlStore) -> Result<Option<String>> {
     println!();
     println!("  {} Create New Pattern", style("*").cyan().bold());
@@ -276,7 +275,6 @@ pub fn interactive_new(store: &YamlStore) -> Result<Option<String>> {
 }
 
 /// Generate a kebab-case name from a description.
-#[allow(dead_code)]
 fn generate_name(description: &str) -> String {
     let stop_words = [
         "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
@@ -305,7 +303,6 @@ fn generate_name(description: &str) -> String {
 // ─── Edit preview ──────────────────────────────────────────────────
 
 /// Show a preview of a pattern before editing.
-#[allow(dead_code)]
 pub fn show_edit_preview(pattern: &Pattern) {
     let maturity_label = format!("{:?}", pattern.maturity);
     let tier_label = format!("{:?}", pattern.tier);
@@ -348,7 +345,6 @@ pub fn show_edit_preview(pattern: &Pattern) {
 }
 
 /// Show a diff between old and new pattern state.
-#[allow(dead_code)]
 pub fn show_edit_diff(old: &Pattern, new: &Pattern) {
     let mut changes = Vec::new();
 
@@ -407,128 +403,57 @@ pub fn show_edit_diff(old: &Pattern, new: &Pattern) {
 
 // ─── mur why ───────────────────────────────────────────────────────
 
-/// Explain why a pattern would be (or was) injected for a query context.
-#[allow(dead_code)]
-pub fn explain_why(pattern: &Pattern, store: &YamlStore) -> Result<()> {
+/// Explain why a skill would be (or was) injected, including its ranking
+/// against the current skill corpus.
+pub fn explain_skill_why(name: &str, mur_home: &std::path::Path) -> Result<()> {
+    use mur_common::skill::stats::SkillStats;
+
     println!();
     println!(
-        "  {} Why was this pattern injected?",
+        "  {} Why was this skill injected?",
         style("?").cyan().bold()
     );
     println!();
 
-    // Show last injection time
-    if let Some(last) = pattern.lifecycle.last_injected {
-        println!("  Last injection: {}", last.format("%Y-%m-%d %H:%M:%S UTC"));
-    } else {
-        println!("  Last injection: never injected");
-    }
-    println!();
+    let stats_path = SkillStats::path(mur_home, name);
+    let stats = SkillStats::load(&stats_path)?;
 
-    // Matching signals
-    println!("  Matching signals:");
-
-    // Trigger/tag info
-    let tag_list = pattern
-        .tags
-        .topics
-        .iter()
-        .chain(pattern.tags.languages.iter())
-        .cloned()
-        .collect::<Vec<_>>();
-
-    if !tag_list.is_empty() {
-        println!(
-            "    {} Tag match:      {}",
-            style("*").dim(),
-            tag_list.join(", ")
-        );
-    }
-
-    // Confidence
-    let conf_icon = if pattern.confidence >= 0.5 {
-        style("OK").green()
-    } else {
-        style("!!").red()
-    };
-    println!(
-        "    {} Confidence:     {:.2} (threshold: 0.50)",
-        conf_icon, pattern.confidence
-    );
-
-    // Maturity
-    let maturity_boost = match pattern.maturity {
-        mur_common::knowledge::Maturity::Stable => "1.5x boost",
-        mur_common::knowledge::Maturity::Canonical => "2.0x boost",
-        mur_common::knowledge::Maturity::Emerging => "1.0x",
-        mur_common::knowledge::Maturity::Draft => "0.8x penalty",
-    };
-    println!(
-        "    {} Maturity:       {:?} ({})",
-        style("*").dim(),
-        pattern.maturity,
-        maturity_boost
-    );
-
-    // Effectiveness
-    let eff = pattern.evidence.effectiveness();
-    println!(
-        "    {} Effectiveness:  {:.0}% ({} success / {} override)",
-        style("*").dim(),
-        eff * 100.0,
-        pattern.evidence.success_signals,
-        pattern.evidence.override_signals
-    );
-
-    // Importance
-    println!(
-        "    {} Importance:     {:.0}%",
-        style("*").dim(),
-        pattern.importance * 100.0
-    );
-
-    println!();
-
-    // Gate results
-    println!("  Gate results:");
-    let conf_ok = pattern.confidence >= 0.5;
-    let not_muted = !pattern.lifecycle.muted;
-    let not_archived = pattern.lifecycle.status != LifecycleStatus::Archived;
-    let is_active = pattern.lifecycle.status == LifecycleStatus::Active;
-
-    print_gate(
-        "Confidence gate",
-        conf_ok,
-        &format!("{:.2} >= 0.50", pattern.confidence),
-    );
-    print_gate("Not muted", not_muted, "");
-    print_gate("Not archived", not_archived, "");
-    print_gate(
-        "Active status",
-        is_active,
-        &format!("{:?}", pattern.lifecycle.status),
-    );
-
-    // Try scoring against a generic query with pattern tags
-    if !tag_list.is_empty() {
-        let query = tag_list.join(" ");
-        let all_patterns = store.list_all().unwrap_or_default();
-        let total_candidates = all_patterns.len();
-        let results: Vec<ScoredPattern> = score_and_rank(&query, all_patterns);
-
-        if let Some(pos) = results.iter().position(|sp| sp.item.name == pattern.name) {
-            println!();
-            println!(
-                "  Combined rank: #{} of {} candidates (query: \"{}\")",
-                pos + 1,
-                total_candidates,
-                query
-            );
-            println!(
-                "  Score: {:.3} | Relevance: {:.3}",
-                results[pos].score, results[pos].relevance
-            );
+    if let Some(s) = &stats {
+        if let Some(last) = s.last_used_at {
+            println!("  Last used: {}", last.format("%Y-%m-%d %H:%M:%S UTC"));
+        } else {
+            println!("  Last used: never");
         }
+        println!(
+            "  Usage: {} total ({} success / {} failure)",
+            s.usage_count, s.success_count, s.failure_count
+        );
+        println!(
+            "  Lifecycle: {:?}  Confidence: {:.2}",
+            s.lifecycle_state, s.anchor_confidence
+        );
+    } else {
+        println!("  No stats recorded yet.");
+    }
+
+    println!();
+
+    // Ranking: score skill against its own name as a query proxy
+    let skills_dir = mur_home.join("skills");
+    let candidates = load_skill_candidates(&skills_dir, mur_home).unwrap_or_default();
+    let total = candidates.len();
+    let ranked = score_and_rank_generic(name, candidates);
+    if let Some(pos) = ranked.iter().position(|s| s.item.manifest.name == name) {
+        println!(
+            "  Corpus rank: #{} of {} skills (query: \"{}\")",
+            pos + 1,
+            total,
+            name
+        );
+        println!(
+            "  Score: {:.3} | Relevance: {:.3}",
+            ranked[pos].score, ranked[pos].relevance
+        );
     }
 
     println!();
@@ -649,52 +574,19 @@ mod tests {
     }
 
     #[test]
-    fn test_explain_why_doesnt_panic() {
+    fn test_explain_skill_why_doesnt_panic() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = YamlStore::new(tmp.path().to_path_buf()).unwrap();
-
-        let pattern = Pattern {
-            base: KnowledgeBase {
-                name: "test-explain".to_string(),
-                description: "Test pattern for explain".to_string(),
-                content: Content::Plain("test content".to_string()),
-                confidence: 0.8,
-                tags: Tags {
-                    topics: vec!["rust".into()],
-                    ..Tags::default()
-                },
-                ..Default::default()
-            },
-            kind: None,
-            origin: None,
-            attachments: vec![],
-        };
-        store.save(&pattern).unwrap();
-
-        // Just verify it doesn't panic
-        explain_why(&pattern, &store).unwrap();
+        // No skills dir — should complete without panic
+        explain_skill_why("nonexistent-skill", tmp.path()).unwrap();
     }
 
     #[test]
-    fn test_explain_why_muted_pattern() {
+    fn test_explain_skill_why_with_stats() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = YamlStore::new(tmp.path().to_path_buf()).unwrap();
-
-        let mut pattern = Pattern {
-            base: KnowledgeBase {
-                name: "muted-test".to_string(),
-                description: "Muted pattern".to_string(),
-                content: Content::Plain("content".to_string()),
-                ..Default::default()
-            },
-            kind: None,
-            origin: None,
-            attachments: vec![],
-        };
-        pattern.lifecycle.muted = true;
-        store.save(&pattern).unwrap();
-
-        explain_why(&pattern, &store).unwrap();
+        let skill_dir = tmp.path().join("skills").join("test-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("skill.yaml"), "name: test-skill\nversion: 1.0.0\n").unwrap();
+        explain_skill_why("test-skill", tmp.path()).unwrap();
     }
 
     #[test]

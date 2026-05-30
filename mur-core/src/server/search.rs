@@ -7,7 +7,8 @@ use axum::extract::{Json, State};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
-use crate::retrieve::scoring::{ScoredPattern, score_and_rank};
+use crate::retrieve::scoring::score_and_rank_generic;
+use crate::retrieve::skill_candidates::load_skill_candidates;
 
 use super::{AppError, AppState, wrap};
 
@@ -37,23 +38,23 @@ pub(super) async fn search_patterns(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SearchRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let store = state.pattern_store()?;
-    let patterns = store.list_all().map_err(AppError::Internal)?;
-    let count = patterns.len();
+    let skills_dir = state.skills_dir();
+    let mur_home = skills_dir.parent().unwrap_or(&skills_dir).to_path_buf();
+    let candidates = load_skill_candidates(&skills_dir, &mur_home)
+        .map_err(AppError::Internal)?;
+    let count = candidates.len();
 
-    let scored: Vec<ScoredPattern> = score_and_rank(&req.query, patterns);
-
-    let results: Vec<SearchResult> = scored
+    let results: Vec<SearchResult> = score_and_rank_generic(&req.query, candidates)
         .into_iter()
         .take(req.limit)
-        .map(|sp| SearchResult {
-            name: sp.item.name.clone(),
-            description: sp.item.description.clone(),
-            score: sp.score,
-            relevance: sp.relevance,
-            tier: format!("{:?}", sp.item.tier).to_lowercase(),
-            maturity: format!("{:?}", sp.item.maturity).to_lowercase(),
-            confidence: sp.item.confidence,
+        .map(|s| SearchResult {
+            name: s.item.manifest.name.clone(),
+            description: s.item.manifest.description.clone(),
+            score: s.score,
+            relevance: s.relevance,
+            tier: format!("{:?}", s.item.manifest.category).to_lowercase(),
+            maturity: format!("{:?}", s.item.stats.lifecycle_state).to_lowercase(),
+            confidence: s.item.stats.anchor_confidence,
         })
         .collect();
 
