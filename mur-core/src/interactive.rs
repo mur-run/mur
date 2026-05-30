@@ -585,7 +585,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let skill_dir = tmp.path().join("skills").join("test-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(skill_dir.join("skill.yaml"), "name: test-skill\nversion: 1.0.0\n").unwrap();
+        std::fs::write(
+            skill_dir.join("skill.yaml"),
+            "name: test-skill\nversion: 1.0.0\n",
+        )
+        .unwrap();
         explain_skill_why("test-skill", tmp.path()).unwrap();
     }
 

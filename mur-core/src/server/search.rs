@@ -40,8 +40,7 @@ pub(super) async fn search_patterns(
 ) -> Result<impl IntoResponse, AppError> {
     let skills_dir = state.skills_dir();
     let mur_home = skills_dir.parent().unwrap_or(&skills_dir).to_path_buf();
-    let candidates = load_skill_candidates(&skills_dir, &mur_home)
-        .map_err(AppError::Internal)?;
+    let candidates = load_skill_candidates(&skills_dir, &mur_home).map_err(AppError::Internal)?;
     let count = candidates.len();
 
     let results: Vec<SearchResult> = score_and_rank_generic(&req.query, candidates)

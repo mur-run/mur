@@ -332,7 +332,8 @@ async fn test_search() {
          description: Use thiserror for library errors\ncategory: context\n\
          content:\n  abstract: rust error handling with anyhow and thiserror\n\
          tags:\n  - rust\n  - error\n",
-    ).unwrap();
+    )
+    .unwrap();
 
     let app = build_router(state);
 
