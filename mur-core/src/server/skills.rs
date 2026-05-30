@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::Deserialize;
 
-use mur_common::skill::{read_from_dir, write_to_dir, SkillManifest};
+use mur_common::skill::{SkillManifest, read_from_dir, write_to_dir};
 
 use super::{AppError, AppState, notify, wrap};
 
@@ -138,8 +138,7 @@ pub(super) async fn update_skill(
     }
 
     skill.updated_at = chrono::Utc::now();
-    write_to_dir(&skill_dir, &skill)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
+    write_to_dir(&skill_dir, &skill).map_err(|e| AppError::Internal(anyhow::anyhow!("{}", e)))?;
     notify(&state, "skill:updated", &name);
     Ok(wrap(skill, 1))
 }
@@ -158,9 +157,8 @@ pub(super) async fn delete_skill(
         return Err(AppError::NotFound(format!("Skill '{}' not found", name)));
     }
 
-    std::fs::remove_dir_all(&skill_dir).map_err(|_| {
-        AppError::NotFound(format!("Failed to delete skill '{}'", name))
-    })?;
+    std::fs::remove_dir_all(&skill_dir)
+        .map_err(|_| AppError::NotFound(format!("Failed to delete skill '{}'", name)))?;
 
     notify(&state, "skill:deleted", &name);
     Ok(StatusCode::NO_CONTENT)
