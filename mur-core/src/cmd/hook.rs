@@ -63,17 +63,6 @@ pub(crate) fn should_skip(query: Option<&str>) -> bool {
     evaluate_query_v2(q, &inputs).tier == GateTier::Skip
 }
 
-fn load_active_skills() -> Result<Vec<crate::retrieve::skill_candidates::LoadedSkill>> {
-    let home = dirs::home_dir().context("no home dir")?;
-    let mur_home = home.join(".mur");
-    let skills_dir = mur_home.join("skills");
-    let candidates = load_skill_candidates(&skills_dir, &mur_home)?;
-    Ok(candidates
-        .into_iter()
-        .filter(|s| !matches!(s.stats.lifecycle_state, LifecycleState::Archived))
-        .collect())
-}
-
 // ── Command handlers ──────────────────────────────────────────────────────────
 
 pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
@@ -82,6 +71,7 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
     let event = parse_event(raw.clone(), EventKind::Prompt, tool);
     let _ = enqueue(&event);
 
+    // Ensure murmurd is running; respawn silently if heartbeat is stale.
     if !crate::daemon::is_daemon_healthy() {
         crate::daemon::try_respawn_daemon();
     }
@@ -97,6 +87,7 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
         return Ok(());
     }
 
+    // Bump to L1 when query overlaps a workflow name — workflow triggers bypass L0 cap
     let effective_tier = if outcome.tier < GateTier::L1 {
         let workflow_names: Vec<String> = WorkflowYamlStore::default_store()
             .and_then(|s| s.list_all())
@@ -113,6 +104,7 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
         outcome.tier
     };
 
+    // Inbox-first path: serve pre-computed context from murmurd if fresh
     if let Some(session_id) = event.session_id.as_deref() {
         let inbox = crate::daemon::inbox_path(session_id);
         if let Some(content) = crate::daemon::read_inbox(&inbox, 300) {
@@ -121,14 +113,15 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
         }
     }
 
-    let skills = load_active_skills()?;
+    // Degraded-mode / cold-start fallback: synchronous skill retrieval
+    let mur_dir = mur_common::trust::mur_home();
+    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
-    let scored = score_and_rank_generic(&query, skills);
-    let injected_items: Vec<_> = scored
+    let scored: Vec<_> = score_and_rank_generic(&query, candidates)
         .into_iter()
-        .map(|s| s.item.to_injected_item())
+        .filter(|s| s.item.stats.lifecycle_state != LifecycleState::Archived)
         .collect();
 
     let budget = match effective_tier {
@@ -138,8 +131,8 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
         GateTier::Skip => unreachable!(),
     };
 
-    let output =
-        crate::inject::hook::format_unified_injection_items(&injected_items, &workflows, budget);
+    let output = crate::inject::hook::format_skills_for_injection(&scored, &workflows, budget);
+
     if !output.is_empty() {
         print!("{output}");
     }
@@ -150,6 +143,7 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
     done_event.session_id = event.session_id.clone();
     done_event.is_duration_record = true;
     let _ = enqueue(&done_event);
+
     Ok(())
 }
 
@@ -159,6 +153,7 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
     let event = parse_event(raw.clone(), EventKind::Tool, tool);
     let _ = enqueue(&event);
 
+    // Emit L2 only on PreToolUse for code-editing tools
     if !is_pre_tool_use(&raw) {
         return Ok(());
     }
@@ -167,16 +162,21 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
         return Ok(());
     }
 
+    // Use tool_input as the query hint (file path / bash command gives keyword signals)
     let query_owned: String = event
         .tool_input
         .as_ref()
         .and_then(|v| {
+            // Try common string keys in order of specificity
             v.get("file_path")
                 .or_else(|| v.get("path"))
                 .or_else(|| v.get("command"))
                 .and_then(|s| s.as_str())
                 .map(str::to_owned)
-                .or_else(|| serde_json::to_string(v).ok())
+                .or_else(|| {
+                    // Fall back to the whole JSON stringified (gives BM25 tokens)
+                    serde_json::to_string(v).ok()
+                })
         })
         .unwrap_or_else(|| tool_called.to_owned());
     let query = query_owned.as_str();
@@ -184,19 +184,19 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
         return Ok(());
     }
 
-    let skills = load_active_skills()?;
+    let mur_dir = mur_common::trust::mur_home();
+    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
-    let scored = score_and_rank_generic(query, skills);
-    let injected_items: Vec<_> = scored
+    let scored: Vec<_> = score_and_rank_generic(query, candidates)
         .into_iter()
-        .map(|s| s.item.to_injected_item())
+        .filter(|s| s.item.stats.lifecycle_state != LifecycleState::Archived)
         .collect();
 
     const L2_BUDGET: usize = 2000;
-    let output =
-        crate::inject::hook::format_unified_injection_items(&injected_items, &workflows, L2_BUDGET);
+    let output = crate::inject::hook::format_skills_for_injection(&scored, &workflows, L2_BUDGET);
+
     if !output.is_empty() {
         print!("{output}");
     }
@@ -207,6 +207,7 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
     done_event.session_id = event.session_id.clone();
     done_event.is_duration_record = true;
     let _ = enqueue(&done_event);
+
     Ok(())
 }
 
@@ -223,32 +224,22 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
     let event = parse_event(raw, EventKind::SessionStart, tool);
     let _ = enqueue(&event);
 
-    let skills = match load_active_skills() {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("skill load failed for session start (non-fatal): {e}");
-            return Ok(());
-        }
-    };
+    let mur_dir = mur_common::trust::mur_home();
+    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
 
-    let items: Vec<_> = skills.iter().map(|s| s.to_injected_item()).collect();
-    if items.is_empty() {
-        return Ok(());
+    let project = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
+
+    let index = crate::inject::index::build_from_skills(&candidates, project.as_deref());
+    if let Err(e) = crate::inject::index::save(&index) {
+        tracing::warn!("capability index save failed (non-fatal): {e}");
     }
 
-    let mut out = String::from("## Available skills\n\n");
-    let mut chars = out.len();
-    const L0_BUDGET_CHARS: usize = 600;
-    for item in &items {
-        let line = format!("- **{}**: {}\n", item.name, item.description);
-        if chars + line.len() > L0_BUDGET_CHARS && !out.ends_with("## Available skills\n\n") {
-            break;
-        }
-        out.push_str(&line);
-        chars += line.len();
-    }
-    if !out.ends_with("## Available skills\n\n") {
-        print!("{out}");
+    let output = crate::inject::index::format_l0(&index, crate::inject::index::L0_BUDGET_CHARS);
+
+    if !output.is_empty() {
+        print!("{output}");
     }
     Ok(())
 }
@@ -263,23 +254,29 @@ pub(crate) fn cmd_hook_stats() -> Result<()> {
     Ok(())
 }
 
+// ── Background pipeline (replaces on-stop.sh background block) ───────────────
+
 fn spawn_background_pipeline() {
     let mur_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
+
+    // sync is fast; spawn detached so parent exits < 50ms
     let _ = std::process::Command::new(&mur_bin)
         .arg("sync")
         .arg("--quiet")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+
+    // evolve + emerge are slow; spawn them sequentially-in-background via a detached child
+    // Use separate spawn() calls instead of sh -c to avoid path-with-spaces issues
     let _ = std::process::Command::new(&mur_bin)
-        .arg("skill")
         .arg("evolve")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+
     let _ = std::process::Command::new(&mur_bin)
-        .arg("skill")
-        .arg("sweep")
+        .arg("emerge")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
@@ -290,6 +287,7 @@ fn spawn_background_pipeline() {
 #[cfg(test)]
 mod workflow_trigger_tests {
     use super::*;
+
     #[test]
     fn exact_workflow_name_matches() {
         let names = vec!["deploy-production".to_owned()];
@@ -298,6 +296,7 @@ mod workflow_trigger_tests {
             &names
         ));
     }
+
     #[test]
     fn partial_workflow_name_matches() {
         let names = vec!["search-bookstore".to_owned()];
@@ -306,16 +305,20 @@ mod workflow_trigger_tests {
             &names
         ));
     }
+
     #[test]
     fn unrelated_query_does_not_match() {
         let names = vec!["deploy-production".to_owned()];
         assert!(!workflow_name_matches_query("fix the lint error", &names));
     }
+
     #[test]
     fn short_words_are_ignored() {
         let names = vec!["run-ci".to_owned()];
+        // "run" (3 chars) and "ci" (2 chars) — both < 4 chars, no match
         assert!(!workflow_name_matches_query("run ci now", &names));
     }
+
     #[test]
     fn empty_workflow_list_never_matches() {
         assert!(!workflow_name_matches_query(
@@ -329,18 +332,21 @@ mod workflow_trigger_tests {
 mod tests {
     use super::*;
     use serde_json::json;
+
     #[test]
     fn ack_query_skips() {
         assert!(should_skip(Some("ok")));
         assert!(should_skip(Some("好")));
         assert!(should_skip(Some("thanks")));
     }
+
     #[test]
     fn empty_query_skips() {
         assert!(should_skip(None));
         assert!(should_skip(Some("")));
         assert!(should_skip(Some("   ")));
     }
+
     #[test]
     fn coding_query_does_not_skip() {
         assert!(!should_skip(Some(
@@ -350,6 +356,7 @@ mod tests {
             "implement retry logic with exponential backoff"
         )));
     }
+
     #[test]
     fn extract_query_from_claude_raw() {
         let raw = json!({"prompt": "implement error retry", "session_id": "s1"});
@@ -358,6 +365,7 @@ mod tests {
             Some("implement error retry")
         );
     }
+
     #[test]
     fn extract_query_missing_returns_none() {
         let raw = json!({"tool_name": "Edit"});

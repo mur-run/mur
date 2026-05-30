@@ -51,7 +51,6 @@ pub mod skill_curate;
 pub mod skill_deps;
 pub mod skill_doctor;
 pub mod skill_evolve;
-pub mod skill_from_pattern;
 pub mod skill_generate;
 pub mod skill_install;
 pub mod skill_intent;
