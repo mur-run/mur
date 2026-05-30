@@ -18,6 +18,7 @@ pub struct CapabilityIndex {
 /// `budget_chars` is the character budget (≈ tokens × 4). Returns empty string
 /// if there are no entries. Truncates entry list when adding the next entry
 /// would exceed the budget.
+#[allow(dead_code)]
 pub fn format_l0(index: &CapabilityIndex, budget_chars: usize) -> String {
     if index.entries.is_empty() {
         return String::new();
@@ -49,9 +50,11 @@ pub fn format_l0(index: &CapabilityIndex, budget_chars: usize) -> String {
 }
 
 /// Default character budget for L0 index injection (≈ 600 tokens × 4).
+#[allow(dead_code)]
 pub const L0_BUDGET_CHARS: usize = 2400;
 
 /// Save index to an explicit path (testable with tempdir).
+#[allow(dead_code)]
 pub fn save_to(index: &CapabilityIndex, path: &std::path::Path) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -77,6 +80,7 @@ pub fn load_from(path: &std::path::Path) -> anyhow::Result<CapabilityIndex> {
 }
 
 /// Save capability index to `~/.mur/index/capabilities.json`.
+#[allow(dead_code)]
 pub fn save(index: &CapabilityIndex) -> anyhow::Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
     let path = home.join(".mur").join("index").join("capabilities.json");
@@ -91,6 +95,7 @@ pub fn load() -> anyhow::Result<CapabilityIndex> {
     load_from(&path)
 }
 
+#[allow(dead_code)]
 pub fn build(patterns: &[Pattern], project: Option<&str>) -> CapabilityIndex {
     let mut entries: Vec<(f64, CapabilityEntry)> = patterns
         .iter()

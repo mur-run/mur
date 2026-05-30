@@ -160,6 +160,7 @@ const MAX_TOKENS: usize = 2000;
 
 /// Score patterns with hybrid search (vector + keyword), no scope context.
 /// `vector_scores` maps pattern name → vector similarity (0-1).
+#[allow(dead_code)]
 pub fn score_and_rank_hybrid(
     query: &str,
     candidates: Vec<Pattern>,

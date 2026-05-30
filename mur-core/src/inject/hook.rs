@@ -26,6 +26,19 @@ use crate::capture::feedback::{InjectedPatternRecord, InjectionRecord, write_inj
 use crate::evolve::cooccurrence::CooccurrenceMatrix;
 use crate::store::yaml::YamlStore;
 
+// ── InjectedItem: decoupled injection representation (Pattern→Skill migration) ─
+
+/// Decoupled representation carrying everything the injection formatters need.
+/// Bridges `LoadedSkill` (and future Workflow items) into a single formatting
+/// pipeline so formatters don't depend on the storage type.
+#[derive(Debug, Clone)]
+pub struct InjectedItem {
+    pub name: String,
+    pub description: String,
+    pub content_text: String,
+    pub kind_group: KindGroup,
+}
+
 /// When to trigger pattern retrieval
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // Manual variant used by CLI callers
@@ -155,7 +168,7 @@ fn format_flat_injection(
 
 /// Kind category for grouping injection output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum KindGroup {
+pub enum KindGroup {
     Preferences,
     Procedures,
     Knowledge,
@@ -415,6 +428,194 @@ pub fn format_unified_injection_with_store(
 
     output.trim_end().to_string()
 }
+
+// ── Item-based formatters (Skill pathway) ────────────────────────────
+
+/// Format scored items for injection (Skill pathway).
+pub fn format_for_injection_items(items: &[InjectedItem], max_tokens: usize) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    let all_knowledge = items
+        .iter()
+        .all(|i| matches!(i.kind_group, KindGroup::Knowledge));
+    if all_knowledge {
+        return format_flat_injection_items(items, max_tokens);
+    }
+    format_grouped_injection_items(items, max_tokens)
+}
+
+fn format_flat_injection_items(items: &[InjectedItem], max_tokens: usize) -> String {
+    let mut output = String::from("## Relevant patterns from your learning history\n\n");
+    let mut token_count = output.len() / 4;
+    for (i, item) in items.iter().enumerate() {
+        let entry = format!(
+            "### {}. {}\n{}\n",
+            i + 1,
+            item.description,
+            item.content_text.trim()
+        );
+        let entry_tokens = entry.len() / 4;
+        if token_count + entry_tokens > max_tokens && i > 0 {
+            break;
+        }
+        output.push_str(&entry);
+        output.push('\n');
+        token_count += entry_tokens;
+    }
+    output.trim_end().to_string()
+}
+
+fn format_grouped_injection_items(items: &[InjectedItem], max_tokens: usize) -> String {
+    let mut output = String::from("## Relevant knowledge from your learning history\n\n");
+    let mut token_count = output.len() / 4;
+    let group_order = [
+        KindGroup::Preferences,
+        KindGroup::Procedures,
+        KindGroup::Knowledge,
+    ];
+    let mut index = 1;
+    'outer: for group in &group_order {
+        let group_items: Vec<&InjectedItem> =
+            items.iter().filter(|i| i.kind_group == *group).collect();
+        if group_items.is_empty() {
+            continue;
+        }
+        let group_header = format!("{}\n\n", group.header());
+        let mut group_buf = group_header;
+        let mut buf_tokens = group_buf.len() / 4;
+        let mut any_added = false;
+        for item in group_items {
+            let entry = match group {
+                KindGroup::Preferences => {
+                    format!("- **{}**: {}\n", item.description, item.content_text.trim())
+                }
+                KindGroup::Procedures => {
+                    format!("### {}\n{}\n", item.description, item.content_text.trim())
+                }
+                KindGroup::Knowledge => format!(
+                    "### {}. {}\n{}\n",
+                    index,
+                    item.description,
+                    item.content_text.trim()
+                ),
+            };
+            let entry_tokens = entry.len() / 4;
+            let is_global_first = index == 1 && !any_added;
+            if !is_global_first && token_count + buf_tokens + entry_tokens > max_tokens {
+                if any_added {
+                    output.push_str(&group_buf);
+                }
+                break 'outer;
+            }
+            group_buf.push_str(&entry);
+            group_buf.push('\n');
+            buf_tokens += entry_tokens;
+            index += 1;
+            any_added = true;
+        }
+        if any_added {
+            output.push_str(&group_buf);
+            token_count += buf_tokens;
+        } else {
+            break 'outer;
+        }
+    }
+    output.trim_end().to_string()
+}
+
+/// Format both items and workflows for unified injection (Skill pathway).
+pub fn format_unified_injection_items(
+    items: &[InjectedItem],
+    workflows: &[Workflow],
+    max_tokens: usize,
+) -> String {
+    if items.is_empty() && workflows.is_empty() {
+        return String::new();
+    }
+    if workflows.is_empty() {
+        return format_for_injection_items(items, max_tokens);
+    }
+    let mut output = String::from("## Relevant knowledge from your learning history\n\n");
+    let mut token_count = output.len() / 4;
+    let mut index = 1;
+    for item in items {
+        let entry = format!(
+            "### {}. {}\n{}\n",
+            index,
+            item.description,
+            item.content_text.trim()
+        );
+        let entry_tokens = entry.len() / 4;
+        if token_count + entry_tokens > max_tokens && index > 1 {
+            break;
+        }
+        output.push_str(&entry);
+        output.push('\n');
+        token_count += entry_tokens;
+        index += 1;
+    }
+    for workflow in workflows {
+        let entry = format_workflow_entry(workflow, index);
+        let entry_tokens = entry.len() / 4;
+        if token_count + entry_tokens > max_tokens && index > 1 {
+            break;
+        }
+        output.push_str(&entry);
+        token_count += entry_tokens;
+        index += 1;
+    }
+    output.trim_end().to_string()
+}
+
+/// Record injected items (Skill pathway).
+pub fn record_injection_items(query: &str, project: &str, items: &[InjectedItem]) {
+    let records: Vec<InjectedPatternRecord> = items
+        .iter()
+        .map(|item| {
+            let snippet = if item.content_text.len() > 100 {
+                format!("{}...", &item.content_text[..100])
+            } else {
+                item.content_text.clone()
+            };
+            InjectedPatternRecord {
+                name: item.name.clone(),
+                snippet,
+            }
+        })
+        .collect();
+    let record = InjectionRecord {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        query: query.to_string(),
+        project: project.to_string(),
+        patterns: records,
+    };
+    if let Err(e) = write_injection_record(&record) {
+        eprintln!("# Warning: failed to write injection record: {}", e);
+    }
+}
+
+/// Record co-occurrence for items (Skill pathway).
+pub fn record_cooccurrence_for_items(items: &[InjectedItem]) {
+    if items.len() < 2 {
+        return;
+    }
+    let path = CooccurrenceMatrix::default_path();
+    let mut matrix = match CooccurrenceMatrix::load(&path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("# Warning: failed to load cooccurrence matrix: {}", e);
+            CooccurrenceMatrix::new()
+        }
+    };
+    let names: Vec<String> = items.iter().map(|i| i.name.clone()).collect();
+    matrix.record_cooccurrence(&names);
+    if let Err(e) = matrix.save(&path) {
+        eprintln!("# Warning: failed to save cooccurrence matrix: {}", e);
+    }
+}
+
+// ── Pattern-based record functions ────────────────────────────────────
 
 /// Record which patterns were injected to `~/.mur/last_injection.json`.
 ///

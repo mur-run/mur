@@ -403,6 +403,7 @@ pub fn show_edit_diff(old: &Pattern, new: &Pattern) {
 // ─── mur why ───────────────────────────────────────────────────────
 
 /// Explain why a pattern would be (or was) injected for a query context.
+#[allow(dead_code)]
 pub fn explain_why(pattern: &Pattern, store: &YamlStore) -> Result<()> {
     println!();
     println!(
@@ -529,6 +530,7 @@ pub fn explain_why(pattern: &Pattern, store: &YamlStore) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn print_gate(name: &str, passed: bool, detail: &str) {
     let icon = if passed {
         style("OK").green()
