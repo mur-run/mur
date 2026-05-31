@@ -41,7 +41,16 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": ["app", "dmg"],
+    "fileAssociations": [
+      {
+        "ext": ["muragent"],
+        "name": "MuR Agent Package",
+        "description": "A portable MuR agent bundle",
+        "mimeType": "application/vnd.mur.agent",
+        "role": "Viewer"
+      }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
