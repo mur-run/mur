@@ -168,7 +168,7 @@ pub(crate) fn cmd_exchange_export(name: &str, dir: Option<String>) -> Result<()>
 
 pub(crate) async fn cmd_login() -> Result<()> {
     if let Some(_tokens) = crate::auth::load_tokens() {
-        println!("Already logged in. Run `mur logout` first to re-authenticate.");
+        println!("Already logged in. Run `mur auth logout` first to re-authenticate.");
         return Ok(());
     }
 

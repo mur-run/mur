@@ -1182,7 +1182,7 @@ Run `mur learn` to extract new patterns from recent sessions.
         config.community.enabled = true;
         let _ = crate::store::config::save_config(&config);
         println!("  Community sharing enabled.");
-        println!("  Run `mur login` to authenticate and start sharing patterns.");
+        println!("  Run `mur auth login` to authenticate and start sharing patterns.");
     }
 
     // ─── Step I: Device sync setup ──────────────────────────────
@@ -1209,7 +1209,7 @@ Run `mur learn` to extract new patterns from recent sessions.
             config.sync.git_remote = None;
             crate::store::config::save_config(&config)?;
             println!("  ✓ Cloud sync enabled (auto-sync on).");
-            println!("  Run `mur login` to authenticate and activate sync.");
+            println!("  Run `mur auth login` to authenticate and activate sync.");
         }
         "2" => {
             config.sync.method = "git".to_string();
@@ -1373,7 +1373,7 @@ Run `mur learn` to extract new patterns from recent sessions.
     println!("    2. Run `mur context --file` to update context for file-based tools");
     println!("    3. Run `mur search <query>` to find patterns");
     if community_enabled {
-        println!("    4. Run `mur login` to authenticate for community sharing");
+        println!("    4. Run `mur auth login` to authenticate for community sharing");
         println!("    5. Run `mur community list` to browse community patterns");
     }
     println!();

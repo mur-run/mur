@@ -9,9 +9,9 @@ content:
     action menu (analyze, export, sync, skip).
   procedure:
     steps:
-      - description: Run `mur out` and show the output to the user.
+      - description: Run `mur session out` and show the output to the user.
       - description: Present the numbered action menu and ask which one the user wants.
-      - description: Run `mur out --action <choice>` with the user's selection.
+      - description: Run `mur session out --action <choice>` with the user's selection.
 tags: [mur, recording, extraction, builtin]
 triggers:
   - type: command
