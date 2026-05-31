@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { save } from "@tauri-apps/plugin-dialog";
 import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
@@ -97,6 +98,16 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
       showToast(`Failed: ${e}`),
     );
   }
+  async function handleShare() {
+    const outPath = await save({
+      defaultPath: `${agent.name}.muragent`,
+      filters: [{ name: "MuR Agent", extensions: ["muragent"] }],
+    });
+    if (!outPath) return;
+    invoke<string>("export_muragent_file", { name: agent.name, outPath })
+      .then(() => showToast(`Exported ${agent.name}.muragent`))
+      .catch((e) => showToast(`Export failed: ${e}`));
+  }
 
   function startHold(e: React.MouseEvent) {
     if (e.button !== 0) return;
@@ -182,6 +193,12 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
             title="Stop agent runtime"
           >
             ■ Stop
+          </button>
+          <button
+            onClick={handleShare}
+            title="Export as .muragent to share"
+          >
+            ↑ Share
           </button>
         </div>
       </div>
