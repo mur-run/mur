@@ -8,7 +8,8 @@ use clap::CommandFactory;
 
 use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
-    AgentPendingAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
+    AgentPendingAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction, AgentSecretAction,
+    AgentSkillAction, AgentTrashAction,
     AgentWebhookAction, AuthAction, ChatAction, Cli, Commands, ConversationsAction, DaemonAction,
     DeployAction, DraftsAction, EvalAction, ExchangeAction, HookEvent, InternalsAction,
     MurmurdAction, ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction,
@@ -1281,6 +1282,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::Pending { name, action } => match action {
             Some(AgentPendingAction::List) | None => cmd::agent::cmd_pending_list(&name)?,
             Some(AgentPendingAction::Act { id, action_id }) => cmd::agent::cmd_pending_act(&name, &id, &action_id)?,
+        },
+        AgentAction::Trash { name, action } => match action {
+            AgentTrashAction::List => cmd::agent::cmd_trash_list(&name)?,
+            AgentTrashAction::Restore { id } => cmd::agent::cmd_trash_restore(&name, &id)?,
+            AgentTrashAction::Empty => cmd::agent::cmd_trash_empty(&name)?,
+            AgentTrashAction::Now { id } => cmd::agent::cmd_trash_now(&name, &id)?,
         },
         AgentAction::Queue { name, action } => match action {
             AgentQueueAction::List => cmd::agent::cmd_queue_list(&name)?,

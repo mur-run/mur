@@ -304,6 +304,13 @@ pub enum AgentAction {
         #[command(subcommand)]
         action: AgentQueueAction,
     },
+    /// Manage agent trash (list/restore/empty/now)
+    Trash {
+        /// Agent name
+        name: String,
+        #[command(subcommand)]
+        action: AgentTrashAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -385,6 +392,24 @@ pub enum AgentQueueAction {
     /// Retry a failed task
     Retry {
         /// Task ID (UUID)
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AgentTrashAction {
+    /// List trash contents
+    List,
+    /// Restore a file from trash
+    Restore {
+        /// Trash entry UUID
+        id: String,
+    },
+    /// Permanently empty all trash
+    Empty,
+    /// Immediately delete a specific trash item
+    Now {
+        /// Trash entry UUID
         id: String,
     },
 }
