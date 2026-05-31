@@ -292,7 +292,7 @@ pub(crate) async fn cmd_in(source: &str) -> anyhow::Result<()> {
     // Start the session
     let session = crate::session::start(source)?;
     eprintln!("Session started: {} (source: {})", &session.id[..8], source);
-    eprintln!("  Use `mur out` to stop and export, or `mur quit` to discard.");
+    eprintln!("  Use `mur session out` to stop and export, or `mur session discard` to discard.");
 
     // Inject context (equivalent to `mur context --quiet`)
     crate::cmd::context::cmd_context(
@@ -1277,7 +1277,7 @@ pub(crate) async fn cmd_session_push(id_prefix: Option<&str>, all: bool) -> Resu
     let token = match crate::auth::load_tokens() {
         Some(t) => t.access_token,
         None => {
-            eprintln!("Not authenticated. Run `mur login` first.");
+            eprintln!("Not authenticated. Run `mur auth login` first.");
             return Ok(());
         }
     };

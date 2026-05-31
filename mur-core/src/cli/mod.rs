@@ -24,7 +24,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Search patterns + sources (unified).
+    /// Search notes + sources (unified).
+    #[command(hide = true)]
     Search {
         /// Search query
         query: String,
@@ -66,6 +67,7 @@ pub enum Commands {
         action: Option<SyncAction>,
     },
     /// Inject patterns for a query (hook integration)
+    #[command(hide = true)]
     Inject {
         #[arg(long)]
         query: String,
@@ -78,11 +80,13 @@ pub enum Commands {
         event: HookEvent,
     },
     /// Manage the murmurd background daemon
+    #[command(hide = true)]
     Murmurd {
         #[command(subcommand)]
         action: MurmurdAction,
     },
     /// Run a workflow by name or semantic query
+    #[command(hide = true)]
     Run {
         /// Workflow name or search query
         query: String,
@@ -93,18 +97,13 @@ pub enum Commands {
         #[arg(long)]
         prompt: bool,
     },
-    /// Garbage collect low-quality patterns
-    Gc {
-        /// Auto-archive without prompting
-        #[arg(long)]
-        auto: bool,
-    },
     /// Manage workflows
     Workflow {
         #[command(subcommand)]
         action: WorkflowAction,
     },
     /// Rebuild index from YAML files
+    #[command(hide = true)]
     Reindex {
         /// Initialise the versioned git store and commit all existing patterns
         /// in one bootstrap commit. Run once to enable `mur pattern history`.
@@ -118,6 +117,7 @@ pub enum Commands {
         check: bool,
     },
     /// Show workflow composition & decomposition suggestions and pending nudges.
+    #[command(hide = true)]
     Suggest {
         /// Auto-create suggested workflows/patterns as drafts
         #[arg(long)]
@@ -132,6 +132,7 @@ pub enum Commands {
     /// Terminal dashboard
     Dashboard,
     /// Inject context-aware patterns (auto-detects project from pwd)
+    #[command(hide = true)]
     Context {
         /// Quiet mode — only output injected patterns, suppress evolution/stats
         #[arg(long, short)]
@@ -163,20 +164,21 @@ pub enum Commands {
         #[command(subcommand)]
         action: SessionAction,
     },
-    /// Community publish/fetch
-    Community {
-        #[command(subcommand)]
-        action: CommunityAction,
-    },
-    /// Team shared patterns
+    /// Team shared skills
     Team {
         #[command(subcommand)]
         action: TeamAction,
     },
-    /// Log in to mur community
-    Login,
-    /// Log out from mur community
-    Logout,
+    /// Authentication (login / logout)
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+    /// Background daemon and server management
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
     /// Initialize MUR directory and optionally install hooks
     Init {
         /// Install hooks for detected AI tools
@@ -187,6 +189,7 @@ pub enum Commands {
         refresh_discovery: bool,
     },
     /// Start local API server for web dashboard
+    #[command(hide = true)]
     Serve {
         /// Port to listen on
         #[arg(long, default_value = "3847")]
@@ -199,6 +202,7 @@ pub enum Commands {
         readonly: bool,
     },
     /// Import/export patterns in MKEF (MUR Knowledge Exchange Format)
+    #[command(hide = true)]
     Exchange {
         #[command(subcommand)]
         action: ExchangeAction,
@@ -229,22 +233,15 @@ pub enum Commands {
         #[arg(long)]
         all: bool,
     },
-    /// Import rules from AI tool config files (.cursorrules, CLAUDE.md, etc.)
-    Import {
-        /// Files to import (auto-detects if not specified)
-        #[arg(long)]
-        file: Option<Vec<String>>,
-        /// Preview what would be imported without saving
-        #[arg(long)]
-        dry_run: bool,
-    },
     /// Start session recording and inject context (shorthand for session start + context)
+    #[command(hide = true)]
     In {
         /// Source identifier (e.g. claude-code)
         #[arg(long, default_value = "claude-code")]
         source: String,
     },
     /// Stop session recording with post-session menu (shorthand for session stop + next action)
+    #[command(hide = true)]
     Out {
         /// Action to perform: analyze, export, skip (skips menu in non-TTY mode)
         #[arg(long)]
@@ -266,13 +263,16 @@ pub enum Commands {
         dry_run: bool,
     },
     /// List / show / accept / reject pending pattern drafts (Channel 2/3 proposals).
+    #[command(hide = true)]
     Drafts {
         #[command(subcommand)]
         action: DraftsAction,
     },
     /// Stop recording without export (alias: quit)
+    #[command(hide = true)]
     Exit,
     /// Stop recording without export (alias: exit)
+    #[command(hide = true)]
     Quit,
     /// Manage Docker Compose deployment
     Deploy {
@@ -285,11 +285,13 @@ pub enum Commands {
         action: ChatAction,
     },
     /// Conversations archive management (pull / cleanup / reindex / doctor / preflight / migrate / rollback)
+    #[command(hide = true)]
     Conversations {
         #[command(subcommand)]
         action: ConversationsAction,
     },
     /// Ask a natural-language question about your conversation archive (Mode C).
+    #[command(hide = true)]
     Ask {
         /// Question to ask. Required unless --show-session is passed.
         question: Option<String>,
@@ -350,11 +352,13 @@ pub enum Commands {
         action: InternalsAction,
     },
     /// Run an eval suite against the local pattern store
+    #[command(hide = true)]
     Eval {
         #[command(subcommand)]
         action: EvalAction,
     },
     /// Configure the daemon sleep cycle (idle background learning).
+    #[command(hide = true)]
     Sleep {
         #[command(subcommand)]
         action: SleepAction,

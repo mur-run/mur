@@ -52,7 +52,7 @@ curl -fsSL https://mur.run/install.sh | sh
 mur init
 
 # Search your skill library
-mur search "testing patterns"
+mur notes search "testing patterns"
 
 # Sync to all your AI tools (Claude Code, Gemini CLI, Cursor, etc.)
 mur sync
@@ -123,7 +123,7 @@ MUR includes a built-in web dashboard for visual management:
 
 ```bash
 # Start the dashboard
-mur serve
+mur daemon serve
 
 # Opens at http://localhost:3847
 ```
@@ -159,7 +159,7 @@ mur workflow search "deploy process"
 mur workflow show "deploy-staging" --md
 
 # Run a workflow (outputs executable prompt for AI)
-mur run "deploy"
+mur workflow run "deploy"
 ```
 
 Workflows support:
@@ -218,14 +218,14 @@ Find patterns by meaning, not just keywords:
 ```bash
 # With Ollama (free, local — recommended)
 ollama pull qwen3-embedding:0.6b
-mur reindex
+mur internals reindex
 
 # With OpenAI
 export OPENAI_API_KEY=sk-...
-mur reindex
+mur internals reindex
 
 # Search naturally
-mur search "how to handle authentication errors"
+mur notes search "how to handle authentication errors"
 # → error-handling-auth (0.84)
 # → retry-with-backoff  (0.71)
 ```
@@ -280,15 +280,15 @@ Run `mur init` for an interactive setup wizard.
 
 ### Ask Configuration
 
-The `ask` section controls behavior of `mur ask` queries:
+The `ask` section controls behavior of `mur chat ask` queries:
 
-- **`summarize_hits_enabled`** (default `true`) — When context is tight, `mur ask` runs an overflow cascade that compresses the longest hits using an abstractive summarization stage. This trades accuracy for context efficiency. Results cache per-hit at `~/.mur/conversations/cache/abstractive/` to amortize LLM cost. Summarization has a hardcoded 5s per-hit timeout and soft-fails silently on error. Set to `false` to restore pre-3.5 behavior (drop history first).
+- **`summarize_hits_enabled`** (default `true`) — When context is tight, `mur chat ask` runs an overflow cascade that compresses the longest hits using an abstractive summarization stage. This trades accuracy for context efficiency. Results cache per-hit at `~/.mur/conversations/cache/abstractive/` to amortize LLM cost. Summarization has a hardcoded 5s per-hit timeout and soft-fails silently on error. Set to `false` to restore pre-3.5 behavior (drop history first).
 
 - **`summarize_model`** (default `null`) — Override the LLM model used for Stage 1b summarization. When `null`, falls back to `ask.model`. Pair with a faster model like `qwen3:4b` to trade summarization accuracy for speed on tight-budget queries.
 
 #### CLI overrides (per-invocation)
 
-Override the `summarize_*` config keys for a single `mur ask` invocation without editing `~/.mur/config.yaml`:
+Override the `summarize_*` config keys for a single `mur chat ask` invocation without editing `~/.mur/config.yaml`:
 
 - **`--no-summarize`** — Disable Stage 1b for this invocation. Overrides `ask.summarize_hits_enabled`. Useful for demos, benchmarks, or scripted comparisons.
 
