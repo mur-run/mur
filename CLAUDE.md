@@ -103,16 +103,18 @@ For detailed agent / companion / GUI export / runtime internals, read `docs/arch
 
 ## Release Process
 
-After tagging a new release:
-
-1. Bump workspace version FIRST in a release-prep PR so `workspace.version` matches the tag.
+1. **Bump `Cargo.toml` workspace version FIRST** so `mur --version` matches the tag.
+   The CI now validates this: pushing a tag whose version doesn't match `Cargo.toml` fails
+   immediately at the `validate-version` job. Example:
+   ```bash
+   # Bump version before tagging:
+   sed -i 's/^version = ".*"/version = "X.Y.Z"/' Cargo.toml
+   git add Cargo.toml && git commit -m "chore(release): bump workspace version to X.Y.Z"
+   ```
 2. `git tag -a v<VERSION> -m "message" && git push origin main --tags`
-3. Update Homebrew tap formula (`mur-run/homebrew-tap`):
-   - `curl -sL https://github.com/mur-run/mur/archive/refs/tags/v<VERSION>.tar.gz | shasum -a 256`
-   - Edit `Formula/mur.rb`: update `url` (new tag) and `sha256`. Commit, push.
+3. Release workflow (`release.yml`) handles the rest automatically: cross-platform build,
+   GitHub Release, Homebrew formula update, installer deployment, crates.io publish.
 4. Verify: `brew update && brew upgrade mur`
-
-Pushing a git tag does NOT auto-update Homebrew.
 
 ## Documentation Checklist
 
