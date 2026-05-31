@@ -269,7 +269,7 @@ mod tests {
         let t1 = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
         let t2 = chrono::DateTime::from_timestamp(2_000, 0).unwrap();
 
-        let mut local = Skill {
+        let local = Skill {
             manifest: SkillManifest {
                 name: "test".into(),
                 version: "1.0".into(),
