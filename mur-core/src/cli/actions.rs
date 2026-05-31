@@ -744,10 +744,26 @@ pub enum ProjectAction {
     Index {
         #[arg(long)]
         path: Option<String>,
+        /// Force full rebuild ignoring mtime cache
         #[arg(long)]
         rebuild: bool,
+        /// Less output
         #[arg(long)]
         quiet: bool,
+        /// Run indexing in background (default: auto-detect based on chunk count)
+        #[arg(long, conflicts_with = "foreground")]
+        background: bool,
+        /// Force foreground execution even for large projects
+        #[arg(long, conflicts_with = "background")]
+        foreground: bool,
+    },
+    /// Internal: spawned by `project index --background`. Not shown in help.
+    #[command(hide = true)]
+    IndexWorker {
+        project_name: String,
+        project_path: String,
+        #[arg(long)]
+        rebuild: bool,
     },
     /// Search indexed code for a query
     Search {

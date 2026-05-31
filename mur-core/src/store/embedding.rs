@@ -80,12 +80,8 @@ pub async fn embed_batch(texts: &[String], config: &EmbeddingConfig) -> Result<V
         EmbeddingProvider::Ollama { base_url } => {
             embed_ollama_batch(texts, base_url, &config.model).await
         }
-        EmbeddingProvider::OpenAI { .. } => {
-            let mut results = Vec::with_capacity(texts.len());
-            for text in texts {
-                results.push(embed(text, config).await?);
-            }
-            Ok(results)
+        EmbeddingProvider::OpenAI { api_key, base_url } => {
+            embed_openai_batch(texts, base_url, api_key, &config.model).await
         }
     }
 }
@@ -159,7 +155,7 @@ async fn embed_ollama_batch(
 #[derive(Serialize)]
 struct OpenAIEmbedRequest {
     model: String,
-    input: String,
+    input: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -180,7 +176,7 @@ async fn embed_openai(text: &str, base_url: &str, api_key: &str, model: &str) ->
         .header("Authorization", format!("Bearer {}", api_key))
         .json(&OpenAIEmbedRequest {
             model: model.into(),
-            input: text.into(),
+            input: vec![text.to_string()],
         })
         .send()
         .await
@@ -198,6 +194,46 @@ async fn embed_openai(text: &str, base_url: &str, api_key: &str, model: &str) ->
         .next()
         .map(|d| d.embedding)
         .context("no embedding returned")
+}
+
+async fn embed_openai_batch(
+    texts: &[String],
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<Vec<Vec<f32>>> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let client = reqwest::Client::new();
+    let url = format!("{}/embeddings", base_url.trim_end_matches('/'));
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&OpenAIEmbedRequest {
+            model: model.into(),
+            input: texts.to_vec(),
+        })
+        .send()
+        .await
+        .with_context(|| format!("calling embed API at {}", url))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Embed API error {} at {}: {}", status, url, body);
+    }
+
+    let data: OpenAIEmbedResponse = resp.json().await.context("parsing embed response")?;
+    let embeddings: Vec<Vec<f32>> = data.data.into_iter().map(|d| d.embedding).collect();
+    if embeddings.len() != texts.len() {
+        anyhow::bail!(
+            "Embed API returned {} embeddings but {} were requested",
+            embeddings.len(),
+            texts.len()
+        );
+    }
+    Ok(embeddings)
 }
 
 #[cfg(test)]
