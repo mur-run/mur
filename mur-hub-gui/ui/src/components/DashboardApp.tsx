@@ -343,6 +343,7 @@ export function DashboardApp() {
     }).catch(() => {});
   }, []);
 
+
   // ⌘K focus search.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
