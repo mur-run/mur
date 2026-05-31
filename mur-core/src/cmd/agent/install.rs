@@ -16,7 +16,7 @@ use mur_common::trust;
 
 use super::resolve_mur_home;
 
-pub fn cmd_install(path: &Path) -> Result<()> {
+pub fn cmd_install(path: &Path, model_ref_override: Option<&str>) -> Result<()> {
     let archive = MuragentArchive::read(path)
         .with_context(|| format!("read .muragent file at {}", path.display()))?;
     let mur_home = resolve_mur_home()?;
@@ -36,7 +36,11 @@ pub fn cmd_install(path: &Path) -> Result<()> {
     println!("  fingerprint: {}", outcome.fingerprint_hex);
     println!("  words:       {}", outcome.fingerprint_words);
 
-    maybe_resolve_model(&mur_home, &outcome.manifest.agent.slug, &archive)?;
+    if let Some(model_ref) = model_ref_override {
+        apply_model_ref_override(&mur_home, &outcome.manifest.agent.slug, model_ref)?;
+    } else {
+        maybe_resolve_model(&mur_home, &outcome.manifest.agent.slug, &archive)?;
+    }
     Ok(())
 }
 
@@ -123,7 +127,7 @@ pub fn cmd_inspect(path: &Path) -> Result<()> {
 
 fn maybe_resolve_model(mur_home: &Path, slug: &str, archive: &MuragentArchive) -> Result<()> {
     use crate::cmd::agent::model_resolve::{apply_model_choice, detect_hardware};
-    use mur_common::model_resolve::{Recommendation, recommend};
+    use mur_common::model_resolve::recommend;
 
     let manifest_yaml = archive
         .get_str("manifest.yaml")
@@ -135,13 +139,8 @@ fn maybe_resolve_model(mur_home: &Path, slug: &str, archive: &MuragentArchive) -
 
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         println!(
-            "  model: {} — set one with `mur model add` then run the agent with --model <ref>",
-            match rec {
-                Recommendation::Local => "local recommended (Ollama/MLX)",
-                Recommendation::Cloud => "cloud model recommended",
-                Recommendation::CloudOrSmallerLocal => "cloud or a smaller local model",
-                Recommendation::NeutralMenu => "choose a backend",
-            }
+            "  model: not configured — use `mur agent install --model <ref>` \
+             or run `mur model add` then `mur agent start {slug}`"
         );
         return Ok(());
     }
@@ -160,6 +159,31 @@ fn maybe_resolve_model(mur_home: &Path, slug: &str, archive: &MuragentArchive) -
     } else {
         println!("  skipped — set one later with `mur model add`");
     }
+    Ok(())
+}
+
+/// Apply a `--model <ref>` override: verify the ref exists in the registry
+/// and point the agent at it. Used by `--model` flag (non-interactive path).
+fn apply_model_ref_override(mur_home: &Path, slug: &str, model_ref: &str) -> Result<()> {
+    use crate::cmd::agent::model_resolve::ModelChoice;
+    use mur_common::model::ModelRegistry;
+
+    let reg_path = ModelRegistry::default_path()?;
+    let reg = ModelRegistry::load_from(&reg_path)?;
+    anyhow::ensure!(
+        reg.models.contains_key(model_ref),
+        "model ref '{model_ref}' not found in ~/.mur/models.yaml — \
+         run `mur model add` to register it first"
+    );
+    let entry = &reg.models[model_ref];
+    let choice = ModelChoice {
+        provider: entry.provider.clone(),
+        model: entry.model.clone(),
+        base_url: entry.base_url.clone(),
+        secret: entry.secret.as_ref().map(|s| s.to_string()),
+    };
+    let key = crate::cmd::agent::model_resolve::apply_model_choice(mur_home, slug, &choice)?;
+    println!("  model_ref = {key}");
     Ok(())
 }
 
@@ -221,4 +245,54 @@ fn read_field(prompt: &str) -> Result<String> {
     let mut s = String::new();
     std::io::stdin().read_line(&mut s)?;
     Ok(s.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maybe_resolve_with_model_ref_applies_without_prompt() {
+        use tempfile::TempDir;
+        use mur_common::model::{ModelEntry, ModelRegistry};
+
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path();
+
+        // Create agent dir with a default profile
+        let agent_home = mur_home.join("agents").join("demo");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let p = mur_common::agent::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent_home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+
+        // Pre-populate the registry so the ref resolves
+        unsafe { std::env::set_var("MUR_HOME", mur_home); }
+        let reg_path = ModelRegistry::default_path().unwrap();
+        let mut reg = ModelRegistry::load_from(&reg_path).unwrap_or_default();
+        reg.models.insert(
+            "ollama_llama3_2_3b".to_string(),
+            ModelEntry {
+                provider: "ollama".into(),
+                model: "llama3.2:3b".into(),
+                base_url: None,
+                secret: None,
+                capabilities: vec![],
+                params: serde_json::Value::Null,
+            },
+        );
+        reg.save_to(&reg_path).unwrap();
+
+        // Call the new apply_model_ref_override helper
+        apply_model_ref_override(mur_home, "demo", "ollama_llama3_2_3b").unwrap();
+
+        let profile: mur_common::agent::AgentProfile = serde_yaml_ng::from_str(
+            &std::fs::read_to_string(agent_home.join("profile.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(profile.model_ref.as_deref(), Some("ollama_llama3_2_3b"));
+    }
 }

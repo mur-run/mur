@@ -931,7 +931,9 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         } => {
             cmd::agent::cmd_export(&name, &out, &format)?;
         }
-        AgentAction::Install { path } => cmd::agent::cmd_install(std::path::Path::new(&path))?,
+        AgentAction::Install { path, model } => {
+            cmd::agent::cmd_install(std::path::Path::new(&path), model.as_deref())?
+        }
         AgentAction::Uninstall { name, purge } => cmd::agent::cmd_uninstall(&name, purge)?,
         AgentAction::Inspect { path } => cmd::agent::cmd_inspect(std::path::Path::new(&path))?,
         AgentAction::Stats { name } => cmd::agent::cmd_stats(&name)?,
