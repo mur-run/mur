@@ -110,7 +110,11 @@ fn muragent_install_with_model_flag_binds_profile() {
     assert_ok(&install, "install --model");
 
     // ── The installed agent's profile is bound to the ref, no prompt needed ──
-    let profile_path = dst_home.path().join("agents").join("demo").join("profile.yaml");
+    let profile_path = dst_home
+        .path()
+        .join("agents")
+        .join("demo")
+        .join("profile.yaml");
     assert!(
         profile_path.exists(),
         "installed profile should exist at {}",
