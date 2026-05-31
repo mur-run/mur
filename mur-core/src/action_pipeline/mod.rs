@@ -8,6 +8,7 @@ pub mod queue;
 pub use error::PipelineError;
 pub use ingest::PendingStore;
 pub use ledger::ActionLedger;
+pub use queue::TaskQueue;
 
 use mur_common::action::ActionPipelineConfig;
 use std::path::PathBuf;
