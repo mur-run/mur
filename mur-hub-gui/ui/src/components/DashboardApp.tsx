@@ -279,6 +279,7 @@ export function DashboardApp() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
+  const [muragentImportPath, setMuragentImportPath] = useState<string | undefined>(undefined);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Build a lookup map for runtime statuses.
@@ -296,6 +297,17 @@ export function DashboardApp() {
     });
     return () => {
       unSelect.then((fn) => fn());
+    };
+  }, []);
+
+  // Listen for .muragent file open events from OS file association / deep-link
+  useEffect(() => {
+    const unlisten = listen<string>("open-muragent-file", (e) => {
+      setMuragentImportPath(e.payload);
+      setMuragentImportOpen(true);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
     };
   }, []);
 
@@ -447,8 +459,10 @@ export function DashboardApp() {
       />
       <MuragentImportModal
         isOpen={muragentImportOpen}
+        initialPath={muragentImportPath}
         onClose={() => {
           setMuragentImportOpen(false);
+          setMuragentImportPath(undefined);
           invoke("list_agents").catch(() => {});
         }}
       />

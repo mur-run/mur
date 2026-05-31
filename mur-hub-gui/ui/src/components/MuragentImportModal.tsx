@@ -16,6 +16,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 interface Props {
   isOpen: boolean;
   onClose: () => void;
+  initialPath?: string;
 }
 
 interface McpServerView {
@@ -87,7 +88,7 @@ interface ModelChoice {
 
 const FIRST_TIME_AUTHOR_DELAY_MS = 5_000;
 
-export function MuragentImportModal({ isOpen, onClose }: Props) {
+export function MuragentImportModal({ isOpen, onClose, initialPath }: Props) {
   const [path, setPath] = useState<string | null>(null);
   const [inspection, setInspection] = useState<MuragentInspection | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -114,6 +115,24 @@ export function MuragentImportModal({ isOpen, onClose }: Props) {
       setDelayRemaining(-1);
     }
   }, [isOpen]);
+
+  // Auto-inspect when a file path is provided via initialPath (e.g. from OS file open)
+  useEffect(() => {
+    if (!isOpen || !initialPath) return;
+    setPath(initialPath);
+    setError(null);
+    setReceipt(null);
+    invoke<MuragentInspection>("inspect_muragent_file", { path: initialPath })
+      .then((result) => {
+        setInspection(result);
+        if (result.signature_valid && result.trust_status.kind === "first_time_author") {
+          setDelayRemaining(FIRST_TIME_AUTHOR_DELAY_MS);
+        } else {
+          setDelayRemaining(0);
+        }
+      })
+      .catch((e) => setError(String(e)));
+  }, [isOpen, initialPath]);
 
   // 5-second delay tick for first-time-author imports (§7.2 rule 4)
   useEffect(() => {
