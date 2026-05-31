@@ -253,8 +253,8 @@ mod tests {
 
     #[test]
     fn maybe_resolve_with_model_ref_applies_without_prompt() {
-        use tempfile::TempDir;
         use mur_common::model::{ModelEntry, ModelRegistry};
+        use tempfile::TempDir;
 
         let tmp = TempDir::new().unwrap();
         let mur_home = tmp.path();
@@ -270,7 +270,9 @@ mod tests {
         .unwrap();
 
         // Pre-populate the registry so the ref resolves
-        unsafe { std::env::set_var("MUR_HOME", mur_home); }
+        unsafe {
+            std::env::set_var("MUR_HOME", mur_home);
+        }
         let reg_path = ModelRegistry::default_path().unwrap();
         let mut reg = ModelRegistry::load_from(&reg_path).unwrap_or_default();
         reg.models.insert(
