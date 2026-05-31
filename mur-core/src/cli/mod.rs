@@ -93,12 +93,6 @@ pub enum Commands {
         #[arg(long)]
         prompt: bool,
     },
-    /// Garbage collect low-quality patterns
-    Gc {
-        /// Auto-archive without prompting
-        #[arg(long)]
-        auto: bool,
-    },
     /// Manage workflows
     Workflow {
         #[command(subcommand)]
@@ -163,11 +157,6 @@ pub enum Commands {
         #[command(subcommand)]
         action: SessionAction,
     },
-    /// Community publish/fetch
-    Community {
-        #[command(subcommand)]
-        action: CommunityAction,
-    },
     /// Team shared patterns
     Team {
         #[command(subcommand)]
@@ -228,15 +217,6 @@ pub enum Commands {
         /// Show all claims (including valid and skipped)
         #[arg(long)]
         all: bool,
-    },
-    /// Import rules from AI tool config files (.cursorrules, CLAUDE.md, etc.)
-    Import {
-        /// Files to import (auto-detects if not specified)
-        #[arg(long)]
-        file: Option<Vec<String>>,
-        /// Preview what would be imported without saving
-        #[arg(long)]
-        dry_run: bool,
     },
     /// Start session recording and inject context (shorthand for session start + context)
     In {

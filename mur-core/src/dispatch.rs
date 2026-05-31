@@ -9,10 +9,10 @@ use clap::CommandFactory;
 use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
     AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
-    AgentWebhookAction, ChatAction, Cli, Commands, CommunityAction, ConversationsAction,
-    DeployAction, DraftsAction, EvalAction, ExchangeAction, HookEvent, InternalsAction,
-    MurmurdAction, PackAction, ProjectAction, ScheduleAction, SessionAction, SleepAction,
-    SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    AgentWebhookAction, ChatAction, Cli, Commands, ConversationsAction, DeployAction,
+    DraftsAction, EvalAction, ExchangeAction, HookEvent, InternalsAction, MurmurdAction,
+    ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction,
+    VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -54,7 +54,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Stats => cmd::misc::cmd_stats()?,
         Commands::Doctor => cmd::misc::cmd_doctor()?,
-        Commands::Gc { auto } => cmd::misc::cmd_gc(auto)?,
 
         Commands::Sync {
             quiet,
@@ -186,50 +185,27 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Dashboard => {
             dashboard::render_dashboard()?;
         }
-        Commands::Community { action } => match action {
-            CommunityAction::Publish { name } => {
-                cmd::community_cmd::cmd_community_publish(&name).await?
-            }
-            CommunityAction::Fetch { id } => cmd::community_cmd::cmd_community_fetch(&id).await?,
-            CommunityAction::Search { query } => {
-                cmd::community_cmd::cmd_community_search(&query).await?
-            }
-            CommunityAction::List { sort } => cmd::community_cmd::cmd_community_list(&sort).await?,
-            CommunityAction::Star { id } => cmd::community_cmd::cmd_community_star(&id).await?,
-            CommunityAction::Report {
-                name,
-                effectiveness,
-                sessions,
-            } => cmd::community_cmd::cmd_community_report(&name, effectiveness, sessions).await?,
-            CommunityAction::Packs => cmd::community_cmd::cmd_community_packs().await?,
-            CommunityAction::Pack { action } => match action {
-                PackAction::Install { id } => {
-                    cmd::community_cmd::cmd_community_pack_install(&id).await?
-                }
-                PackAction::Show { id } => cmd::community_cmd::cmd_community_pack_show(&id).await?,
-            },
-        },
         Commands::Team { action } => match action {
             TeamAction::List { team } => match team {
                 Some(t) => {
                     let client = reqwest::Client::new();
                     let team_id = team::resolve_team_id(&client, &t).await?;
-                    cmd::community_cmd::cmd_team_list(&team_id).await?
+                    cmd::team_cmd::cmd_team_list(&team_id).await?
                 }
-                None => cmd::community_cmd::cmd_team_list_mine().await?,
+                None => cmd::team_cmd::cmd_team_list_mine().await?,
             },
-            TeamAction::Use { team } => cmd::community_cmd::cmd_team_use(&team).await?,
+            TeamAction::Use { team } => cmd::team_cmd::cmd_team_use(&team).await?,
             TeamAction::Share { name, team } => {
                 let slug = resolve_team_arg(team)?;
                 let client = reqwest::Client::new();
                 let team_id = team::resolve_team_id(&client, &slug).await?;
-                cmd::community_cmd::cmd_team_share(&name, &team_id).await?
+                cmd::team_cmd::cmd_team_share(&name, &team_id).await?
             }
             TeamAction::Sync { team } => {
                 let slug = resolve_team_arg(team)?;
                 let client = reqwest::Client::new();
                 let team_id = team::resolve_team_id(&client, &slug).await?;
-                cmd::community_cmd::cmd_team_sync(&team_id).await?
+                cmd::team_cmd::cmd_team_sync(&team_id).await?
             }
         },
         Commands::Login => cmd::misc::cmd_login().await?,
@@ -573,14 +549,6 @@ pub async fn run(cli: Cli) -> Result<()> {
             let known = verify::collect_commands_from_clap(&clap_cmd);
             verify::set_known_commands(known);
             cmd::verify::cmd_verify(file.as_deref(), all)?
-        }
-        Commands::Import {
-            file: _,
-            dry_run: _,
-        } => {
-            eprintln!(
-                "# `mur import` has been removed. Use `mur notes ingest <file>` once notes are available."
-            );
         }
         Commands::In { source } => cmd::session::cmd_in(&source).await?,
         Commands::Out { action, force } => cmd::session::cmd_out(action.as_deref(), force).await?,

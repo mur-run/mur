@@ -130,12 +130,6 @@ pub(crate) fn cmd_doctor() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn cmd_gc(_auto: bool) -> Result<()> {
-    eprintln!(
-        "# mur gc: pattern lifecycle management removed — use `mur skill sweep` for skill lifecycle."
-    );
-    Ok(())
-}
 pub(crate) fn cmd_exchange_import(file: &str) -> Result<()> {
     let store = YamlStore::default_store()?;
     let path = std::path::Path::new(file);

@@ -16,7 +16,6 @@ pub mod agent_schedule;
 pub mod agent_voice;
 /// Track C5 / M5.1 — webhook receiver config + CLI verbs.
 pub(crate) mod agent_webhook;
-pub(crate) mod community_cmd;
 pub(crate) mod context;
 pub(crate) mod conversations_cmd;
 pub mod conversations_cost_report;
@@ -64,6 +63,7 @@ pub mod skill_suggest;
 pub mod skill_sweep;
 pub(crate) mod sleep;
 pub(crate) mod sync_cmd;
+pub(crate) mod team_cmd;
 pub(crate) mod system_schedule;
 pub(crate) mod update;
 #[allow(dead_code)]

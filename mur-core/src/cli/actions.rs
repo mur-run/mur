@@ -231,41 +231,6 @@ pub enum SessionAction {
     },
 }
 
-#[derive(Subcommand)]
-pub enum CommunityAction {
-    /// Publish a pattern to the community
-    Publish { name: String },
-    /// Fetch (copy) a community pattern by ID
-    Fetch { id: String },
-    /// Search community patterns
-    Search { query: String },
-    /// List community patterns
-    List {
-        /// Sort order: popular, recent, trending, stars
-        #[arg(long, default_value = "popular")]
-        sort: String,
-    },
-    /// Star a community pattern
-    Star { id: String },
-    /// Report effectiveness of a community pattern
-    Report {
-        /// Pattern name or ID
-        name: String,
-        /// Effectiveness score (0.0-1.0)
-        #[arg(long)]
-        effectiveness: f64,
-        /// Number of sessions used
-        #[arg(long)]
-        sessions: u32,
-    },
-    /// List available community packs
-    Packs,
-    /// View or install a community pack
-    Pack {
-        #[command(subcommand)]
-        action: PackAction,
-    },
-}
 
 #[derive(Subcommand)]
 pub enum TeamAction {
@@ -296,19 +261,6 @@ pub enum TeamAction {
     },
 }
 
-#[derive(Subcommand)]
-pub enum PackAction {
-    /// Install a community pack (downloads all its patterns)
-    Install {
-        /// Pack ID
-        id: String,
-    },
-    /// Show details of a community pack
-    Show {
-        /// Pack ID
-        id: String,
-    },
-}
 
 #[derive(Subcommand)]
 pub enum SyncAction {
