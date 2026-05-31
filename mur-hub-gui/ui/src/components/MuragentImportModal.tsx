@@ -16,6 +16,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 interface Props {
   isOpen: boolean;
   onClose: () => void;
+  initialPath?: string;
 }
 
 interface McpServerView {
@@ -62,14 +63,40 @@ interface InstallReceipt {
   fingerprint_hex: string;
 }
 
+interface ModelHintView {
+  provider: string;
+  name: string;
+  tier: string;
+  min_ram_gb: number;
+  local_capable: boolean;
+}
+
+interface ResolutionView {
+  hint: ModelHintView | null;
+  total_ram_gb: number;
+  apple_silicon: boolean;
+  ollama_present: boolean;
+  recommendation: "local" | "cloud" | "cloud_or_smaller_local" | "neutral_menu";
+}
+
+interface ModelChoice {
+  provider: string;
+  model: string;
+  base_url?: string;
+  secret?: string;
+}
+
 const FIRST_TIME_AUTHOR_DELAY_MS = 5_000;
 
-export function MuragentImportModal({ isOpen, onClose }: Props) {
+export function MuragentImportModal({ isOpen, onClose, initialPath }: Props) {
   const [path, setPath] = useState<string | null>(null);
   const [inspection, setInspection] = useState<MuragentInspection | null>(null);
   const [installing, setInstalling] = useState(false);
   const [receipt, setReceipt] = useState<InstallReceipt | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resolutionView, setResolutionView] = useState<ResolutionView | null>(null);
+  const [modelApplied, setModelApplied] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
   // Counts down from FIRST_TIME_AUTHOR_DELAY_MS to 0 for first-time authors.
   // Known authors get 0 immediately. -1 means no inspection loaded yet.
   const [delayRemaining, setDelayRemaining] = useState<number>(-1);
@@ -82,9 +109,30 @@ export function MuragentImportModal({ isOpen, onClose }: Props) {
       setInstalling(false);
       setReceipt(null);
       setError(null);
+      setResolutionView(null);
+      setModelApplied(false);
+      setModelError(null);
       setDelayRemaining(-1);
     }
   }, [isOpen]);
+
+  // Auto-inspect when a file path is provided via initialPath (e.g. from OS file open)
+  useEffect(() => {
+    if (!isOpen || !initialPath) return;
+    setPath(initialPath);
+    setError(null);
+    setReceipt(null);
+    invoke<MuragentInspection>("inspect_muragent_file", { path: initialPath })
+      .then((result) => {
+        setInspection(result);
+        if (result.signature_valid && result.trust_status.kind === "first_time_author") {
+          setDelayRemaining(FIRST_TIME_AUTHOR_DELAY_MS);
+        } else {
+          setDelayRemaining(0);
+        }
+      })
+      .catch((e) => setError(String(e)));
+  }, [isOpen, initialPath]);
 
   // 5-second delay tick for first-time-author imports (§7.2 rule 4)
   useEffect(() => {
@@ -131,10 +179,33 @@ export function MuragentImportModal({ isOpen, onClose }: Props) {
     try {
       const r = await invoke<InstallReceipt>("install_muragent_file", { path });
       setReceipt(r);
+      // Fetch model resolution info for the wizard step
+      try {
+        if (path) {
+          const rv = await invoke<ResolutionView>("model_resolution_view", { path });
+          // Only show the wizard if there's useful info (hint present or non-neutral recommendation)
+          if (rv.hint !== null || rv.recommendation !== "neutral_menu") {
+            setResolutionView(rv);
+          }
+        }
+      } catch {
+        // model_resolution_view is best-effort; failure just skips the wizard step
+      }
     } catch (e) {
       setError(String(e));
     } finally {
       setInstalling(false);
+    }
+  }
+
+  async function applyModelChoice(choice: ModelChoice) {
+    if (!receipt) return;
+    setModelError(null);
+    try {
+      await invoke<string>("apply_agent_model", { slug: receipt.slug, choice });
+      setModelApplied(true);
+    } catch (e) {
+      setModelError(String(e));
     }
   }
 
@@ -181,7 +252,31 @@ export function MuragentImportModal({ isOpen, onClose }: Props) {
             />
           )}
 
-          {receipt && <ReceiptStep receipt={receipt} />}
+          {receipt && !resolutionView && <ReceiptStep receipt={receipt} />}
+          {receipt && resolutionView && !modelApplied && (
+            <>
+              <ReceiptStep receipt={receipt} />
+              <hr style={{ margin: "12px 0", borderColor: "var(--border, #2a2a2a)" }} />
+              <ModelResolutionStep
+                receipt={receipt}
+                view={resolutionView}
+                applied={modelApplied}
+                error={modelError}
+                onApply={applyModelChoice}
+                onSkip={() => setResolutionView(null)}
+              />
+            </>
+          )}
+          {receipt && resolutionView && modelApplied && (
+            <ModelResolutionStep
+              receipt={receipt}
+              view={resolutionView}
+              applied={true}
+              error={null}
+              onApply={() => {}}
+              onSkip={() => {}}
+            />
+          )}
         </div>
 
         {inspection && !receipt && (
@@ -461,6 +556,130 @@ function ReceiptStep({ receipt }: { receipt: InstallReceipt }) {
       <div style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>
         Trust: <code>{receipt.trust_level}</code> · Fingerprint{" "}
         <code>{receipt.fingerprint_hex}</code>
+      </div>
+    </div>
+  );
+}
+
+// ─── Model resolution step (spec §7.3) ──────────────────────────────────────
+
+function ModelResolutionStep({
+  receipt,
+  view,
+  applied,
+  error,
+  onApply,
+  onSkip,
+}: {
+  receipt: InstallReceipt;
+  view: ResolutionView;
+  applied: boolean;
+  error: string | null;
+  onApply: (choice: ModelChoice) => void;
+  onSkip: () => void;
+}) {
+  const [provider, setProvider] = useState(
+    view.recommendation === "local" ? "ollama" : "anthropic"
+  );
+  const [model, setModel] = useState(
+    view.recommendation === "local"
+      ? (view.hint?.local_capable ? view.hint.name : "llama3.2:3b")
+      : (view.hint?.name ?? "claude-sonnet-4-6")
+  );
+  const [secret, setSecret] = useState("");
+
+  if (applied) {
+    return (
+      <div style={{ padding: "16px 0" }}>
+        <p style={{ color: "var(--success, #4caf50)", marginBottom: 8 }}>
+          ✅ Model configured. <strong>{receipt.display_name}</strong> is ready to use.
+        </p>
+        <p style={{ fontSize: 12, color: "var(--muted, #888)" }}>
+          Change it anytime with <code>mur model add</code> or via Hub settings.
+        </p>
+      </div>
+    );
+  }
+
+  const recLabel: Record<string, string> = {
+    local: "Local model recommended (your hardware can run it)",
+    cloud: "Cloud model recommended (agent was authored against a frontier model)",
+    cloud_or_smaller_local: "Cloud recommended — your RAM may be too low for the original local model",
+    neutral_menu: "Choose a model backend for this agent",
+  };
+
+  return (
+    <div style={{ padding: "8px 0" }}>
+      <p style={{ fontWeight: 600, marginBottom: 4 }}>Set up a model</p>
+      <p style={{ fontSize: 13, color: "var(--muted, #888)", marginBottom: 12 }}>
+        {recLabel[view.recommendation]}
+        {view.hint && (
+          <span>
+            {" "}(original: <code>{view.hint.provider}/{view.hint.name}</code>)
+          </span>
+        )}
+      </p>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: 12 }}>Provider</label>
+            <input
+              className="input"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+              placeholder="ollama / anthropic / openai"
+              style={{ width: "100%", marginTop: 2 }}
+            />
+          </div>
+          <div style={{ flex: 2 }}>
+            <label style={{ fontSize: 12 }}>Model</label>
+            <input
+              className="input"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="llama3.2:3b / claude-sonnet-4-6"
+              style={{ width: "100%", marginTop: 2 }}
+            />
+          </div>
+        </div>
+
+        {provider !== "ollama" && (
+          <div>
+            <label style={{ fontSize: 12 }}>API key (stored in your secret store)</label>
+            <input
+              className="input"
+              type="password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              placeholder="sk-… or env:ANTHROPIC_API_KEY"
+              style={{ width: "100%", marginTop: 2 }}
+            />
+          </div>
+        )}
+
+        {error && (
+          <p style={{ color: "var(--error, #f44336)", fontSize: 12 }}>{error}</p>
+        )}
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+        <button className="toolbar-btn" onClick={onSkip} style={{ color: "var(--muted, #888)" }}>
+          Skip for now
+        </button>
+        <button
+          className="toolbar-btn primary"
+          onClick={() =>
+            onApply({
+              provider,
+              model,
+              secret: secret.trim() || undefined,
+            })
+          }
+          disabled={!provider.trim() || !model.trim()}
+        >
+          Save model
+        </button>
       </div>
     </div>
   );

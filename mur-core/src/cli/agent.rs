@@ -151,6 +151,11 @@ pub enum AgentAction {
     Install {
         /// Path to the `.muragent` file
         path: String,
+        /// Bind to an existing model registry entry immediately (non-interactive).
+        /// The ref must already exist in ~/.mur/models.yaml.
+        /// Example: --model ollama_llama3_2_3b
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Uninstall an agent (data preserved at <home>/data unless --purge)
     Uninstall {
