@@ -6,6 +6,8 @@ pub mod notify;
 pub mod queue;
 
 pub use error::PipelineError;
+pub use ingest::PendingStore;
+pub use ledger::ActionLedger;
 
 use mur_common::action::ActionPipelineConfig;
 use std::path::PathBuf;
