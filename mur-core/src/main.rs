@@ -31,7 +31,6 @@ mod extract;
 mod extract_llm;
 #[allow(dead_code)]
 mod federation;
-mod gep;
 mod inject;
 mod interactive;
 #[allow(dead_code, unused_imports)]
