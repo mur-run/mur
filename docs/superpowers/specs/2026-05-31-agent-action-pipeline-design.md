@@ -1,7 +1,7 @@
 # Agent Action Pipeline — Design Spec
 
 > **Date**: 2026-05-31
-> **Status**: Draft
+> **Status**: Ready for review (revised 2026-05-31 — reconciled against codebase: P0b dependency, Hook-based guard, `file_actions` schema, `mur-hub-gui` target)
 > **Scope**: Agent platform enhancement — file notification + deletion safety + task queue (Block A)
 
 ## Overview
@@ -104,7 +104,7 @@ struct Task {
 }
 
 struct Action {
-    id: String,                   // matches capabilities.file_actions[].id
+    id: String,                   // matches file_actions[].id
     label: String,
     user_prompt: Option<String>,  // filled for ask_me
 }
@@ -196,46 +196,63 @@ enum ActionEvent {
 ├── trash/
 │   └── {timestamp}_{filename}/   ← trashed files
 ├── companion/                    ← existing
-├── profile.yaml                  ← existing + new fields
+├── profile.yaml                  ← existing + new top-level keys (file_actions, action_pipeline)
 └── ...
 ```
 
+> **Ledger writer model.** Three concurrent writers exist — CLI control ops,
+> the runtime executor, and the daemon expiry tick — so the ledger uses the
+> **flock pattern** (`mur-common/src/multimodal/ledger.rs::ProvenanceLedger`),
+> **not** the single-writer companion `durable::Ledger`. Sink the shared
+> daily-rotated abstraction into `mur-common` first. `pending.json` is a
+> whole-state snapshot (temp+rename) rebuilt by replaying the day's ledger on
+> crash — no existing ledger reconstructs in-memory state today, so this is new
+> work, not reuse.
+
 ### Profile Schema Additions
 
+> **Do NOT nest under `capabilities:`.** That field is `Vec<String>` (`mur-common/src/agent.rs:72`) and is serialized into three surfaces — the A2A agent card (`protocol/methods/card.rs:65` → feeds `LockFile.card_digest`), `running.lock` (`supervisor.rs:377`), and the `.muragent` export (`muragent/writer.rs:188`). It also already denotes **trust/security** capabilities (`skill/capability.rs`). Add new **top-level** sections instead; all fields are `#[serde(default)]` so existing profiles load unchanged.
+
 ```yaml
-capabilities:
-  file_actions:                   # A1: declarative action list
-    - id: summarize
-      label:
-        en: "Summarize"
-        zh-TW: "摘要"
-      description: "Extract key points from the file"
-      mime_types: [text/*, application/pdf, application/msword]
-    - id: translate
-      label:
-        en: "Translate"
-        zh-TW: "翻譯"
-      mime_types: [text/*, application/pdf]
-    - id: ask_me                  # reserved: always last, skips mime check
-      label:
-        en: "Ask me anything..."
-        zh-TW: "自由指令..."
+# A1: declarative UI action list (NEW top-level key — not under capabilities)
+file_actions:
+  - id: summarize
+    label: { en: "Summarize", zh-TW: "摘要" }
+    description: "Extract key points from the file"
+    mime_types: [text/*, application/pdf, application/msword]
+  - id: translate
+    label: { en: "Translate", zh-TW: "翻譯" }
+    mime_types: [text/*, application/pdf]
+  - id: ask_me                  # reserved: always last; empty mime_types ⇒ any
+    label: { en: "Ask me anything...", zh-TW: "自由指令..." }
 
-deletion:                          # A2: deletion safety
-  trash_enabled: true
-  trash_ttl_minutes: 10
-  trash_max_mb: 1024
-  trusted_paths: []                # paths that bypass trash
-
-queue:                             # A3: queue settings
-  max_concurrent: 3
-  default_timeout_minutes: 30
-  pending_item_ttl_minutes: 60     # expiry for unhandled pending items
+# A2 + A3: namespaced under one section
+action_pipeline:
+  deletion:
+    trash_enabled: true
+    trash_ttl_minutes: 10
+    trash_max_mb: 1024
+    trusted_paths: []           # canonicalized; symlinks resolved (see Phase 3)
+  queue:
+    max_concurrent: 3
+    default_timeout_minutes: 30
+    pending_item_ttl_minutes: 60
 ```
 
-### Action Buttons from Capabilities
+`label` is a BCP-47 → text map. Render-time locale selection reuses `CompanionConfig.locale` / `default_locale()` (from `LANG`), falling back exact (`zh-TW`) → language prefix (`zh`) → `en` → first entry.
 
-Action buttons rendered in the selection UI are sourced from `profile.yaml → capabilities.file_actions`, filtered by the intersecting MIME types of the selected files. The `ask_me` action always appears last and accepts any file type.
+```rust
+struct FileAction {
+    id: String,
+    #[serde(default)] label: BTreeMap<String, String>,
+    #[serde(default)] description: Option<String>,
+    #[serde(default)] mime_types: Vec<String>,   // empty ⇒ matches any
+}
+```
+
+### Action Buttons from file_actions
+
+Action buttons rendered in the selection UI are sourced from `profile.yaml → file_actions` (top-level), filtered by the intersecting MIME types of the selected files. The `ask_me` action always appears last and accepts any file type.
 
 **Future extension points** (not in v1): `icon`, `shortcut_key`, `requires_confirmation`, `output_kind`, MCP tool binding.
 
@@ -364,37 +381,41 @@ Agent reports steps via `TaskStepUpdated` events. Steps are agent-defined — it
 
 ## Phase 3: EXEC — Execution & Deletion Safety
 
-### TrashGuard Interception
+### TrashGuard: a Hook gate + a dispatcher executor (NOT a new layer)
+
+"Every tool call passes through TrashGuard" **already describes the existing frozen hook chain** (`HOOK_SCHEMA_VERSION = 2`, `hooks/mod.rs`). TrashGuard is not new infrastructure — it splits into two pieces that plug into existing seams.
+
+**(a) Gate — a `Hook` impl, registered via the A1 handler-picker.** Runs in `pre_tool_use` *after* `B0SafetyHook`. The chain short-circuits on the first non-`Allow` (`hooks/chain.rs:49-65`), and B0 already owns the out-of-home AskUser gate (Rule 1 matches `fs.write|fs.delete|fs.append|fs.create`, `b0.rs:403-431`). The gate therefore adds only the checks B0 lacks:
 
 ```
-Every tool call passes through TrashGuard::intercept():
-
-1. DETECT destructive patterns:
-   - Shell: rm, unlink, delete
-   - Shell: mv to /dev/null
-   - Python: os.remove, os.unlink, shutil.rmtree
-   - MCP: delete_file tool invocations
-   - A2A: delete requests to other agents
-   - If path matches trusted_paths → allow (no trash)
-
-2. SCHEMA-LEVEL enforcement:
-   - Batch size ≤ 10 files per operation
-   - No wildcards (*, ?) in paths
-   - Path within allowed scope
-   - Reject with clear error if violation
-
-3. REWRITE destructive operations:
-   rm <path> → mv <path> <agent_home>/trash/{timestamp}_{filename}/
-
-4. CREATE TrashEntry with metadata:
-   - Original path, trash path, file size
-   - RestoreMetadata (owner, perms, xattrs)
-   - expires_at = created_at + deletion.ttl_minutes
-
-5. APPEND TrashCreated to ledger
-
-6. NOTIFY Phase 4 (deletion notifications are independent and urgent)
+DETECT destructive patterns (shell rm/unlink, mv→/dev/null, os.remove,
+   os.unlink, shutil.rmtree, MCP delete_file, A2A delete intent)
+SCHEMA-LEVEL enforcement → Decision::Deny on violation:
+   - batch size ≤ deletion.max_batch          (config, not hardcoded)
+   - reject wildcards (*, ?) in paths
+   - path within allowed scope (canonicalized)
+TWO-PHASE → first destructive op in a task → Decision::AskUser (default Deny),
+   reusing the existing AskUser + GrantStore plumbing.
 ```
+
+**(b) Executor — in the P0b tool dispatcher, not a hook.** `pre_tool_use` is a *gate* (Allow/Deny/AskUser) and **cannot mutate call args**, so the rm→mv rewrite cannot live there. Once the gate returns `Allow`, the dispatcher routes the op through a trash executor:
+
+```
+REWRITE  rm <path> → move <path> → <agent_home>/trash/{ts}_{filename}/
+CREATE   TrashEntry { original/trash path, size, RestoreMeta, expires_at }
+APPEND   TrashCreated to ledger
+NOTIFY   Phase 4 (deletion notifications are independent and urgent)
+```
+
+This split is why (b) is blocked on P0b (it needs the tool loop) while (a) can be written and unit-tested ahead of it.
+
+### Relationship to the B1 OS sandbox (defense in depth, not redundancy)
+
+The kernel sandbox (Landlock on Linux, SBPL on macOS — `sandbox/policy.rs`) is the **outer** confinement; TrashGuard is **userspace policy within writable scope**. Document the consequence explicitly: on Linux, deleting a path outside `fs_write` is **blocked by the kernel before TrashGuard sees it** — the op never reaches userspace, so move-to-trash neither does nor can apply there.
+
+### Cross-filesystem trash (EXDEV)
+
+The trash dir is inside `<agent_home>` (e.g. `~/.mur/...`), but sources may sit on another volume. `rename(2)` across filesystems returns **EXDEV**, so the executor falls back to **copy + unlink**, and a batch is **per-file all-or-nothing**, reporting mixed results as `TaskOutcome::PartialSuccess`.
 
 ### Two-Phase Protocol
 
@@ -404,34 +425,37 @@ Following the [Cursor/Gemini incident lesson](https://forum.cursor.com/t/gemini-
 - Await user confirmation
 - Turn 2: Execute only after explicit consent
 
-This is enforced at the TrashGuard level: the first time a task triggers a destructive operation, execution pauses and waits for user acknowledgment.
+This maps onto the **existing** `Decision::AskUser` + `GrantStore` flow: the first destructive op returns `AskUser` (default `Deny`); execution proceeds on a later turn once the user grants. Note this is a *between-turn* grant, not mid-turn suspend/resume — true in-flight pausing is a separate P0b runtime capability and is out of scope for the guard.
 
 ### Trash Timer
 
-- Background tick every 30 seconds scans for `TrashEntry` where `expires_at < now()` and `status == Pending`
-- Expired entries → `TrashAutoDeleted` → files permanently removed
-- Individual timers per entry (not a single global timer)
+- A single background tick (every 30 s) scans for `TrashEntry` where `expires_at < now()` and `status == Pending`; expired entries → `TrashAutoDeleted` → files permanently removed.
+- **Owner = `mur-daemon`, not the runtime.** The runtime is frequently ephemeral (spawn → serve one request → exit, `a2a_dial.rs`), so a 10-minute TTL would otherwise never fire. The daemon's existing loop (`main.rs`) hosts one scan across all agents.
+- No per-entry timers — they don't survive restart and contradict the established 30 s-scan pattern (`idle_scheduler.rs`).
 
 ### Trash Capacity
 
-- Total trash size tracked. If new entry would exceed `trash_max_mb` → reject with notification "Trash full. Please empty trash before new deletions."
-- No automatic eviction (FIFO or otherwise) — user must explicitly manage.
+- Total trash size tracked. If a new entry would exceed `trash_max_mb`, first **sweep expired-but-unswept entries** (`expires_at < now()`) to reclaim space.
+- If still over budget → reject the rewrite, but **do not hard-block the agent**: fall back to B0's `AskUser` (delete-without-trash on explicit consent) and raise an urgent "Trash full" notification with a one-tap **Empty expired / Empty all**. This avoids a deadlock where a full trash silently prevents every routine delete.
+- No automatic eviction of *unexpired* entries (FIFO or otherwise) — the user stays in control of those.
 
 ### Trusted Paths
 
-- Exact string match only; symlinks are NOT resolved
-- `~/Downloads/tmp/` as symlink → does NOT match → trash still applies
-- Design rationale: prevents agent from exploiting symlinks to bypass protection
+- Paths are **canonicalized** (`std::fs::canonicalize()`), matching B0's `path_confined_to` (`b0_helpers.rs:17-36`). The two safety layers must not disagree on whether a symlink escapes confinement.
+- A `trusted_paths` entry bypasses trash only if the canonical target matches; a symlink whose canonical target lies outside the trusted set does not bypass.
 
 ### Coverage Scope
 
-| Path | Intercepted? | Method |
+All tool-level interception requires the **P0b agentic loop** (the gate fires from `HookChain::pre_tool_use`, which has no caller until P0b). Syscall-level deletion is covered by the **already-shipped B1 OS sandbox**, not a future phase.
+
+| Path | Gated by guard? | Method |
 |------|-------------|--------|
-| Shell `rm` | ✅ | Tool-call pattern matching |
-| Python `os.remove` etc. | ✅ | Same shell tool-call path |
-| MCP `delete_file` | ✅ | MCP handler layer |
-| A2A delete request | ✅ | Supervisor dispatch |
-| Direct syscall from C extension | ❌ | Out of scope; requires OS sandbox (Phase 2) |
+| Shell `rm` | ✅ (P0b) | Tool-call pattern matching in `pre_tool_use` |
+| Python `os.remove` etc. | ✅ (P0b) | Same shell tool-call path |
+| MCP `delete_file` | ✅ (P0b) | Same `pre_tool_use` gate before `tools/call` |
+| A2A delete intent | ✅ (P0b) | Supervisor dispatch |
+| Out-of-`fs_write` path | n/a | **B1 kernel sandbox denies first** (guard never sees it) |
+| Direct syscall from C extension | — | Covered by B1 sandbox (Landlock/SBPL), already shipped |
 
 ## Phase 4: NOTIFY — Result Delivery
 
@@ -496,19 +520,26 @@ mur agent trash <name> --empty        # Permanently empty trash
 mur agent trash <name> --now <id>     # Immediately delete specific item
 ```
 
+**Conventions.** The flag forms above are shorthand. House style for multi-op subcommands is **nested-action enums** (`AgentPendingAction` / `AgentQueueAction` / `AgentTrashAction`), mirroring `AgentScheduleAction` — e.g. `mur agent queue <name> pause <id>`, not `--pause`.
+
+**Control plane.** Read-only listing reads the ledger / `pending.json` snapshot directly. **Mutating a live task** (pause / cancel) dials the running agent via `dial_method()` A2A over its socket (`a2a_dial.rs`); if the agent is offline, the op is appended to the ledger and reconciled on next start. `trash restore|empty|now` mutate the trash dir + ledger directly (no live agent needed).
+
 ## Implementation Plan
 
 ### Phase Order & Dependencies
 
+**Hard dependency:** Phase 3 (EXEC / trash *executor*) and per-step reporting depend on the **P0b agentic tool-call loop**, which is NOT yet implemented. Today `task_runner.rs::run_llm()` only performs LLM↔text round-trips and never parses or dispatches tool calls, so `HookChain::pre_tool_use()` has **no caller** (`HOOKS.md`: "lights up with Track A/D MCP integration"). There is no dispatch point to host trash rewriting until P0b lands.
+
 ```
-Phase 0: Shared Infrastructure
-  → Phase 1: INGEST (A1 front half)
-    → Phase 2: QUEUE (A3)
-      → Phase 3: EXEC (A2 + A1 back half)
-        → Phase 4: NOTIFY (A1 back half)
+Phase 0  Shared infra (ledger, state, profile schema)   — buildable now
+Phase 1  INGEST  (file intake + selection UI)           — buildable now
+Phase 2  QUEUE   (task lifecycle, CLI)                   — buildable now
+Phase 4a NOTIFY  (completion aggregation)                — after Phase 2
+Phase 3  EXEC    (TrashGuard gate + trash executor)      — BLOCKED on P0b
+Phase 4b NOTIFY  (per-step reporting)                    — BLOCKED on P0b
 ```
 
-Each phase builds on the previous. Phase 1 can be delivered standalone (files in → notify → select action). Phase 2 adds queue. Phase 3 adds safety. Phase 4 closes the loop.
+**v1 deliverable = Phases 0–2 + 4a.** Gate Phase 3 / 4b behind P0b. The TrashGuard *gate* (detection + schema limits + two-phase AskUser) can be written and unit-tested as a `Hook` ahead of P0b; only its *executor* (the actual rm→mv) needs the loop.
 
 ### File Structure
 
@@ -517,7 +548,7 @@ Each phase builds on the previous. Phase 1 can be delivered standalone (files in
 ```
 mod.rs       ← ~120 lines: public API, Pipeline struct
 state.rs     ← ~350 lines: all types + serde
-ledger.rs    ← ~200 lines: JSONL read/write (reuses companion pattern)
+ledger.rs    ← ~200 lines: JSONL read/write (flock multi-writer; sink Ledger<E> to mur-common)
 ingest.rs    ← ~300 lines: PendingStore, MIME detect, dedup, merge
 queue.rs     ← ~350 lines: TaskQueue, state machine, concurrency
 guard.rs     ← ~400 lines: TrashGuard, pattern matching, schema checks
@@ -525,7 +556,7 @@ notify.rs    ← ~250 lines: Aggregator, notification formatting
 error.rs     ← ~80 lines:  error types
 ```
 
-**mur-agent-gui/ui/src/** (new React components):
+**mur-hub-gui/ui/src/** (new React components — NOT `mur-agent-gui`, deprecated M-h8 / removed in v2):
 
 ```
 pending/     ← PendingPanel, FloatingBadge, FileChecklist, ActionButtons,
@@ -538,11 +569,13 @@ trash/       ← TrashPanel, TrashRow, useTrashBridge, api, types
 
 | Crate | New | Modified |
 |-------|-----|----------|
-| **mur-common** | `src/action.rs` (ActionEvent enum) | — |
-| **mur-core** | `src/action_pipeline/` (8 files) | `profile.yaml` schema, CLI dispatch |
-| **mur-agent-runtime** | `src/action_pipeline/` (step reporting), `trash_watcher.rs` | `supervisor.rs` (TrashGuard hook) |
-| **mur-agent-gui** | `pending/` `queue/` `trash/` (~18 files) | `CompanionBridge` (add action event), `App.tsx` (new tabs) |
-| **mur-daemon** | — | Optional: relocate trash timer here for long-running |
+| **mur-common** | `src/action.rs` (`ActionEvent`, `FileAction`); **sink the generic `Ledger<E>` here** (today in `mur-agent-runtime/src/durable/ledger.rs`) | — |
+| **mur-core** | `src/action_pipeline/` (ingest, queue, state, error) + CLI | profile schema, CLI dispatch |
+| **mur-agent-runtime** | TrashGuard **gate** (`Hook`) + trash **executor** in the P0b dispatcher; `trash_watcher.rs` | register hook via **A1 handler-picker** (`HooksConfig`) |
+| **mur-daemon** | trash + pending TTL **expiry tick** (30 s scan, all agents) | main loop |
+| **mur-gui-core** | action bridge (shared); extract VoiceInput from legacy app | `companion_bridge` |
+| **mur-hub-gui** | `components/` + `hooks/` panels (~18 files) | `App.tsx` (new tabs) |
+| ~~mur-agent-gui~~ | — *(deprecated M-h8; do not target)* | — |
 
 ## Testing Strategy
 
