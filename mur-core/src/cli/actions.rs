@@ -349,7 +349,6 @@ pub enum SessionAction {
     Discard,
 }
 
-
 #[derive(Subcommand)]
 pub enum TeamAction {
     /// List your teams (or patterns in a specific team)
@@ -378,7 +377,6 @@ pub enum TeamAction {
         team: Option<String>,
     },
 }
-
 
 #[derive(Subcommand)]
 pub enum SyncAction {

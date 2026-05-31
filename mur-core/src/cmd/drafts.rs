@@ -22,8 +22,8 @@ use crate::sync::{DraftRecord, SyncClient};
 const DEFAULT_PAGE_LIMIT: u32 = 100;
 
 fn client_from_env() -> Result<SyncClient> {
-    let tokens =
-        crate::auth::load_tokens().ok_or_else(|| anyhow!("not logged in (run `mur auth login`)"))?;
+    let tokens = crate::auth::load_tokens()
+        .ok_or_else(|| anyhow!("not logged in (run `mur auth login`)"))?;
     let url = crate::auth::server_url();
     SyncClient::new(url, tokens.access_token)
 }

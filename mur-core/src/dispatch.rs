@@ -9,11 +9,10 @@ use clap::CommandFactory;
 use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
     AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
-    AgentWebhookAction, AuthAction, ChatAction, Cli, Commands, ConversationsAction,
-    DaemonAction, DeployAction, DraftsAction, EvalAction, ExchangeAction, HookEvent,
-    InternalsAction, MurmurdAction,
-    ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction,
-    VoiceAction, WorkflowAction,
+    AgentWebhookAction, AuthAction, ChatAction, Cli, Commands, ConversationsAction, DaemonAction,
+    DeployAction, DraftsAction, EvalAction, ExchangeAction, HookEvent, InternalsAction,
+    MurmurdAction, ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction,
+    TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -103,20 +102,19 @@ pub async fn run(cli: Cli) -> Result<()> {
                 json,
                 scope,
             } => {
-                cmd::context::cmd_context(
-                    query, compact, file, budget, source, json, scope, quiet,
-                )
-                .await?
+                cmd::context::cmd_context(query, compact, file, budget, source, json, scope, quiet)
+                    .await?
             }
         },
         // Deprecated: use `mur daemon`
         Commands::Murmurd { action } => {
             eprintln!("# mur murmurd: use `mur daemon`");
             match action {
-            MurmurdAction::Start { detach } => cmd::murmurd::cmd_murmurd_start(detach)?,
-            MurmurdAction::Stop => cmd::murmurd::cmd_murmurd_stop()?,
-            MurmurdAction::Status => cmd::murmurd::cmd_murmurd_status()?,
-        }},
+                MurmurdAction::Start { detach } => cmd::murmurd::cmd_murmurd_start(detach)?,
+                MurmurdAction::Stop => cmd::murmurd::cmd_murmurd_stop()?,
+                MurmurdAction::Status => cmd::murmurd::cmd_murmurd_status()?,
+            }
+        }
         // Deprecated: use `mur workflow run`
         Commands::Run {
             query,
@@ -608,10 +606,11 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Exchange { action } => {
             eprintln!("# mur exchange: use `mur skill exchange`");
             match action {
-            ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
-            ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,
-            ExchangeAction::Export { name, dir } => cmd::misc::cmd_exchange_export(&name, dir)?,
-        }},
+                ExchangeAction::Import { file } => cmd::misc::cmd_exchange_import(&file)?,
+                ExchangeAction::ImportAll => cmd::misc::cmd_exchange_import_all()?,
+                ExchangeAction::Export { name, dir } => cmd::misc::cmd_exchange_export(&name, dir)?,
+            }
+        }
         Commands::Verify { file, all } => {
             // Initialize known commands from the clap tree so verify doesn't
             // need a hardcoded list.
@@ -642,15 +641,16 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Drafts { action } => {
             eprintln!("# mur drafts: use `mur skill drafts`");
             match action {
-            DraftsAction::List { since } => cmd::drafts::cmd_drafts_list(since).await?,
-            DraftsAction::Show { id } => cmd::drafts::cmd_drafts_show(&id).await?,
-            DraftsAction::Accept { id, as_tier } => {
-                cmd::drafts::cmd_drafts_accept(&id, as_tier.as_deref()).await?
+                DraftsAction::List { since } => cmd::drafts::cmd_drafts_list(since).await?,
+                DraftsAction::Show { id } => cmd::drafts::cmd_drafts_show(&id).await?,
+                DraftsAction::Accept { id, as_tier } => {
+                    cmd::drafts::cmd_drafts_accept(&id, as_tier.as_deref()).await?
+                }
+                DraftsAction::Reject { id, reason } => {
+                    cmd::drafts::cmd_drafts_reject(&id, reason.as_deref()).await?
+                }
             }
-            DraftsAction::Reject { id, reason } => {
-                cmd::drafts::cmd_drafts_reject(&id, reason.as_deref()).await?
-            }
-        }},
+        }
         // Deprecated: use `mur session discard`
         Commands::Exit | Commands::Quit => {
             eprintln!("# mur exit/quit: use `mur session discard`");
@@ -717,12 +717,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                 )
                 .await?
             }
-            ChatAction::Doctor => {
-                cmd::conversations_cmd::cmd_conversations_doctor().await?
-            }
-            ChatAction::Preflight => {
-                cmd::conversations_cmd::cmd_conversations_preflight().await?
-            }
+            ChatAction::Doctor => cmd::conversations_cmd::cmd_conversations_doctor().await?,
+            ChatAction::Preflight => cmd::conversations_cmd::cmd_conversations_preflight().await?,
             ChatAction::Migrate {
                 run,
                 resume,
@@ -731,9 +727,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 cmd::conversations_cmd::cmd_conversations_migrate(run, resume, discard_staging)
                     .await?
             }
-            ChatAction::Rollback => {
-                cmd::conversations_cmd::cmd_conversations_rollback().await?
-            }
+            ChatAction::Rollback => cmd::conversations_cmd::cmd_conversations_rollback().await?,
             ChatAction::Compact {
                 date,
                 since,
@@ -788,91 +782,94 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Conversations { action } => {
             eprintln!("# mur conversations: use `mur chat <subcommand>`");
             match action {
-            ConversationsAction::Pull => cmd::conversations_cmd::cmd_conversations_pull().await?,
-            ConversationsAction::Cleanup => {
-                cmd::conversations_cmd::cmd_conversations_cleanup().await?
-            }
-            ConversationsAction::Reindex {
-                raw_only,
-                spans_only,
-                rollups_only,
-            } => {
-                cmd::conversations_cmd::cmd_conversations_reindex(
-                    cmd::conversations_cmd::ReindexArgs {
-                        raw_only,
-                        spans_only,
-                        rollups_only,
-                    },
-                )
-                .await?
-            }
-            ConversationsAction::Doctor => {
-                cmd::conversations_cmd::cmd_conversations_doctor().await?
-            }
-            ConversationsAction::Preflight => {
-                cmd::conversations_cmd::cmd_conversations_preflight().await?
-            }
-            ConversationsAction::Migrate {
-                run,
-                resume,
-                discard_staging,
-            } => {
-                cmd::conversations_cmd::cmd_conversations_migrate(run, resume, discard_staging)
+                ConversationsAction::Pull => {
+                    cmd::conversations_cmd::cmd_conversations_pull().await?
+                }
+                ConversationsAction::Cleanup => {
+                    cmd::conversations_cmd::cmd_conversations_cleanup().await?
+                }
+                ConversationsAction::Reindex {
+                    raw_only,
+                    spans_only,
+                    rollups_only,
+                } => {
+                    cmd::conversations_cmd::cmd_conversations_reindex(
+                        cmd::conversations_cmd::ReindexArgs {
+                            raw_only,
+                            spans_only,
+                            rollups_only,
+                        },
+                    )
                     .await?
+                }
+                ConversationsAction::Doctor => {
+                    cmd::conversations_cmd::cmd_conversations_doctor().await?
+                }
+                ConversationsAction::Preflight => {
+                    cmd::conversations_cmd::cmd_conversations_preflight().await?
+                }
+                ConversationsAction::Migrate {
+                    run,
+                    resume,
+                    discard_staging,
+                } => {
+                    cmd::conversations_cmd::cmd_conversations_migrate(run, resume, discard_staging)
+                        .await?
+                }
+                ConversationsAction::Rollback => {
+                    cmd::conversations_cmd::cmd_conversations_rollback().await?
+                }
+                ConversationsAction::Compact {
+                    date,
+                    since,
+                    force,
+                    if_stale,
+                    max_days,
+                    extractive_only,
+                    debug_prompt,
+                    skip_rollups,
+                } => {
+                    cmd::conversations_cmd::cmd_conversations_compact(
+                        cmd::conversations_cmd::CompactArgs {
+                            date,
+                            since,
+                            force,
+                            if_stale,
+                            max_days,
+                            extractive_only,
+                            debug_prompt,
+                            skip_rollups,
+                        },
+                    )
+                    .await?
+                }
+                ConversationsAction::Rollup {
+                    week,
+                    month,
+                    all_missing,
+                    force,
+                    if_stale,
+                    max_weeks,
+                    max_months,
+                } => {
+                    cmd::conversations_cmd::cmd_conversations_rollup(
+                        cmd::conversations_cmd::RollupArgs {
+                            week,
+                            month,
+                            all_missing,
+                            force,
+                            if_stale,
+                            max_weeks,
+                            max_months,
+                        },
+                    )
+                    .await?
+                }
+                ConversationsAction::CostReport { since, json } => {
+                    cmd::conversations_cost_report::cmd_cost_report(&since, json, None).await?
+                }
             }
-            ConversationsAction::Rollback => {
-                cmd::conversations_cmd::cmd_conversations_rollback().await?
-            }
-            ConversationsAction::Compact {
-                date,
-                since,
-                force,
-                if_stale,
-                max_days,
-                extractive_only,
-                debug_prompt,
-                skip_rollups,
-            } => {
-                cmd::conversations_cmd::cmd_conversations_compact(
-                    cmd::conversations_cmd::CompactArgs {
-                        date,
-                        since,
-                        force,
-                        if_stale,
-                        max_days,
-                        extractive_only,
-                        debug_prompt,
-                        skip_rollups,
-                    },
-                )
-                .await?
-            }
-            ConversationsAction::Rollup {
-                week,
-                month,
-                all_missing,
-                force,
-                if_stale,
-                max_weeks,
-                max_months,
-            } => {
-                cmd::conversations_cmd::cmd_conversations_rollup(
-                    cmd::conversations_cmd::RollupArgs {
-                        week,
-                        month,
-                        all_missing,
-                        force,
-                        if_stale,
-                        max_weeks,
-                        max_months,
-                    },
-                )
-                .await?
-            }
-            ConversationsAction::CostReport { since, json } => {
-                cmd::conversations_cost_report::cmd_cost_report(&since, json, None).await?
-            }
-        }},
+        }
         Commands::Deploy { action } => match action {
             DeployAction::Up {
                 build,
@@ -948,19 +945,21 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Eval { action } => {
             eprintln!("# mur eval: use `mur skill eval`");
             match action {
-            EvalAction::Run { suite, format } => {
-                let code = cmd::eval::cmd_eval_run(&suite, &format)?;
-                std::process::exit(code);
+                EvalAction::Run { suite, format } => {
+                    let code = cmd::eval::cmd_eval_run(&suite, &format)?;
+                    std::process::exit(code);
+                }
             }
-        }},
+        }
         // Deprecated: use `mur daemon sleep`
         Commands::Sleep { action } => {
             eprintln!("# mur sleep: use `mur daemon sleep`");
             match action {
-            SleepAction::Enable => cmd::sleep::cmd_sleep_enable()?,
-            SleepAction::Disable => cmd::sleep::cmd_sleep_disable()?,
-            SleepAction::Status => cmd::sleep::cmd_sleep_status()?,
-        }},
+                SleepAction::Enable => cmd::sleep::cmd_sleep_enable()?,
+                SleepAction::Disable => cmd::sleep::cmd_sleep_disable()?,
+                SleepAction::Status => cmd::sleep::cmd_sleep_status()?,
+            }
+        }
         Commands::Project { action } => match action {
             ProjectAction::Index {
                 path,
@@ -984,9 +983,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             DaemonAction::Start { detach } => cmd::murmurd::cmd_murmurd_start(detach)?,
             DaemonAction::Stop => cmd::murmurd::cmd_murmurd_stop()?,
             DaemonAction::Status => cmd::murmurd::cmd_murmurd_status()?,
-            DaemonAction::Serve { port, open, readonly } => {
-                cmd::server_cmd::cmd_serve(port, open, readonly).await?
-            }
+            DaemonAction::Serve {
+                port,
+                open,
+                readonly,
+            } => cmd::server_cmd::cmd_serve(port, open, readonly).await?,
             DaemonAction::Sleep { action } => match action {
                 SleepAction::Enable => cmd::sleep::cmd_sleep_enable()?,
                 SleepAction::Disable => cmd::sleep::cmd_sleep_disable()?,
