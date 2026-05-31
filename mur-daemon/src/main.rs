@@ -1,3 +1,4 @@
+mod action_tick;
 mod consumer;
 mod inbox;
 mod lock;
@@ -101,6 +102,19 @@ async fn main() -> Result<()> {
                 heartbeat_at: Utc::now(),
             };
             let _ = write_lock(&lock_file_hb, &new_state);
+        }
+    });
+
+    // Action pipeline tick: every 30 seconds
+    let mur_home_tick = mur_dir.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        tick.tick().await; // skip first immediate fire
+        loop {
+            tick.tick().await;
+            if let Err(e) = action_tick::scan_all_agents(&mur_home_tick) {
+                tracing::error!(error = %e, "action_tick failed");
+            }
         }
     });
 

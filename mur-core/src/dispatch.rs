@@ -7,12 +7,12 @@ use anyhow::{Context, Result};
 use clap::CommandFactory;
 
 use crate::cli::{
-    AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
-    AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
-    AgentWebhookAction, AuthAction, ChatAction, Cli, Commands, ConversationsAction, DaemonAction,
-    DeployAction, DraftsAction, EvalAction, ExchangeAction, HookEvent, InternalsAction,
-    MurmurdAction, ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction,
-    TeamAction, VoiceAction, WorkflowAction,
+    AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPendingAction,
+    AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction, AgentSecretAction,
+    AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction, ChatAction, Cli, Commands,
+    ConversationsAction, DaemonAction, DeployAction, DraftsAction, EvalAction, ExchangeAction,
+    HookEvent, InternalsAction, MurmurdAction, ProjectAction, ScheduleAction, SessionAction,
+    SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -1278,6 +1278,25 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         },
         AgentAction::Reconnect { name } => cmd::agent::cmd_agent_reconnect(&name)?,
         AgentAction::Apply { file } => cmd::agent::cmd_agent_apply(&file)?,
+        AgentAction::Pending { name, action } => match action {
+            Some(AgentPendingAction::List) | None => cmd::agent::cmd_pending_list(&name)?,
+            Some(AgentPendingAction::Act { id, action_id }) => {
+                cmd::agent::cmd_pending_act(&name, &id, &action_id)?
+            }
+        },
+        AgentAction::Trash { name, action } => match action {
+            AgentTrashAction::List => cmd::agent::cmd_trash_list(&name)?,
+            AgentTrashAction::Restore { id } => cmd::agent::cmd_trash_restore(&name, &id)?,
+            AgentTrashAction::Empty => cmd::agent::cmd_trash_empty(&name)?,
+            AgentTrashAction::Now { id } => cmd::agent::cmd_trash_now(&name, &id)?,
+        },
+        AgentAction::Queue { name, action } => match action {
+            AgentQueueAction::List => cmd::agent::cmd_queue_list(&name)?,
+            AgentQueueAction::Pause { id } => cmd::agent::cmd_queue_pause(&name, &id)?,
+            AgentQueueAction::Resume { id } => cmd::agent::cmd_queue_resume(&name, &id)?,
+            AgentQueueAction::Cancel { id } => cmd::agent::cmd_queue_cancel(&name, &id)?,
+            AgentQueueAction::Retry { id } => cmd::agent::cmd_queue_retry(&name, &id)?,
+        },
     }
     Ok(())
 }

@@ -158,6 +158,8 @@ pub fn cmd_create(
         trusted_peers: Vec::new(),
         appearance: mur_common::AgentAppearance::default(),
         federation: mur_common::FederationConfig::default(),
+        file_actions: vec![],
+        action_pipeline: mur_common::action::ActionPipelineConfig::default(),
         installed_skills: vec![],
         created_at: now.clone(),
         updated_at: now,
