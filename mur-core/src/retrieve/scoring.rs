@@ -161,17 +161,6 @@ const MAX_PATTERNS: usize = 5;
 /// Default max total tokens (rough: 1 token ≈ 4 chars)
 const MAX_TOKENS: usize = 2000;
 
-/// Score patterns with hybrid search (vector + keyword), no scope context.
-/// `vector_scores` maps pattern name → vector similarity (0-1).
-#[allow(dead_code)]
-pub fn score_and_rank_hybrid(
-    query: &str,
-    candidates: Vec<Pattern>,
-    vector_scores: &std::collections::HashMap<String, f64>,
-) -> Vec<ScoredPattern> {
-    score_and_rank_hybrid_with_scope(query, candidates, vector_scores, None, None)
-}
-
 /// Score patterns with hybrid search, using config-driven retrieval parameters.
 pub fn score_and_rank_hybrid_with_config(
     query: &str,
@@ -245,7 +234,6 @@ pub fn score_and_rank(query: &str, candidates: Vec<Pattern>) -> Vec<ScoredPatter
 /// default scoring config. Mirrors `score_and_rank` for the generic case.
 ///
 /// Hybrid / scope-aware generic entries are added in later plans as needed.
-#[allow(dead_code)]
 pub fn score_and_rank_generic<T: Retrievable>(query: &str, candidates: Vec<T>) -> Vec<Scored<T>> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
@@ -780,20 +768,6 @@ mod tests {
             "60-day-old pattern should have low recency, got {}",
             score
         );
-    }
-
-    #[test]
-    fn test_hybrid_scoring_with_vector_scores() {
-        let p1 = make_pattern("swift-testing", "Use @Test macro for Swift testing");
-        let p2 = make_pattern("rust-error-handling", "Use anyhow for Rust error handling");
-
-        let mut vector_scores = std::collections::HashMap::new();
-        vector_scores.insert("swift-testing".to_string(), 0.9);
-        vector_scores.insert("rust-error-handling".to_string(), 0.1);
-
-        let results = score_and_rank_hybrid("swift testing", vec![p1, p2], &vector_scores);
-        assert!(!results.is_empty());
-        assert_eq!(results[0].item.name, "swift-testing");
     }
 
     #[test]
