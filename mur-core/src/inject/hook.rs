@@ -411,16 +411,6 @@ pub fn format_skills_for_injection(
     output.trim_end().to_string()
 }
 
-/// Format both patterns and workflows for unified injection.
-#[allow(dead_code)] // Used by tests and as public API
-pub fn format_unified_injection(
-    patterns: &[Pattern],
-    workflows: &[Workflow],
-    max_tokens: usize,
-) -> String {
-    format_unified_injection_with_store(patterns, workflows, max_tokens, None)
-}
-
 /// Format both patterns and workflows with optional store for diagram resolution.
 pub fn format_unified_injection_with_store(
     patterns: &[Pattern],
@@ -1032,7 +1022,7 @@ mod tests {
     fn test_unified_injection() {
         let patterns = vec![make_pattern("Use testing", "Use @Test macro")];
         let workflows = vec![make_workflow("Deploy flow")];
-        let result = format_unified_injection(&patterns, &workflows, 5000);
+        let result = format_unified_injection_with_store(&patterns, &workflows, 5000, None);
         assert!(result.contains("Relevant knowledge"));
         assert!(result.contains("Use testing"));
         assert!(result.contains("[Workflow:"));
@@ -1041,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_unified_injection_empty() {
-        let result = format_unified_injection(&[], &[], 5000);
+        let result = format_unified_injection_with_store(&[], &[], 5000, None);
         assert_eq!(result, "");
     }
 
@@ -1274,7 +1264,7 @@ mod tests {
         let mut pref = make_pattern("Always be concise", "One sentence max.");
         pref.kind = Some(PatternKind::Preference);
 
-        let result = format_unified_injection(&[pref], &[], 5000);
+        let result = format_unified_injection_with_store(&[pref], &[], 5000, None);
         // Should use grouped header (not the flat one)
         assert!(
             result.contains("Relevant knowledge from your learning history"),
@@ -1296,7 +1286,7 @@ mod tests {
         // With workflows, unified injection uses flat numbered format.
         let p = make_pattern("Use testing", "Use @Test macro");
         let wf = make_workflow("Deploy flow");
-        let result = format_unified_injection(&[p], &[wf], 5000);
+        let result = format_unified_injection_with_store(&[p], &[wf], 5000, None);
         assert!(result.contains("Use testing"));
         assert!(result.contains("[Workflow:"));
         assert!(result.contains("Deploy flow"));
