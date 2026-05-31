@@ -197,6 +197,19 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            for arg in argv.iter() {
+                if arg.ends_with(".muragent") {
+                    let _ = app.emit("open-muragent-file", arg.clone());
+                    break;
+                }
+            }
+            if let Some(win) = app.get_webview_window("dashboard") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .manage(AgentState(Mutex::new(Vec::new())))
         .manage(SupervisorState(supervisor))
         .manage(WizardState(Mutex::new(None)))
@@ -266,6 +279,17 @@ pub fn run() {
                 });
             }
 
+            #[cfg(target_os = "windows")]
+            {
+                let args: Vec<String> = std::env::args().collect();
+                for arg in args.iter().skip(1) {
+                    if arg.ends_with(".muragent") {
+                        let _ = app.handle().emit("open-muragent-file", arg.clone());
+                        break;
+                    }
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -283,6 +307,8 @@ pub fn run() {
             onboarding::wizard_start_render,
             onboarding::wizard_finish,
             onboarding::wizard_cancel,
+            onboarding::first_launch::check_first_launch,
+            onboarding::first_launch::mark_first_launch_done,
             pet::pet_spawn_at,
             pet::pet_close,
             pet::pet_reposition,
@@ -307,8 +333,20 @@ pub fn run() {
             companion::companion_proactive,
             companion::companion_quiet,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                for url in urls {
+                    if let Ok(path) = url.to_file_path()
+                        && let Some(s) = path.to_str()
+                    {
+                        let _ = _app.emit("open-muragent-file", s.to_string());
+                    }
+                }
+            }
+        });
 }
 
 fn mur_home_path() -> PathBuf {
