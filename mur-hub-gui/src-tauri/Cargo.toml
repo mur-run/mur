@@ -28,6 +28,8 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-window-state = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = "2"
 
 # Workspace siblings — reused from the root repo via relative path.
 mur-common = { path = "../../mur-common" }
@@ -49,3 +51,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signa
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+tempfile = "3"

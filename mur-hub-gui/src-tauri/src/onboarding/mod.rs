@@ -1,3 +1,6 @@
+pub mod first_launch;
+pub use first_launch::{check_first_launch, mark_first_launch_done};
+
 use mur_common::agent::{AgentAppearance, BehaviorPreset, RenderStatus};
 use mur_common::hub::preset_loader::{default_blob, find_preset};
 use mur_common::hub::style_preset::PresetFamily;

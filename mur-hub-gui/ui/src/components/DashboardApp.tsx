@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { save } from "@tauri-apps/plugin-dialog";
 import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
@@ -97,6 +98,16 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
       showToast(`Failed: ${e}`),
     );
   }
+  async function handleShare() {
+    const outPath = await save({
+      defaultPath: `${agent.name}.muragent`,
+      filters: [{ name: "MuR Agent", extensions: ["muragent"] }],
+    });
+    if (!outPath) return;
+    invoke<string>("export_muragent_file", { name: agent.name, outPath })
+      .then(() => showToast(`Exported ${agent.name}.muragent`))
+      .catch((e) => showToast(`Export failed: ${e}`));
+  }
 
   function startHold(e: React.MouseEvent) {
     if (e.button !== 0) return;
@@ -182,6 +193,12 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
             title="Stop agent runtime"
           >
             ■ Stop
+          </button>
+          <button
+            onClick={handleShare}
+            title="Export as .muragent to share"
+          >
+            ↑ Share
           </button>
         </div>
       </div>
@@ -279,6 +296,8 @@ export function DashboardApp() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
+  const [muragentImportPath, setMuragentImportPath] = useState<string | undefined>(undefined);
+  const [showAppsBanner, setShowAppsBanner] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Build a lookup map for runtime statuses.
@@ -297,6 +316,31 @@ export function DashboardApp() {
     return () => {
       unSelect.then((fn) => fn());
     };
+  }, []);
+
+  // Listen for .muragent file open events from OS file association / deep-link
+  useEffect(() => {
+    const unlisten = listen<string>("open-muragent-file", (e) => {
+      setMuragentImportPath(e.payload);
+      setMuragentImportOpen(true);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // First-launch check: show banner if not running from /Applications
+  useEffect(() => {
+    invoke<{ is_first_launch: boolean; in_applications: boolean }>(
+      "check_first_launch"
+    ).then((status) => {
+      if (!status.in_applications) {
+        setShowAppsBanner(true);
+      }
+      if (status.is_first_launch) {
+        invoke("mark_first_launch_done").catch(() => {});
+      }
+    }).catch(() => {});
   }, []);
 
   // ⌘K focus search.
@@ -321,7 +365,21 @@ export function DashboardApp() {
   return (
     <div className="dashboard-root">
       <Sidebar activeCategory={activeCategory} agents={agents} onSelect={setActiveCategory} />
-      <div className="dashboard-main">        <div className="toolbar">
+      <div className="dashboard-main">        {showAppsBanner && (
+          <div className="onboarding-banner">
+            <span>
+              Move MuR Hub to your <strong>Applications</strong> folder so .muragent files open here automatically.
+            </span>
+            <button
+              className="toolbar-btn"
+              onClick={() => setShowAppsBanner(false)}
+              title="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+        <div className="toolbar">
           <button
             className="toolbar-btn"
             onClick={() => setWizardOpen(true)}
@@ -447,8 +505,10 @@ export function DashboardApp() {
       />
       <MuragentImportModal
         isOpen={muragentImportOpen}
+        initialPath={muragentImportPath}
         onClose={() => {
           setMuragentImportOpen(false);
+          setMuragentImportPath(undefined);
           invoke("list_agents").catch(() => {});
         }}
       />
