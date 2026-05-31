@@ -229,7 +229,6 @@ mod tests {
         let mur = tempfile::tempdir().unwrap();
         // Build minimal profiles using default_for_tests + companion block.
         let mut prof = mur_common::agent::AgentProfile::default_for_tests();
-        let base_yaml = serde_yaml_ng::to_string(&prof).unwrap();
         // agent "on": profile with companion.enabled = true
         prof.companion.enabled = true;
         let on_yaml = serde_yaml_ng::to_string(&prof).unwrap();
