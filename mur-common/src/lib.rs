@@ -40,6 +40,7 @@ pub mod sync_types;
 pub mod telemetry;
 pub mod trust;
 pub mod variable;
+pub mod action;
 pub mod workflow;
 
 pub use actor::{Actor, ActorSource};
