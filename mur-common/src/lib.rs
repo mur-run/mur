@@ -41,6 +41,7 @@ pub mod telemetry;
 pub mod trust;
 pub mod variable;
 pub mod action;
+pub mod ledger;
 pub mod workflow;
 
 pub use actor::{Actor, ActorSource};
