@@ -24,6 +24,9 @@ use crate::store::embedding::{EmbeddingConfig, embed_batch};
 const TABLE_NAME: &str = "chunks";
 const EMBED_BATCH_SIZE: usize = 200;
 
+/// Chunks above this threshold auto-trigger background mode.
+pub const BACKGROUND_CHUNK_THRESHOLD: usize = 200;
+
 #[derive(Debug, Clone)]
 pub struct CodeChunk {
     pub file: String,
@@ -64,6 +67,34 @@ pub struct DiscoveredIndex {
     pub project_path: Option<String>,
     pub last_indexed: Option<String>,
     pub file_count: usize,
+}
+
+/// Written during background indexing so `mur project status` can show live progress.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexProgress {
+    pub status: IndexStatus,
+    pub total_chunks: usize,
+    pub done_chunks: usize,
+    pub errors: usize,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexStatus {
+    Running,
+    Done,
+    Error,
+}
+
+/// Lightweight lock file to prevent concurrent indexing of the same project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexLock {
+    pub pid: u32,
+    pub project_name: String,
+    pub started_at: String,
 }
 
 pub struct CodebaseIndex {
@@ -108,6 +139,67 @@ impl CodebaseIndex {
         let data = serde_json::to_string_pretty(meta)?;
         std::fs::write(path, data)?;
         Ok(())
+    }
+
+    pub(crate) fn lock_path(&self) -> PathBuf {
+        self.lance_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!("{}.lock", self.project_name))
+    }
+
+    fn progress_path(&self) -> PathBuf {
+        self.lance_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!("{}.progress.json", self.project_name))
+    }
+
+    /// Try to acquire the index lock. Returns Ok(true) if we got it, Ok(false) if another
+    /// live process holds it, Err if I/O fails.
+    pub fn try_acquire_lock(&self) -> Result<bool> {
+        let path = self.lock_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // Check existing lock
+        if path.exists()
+            && let Ok(data) = std::fs::read_to_string(&path)
+            && let Ok(lock) = serde_json::from_str::<IndexLock>(&data)
+            && mur_common::lock_file::pid_alive(lock.pid)
+        {
+            return Ok(false); // Another live process holds the lock
+            // Stale lock — pid is dead, we'll overwrite
+        }
+        let lock = IndexLock {
+            pid: std::process::id(),
+            project_name: self.project_name.clone(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+        };
+        std::fs::write(&path, serde_json::to_string(&lock)?)?;
+        Ok(true)
+    }
+
+    pub fn release_lock(&self) {
+        let path = self.lock_path();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Write progress for `mur project status` to read.
+    pub fn write_progress(&self, progress: &IndexProgress) -> Result<()> {
+        let path = self.progress_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, serde_json::to_string(progress)?)?;
+        Ok(())
+    }
+
+    /// Read progress file if it exists.
+    pub fn read_progress(&self) -> Option<IndexProgress> {
+        let path = self.progress_path();
+        let data = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&data).ok()
     }
 
     async fn get_db(&self) -> Result<&lancedb::Connection> {
@@ -606,7 +698,7 @@ pub fn ensure_git_hook(project_path: &Path, quiet: bool) -> Result<bool> {
         .map(|d| d.join(".mur").join("bin").join("mur"))
         .unwrap_or_else(|| PathBuf::from("mur"));
     let hook_content = format!(
-        "\n{}\nif command -v {} &>/dev/null; then\n  {} project index \"{}\" --quiet &\nfi\n",
+        "\n{}\nif command -v {} &>/dev/null; then\n  {} project index \"{}\" --quiet --background\nfi\n",
         marker,
         mur_bin.display(),
         mur_bin.display(),
