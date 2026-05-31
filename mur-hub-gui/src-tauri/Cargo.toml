@@ -51,3 +51,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signa
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+tempfile = "3"

@@ -9,8 +9,7 @@ use anyhow::Result;
 use chrono::Utc;
 use lock::{LockState, is_healthy, lock_path, read_lock, write_lock};
 use mur_core::inject::event::{EventKind, NormalizedEvent};
-use mur_core::inject::index::{build as build_index, format_l0};
-use mur_core::store::yaml::YamlStore;
+use mur_core::inject::index::{format_l0, load as load_capability_index};
 use std::time::Instant;
 
 const L0_BUDGET_CHARS: usize = 2400;
@@ -21,9 +20,12 @@ fn process_event(event: &NormalizedEvent) -> Result<()> {
             let Some(ref session_id) = event.session_id else {
                 return Ok(());
             };
-            let yaml_store = YamlStore::default_store()?;
-            let patterns = yaml_store.list_all()?;
-            let index = build_index(&patterns, None);
+            let index = load_capability_index().unwrap_or_else(|_| {
+                mur_core::inject::index::CapabilityIndex {
+                    entries: vec![],
+                    project: None,
+                }
+            });
             let content = format_l0(&index, L0_BUDGET_CHARS);
             if !content.is_empty() {
                 let path = inbox::inbox_path(session_id);

@@ -335,13 +335,14 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::Opened { urls } = event {
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
                 for url in urls {
-                    if let Ok(path) = url.to_file_path() {
-                        if let Some(s) = path.to_str() {
-                            let _ = app.emit("open-muragent-file", s.to_string());
-                        }
+                    if let Ok(path) = url.to_file_path()
+                        && let Some(s) = path.to_str()
+                    {
+                        let _ = _app.emit("open-muragent-file", s.to_string());
                     }
                 }
             }
