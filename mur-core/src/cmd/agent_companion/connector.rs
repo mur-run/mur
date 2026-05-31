@@ -634,6 +634,8 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
         trusted_peers: vec![],
         appearance: mur_common::AgentAppearance::default(),
         federation: mur_common::FederationConfig::default(),
+        file_actions: vec![],
+        action_pipeline: mur_common::action::ActionPipelineConfig::default(),
         installed_skills: vec![],
         created_at: now.clone(),
         updated_at: now,
