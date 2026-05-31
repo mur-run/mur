@@ -8,7 +8,7 @@ use clap::CommandFactory;
 
 use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
-    AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
+    AgentPromptAction, AgentQueueAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
     AgentWebhookAction, AuthAction, ChatAction, Cli, Commands, ConversationsAction, DaemonAction,
     DeployAction, DraftsAction, EvalAction, ExchangeAction, HookEvent, InternalsAction,
     MurmurdAction, ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction,
@@ -1278,6 +1278,13 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         },
         AgentAction::Reconnect { name } => cmd::agent::cmd_agent_reconnect(&name)?,
         AgentAction::Apply { file } => cmd::agent::cmd_agent_apply(&file)?,
+        AgentAction::Queue { name, action } => match action {
+            AgentQueueAction::List => cmd::agent::cmd_queue_list(&name)?,
+            AgentQueueAction::Pause { id } => cmd::agent::cmd_queue_pause(&name, &id)?,
+            AgentQueueAction::Resume { id } => cmd::agent::cmd_queue_resume(&name, &id)?,
+            AgentQueueAction::Cancel { id } => cmd::agent::cmd_queue_cancel(&name, &id)?,
+            AgentQueueAction::Retry { id } => cmd::agent::cmd_queue_retry(&name, &id)?,
+        },
     }
     Ok(())
 }

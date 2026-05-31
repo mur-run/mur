@@ -290,6 +290,13 @@ pub enum AgentAction {
         #[arg(short = 'f', long)]
         file: std::path::PathBuf,
     },
+    /// Manage the action task queue (list/pause/cancel/retry)
+    Queue {
+        /// Agent name
+        name: String,
+        #[command(subcommand)]
+        action: AgentQueueAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -333,6 +340,32 @@ pub enum AgentHooksAction {
         /// Emit machine-readable JSON array
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AgentQueueAction {
+    /// List all tasks in the queue
+    List,
+    /// Pause a running task at next checkpoint
+    Pause {
+        /// Task ID (UUID)
+        id: String,
+    },
+    /// Resume a paused task
+    Resume {
+        /// Task ID (UUID)
+        id: String,
+    },
+    /// Cancel a queued or running task
+    Cancel {
+        /// Task ID (UUID)
+        id: String,
+    },
+    /// Retry a failed task
+    Retry {
+        /// Task ID (UUID)
+        id: String,
     },
 }
 

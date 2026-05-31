@@ -84,6 +84,9 @@ pub use skill::{cmd_skill_add, cmd_skill_list, cmd_skill_remove, cmd_skill_show}
 pub use snapshot::{cmd_snapshot_pull, cmd_snapshot_show};
 #[allow(unused_imports)]
 pub use stats::{cmd_logs, cmd_stats};
+mod queue_cmd;
+#[allow(unused_imports)]
+pub use queue_cmd::{cmd_queue_cancel, cmd_queue_list, cmd_queue_pause, cmd_queue_resume, cmd_queue_retry};
 
 // ─── Shared helpers used across submodules ─────────────────────────
 

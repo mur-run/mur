@@ -59,6 +59,7 @@ mod sync;
 mod team;
 mod update;
 mod verify;
+mod action_pipeline;
 
 use cli::Cli;
 
