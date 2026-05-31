@@ -1,4 +1,5 @@
 //! Unified pattern + sources search handler. Extracted from `main.rs`.
+#![allow(dead_code)]
 
 #[cfg(feature = "sources")]
 pub async fn cmd_search_unified(

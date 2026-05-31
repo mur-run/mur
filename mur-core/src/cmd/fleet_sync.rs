@@ -486,7 +486,8 @@ pub async fn fleet_push(
 /// pushes and/or pulls each fleet entity type.
 pub async fn fleet_sync_cmd(direction: DeviceSyncDirection, force_local: bool) -> Result<()> {
     let server_url = crate::auth::server_url();
-    let tokens = crate::auth::load_tokens().context("not signed in — run `mur login` first")?;
+    let tokens =
+        crate::auth::load_tokens().context("not signed in — run `mur auth login` first")?;
     let plan = crate::auth::fetch_effective_plan(&server_url, &tokens.access_token).await?;
     if !crate::auth::plan_allows_fleet(&plan) {
         bail!("fleet sync requires a Pro plan (current: {plan}). Upgrade at https://app.mur.run");
