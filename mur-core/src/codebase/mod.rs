@@ -163,15 +163,13 @@ impl CodebaseIndex {
             std::fs::create_dir_all(parent)?;
         }
         // Check existing lock
-        if path.exists() {
-            if let Ok(data) = std::fs::read_to_string(&path) {
-                if let Ok(lock) = serde_json::from_str::<IndexLock>(&data) {
-                    if mur_common::lock_file::pid_alive(lock.pid) {
-                        return Ok(false); // Another live process holds the lock
-                    }
-                    // Stale lock — pid is dead, we'll overwrite
-                }
-            }
+        if path.exists()
+            && let Ok(data) = std::fs::read_to_string(&path)
+            && let Ok(lock) = serde_json::from_str::<IndexLock>(&data)
+            && mur_common::lock_file::pid_alive(lock.pid)
+        {
+            return Ok(false); // Another live process holds the lock
+            // Stale lock — pid is dead, we'll overwrite
         }
         let lock = IndexLock {
             pid: std::process::id(),
