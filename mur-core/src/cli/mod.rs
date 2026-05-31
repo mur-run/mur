@@ -24,7 +24,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Search patterns + sources (unified).
+    /// Search notes + sources (unified).
     #[command(hide = true)]
     Search {
         /// Search query
@@ -164,7 +164,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: SessionAction,
     },
-    /// Team shared patterns
+    /// Team shared skills
     Team {
         #[command(subcommand)]
         action: TeamAction,
