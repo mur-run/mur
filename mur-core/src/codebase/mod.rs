@@ -141,7 +141,7 @@ impl CodebaseIndex {
         Ok(())
     }
 
-    fn lock_path(&self) -> PathBuf {
+    pub(crate) fn lock_path(&self) -> PathBuf {
         self.lance_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
@@ -700,7 +700,7 @@ pub fn ensure_git_hook(project_path: &Path, quiet: bool) -> Result<bool> {
         .map(|d| d.join(".mur").join("bin").join("mur"))
         .unwrap_or_else(|| PathBuf::from("mur"));
     let hook_content = format!(
-        "\n{}\nif command -v {} &>/dev/null; then\n  {} project index \"{}\" --quiet &\nfi\n",
+        "\n{}\nif command -v {} &>/dev/null; then\n  {} project index \"{}\" --quiet --background\nfi\n",
         marker,
         mur_bin.display(),
         mur_bin.display(),
