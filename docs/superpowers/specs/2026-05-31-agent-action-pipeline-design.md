@@ -1,7 +1,7 @@
 # Agent Action Pipeline — Design Spec
 
 > **Date**: 2026-05-31
-> **Status**: Ready for review (revised 2026-05-31 — reconciled against codebase: P0b dependency, Hook-based guard, `file_actions` schema, `mur-hub-gui` target)
+> **Status**: Ready for review (revised 2026-05-31 — reconciled against codebase: P0b dependency, Hook-based guard, `file_actions` schema, `mur-hub-gui` target; **red-team revision 2026-05-31 — deletion model changed from timed auto-permanent-delete → cancel-window + long retention with NO auto-hard-delete; Roadmap Alignment section added**)
 > **Scope**: Agent platform enhancement — file notification + deletion safety + task queue (Block A)
 
 ## Overview
@@ -15,8 +15,8 @@ These are not independent features — they are phases of the same value chain: 
 Design validated against 2025–2026 industry best practices:
 
 - **File handling UX**: Multi-surface notification (badge + toast + OS notify), review-before-execute, structured notification metadata. Sources: [Smashing Magazine 2026](https://shop.smashingmagazine.com/2026/05/practical-interface-patterns-ai-transparency/), [Jacar](https://jacar.es/en/diseno-ui-agentes/), [Courier 2026](https://www.courier.com/blog/your-notifications-now-have-two-audiences-humans-and-ai-agents/)
-- **Deletion safety**: Archive-don't-delete (Trash), two-phase protocol (never propose+execute same-turn), schema-level enforcement (batch limits, no wildcards), deterministic policy enforcement. Sources: [Conseca (Google, HOTOS '25)](https://sigops.org/s/conferences/hotos/2025/papers/hotos25-100.pdf), [agent-safe-delete](https://github.com/ckckck/agent-safe-delete), [Replit Snapshot Engine](https://blog.replit.com/inside-replits-snapshot-engine), [Safe File Deletion MCP](https://www.npmjs.com/package/@mizunashi_mana/safe-file-deletion-mcp)
-- **Task queue UX**: Three-state execution row (pause/cancel/resume), dynamic checklist over progress bar, checkpoint-based pausing, AG-UI event model. Sources: [Morae (UIST '25)](https://ar5iv.labs.arxiv.org/html/2508.21456), [AgentField #243](https://github.com/Agent-Field/agentfield/issues/243), [AG-UI Protocol](https://futureagi.com/blog/agentic-ux-webinar-2025/#hero), [Autopoiesis #614](https://github.com/DavSimFel/autopoiesis/issues/614)
+- **Deletion safety**: Archive-don't-delete (Trash) with a **long retention window and NO time-triggered permanent deletion** (industry norm: Notion keeps until manually emptied, Instagram ~30 days); a short **cancel/undo window before the destructive op executes** (Gmail-undo style); two-phase protocol (never propose+execute same-turn); **read-after-write verification** (the exact check missing in the Gemini-CLI incident); schema-level enforcement (batch limits, no wildcards). Sources: [Conseca (Google, HOTOS '25)](https://sigops.org/s/conferences/hotos/2025/papers/hotos25-100.pdf), [Replit DB-wipe incident (Fortune)](https://fortune.com/2025/07/23/ai-coding-tool-replit-wiped-database-called-it-a-catastrophic-failure/), [Gemini CLI file-deletion incident](https://winbuzzer.com/2025/07/26/googles-gemini-cli-deletes-user-files-confesses-catastrophic-failure-xcxwbn/), [soft-delete anti-pattern (Cultured Systems)](https://www.cultured.systems/2024/04/24/Soft-delete/), [delete-UX best practice (DesignMonks)](https://www.designmonks.co/blog/delete-button-ui)
+- **Task queue UX**: Three-state execution row (pause/cancel/resume), dynamic checklist over progress bar, checkpoint-based pausing (interrupt-and-resume), AG-UI event model. Sources: [Morae (UIST '25)](https://ar5iv.labs.arxiv.org/html/2508.21456), [LangChain human-in-the-loop docs](https://docs.langchain.com/oss/python/langchain/human-in-the-loop), [AG-UI Protocol](https://futureagi.com/blog/agentic-ux-webinar-2025/#hero), [HITL approvals 2026 (getclaw)](https://getclaw.sh/blog/human-in-the-loop-ai-agents-approvals-2026)
 - **Capability declaration**: Declarative manifest with scoped permissions, mime-type filtering, structured action definitions. Sources: [Agents.md](https://www.remio.ai/post/what-is-agents-md-a-complete-guide-to-the-new-ai-coding-agent-standard-in-2025), [OpenPort Protocol](https://ar5iv.labs.arxiv.org/html/2602.20196), [Claude Code Permission Model](https://skywork.ai/blog/permission-model-claude-code-vs-code-jetbrains-cli/)
 
 ## Architecture
@@ -53,7 +53,17 @@ Three architectural approaches were evaluated:
 | New subsystem per feature | Manual coordination | Highest | High | |
 | **Unified Action Pipeline** | **Native** | **Medium** | **Highest** | ✅ |
 
-The pipeline was chosen because A1, A2, A3 are phases of the same chain (ingest → queue → execute → notify), share a common ledger, and a shared state model eliminates duplication. Future features (agent roles, trigger modes, flow editor) extend by adding phases or hooks.
+The pipeline was chosen because A1, A2, A3 are phases of the same chain (ingest → queue → execute → notify), share a common ledger, and a shared state model eliminates duplication. Future features (agent roles, trigger modes) extend by adding phases or hooks. A visual DAG/flow editor is explicitly **not** a planned extension — see Roadmap Alignment below.
+
+### Roadmap Alignment (red-team 2026-05-31)
+
+This spec is **Block A** of a larger agent-platform roadmap. A red-team review (ultra-deep web research + competitive scan) bounded that roadmap against MUR's stated moat — local-first + ≈0 marginal cost + accumulating memory + cryptographic governance (`docs/superpowers/specs/2026-05-29-mur-strategy-positioning-vs-archon.md`). The constraints that touch this spec:
+
+- **Deletion never auto-hard-deletes on a timer** (this revision; see Phase 3). A background process that destroys user files on a short TTL is itself a data-loss vector and contradicts the "archive-don't-delete" principle cited above and the Replit/Gemini incidents.
+- **No visual DAG/flow editor.** The pipeline's extension surface is phases/hooks plus the `mur run "w1 | w2 && w3"` expression — not a graph canvas. Authoring for non-technical users, if ever needed, is NL→pipeline-expression generation; at most a **read-only** run visualization for trust/audit.
+- **Agent roles ship narrow, not broad.** Prefer 2–3 deep roles/teams that exploit the moat (local-first, always-on at ≈0 cost, governed) over a wide catalog of thin vertical agents.
+- **Agent Teams** (when built) are **first-party, curated, signed bundles** gated to a paid tier — **not** an open third-party marketplace (keeps the catalog off the GPT-Store / MCP supply-chain risk surface). A one-click team load is a large capability grant and must pass the same gate + sandbox + audit as any single agent.
+- **Result delivery** prefers push + the existing Slack bridge over a net-new native mobile app until demand is validated.
 
 ## Data Model
 
@@ -142,20 +152,23 @@ struct TaskStep {
 struct TrashEntry {
     id: Uuid,
     original_path: PathBuf,
-    trash_path: PathBuf,          // <agent_home>/trash/{timestamp}_{filename}
+    trash_path: Option<PathBuf>,  // None while PendingDelete (file not moved yet); set on move-to-trash
     file_size_bytes: u64,
     created_by_task_id: Uuid,
     created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,    // created_at + deletion.ttl_minutes
+    execute_at: DateTime<Utc>,    // created_at + deletion.cancel_window_minutes; move-to-trash fires at/after this
+    retention_until: Option<DateTime<Utc>>, // set on move = moved_at + deletion.trash_retention_days; marks
+                                  //   eviction-ELIGIBILITY, never auto-deletion
     status: TrashStatus,
     restore_metadata: RestoreMeta,
 }
 
 enum TrashStatus {
-    Pending,
-    Restored,
-    PermDeleted,
-    AutoDeleted,
+    PendingDelete,  // consented; within cancel window; file NOT yet moved (Undo drops it, lossless)
+    Retained,       // moved to trash; within retention window; recoverable
+    Expired,        // past retention; eligible for capacity eviction but STILL on disk + recoverable
+    Restored,       // user restored to original location
+    PermDeleted,    // gone for good — ONLY via explicit empty/now, or capacity eviction (oldest-Expired-first)
 }
 
 struct RestoreMeta {
@@ -178,10 +191,12 @@ enum ActionEvent {
     TaskResumed        { task_id: Uuid },
     TaskCompleted      { task_id: Uuid, outcome: TaskOutcome },
     TaskCancelled      { task_id: Uuid },
-    TrashCreated       { entry: TrashEntry },
+    DeletionPending    { entry: TrashEntry },        // consented; cancel window open, file untouched
+    DeletionCancelled  { entry_id: Uuid },           // Undo within cancel window
+    TrashCreated       { entry: TrashEntry },         // cancel window elapsed → moved to trash
     TrashRestored      { entry_id: Uuid },
-    TrashPermDeleted   { entry_id: Uuid },
-    TrashAutoDeleted   { entry_id: Uuid },
+    TrashExpired       { entry_id: Uuid },            // past retention; eviction-eligible (NOT deleted)
+    TrashPermDeleted   { entry_id: Uuid, reason: PermDeleteReason }, // explicit empty/now | CapacityEviction
 }
 ```
 
@@ -230,9 +245,12 @@ file_actions:
 action_pipeline:
   deletion:
     trash_enabled: true
-    trash_ttl_minutes: 10
-    trash_max_mb: 1024
-    trusted_paths: []           # canonicalized; symlinks resolved (see Phase 3)
+    cancel_window_minutes: 10    # undo window BEFORE the delete executes (Gmail-undo); 0 = execute on consent
+    trash_retention_days: 30     # how long trashed files stay recoverable; expiry = eviction-eligibility, NOT auto-delete
+    trash_max_mb: 1024           # hard cap; capacity pressure evicts oldest-EXPIRED-first (never unexpired)
+    max_batch: 50                # reject a destructive op touching more than this many paths
+    auto_permanent_delete: false # MUST stay false: no daemon ever hard-deletes user files on a timer
+    trusted_paths: []            # canonicalized; symlinks resolved (see Phase 3)
   queue:
     max_concurrent: 3
     default_timeout_minutes: 30
@@ -401,8 +419,12 @@ TWO-PHASE → first destructive op in a task → Decision::AskUser (default Deny
 **(b) Executor — in the P0b tool dispatcher, not a hook.** `pre_tool_use` is a *gate* (Allow/Deny/AskUser) and **cannot mutate call args**, so the rm→mv rewrite cannot live there. Once the gate returns `Allow`, the dispatcher routes the op through a trash executor:
 
 ```
+DEFER    record PendingDelete { original_path, size, RestoreMeta,
+            execute_at = now + deletion.cancel_window_minutes }
+APPEND   DeletionPending to ledger; surface Undo (Phase 4) — file NOT touched yet
+─ later, when cancel window elapses (daemon tick, no Undo) ─
 REWRITE  rm <path> → move <path> → <agent_home>/trash/{ts}_{filename}/
-CREATE   TrashEntry { original/trash path, size, RestoreMeta, expires_at }
+SET      trash_path; retention_until = now + deletion.trash_retention_days; status → Retained
 APPEND   TrashCreated to ledger
 NOTIFY   Phase 4 (deletion notifications are independent and urgent)
 ```
@@ -427,17 +449,26 @@ Following the [Cursor/Gemini incident lesson](https://forum.cursor.com/t/gemini-
 
 This maps onto the **existing** `Decision::AskUser` + `GrantStore` flow: the first destructive op returns `AskUser` (default `Deny`); execution proceeds on a later turn once the user grants. Note this is a *between-turn* grant, not mid-turn suspend/resume — true in-flight pausing is a separate P0b runtime capability and is out of scope for the guard.
 
-### Trash Timer
+### Cancel Window (pre-execution undo)
 
-- A single background tick (every 30 s) scans for `TrashEntry` where `expires_at < now()` and `status == Pending`; expired entries → `TrashAutoDeleted` → files permanently removed.
-- **Owner = `mur-daemon`, not the runtime.** The runtime is frequently ephemeral (spawn → serve one request → exit, `a2a_dial.rs`), so a 10-minute TTL would otherwise never fire. The daemon's existing loop (`main.rs`) hosts one scan across all agents.
+After consent, a destructive op is **not executed immediately**. The executor records a `PendingDelete` entry with `execute_at = now + deletion.cancel_window_minutes` (default 10; set 0 to execute on consent) and surfaces an **Undo** affordance (Phase 4). The file is **not touched** during this window — Undo simply drops the entry (`DeletionCancelled`), instantly and losslessly. The daemon performs the actual move-to-trash only after the window elapses. This is the correct reading of the original "defer deletion 10 minutes" intent: a reversible grace period *before* anything is destroyed, distinct from (and layered on top of) the long trash retention *after* the move.
+
+### Trash Timer (deferred executor — never an auto-deleter)
+
+A single background tick (every 30 s) does **two** things, and **never permanently deletes user files**:
+
+1. **Execute deferred deletes.** For `status == PendingDelete` where `execute_at < now()` (cancel window elapsed, no Undo): perform rm→move-to-trash, set `trash_path` + `retention_until`, transition → `Retained`, append `TrashCreated`.
+2. **Mark expirations.** For `status == Retained` where `retention_until < now()`: transition → `Expired` and append `TrashExpired`. **The file stays on disk and remains recoverable** — `Expired` only makes it *eligible* for capacity eviction (see Trash Capacity). No file is removed here.
+
+- **Owner = `mur-daemon`, not the runtime.** The runtime is frequently ephemeral (spawn → serve one request → exit, `a2a_dial.rs`), so a deferred delete or retention sweep would otherwise never fire. The daemon's existing loop (`main.rs`) hosts one scan across all agents.
 - No per-entry timers — they don't survive restart and contradict the established 30 s-scan pattern (`idle_scheduler.rs`).
+- **There is no time-triggered permanent deletion** (red-team reversal, 2026-05-31). Files leave disk only via explicit user action (`trash --empty` / `trash --now`) or capacity-pressure eviction. A background process that destroys user data on a timer is itself a data-loss vector and contradicts the archive-don't-delete principle.
 
-### Trash Capacity
+### Trash Capacity (the only automatic permanent removal)
 
-- Total trash size tracked. If a new entry would exceed `trash_max_mb`, first **sweep expired-but-unswept entries** (`expires_at < now()`) to reclaim space.
-- If still over budget → reject the rewrite, but **do not hard-block the agent**: fall back to B0's `AskUser` (delete-without-trash on explicit consent) and raise an urgent "Trash full" notification with a one-tap **Empty expired / Empty all**. This avoids a deadlock where a full trash silently prevents every routine delete.
-- No automatic eviction of *unexpired* entries (FIFO or otherwise) — the user stays in control of those.
+- Total trash size tracked. If a new entry would exceed `trash_max_mb`, evict **`Expired` entries oldest-first** (those past `retention_until`) until under budget; each eviction appends `TrashPermDeleted { reason: CapacityEviction }`. This is the **only** path by which the system removes a file without explicit user action — and it touches **only** already-expired entries.
+- If reclaiming every `Expired` entry still leaves the new op over budget → reject the rewrite, but **do not hard-block the agent**: fall back to B0's `AskUser` (delete-without-trash on explicit consent) and raise an urgent "Trash full" notification with a one-tap **Empty expired / Empty all**. This avoids a deadlock where a full trash silently prevents every routine delete.
+- **Never evict `Retained` (unexpired) entries** (FIFO or otherwise) — the user stays in control of those.
 
 ### Trusted Paths
 
@@ -476,8 +507,8 @@ All tool-level interception requires the **P0b agentic loop** (the gate fires fr
 │  📄 /tmp/paper2_ocr.pdf                 │
 │  📄 /tmp/paper3_ocr.pdf                 │
 │                                         │
-│  Will be permanently deleted in 10 min  │
-│  [Delete Now] [Restore All] [View Trash]│
+│  Moving to Trash in 10 min · recoverable │
+│  for 30 days   [Undo] [Move Now] [Trash] │
 └─────────────────────────────────────────┘
 ```
 
@@ -585,7 +616,7 @@ trash/       ← TrashPanel, TrashRow, useTrashBridge, api, types
 - **ledger.rs**: Append + scan_days + state rebuild from ledger
 - **ingest.rs**: MIME detect, dedup window (5s), merge window (5s), expiry (TTL exceeded)
 - **queue.rs**: Enqueue below/at capacity, state machine transitions, pause at checkpoint (<30s), force-pause after timeout (≥30s), cancel cleanup, ledger rebuild (crash recovery)
-- **guard.rs**: Detect all destructive patterns (shell, Python, MCP, A2A), batch size reject, wildcard reject, trusted_paths bypass, rewrite rm→mv, TrashEntry expiry, auto-delete, capacity limit, restore, symlink-in-trusted-paths edge case
+- **guard.rs**: Detect all destructive patterns (shell, Python, MCP, A2A), batch size reject, wildcard reject, trusted_paths bypass, rewrite rm→mv, cancel-window deferral + Undo, deferred-execute after window elapses, retention→Expired (no deletion), capacity eviction (oldest-Expired-first only), restore, symlink-in-trusted-paths edge case
 - **notify.rs**: Same-batch aggregation, independent deletion notification, badge count correctness
 
 ### E2E Tests
@@ -605,7 +636,10 @@ trash/       ← TrashPanel, TrashRow, useTrashBridge, api, types
 | Agent has no matching action for file type | Show only ask_me + hint |
 | Voice STT error | Show transcription in editable field; user corrects |
 | Agent crashes during task | Rebuild queue state from ledger on restart |
-| Trash capacity exceeded | Reject new deletions; notify user to empty |
+| Trash capacity exceeded | Evict oldest EXPIRED entries first; if still over, AskUser (delete-without-trash) + "Trash full" notify — never evict unexpired |
+| User hits Undo in cancel window | Drop PendingDelete; file never touched (lossless) |
+| Daemon down during cancel window | Delete simply does not execute (fail-safe); reconciled on next daemon start |
+| Trash retention elapsed | Mark Expired (still on disk, recoverable); NEVER auto-deleted |
 | Symlink in trusted_paths | Not resolved; trash still applies |
 | 50 files in one batch | 1 aggregated notification |
 | Task timeout | Mark failed; retain for retry |
@@ -622,6 +656,12 @@ trash/       ← TrashPanel, TrashRow, useTrashBridge, api, types
 - [Safe File Deletion MCP — NPM package](https://www.npmjs.com/package/@mizunashi_mana/safe-file-deletion-mcp)
 - [Undisk MCP — Per-file undo](https://chat.mcp.so/server/undisk-mcp/Kiarash%20Adl)
 - [Replit — Inside the Snapshot Engine, Dec 2025](https://blog.replit.com/inside-replits-snapshot-engine)
+- [Replit AI wiped production database — Fortune, Jul 2025](https://fortune.com/2025/07/23/ai-coding-tool-replit-wiped-database-called-it-a-catastrophic-failure/)
+- [Google Gemini CLI deletes user files — Winbuzzer, Jul 2025](https://winbuzzer.com/2025/07/26/googles-gemini-cli-deletes-user-files-confesses-catastrophic-failure-xcxwbn/)
+- [Avoiding the soft-delete anti-pattern — Cultured Systems, 2024](https://www.cultured.systems/2024/04/24/Soft-delete/)
+- [Delete Button UI best practice — DesignMonks](https://www.designmonks.co/blog/delete-button-ui)
+- [Human-in-the-loop — LangChain docs](https://docs.langchain.com/oss/python/langchain/human-in-the-loop)
+- [Human-in-the-loop AI agent approvals 2026 — getclaw](https://getclaw.sh/blog/human-in-the-loop-ai-agents-approvals-2026)
 - [Morae — Proactively Pausing UI Agents (UIST '25)](https://ar5iv.labs.arxiv.org/html/2508.21456)
 - [AgentField — Cancel/Pause/Resume issue #243](https://github.com/Agent-Field/agentfield/issues/243)
 - [Autopoiesis — Delayed Action Buffer #614](https://github.com/DavSimFel/autopoiesis/issues/614)
