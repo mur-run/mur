@@ -4,7 +4,7 @@ use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::{YamlStore, default_mur_dir};
 
 pub(crate) async fn cmd_reindex() -> Result<()> {
-    use crate::store::embedding::{EmbeddingConfig, embed};
+    use crate::store::embedding::{EmbeddingConfig, embed_batch};
     use crate::store::vector::LanceDbStore as VectorStore;
 
     let pattern_store = YamlStore::default_store()?;
@@ -35,58 +35,68 @@ pub(crate) async fn cmd_reindex() -> Result<()> {
         }
     );
 
-    let mut indexed_patterns = Vec::new();
-    let mut indexed_workflows = Vec::new();
-    let mut errors = 0;
-    let total = patterns.len() + workflows.len();
+    // Collect all texts first
+    let mut texts: Vec<String> = Vec::with_capacity(patterns.len() + workflows.len());
 
-    for (i, pattern) in patterns.iter().enumerate() {
+    for pattern in &patterns {
         let mut text = format!(
             "{}: {}\n{}",
             pattern.name,
             pattern.description,
             pattern.content.as_text()
         );
-        // Include attachment descriptions in embedding text for better search
         for att in &pattern.attachments {
             if !att.description.is_empty() {
                 text.push_str("\n\n");
                 text.push_str(&att.description);
             }
         }
-        match embed(&text, &config).await {
-            Ok(embedding) => {
-                indexed_patterns.push((pattern.clone(), embedding));
-                if (i + 1) % 10 == 0 {
-                    println!("  {}/{} embedded...", i + 1, total);
-                }
-            }
-            Err(e) => {
-                eprintln!("  ⚠️  {} — {}", pattern.name, e);
-                errors += 1;
-            }
-        }
+        texts.push(text);
     }
-
-    for (i, workflow) in workflows.iter().enumerate() {
+    for workflow in &workflows {
         let text = format!(
             "{}: {}\n{}",
             workflow.name,
             workflow.description,
             workflow.content.as_text()
         );
-        match embed(&text, &config).await {
-            Ok(embedding) => {
-                indexed_workflows.push((workflow.clone(), embedding));
-                let idx = patterns.len() + i + 1;
-                if idx % 10 == 0 {
-                    println!("  {}/{} embedded...", idx, total);
+        texts.push(text);
+    }
+
+    let total = texts.len();
+    let mut embeddings: Vec<Option<Vec<f32>>> = vec![None; total];
+    let mut errors = 0;
+
+    const EMBED_BATCH: usize = 200;
+    for batch_start in (0..total).step_by(EMBED_BATCH) {
+        let batch_end = (batch_start + EMBED_BATCH).min(total);
+        let batch: Vec<String> = texts[batch_start..batch_end].to_vec();
+        match embed_batch(&batch, &config).await {
+            Ok(batch_embs) => {
+                for (j, emb) in batch_embs.into_iter().enumerate() {
+                    embeddings[batch_start + j] = Some(emb);
                 }
+                println!("  {}/{} embedded...", batch_end, total);
             }
             Err(e) => {
-                eprintln!("  ⚠️  {} — {}", workflow.name, e);
-                errors += 1;
+                eprintln!("  ⚠️  batch {}-{} embedding failed: {}", batch_start, batch_end, e);
+                errors += batch_end - batch_start;
             }
+        }
+    }
+
+    // Pair results back
+    let mut indexed_patterns = Vec::new();
+    let mut indexed_workflows = Vec::new();
+
+    for (i, pattern) in patterns.iter().enumerate() {
+        if let Some(emb) = embeddings[i].take() {
+            indexed_patterns.push((pattern.clone(), emb));
+        }
+    }
+    for (i, workflow) in workflows.iter().enumerate() {
+        if let Some(emb) = embeddings[patterns.len() + i].take() {
+            indexed_workflows.push((workflow.clone(), emb));
         }
     }
 
