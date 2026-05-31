@@ -477,7 +477,7 @@ pub(crate) fn cmd_workflow_publish(name: &str, team: &str) -> Result<()> {
     let token = match crate::auth::load_tokens() {
         Some(t) => t.access_token,
         None => {
-            eprintln!("Not logged in. Run `mur login` first.");
+            eprintln!("Not logged in. Run `mur auth login` first.");
             return Ok(());
         }
     };
@@ -555,7 +555,7 @@ pub(crate) fn cmd_workflow_install(name: &str, team: &str) -> Result<()> {
     let token = match crate::auth::load_tokens() {
         Some(t) => t.access_token,
         None => {
-            eprintln!("Not logged in. Run `mur login` first.");
+            eprintln!("Not logged in. Run `mur auth login` first.");
             return Ok(());
         }
     };

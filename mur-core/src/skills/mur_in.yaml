@@ -5,12 +5,12 @@ description: "Start MUR session recording to capture your workflow for pattern e
 category: context
 content:
   abstract: |
-    Start session recording with `mur in`. Captures prompts, responses,
+    Start session recording with `mur session in`. Captures prompts, responses,
     tool calls, errors for later pattern extraction.
   context: |
     # mur-in — Start Recording
 
-    Run `mur in` to start a session and inject context patterns.
+    Run `mur session in` to start a session and inject context patterns.
 
     Captures user prompts, AI responses, tool calls, errors. Used later
     by mur-out to extract patterns. When to use: before debugging,

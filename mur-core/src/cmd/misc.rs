@@ -111,10 +111,24 @@ pub(crate) fn cmd_doctor() -> Result<()> {
         println!("❌ MUR directory not found. Run `mur init` first.");
     }
 
-    // Check patterns
-    let store = YamlStore::default_store()?;
-    let count = store.list_all()?.len();
-    println!("✅ Patterns: {count}");
+    // Check skills
+    let skills_dir = mur_dir.join("skills");
+    let skill_count = if skills_dir.exists() {
+        std::fs::read_dir(&skills_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .count()
+    } else {
+        0
+    };
+    if skill_count > 0 {
+        println!("✅ Skills (installed): {skill_count}");
+        if skill_count < 5 {
+            println!("  ⚠ Few skills installed. Run `mur skill install <name>` to add more.");
+        }
+    } else {
+        println!("  ⚠ No skills found in {}", skills_dir.display());
+    }
 
     // Check LLM config
     let config = crate::store::config::load_config()?;
@@ -130,12 +144,6 @@ pub(crate) fn cmd_doctor() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn cmd_gc(_auto: bool) -> Result<()> {
-    eprintln!(
-        "# mur gc: pattern lifecycle management removed — use `mur skill sweep` for skill lifecycle."
-    );
-    Ok(())
-}
 pub(crate) fn cmd_exchange_import(file: &str) -> Result<()> {
     let store = YamlStore::default_store()?;
     let path = std::path::Path::new(file);
@@ -174,7 +182,7 @@ pub(crate) fn cmd_exchange_export(name: &str, dir: Option<String>) -> Result<()>
 
 pub(crate) async fn cmd_login() -> Result<()> {
     if let Some(_tokens) = crate::auth::load_tokens() {
-        println!("Already logged in. Run `mur logout` first to re-authenticate.");
+        println!("Already logged in. Run `mur auth logout` first to re-authenticate.");
         return Ok(());
     }
 

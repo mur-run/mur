@@ -274,8 +274,8 @@ pub async fn auth_request(
     method: reqwest::Method,
     url: &str,
 ) -> Result<reqwest::RequestBuilder> {
-    let tokens =
-        load_tokens().ok_or_else(|| anyhow::anyhow!("Not logged in. Run `mur login` first."))?;
+    let tokens = load_tokens()
+        .ok_or_else(|| anyhow::anyhow!("Not logged in. Run `mur auth login` first."))?;
 
     Ok(client
         .request(method, url)

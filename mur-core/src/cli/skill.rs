@@ -240,6 +240,21 @@ pub enum SkillAction {
         #[arg(long)]
         json: bool,
     },
+    /// Import/export skills in MKEF format
+    Exchange {
+        #[command(subcommand)]
+        action: crate::cli::actions::ExchangeAction,
+    },
+    /// Manage pending skill drafts
+    Drafts {
+        #[command(subcommand)]
+        action: crate::cli::actions::DraftsAction,
+    },
+    /// Run eval suites
+    Eval {
+        #[command(subcommand)]
+        action: crate::cli::actions::EvalAction,
+    },
     /// Host-level intent canonicalisation (M7c).
     #[command(subcommand)]
     Intent(IntentAction),

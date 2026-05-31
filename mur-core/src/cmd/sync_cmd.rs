@@ -38,7 +38,7 @@ pub(crate) async fn device_sync(
                 Some(t) => t.access_token,
                 None => {
                     if !quiet {
-                        eprintln!("  ⚠ Not authenticated. Run `mur login` for cloud sync.");
+                        eprintln!("  ⚠ Not authenticated. Run `mur auth login` for cloud sync.");
                     }
                     return Ok(());
                 }
@@ -1353,7 +1353,7 @@ pub(crate) async fn run_push(server_url: &str, dry_run: bool) -> anyhow::Result<
     }
 
     let tokens = crate::auth::load_tokens()
-        .ok_or_else(|| anyhow::anyhow!("not logged in (run `mur login`)"))?;
+        .ok_or_else(|| anyhow::anyhow!("not logged in (run `mur auth login`)"))?;
     let client = crate::sync::SyncClient::new(server_url, &tokens.access_token)?;
 
     let signals: Vec<mur_common::Signal> = to_send.iter().map(|(_, s)| s.clone()).collect();
@@ -1391,7 +1391,7 @@ pub(crate) async fn run_fetch(server_url: &str, dry_run: bool) -> anyhow::Result
     }
 
     let tokens = crate::auth::load_tokens()
-        .ok_or_else(|| anyhow::anyhow!("not logged in (run `mur login`)"))?;
+        .ok_or_else(|| anyhow::anyhow!("not logged in (run `mur auth login`)"))?;
     let client = crate::sync::SyncClient::new(server_url, &tokens.access_token)?;
 
     let resp = client

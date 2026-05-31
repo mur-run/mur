@@ -32,6 +32,77 @@ pub enum HookEvent {
     },
     /// Show hook statistics (skip rate, tier distribution, latency)
     Stats,
+    /// Test injection pipeline: show what skills would be injected for a query
+    Inject {
+        /// Query to test injection against
+        query: String,
+    },
+    /// Inject context-aware skills (auto-detects project/session context)
+    Context {
+        /// Quiet mode — only output injected skills
+        #[arg(long, short)]
+        quiet: bool,
+        /// Compact output
+        #[arg(long)]
+        compact: bool,
+        /// Override auto-detected query
+        #[arg(long)]
+        query: Option<String>,
+        /// Write context to ~/.mur/context.md
+        #[arg(long)]
+        file: bool,
+        /// Token budget (default: 2000)
+        #[arg(long, default_value = "2000")]
+        budget: usize,
+        /// Source tool identifier
+        #[arg(long, default_value = "cli")]
+        source: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Scope filter (repeatable key=value)
+        #[arg(long)]
+        scope: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AuthAction {
+    /// Log in to mur.run
+    Login,
+    /// Log out and clear stored credentials
+    Logout,
+}
+
+#[derive(Subcommand)]
+pub enum DaemonAction {
+    /// Start the murmurd daemon
+    Start {
+        /// Run in background (detach from terminal)
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Stop the murmurd daemon
+    Stop,
+    /// Show murmurd daemon status
+    Status,
+    /// Start the local API server for the web dashboard
+    Serve {
+        /// Port to listen on
+        #[arg(long, default_value = "3847")]
+        port: u16,
+        /// Open browser after starting
+        #[arg(long)]
+        open: bool,
+        /// Read-only mode (reject all write operations)
+        #[arg(long)]
+        readonly: bool,
+    },
+    /// Configure the daemon sleep cycle
+    Sleep {
+        #[command(subcommand)]
+        action: SleepAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -69,6 +140,13 @@ pub enum ExchangeAction {
 
 #[derive(Subcommand)]
 pub enum InternalsAction {
+    /// Rebuild the LanceDB vector index from YAML skill files
+    Reindex {
+        /// Initialise the versioned git store and commit all existing skills
+        /// in one bootstrap commit.
+        #[arg(long)]
+        bootstrap: bool,
+    },
     /// Rebuild the versioned-store history index from git log (recovery only)
     RebuildIndex {
         /// Which layer: `knowledge` (patterns/workflows) or `agents`
@@ -88,6 +166,29 @@ pub enum InternalsAction {
 
 #[derive(Subcommand)]
 pub enum WorkflowAction {
+    /// Run a workflow by name or semantic query
+    Run {
+        /// Workflow name or search query
+        query: String,
+        /// Cancel remaining parallel branches on first failure
+        #[arg(long)]
+        fail_fast: bool,
+        /// Print workflow as AI prompt instead of executing
+        #[arg(long)]
+        prompt: bool,
+    },
+    /// Show workflow composition suggestions and pending nudges
+    Suggest {
+        /// Auto-create suggested workflows as drafts
+        #[arg(long)]
+        create: bool,
+        /// Accept a pending nudge by id
+        #[arg(long, value_name = "ID")]
+        accept: Option<String>,
+        /// Dismiss a pending nudge by id
+        #[arg(long, value_name = "ID")]
+        dismiss: Option<String>,
+    },
     /// List all workflows
     List,
     /// Manage workflow schedules
@@ -229,42 +330,23 @@ pub enum SessionAction {
         #[arg(long)]
         all: bool,
     },
-}
-
-#[derive(Subcommand)]
-pub enum CommunityAction {
-    /// Publish a pattern to the community
-    Publish { name: String },
-    /// Fetch (copy) a community pattern by ID
-    Fetch { id: String },
-    /// Search community patterns
-    Search { query: String },
-    /// List community patterns
-    List {
-        /// Sort order: popular, recent, trending, stars
-        #[arg(long, default_value = "popular")]
-        sort: String,
+    /// Start session recording and inject context (shorthand for start + context)
+    In {
+        /// Source identifier (e.g. claude-code)
+        #[arg(long, default_value = "claude-code")]
+        source: String,
     },
-    /// Star a community pattern
-    Star { id: String },
-    /// Report effectiveness of a community pattern
-    Report {
-        /// Pattern name or ID
-        name: String,
-        /// Effectiveness score (0.0-1.0)
+    /// Stop session recording with post-session menu
+    Out {
+        /// Action to perform: analyze, export, skip
         #[arg(long)]
-        effectiveness: f64,
-        /// Number of sessions used
+        action: Option<String>,
+        /// Force LLM analysis even for short sessions
         #[arg(long)]
-        sessions: u32,
+        force: bool,
     },
-    /// List available community packs
-    Packs,
-    /// View or install a community pack
-    Pack {
-        #[command(subcommand)]
-        action: PackAction,
-    },
+    /// Stop recording and delete the session (no export)
+    Discard,
 }
 
 #[derive(Subcommand)]
@@ -293,20 +375,6 @@ pub enum TeamAction {
         /// Team ID or slug (falls back to default set by `mur team use`)
         #[arg(long, env = "MUR_TEAM_ID")]
         team: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum PackAction {
-    /// Install a community pack (downloads all its patterns)
-    Install {
-        /// Pack ID
-        id: String,
-    },
-    /// Show details of a community pack
-    Show {
-        /// Pack ID
-        id: String,
     },
 }
 
@@ -351,6 +419,112 @@ pub enum ChatAction {
         limit: usize,
         #[arg(long)]
         src: Option<String>,
+    },
+    /// Ask a natural-language question about your conversation archive
+    Ask {
+        /// Question to ask
+        question: Option<String>,
+        #[arg(long)]
+        src: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        #[arg(long, default_value = "5")]
+        k: usize,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        min_score: Option<f64>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        no_escalate: bool,
+        #[arg(long)]
+        debug_prompt: bool,
+        #[arg(long)]
+        strict_citations: bool,
+        #[arg(long = "continue", conflicts_with = "new_flag")]
+        continue_flag: bool,
+        #[arg(long = "new", conflicts_with = "continue_flag")]
+        new_flag: bool,
+        #[arg(long, conflicts_with_all = ["continue_flag", "new_flag"])]
+        show_session: bool,
+        #[arg(long, conflicts_with = "summarize_model")]
+        no_summarize: bool,
+        #[arg(long)]
+        summarize_model: Option<String>,
+    },
+    /// Run polling ingesters (Cursor/Gemini/Aider)
+    Pull,
+    /// Apply retention cleanup
+    Cleanup,
+    /// Rebuild LanceDB from raw + summaries
+    Reindex {
+        #[arg(long, conflicts_with_all = ["spans_only", "rollups_only"])]
+        raw_only: bool,
+        #[arg(long, conflicts_with_all = ["raw_only", "rollups_only"])]
+        spans_only: bool,
+        #[arg(long, conflicts_with_all = ["raw_only", "spans_only"])]
+        rollups_only: bool,
+    },
+    /// Run conversation archive health checks
+    Doctor,
+    /// Check migration preconditions
+    Preflight,
+    /// Migrate from commander paths
+    Migrate {
+        #[arg(long)]
+        run: bool,
+        #[arg(long, conflicts_with_all = &["run", "discard_staging"])]
+        resume: bool,
+        #[arg(long, conflicts_with_all = &["run", "resume"])]
+        discard_staging: bool,
+    },
+    /// Roll back to commander's old paths
+    Rollback,
+    /// Generate hybrid summaries for completed days
+    Compact {
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        if_stale: bool,
+        #[arg(long)]
+        max_days: Option<u32>,
+        #[arg(long)]
+        extractive_only: bool,
+        #[arg(long)]
+        debug_prompt: bool,
+        #[arg(long)]
+        skip_rollups: bool,
+    },
+    /// Generate weekly + monthly rollup summaries
+    Rollup {
+        #[arg(long)]
+        week: Option<String>,
+        #[arg(long, conflicts_with = "week")]
+        month: Option<String>,
+        #[arg(long, conflicts_with_all = ["week", "month"])]
+        all_missing: bool,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        if_stale: bool,
+        #[arg(long)]
+        max_weeks: Option<u32>,
+        #[arg(long)]
+        max_months: Option<u32>,
+    },
+    /// Aggregate LLM call telemetry into per-stage cost report
+    CostReport {
+        #[arg(long, default_value = "7d")]
+        since: String,
+        #[arg(long)]
+        json: bool,
     },
 }
 
