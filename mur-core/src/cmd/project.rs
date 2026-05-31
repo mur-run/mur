@@ -3,11 +3,11 @@ use std::path::PathBuf;
 
 use crate::codebase::scanner::{expand_tilde, project_name_from_path, scan_project};
 use crate::codebase::{
-    CodebaseIndex, IndexProgress, IndexStatus, IndexLock, BACKGROUND_CHUNK_THRESHOLD,
+    BACKGROUND_CHUNK_THRESHOLD, CodebaseIndex, IndexLock, IndexProgress, IndexStatus,
     discover_all_indexes,
 };
 use crate::store::config::load_config;
-use crate::store::embedding::{embed, EmbeddingConfig};
+use crate::store::embedding::{EmbeddingConfig, embed};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BackgroundMode {
@@ -50,10 +50,17 @@ pub(crate) async fn cmd_project_index(
         BackgroundMode::Auto => {
             // Quick scan to estimate chunk count
             let files = scan_project(&project_path);
-            let estimated_chunks: usize = files.iter().map(|f| {
-                let lines = f.content.lines().count();
-                if lines < 50 { 1 } else { (lines / 60).max(1) + 1 }
-            }).sum();
+            let estimated_chunks: usize = files
+                .iter()
+                .map(|f| {
+                    let lines = f.content.lines().count();
+                    if lines < 50 {
+                        1
+                    } else {
+                        (lines / 60).max(1) + 1
+                    }
+                })
+                .sum();
             estimated_chunks > BACKGROUND_CHUNK_THRESHOLD
         }
     };
@@ -91,14 +98,13 @@ pub(crate) async fn cmd_project_index(
             cmd.process_group(0); // Detach from parent process group
         }
 
-        let child = cmd.spawn().with_context(|| "spawning background index worker")?;
+        let child = cmd
+            .spawn()
+            .with_context(|| "spawning background index worker")?;
         let pid = child.id();
 
         if !quiet {
-            eprintln!(
-                "Indexing '{}' in background (PID: {}).",
-                project_name, pid,
-            );
+            eprintln!("Indexing '{}' in background (PID: {}).", project_name, pid,);
             eprintln!("  Check progress: mur project status");
         }
 
@@ -277,8 +283,10 @@ pub(crate) async fn cmd_project_status(path: Option<String>) -> Result<()> {
                     0.0
                 };
                 println!("  Status: indexing in background (PID: {})", lock.pid);
-                println!("  Progress: {}/{} chunks ({:.0}%)",
-                    progress.done_chunks, progress.total_chunks, pct);
+                println!(
+                    "  Progress: {}/{} chunks ({:.0}%)",
+                    progress.done_chunks, progress.total_chunks, pct
+                );
                 if progress.errors > 0 {
                     println!("  Errors: {}", progress.errors);
                 }
@@ -300,7 +308,10 @@ pub(crate) async fn cmd_project_status(path: Option<String>) -> Result<()> {
                         }
                     }
                     IndexStatus::Running => {
-                        println!("  Last index: interrupted (stale lock, PID {} no longer alive)", lock.pid);
+                        println!(
+                            "  Last index: interrupted (stale lock, PID {} no longer alive)",
+                            lock.pid
+                        );
                     }
                 }
             } else {

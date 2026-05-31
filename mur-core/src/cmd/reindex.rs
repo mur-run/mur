@@ -79,7 +79,10 @@ pub(crate) async fn cmd_reindex() -> Result<()> {
                 println!("  {}/{} embedded...", batch_end, total);
             }
             Err(e) => {
-                eprintln!("  ⚠️  batch {}-{} embedding failed: {}", batch_start, batch_end, e);
+                eprintln!(
+                    "  ⚠️  batch {}-{} embedding failed: {}",
+                    batch_start, batch_end, e
+                );
                 errors += batch_end - batch_start;
             }
         }
