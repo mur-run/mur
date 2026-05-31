@@ -20,9 +20,11 @@ pub mod builder;
 pub mod companion_voice;
 pub mod ledger;
 pub mod telemetry;
+pub mod trash_guard;
 pub mod voice_input;
 
 pub use b0::B0SafetyHook;
+pub use trash_guard::TrashGuard;
 pub use chain::HookChain;
 pub use decision::Decision;
 pub use patch::{MessagePatch, PostToolUsePatch, PromptPatch, UntrustedWrapper};

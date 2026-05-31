@@ -1,1 +1,2 @@
-// Stub — implemented in Task 0.4/1.1/2.1/4.1/3.1 respectively
+// Re-exported from mur-common for backward compatibility.
+pub use mur_common::guard::{DestructivePattern, GuardError, TrashGuardLogic};
