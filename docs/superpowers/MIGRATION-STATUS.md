@@ -1,19 +1,20 @@
 # Pattern → Skill Migration Status
 
-**Last updated:** 2026-05-30  
-**Phase:** Tier A complete; Tier B/C gated on fleet-sync Phase 2
+**Last updated:** 2026-05-31  
+**Phase:** Tier A + C1 dead-code sweep complete; C2 deferred (no blocker, low urgency)
 
 ---
 
 ## Summary
 
-The Pattern → Skill migration is a three-tier effort to retire the legacy Pattern type and promote Skills as the unified learning system. **Tier A (cleanup) is complete.** Tier B and C are blocked pending fleet-sync Phase 2 implementation.
+The Pattern → Skill migration is a three-tier effort to retire the legacy Pattern type and promote Skills as the unified learning system. **Tier A and C1 (dead-code sweep) are complete.** Fleet-sync Phase 2 shipped. C2 (replacing 14 live Pattern areas with Skill equivalents) is deferred — Pattern is stable legacy code, nothing new builds on it, and C2 requires coordinated cross-repo changes (community API, sync protocol).
 
 | Tier | Work | Status | Blocker |
 |---|---|---|---|
-| **A** | Retire Pattern-only CLI + modules | ✅ **SHIPPED** | None |
-| **B** | Build skill-native fleet-sync infrastructure | 🔲 Not started | Scheduled with fleet-sync Phase 2 |
-| **C** | Remove Pattern type from codebase | 🔲 Not started | Tier B completion |
+| **A** | Retire Pattern-only CLI + modules | ✅ **SHIPPED** (#313, #316, #317) | None |
+| **B** | Skill-native fleet-sync infrastructure | ✅ **SHIPPED** (#318) | None |
+| **C1** | Dead-code sweep (callerless Pattern functions) | ✅ **SHIPPED** (#319) | None |
+| **C2** | Replace 14 live Pattern areas with Skill equivalents | ⏸ **DEFERRED** | Cross-repo (community API, sync protocol); no feature blocked |
 
 ---
 
