@@ -22,8 +22,29 @@ permissions:
 #     "mur.run" as the custom domain.
 
 jobs:
+  validate-version:
+    name: Validate tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check version consistency
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION="$(grep '^version ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "❌ Tag version (v${TAG_VERSION}) does not match Cargo.toml version (${CARGO_VERSION})"
+            echo ""
+            echo "  Fix: bump workspace version in Cargo.toml to match the tag before pushing."
+            echo "  Example: sed -i 's/version = \"${CARGO_VERSION}\"/version = \"${TAG_VERSION}\"/' Cargo.toml"
+            echo ""
+            exit 1
+          fi
+          echo "✅ Tag version v${TAG_VERSION} matches Cargo.toml"
+
   build:
     name: Build (${{ matrix.target }})
+    needs: validate-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
