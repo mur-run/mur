@@ -162,10 +162,16 @@ pub enum Commands {
         #[command(subcommand)]
         action: TeamAction,
     },
-    /// Log in to mur community
-    Login,
-    /// Log out from mur community
-    Logout,
+    /// Authentication (login / logout)
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+    /// Background daemon and server management
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
     /// Initialize MUR directory and optionally install hooks
     Init {
         /// Install hooks for detected AI tools

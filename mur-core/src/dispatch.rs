@@ -9,8 +9,9 @@ use clap::CommandFactory;
 use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
     AgentPromptAction, AgentScheduleAction, AgentSecretAction, AgentSkillAction,
-    AgentWebhookAction, ChatAction, Cli, Commands, ConversationsAction, DeployAction,
-    DraftsAction, EvalAction, ExchangeAction, HookEvent, InternalsAction, MurmurdAction,
+    AgentWebhookAction, AuthAction, ChatAction, Cli, Commands, ConversationsAction,
+    DaemonAction, DeployAction, DraftsAction, EvalAction, ExchangeAction, HookEvent,
+    InternalsAction, MurmurdAction,
     ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction,
     VoiceAction, WorkflowAction,
 };
@@ -208,8 +209,6 @@ pub async fn run(cli: Cli) -> Result<()> {
                 cmd::team_cmd::cmd_team_sync(&team_id).await?
             }
         },
-        Commands::Login => cmd::misc::cmd_login().await?,
-        Commands::Logout => cmd::misc::cmd_logout()?,
         Commands::Init {
             hooks,
             refresh_discovery,
@@ -753,6 +752,23 @@ pub async fn run(cli: Cli) -> Result<()> {
             } => cmd::project::cmd_project_search(query, project, limit, json).await?,
             ProjectAction::Status { path } => cmd::project::cmd_project_status(path).await?,
             ProjectAction::List => cmd::project::cmd_project_list()?,
+        },
+        Commands::Auth { action } => match action {
+            AuthAction::Login => cmd::misc::cmd_login().await?,
+            AuthAction::Logout => cmd::misc::cmd_logout()?,
+        },
+        Commands::Daemon { action } => match action {
+            DaemonAction::Start { detach } => cmd::murmurd::cmd_murmurd_start(detach)?,
+            DaemonAction::Stop => cmd::murmurd::cmd_murmurd_stop()?,
+            DaemonAction::Status => cmd::murmurd::cmd_murmurd_status()?,
+            DaemonAction::Serve { port, open, readonly } => {
+                cmd::server_cmd::cmd_serve(port, open, readonly).await?
+            }
+            DaemonAction::Sleep { action } => match action {
+                SleepAction::Enable => cmd::sleep::cmd_sleep_enable()?,
+                SleepAction::Disable => cmd::sleep::cmd_sleep_disable()?,
+                SleepAction::Status => cmd::sleep::cmd_sleep_status()?,
+            },
         },
     }
 

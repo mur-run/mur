@@ -35,6 +35,45 @@ pub enum HookEvent {
 }
 
 #[derive(Subcommand)]
+pub enum AuthAction {
+    /// Log in to mur.run
+    Login,
+    /// Log out and clear stored credentials
+    Logout,
+}
+
+#[derive(Subcommand)]
+pub enum DaemonAction {
+    /// Start the murmurd daemon
+    Start {
+        /// Run in background (detach from terminal)
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Stop the murmurd daemon
+    Stop,
+    /// Show murmurd daemon status
+    Status,
+    /// Start the local API server for the web dashboard
+    Serve {
+        /// Port to listen on
+        #[arg(long, default_value = "3847")]
+        port: u16,
+        /// Open browser after starting
+        #[arg(long)]
+        open: bool,
+        /// Read-only mode (reject all write operations)
+        #[arg(long)]
+        readonly: bool,
+    },
+    /// Configure the daemon sleep cycle
+    Sleep {
+        #[command(subcommand)]
+        action: SleepAction,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum MurmurdAction {
     /// Start the murmurd daemon
     Start {
