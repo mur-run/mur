@@ -290,6 +290,13 @@ pub enum AgentAction {
         #[arg(short = 'f', long)]
         file: std::path::PathBuf,
     },
+    /// List or act on pending ingested items (A1)
+    Pending {
+        /// Agent name
+        name: String,
+        #[command(subcommand)]
+        action: Option<AgentPendingAction>,
+    },
     /// Manage the action task queue (list/pause/cancel/retry)
     Queue {
         /// Agent name
@@ -340,6 +347,19 @@ pub enum AgentHooksAction {
         /// Emit machine-readable JSON array
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AgentPendingAction {
+    /// List pending items for this agent
+    List,
+    /// Execute an action on a pending item
+    Act {
+        /// Pending item UUID
+        id: String,
+        /// Action ID from file_actions (e.g. "summarize")
+        action_id: String,
     },
 }
 
