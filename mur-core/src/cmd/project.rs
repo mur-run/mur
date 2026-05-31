@@ -1,15 +1,29 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-use crate::codebase::scanner::{expand_tilde, project_name_from_path};
-use crate::codebase::{CodebaseIndex, discover_all_indexes};
+use crate::codebase::scanner::{expand_tilde, project_name_from_path, scan_project};
+use crate::codebase::{
+    CodebaseIndex, IndexProgress, IndexStatus, IndexLock, BACKGROUND_CHUNK_THRESHOLD,
+    discover_all_indexes,
+};
 use crate::store::config::load_config;
-use crate::store::embedding::{EmbeddingConfig, embed};
+use crate::store::embedding::{embed, EmbeddingConfig};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BackgroundMode {
+    /// Auto-detect: background if chunks > BACKGROUND_CHUNK_THRESHOLD
+    Auto,
+    /// Force background execution
+    ForceBackground,
+    /// Force foreground execution
+    ForceForeground,
+}
 
 pub(crate) async fn cmd_project_index(
     path: Option<String>,
     rebuild: bool,
     quiet: bool,
+    bg_mode: BackgroundMode,
 ) -> Result<()> {
     let project_path = match &path {
         Some(p) => expand_tilde(p),
@@ -29,6 +43,89 @@ pub(crate) async fn cmd_project_index(
     let embed_config = EmbeddingConfig::from_config(&cfg);
     let index = CodebaseIndex::new(&project_name, &project_path);
 
+    // Determine whether to run in background
+    let run_in_background = match bg_mode {
+        BackgroundMode::ForceBackground => true,
+        BackgroundMode::ForceForeground => false,
+        BackgroundMode::Auto => {
+            // Quick scan to estimate chunk count
+            let files = scan_project(&project_path);
+            let estimated_chunks: usize = files.iter().map(|f| {
+                let lines = f.content.lines().count();
+                if lines < 50 { 1 } else { (lines / 60).max(1) + 1 }
+            }).sum();
+            estimated_chunks > BACKGROUND_CHUNK_THRESHOLD
+        }
+    };
+
+    if run_in_background {
+        // Check lock
+        if !index.try_acquire_lock()? {
+            eprintln!(
+                "Indexing already in progress for '{}' (lock held by another process).",
+                project_name
+            );
+            eprintln!("  Check status: mur project status");
+            return Ok(());
+        }
+
+        // Spawn worker subprocess
+        let mur_bin = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("mur"));
+        let mut cmd = std::process::Command::new(&mur_bin);
+        cmd.args([
+            "project",
+            "index-worker",
+            &project_name,
+            &project_path.display().to_string(),
+        ]);
+        if rebuild {
+            cmd.arg("--rebuild");
+        }
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.stdin(std::process::Stdio::null());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0); // Detach from parent process group
+        }
+
+        let child = cmd.spawn().with_context(|| "spawning background index worker")?;
+        let pid = child.id();
+
+        if !quiet {
+            eprintln!(
+                "Indexing '{}' in background (PID: {}).",
+                project_name, pid,
+            );
+            eprintln!("  Check progress: mur project status");
+        }
+
+        // Overwrite lock with the child's pid
+        let lock = IndexLock {
+            pid,
+            project_name: project_name.clone(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let lock_path = index.lock_path();
+        std::fs::write(&lock_path, serde_json::to_string(&lock)?)?;
+
+        // Write initial progress
+        index.write_progress(&IndexProgress {
+            status: IndexStatus::Running,
+            total_chunks: 0,
+            done_chunks: 0,
+            errors: 0,
+            started_at: chrono::Utc::now().to_rfc3339(),
+            finished_at: None,
+            error_message: None,
+        })?;
+
+        return Ok(());
+    }
+
+    // ── Foreground path (existing behavior) ──
     if !quiet {
         eprintln!("Indexing {} ({})...", project_name, project_path.display());
     }
@@ -54,7 +151,6 @@ pub(crate) async fn cmd_project_index(
     }
 
     crate::codebase::ensure_git_hook(&project_path, quiet)?;
-
     Ok(())
 }
 
@@ -190,4 +286,110 @@ pub(crate) fn cmd_project_list() -> Result<()> {
         println!("    path: {}", path_display);
     }
     Ok(())
+}
+
+/// Internal: runs the actual indexing work when spawned in background mode.
+pub(crate) async fn cmd_project_index_worker(
+    project_name: &str,
+    project_path_str: &str,
+    rebuild: bool,
+) -> Result<()> {
+    let project_path = PathBuf::from(project_path_str);
+    let cfg = load_config()?;
+    let embed_config = EmbeddingConfig::from_config(&cfg);
+    let index = CodebaseIndex::new(project_name, &project_path);
+
+    // Build with progress callbacks that write to the progress file
+    let build_result = index
+        .build(&embed_config, rebuild, |done, total| {
+            let progress = IndexProgress {
+                status: IndexStatus::Running,
+                total_chunks: total,
+                done_chunks: done,
+                errors: 0,
+                started_at: String::new(),
+                finished_at: None,
+                error_message: None,
+            };
+            let _ = index.write_progress(&progress);
+        })
+        .await;
+
+    match build_result {
+        Ok(stats) => {
+            let progress = IndexProgress {
+                status: IndexStatus::Done,
+                total_chunks: stats.chunks_created,
+                done_chunks: stats.chunks_created,
+                errors: 0,
+                started_at: String::new(),
+                finished_at: Some(chrono::Utc::now().to_rfc3339()),
+                error_message: None,
+            };
+            let _ = index.write_progress(&progress);
+            index.release_lock();
+
+            // Desktop notification
+            send_notification(
+                &format!("mur: {} indexed", project_name),
+                &format!(
+                    "{} files, {} chunks in {:.1}s",
+                    stats.files_indexed,
+                    stats.chunks_created,
+                    stats.duration_ms as f64 / 1000.0
+                ),
+            );
+        }
+        Err(e) => {
+            let progress = IndexProgress {
+                status: IndexStatus::Error,
+                total_chunks: 0,
+                done_chunks: 0,
+                errors: 1,
+                started_at: String::new(),
+                finished_at: Some(chrono::Utc::now().to_rfc3339()),
+                error_message: Some(e.to_string()),
+            };
+            let _ = index.write_progress(&progress);
+            index.release_lock();
+
+            send_notification(
+                &format!("mur: {} index failed", project_name),
+                &format!("Error: {:.100}", e),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Send a desktop notification. macOS uses osascript; Linux uses notify-send if available.
+fn send_notification(title: &str, message: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "display notification \"{}\" with title \"{}\"",
+            message.replace('"', "\\\""),
+            title.replace('"', "\\\"")
+        );
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Fallback: terminal bell + stderr
+        eprintln!("\n\x07{}: {}", title, message);
+        // Try notify-send on Linux
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("notify-send")
+                .args([title, message])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+    }
 }

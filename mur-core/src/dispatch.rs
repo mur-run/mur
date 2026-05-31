@@ -965,7 +965,21 @@ pub async fn run(cli: Cli) -> Result<()> {
                 path,
                 rebuild,
                 quiet,
-            } => cmd::project::cmd_project_index(path, rebuild, quiet).await?,
+                background,
+                foreground,
+            } => {
+                let mode = match (background, foreground) {
+                    (true, _) => cmd::project::BackgroundMode::ForceBackground,
+                    (_, true) => cmd::project::BackgroundMode::ForceForeground,
+                    (false, false) => cmd::project::BackgroundMode::Auto,
+                };
+                cmd::project::cmd_project_index(path, rebuild, quiet, mode).await?
+            }
+            ProjectAction::IndexWorker {
+                project_name,
+                project_path,
+                rebuild,
+            } => cmd::project::cmd_project_index_worker(&project_name, &project_path, rebuild).await?,
             ProjectAction::Search {
                 query,
                 project,
