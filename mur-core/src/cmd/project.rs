@@ -256,13 +256,62 @@ pub(crate) async fn cmd_project_status(path: Option<String>) -> Result<()> {
     let project_name = project_name_from_path(&project_path);
     let index = CodebaseIndex::new(&project_name, &project_path);
 
-    let meta = index.lance_path().exists();
+    let has_db = index.lance_path().exists();
     let stats = index.stats_async().await?;
 
     println!("Project: {}", project_name);
     println!("  Path: {}", project_path.display());
-    println!("  Indexed: {}", if meta { "yes" } else { "no" });
-    if meta {
+
+    // Check if a background index is running
+    let lock_path = index.lock_path();
+    if lock_path.exists() {
+        if let Ok(data) = std::fs::read_to_string(&lock_path) {
+            if let Ok(lock) = serde_json::from_str::<IndexLock>(&data) {
+                if mur_common::lock_file::pid_alive(lock.pid) {
+                    // Live background process — show progress
+                    if let Some(progress) = index.read_progress() {
+                        let pct = if progress.total_chunks > 0 {
+                            (progress.done_chunks as f64 / progress.total_chunks as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        println!("  Status: indexing in background (PID: {})", lock.pid);
+                        println!("  Progress: {}/{} chunks ({:.0}%)",
+                            progress.done_chunks, progress.total_chunks, pct);
+                        if progress.errors > 0 {
+                            println!("  Errors: {}", progress.errors);
+                        }
+                    } else {
+                        println!("  Status: indexing in background (PID: {})", lock.pid);
+                    }
+                    return Ok(());
+                } else {
+                    // Stale lock — process died
+                    if let Some(progress) = index.read_progress() {
+                        match progress.status {
+                            IndexStatus::Done => {
+                                println!("  Last index: completed");
+                            }
+                            IndexStatus::Error => {
+                                println!("  Last index: failed");
+                                if let Some(ref msg) = progress.error_message {
+                                    println!("  Error: {}", msg);
+                                }
+                            }
+                            IndexStatus::Running => {
+                                println!("  Last index: interrupted (stale lock, PID {} no longer alive)", lock.pid);
+                            }
+                        }
+                    } else {
+                        println!("  Last index: unknown (stale lock)");
+                    }
+                }
+            }
+        }
+    }
+
+    println!("  Indexed: {}", if has_db { "yes" } else { "no" });
+    if has_db {
         println!("  Chunks: {}", stats.chunks_created);
     }
 
