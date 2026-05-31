@@ -105,6 +105,16 @@ pub struct AgentProfile {
     /// E6: Pattern federation — snapshot filter + outbox config.
     #[serde(default)]
     pub federation: FederationConfig,
+
+    /// A1: declarative UI action list — file_actions rendered as action
+    /// buttons in the pending-item selection UI. New top-level key; NOT
+    /// nested under `capabilities:`.
+    #[serde(default)]
+    pub file_actions: Vec<crate::action::FileAction>,
+
+    /// A2 + A3: action pipeline configuration (deletion safety + queue limits).
+    #[serde(default)]
+    pub action_pipeline: crate::action::ActionPipelineConfig,
 }
 
 fn default_algorithm() -> String {
@@ -1489,6 +1499,15 @@ mod appearance_tests {
         assert_eq!(profile.appearance.style_preset, "default-blob");
         assert_eq!(profile.appearance.behavior_preset, BehaviorPreset::Normal);
         assert_eq!(profile.appearance.render_status, RenderStatus::Pending);
+    }
+
+    #[test]
+    fn legacy_profile_without_file_actions_or_action_pipeline_loads() {
+        let yaml = include_str!("../tests/fixtures/profile_p0a_minimal.yaml");
+        let p: AgentProfile = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(p.file_actions.is_empty());
+        assert_eq!(p.action_pipeline.deletion.cancel_window_minutes, 10);
+        assert_eq!(p.action_pipeline.queue.max_concurrent, 3);
     }
 }
 

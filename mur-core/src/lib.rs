@@ -54,6 +54,8 @@ pub mod update;
 pub mod verify;
 pub mod yaml_edit;
 
+pub mod action_pipeline;
+
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(feature = "server")]

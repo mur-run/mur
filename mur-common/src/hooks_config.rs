@@ -19,6 +19,10 @@ pub struct HooksConfig {
     /// `None` = auto-wire from `profile.voice.enabled`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_input: Option<bool>,
+
+    /// Whether `TrashGuard` runs. Default: true.
+    #[serde(default = "default_true")]
+    pub trash_guard: bool,
 }
 
 impl Default for HooksConfig {
@@ -27,6 +31,7 @@ impl Default for HooksConfig {
             ledger: true,
             companion_voice: None,
             voice_input: None,
+            trash_guard: true,
         }
     }
 }

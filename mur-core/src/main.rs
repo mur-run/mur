@@ -23,6 +23,7 @@ mod dashboard;
 mod dispatch;
 // Discovery items (cache constants, LLM preference table, test-only fns) are
 // defined for library consumers and tests; the binary only uses a subset.
+mod action_pipeline;
 #[allow(dead_code)]
 mod discovery;
 mod evolve;

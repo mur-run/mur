@@ -290,6 +290,27 @@ pub enum AgentAction {
         #[arg(short = 'f', long)]
         file: std::path::PathBuf,
     },
+    /// List or act on pending ingested items (A1)
+    Pending {
+        /// Agent name
+        name: String,
+        #[command(subcommand)]
+        action: Option<AgentPendingAction>,
+    },
+    /// Manage the action task queue (list/pause/cancel/retry)
+    Queue {
+        /// Agent name
+        name: String,
+        #[command(subcommand)]
+        action: AgentQueueAction,
+    },
+    /// Manage agent trash (list/restore/empty/now)
+    Trash {
+        /// Agent name
+        name: String,
+        #[command(subcommand)]
+        action: AgentTrashAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -333,6 +354,63 @@ pub enum AgentHooksAction {
         /// Emit machine-readable JSON array
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AgentPendingAction {
+    /// List pending items for this agent
+    List,
+    /// Execute an action on a pending item
+    Act {
+        /// Pending item UUID
+        id: String,
+        /// Action ID from file_actions (e.g. "summarize")
+        action_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AgentQueueAction {
+    /// List all tasks in the queue
+    List,
+    /// Pause a running task at next checkpoint
+    Pause {
+        /// Task ID (UUID)
+        id: String,
+    },
+    /// Resume a paused task
+    Resume {
+        /// Task ID (UUID)
+        id: String,
+    },
+    /// Cancel a queued or running task
+    Cancel {
+        /// Task ID (UUID)
+        id: String,
+    },
+    /// Retry a failed task
+    Retry {
+        /// Task ID (UUID)
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AgentTrashAction {
+    /// List trash contents
+    List,
+    /// Restore a file from trash
+    Restore {
+        /// Trash entry UUID
+        id: String,
+    },
+    /// Permanently empty all trash
+    Empty,
+    /// Immediately delete a specific trash item
+    Now {
+        /// Trash entry UUID
+        id: String,
     },
 }
 
