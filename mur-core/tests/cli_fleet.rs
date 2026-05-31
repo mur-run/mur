@@ -92,7 +92,7 @@ async fn fleet_push_resolves_conflict_then_succeeds() {
 
 #[tokio::test]
 async fn missing_secret_ref_is_degraded_not_fatal() {
-    use mur_common::sync_types::{FleetEntity, FleetEntityType};
+    use mur_common::sync_types::FleetEntityType;
     let server = wiremock::MockServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     let mur = tmp.path();
