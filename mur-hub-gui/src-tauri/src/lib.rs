@@ -307,6 +307,8 @@ pub fn run() {
             onboarding::wizard_start_render,
             onboarding::wizard_finish,
             onboarding::wizard_cancel,
+            onboarding::first_launch::check_first_launch,
+            onboarding::first_launch::mark_first_launch_done,
             pet::pet_spawn_at,
             pet::pet_close,
             pet::pet_reposition,

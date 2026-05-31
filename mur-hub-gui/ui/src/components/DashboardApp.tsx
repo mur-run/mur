@@ -297,6 +297,7 @@ export function DashboardApp() {
   const [presetImportOpen, setPresetImportOpen] = useState(false);
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
   const [muragentImportPath, setMuragentImportPath] = useState<string | undefined>(undefined);
+  const [showAppsBanner, setShowAppsBanner] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Build a lookup map for runtime statuses.
@@ -328,6 +329,20 @@ export function DashboardApp() {
     };
   }, []);
 
+  // First-launch check: show banner if not running from /Applications
+  useEffect(() => {
+    invoke<{ is_first_launch: boolean; in_applications: boolean }>(
+      "check_first_launch"
+    ).then((status) => {
+      if (!status.in_applications) {
+        setShowAppsBanner(true);
+      }
+      if (status.is_first_launch) {
+        invoke("mark_first_launch_done").catch(() => {});
+      }
+    }).catch(() => {});
+  }, []);
+
   // ⌘K focus search.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -350,7 +365,21 @@ export function DashboardApp() {
   return (
     <div className="dashboard-root">
       <Sidebar activeCategory={activeCategory} agents={agents} onSelect={setActiveCategory} />
-      <div className="dashboard-main">        <div className="toolbar">
+      <div className="dashboard-main">        {showAppsBanner && (
+          <div className="onboarding-banner">
+            <span>
+              Move MuR Hub to your <strong>Applications</strong> folder so .muragent files open here automatically.
+            </span>
+            <button
+              className="toolbar-btn"
+              onClick={() => setShowAppsBanner(false)}
+              title="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+        <div className="toolbar">
           <button
             className="toolbar-btn"
             onClick={() => setWizardOpen(true)}

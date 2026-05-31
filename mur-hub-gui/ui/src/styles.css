@@ -745,3 +745,18 @@ input {
   line-height: 1;
 }
 .pet-bubble-close:hover { color: #F9FAFB; background: #374151; }
+
+/* ─── First-launch banner ─────────────────────────────────────────────────── */
+.onboarding-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #1e3a5f;
+  border-bottom: 1px solid #2d5a9e;
+  font-size: 13px;
+  color: #dbeafe;
+}
+.onboarding-banner strong { color: #93c5fd; }
+.onboarding-banner .toolbar-btn { padding: 2px 8px; font-size: 12px; }
