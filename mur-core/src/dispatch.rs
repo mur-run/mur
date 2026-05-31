@@ -7,13 +7,12 @@ use anyhow::{Context, Result};
 use clap::CommandFactory;
 
 use crate::cli::{
-    AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPermAction,
-    AgentPendingAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction, AgentSecretAction,
-    AgentSkillAction, AgentTrashAction,
-    AgentWebhookAction, AuthAction, ChatAction, Cli, Commands, ConversationsAction, DaemonAction,
-    DeployAction, DraftsAction, EvalAction, ExchangeAction, HookEvent, InternalsAction,
-    MurmurdAction, ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction,
-    TeamAction, VoiceAction, WorkflowAction,
+    AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPendingAction,
+    AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction, AgentSecretAction,
+    AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction, ChatAction, Cli, Commands,
+    ConversationsAction, DaemonAction, DeployAction, DraftsAction, EvalAction, ExchangeAction,
+    HookEvent, InternalsAction, MurmurdAction, ProjectAction, ScheduleAction, SessionAction,
+    SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -1281,7 +1280,9 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::Apply { file } => cmd::agent::cmd_agent_apply(&file)?,
         AgentAction::Pending { name, action } => match action {
             Some(AgentPendingAction::List) | None => cmd::agent::cmd_pending_list(&name)?,
-            Some(AgentPendingAction::Act { id, action_id }) => cmd::agent::cmd_pending_act(&name, &id, &action_id)?,
+            Some(AgentPendingAction::Act { id, action_id }) => {
+                cmd::agent::cmd_pending_act(&name, &id, &action_id)?
+            }
         },
         AgentAction::Trash { name, action } => match action {
             AgentTrashAction::List => cmd::agent::cmd_trash_list(&name)?,

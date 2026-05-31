@@ -1,7 +1,7 @@
+use crate::action_pipeline::Pipeline;
+use crate::action_pipeline::ledger::ActionLedger;
 use anyhow::{Context, Result, bail};
 use mur_common::action::{ActionEvent, PermDeleteReason};
-use crate::action_pipeline::ledger::ActionLedger;
-use crate::action_pipeline::Pipeline;
 use uuid::Uuid;
 
 use super::resolve_mur_home;
@@ -10,13 +10,26 @@ pub fn cmd_trash_list(name: &str) -> Result<()> {
     let pipeline = pipeline_for(name)?;
     let events = ActionLedger::replay_days(&pipeline.ledger_dir(), 30);
     let mut found = false;
-    println!("{:<36} {:<14} {:<40} ORIGINAL", "ID", "STATUS", "TRASH_PATH");
+    println!(
+        "{:<36} {:<14} {:<40} ORIGINAL",
+        "ID", "STATUS", "TRASH_PATH"
+    );
     for event in &events {
         if let ActionEvent::TrashCreated { entry } = event {
             found = true;
             let status = format!("{:?}", entry.status).to_lowercase();
-            let trash_path = entry.trash_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "?".into());
-            println!("{:<36} {:<14} {:<40} {}", entry.id, status, trash_path, entry.original_path.display());
+            let trash_path = entry
+                .trash_path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "?".into());
+            println!(
+                "{:<36} {:<14} {:<40} {}",
+                entry.id,
+                status,
+                trash_path,
+                entry.original_path.display()
+            );
         }
     }
     if !found {
@@ -40,7 +53,11 @@ pub fn cmd_trash_restore(name: &str, id: &str) -> Result<()> {
                 std::fs::rename(trash_path, &entry.original_path)?;
                 let mut ledger = ActionLedger::open(&pipeline.ledger_dir())?;
                 ledger.append(&ActionEvent::TrashRestored { entry_id })?;
-                println!("restored {} to {}", trash_path.display(), entry.original_path.display());
+                println!(
+                    "restored {} to {}",
+                    trash_path.display(),
+                    entry.original_path.display()
+                );
                 return Ok(());
             }
             bail!("trash file not found for entry {id}");

@@ -56,12 +56,11 @@ fn scan_one_agent(agent_home: &std::path::Path) -> Result<()> {
     let now = Utc::now();
 
     for event in &events {
+        #[allow(clippy::collapsible_match)]
         match event {
             // Execute deferred deletes (cancel window elapsed, no Undo)
             ActionEvent::DeletionPending { entry } => {
-                if entry.status == TrashStatus::PendingDelete
-                    && entry.execute_at < now
-                {
+                if entry.status == TrashStatus::PendingDelete && entry.execute_at < now {
                     execute_move_to_trash(&pipeline, entry)?;
                 }
             }
@@ -116,10 +115,10 @@ fn execute_move_to_trash(
     if moved {
         let mut updated = entry.clone();
         updated.trash_path = Some(trash_file);
-        updated.retention_until =
-            Some(Utc::now() + chrono::Duration::days(
-                pipeline.config.deletion.trash_retention_days as i64
-            ));
+        updated.retention_until = Some(
+            Utc::now()
+                + chrono::Duration::days(pipeline.config.deletion.trash_retention_days as i64),
+        );
         updated.status = TrashStatus::Retained;
 
         let mut ledger = ActionLedger::open(&pipeline.ledger_dir())?;

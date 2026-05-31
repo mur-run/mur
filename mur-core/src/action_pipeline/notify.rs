@@ -66,9 +66,7 @@ impl Aggregator {
         ActionNotification {
             event_type: "deletion_pending".into(),
             title: format!("{agent_name} wants to delete {file_count} files"),
-            body: format!(
-                "Moving to Trash in {cancel_window_minutes} min · recoverable"
-            ),
+            body: format!("Moving to Trash in {cancel_window_minutes} min · recoverable"),
             urgency: "high".into(),
             file_count,
             item_id: None,
@@ -96,7 +94,11 @@ impl Aggregator {
         let body = if file_names.len() <= 3 {
             file_names.join(", ")
         } else {
-            format!("{} and {} more", &file_names[..3].join(", "), file_names.len() - 3)
+            format!(
+                "{} and {} more",
+                &file_names[..3].join(", "),
+                file_names.len() - 3
+            )
         };
 
         ActionNotification {
@@ -114,13 +116,20 @@ impl Aggregator {
 mod tests {
     use super::*;
     use mur_common::action::{ActionOutput, OutputKind, TaskOutcome};
-    use uuid::Uuid;
 
     #[test]
     fn aggregate_same_batch_single_notification() {
         let outputs = vec![
-            ActionOutput { kind: OutputKind::File, file_path: Some("/tmp/a.txt".into()), chat_content: None },
-            ActionOutput { kind: OutputKind::File, file_path: Some("/tmp/b.txt".into()), chat_content: None },
+            ActionOutput {
+                kind: OutputKind::File,
+                file_path: Some("/tmp/a.txt".into()),
+                chat_content: None,
+            },
+            ActionOutput {
+                kind: OutputKind::File,
+                file_path: Some("/tmp/b.txt".into()),
+                chat_content: None,
+            },
         ];
         let notifications = Aggregator::build_completion_notifications(
             "TestAgent",
@@ -134,12 +143,11 @@ mod tests {
 
     #[test]
     fn partial_success_reports_counts() {
-        let outcome = TaskOutcome::PartialSuccess { succeeded: 3, failed: 2 };
-        let notifications = Aggregator::build_completion_notifications(
-            "Agent",
-            &outcome,
-            0,
-        );
+        let outcome = TaskOutcome::PartialSuccess {
+            succeeded: 3,
+            failed: 2,
+        };
+        let notifications = Aggregator::build_completion_notifications("Agent", &outcome, 0);
         assert!(notifications[0].body.contains("3 succeeded"));
         assert!(notifications[0].body.contains("2 failed"));
     }
@@ -154,9 +162,7 @@ mod tests {
     #[test]
     fn deletion_notification_is_independent() {
         let n = Aggregator::build_deletion_notification(
-            "Agent",
-            3,
-            10, // cancel_window_minutes
+            "Agent", 3, 10, // cancel_window_minutes
         );
         assert!(n.title.contains("3 files"));
         assert!(n.body.contains("10 min"));

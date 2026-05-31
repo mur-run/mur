@@ -1,8 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use mur_common::action::{
-    Action, ActionEvent, Task, TaskOutcome, TaskState, TaskStep,
-};
+use mur_common::action::{Action, ActionEvent, Task, TaskOutcome, TaskState, TaskStep};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -128,56 +126,62 @@ impl TaskQueue {
         }
         task.state = TaskState::Running;
         task.started_at = Some(Utc::now());
-        self.ledger
-            .append(&ActionEvent::TaskStarted { task_id })?;
+        self.ledger.append(&ActionEvent::TaskStarted { task_id })?;
         Ok(())
     }
 
     /// Transition Running → Paused.
     pub fn pause_task(&mut self, task_id: Uuid, reason: String) -> Result<()> {
-        let task = self.tasks.get_mut(&task_id).ok_or(PipelineError::TaskNotFound {
-            task_id: task_id.to_string(),
-        })?;
+        let task = self
+            .tasks
+            .get_mut(&task_id)
+            .ok_or(PipelineError::TaskNotFound {
+                task_id: task_id.to_string(),
+            })?;
         task.state = TaskState::Paused;
-        self.ledger.append(&ActionEvent::TaskPaused {
-            task_id,
-            reason,
-        })?;
+        self.ledger
+            .append(&ActionEvent::TaskPaused { task_id, reason })?;
         Ok(())
     }
 
     /// Transition Paused → Running.
     pub fn resume_task(&mut self, task_id: Uuid) -> Result<()> {
-        let task = self.tasks.get_mut(&task_id).ok_or(PipelineError::TaskNotFound {
-            task_id: task_id.to_string(),
-        })?;
+        let task = self
+            .tasks
+            .get_mut(&task_id)
+            .ok_or(PipelineError::TaskNotFound {
+                task_id: task_id.to_string(),
+            })?;
         task.state = TaskState::Running;
-        self.ledger
-            .append(&ActionEvent::TaskResumed { task_id })?;
+        self.ledger.append(&ActionEvent::TaskResumed { task_id })?;
         Ok(())
     }
 
     /// Transition Running → Completed.
     pub fn complete_task(&mut self, task_id: Uuid, outcome: TaskOutcome) -> Result<()> {
-        let task = self.tasks.get_mut(&task_id).ok_or(PipelineError::TaskNotFound {
-            task_id: task_id.to_string(),
-        })?;
+        let task = self
+            .tasks
+            .get_mut(&task_id)
+            .ok_or(PipelineError::TaskNotFound {
+                task_id: task_id.to_string(),
+            })?;
         task.state = TaskState::Completed {
             outcome: outcome.clone(),
         };
         task.completed_at = Some(Utc::now());
-        self.ledger.append(&ActionEvent::TaskCompleted {
-            task_id,
-            outcome,
-        })?;
+        self.ledger
+            .append(&ActionEvent::TaskCompleted { task_id, outcome })?;
         Ok(())
     }
 
     /// Transition Running | Queued → Cancelled.
     pub fn cancel_task(&mut self, task_id: Uuid) -> Result<()> {
-        let task = self.tasks.get_mut(&task_id).ok_or(PipelineError::TaskNotFound {
-            task_id: task_id.to_string(),
-        })?;
+        let task = self
+            .tasks
+            .get_mut(&task_id)
+            .ok_or(PipelineError::TaskNotFound {
+                task_id: task_id.to_string(),
+            })?;
         task.state = TaskState::Cancelled;
         task.completed_at = Some(Utc::now());
         self.ledger
@@ -187,18 +191,19 @@ impl TaskQueue {
 
     /// Update a step on a running task.
     pub fn update_step(&mut self, task_id: Uuid, step: TaskStep) -> Result<()> {
-        let task = self.tasks.get_mut(&task_id).ok_or(PipelineError::TaskNotFound {
-            task_id: task_id.to_string(),
-        })?;
+        let task = self
+            .tasks
+            .get_mut(&task_id)
+            .ok_or(PipelineError::TaskNotFound {
+                task_id: task_id.to_string(),
+            })?;
         if let Some(existing) = task.steps.iter_mut().find(|s| s.index == step.index) {
             *existing = step.clone();
         } else {
             task.steps.push(step.clone());
         }
-        self.ledger.append(&ActionEvent::TaskStepUpdated {
-            task_id,
-            step,
-        })?;
+        self.ledger
+            .append(&ActionEvent::TaskStepUpdated { task_id, step })?;
         Ok(())
     }
 
@@ -283,9 +288,15 @@ mod tests {
         pipeline.config.queue.max_concurrent = 1;
 
         let mut queue = TaskQueue::new(&pipeline).unwrap();
-        let a = Action { id: "a".into(), label: "A".into(), user_prompt: None };
+        let a = Action {
+            id: "a".into(),
+            label: "A".into(),
+            user_prompt: None,
+        };
 
-        let t1 = queue.enqueue(Uuid::now_v7(), a.clone(), 30, vec![]).unwrap();
+        let t1 = queue
+            .enqueue(Uuid::now_v7(), a.clone(), 30, vec![])
+            .unwrap();
         queue.start_task(t1.id).unwrap();
 
         // Second task at capacity
@@ -301,7 +312,11 @@ mod tests {
     fn state_machine_transitions() {
         let (pipeline, _tmp) = test_pipeline();
         let mut queue = TaskQueue::new(&pipeline).unwrap();
-        let a = Action { id: "t".into(), label: "T".into(), user_prompt: None };
+        let a = Action {
+            id: "t".into(),
+            label: "T".into(),
+            user_prompt: None,
+        };
         let task = queue.enqueue(Uuid::now_v7(), a, 30, vec![]).unwrap();
         let task_id = task.id;
 
@@ -320,14 +335,21 @@ mod tests {
         // Running → Completed
         let outcome = TaskOutcome::Success { outputs: vec![] };
         queue.complete_task(task_id, outcome.clone()).unwrap();
-        assert_eq!(queue.get(task_id).unwrap().state, TaskState::Completed { outcome });
+        assert_eq!(
+            queue.get(task_id).unwrap().state,
+            TaskState::Completed { outcome }
+        );
     }
 
     #[test]
     fn cancel_cleans_up_task() {
         let (pipeline, _tmp) = test_pipeline();
         let mut queue = TaskQueue::new(&pipeline).unwrap();
-        let a = Action { id: "c".into(), label: "C".into(), user_prompt: None };
+        let a = Action {
+            id: "c".into(),
+            label: "C".into(),
+            user_prompt: None,
+        };
         let task = queue.enqueue(Uuid::now_v7(), a, 30, vec![]).unwrap();
 
         queue.cancel_task(task.id).unwrap();
@@ -339,7 +361,11 @@ mod tests {
     fn ledger_rebuild_on_crash() {
         let (pipeline, _tmp) = test_pipeline();
         let pending_id = Uuid::now_v7();
-        let a = Action { id: "r".into(), label: "R".into(), user_prompt: None };
+        let a = Action {
+            id: "r".into(),
+            label: "R".into(),
+            user_prompt: None,
+        };
 
         {
             let mut queue = TaskQueue::new(&pipeline).unwrap();
@@ -359,7 +385,11 @@ mod tests {
     fn step_reporting_updates_task() {
         let (pipeline, _tmp) = test_pipeline();
         let mut queue = TaskQueue::new(&pipeline).unwrap();
-        let a = Action { id: "s".into(), label: "S".into(), user_prompt: None };
+        let a = Action {
+            id: "s".into(),
+            label: "S".into(),
+            user_prompt: None,
+        };
         let task = queue.enqueue(Uuid::now_v7(), a, 30, vec![]).unwrap();
         queue.start_task(task.id).unwrap();
 

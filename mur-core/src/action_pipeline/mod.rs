@@ -1,3 +1,7 @@
+// Allow dead_code and unused imports during Phases 0-2+4a — full
+// wiring to production paths lands in P0b.
+#![allow(dead_code, unused_imports)]
+
 pub mod error;
 pub mod guard;
 pub mod ingest;

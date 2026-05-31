@@ -1,8 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-use mur_common::action::{
-    ActionEvent, ItemSource, PendingFile, PendingItem, PendingStatus,
-};
+use mur_common::action::{ActionEvent, ItemSource, PendingFile, PendingItem, PendingStatus};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -103,7 +101,9 @@ impl PendingStore {
             // Compute file info before mutable borrow
             let mut new_files = Vec::new();
             for path in &paths {
-                let mime_type = self.detect_mime(path).unwrap_or_else(|_| "application/octet-stream".into());
+                let mime_type = self
+                    .detect_mime(path)
+                    .unwrap_or_else(|_| "application/octet-stream".into());
                 let size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 new_files.push(PendingFile {
                     path: path.clone(),
@@ -118,7 +118,9 @@ impl PendingStore {
                 existing.created_at = Utc::now();
                 existing.clone()
             } else {
-                return Err(PipelineError::PendingNotFound { item_id: existing_id.to_string() });
+                return Err(PipelineError::PendingNotFound {
+                    item_id: existing_id.to_string(),
+                });
             };
 
             let event = ActionEvent::ItemIngested {
@@ -131,9 +133,8 @@ impl PendingStore {
 
         // New batch
         let item = self.create_pending_item(source, paths, now)?;
-        self.ledger.append(&ActionEvent::ItemIngested {
-            item: item.clone(),
-        })?;
+        self.ledger
+            .append(&ActionEvent::ItemIngested { item: item.clone() })?;
         self.write_snapshot()?;
         Ok(item)
     }
@@ -147,8 +148,10 @@ impl PendingStore {
         let id = Uuid::now_v7();
         let mut files = Vec::new();
         for path in &paths {
-            let mime_type = self.detect_mime(path).unwrap_or_else(|_| "application/octet-stream".into());
-            let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let mime_type = self
+                .detect_mime(path)
+                .unwrap_or_else(|_| "application/octet-stream".into());
+            let size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             files.push(PendingFile {
                 path: path.clone(),
                 mime_type,
@@ -202,9 +205,17 @@ impl PendingStore {
         if len >= 4 && &buf[..4] == b"PK\x03\x04" {
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 return Ok(match ext.to_lowercase().as_str() {
-                    "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into(),
-                    "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
-                    "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation".into(),
+                    "docx" => {
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            .into()
+                    }
+                    "xlsx" => {
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into()
+                    }
+                    "pptx" => {
+                        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                            .into()
+                    }
                     _ => "application/zip".into(),
                 });
             }
@@ -228,23 +239,23 @@ impl PendingStore {
             item.status = PendingStatus::Expired;
         }
         self.items.remove(&item_id);
-        self.ledger.append(&ActionEvent::ItemExpired {
-            item_id,
-        })?;
+        self.ledger.append(&ActionEvent::ItemExpired { item_id })?;
         self.write_snapshot()?;
         Ok(())
     }
 
     /// Select an action for a pending item.
-    pub fn select_action(&mut self, item_id: Uuid, action: mur_common::action::Action) -> Result<()> {
+    pub fn select_action(
+        &mut self,
+        item_id: Uuid,
+        action: mur_common::action::Action,
+    ) -> Result<()> {
         if let Some(item) = self.items.get_mut(&item_id) {
             item.status = PendingStatus::Selected {
                 action_id: action.id.clone(),
             };
-            self.ledger.append(&ActionEvent::ItemSelected {
-                item_id,
-                action,
-            })?;
+            self.ledger
+                .append(&ActionEvent::ItemSelected { item_id, action })?;
             self.write_snapshot()?;
         }
         Ok(())
@@ -309,7 +320,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let home = tmp.path().join("agent_home");
         std::fs::create_dir_all(&home).unwrap();
-        let pipeline = Pipeline::new(home.clone(), mur_common::action::ActionPipelineConfig::default());
+        let pipeline = Pipeline::new(
+            home.clone(),
+            mur_common::action::ActionPipelineConfig::default(),
+        );
         (pipeline, tmp)
     }
 
@@ -319,10 +333,14 @@ mod tests {
         let src = make_file(_tmp.path(), "test.txt", b"hello world");
 
         let mut store = PendingStore::new(&pipeline).unwrap();
-        let item = store.ingest_files(
-            ItemSource::DragDrop { paths: vec![src.clone()] },
-            vec![src],
-        ).unwrap();
+        let item = store
+            .ingest_files(
+                ItemSource::DragDrop {
+                    paths: vec![src.clone()],
+                },
+                vec![src],
+            )
+            .unwrap();
 
         assert_eq!(item.files.len(), 1);
         assert_eq!(item.status, PendingStatus::AwaitingSelection);
@@ -363,16 +381,24 @@ mod tests {
         let src = make_file(_tmp.path(), "test.txt", b"hello");
 
         let mut store = PendingStore::new(&pipeline).unwrap();
-        let item1 = store.ingest_files(
-            ItemSource::DragDrop { paths: vec![src.clone()] },
-            vec![src.clone()],
-        ).unwrap();
+        let item1 = store
+            .ingest_files(
+                ItemSource::DragDrop {
+                    paths: vec![src.clone()],
+                },
+                vec![src.clone()],
+            )
+            .unwrap();
 
         // Within 5s, same path → dedup, return existing item
-        let item2 = store.ingest_files(
-            ItemSource::DragDrop { paths: vec![src.clone()] },
-            vec![src],
-        ).unwrap();
+        let item2 = store
+            .ingest_files(
+                ItemSource::DragDrop {
+                    paths: vec![src.clone()],
+                },
+                vec![src],
+            )
+            .unwrap();
         assert_eq!(item1.id, item2.id, "same path within 5s must dedup");
     }
 
@@ -383,15 +409,23 @@ mod tests {
         let f2 = make_file(_tmp.path(), "b.txt", b"b");
 
         let mut store = PendingStore::new(&pipeline).unwrap();
-        let item1 = store.ingest_files(
-            ItemSource::DragDrop { paths: vec![f1.clone()] },
-            vec![f1],
-        ).unwrap();
+        let item1 = store
+            .ingest_files(
+                ItemSource::DragDrop {
+                    paths: vec![f1.clone()],
+                },
+                vec![f1],
+            )
+            .unwrap();
 
-        let item2 = store.ingest_files(
-            ItemSource::DragDrop { paths: vec![f2.clone()] },
-            vec![f2],
-        ).unwrap();
+        let item2 = store
+            .ingest_files(
+                ItemSource::DragDrop {
+                    paths: vec![f2.clone()],
+                },
+                vec![f2],
+            )
+            .unwrap();
 
         // Same PendingItem (merged), file count increased
         assert_eq!(item1.id, item2.id);
@@ -404,10 +438,14 @@ mod tests {
         let src = make_file(_tmp.path(), "test.txt", b"hi");
 
         let mut store = PendingStore::new(&pipeline).unwrap();
-        let item = store.ingest_files(
-            ItemSource::DragDrop { paths: vec![src.clone()] },
-            vec![src],
-        ).unwrap();
+        let item = store
+            .ingest_files(
+                ItemSource::DragDrop {
+                    paths: vec![src.clone()],
+                },
+                vec![src],
+            )
+            .unwrap();
 
         // Manually expire it
         store.expire_item(item.id).unwrap();

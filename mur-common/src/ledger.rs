@@ -128,8 +128,18 @@ mod tests {
     fn append_and_scan_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let mut ledger = Ledger::<TestEvent>::open(tmp.path()).unwrap();
-        ledger.append(&TestEvent { msg: "hello".into(), n: 1 }).unwrap();
-        ledger.append(&TestEvent { msg: "world".into(), n: 2 }).unwrap();
+        ledger
+            .append(&TestEvent {
+                msg: "hello".into(),
+                n: 1,
+            })
+            .unwrap();
+        ledger
+            .append(&TestEvent {
+                msg: "world".into(),
+                n: 2,
+            })
+            .unwrap();
         // Must flush so the file is on disk before scanning
         ledger.flush().unwrap();
         drop(ledger);
@@ -161,7 +171,15 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
         let path = tmp.path().join(format!("{today}.jsonl"));
-        std::fs::write(&path, r#"{"msg":"ok","n":1}"#.to_string() + "\n" + "garbage\n" + r#"{"msg":"also ok","n":3}"# + "\n").unwrap();
+        std::fs::write(
+            &path,
+            r#"{"msg":"ok","n":1}"#.to_string()
+                + "\n"
+                + "garbage\n"
+                + r#"{"msg":"also ok","n":3}"#
+                + "\n",
+        )
+        .unwrap();
 
         let results = Ledger::<TestEvent>::scan_days(tmp.path(), 1);
         let events: Vec<_> = results.into_iter().filter_map(|r| r.ok()).collect();

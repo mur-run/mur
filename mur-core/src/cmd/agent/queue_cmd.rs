@@ -1,5 +1,5 @@
-use anyhow::{Context, Result, bail};
 use crate::action_pipeline::{Pipeline, TaskQueue};
+use anyhow::{Context, Result, bail};
 use uuid::Uuid;
 
 use super::resolve_mur_home;
@@ -71,7 +71,9 @@ pub fn cmd_queue_cancel(name: &str, id: &str) -> Result<()> {
 pub fn cmd_queue_retry(name: &str, id: &str) -> Result<()> {
     let (_pipeline, mut queue) = pipeline_for(name)?;
     let task_id = Uuid::parse_str(id).context("invalid task ID")?;
-    let task = queue.get(task_id).with_context(|| format!("task {id} not found"))?;
+    let task = queue
+        .get(task_id)
+        .with_context(|| format!("task {id} not found"))?;
     let action = task.action.clone();
     let pending_id = task.pending_item_id;
     queue.enqueue(pending_id, action, task.timeout_seconds, vec![])?;

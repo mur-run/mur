@@ -12,7 +12,10 @@ pub enum DestructivePattern {
     /// Python: `os.remove`, `os.unlink`, `shutil.rmtree`
     PythonRemove { raw: String, paths: Vec<String> },
     /// MCP: tool named `delete_file` or similar
-    McpDelete { tool_name: String, paths: Vec<String> },
+    McpDelete {
+        tool_name: String,
+        paths: Vec<String>,
+    },
     /// A2A: delete intent in message
     A2ADelete { paths: Vec<String> },
 }
@@ -28,8 +31,12 @@ pub enum GuardError {
 impl std::fmt::Display for GuardError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GuardError::BatchTooLarge { count, max } => write!(f, "batch size {count} exceeds max {max}"),
-            GuardError::PathOutOfScope { path } => write!(f, "path outside allowed scope: {}", path.display()),
+            GuardError::BatchTooLarge { count, max } => {
+                write!(f, "batch size {count} exceeds max {max}")
+            }
+            GuardError::PathOutOfScope { path } => {
+                write!(f, "path outside allowed scope: {}", path.display())
+            }
             GuardError::WildcardRejected { path } => write!(f, "wildcard pattern rejected: {path}"),
             GuardError::Other(msg) => write!(f, "{msg}"),
         }
@@ -54,8 +61,8 @@ impl DestructivePattern {
             });
         }
 
-        if cmd_trimmed.starts_with("unlink ") {
-            let paths = extract_paths(&cmd_trimmed["unlink ".len()..]);
+        if let Some(rest) = cmd_trimmed.strip_prefix("unlink ") {
+            let paths = extract_paths(rest);
             patterns.push(DestructivePattern::Rm {
                 raw: cmd.to_string(),
                 paths,
@@ -76,7 +83,12 @@ impl DestructivePattern {
     pub fn detect_in_code(code: &str) -> Vec<DestructivePattern> {
         let mut patterns = Vec::new();
 
-        for keyword in &["os.remove", "os.unlink", "shutil.rmtree", "pathlib.Path.unlink"] {
+        for keyword in &[
+            "os.remove",
+            "os.unlink",
+            "shutil.rmtree",
+            "pathlib.Path.unlink",
+        ] {
             if code.contains(keyword) {
                 let paths = extract_python_paths(code, keyword);
                 patterns.push(DestructivePattern::PythonRemove {
@@ -101,7 +113,10 @@ impl DestructivePattern {
     }
 
     /// Check if pattern matches MCP delete_file tool.
-    pub fn detect_in_mcp_tool(tool_name: &str, arguments: &serde_json::Value) -> Vec<DestructivePattern> {
+    pub fn detect_in_mcp_tool(
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> Vec<DestructivePattern> {
         let delete_tools = [
             "delete_file",
             "delete_files",
@@ -110,7 +125,9 @@ impl DestructivePattern {
             "fs_delete",
             "fs.remove",
         ];
-        if delete_tools.iter().any(|t| tool_name.eq_ignore_ascii_case(t))
+        if delete_tools
+            .iter()
+            .any(|t| tool_name.eq_ignore_ascii_case(t))
             || tool_name.to_lowercase().contains("delete")
             || tool_name.to_lowercase().contains("remove")
         {
@@ -150,9 +167,7 @@ impl TrashGuardLogic {
         if self.config.trusted_paths.is_empty() {
             return Ok(());
         }
-        let canonical = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         for trusted in &self.config.trusted_paths {
             let trusted_path = PathBuf::from(trusted);
             let trusted_canonical = trusted_path
@@ -168,10 +183,16 @@ impl TrashGuardLogic {
     }
 
     /// Detect all destructive patterns in a tool call.
-    pub fn detect(&self, tool_name: &str, tool_input: &serde_json::Value) -> Vec<DestructivePattern> {
+    pub fn detect(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> Vec<DestructivePattern> {
         let mut patterns = Vec::new();
 
-        patterns.extend(DestructivePattern::detect_in_mcp_tool(tool_name, tool_input));
+        patterns.extend(DestructivePattern::detect_in_mcp_tool(
+            tool_name, tool_input,
+        ));
 
         if let Some(cmd) = tool_input.get("command").and_then(|v| v.as_str()) {
             patterns.extend(DestructivePattern::detect_in_shell(cmd));
@@ -180,13 +201,13 @@ impl TrashGuardLogic {
             patterns.extend(DestructivePattern::detect_in_code(code));
         }
 
-        if let Some(path) = tool_input.get("path").and_then(|v| v.as_str()) {
-            if path.contains('*') || path.contains('?') {
-                patterns.push(DestructivePattern::Rm {
-                    raw: format!("delete path={path}"),
-                    paths: vec![path.to_string()],
-                });
-            }
+        if let Some(path) = tool_input.get("path").and_then(|v| v.as_str())
+            && (path.contains('*') || path.contains('?'))
+        {
+            patterns.push(DestructivePattern::Rm {
+                raw: format!("delete path={path}"),
+                paths: vec![path.to_string()],
+            });
         }
 
         patterns
@@ -255,7 +276,11 @@ mod tests {
     fn detect_shell_rm_pattern() {
         let detections = DestructivePattern::detect_in_shell("rm -rf /tmp/foo");
         assert!(!detections.is_empty());
-        assert!(detections.iter().any(|d| matches!(d, DestructivePattern::Rm { .. })));
+        assert!(
+            detections
+                .iter()
+                .any(|d| matches!(d, DestructivePattern::Rm { .. }))
+        );
     }
 
     #[test]
@@ -272,7 +297,10 @@ mod tests {
 
     #[test]
     fn reject_batch_above_max() {
-        let config = DeletionConfig { max_batch: 5, ..test_config() };
+        let config = DeletionConfig {
+            max_batch: 5,
+            ..test_config()
+        };
         let guard = TrashGuardLogic::new(config);
         let result = guard.check_batch_size(10);
         assert!(result.is_err());
@@ -287,7 +315,10 @@ mod tests {
 
     #[test]
     fn allow_batch_at_or_below_max() {
-        let config = DeletionConfig { max_batch: 5, ..test_config() };
+        let config = DeletionConfig {
+            max_batch: 5,
+            ..test_config()
+        };
         let guard = TrashGuardLogic::new(config);
         assert!(guard.check_batch_size(5).is_ok());
         assert!(guard.check_batch_size(1).is_ok());

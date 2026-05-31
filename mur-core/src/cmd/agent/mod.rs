@@ -90,9 +90,11 @@ mod queue_cmd;
 pub use pending::{cmd_pending_act, cmd_pending_list};
 mod trash;
 #[allow(unused_imports)]
-pub use trash::{cmd_trash_empty, cmd_trash_list, cmd_trash_now, cmd_trash_restore};
+pub use queue_cmd::{
+    cmd_queue_cancel, cmd_queue_list, cmd_queue_pause, cmd_queue_resume, cmd_queue_retry,
+};
 #[allow(unused_imports)]
-pub use queue_cmd::{cmd_queue_cancel, cmd_queue_list, cmd_queue_pause, cmd_queue_resume, cmd_queue_retry};
+pub use trash::{cmd_trash_empty, cmd_trash_list, cmd_trash_now, cmd_trash_restore};
 
 // ─── Shared helpers used across submodules ─────────────────────────
 

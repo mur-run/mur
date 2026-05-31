@@ -1,6 +1,6 @@
+use crate::action_pipeline::{PendingStore, Pipeline};
 use anyhow::{Context, Result, bail};
 use mur_common::action::Action;
-use crate::action_pipeline::{PendingStore, Pipeline};
 use uuid::Uuid;
 
 use super::resolve_mur_home;
@@ -19,7 +19,11 @@ pub fn cmd_pending_list(name: &str) -> Result<()> {
             item.id,
             format!("{:?}", item.status).to_lowercase(),
             item.files.len(),
-            item.files.iter().map(|f| f.path.file_name().unwrap_or_default().to_string_lossy()).collect::<Vec<_>>().join(", "),
+            item.files
+                .iter()
+                .map(|f| f.path.file_name().unwrap_or_default().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(", "),
         );
     }
     Ok(())

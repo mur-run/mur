@@ -61,9 +61,9 @@ pub struct Task {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Action {
-    pub id: String,                   // matches file_actions[].id
+    pub id: String, // matches file_actions[].id
     pub label: String,
-    pub user_prompt: Option<String>,  // filled for ask_me
+    pub user_prompt: Option<String>, // filled for ask_me
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -157,22 +157,59 @@ pub enum PermDeleteReason {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum ActionEvent {
-    ItemIngested       { item: PendingItem },
-    ItemSelected       { item_id: Uuid, action: Action },
-    ItemExpired        { item_id: Uuid },
-    TaskEnqueued       { task: Task },
-    TaskStarted        { task_id: Uuid },
-    TaskStepUpdated    { task_id: Uuid, step: TaskStep },
-    TaskPaused         { task_id: Uuid, reason: String },
-    TaskResumed        { task_id: Uuid },
-    TaskCompleted      { task_id: Uuid, outcome: TaskOutcome },
-    TaskCancelled      { task_id: Uuid },
-    DeletionPending    { entry: TrashEntry },
-    DeletionCancelled  { entry_id: Uuid },
-    TrashCreated       { entry: TrashEntry },
-    TrashRestored      { entry_id: Uuid },
-    TrashExpired       { entry_id: Uuid },
-    TrashPermDeleted   { entry_id: Uuid, reason: PermDeleteReason },
+    ItemIngested {
+        item: PendingItem,
+    },
+    ItemSelected {
+        item_id: Uuid,
+        action: Action,
+    },
+    ItemExpired {
+        item_id: Uuid,
+    },
+    TaskEnqueued {
+        task: Task,
+    },
+    TaskStarted {
+        task_id: Uuid,
+    },
+    TaskStepUpdated {
+        task_id: Uuid,
+        step: TaskStep,
+    },
+    TaskPaused {
+        task_id: Uuid,
+        reason: String,
+    },
+    TaskResumed {
+        task_id: Uuid,
+    },
+    TaskCompleted {
+        task_id: Uuid,
+        outcome: TaskOutcome,
+    },
+    TaskCancelled {
+        task_id: Uuid,
+    },
+    DeletionPending {
+        entry: TrashEntry,
+    },
+    DeletionCancelled {
+        entry_id: Uuid,
+    },
+    TrashCreated {
+        entry: TrashEntry,
+    },
+    TrashRestored {
+        entry_id: Uuid,
+    },
+    TrashExpired {
+        entry_id: Uuid,
+    },
+    TrashPermDeleted {
+        entry_id: Uuid,
+        reason: PermDeleteReason,
+    },
 }
 
 // ── Profile Schema Types ──
@@ -185,7 +222,7 @@ pub struct FileAction {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
-    pub mime_types: Vec<String>,   // empty ⇒ matches any
+    pub mime_types: Vec<String>, // empty ⇒ matches any
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -209,7 +246,7 @@ pub struct DeletionConfig {
     #[serde(default = "default_max_batch")]
     pub max_batch: u32,
     #[serde(default)]
-    pub auto_permanent_delete: bool,  // MUST stay false
+    pub auto_permanent_delete: bool, // MUST stay false
     #[serde(default)]
     pub trusted_paths: Vec<String>,
 }
@@ -224,14 +261,30 @@ pub struct QueueConfig {
     pub pending_item_ttl_minutes: u32,
 }
 
-fn default_true() -> bool { true }
-fn default_cancel_window() -> u32 { 10 }
-fn default_retention_days() -> u32 { 30 }
-fn default_trash_max_mb() -> u64 { 1024 }
-fn default_max_batch() -> u32 { 50 }
-fn default_max_concurrent() -> u32 { 3 }
-fn default_timeout_minutes() -> u32 { 30 }
-fn default_pending_ttl_minutes() -> u32 { 60 }
+fn default_true() -> bool {
+    true
+}
+fn default_cancel_window() -> u32 {
+    10
+}
+fn default_retention_days() -> u32 {
+    30
+}
+fn default_trash_max_mb() -> u64 {
+    1024
+}
+fn default_max_batch() -> u32 {
+    50
+}
+fn default_max_concurrent() -> u32 {
+    3
+}
+fn default_timeout_minutes() -> u32 {
+    30
+}
+fn default_pending_ttl_minutes() -> u32 {
+    60
+}
 
 impl Default for ActionPipelineConfig {
     fn default() -> Self {
@@ -283,7 +336,11 @@ impl FileAction {
         if let Some(v) = self.label.get("en") {
             return v.as_str();
         }
-        self.label.values().next().map(|s| s.as_str()).unwrap_or(&self.id)
+        self.label
+            .values()
+            .next()
+            .map(|s| s.as_str())
+            .unwrap_or(&self.id)
     }
 }
 
@@ -388,7 +445,8 @@ trusted_paths: []
 
     #[test]
     fn queue_config_defaults_deserialize() {
-        let yaml = "max_concurrent: 5\ndefault_timeout_minutes: 60\npending_item_ttl_minutes: 120\n";
+        let yaml =
+            "max_concurrent: 5\ndefault_timeout_minutes: 60\npending_item_ttl_minutes: 120\n";
         let cfg: QueueConfig = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(cfg.max_concurrent, 5);
         assert_eq!(cfg.default_timeout_minutes, 60);
