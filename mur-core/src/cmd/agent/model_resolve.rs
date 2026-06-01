@@ -80,6 +80,8 @@ pub fn apply_model_choice(mur_home: &Path, slug: &str, choice: &ModelChoice) -> 
             secret: choice.secret.as_deref().map(|s| s.parse()).transpose()?,
             capabilities: vec![],
             params: serde_json::Value::Null,
+            tier: None,
+            cost_per_1k_tokens: None,
         },
     );
     reg.save_to(&reg_path)?;

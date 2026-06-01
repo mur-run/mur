@@ -12,6 +12,7 @@
 //!     capabilities: [chat, tools]
 //! ```
 
+use crate::route::{RoutePolicy, RouteTier};
 use crate::secret::SecretRef;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -29,6 +30,14 @@ pub struct ModelEntry {
     pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub params: serde_json::Value,
+    /// Routing tier: cheap/local vs frontier/expensive.
+    /// When absent, the router infers based on provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<RouteTier>,
+    /// Estimated USD cost per 1000 output tokens.
+    /// Used for ledger cost estimates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_per_1k_tokens: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -44,6 +53,10 @@ pub struct RoleEntry {
     /// If true, only use local models when handling sensitive data.
     #[serde(default)]
     pub privacy_local_only: bool,
+    /// Per-role routing policy override.
+    /// When absent, the router uses the default heuristic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_policy: Option<RoutePolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -164,6 +177,8 @@ models:
                 }),
                 capabilities: vec!["chat".into()],
                 params: serde_json::Value::Null,
+                tier: None,
+                cost_per_1k_tokens: None,
             },
         );
         let s = serde_yaml_ng::to_string(&r).unwrap();
@@ -218,6 +233,8 @@ roles:
                 secret: None,
                 capabilities: vec![],
                 params: serde_json::Value::Null,
+                tier: None,
+                cost_per_1k_tokens: None,
             },
         );
         reg.roles.insert(
@@ -243,6 +260,8 @@ roles:
                 secret: None,
                 capabilities: vec![],
                 params: serde_json::Value::Null,
+                tier: None,
+                cost_per_1k_tokens: None,
             },
         );
         reg.roles.insert(
@@ -260,6 +279,81 @@ roles:
     fn test_resolve_role_none() {
         let reg = ModelRegistry::default();
         assert_eq!(reg.resolve_role("reflector"), None);
+    }
+
+    #[test]
+    fn model_entry_parses_tier_field() {
+        let yaml = r#"
+schema_version: 1
+models:
+  haiku:
+    provider: anthropic
+    model: claude-haiku-4-5
+    tier: local
+  opus:
+    provider: anthropic
+    model: claude-opus-4-7
+    tier: frontier
+    cost_per_1k_tokens: 0.015
+"#;
+        let r: ModelRegistry = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(r.models["haiku"].tier, Some(RouteTier::Local));
+        assert_eq!(r.models["opus"].tier, Some(RouteTier::Frontier));
+        assert_eq!(r.models["opus"].cost_per_1k_tokens, Some(0.015));
+        // Missing tier is None.
+        let mut r2 = ModelRegistry::default();
+        r2.models.insert(
+            "x".into(),
+            ModelEntry {
+                provider: "ollama".into(),
+                model: "llama3".into(),
+                base_url: None,
+                secret: None,
+                capabilities: vec![],
+                params: serde_json::Value::Null,
+                tier: None,
+                cost_per_1k_tokens: None,
+            },
+        );
+        let yaml = serde_yaml_ng::to_string(&r2).unwrap();
+        assert!(!yaml.contains("tier:"), "absent tier should not be serialized: {yaml}");
+    }
+
+    #[test]
+    fn role_entry_parses_route_policy() {
+        let yaml = r#"
+schema_version: 1
+models:
+  haiku:
+    provider: anthropic
+    model: claude-haiku-4-5
+  opus:
+    provider: anthropic
+    model: claude-opus-4-7
+roles:
+  dev:
+    primary: opus
+    route_policy: !force_frontier
+      model_id: opus
+  reflector:
+    primary: haiku
+    route_policy: prefer_local
+  curator:
+    primary: haiku
+    route_policy: force_local
+  chat:
+    primary: haiku
+"#;
+        let r: ModelRegistry = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(
+            r.roles["dev"].route_policy,
+            Some(RoutePolicy::ForceFrontier {
+                model_id: "opus".into()
+            })
+        );
+        assert_eq!(r.roles["reflector"].route_policy, Some(RoutePolicy::PreferLocal));
+        assert_eq!(r.roles["curator"].route_policy, Some(RoutePolicy::ForceLocal));
+        assert_eq!(r.roles["chat"].route_policy, None);
     }
 }
 
@@ -290,6 +384,8 @@ mod io_tests {
                 secret: None,
                 capabilities: vec![],
                 params: serde_json::Value::Null,
+                tier: None,
+                cost_per_1k_tokens: None,
             },
         );
         r.save_to(&p).unwrap();

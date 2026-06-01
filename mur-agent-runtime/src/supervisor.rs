@@ -828,6 +828,8 @@ pub fn resolve_model_entry(
             secret: None,
             capabilities: vec![],
             params: serde_json::to_value(&profile.model.params).unwrap_or(serde_json::Value::Null),
+            tier: None,
+            cost_per_1k_tokens: None,
         })
     }
 }

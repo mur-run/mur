@@ -97,6 +97,8 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
                     secret: secret_ref,
                     capabilities,
                     params: serde_json::Value::Null,
+                    tier: None,
+                    cost_per_1k_tokens: None,
                 },
             );
             reg.save_to(&path)?;
@@ -164,6 +166,8 @@ fn cmd_migrate(dry_run: bool) -> anyhow::Result<()> {
             secret: None,
             capabilities: vec![],
             params: serde_json::Value::Null,
+            tier: None,
+            cost_per_1k_tokens: None,
         });
         profile.model_ref = Some(id.clone());
         migrated_agents.push(format!("{} → {id}", profile.name));
@@ -212,6 +216,7 @@ fn cmd_role(
                     fallback,
                     cost_budget_per_day_usd: budget,
                     privacy_local_only,
+                    route_policy: None,
                 },
             );
             reg.save_to(path)?;
