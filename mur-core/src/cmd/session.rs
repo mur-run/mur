@@ -1365,3 +1365,132 @@ pub(crate) fn record_nudges_for_candidates(
     ledger.save(&path)?;
     Ok(actionable.into_iter().map(|c| c.id).collect())
 }
+
+pub(crate) fn cmd_session_remove(
+    id: Option<String>,
+    all: bool,
+    force: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let active_id = crate::session::active_session_id().ok().flatten();
+
+    if let Some(prefix) = id {
+        // ── Single removal ──
+        let full_id = session::find_recording_by_prefix(&prefix)?
+            .ok_or_else(|| anyhow::anyhow!("No session found matching prefix '{}'", prefix))?;
+
+        // Guard: don't delete active session
+        if let Some(ref active) = active_id
+            && active == &full_id
+        {
+            anyhow::bail!(
+                "Session {} is currently active. Use `mur session discard` to stop and delete it.",
+                &full_id[..8]
+            );
+        }
+
+        // Confirm unless --force (non-TTY without --force = error)
+        let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+        if !force {
+            if !is_tty {
+                anyhow::bail!("--force required when not running interactively.");
+            }
+            eprint!("Delete session {}? [y/N]: ", &full_id[..8]);
+            let mut buf = String::new();
+            std::io::stdin().read_line(&mut buf)?;
+            if !buf.trim().eq_ignore_ascii_case("y") {
+                eprintln!("Cancelled.");
+                return Ok(());
+            }
+        }
+
+        let was_synced = session::is_recording_synced(&full_id);
+        session::remove_recording(&full_id)?;
+        eprintln!("Session {} removed.", &full_id[..8]);
+        if was_synced {
+            eprintln!(
+                "  \u{2139}\u{fe0f}  This session was synced to the cloud. Cloud copies are unaffected \
+                 — use the dashboard to manage them."
+            );
+        }
+    } else if all {
+        // ── Bulk removal ──
+        let recordings = session::list_recordings()?;
+        if recordings.is_empty() {
+            eprintln!("No session recordings found.");
+            return Ok(());
+        }
+
+        // Filter out active session
+        let (to_delete, skipped): (Vec<_>, Vec<_>) = recordings
+            .into_iter()
+            .partition(|r| active_id.as_ref() != Some(&r.id));
+
+        if dry_run {
+            eprintln!("Would delete {} session(s):", to_delete.len());
+            for r in &to_delete {
+                let ts: chrono::DateTime<chrono::Utc> = r.modified.into();
+                eprintln!(
+                    "  {} — {} events, {} bytes ({})",
+                    &r.id[..8],
+                    r.event_count,
+                    r.file_size,
+                    ts.format("%Y-%m-%d %H:%M"),
+                );
+            }
+            if !skipped.is_empty() {
+                eprintln!("  1 session skipped (active).");
+            }
+            return Ok(());
+        }
+
+        if to_delete.is_empty() {
+            eprintln!("No sessions to delete (1 active).");
+            return Ok(());
+        }
+
+        // Confirm
+        let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+        if !force {
+            if !is_tty {
+                anyhow::bail!("--force required when not running interactively.");
+            }
+            eprint!("Delete {} session(s)? [y/N]: ", to_delete.len());
+            let mut buf = String::new();
+            std::io::stdin().read_line(&mut buf)?;
+            if !buf.trim().eq_ignore_ascii_case("y") {
+                eprintln!("Cancelled.");
+                return Ok(());
+            }
+        }
+
+        let synced_count = to_delete
+            .iter()
+            .filter(|r| session::is_recording_synced(&r.id))
+            .count();
+        let mut deleted = 0usize;
+        for r in &to_delete {
+            if let Err(e) = session::remove_recording(&r.id) {
+                eprintln!("  \u{26a0} Failed to delete {}: {}", &r.id[..8], e);
+            } else {
+                deleted += 1;
+            }
+        }
+
+        eprintln!("Deleted {} session(s).", deleted);
+        if !skipped.is_empty() {
+            eprintln!("  1 session skipped (active).");
+        }
+        if synced_count > 0 {
+            eprintln!();
+            eprintln!(
+                "  \u{2139}\u{fe0f}  {} session(s) were synced to the cloud. Cloud copies are unaffected.",
+                synced_count,
+            );
+        }
+    } else {
+        anyhow::bail!("Specify a session ID or use --all.");
+    }
+
+    Ok(())
+}

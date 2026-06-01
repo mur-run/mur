@@ -223,6 +223,12 @@ pub async fn run(cli: Cli) -> Result<()> {
                 cmd::session::cmd_out(action.as_deref(), force).await?
             }
             SessionAction::Discard => cmd::session::cmd_session_exit()?,
+            SessionAction::Remove {
+                id,
+                all,
+                force,
+                dry_run,
+            } => cmd::session::cmd_session_remove(id, all, force, dry_run)?,
         },
         Commands::Dashboard => {
             dashboard::render_dashboard()?;
