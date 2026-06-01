@@ -30,10 +30,9 @@ impl WorkflowYamlStore {
 
     /// Create a WorkflowYamlStore using the default ~/.mur/workflows/ path.
     pub fn default_store() -> Result<Self> {
-        let dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("~"))
-            .join(".mur")
-            .join("workflows");
+        // Honor MUR_HOME via the canonical resolver so workflows live in the
+        // same home as agents/patterns (see crate::paths).
+        let dir = crate::paths::mur_root(None).join("workflows");
         Self::new(dir)
     }
 

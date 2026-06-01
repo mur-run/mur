@@ -32,6 +32,33 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 pub async fn entrypoint() -> anyhow::Result<()> {
+    // Handle --help/--version before any side effects (process-group changes,
+    // socket creation, serve loop). Running the symlink with these flags must
+    // print and exit, not silently start the supervisor daemon.
+    let argv: Vec<String> = std::env::args().collect();
+    if crate::subcommand::has_flag(&argv, &["--help", "-h"]) {
+        let exe = argv
+            .first()
+            .map(String::as_str)
+            .unwrap_or("mur-agent-runtime");
+        println!(
+            "{exe} — MUR per-agent A2A supervisor runtime\n\n\
+             Usage: mur_agent_<name> [OPTIONS]\n\n\
+             Running with no options starts the agent's A2A supervisor (Unix socket).\n\n\
+             Options:\n  \
+             --load <PATH>   Load and run a portable .muragent package\n  \
+             -h, --help      Print this help and exit\n  \
+             -V, --version   Print version and exit\n\n\
+             Environment:\n  \
+             MUR_HOME        Override the MUR home directory (default ~/.mur)"
+        );
+        return Ok(());
+    }
+    if crate::subcommand::has_flag(&argv, &["--version", "-V"]) {
+        println!("mur-agent-runtime {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .init();
@@ -62,7 +89,6 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let mur_home = std::env::var_os("MUR_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
-    let argv: Vec<String> = std::env::args().collect();
     let load_path = crate::subcommand::flag_value(&argv, "--load");
     let agent_home = if let Some(path) = load_path {
         match load_muragent_and_home(&path, &mur_home) {
