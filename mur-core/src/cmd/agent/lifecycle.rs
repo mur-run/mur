@@ -483,10 +483,22 @@ fn collect_agents() -> Result<Vec<AgentRow>> {
         if !profile_path.exists() {
             continue;
         }
-        let yaml = fs::read_to_string(&profile_path)
-            .with_context(|| format!("read {}", profile_path.display()))?;
-        let profile: _AgentProfile = serde_yaml_ng::from_str(&yaml)
-            .with_context(|| format!("parse {}", profile_path.display()))?;
+        let yaml = match fs::read_to_string(&profile_path) {
+            Ok(y) => y,
+            Err(e) => {
+                eprintln!("warning: skipping {}: {e}", profile_path.display());
+                continue;
+            }
+        };
+        // A single malformed profile must not abort listing every other agent.
+        // Mirror the pattern store's skip-and-warn behavior (store/yaml.rs).
+        let profile: _AgentProfile = match serde_yaml_ng::from_str(&yaml) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("warning: skipping {}: {e}", profile_path.display());
+                continue;
+            }
+        };
 
         let lock_path = dir.join("running.lock");
         let (status, pid, uptime) = classify(&lock_path);
