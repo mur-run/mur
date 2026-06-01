@@ -1,4 +1,6 @@
 pub mod agent;
+#[allow(unused_imports)]
+pub use agent::resolve_mur_home;
 pub mod agent_companion;
 /// B0 M11.4 — eval-harness JSONL → markdown report aggregator.
 pub(crate) mod agent_eval;
