@@ -208,6 +208,8 @@ mod sanitize_tests {
                     secret: None,
                     capabilities: vec![],
                     params: serde_json::Value::Null,
+                    tier: None,
+                    cost_per_1k_tokens: None,
                 },
             )]),
             roles: Default::default(),

@@ -33,6 +33,7 @@ pub mod parameterize;
 pub mod pattern;
 pub mod permissions;
 pub mod pipeline;
+pub mod route;
 pub mod schedule;
 pub mod schedule_claim;
 pub mod scope;
