@@ -50,10 +50,7 @@ pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool, prompt: bool)
     }
 
     // Semantic search
-    let index_path = dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("index");
+    let index_path = crate::paths::mur_root(None).join("index");
 
     let mut best_name: Option<String> = None;
 
@@ -285,10 +282,7 @@ pub(crate) async fn cmd_workflow_search(query: &str, limit: usize) -> Result<()>
         return Ok(());
     }
 
-    let index_path = dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("index");
+    let index_path = crate::paths::mur_root(None).join("index");
 
     if index_path.exists() {
         // Semantic search via LanceDB
@@ -492,9 +486,7 @@ pub(crate) fn cmd_workflow_publish(name: &str, team: &str) -> Result<()> {
     let device_os = crate::auth::get_device_os();
 
     let yaml_content = std::fs::read_to_string(
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".mur")
+        crate::paths::mur_root(None)
             .join("workflows")
             .join(format!("{}.yaml", name)),
     )?;
@@ -789,10 +781,7 @@ pub(crate) fn collect_tags_from_patterns(
 use mur_common::schedule::{Schedule, ScheduleNotify, SchedulesFile};
 
 fn schedules_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("~"))
-        .join(".mur")
-        .join("schedules.yaml")
+    crate::paths::mur_root(None).join("schedules.yaml")
 }
 
 fn load_schedules() -> Result<Vec<Schedule>> {
