@@ -1413,7 +1413,6 @@ pub(crate) fn cmd_session_remove(
                  — use the dashboard to manage them."
             );
         }
-
     } else if all {
         // ── Bulk removal ──
         let recordings = session::list_recordings()?;
@@ -1489,7 +1488,6 @@ pub(crate) fn cmd_session_remove(
                 synced_count,
             );
         }
-
     } else {
         anyhow::bail!("Specify a session ID or use --all.");
     }
