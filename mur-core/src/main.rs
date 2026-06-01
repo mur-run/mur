@@ -38,6 +38,7 @@ mod interactive;
 mod nudge;
 mod paths;
 mod retrieve;
+mod route;
 mod server;
 #[cfg(feature = "server")]
 mod server_agents;
