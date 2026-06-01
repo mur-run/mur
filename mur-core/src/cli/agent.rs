@@ -122,30 +122,18 @@ pub enum AgentAction {
         #[command(subcommand)]
         action: AgentPermAction,
     },
-    /// Export an agent to a .muragent (default, signed v2 portable), .murpkg (legacy),
-    /// self-contained binary, or click-to-launch GUI app
+    /// Export an agent to a portable `.muragent` (default, signed v2) or a
+    /// legacy `.murpkg`. Recipients open it with the MuR Hub app or run it
+    /// headless via `mur-agent-runtime --load <file>.muragent`.
     Export {
         /// Agent name
         name: String,
-        /// Output path (e.g. agent.muragent, agent.murpkg, my_agent, or MyAgent.app)
+        /// Output path (e.g. agent.muragent or agent.murpkg)
         #[arg(long, short = 'o')]
         out: String,
-        /// Format: "muragent" (default — signed v2 portable), "pkg" (legacy v1), "bin", or "gui"
+        /// Format: "muragent" (default — signed v2 portable) or "pkg" (legacy v1)
         #[arg(long, default_value = "muragent")]
         format: String,
-        /// (gui only) Default theme baked into the bundle
-        #[arg(long, default_value = "light")]
-        theme: String,
-        /// (gui only) Override theme's app icon with this PNG
-        #[arg(long)]
-        icon: Option<String>,
-        /// (gui only) Embed identity.{key,pub} so recipient inherits identity
-        /// (rekeys on first launch). Default: template mode mints fresh keys.
-        #[arg(long)]
-        clone_identity: bool,
-        /// (gui only) Skip macOS codesign + notarization (testing only)
-        #[arg(long)]
-        skip_notarize: bool,
     },
     /// Install an agent from a signed `.muragent` package
     Install {
