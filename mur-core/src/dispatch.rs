@@ -991,10 +991,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             } => cmd::project::cmd_project_search(query, project, limit, json).await?,
             ProjectAction::Status { path } => cmd::project::cmd_project_status(path).await?,
             ProjectAction::List => cmd::project::cmd_project_list()?,
-            ProjectAction::Remove { path } => {
-                let _ = path;
-                todo!("implement project remove")
-            },
+            ProjectAction::Remove { path } => cmd::project::cmd_project_remove(path)?,
         },
         Commands::Auth { action } => match action {
             AuthAction::Login => cmd::misc::cmd_login().await?,
