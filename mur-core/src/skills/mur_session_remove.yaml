@@ -1,0 +1,16 @@
+name: mur-session-remove
+version: 0.1.0
+publisher: human:mur
+description: "Remove stale session recordings to free disk space."
+category: command
+content:
+  abstract: |
+    Run `mur session remove <id>` to delete a session recording (id can be a prefix).
+    List sessions first with `mur session list`.
+    To clear everything, run `mur session remove --all` (preview with `--all --dry-run`,
+    skip the prompt with `--force`). Use this when old recordings pile up on disk.
+  command: "mur session remove"
+tags: [mur, session, cleanup, builtin]
+triggers:
+  - type: manual
+priority: low

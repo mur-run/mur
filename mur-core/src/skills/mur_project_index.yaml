@@ -1,0 +1,28 @@
+name: mur-project-index
+version: 0.1.0
+publisher: human:mur
+description: "Index a project's source code for semantic search. Run after git commits."
+category: context
+hosts: [all]
+content:
+  abstract: |
+    Run `mur project index` to rebuild the codebase index.
+    This enables `mur project search` for semantic code search.
+  context: |
+    # mur-project-index — Keep Codebase Index Fresh
+
+    After committing or pushing code, run:
+    ```
+    mur project index
+    ```
+
+    For large projects add `--background` to index asynchronously.
+    Use `--rebuild` to force a full reindex (ignores mtime cache).
+
+    Check index status with: `mur project status`
+tags: [mur, project, indexing, builtin]
+triggers:
+  - type: keyword
+    pattern: "(mur project index|reindex codebase|rebuild.{0,12}codebase index|index.{0,12}for semantic)"
+  - type: manual
+priority: normal

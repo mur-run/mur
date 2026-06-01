@@ -1130,6 +1130,22 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
         ("mur-in", include_str!("../skills/mur_in.yaml")),
         ("mur-out", include_str!("../skills/mur_out.yaml")),
         ("mur-run", include_str!("../skills/mur_run.yaml")),
+        (
+            "mur-agent-manage",
+            include_str!("../skills/mur_agent_manage.yaml"),
+        ),
+        (
+            "mur-project-index",
+            include_str!("../skills/mur_project_index.yaml"),
+        ),
+        (
+            "mur-project-remove",
+            include_str!("../skills/mur_project_remove.yaml"),
+        ),
+        (
+            "mur-session-remove",
+            include_str!("../skills/mur_session_remove.yaml"),
+        ),
     ];
 
     let mur_skills_dir = home.join(".mur").join("skills");
