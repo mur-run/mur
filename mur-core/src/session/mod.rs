@@ -300,6 +300,36 @@ pub fn delete_recording(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove a session's recording, metadata, and sync marker from a specific
+/// recordings directory.  Used by `remove_recording()` and by tests.
+fn remove_recording_in_dir(recordings_dir: &std::path::Path, id: &str) -> Result<()> {
+    let jsonl = recordings_dir.join(format!("{}.jsonl", id));
+    let meta = recordings_dir.join(format!("{}.meta.json", id));
+    let synced = recordings_dir.join(format!("{}.synced", id));
+
+    if jsonl.exists() {
+        fs::remove_file(&jsonl)?;
+    }
+    if meta.exists() {
+        fs::remove_file(&meta)?;
+    }
+    if synced.exists() {
+        fs::remove_file(&synced)?;
+    }
+    Ok(())
+}
+
+/// Remove a session recording, metadata, and sync marker from the default
+/// recordings directory.
+pub(crate) fn remove_recording(id: &str) -> Result<()> {
+    remove_recording_in_dir(&recordings_dir(), id)
+}
+
+/// Check if a recording has been synced to the cloud.
+pub(crate) fn is_recording_synced(id: &str) -> bool {
+    recordings_dir().join(format!("{}.synced", id)).exists()
+}
+
 /// Read and parse all events from a session recording.
 pub fn read_events(id: &str) -> Result<Vec<SessionEvent>> {
     let path = recordings_dir().join(format!("{}.jsonl", id));
@@ -700,5 +730,48 @@ mod tests {
         tools.insert("Read".to_string());
         tools.insert("Bash".to_string()); // duplicate
         assert_eq!(tools.len(), 2);
+    }
+
+    // ─── remove_recording tests ─────────────────────────────────────
+
+    #[test]
+    fn test_remove_recording_cleans_all_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rec_dir = tmp.path().join("recordings");
+        fs::create_dir_all(&rec_dir).unwrap();
+
+        let id = "test-remove-123";
+        // Create the three files
+        fs::write(rec_dir.join(format!("{}.jsonl", id)), "line1\n").unwrap();
+        fs::write(rec_dir.join(format!("{}.meta.json", id)), "{}").unwrap();
+        fs::write(rec_dir.join(format!("{}.synced", id)), "2026-01-01").unwrap();
+
+        assert!(rec_dir.join(format!("{}.jsonl", id)).exists());
+        assert!(rec_dir.join(format!("{}.meta.json", id)).exists());
+        assert!(rec_dir.join(format!("{}.synced", id)).exists());
+
+        // Call the helper with explicit dir
+        remove_recording_in_dir(&rec_dir, id).unwrap();
+
+        assert!(!rec_dir.join(format!("{}.jsonl", id)).exists());
+        assert!(!rec_dir.join(format!("{}.meta.json", id)).exists());
+        assert!(!rec_dir.join(format!("{}.synced", id)).exists());
+    }
+
+    #[test]
+    fn test_remove_recording_no_synced_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rec_dir = tmp.path().join("recordings");
+        fs::create_dir_all(&rec_dir).unwrap();
+
+        let id = "test-no-sync";
+        fs::write(rec_dir.join(format!("{}.jsonl", id)), "line1\n").unwrap();
+        fs::write(rec_dir.join(format!("{}.meta.json", id)), "{}").unwrap();
+
+        // Should succeed even without .synced file
+        remove_recording_in_dir(&rec_dir, id).unwrap();
+
+        assert!(!rec_dir.join(format!("{}.jsonl", id)).exists());
+        assert!(!rec_dir.join(format!("{}.meta.json", id)).exists());
     }
 }
