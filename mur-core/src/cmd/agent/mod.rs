@@ -29,7 +29,7 @@ mod comm;
 pub mod export;
 mod hub;
 mod install;
-mod lifecycle;
+pub mod lifecycle;
 mod mcp;
 pub mod model_resolve;
 mod peers;

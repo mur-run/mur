@@ -267,6 +267,152 @@ struct AgentRow {
     category: String,
 }
 
+/// Structured agent list entry — returned by do_list().
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentListEntry {
+    pub name: String,
+    pub running: bool,
+    pub transport: String,
+}
+
+/// Structured agent status — returned by do_status().
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentStatusInfo {
+    pub name: String,
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub transport: String,
+    pub socket_path: Option<String>,
+    pub skills_count: usize,
+    pub mcp_servers_count: usize,
+}
+
+pub fn do_list() -> Result<Vec<AgentListEntry>> {
+    let home = super::resolve_mur_home()?;
+    let agents_dir = home.join("agents");
+    if !agents_dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&agents_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let profile_path = entry.path().join("profile.yaml");
+            let running = check_running(&entry.path());
+            let transport = if profile_path.exists() {
+                load_transport(&profile_path).unwrap_or_else(|_| "stdio".into())
+            } else {
+                "unknown".into()
+            };
+            entries.push(AgentListEntry {
+                name,
+                running,
+                transport,
+            });
+        }
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+pub fn do_status(name: &str) -> Result<AgentStatusInfo> {
+    let home = super::resolve_mur_home()?;
+    let agent_dir = home.join("agents").join(name);
+    if !agent_dir.exists() {
+        anyhow::bail!(
+            "Agent '{}' not found. Run 'mur agent list' to see configured agents.",
+            name
+        );
+    }
+    let profile_path = agent_dir.join("profile.yaml");
+    let running = check_running(&agent_dir);
+    let pid = get_pid(&agent_dir);
+    let transport = if profile_path.exists() {
+        load_transport(&profile_path).unwrap_or_else(|_| "stdio".into())
+    } else {
+        "unknown".into()
+    };
+    let socket_path = agent_dir
+        .join("agent.sock")
+        .to_str()
+        .map(|s| s.to_string());
+    let skills_count = count_skills(&home, name);
+    let mcp_servers_count = count_mcp(&agent_dir);
+
+    Ok(AgentStatusInfo {
+        name: name.into(),
+        running,
+        pid,
+        transport,
+        socket_path,
+        skills_count,
+        mcp_servers_count,
+    })
+}
+
+fn check_running(agent_dir: &std::path::Path) -> bool {
+    let lock_path = agent_dir.join("running.lock");
+    if lock_path.exists()
+        && let Ok(bytes) = std::fs::read(&lock_path)
+        && let Ok(lock) = serde_json::from_slice::<LockFile>(&bytes)
+    {
+        pid_alive(lock.pid)
+    } else {
+        false
+    }
+}
+
+fn get_pid(agent_dir: &std::path::Path) -> Option<u32> {
+    let lock_path = agent_dir.join("running.lock");
+    if lock_path.exists()
+        && let Ok(bytes) = std::fs::read(&lock_path)
+        && let Ok(lock) = serde_json::from_slice::<LockFile>(&bytes)
+    {
+        Some(lock.pid)
+    } else {
+        None
+    }
+}
+
+fn load_transport(profile_path: &std::path::Path) -> Result<String> {
+    let yaml = std::fs::read_to_string(profile_path)?;
+    let profile: mur_common::AgentProfile = serde_yaml_ng::from_str(&yaml)?;
+    if profile.transport.socket.enabled {
+        Ok("socket".into())
+    } else if profile.transport.tcp.enabled {
+        Ok("tcp".into())
+    } else {
+        Ok("stdio".into())
+    }
+}
+
+fn count_skills(mur_home: &std::path::Path, agent_name: &str) -> usize {
+    let skills_dir = mur_home.join("agents").join(agent_name).join("skills");
+    if !skills_dir.exists() {
+        return 0;
+    }
+    std::fs::read_dir(&skills_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn count_mcp(agent_dir: &std::path::Path) -> usize {
+    let profile_path = agent_dir.join("profile.yaml");
+    match std::fs::read_to_string(&profile_path) {
+        Ok(yaml) => match serde_yaml_ng::from_str::<mur_common::AgentProfile>(&yaml) {
+            Ok(profile) => profile.mcp_servers.len(),
+            Err(_) => 0,
+        },
+        Err(_) => 0,
+    }
+}
+
 pub fn cmd_list(json: bool) -> Result<()> {
     let rows = collect_agents()?;
     if json {
