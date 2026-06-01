@@ -642,6 +642,19 @@ impl CodebaseIndex {
     pub fn lance_path(&self) -> &Path {
         &self.lance_path
     }
+
+    /// Delete all index data for this project (LanceDB dir, meta, lock, progress).
+    pub fn delete_index(&self) -> Result<()> {
+        if self.lance_path.exists() {
+            std::fs::remove_dir_all(&self.lance_path)?;
+        }
+        for path in [self.meta_path(), self.lock_path(), self.progress_path()] {
+            if path.exists() {
+                std::fs::remove_file(path)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub fn discover_all_indexes() -> Vec<DiscoveredIndex> {
