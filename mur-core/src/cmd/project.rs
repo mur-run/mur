@@ -347,6 +347,72 @@ pub(crate) fn cmd_project_list() -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn cmd_project_remove(path: Option<String>) -> Result<()> {
+    let project_path = match &path {
+        Some(p) => expand_tilde(p),
+        None => std::env::current_dir()?,
+    };
+    let project_path = project_path.canonicalize().unwrap_or(project_path);
+    let project_name = project_name_from_path(&project_path);
+    let index = CodebaseIndex::new(&project_name, &project_path);
+
+    if index.lance_path().exists() {
+        index.delete_index()?;
+        println!(
+            "Removed index for '{}' at {}",
+            project_name,
+            project_path.display()
+        );
+        return Ok(());
+    }
+
+    // Fallback: scan all indexes for matching project_path (handles renamed dirs)
+    let indexes = discover_all_indexes();
+    let found = indexes.iter().find(|d| {
+        d.project_path
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).canonicalize().ok())
+            .map(|p| p == project_path)
+            .unwrap_or(false)
+    });
+
+    match found {
+        Some(entry) => {
+            let fallback = CodebaseIndex::new(&entry.name, &project_path);
+            fallback.delete_index()?;
+            println!(
+                "Removed index for '{}' at {}",
+                entry.name,
+                project_path.display()
+            );
+            Ok(())
+        }
+        None => {
+            if indexes.is_empty() {
+                anyhow::bail!(
+                    "No index found for '{}'.\n  No projects are currently indexed. Run `mur project index` first.",
+                    project_path.display()
+                );
+            }
+            anyhow::bail!(
+                "No index found for '{}'.\n  Indexed projects:\n{}",
+                project_path.display(),
+                indexes
+                    .iter()
+                    .map(|d| {
+                        format!(
+                            "    {}  ({})",
+                            d.name,
+                            d.project_path.as_deref().unwrap_or("?")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        }
+    }
+}
+
 /// Internal: runs the actual indexing work when spawned in background mode.
 pub(crate) async fn cmd_project_index_worker(
     project_name: &str,
