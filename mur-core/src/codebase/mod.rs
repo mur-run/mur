@@ -22,7 +22,8 @@ use scanner::scan_project;
 use crate::store::embedding::{EmbeddingConfig, embed_batch};
 
 const TABLE_NAME: &str = "chunks";
-const EMBED_BATCH_SIZE: usize = 200;
+/// Fallback when embed_config.batch_size is zero (shouldn't happen).
+const FALLBACK_EMBED_BATCH_SIZE: usize = 32;
 
 /// Chunks above this threshold auto-trigger background mode.
 pub const BACKGROUND_CHUNK_THRESHOLD: usize = 200;
@@ -377,8 +378,14 @@ impl CodebaseIndex {
         if total_to_embed > 0 {
             on_progress(0, total_to_embed);
         }
-        for batch_start in (0..total_to_embed).step_by(EMBED_BATCH_SIZE) {
-            let batch_end = (batch_start + EMBED_BATCH_SIZE).min(total_to_embed);
+        let embed_batch_size = if embed_config.batch_size > 0 {
+            embed_config.batch_size
+        } else {
+            FALLBACK_EMBED_BATCH_SIZE
+        };
+
+        for batch_start in (0..total_to_embed).step_by(embed_batch_size) {
+            let batch_end = (batch_start + embed_batch_size).min(total_to_embed);
             let batch_indices = &chunks_to_embed[batch_start..batch_end];
 
             let texts: Vec<String> = batch_indices

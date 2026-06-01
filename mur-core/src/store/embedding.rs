@@ -10,6 +10,8 @@ pub struct EmbeddingConfig {
     pub model: String,
     #[allow(dead_code)] // Used by callers to pass dimensions to VectorStore
     pub dimensions: usize,
+    /// Max texts per embedding API request (controls model-server RAM).
+    pub batch_size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +47,7 @@ impl EmbeddingConfig {
             provider,
             model: cfg.embedding.model.clone(),
             dimensions: cfg.embedding.dimensions,
+            batch_size: cfg.sources_global.embedding_batch_size,
         }
     }
 }
@@ -57,6 +60,7 @@ impl Default for EmbeddingConfig {
             },
             model: "qwen3-embedding:0.6b".into(),
             dimensions: 1024,
+            batch_size: 32,
         }
     }
 }
