@@ -347,6 +347,23 @@ pub enum SessionAction {
     },
     /// Stop recording and delete the session (no export)
     Discard,
+    /// Remove session recording(s)
+    Remove {
+        /// Session ID or prefix
+        id: Option<String>,
+
+        /// Remove all session recordings
+        #[arg(long, conflicts_with = "id")]
+        all: bool,
+
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+
+        /// Show what would be deleted without actually deleting
+        #[arg(long, requires = "all")]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
