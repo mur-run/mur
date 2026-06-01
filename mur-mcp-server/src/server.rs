@@ -1,7 +1,7 @@
 // mur-mcp-server/src/server.rs
 use crate::jsonrpc::{Request, Response};
 use crate::tools;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub struct McpServer {
     /// Server name sent in initialize response.
@@ -109,7 +109,9 @@ impl McpServer {
             Ok(result) => {
                 let content = match result {
                     Value::String(s) => vec![json!({"type": "text", "text": s})],
-                    other => vec![json!({"type": "text", "text": serde_json::to_string_pretty(&other).unwrap_or_else(|_| format!("{:?}", other))})],
+                    other => vec![
+                        json!({"type": "text", "text": serde_json::to_string_pretty(&other).unwrap_or_else(|_| format!("{:?}", other))}),
+                    ],
                 };
                 Response::success(id, json!({ "content": content }))
             }

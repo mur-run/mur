@@ -31,10 +31,12 @@ fn test_initialize_and_list_tools() {
     );
     let resp = read_response(&mut stdout);
     assert_eq!(resp["id"], 1);
-    assert!(resp["result"]["serverInfo"]["name"]
-        .as_str()
-        .unwrap()
-        .contains("mur"));
+    assert!(
+        resp["result"]["serverInfo"]["name"]
+            .as_str()
+            .unwrap()
+            .contains("mur")
+    );
 
     // Confirm initialization
     send_request(

@@ -6,6 +6,7 @@ use std::io::{BufRead, Write};
 /// JSON-RPC 2.0 request (what the client sends us).
 #[derive(Debug, Deserialize)]
 pub struct Request {
+    #[allow(dead_code)]
     pub jsonrpc: String,
     pub id: Option<Value>,
     pub method: String,

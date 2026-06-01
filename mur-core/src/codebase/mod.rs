@@ -67,6 +67,7 @@ pub struct DiscoveredIndex {
     pub name: String,
     pub project_path: Option<String>,
     pub last_indexed: Option<String>,
+    #[allow(dead_code)]
     pub file_count: usize,
 }
 

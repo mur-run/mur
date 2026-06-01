@@ -8,7 +8,9 @@ use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
 // ─── Structured return types for MCP consumption ────────────────────
+// Public API consumed by mur-mcp-server crate.
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ContextResult {
     pub patterns: Vec<ContextPattern>,
@@ -16,6 +18,7 @@ pub struct ContextResult {
     pub token_count: usize,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ContextPattern {
     pub name: String,
@@ -26,6 +29,7 @@ pub struct ContextPattern {
 
 /// Retrieve contextual patterns for the current project. Returns structured
 /// data suitable for MCP tool responses (no side effects, no printing).
+#[allow(dead_code)]
 pub async fn do_context(
     query: Option<String>,
     compact: bool,
@@ -50,8 +54,7 @@ pub async fn do_context(
 
     let yaml_store = YamlStore::default_store()?;
     let patterns = yaml_store.list_all()?;
-    let project_language =
-        capture::starter::detect_language(&cwd).map(|l| l.as_str().to_string());
+    let project_language = capture::starter::detect_language(&cwd).map(|l| l.as_str().to_string());
 
     let score_scope = ScopeContext {
         user: None,
@@ -105,10 +108,7 @@ pub async fn do_context(
         .iter()
         .filter(|sp| sp.item.lifecycle.status != LifecycleStatus::Archived)
         .map(|sp| {
-            let content = sp
-                .item
-                .description
-                .clone();
+            let content = sp.item.description.clone();
             let tier = format!("{:?}", sp.item.tier).to_lowercase();
             ContextPattern {
                 name: sp.item.name.clone(),

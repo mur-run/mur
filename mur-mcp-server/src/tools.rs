@@ -1,6 +1,6 @@
 // mur-mcp-server/src/tools.rs
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use mur_core::cmd::notes_cmd;
 
@@ -156,26 +156,32 @@ pub fn all_tools() -> Vec<Tool> {
 pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
     match name {
         "mur_notes_search" => {
-            let query = arguments.get("query")
+            let query = arguments
+                .get("query")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing required parameter: 'query' (string)".to_string())?;
-            let limit = arguments.get("limit")
+            let limit = arguments
+                .get("limit")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(5)
                 .clamp(1, 10) as usize;
 
-            let home = resolve_mur_home().map_err(|e| format!("Failed to resolve MUR home: {}", e))?;
+            let home =
+                resolve_mur_home().map_err(|e| format!("Failed to resolve MUR home: {}", e))?;
             let results = notes_cmd::do_search(&home, query, limit)
                 .map_err(|e| format!("Search failed: {}", e))?;
 
-            let items: Vec<Value> = results.iter().map(|scored| {
-                json!({
-                    "name": scored.item.manifest.name,
-                    "description": scored.item.manifest.description,
-                    "score": scored.score,
-                    "maturity": format!("{:?}", scored.item.stats.lifecycle_state),
+            let items: Vec<Value> = results
+                .iter()
+                .map(|scored| {
+                    json!({
+                        "name": scored.item.manifest.name,
+                        "description": scored.item.manifest.description,
+                        "score": scored.score,
+                        "maturity": format!("{:?}", scored.item.stats.lifecycle_state),
+                    })
                 })
-            }).collect();
+                .collect();
 
             Ok(json!({
                 "results": items,
@@ -184,13 +190,15 @@ pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         }
 
         "mur_notes_show" => {
-            let name = arguments.get("name")
+            let name = arguments
+                .get("name")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing required parameter: 'name' (string)".to_string())?;
 
-            let home = resolve_mur_home().map_err(|e| format!("Failed to resolve MUR home: {}", e))?;
-            let view = notes_cmd::do_show(&home, name)
-                .map_err(|e| format!("Note not found: {}", e))?;
+            let home =
+                resolve_mur_home().map_err(|e| format!("Failed to resolve MUR home: {}", e))?;
+            let view =
+                notes_cmd::do_show(&home, name).map_err(|e| format!("Note not found: {}", e))?;
 
             Ok(json!({
                 "name": view.name,
@@ -201,11 +209,13 @@ pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         }
 
         "mur_project_search" => {
-            let query = arguments.get("query")
+            let query = arguments
+                .get("query")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing required parameter: 'query' (string)".to_string())?;
             let project = arguments.get("project").and_then(|v| v.as_str());
-            let limit = arguments.get("limit")
+            let limit = arguments
+                .get("limit")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(5)
                 .clamp(1, 10) as usize;
@@ -214,13 +224,19 @@ pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 .await
                 .map_err(|e| format!("Project search failed: {}", e))?;
 
-            let snippets: Vec<Value> = result.chunks.iter().map(|c| json!({
-                "file": c.file,
-                "lines": format!("{}-{}", c.line_start, c.line_end),
-                "content": c.content,
-                "score": c.score,
-                "project": c.project,
-            })).collect();
+            let snippets: Vec<Value> = result
+                .chunks
+                .iter()
+                .map(|c| {
+                    json!({
+                        "file": c.file,
+                        "lines": format!("{}-{}", c.line_start, c.line_end),
+                        "content": c.content,
+                        "score": c.score,
+                        "project": c.project,
+                    })
+                })
+                .collect();
 
             Ok(json!({
                 "results": snippets,
@@ -252,9 +268,18 @@ pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
         }
 
         "mur_hook_context" => {
-            let query = arguments.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let compact = arguments.get("compact").and_then(|v| v.as_bool()).unwrap_or(false);
-            let budget = arguments.get("budget").and_then(|v| v.as_u64()).unwrap_or(2000) as usize;
+            let query = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let compact = arguments
+                .get("compact")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let budget = arguments
+                .get("budget")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(2000) as usize;
 
             let result = mur_core::cmd::context::do_context(query, compact, budget)
                 .await

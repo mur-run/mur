@@ -77,7 +77,7 @@ pub async fn do_project_search(
     let mut all_chunks: Vec<ProjectSearchChunk> = Vec::new();
 
     for discovered in &indexes {
-        if let Some(ref filter) = project_filter
+        if let Some(filter) = project_filter
             && discovered.name != *filter
         {
             continue;
@@ -107,7 +107,9 @@ pub async fn do_project_search(
     }
 
     all_chunks.sort_by(|a, b| {
-        b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     let total = all_chunks.len();
     all_chunks.truncate(limit);
@@ -150,22 +152,21 @@ pub fn do_project_status(path: Option<&str>) -> Result<ProjectStatusInfo> {
     if lock_path.exists()
         && let Ok(data) = std::fs::read_to_string(&lock_path)
         && let Ok(lock) = serde_json::from_str::<IndexLock>(&data)
+        && mur_common::lock_file::pid_alive(lock.pid)
     {
-        if mur_common::lock_file::pid_alive(lock.pid) {
-            info.indexing_in_progress = true;
-            if let Some(prog) = index.read_progress() {
-                let pct = if prog.total_chunks > 0 {
-                    (prog.done_chunks as f64 / prog.total_chunks as f64) * 100.0
-                } else {
-                    0.0
-                };
-                info.progress = Some(IndexProgressInfo {
-                    done_chunks: prog.done_chunks,
-                    total_chunks: prog.total_chunks,
-                    pct,
-                    errors: prog.errors,
-                });
-            }
+        info.indexing_in_progress = true;
+        if let Some(prog) = index.read_progress() {
+            let pct = if prog.total_chunks > 0 {
+                (prog.done_chunks as f64 / prog.total_chunks as f64) * 100.0
+            } else {
+                0.0
+            };
+            info.progress = Some(IndexProgressInfo {
+                done_chunks: prog.done_chunks,
+                total_chunks: prog.total_chunks,
+                pct,
+                errors: prog.errors,
+            });
         }
     }
 
@@ -395,10 +396,7 @@ pub fn cmd_project_status(path: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "  Indexed: {}",
-        if info.indexed { "yes" } else { "no" }
-    );
+    println!("  Indexed: {}", if info.indexed { "yes" } else { "no" });
     if let Some(chunks) = info.chunks {
         println!("  Chunks: {}", chunks);
     }
@@ -415,10 +413,7 @@ pub fn cmd_project_list() -> Result<()> {
     println!("Indexed projects:");
     for p in &projects {
         let last = p.last_indexed.as_deref().unwrap_or("(unknown)");
-        println!(
-            "  {} — last indexed: {}",
-            p.name, last
-        );
+        println!("  {} — last indexed: {}", p.name, last);
         println!("    path: {}", p.path);
     }
     Ok(())

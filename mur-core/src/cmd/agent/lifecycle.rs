@@ -268,6 +268,8 @@ struct AgentRow {
 }
 
 /// Structured agent list entry — returned by do_list().
+/// Public API consumed by mur-mcp-server.
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentListEntry {
     pub name: String,
@@ -276,6 +278,8 @@ pub struct AgentListEntry {
 }
 
 /// Structured agent status — returned by do_status().
+/// Public API consumed by mur-mcp-server.
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentStatusInfo {
     pub name: String,
@@ -287,6 +291,7 @@ pub struct AgentStatusInfo {
     pub mcp_servers_count: usize,
 }
 
+#[allow(dead_code)]
 pub fn do_list() -> Result<Vec<AgentListEntry>> {
     let home = super::resolve_mur_home()?;
     let agents_dir = home.join("agents");
@@ -316,6 +321,7 @@ pub fn do_list() -> Result<Vec<AgentListEntry>> {
     Ok(entries)
 }
 
+#[allow(dead_code)]
 pub fn do_status(name: &str) -> Result<AgentStatusInfo> {
     let home = super::resolve_mur_home()?;
     let agent_dir = home.join("agents").join(name);
@@ -333,10 +339,7 @@ pub fn do_status(name: &str) -> Result<AgentStatusInfo> {
     } else {
         "unknown".into()
     };
-    let socket_path = agent_dir
-        .join("agent.sock")
-        .to_str()
-        .map(|s| s.to_string());
+    let socket_path = agent_dir.join("agent.sock").to_str().map(|s| s.to_string());
     let skills_count = count_skills(&home, name);
     let mcp_servers_count = count_mcp(&agent_dir);
 
@@ -351,6 +354,7 @@ pub fn do_status(name: &str) -> Result<AgentStatusInfo> {
     })
 }
 
+#[allow(dead_code)]
 fn check_running(agent_dir: &std::path::Path) -> bool {
     let lock_path = agent_dir.join("running.lock");
     if lock_path.exists()
@@ -363,6 +367,7 @@ fn check_running(agent_dir: &std::path::Path) -> bool {
     }
 }
 
+#[allow(dead_code)]
 fn get_pid(agent_dir: &std::path::Path) -> Option<u32> {
     let lock_path = agent_dir.join("running.lock");
     if lock_path.exists()
@@ -375,6 +380,7 @@ fn get_pid(agent_dir: &std::path::Path) -> Option<u32> {
     }
 }
 
+#[allow(dead_code)]
 fn load_transport(profile_path: &std::path::Path) -> Result<String> {
     let yaml = std::fs::read_to_string(profile_path)?;
     let profile: mur_common::AgentProfile = serde_yaml_ng::from_str(&yaml)?;
@@ -387,6 +393,7 @@ fn load_transport(profile_path: &std::path::Path) -> Result<String> {
     }
 }
 
+#[allow(dead_code)]
 fn count_skills(mur_home: &std::path::Path, agent_name: &str) -> usize {
     let skills_dir = mur_home.join("agents").join(agent_name).join("skills");
     if !skills_dir.exists() {
@@ -402,6 +409,7 @@ fn count_skills(mur_home: &std::path::Path, agent_name: &str) -> usize {
         .unwrap_or(0)
 }
 
+#[allow(dead_code)]
 fn count_mcp(agent_dir: &std::path::Path) -> usize {
     let profile_path = agent_dir.join("profile.yaml");
     match std::fs::read_to_string(&profile_path) {
