@@ -49,6 +49,20 @@ Batch bugs (3 at a time) → fix → PR (author `karajanchang`) → CI → auto-
 - `mur stats` floods one WARN per corrupt pattern YAML (should summarize).
 - Runtime previously had NO `--help` (fixed in batch 1).
 
+### Agent-subcommand sweep — arg-order matrix (all functional; placement inconsistent)
+- `<verb> <name>`: stats, logs, history, skill list, mcp list, schedule list
+- `<name> <verb>`: secret <name> list, queue <name> list
+- `<verb> show <name>`: perm show <name>
+- no name (global): doctor
+Real ergonomics wart (name position unpredictable) but a fix is a breaking CLI change needing
+design sign-off → documented as recommendation, NOT auto-fixed. No new crash bug → no batch-2 PR.
+
+### Sweep coverage
+top-level: stats, doctor, verify, model list, skill list, notes list, workflow list, source list,
+team, chat, agent list (+bug), unknown-cmd error.
+agent: create, list, status, card, send (real A2A), prompt set, perm set-mode/show, secret set/list,
+stats, logs, hooks, peers, skill list, mcp list, schedule list, history, queue list, doctor.
+
 ## Collaboration findings (relay)
 - All 7 roles produced coherent, role-appropriate artifacts; design converged (PM PRD → Architect `AgentStatus::emoji()` → Rust code → DevOps CI/versioning → Reviewer caught wire-break risk → Security flagged ZWJ/RTL injection on ingest → QA test plan).
 - 6/7 emitted the required `HANDOFF ->` line. **Rust Engineer dropped it** (produced code, omitted handoff). QA's final handoff truncated at the word cap.
