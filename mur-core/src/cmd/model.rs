@@ -431,8 +431,8 @@ fn parse_route_policy(raw: &str) -> anyhow::Result<RoutePolicy> {
         "force-local" | "force_local" => Ok(RoutePolicy::ForceLocal),
         other if other.starts_with("force-frontier:") || other.starts_with("force_frontier:") => {
             let model_id = other
-                .splitn(2, ':')
-                .nth(1)
+                .split_once(':')
+                .map(|x| x.1)
                 .ok_or_else(|| anyhow::anyhow!("force-frontier requires :<model-id>"))?
                 .trim()
                 .to_string();

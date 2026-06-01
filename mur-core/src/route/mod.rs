@@ -70,6 +70,7 @@ impl Router {
     /// Thin wrapper over [`Router::decide_with_score`] that discards the score.
     /// There is exactly **one** routing code path (`decide_with_score`), so the
     /// two entry points can never disagree.
+    #[allow(dead_code)]
     pub fn decide(
         &self,
         task_summary: &str,

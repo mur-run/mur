@@ -45,6 +45,7 @@ impl EscalationLedger {
     }
 
     /// Replay today's ledger events.
+    #[allow(dead_code)]
     pub fn replay_today(base_dir: &Path) -> Vec<EscalationEvent> {
         GenericLedger::<EscalationEvent>::scan_days(base_dir, 1)
             .into_iter()
@@ -62,6 +63,7 @@ impl EscalationLedger {
 
     /// Count escalation rate over the last `days`.
     /// Returns (escalations, total_decisions, rate).
+    #[allow(dead_code)]
     pub fn escalation_rate(base_dir: &Path, days: u32) -> (usize, usize, f64) {
         let s = Self::summary(base_dir, days);
         (s.escalations, s.total, s.rate)
