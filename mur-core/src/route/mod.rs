@@ -5,6 +5,7 @@
 //! Phase 2 (deferred): governed spawn via `CodingAgentAdapter`.
 
 pub mod heuristic;
+pub mod ledger;
 
 use anyhow::Result;
 use mur_common::model::{ModelEntry, ModelRegistry};
