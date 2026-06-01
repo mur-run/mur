@@ -27,6 +27,7 @@ pub mod lock_file;
 pub mod manifest;
 pub mod model;
 pub mod model_resolve;
+pub mod route;
 pub mod multimodal;
 pub mod muragent;
 pub mod parameterize;
