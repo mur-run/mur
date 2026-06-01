@@ -2,6 +2,7 @@ use tracing_subscriber::EnvFilter;
 
 mod jsonrpc;
 mod server;
+mod tools;
 
 #[tokio::main]
 async fn main() {
