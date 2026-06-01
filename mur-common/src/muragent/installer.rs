@@ -244,11 +244,27 @@ fn try_apply_rotation(
     Ok(())
 }
 
-/// Remove every entry in `dir` except `data/`. Used by the update path.
+/// Files and directories that must survive an in-place update: the agent's
+/// runtime `data/` and its local identity keypair (private material the
+/// incoming, sanitized package never carries — clobbering it would orphan the
+/// agent's signing key and break re-export).
+const PRESERVE_ON_UPDATE: &[&str] = &[
+    "data",
+    "identity.key",
+    "identity.pub",
+    "identity.key.prev",
+    "identity.pub.prev",
+];
+
+/// Remove every entry in `dir` except the [`PRESERVE_ON_UPDATE`] set. Used by
+/// the update path.
 fn clear_except_data(dir: &Path) -> Result<(), MuragentError> {
     for entry in fs::read_dir(dir).map_err(MuragentError::Io)? {
         let entry = entry.map_err(MuragentError::Io)?;
-        if entry.file_name() == "data" {
+        if PRESERVE_ON_UPDATE
+            .iter()
+            .any(|keep| entry.file_name() == *keep)
+        {
             continue;
         }
         let path = entry.path();
@@ -422,6 +438,55 @@ mod tests {
         assert!(outcome2.was_update);
         let preserved = fs::read(data_dir.join("history.jsonl")).unwrap();
         assert_eq!(preserved, b"important");
+
+        // Cleanup
+        unsafe {
+            if let Some(p) = prev {
+                std::env::set_var("MUR_HOME", p);
+            } else {
+                std::env::remove_var("MUR_HOME");
+            }
+        }
+    }
+
+    #[test]
+    fn update_preserves_local_identity_keypair() {
+        // Regression: loading a template-mode (.muragent carries no private
+        // key) package over an existing agent must NOT delete the agent's
+        // locally-minted identity keypair, or `mur agent export` afterward
+        // fails with "identity files not found".
+        let _guard = crate::trust::test_env_lock::MUR_HOME_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path().join("mur");
+        let prev = std::env::var_os("MUR_HOME");
+        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+
+        let pkg = make_test_package(&tmp);
+        let archive = MuragentArchive::read(&pkg).unwrap();
+        let outcome = install(&archive, &mur_home, "test").unwrap();
+        let slug = outcome.manifest.agent.slug.clone();
+        let agent_dir = mur_home.join("agents").join(&slug);
+
+        // Simulate a locally-minted keypair (as `mur agent create` writes).
+        fs::write(agent_dir.join("identity.key"), b"PRIVATE-KEY").unwrap();
+        fs::write(agent_dir.join("identity.pub"), b"PUBLIC-KEY").unwrap();
+
+        // Re-install (same archive, same UUID) → update path runs clear_except_data.
+        let outcome2 = install(&archive, &mur_home, "test").unwrap();
+        assert!(outcome2.was_update);
+
+        assert!(
+            agent_dir.join("identity.key").exists(),
+            "identity.key must survive an in-place update"
+        );
+        assert_eq!(
+            fs::read(agent_dir.join("identity.key")).unwrap(),
+            b"PRIVATE-KEY"
+        );
+        assert!(
+            agent_dir.join("identity.pub").exists(),
+            "identity.pub must survive an in-place update"
+        );
 
         // Cleanup
         unsafe {
