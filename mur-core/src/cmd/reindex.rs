@@ -67,9 +67,13 @@ pub(crate) async fn cmd_reindex() -> Result<()> {
     let mut embeddings: Vec<Option<Vec<f32>>> = vec![None; total];
     let mut errors = 0;
 
-    const EMBED_BATCH: usize = 200;
-    for batch_start in (0..total).step_by(EMBED_BATCH) {
-        let batch_end = (batch_start + EMBED_BATCH).min(total);
+    let embed_batch_size = if config.batch_size > 0 {
+        config.batch_size
+    } else {
+        32 // fallback
+    };
+    for batch_start in (0..total).step_by(embed_batch_size) {
+        let batch_end = (batch_start + embed_batch_size).min(total);
         let batch: Vec<String> = texts[batch_start..batch_end].to_vec();
         match embed_batch(&batch, &config).await {
             Ok(batch_embs) => {
