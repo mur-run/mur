@@ -569,6 +569,8 @@ mod tests {
                 secret: Some("keychain:mur/openai".parse().unwrap()),
                 capabilities: vec![],
                 params: serde_json::Value::Null,
+                tier: None,
+                cost_per_1k_tokens: None,
             },
         );
 
