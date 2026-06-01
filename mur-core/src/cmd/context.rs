@@ -7,6 +7,128 @@ use crate::inject;
 use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
+// ─── Structured return types for MCP consumption ────────────────────
+// Public API consumed by mur-mcp-server crate.
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextResult {
+    pub patterns: Vec<ContextPattern>,
+    pub project_context: Option<String>,
+    pub token_count: usize,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextPattern {
+    pub name: String,
+    pub description: String,
+    pub content: String,
+    pub tier: String,
+}
+
+/// Retrieve contextual patterns for the current project. Returns structured
+/// data suitable for MCP tool responses (no side effects, no printing).
+#[allow(dead_code)]
+pub async fn do_context(
+    query: Option<String>,
+    compact: bool,
+    budget: usize,
+) -> Result<ContextResult> {
+    use crate::retrieve::scoring::{ScopeContext, score_and_rank_with_scope};
+    use crate::store::embedding::{EmbeddingConfig, embed};
+    use crate::store::vector::LanceDbStore as VectorStore;
+    use std::collections::HashMap;
+
+    let cwd = std::env::current_dir()?;
+    let project_name = cwd
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Build query from provided or auto-detected context
+    let effective_query = match query {
+        Some(q) => q,
+        None => project_name.clone(),
+    };
+
+    let yaml_store = YamlStore::default_store()?;
+    let patterns = yaml_store.list_all()?;
+    let project_language = capture::starter::detect_language(&cwd).map(|l| l.as_str().to_string());
+
+    let score_scope = ScopeContext {
+        user: None,
+        platform: None,
+        task: None,
+    };
+
+    // Try hybrid search if LanceDB index exists
+    let index_path = dirs::home_dir()
+        .expect("no home dir")
+        .join(".mur")
+        .join("index");
+
+    let results = if index_path.exists() {
+        let cfg = crate::store::config::load_config()?;
+        let config = EmbeddingConfig::from_config(&cfg);
+        match embed(&effective_query, &config).await {
+            Ok(query_embedding) => {
+                let vector_store =
+                    VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
+                let vector_results = vector_store.search(&query_embedding, 20, None).await?;
+                let vector_scores: HashMap<String, f64> = vector_results
+                    .into_iter()
+                    .map(|r| (r.name, r.similarity as f64))
+                    .collect();
+                crate::retrieve::scoring::score_and_rank_hybrid_with_scope(
+                    &effective_query,
+                    patterns,
+                    &vector_scores,
+                    Some(&score_scope),
+                    project_language.as_deref(),
+                )
+            }
+            Err(_) => score_and_rank_with_scope(
+                &effective_query,
+                patterns,
+                Some(&score_scope),
+                project_language.as_deref(),
+            ),
+        }
+    } else {
+        score_and_rank_with_scope(
+            &effective_query,
+            patterns,
+            Some(&score_scope),
+            project_language.as_deref(),
+        )
+    };
+
+    let context_patterns: Vec<ContextPattern> = results
+        .iter()
+        .filter(|sp| sp.item.lifecycle.status != LifecycleStatus::Archived)
+        .map(|sp| {
+            let content = sp.item.description.clone();
+            let tier = format!("{:?}", sp.item.tier).to_lowercase();
+            ContextPattern {
+                name: sp.item.name.clone(),
+                description: sp.item.description.clone(),
+                content,
+                tier,
+            }
+        })
+        .collect();
+
+    let token_budget = if compact { 800 } else { budget };
+    let token_count = context_patterns.len() * 50; // rough estimate
+
+    Ok(ContextResult {
+        patterns: context_patterns,
+        project_context: Some(project_name),
+        token_count: token_count.min(token_budget),
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn cmd_context(
     query: Option<String>,
