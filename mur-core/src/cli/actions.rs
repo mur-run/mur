@@ -782,4 +782,9 @@ pub enum ProjectAction {
     },
     /// List all indexed projects
     List,
+    /// Remove an indexed project
+    Remove {
+        /// Path to the project (defaults to current directory)
+        path: Option<String>,
+    },
 }

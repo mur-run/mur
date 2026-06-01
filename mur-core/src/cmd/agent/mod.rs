@@ -29,7 +29,7 @@ mod comm;
 pub mod export;
 mod hub;
 mod install;
-mod lifecycle;
+pub mod lifecycle;
 mod mcp;
 pub mod model_resolve;
 mod peers;
@@ -98,7 +98,7 @@ pub use trash::{cmd_trash_empty, cmd_trash_list, cmd_trash_now, cmd_trash_restor
 
 // ─── Shared helpers used across submodules ─────────────────────────
 
-pub(crate) fn resolve_mur_home() -> Result<PathBuf> {
+pub fn resolve_mur_home() -> Result<PathBuf> {
     if let Some(v) = std::env::var_os("MUR_HOME") {
         return Ok(PathBuf::from(v));
     }

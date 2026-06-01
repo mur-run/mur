@@ -1,4 +1,6 @@
 pub mod agent;
+#[allow(unused_imports)]
+pub use agent::resolve_mur_home;
 pub mod agent_companion;
 /// B0 M11.4 — eval-harness JSONL → markdown report aggregator.
 pub(crate) mod agent_eval;
@@ -16,7 +18,7 @@ pub mod agent_schedule;
 pub mod agent_voice;
 /// Track C5 / M5.1 — webhook receiver config + CLI verbs.
 pub(crate) mod agent_webhook;
-pub(crate) mod context;
+pub mod context;
 pub(crate) mod conversations_cmd;
 pub mod conversations_cost_report;
 pub(crate) mod deploy;
@@ -36,7 +38,7 @@ pub(crate) mod misc;
 pub(crate) mod model;
 pub(crate) mod murmurd;
 pub mod notes_cmd;
-pub(crate) mod project;
+pub mod project;
 pub(crate) mod reindex;
 pub(crate) mod search;
 pub(crate) mod server_cmd;

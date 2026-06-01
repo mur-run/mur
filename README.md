@@ -3,9 +3,9 @@
 [![Release](https://img.shields.io/github/v/release/mur-run/mur)](https://github.com/mur-run/mur/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**The learning layer for AI coding tools.**
+**The local-first Agent platform.**
 
-MUR is the only system that captures patterns from your coding sessions, evolves them over time, and injects them into 16+ AI tools automatically. Unlike static rules files or generic memory APIs, MUR's patterns mature, decay, and adapt — so your AI assistants continuously get smarter.
+MUR runs a fleet of specialized AI agents on your machine — agents that learn from every session, evolve their skills over time, and work across 16+ AI tools. Unlike cloud-dependent platforms, MUR is native Rust, always-on, and keeps everything on your device. Create agents, teach them skills, give them voice, and export them as standalone desktop apps.
 
 ## Why MUR?
 
@@ -31,7 +31,7 @@ Month 3:    Unused patterns decay. Active ones get promoted to Canonical.
 | Data format | Markdown/YAML | Opaque DB / API | YAML + Git-friendly |
 | Privacy | Local | Cloud-dependent | 100% local-first |
 
-> **In short:** Rules sync tools write config files but don't learn. Memory frameworks store data but don't evolve it. MUR does both — and connects them in a closed loop.
+> **In short:** MUR is an Agent platform with a learning memory layer. Rules sync tools write config files but don't learn. Memory frameworks store data but don't evolve it. MUR agents do both — learn, evolve, and act — in a closed loop, all running locally on your machine.
 
 ### Agents (P0a — `murmur`)
 
@@ -83,6 +83,8 @@ mur update --check   # check only, don't install
 
 ## How It Works
 
+MUR agents learn from every interaction. The memory pipeline captures, stores, retrieves, and evolves knowledge automatically:
+
 ```
  You use AI CLI normally
  $ claude "write tests for auth module"
@@ -103,11 +105,18 @@ mur update --check   # check only, don't install
 
 Patterns start as **Draft**, get promoted through **Emerging → Stable → Canonical** based on real usage, and automatically decay if unused. No junk accumulates.
 
+For the full Agent platform — MCP server, skills, action pipeline, companion, voice, Slack bridge, and Commander governance — see the [architecture docs](docs/architecture/runtime-overview.md).
+
 ## Features
 
 | Feature | Description |
 |---------|-------------|
-| **Closed-Loop Learning** | Session recording → pattern extraction → injection → feedback → evolution. No other tool does all five. |
+| **Specialized AI Agents** | Create, manage, and run a fleet of specialized agents (A2A v0.3). Each with its own profile, model, MCP servers, skills, and entitlements. |
+| **Agent Export** | Export any agent as a standalone desktop app (.app / .AppImage / .exe) with voice, companion presence, and bundled runtime — give it to anyone. |
+| **MCP Server** | Expose MUR to AI tools mid-conversation via stdio MCP. Agents and tools can search, recall, and look up context interactively. |
+| **Skills Ecosystem** | Curated skill manifests that teach AI agents when, why, and how to use MUR commands. Session-aware injection via hooks. |
+| **Companion + Voice** | Proactive agent messaging with on-device TTS (Kokoro 82M) and STT (whisper.cpp). Companion presence via Hub GUI. |
+| **Closed-Loop Learning** | Session recording → pattern extraction → injection → feedback → evolution. Agents get smarter with every session. |
 | **Pattern Evolution Engine** | Time decay (exponential half-life), maturity lifecycle (Draft→Canonical), GEP-based genetic evolution, auto-promotion/demotion. **No competitor has this.** |
 | **Universal Sync** | 16+ tools: Claude Code, Gemini CLI, Auggie, Cursor, Copilot CLI, OpenClaw, OpenCode, Amp, Codex, Aider, Windsurf, Zed, Junie, Trae, Cline, Amazon Q |
 | **Hybrid Semantic Search** | Vector similarity (70%) + BM25 keyword (30%) + 6-factor scoring. More precise than pure vector search. |
