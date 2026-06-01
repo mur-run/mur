@@ -1,0 +1,15 @@
+name: mur-project-remove
+version: 0.1.0
+publisher: human:mur
+description: "Remove a stale project index to free disk space."
+category: command
+content:
+  abstract: |
+    Run `mur project remove [PATH]` to delete an indexed project.
+    PATH is a positional argument; it defaults to the current directory if omitted.
+    Use this when `mur project list` shows indexes for projects you no longer work on.
+  command: "mur project remove"
+tags: [mur, project, cleanup, builtin]
+triggers:
+  - type: manual
+priority: low

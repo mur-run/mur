@@ -1,0 +1,23 @@
+name: mur-agent-manage
+version: 0.1.0
+publisher: human:mur
+description: "Manage MUR agent lifecycle: create, run as a service, stop, export."
+category: workflow
+content:
+  abstract: |
+    Guide through MUR agent lifecycle management.
+  procedure:
+    steps:
+      - description: To list agents, run `mur agent list` or use the MCP tool `mur_agent_status` (no args = list all)
+      - description: To create a new agent, run `mur agent create <name>` and follow the wizard
+      - description: To run an agent as a managed launchd/systemd service, run `mur agent install-service <name>`
+      - description: To stop a running agent, run `mur agent stop <name>` (SIGTERM, then SIGKILL after timeout)
+      - description: To check agent health, use `mur_agent_status(name="<name>")` or run `mur agent status <name>`
+      - description: To export an agent as a portable .muragent, run `mur agent export <name>`
+tags: [mur, agent, builtin]
+triggers:
+  - type: command
+    pattern: "/mur-agent"
+  - type: keyword
+    pattern: "(mur agent|murmur agent|\\.muragent)"
+priority: normal
