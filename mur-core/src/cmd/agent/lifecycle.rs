@@ -260,6 +260,10 @@ fn default_entitlements_custom() -> Entitlements {
 struct AgentRow {
     name: String,
     status: &'static str,
+    // Derived visual marker for `status`; CLI table only — kept out of the
+    // `--json` payload (PM scope: only the human table gains the column).
+    #[serde(skip)]
+    emoji: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -427,8 +431,8 @@ pub fn cmd_list(json: bool) -> Result<()> {
         println!("{}", serde_json::to_string(&rows)?);
     } else {
         println!(
-            "{:<20} {:<10} {:<20} {:<10} {:<12}",
-            "NAME", "STATUS", "UPTIME", "PID", "CATEGORY"
+            "{:<20} {:<6} {:<10} {:<20} {:<10} {:<12}",
+            "NAME", "EMOJI", "STATUS", "UPTIME", "PID", "CATEGORY"
         );
         for r in &rows {
             let pid = r
@@ -437,8 +441,8 @@ pub fn cmd_list(json: bool) -> Result<()> {
                 .unwrap_or_else(|| "-".to_string());
             let uptime = r.uptime.clone().unwrap_or_else(|| "-".to_string());
             println!(
-                "{:<20} {:<10} {:<20} {:<10} {:<12}",
-                r.name, r.status, uptime, pid, r.category
+                "{:<20} {:<6} {:<10} {:<20} {:<10} {:<12}",
+                r.name, r.emoji, r.status, uptime, pid, r.category
             );
         }
     }
@@ -501,10 +505,11 @@ fn collect_agents() -> Result<Vec<AgentRow>> {
         };
 
         let lock_path = dir.join("running.lock");
-        let (status, pid, uptime) = classify(&lock_path);
+        let (status, emoji, pid, uptime) = classify(&lock_path);
         rows.push(AgentRow {
             name: profile.name,
             status,
+            emoji,
             pid,
             uptime,
             category: format!("{:?}", profile.persona.category).to_lowercase(),
@@ -519,7 +524,7 @@ fn collect_agents() -> Result<Vec<AgentRow>> {
 /// Returns `(status_str, pid, uptime)`. Delegates to
 /// `mur_common::lock_file::classify` for the 3-state liveness logic and
 /// adds uptime computation (CLI-specific) on top.
-fn classify(lock_path: &Path) -> (&'static str, Option<u32>, Option<String>) {
+fn classify(lock_path: &Path) -> (&'static str, &'static str, Option<u32>, Option<String>) {
     use mur_common::lock_file::AgentStatusKind;
     let status = mur_common::lock_file::classify(lock_path);
     let status_str = match status.kind {
@@ -527,6 +532,7 @@ fn classify(lock_path: &Path) -> (&'static str, Option<u32>, Option<String>) {
         AgentStatusKind::Stale => "stale",
         AgentStatusKind::Stopped => "stopped",
     };
+    let emoji = status.kind.emoji();
     // Compute uptime from the lock file's started_at only when running.
     let uptime = if status.kind == AgentStatusKind::Running {
         mur_common::lock_file::read(lock_path)
@@ -542,7 +548,7 @@ fn classify(lock_path: &Path) -> (&'static str, Option<u32>, Option<String>) {
     } else {
         None
     };
-    (status_str, status.pid, uptime)
+    (status_str, emoji, status.pid, uptime)
 }
 
 // ─── stop / remove / rename ──────────────────────────────────────────────

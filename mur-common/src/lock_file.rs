@@ -22,6 +22,19 @@ pub enum AgentStatusKind {
     Stopped,
 }
 
+impl AgentStatusKind {
+    /// Stable visual marker for this status — the single source of truth for
+    /// the status→emoji mapping used by `mur agent list` and the agent card.
+    /// Exhaustive match: adding a variant is a compile error here by design.
+    pub fn emoji(&self) -> &'static str {
+        match self {
+            AgentStatusKind::Running => "🟢",
+            AgentStatusKind::Stale => "🟡",
+            AgentStatusKind::Stopped => "⚪",
+        }
+    }
+}
+
 /// Result of classifying an agent's lock state.
 #[derive(Debug, Clone, Copy)]
 pub struct AgentStatus {
@@ -116,6 +129,13 @@ pub fn classify(lock_path: &Path) -> AgentStatus {
 mod tests {
     use super::*;
     use crate::agent::LockTransports;
+
+    #[test]
+    fn status_emoji_mapping_is_stable() {
+        assert_eq!(AgentStatusKind::Running.emoji(), "🟢");
+        assert_eq!(AgentStatusKind::Stale.emoji(), "🟡");
+        assert_eq!(AgentStatusKind::Stopped.emoji(), "⚪");
+    }
 
     fn make_lock(pid: u32) -> LockFile {
         LockFile {
