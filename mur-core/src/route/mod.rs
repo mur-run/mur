@@ -32,6 +32,7 @@ const REGISTRY_NONEMPTY_INVARIANT: &str =
 
 /// Combines the difficulty heuristic with the model registry and per-role
 /// overrides to decide local vs. frontier routing for a sub-task.
+#[derive(Debug)]
 pub struct Router {
     registry: ModelRegistry,
     heuristic: DefaultHeuristic,
