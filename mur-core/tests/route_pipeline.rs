@@ -7,8 +7,8 @@
 mod route_fixtures;
 use mur_common::model::RoleEntry;
 use mur_common::route::{RouteDecision, RoutePolicy, TaskType};
-use mur_core::route::ledger::EscalationLedger;
 use mur_core::route::Router;
+use mur_core::route::ledger::EscalationLedger;
 use route_fixtures::test_registry;
 use tempfile::TempDir;
 
@@ -48,10 +48,20 @@ fn full_pipeline_routes_records_and_tracks_cost() {
 
     let tasks = vec![
         ("Run unit tests", TaskType::Execution, 200_u64, Some("dev")),
-        ("Summarize chat history", TaskType::General, 1500, Some("reflector")),
+        (
+            "Summarize chat history",
+            TaskType::General,
+            1500,
+            Some("reflector"),
+        ),
         ("Add a docstring", TaskType::Documentation, 300, None),
         ("Refactor auth module", TaskType::Refactor, 8000, None),
-        ("Fix typo in README", TaskType::Documentation, 100, Some("reflector")),
+        (
+            "Fix typo in README",
+            TaskType::Documentation,
+            100,
+            Some("reflector"),
+        ),
     ];
 
     let mut local_count = 0;
@@ -66,17 +76,29 @@ fn full_pipeline_routes_records_and_tracks_cost() {
         }
         // cost fields must be populated
         if let RouteDecision::Escalate { .. } = &event.decision {
-            assert!(event.estimated_cost_usd > 0.0, "escalated task must have a cost");
+            assert!(
+                event.estimated_cost_usd > 0.0,
+                "escalated task must have a cost"
+            );
         }
-        assert!(event.counterfactual_cost_usd > 0.0, "all tasks have a counterfactual cost");
+        assert!(
+            event.counterfactual_cost_usd > 0.0,
+            "all tasks have a counterfactual cost"
+        );
         ledger.append(&event).unwrap();
     }
     ledger.flush().unwrap();
     drop(ledger);
 
     // Routing: dev→escalate, reflector→local, no-role→depends-on-difficulty.
-    assert_eq!(local_count, 3, "reflector tasks + easy doc task should be local");
-    assert_eq!(escalate_count, 2, "dev task + hard refactor should escalate");
+    assert_eq!(
+        local_count, 3,
+        "reflector tasks + easy doc task should be local"
+    );
+    assert_eq!(
+        escalate_count, 2,
+        "dev task + hard refactor should escalate"
+    );
 
     // Ledger + cost summary.
     let events = EscalationLedger::replay_today(tmp.path());
@@ -90,13 +112,13 @@ fn full_pipeline_routes_records_and_tracks_cost() {
     assert!(s.spend_usd > 0.0, "spend should be > 0");
     // 3 local tasks avoided frontier cost → savings > 0
     assert!(s.savings_usd > 0.0, "savings should be > 0");
-    assert!(
-        s.total > s.escalations,
-        "more local tasks than escalations"
-    );
+    assert!(s.total > s.escalations, "more local tasks than escalations");
 
     // Verify specific decisions.
-    let dev_event = events.iter().find(|e| e.role.as_deref() == Some("dev")).unwrap();
+    let dev_event = events
+        .iter()
+        .find(|e| e.role.as_deref() == Some("dev"))
+        .unwrap();
     assert!(matches!(dev_event.decision, RouteDecision::Escalate { .. }));
     assert_eq!(dev_event.task_type, TaskType::Execution);
 
@@ -104,7 +126,10 @@ fn full_pipeline_routes_records_and_tracks_cost() {
         .iter()
         .find(|e| e.role.as_deref() == Some("reflector"))
         .unwrap();
-    assert!(matches!(reflector_event.decision, RouteDecision::Local { .. }));
+    assert!(matches!(
+        reflector_event.decision,
+        RouteDecision::Local { .. }
+    ));
 }
 
 #[test]
@@ -152,6 +177,10 @@ fn escalation_rate_decreases_with_more_local_tasks() {
     let s = EscalationLedger::summary(tmp.path(), 1);
     assert_eq!(s.total, 8);
     // Hard tasks (3) + easy tasks (5) → 3 escalations → rate 3/8 = 0.375
-    assert!(s.rate > 0.3 && s.rate < 0.45, "rate={}, expected ~0.375", s.rate);
+    assert!(
+        s.rate > 0.3 && s.rate < 0.45,
+        "rate={}, expected ~0.375",
+        s.rate
+    );
     assert!(s.savings_usd > 0.0, "savings should be > 0");
 }

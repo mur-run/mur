@@ -316,7 +316,10 @@ models:
             },
         );
         let yaml = serde_yaml_ng::to_string(&r2).unwrap();
-        assert!(!yaml.contains("tier:"), "absent tier should not be serialized: {yaml}");
+        assert!(
+            !yaml.contains("tier:"),
+            "absent tier should not be serialized: {yaml}"
+        );
     }
 
     #[test]
@@ -351,8 +354,14 @@ roles:
                 model_id: "opus".into()
             })
         );
-        assert_eq!(r.roles["reflector"].route_policy, Some(RoutePolicy::PreferLocal));
-        assert_eq!(r.roles["curator"].route_policy, Some(RoutePolicy::ForceLocal));
+        assert_eq!(
+            r.roles["reflector"].route_policy,
+            Some(RoutePolicy::PreferLocal)
+        );
+        assert_eq!(
+            r.roles["curator"].route_policy,
+            Some(RoutePolicy::ForceLocal)
+        );
         assert_eq!(r.roles["chat"].route_policy, None);
     }
 }

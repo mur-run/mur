@@ -8,7 +8,10 @@ use route_fixtures::test_registry;
 fn easy_task_routes_to_local() {
     let router = Router::new(test_registry()).unwrap();
     let decision = router.decide("run cargo fmt", TaskType::Execution, 200, None);
-    assert!(matches!(decision, RouteDecision::Local { .. }), "got {decision:?}");
+    assert!(
+        matches!(decision, RouteDecision::Local { .. }),
+        "got {decision:?}"
+    );
 }
 
 #[test]
@@ -20,7 +23,10 @@ fn hard_task_routes_to_frontier() {
         8000,
         None,
     );
-    assert!(matches!(decision, RouteDecision::Escalate { .. }), "got {decision:?}");
+    assert!(
+        matches!(decision, RouteDecision::Escalate { .. }),
+        "got {decision:?}"
+    );
 }
 
 #[test]
@@ -37,9 +43,16 @@ fn force_local_override_wins() {
         },
     );
     let router = Router::new(reg).unwrap();
-    let decision =
-        router.decide("refactor everything", TaskType::Refactor, 10_000, Some("reflector"));
-    assert!(matches!(decision, RouteDecision::Local { .. }), "got {decision:?}");
+    let decision = router.decide(
+        "refactor everything",
+        TaskType::Refactor,
+        10_000,
+        Some("reflector"),
+    );
+    assert!(
+        matches!(decision, RouteDecision::Local { .. }),
+        "got {decision:?}"
+    );
 }
 
 #[test]
@@ -59,13 +72,15 @@ fn force_frontier_trumps_easy_task() {
     );
     let router = Router::new(reg).unwrap();
     let decision = router.decide("echo hello", TaskType::Execution, 50, Some("dev"));
-    assert!(matches!(decision, RouteDecision::Escalate { .. }), "got {decision:?}");
+    assert!(
+        matches!(decision, RouteDecision::Escalate { .. }),
+        "got {decision:?}"
+    );
 }
 
 #[test]
 fn decide_with_score_exposes_score() {
     let router = Router::new(test_registry()).unwrap();
-    let (_decision, score) =
-        router.decide_with_score("medium task", TaskType::CodeGen, 500, None);
+    let (_decision, score) = router.decide_with_score("medium task", TaskType::CodeGen, 500, None);
     assert!((0.0..=1.0).contains(&score));
 }

@@ -38,7 +38,11 @@ fn summary_reports_rate_and_savings() {
     assert_eq!(s.total, 5);
     assert!((s.rate - 0.4).abs() < 0.001);
     assert!((s.spend_usd - 0.030).abs() < 1e-9, "spend={}", s.spend_usd);
-    assert!((s.savings_usd - 0.045).abs() < 1e-9, "savings={}", s.savings_usd);
+    assert!(
+        (s.savings_usd - 0.045).abs() < 1e-9,
+        "savings={}",
+        s.savings_usd
+    );
 }
 
 #[test]

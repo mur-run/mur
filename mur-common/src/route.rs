@@ -43,15 +43,9 @@ impl<'de> Deserialize<'de> for RouteTier {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RouteDecision {
     /// Route to a cheap/local model.
-    Local {
-        model_id: String,
-        reason: String,
-    },
+    Local { model_id: String, reason: String },
     /// Escalate to a frontier model.
-    Escalate {
-        model_id: String,
-        reason: String,
-    },
+    Escalate { model_id: String, reason: String },
 }
 
 impl fmt::Display for RouteDecision {
@@ -222,10 +216,7 @@ mod tests {
         assert_eq!(parsed.difficulty_score, 0.82);
         assert_eq!(parsed.task_type, TaskType::CodeGen);
         assert_eq!(parsed.counterfactual_cost_usd, 0.0525);
-        assert!(matches!(
-            parsed.decision,
-            RouteDecision::Escalate { .. }
-        ));
+        assert!(matches!(parsed.decision, RouteDecision::Escalate { .. }));
     }
 
     #[test]
@@ -273,7 +264,10 @@ mod tests {
         ];
         for tt in &all {
             let s = tt.base_difficulty();
-            assert!((0.0..=1.0).contains(&s), "{tt:?} base_difficulty {s} out of range");
+            assert!(
+                (0.0..=1.0).contains(&s),
+                "{tt:?} base_difficulty {s} out of range"
+            );
         }
     }
 }

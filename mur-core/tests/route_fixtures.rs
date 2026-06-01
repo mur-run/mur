@@ -55,7 +55,11 @@ pub fn make_event(escalate: bool) -> EscalationEvent {
             }
         },
         role: None,
-        escalation_from: if escalate { Some("ollama_llama3".into()) } else { None },
+        escalation_from: if escalate {
+            Some("ollama_llama3".into())
+        } else {
+            None
+        },
         estimated_cost_usd: if escalate { 0.015 } else { 0.0 },
         counterfactual_cost_usd: 0.015,
     }

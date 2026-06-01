@@ -22,8 +22,14 @@ const DEFAULT_ESCALATION_THRESHOLD: f64 = 0.55;
 const PREFER_LOCAL_THRESHOLD: f64 = 0.75;
 
 /// Providers treated as local/cheap when a model carries no explicit `tier`.
-const LOCAL_PROVIDERS: &[&str] =
-    &["ollama", "llamacpp", "llama_cpp", "mlx", "lmstudio", "local"];
+const LOCAL_PROVIDERS: &[&str] = &[
+    "ollama",
+    "llamacpp",
+    "llama_cpp",
+    "mlx",
+    "lmstudio",
+    "local",
+];
 
 /// Enforced by `Router::new` (which rejects an empty registry); justifies the
 /// `expect` on cross-tier degradation, where at least one model always exists.
@@ -90,7 +96,9 @@ impl Router {
         estimated_tokens: u64,
         role: Option<&str>,
     ) -> (RouteDecision, f64) {
-        let score = self.heuristic.score(task_summary, task_type, estimated_tokens);
+        let score = self
+            .heuristic
+            .score(task_summary, task_type, estimated_tokens);
 
         // 1. Per-role policy override (Auto falls through to the heuristic).
         if let Some(role_name) = role
@@ -198,7 +206,9 @@ impl Router {
                     reason: format!("difficulty {score:.2} < {label} {threshold:.2}"),
                 },
                 None => RouteDecision::Escalate {
-                    model_id: self.pick_best_frontier().expect(REGISTRY_NONEMPTY_INVARIANT),
+                    model_id: self
+                        .pick_best_frontier()
+                        .expect(REGISTRY_NONEMPTY_INVARIANT),
                     reason: format!(
                         "difficulty {score:.2} < {label}, but no local model — using frontier"
                     ),
@@ -368,12 +378,7 @@ mod tests {
             },
         );
         let router = Router::new(reg).unwrap();
-        let decision = router.decide(
-            "run echo hello",
-            TaskType::Execution,
-            50,
-            Some("dev"),
-        );
+        let decision = router.decide("run echo hello", TaskType::Execution, 50, Some("dev"));
         assert!(
             matches!(decision, RouteDecision::Escalate { .. }),
             "force_frontier should win even on trivial tasks, got {decision:?}"
@@ -407,12 +412,8 @@ mod tests {
     #[test]
     fn decide_with_score_returns_score() {
         let router = Router::new(test_registry()).unwrap();
-        let (decision, score) = router.decide_with_score(
-            "medium task",
-            TaskType::CodeGen,
-            500,
-            None,
-        );
+        let (decision, score) =
+            router.decide_with_score("medium task", TaskType::CodeGen, 500, None);
         assert!((0.0..=1.0).contains(&score));
         // Medium code-gen task around the threshold — don't assert the
         // decision, just that we got a valid one.
@@ -481,7 +482,10 @@ mod tests {
             200_000,
             Some("chat"),
         );
-        assert!(score >= 0.75, "extreme task should exceed prefer-local threshold, got {score}");
+        assert!(
+            score >= 0.75,
+            "extreme task should exceed prefer-local threshold, got {score}"
+        );
         assert!(
             matches!(decision, RouteDecision::Escalate { .. }),
             "extreme task must escalate even under prefer_local, got {decision:?}"
@@ -511,8 +515,7 @@ mod tests {
         // must escalate whether or not the role is explicitly `Auto`.
         let hard = "refactor the entire auth system across 12 modules";
         let via_decide = router.decide(hard, TaskType::Refactor, 8000, Some("dev"));
-        let (via_score, _) =
-            router.decide_with_score(hard, TaskType::Refactor, 8000, Some("dev"));
+        let (via_score, _) = router.decide_with_score(hard, TaskType::Refactor, 8000, Some("dev"));
         assert_eq!(
             std::mem::discriminant(&via_decide),
             std::mem::discriminant(&via_score),

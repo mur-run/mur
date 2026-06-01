@@ -77,7 +77,10 @@ impl EscalationLedger {
         let mut spend_usd = 0.0;
         let mut savings_usd = 0.0;
         for e in &events {
-            if matches!(e.decision, mur_common::route::RouteDecision::Escalate { .. }) {
+            if matches!(
+                e.decision,
+                mur_common::route::RouteDecision::Escalate { .. }
+            ) {
                 escalations += 1;
             }
             spend_usd += e.estimated_cost_usd;
@@ -177,10 +180,10 @@ mod tests {
         let mut ledger = EscalationLedger::open(tmp.path()).unwrap();
         // 3 local, 2 escalate → rate = 2/5 = 0.4
         ledger.append(&make_event(false)).unwrap(); // local
-        ledger.append(&make_event(true)).unwrap();  // escalate
+        ledger.append(&make_event(true)).unwrap(); // escalate
         ledger.append(&make_event(false)).unwrap(); // local
         ledger.append(&make_event(false)).unwrap(); // local
-        ledger.append(&make_event(true)).unwrap();  // escalate
+        ledger.append(&make_event(true)).unwrap(); // escalate
         ledger.flush().unwrap();
         drop(ledger);
 
@@ -213,6 +216,10 @@ mod tests {
         assert_eq!(s.escalations, 2);
         assert_eq!(s.total, 5);
         assert!((s.spend_usd - 0.030).abs() < 1e-9, "spend={}", s.spend_usd);
-        assert!((s.savings_usd - 0.045).abs() < 1e-9, "savings={}", s.savings_usd);
+        assert!(
+            (s.savings_usd - 0.045).abs() < 1e-9,
+            "savings={}",
+            s.savings_usd
+        );
     }
 }

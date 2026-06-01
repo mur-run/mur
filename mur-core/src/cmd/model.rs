@@ -8,8 +8,8 @@ use mur_common::model::{ModelEntry, ModelRegistry, RoleEntry};
 use mur_common::route::{RouteDecision, RoutePolicy, RouteTier, TaskType};
 use mur_common::secret::SecretRef;
 
-use crate::route::ledger::EscalationLedger;
 use crate::route::Router;
+use crate::route::ledger::EscalationLedger;
 
 #[derive(Args, Debug)]
 pub struct ModelArgs {
@@ -148,9 +148,7 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
                 .map(|t| match t.to_lowercase().as_str() {
                     "local" => Ok(RouteTier::Local),
                     "frontier" => Ok(RouteTier::Frontier),
-                    other => anyhow::bail!(
-                        "invalid tier: {other}. Valid: local, frontier"
-                    ),
+                    other => anyhow::bail!("invalid tier: {other}. Valid: local, frontier"),
                 })
                 .transpose()?;
             reg.models.insert(

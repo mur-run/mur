@@ -24,5 +24,8 @@ fn heuristic_scores_higher_for_more_tokens() {
     let h = DefaultHeuristic::default();
     let small = h.score("fix typo in README", TaskType::Documentation, 100);
     let large = h.score("fix typo in README", TaskType::Documentation, 10000);
-    assert!(large > small, "more tokens should increase score: {small} vs {large}");
+    assert!(
+        large > small,
+        "more tokens should increase score: {small} vs {large}"
+    );
 }

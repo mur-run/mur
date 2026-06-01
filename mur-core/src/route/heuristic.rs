@@ -13,12 +13,7 @@ pub trait DifficultyHeuristic {
     /// * `task_summary` — human-readable description of the work.
     /// * `task_type` — classified task category.
     /// * `estimated_tokens` — rough context-window size estimate.
-    fn score(
-        &self,
-        task_summary: &str,
-        task_type: TaskType,
-        estimated_tokens: u64,
-    ) -> f64;
+    fn score(&self, task_summary: &str, task_type: TaskType, estimated_tokens: u64) -> f64;
 }
 
 /// Default difficulty heuristic.
@@ -109,12 +104,7 @@ impl DefaultHeuristic {
 }
 
 impl DifficultyHeuristic for DefaultHeuristic {
-    fn score(
-        &self,
-        task_summary: &str,
-        task_type: TaskType,
-        estimated_tokens: u64,
-    ) -> f64 {
+    fn score(&self, task_summary: &str, task_type: TaskType, estimated_tokens: u64) -> f64 {
         let base = task_type.base_difficulty();
         let context = self.context_factor(estimated_tokens);
         let keywords = self.keyword_boost(task_summary);
@@ -151,14 +141,21 @@ mod tests {
         let h = DefaultHeuristic::default();
         let small = h.score("fix typo in README", TaskType::Documentation, 100);
         let large = h.score("fix typo in README", TaskType::Documentation, 10000);
-        assert!(large > small, "more tokens should increase score: {small} vs {large}");
+        assert!(
+            large > small,
+            "more tokens should increase score: {small} vs {large}"
+        );
     }
 
     #[test]
     fn keyword_boost_works() {
         let h = DefaultHeuristic::default();
         let without = h.score("change the color", TaskType::CodeGen, 500);
-        let with = h.score("refactor and rewrite the auth module", TaskType::CodeGen, 500);
+        let with = h.score(
+            "refactor and rewrite the auth module",
+            TaskType::CodeGen,
+            500,
+        );
         assert!(with > without, "keywords should boost: {without} vs {with}");
     }
 
