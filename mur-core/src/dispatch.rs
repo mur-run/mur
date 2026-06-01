@@ -989,7 +989,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 limit,
                 json,
             } => cmd::project::cmd_project_search(query, project, limit, json).await?,
-            ProjectAction::Status { path } => cmd::project::cmd_project_status(path).await?,
+            ProjectAction::Status { path } => cmd::project::cmd_project_status(path)?,
             ProjectAction::List => cmd::project::cmd_project_list()?,
             ProjectAction::Remove { path } => cmd::project::cmd_project_remove(path)?,
         },

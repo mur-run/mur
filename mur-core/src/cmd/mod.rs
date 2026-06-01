@@ -38,7 +38,7 @@ pub(crate) mod misc;
 pub(crate) mod model;
 pub(crate) mod murmurd;
 pub mod notes_cmd;
-pub(crate) mod project;
+pub mod project;
 pub(crate) mod reindex;
 pub(crate) mod search;
 pub(crate) mod server_cmd;
