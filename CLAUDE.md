@@ -42,6 +42,7 @@ Cargo workspace with five crates plus two workspace-excluded Tauri apps:
 - **`mur-core`** — All CLI logic and the `mur` binary. Modules map to the four-stage pipeline. Hosts `mur agent ...` user-facing subcommands.
 - **`mur-agent-runtime`** — Per-agent A2A v0.3 supervisor (P0a). One binary, one BusyBox-style symlink per agent (`mur_agent_<name>` → `mur-agent-runtime`). Crate README has the walkthrough.
 - **`mur-daemon`** — Long-running background daemon binary.
+- **`mur-mcp-server`** — MCP server binary (stdio JSON-RPC). Exposes interactive lookup tools so AI tools can call MUR mid-conversation. Read-only; mutations go through hooks.
 - **`mur-gui-core`** — Shared GUI library (sidecar supervisor, companion bridge, A2A client). Consumed by `mur-hub-gui` and during migration also by `mur-agent-gui`. See `docs/superpowers/specs/2026-05-11-mur-hub-companion-design.md` §3.1.
 
 Workspace-excluded Tauri 2 GUI apps (built via their own manifests so `cargo build --workspace` does not pull WebKitGTK / Cocoa / WebView2):
@@ -49,7 +50,21 @@ Workspace-excluded Tauri 2 GUI apps (built via their own manifests so `cargo bui
 - **`mur-agent-gui`** — Per-agent `.app` shell (legacy; deprecated in M-h8).
 - **`mur-hub-gui`** — MuR Hub cross-agent desktop app (in development; replaces `mur-agent-gui` in v1).
 
-### Four-Stage Pipeline
+### Agent Platform
+
+MUR is a local-first Agent platform in native Rust. Architecture layers:
+
+- **Agent Runtime** — `mur-agent-runtime` (P0a): per-agent A2A v0.3 supervisor with profile, prompt, MCP servers, skills, entitlements. One BusyBox-style binary, symlinked per agent.
+- **Memory / Learning** — Four-stage pipeline below: patterns, workflows, notes, skills with maturity lifecycle and decay.
+- **Agent Infrastructure** — MCP Server (interactive tools for AI tools mid-conversation), Skills (teach agents when/why to use MUR commands), Action Pipeline (file notification + deletion safety + task queue), Cost Router (governed spawn of claude/codex/agy).
+- **Human Interface** — Companion (voice + proactive messaging), Hub GUI (cross-agent desktop app), Slack Bridge.
+- **Governance** — Commander: cross-network orchestration with cryptographic governance and immutable audit.
+
+Key specs: `docs/superpowers/specs/2026-05-29-mur-strategy-positioning-vs-archon.md` (positioning), `2026-05-31-agent-action-pipeline-design.md` (action pipeline), `2026-06-01-mur-mcp-server-and-skills-design.md` (MCP + skills), `2026-06-01-cost-router-orchestrator-design.md` (cost router).
+
+### Memory Pipeline (Four-Stage)
+
+The learning subsystem that powers agent memory:
 
 ```
 capture/ → store/ → retrieve/ → inject/

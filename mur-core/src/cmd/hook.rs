@@ -65,6 +65,38 @@ pub(crate) fn should_skip(query: Option<&str>) -> bool {
 
 // ── Command handlers ──────────────────────────────────────────────────────────
 
+// ── Git-commit auto-index helpers ─────────────────────────────────────────
+
+/// Keywords that trigger a background project reindex.
+const INDEX_TRIGGER_COMMANDS: &[&str] = &["git commit", "git push"];
+
+fn should_trigger_index(tool_input: &serde_json::Value) -> bool {
+    let command = tool_input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let command_lower = command.to_lowercase();
+    INDEX_TRIGGER_COMMANDS
+        .iter()
+        .any(|trigger| command_lower.contains(trigger))
+}
+
+fn spawn_background_index() {
+    let mur_bin = std::env::current_exe()
+        .ok()
+        .unwrap_or_else(|| std::path::PathBuf::from("mur"));
+
+    tracing::info!("git commit detected — spawning background project index");
+    if let Err(e) = std::process::Command::new(&mur_bin)
+        .args(["project", "index", "--quiet", "--background"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        tracing::warn!(error = %e, "failed to spawn background index");
+    }
+}
+
 pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
     let t0 = std::time::Instant::now();
     let raw = read_stdin_json();
@@ -152,6 +184,14 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
     let raw = read_stdin_json();
     let event = parse_event(raw.clone(), EventKind::Tool, tool);
     let _ = enqueue(&event);
+
+    // Check for git commits and trigger background reindex
+    if tool == "claude"
+        && let Some(ref tool_input) = event.tool_input
+        && should_trigger_index(tool_input)
+    {
+        spawn_background_index();
+    }
 
     // Emit L2 only on PreToolUse for code-editing tools
     if !is_pre_tool_use(&raw) {

@@ -67,6 +67,7 @@ pub struct DiscoveredIndex {
     pub name: String,
     pub project_path: Option<String>,
     pub last_indexed: Option<String>,
+    #[allow(dead_code)]
     pub file_count: usize,
 }
 
@@ -641,6 +642,19 @@ impl CodebaseIndex {
 
     pub fn lance_path(&self) -> &Path {
         &self.lance_path
+    }
+
+    /// Delete all index data for this project (LanceDB dir, meta, lock, progress).
+    pub fn delete_index(&self) -> Result<()> {
+        if self.lance_path.exists() {
+            std::fs::remove_dir_all(&self.lance_path)?;
+        }
+        for path in [self.meta_path(), self.lock_path(), self.progress_path()] {
+            if path.exists() {
+                std::fs::remove_file(path)?;
+            }
+        }
+        Ok(())
     }
 }
 

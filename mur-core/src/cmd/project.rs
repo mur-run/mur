@@ -19,6 +19,180 @@ pub enum BackgroundMode {
     ForceForeground,
 }
 
+// ─── Structured return types for tool/mcp consumption ───────────────
+
+/// Structured result from project search — returned by do_project_search().
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProjectSearchResult {
+    pub chunks: Vec<ProjectSearchChunk>,
+    pub total_hits: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProjectSearchChunk {
+    pub project: String,
+    pub file: String,
+    pub language: String,
+    pub chunk_type: String,
+    pub symbol: Option<String>,
+    pub content: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub score: f32,
+}
+
+/// Structured status for one project — returned by do_project_status().
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProjectStatusInfo {
+    pub name: String,
+    pub path: String,
+    pub indexed: bool,
+    pub chunks: Option<usize>,
+    pub last_indexed: Option<String>,
+    pub indexing_in_progress: bool,
+    pub progress: Option<IndexProgressInfo>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexProgressInfo {
+    pub done_chunks: usize,
+    pub total_chunks: usize,
+    pub pct: f64,
+    pub errors: usize,
+}
+
+// ─── Structured do_* functions ─────────────────────────────────────
+
+/// Search all indexed projects (or a specific one) and return structured results.
+pub async fn do_project_search(
+    query: &str,
+    project_filter: Option<&str>,
+    limit: usize,
+) -> Result<ProjectSearchResult> {
+    let cfg = load_config()?;
+    let embed_config = EmbeddingConfig::from_config(&cfg);
+    let query_embedding = embed(query, &embed_config).await?;
+
+    let indexes = discover_all_indexes();
+    let mut all_chunks: Vec<ProjectSearchChunk> = Vec::new();
+
+    for discovered in &indexes {
+        if let Some(filter) = project_filter
+            && discovered.name != *filter
+        {
+            continue;
+        }
+
+        let project_path = discovered
+            .project_path
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        let index = CodebaseIndex::new(&discovered.name, &project_path);
+        let chunks = index.search(&query_embedding, limit).await?;
+
+        for c in &chunks {
+            all_chunks.push(ProjectSearchChunk {
+                project: discovered.name.clone(),
+                file: c.file.clone(),
+                language: c.language.clone(),
+                chunk_type: c.chunk_type.clone(),
+                symbol: c.symbol.clone(),
+                content: c.content.clone(),
+                line_start: c.line_start,
+                line_end: c.line_end,
+                score: c.score,
+            });
+        }
+    }
+
+    all_chunks.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let total = all_chunks.len();
+    all_chunks.truncate(limit);
+
+    Ok(ProjectSearchResult {
+        chunks: all_chunks,
+        total_hits: total,
+    })
+}
+
+/// Return structured status for a single project (default: current directory).
+pub fn do_project_status(path: Option<&str>) -> Result<ProjectStatusInfo> {
+    let project_path = match path {
+        Some(p) => expand_tilde(p),
+        None => std::env::current_dir()?,
+    };
+    let project_path = project_path.canonicalize().unwrap_or(project_path);
+    let project_name = project_name_from_path(&project_path);
+    let index = CodebaseIndex::new(&project_name, &project_path);
+
+    let has_db = index.lance_path().exists();
+    let stats = futures::executor::block_on(index.stats_async())?;
+
+    let mut info = ProjectStatusInfo {
+        name: project_name,
+        path: project_path.display().to_string(),
+        indexed: has_db,
+        chunks: if has_db {
+            Some(stats.chunks_created)
+        } else {
+            None
+        },
+        last_indexed: None,
+        indexing_in_progress: false,
+        progress: None,
+    };
+
+    // Check lock for background indexing
+    let lock_path = index.lock_path();
+    if lock_path.exists()
+        && let Ok(data) = std::fs::read_to_string(&lock_path)
+        && let Ok(lock) = serde_json::from_str::<IndexLock>(&data)
+        && mur_common::lock_file::pid_alive(lock.pid)
+    {
+        info.indexing_in_progress = true;
+        if let Some(prog) = index.read_progress() {
+            let pct = if prog.total_chunks > 0 {
+                (prog.done_chunks as f64 / prog.total_chunks as f64) * 100.0
+            } else {
+                0.0
+            };
+            info.progress = Some(IndexProgressInfo {
+                done_chunks: prog.done_chunks,
+                total_chunks: prog.total_chunks,
+                pct,
+                errors: prog.errors,
+            });
+        }
+    }
+
+    Ok(info)
+}
+
+/// List all indexed projects with summary info.
+pub fn do_project_list() -> Result<Vec<ProjectStatusInfo>> {
+    let indexes = discover_all_indexes();
+    indexes
+        .into_iter()
+        .map(|idx| {
+            let project_path = idx.project_path.as_deref().unwrap_or("");
+            Ok(ProjectStatusInfo {
+                name: idx.name,
+                path: project_path.to_string(),
+                indexed: true,
+                chunks: Some(0), // quick — don't load stats for list view
+                last_indexed: idx.last_indexed,
+                indexing_in_progress: false,
+                progress: None,
+            })
+        })
+        .collect()
+}
+
 pub(crate) async fn cmd_project_index(
     path: Option<String>,
     rebuild: bool,
@@ -160,18 +334,15 @@ pub(crate) async fn cmd_project_index(
     Ok(())
 }
 
-pub(crate) async fn cmd_project_search(
+pub async fn cmd_project_search(
     query: String,
     project_filter: Option<String>,
     limit: usize,
     json: bool,
 ) -> Result<()> {
-    let cfg = load_config()?;
-    let embed_config = EmbeddingConfig::from_config(&cfg);
-    let query_embedding = embed(&query, &embed_config).await?;
+    let result = do_project_search(&query, project_filter.as_deref(), limit).await?;
 
-    let indexes = discover_all_indexes();
-    if indexes.is_empty() {
+    if result.chunks.is_empty() {
         if json {
             println!("[]");
         } else {
@@ -180,70 +351,21 @@ pub(crate) async fn cmd_project_search(
         return Ok(());
     }
 
-    let mut all_results: Vec<serde_json::Value> = Vec::new();
-
-    for discovered in &indexes {
-        if let Some(ref filter) = project_filter
-            && discovered.name != *filter
-        {
-            continue;
-        }
-
-        let project_path = discovered
-            .project_path
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let index = CodebaseIndex::new(&discovered.name, &project_path);
-        let chunks = index.search(&query_embedding, limit).await?;
-
-        for c in &chunks {
-            all_results.push(serde_json::json!({
-                "project": discovered.name,
-                "file": c.file,
-                "language": c.language,
-                "chunk_type": c.chunk_type,
-                "symbol": c.symbol,
-                "content": c.content,
-                "line_start": c.line_start,
-                "line_end": c.line_end,
-                "score": c.score,
-            }));
-        }
-    }
-
-    all_results.sort_by(|a, b| {
-        b["score"]
-            .as_f64()
-            .unwrap_or(0.0)
-            .partial_cmp(&a["score"].as_f64().unwrap_or(0.0))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    all_results.truncate(limit);
-
     if json {
-        println!("{}", serde_json::to_string_pretty(&all_results)?);
+        println!("{}", serde_json::to_string_pretty(&result.chunks)?);
     } else {
-        for (i, result) in all_results.iter().enumerate() {
-            let file = result["file"].as_str().unwrap_or("");
-            let project = result["project"].as_str().unwrap_or("");
-            let symbol = result["symbol"].as_str().unwrap_or("");
-            let score = result["score"].as_f64().unwrap_or(0.0);
-            let content = result["content"].as_str().unwrap_or("");
-            let line_start = result["line_start"].as_u64().unwrap_or(0);
-            let line_end = result["line_end"].as_u64().unwrap_or(0);
-
+        for (i, c) in result.chunks.iter().enumerate() {
             println!(
                 "{}. {}:{} ({}) lines {}-{} score={:.3}",
                 i + 1,
-                project,
-                file,
-                symbol,
-                line_start,
-                line_end,
-                score
+                c.project,
+                c.file,
+                c.symbol.as_deref().unwrap_or(""),
+                c.line_start,
+                c.line_end,
+                c.score
             );
-            for line in content.lines().take(3) {
+            for line in c.content.lines().take(3) {
                 println!("   {}", line);
             }
             println!();
@@ -253,7 +375,51 @@ pub(crate) async fn cmd_project_search(
     Ok(())
 }
 
-pub(crate) async fn cmd_project_status(path: Option<String>) -> Result<()> {
+pub fn cmd_project_status(path: Option<String>) -> Result<()> {
+    let info = do_project_status(path.as_deref())?;
+
+    println!("Project: {}", info.name);
+    println!("  Path: {}", info.path);
+
+    if info.indexing_in_progress {
+        if let Some(ref prog) = info.progress {
+            println!(
+                "  Status: indexing in background ({}/{} chunks, {:.0}%)",
+                prog.done_chunks, prog.total_chunks, prog.pct
+            );
+            if prog.errors > 0 {
+                println!("  Errors: {}", prog.errors);
+            }
+        } else {
+            println!("  Status: indexing in background");
+        }
+        return Ok(());
+    }
+
+    println!("  Indexed: {}", if info.indexed { "yes" } else { "no" });
+    if let Some(chunks) = info.chunks {
+        println!("  Chunks: {}", chunks);
+    }
+
+    Ok(())
+}
+
+pub fn cmd_project_list() -> Result<()> {
+    let projects = do_project_list()?;
+    if projects.is_empty() {
+        println!("No indexed projects.");
+        return Ok(());
+    }
+    println!("Indexed projects:");
+    for p in &projects {
+        let last = p.last_indexed.as_deref().unwrap_or("(unknown)");
+        println!("  {} — last indexed: {}", p.name, last);
+        println!("    path: {}", p.path);
+    }
+    Ok(())
+}
+
+pub(crate) fn cmd_project_remove(path: Option<String>) -> Result<()> {
     let project_path = match &path {
         Some(p) => expand_tilde(p),
         None => std::env::current_dir()?,
@@ -262,89 +428,61 @@ pub(crate) async fn cmd_project_status(path: Option<String>) -> Result<()> {
     let project_name = project_name_from_path(&project_path);
     let index = CodebaseIndex::new(&project_name, &project_path);
 
-    let has_db = index.lance_path().exists();
-    let stats = index.stats_async().await?;
-
-    println!("Project: {}", project_name);
-    println!("  Path: {}", project_path.display());
-
-    // Check if a background index is running
-    let lock_path = index.lock_path();
-    if lock_path.exists()
-        && let Ok(data) = std::fs::read_to_string(&lock_path)
-        && let Ok(lock) = serde_json::from_str::<IndexLock>(&data)
-    {
-        if mur_common::lock_file::pid_alive(lock.pid) {
-            // Live background process — show progress
-            if let Some(progress) = index.read_progress() {
-                let pct = if progress.total_chunks > 0 {
-                    (progress.done_chunks as f64 / progress.total_chunks as f64) * 100.0
-                } else {
-                    0.0
-                };
-                println!("  Status: indexing in background (PID: {})", lock.pid);
-                println!(
-                    "  Progress: {}/{} chunks ({:.0}%)",
-                    progress.done_chunks, progress.total_chunks, pct
-                );
-                if progress.errors > 0 {
-                    println!("  Errors: {}", progress.errors);
-                }
-            } else {
-                println!("  Status: indexing in background (PID: {})", lock.pid);
-            }
-            return Ok(());
-        } else {
-            // Stale lock — process died
-            if let Some(progress) = index.read_progress() {
-                match progress.status {
-                    IndexStatus::Done => {
-                        println!("  Last index: completed");
-                    }
-                    IndexStatus::Error => {
-                        println!("  Last index: failed");
-                        if let Some(ref msg) = progress.error_message {
-                            println!("  Error: {}", msg);
-                        }
-                    }
-                    IndexStatus::Running => {
-                        println!(
-                            "  Last index: interrupted (stale lock, PID {} no longer alive)",
-                            lock.pid
-                        );
-                    }
-                }
-            } else {
-                println!("  Last index: unknown (stale lock)");
-            }
-        }
-    }
-
-    println!("  Indexed: {}", if has_db { "yes" } else { "no" });
-    if has_db {
-        println!("  Chunks: {}", stats.chunks_created);
-    }
-
-    Ok(())
-}
-
-pub(crate) fn cmd_project_list() -> Result<()> {
-    let indexes = discover_all_indexes();
-    if indexes.is_empty() {
-        println!("No indexed projects.");
+    if index.lance_path().exists() {
+        index.delete_index()?;
+        println!(
+            "Removed index for '{}' at {}",
+            project_name,
+            project_path.display()
+        );
         return Ok(());
     }
-    println!("Indexed projects:");
-    for idx in &indexes {
-        let path_display = idx.project_path.as_deref().unwrap_or("(unknown)");
-        let last = idx.last_indexed.as_deref().unwrap_or("(unknown)");
-        println!(
-            "  {} — {} files, last indexed: {}",
-            idx.name, idx.file_count, last
-        );
-        println!("    path: {}", path_display);
+
+    // Fallback: scan all indexes for matching project_path (handles renamed dirs)
+    let indexes = discover_all_indexes();
+    let found = indexes.iter().find(|d| {
+        d.project_path
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).canonicalize().ok())
+            .map(|p| p == project_path)
+            .unwrap_or(false)
+    });
+
+    match found {
+        Some(entry) => {
+            let fallback = CodebaseIndex::new(&entry.name, &project_path);
+            fallback.delete_index()?;
+            println!(
+                "Removed index for '{}' at {}",
+                entry.name,
+                project_path.display()
+            );
+            Ok(())
+        }
+        None => {
+            if indexes.is_empty() {
+                anyhow::bail!(
+                    "No index found for '{}'.\n  No projects are currently indexed. Run `mur project index` first.",
+                    project_path.display()
+                );
+            }
+            anyhow::bail!(
+                "No index found for '{}'.\n  Indexed projects:\n{}",
+                project_path.display(),
+                indexes
+                    .iter()
+                    .map(|d| {
+                        format!(
+                            "    {}  ({})",
+                            d.name,
+                            d.project_path.as_deref().unwrap_or("?")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        }
     }
-    Ok(())
 }
 
 /// Internal: runs the actual indexing work when spawned in background mode.
