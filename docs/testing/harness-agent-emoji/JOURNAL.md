@@ -32,11 +32,13 @@ Batch bugs (3 at a time) → fix → PR (author `karajanchang`) → CI → auto-
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Infra/journal/build | done |
-| A | CLI representative sweep | in progress (found 3 bugs; ongoing) |
-| C | Build 7-agent team + A2A | done (all 7 live on real Claude) |
-| (relay) | PM→QA collaboration relay | done — transcript saved, 6/7 handoff lines |
-| E | Bug-fix PR batch 1 (#332) | in CI |
-| D | Implement emoji feature | NEXT (branch feat/agent-emoji) |
+| A | CLI representative sweep | DONE (3 bugs found + fixed) |
+| C | Build 7-agent team + A2A | DONE (all 7 live on real Claude) |
+| (relay) | PM→QA collaboration relay | DONE — transcript saved, 6/7 handoff lines |
+| E | Bug-fix PR batch 1 (#332) | MERGED ✅ |
+| D | Emoji feature (#333) | MERGED ✅ (rebased on main, CI green) |
+
+**FINAL: both PRs merged to main 2026-06-02. #332=3 bug fixes, #333=emoji feature.**
 
 ## Bug buffer
 - Batch 1 (FIXED → PR #332, author karajanchang):
