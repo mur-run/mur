@@ -47,22 +47,49 @@ or the MuR Hub app. → **Bug #1: stale `--help`.**
 ## Phase status
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 0 | Journal / branches / isolated home | in progress |
-| A | export CLI sweep + find 3 bugs | pending |
+| 0 | Journal / branches / isolated home | done |
+| A | export CLI sweep + find 3 bugs | DONE (3 bugs) |
 | B | build 2-3 agent team + A2A handoff | pending |
-| C | export → headless `--load` run round trip | pending |
+| C | export → headless `--load` run round trip | DONE (verified) |
 | D | MuR Hub GUI build + load `.muragent` | pending |
-| E | bug-fix batch 1 → PR → CI → merge | pending |
+| E | bug-fix batch 1 → PR → CI → merge | PR #334 OPEN (CI running) |
 
-## Bug buffer (batch 1, target 3)
-1. **Stale `--help`** — `mur agent export --help` advertises `bin`/`gui`/`.app` +
-   `--theme/--icon/--clone-identity/--skip-notarize`, all of which `bail!` "no longer
-   supported". Help must match the 2 real formats. (FOUND — pending fix)
-2. _TBD_
-3. _TBD_
+## Bug buffer (batch 1, target 3) — ALL FOUND
+1. **Stale `--help`** — `mur agent export --help` (cmd `about` + `--format` help) advertises
+   `bin`/`gui`/`.app` formats that `bail!` "no longer supported". Error msg & runtime are
+   honest ("use muragent or pkg") but help lies. Fix: scrub help to the 2 real formats.
+2. **Dead gui-only flags silently accepted** — `--theme/--icon/--clone-identity/--skip-notarize`
+   only applied to the removed `gui` export, but the clap args linger. With `--format muragent`
+   they are parsed and silently ignored — even `--icon /nonexistent.png` is accepted with exit 0.
+   Fix: remove the dead flags from the export arg struct.
+3. **`--load` clobbers an existing agent's identity keypair (DATA LOSS)** — loading a
+   template-mode `.muragent` into a home that already has a same-named agent overwrites it with
+   the sanitized (keyless) copy, deleting `identity.key`/`identity.pub`. After a self/re-load,
+   `mur agent export <name>` fails "identity files not found". Clean repro in `/tmp/mur-bug3`.
+   Fix: on install, preserve an existing agent's identity when the incoming package is
+   template-mode (or refuse to overwrite without an explicit flag).
+
+### Other findings (not in batch — documented)
+- `mur-agent-runtime --load <x.murpkg>` fails with confusing "manifest YAML parse error:
+  missing field `exporter`" — legacy `pkg` exports have no run path (only `.muragent` loads).
+  Error should say "legacy .murpkg not loadable; re-export as .muragent". (low-risk, deferred)
+- Export edge cases graceful: missing agent / missing --out / bad --format / missing out-dir /
+  out=dir all error cleanly with exit 1. Overwrite of existing export is silent (acceptable).
 
 ## Operation log
 - 2026-06-02 Phase 0: branched `test/harness-agent-export` off the emoji test branch;
   isolated `MUR_HOME=/tmp/mur-export-test`; created scratch agent `expbot`; confirmed
   format matrix: `muragent`✅ `pkg`✅ `bin`❌bail `gui`❌bail; confirmed
   `mur-agent-runtime --load <PATH>` exists. Logged Bug #1 (stale `--help`).
+- 2026-06-02 Phase A: edge-case sweep (E1-E16). Found Bug #2 (dead gui-only flags silently
+  accepted under muragent) and Bug #3 (identity clobber on `--load` into existing home,
+  clean repro in `/tmp/mur-bug3`). Located fix sites: `cli/agent.rs` Export variant,
+  `dispatch.rs:1161`, `mur-common/.../installer.rs::clear_except_data`.
+- 2026-06-02 Phase C: headless round trip verified — `--load expbot.muragent` brings up the
+  A2A supervisor ("agent ready", `agent.sock` created, graceful SIGTERM shutdown). Recipient
+  round trip into a FRESH home installs profile + trust and `mur agent list` then shows it.
+- 2026-06-02 Phase E: implemented 3 fixes on `fix/agent-export-batch1` (off origin/main):
+  scrub help to 2 real formats, drop dead gui-only flags, preserve identity keypair in
+  `clear_except_data` (+ regression test). Verified: fmt+clippy clean, 4 installer tests ok,
+  end-to-end identity now survives `--load` and re-export exits 0. Commit `b7a74c97`
+  (author karajanchang). **PR #334 opened; CI running.**
