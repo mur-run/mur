@@ -111,3 +111,54 @@ mod request_tests {
         assert_eq!(parse_completion(&resp).as_deref(), Some("這是一隻貓"));
     }
 }
+
+// ── Orchestrator ──
+
+use mur_common::config::DEFAULT_BUNDLED_MODEL_ID;
+
+/// Resolve the local model endpoint base URL (e.g. http://127.0.0.1:PORT/v1).
+fn local_base_url() -> Result<String> {
+    let home = crate::cmd::resolve_mur_home()?;
+    mur_common::local_llm::read_base_url(&home)
+        .context("local model endpoint not available (is MuR Hub running?)")
+}
+
+/// Capture the current VLC frame and explain it with the local multimodal model.
+pub async fn explain(prompt: Option<&str>) -> Result<String> {
+    let client = reqwest::Client::new();
+
+    // 1. Ensure VLC is up and take a snapshot.
+    let rt = super::vlc::ensure_for_snapshot(&client).await?;
+    super::vlc::snapshot_command(&rt, &client).await?;
+
+    // 2. Read the newest snapshot file (retry briefly for the file to land).
+    let mut img_path = None;
+    for _ in 0..10 {
+        if let Some(p) = newest_file(&rt.snapshot_dir) {
+            img_path = Some(p);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+    let img_path = img_path.context("no snapshot produced by VLC")?;
+    let bytes = std::fs::read(&img_path).context("read snapshot")?;
+
+    // 3. Call the local OpenAI-compatible vision endpoint.
+    let base = local_base_url()?;
+    let body = build_request(
+        DEFAULT_BUNDLED_MODEL_ID,
+        prompt.unwrap_or(DEFAULT_EXPLAIN_PROMPT),
+        &png_data_url(&bytes),
+    );
+    let resp: serde_json::Value = client
+        .post(format!("{}/chat/completions", base.trim_end_matches('/')))
+        .json(&body)
+        .send()
+        .await
+        .context("call local VLM")?
+        .json()
+        .await
+        .context("parse VLM response")?;
+
+    parse_completion(&resp).context("VLM returned no content")
+}
