@@ -14,6 +14,11 @@ use serde_json::json;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
+/// Total time allowed for a single LLM request (including server think time).
+const LLM_REQUEST_TIMEOUT_SECS: u64 = 60;
+/// Time allowed to establish a TCP connection to the LLM endpoint.
+const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
+
 /// Service constant used by `mur agent secret set` (mirrors agent.rs).
 const MUR_AGENT_KEYCHAIN_SERVICE: &str = "mur-agent";
 
@@ -26,11 +31,16 @@ pub struct OpenAiClient {
 
 impl OpenAiClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(LLM_REQUEST_TIMEOUT_SECS))
+            .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
+            .build()
+            .expect("failed to build reqwest client");
         Self {
             base_url,
             api_key,
             model,
-            http: reqwest::Client::new(),
+            http,
         }
     }
 
@@ -164,7 +174,13 @@ impl LlmClient for OpenAiClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LlmError::Timeout
+                } else {
+                    LlmError::Http(e.to_string())
+                }
+            })?;
 
         let status = resp.status();
         if status == 429 {
@@ -173,7 +189,13 @@ impl LlmClient for OpenAiClient {
         let v: serde_json::Value = resp
             .json()
             .await
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LlmError::Timeout
+                } else {
+                    LlmError::Http(e.to_string())
+                }
+            })?;
         if !status.is_success() {
             let msg = v["error"]["message"].as_str().unwrap_or("unknown");
             return Err(LlmError::Http(format!("status {status}: {msg}")));

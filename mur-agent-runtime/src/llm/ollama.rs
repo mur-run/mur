@@ -4,6 +4,11 @@ use super::{LlmClient, LlmError, LlmRequest, LlmResponse};
 use async_trait::async_trait;
 use serde_json::json;
 
+/// Total time allowed for a single LLM request (including server think time).
+const LLM_REQUEST_TIMEOUT_SECS: u64 = 60;
+/// Time allowed to establish a TCP connection to the LLM endpoint.
+const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
+
 pub struct OllamaClient {
     base_url: String,
     model: String,
@@ -12,10 +17,15 @@ pub struct OllamaClient {
 
 impl OllamaClient {
     pub fn new(base_url: String, model: String) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(LLM_REQUEST_TIMEOUT_SECS))
+            .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
+            .build()
+            .expect("failed to build reqwest client");
         Self {
             base_url,
             model,
-            http: reqwest::Client::new(),
+            http,
         }
     }
 
@@ -55,14 +65,26 @@ impl LlmClient for OllamaClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LlmError::Timeout
+                } else {
+                    LlmError::Http(e.to_string())
+                }
+            })?;
         if resp.status() == 429 {
             return Err(LlmError::RateLimit);
         }
         let v: serde_json::Value = resp
             .json()
             .await
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LlmError::Timeout
+                } else {
+                    LlmError::Http(e.to_string())
+                }
+            })?;
         let text = v["message"]["content"]
             .as_str()
             .ok_or_else(|| LlmError::InvalidResponse("missing message.content".into()))?

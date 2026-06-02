@@ -8,6 +8,16 @@ use std::path::{Path, PathBuf};
 use tar::Archive;
 use tempfile::TempDir;
 
+/// Maximum total uncompressed bytes allowed from a single archive (512 MiB).
+/// Prevents decompression-bomb attacks where a small .murpkg expands to
+/// fill the disk.
+const MAX_EXTRACT_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Maximum number of entries allowed in a single archive (10 000).
+/// Prevents a "small bytes" bomb that still exhausts inodes or directory
+/// iteration time.
+const MAX_EXTRACT_ENTRIES: usize = 10_000;
+
 #[derive(Debug, Clone, Default)]
 pub struct ImportOptions {
     /// Override the agent name baked into the package (useful for avoiding
@@ -32,9 +42,32 @@ pub fn import_pkg(pkg_path: &Path, mur_home: &Path, opts: ImportOptions) -> Resu
         let file = File::open(pkg_path).with_context(|| format!("open {}", pkg_path.display()))?;
         let gz = GzDecoder::new(file);
         let mut archive = Archive::new(gz);
-        archive
-            .unpack(scratch.path())
-            .with_context(|| format!("unpack {}", pkg_path.display()))?;
+        // Bounded extraction: guard against decompression bombs.
+        let mut total_bytes: u64 = 0;
+        let mut entry_count: usize = 0;
+        for entry in archive.entries().with_context(|| format!("read entries from {}", pkg_path.display()))? {
+            let mut entry = entry.with_context(|| format!("read entry from {}", pkg_path.display()))?;
+            entry_count += 1;
+            if entry_count > MAX_EXTRACT_ENTRIES {
+                bail!(
+                    "archive {} contains more than {MAX_EXTRACT_ENTRIES} entries — refusing to unpack",
+                    pkg_path.display()
+                );
+            }
+            let entry_size = entry.header().size().with_context(|| "read entry size")?;
+            total_bytes = total_bytes.saturating_add(entry_size);
+            if total_bytes > MAX_EXTRACT_BYTES {
+                bail!(
+                    "archive {} would expand to more than {} MiB — refusing to unpack",
+                    pkg_path.display(),
+                    MAX_EXTRACT_BYTES / (1024 * 1024)
+                );
+            }
+            // unpack_in preserves tar's path-traversal (../ and symlink) protection.
+            entry
+                .unpack_in(scratch.path())
+                .with_context(|| format!("unpack entry from {}", pkg_path.display()))?;
+        }
     }
 
     // 2. Validate the manifest and pull the packaged name.

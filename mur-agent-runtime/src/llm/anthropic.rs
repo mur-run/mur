@@ -20,6 +20,11 @@ use serde_json::json;
 const DEFAULT_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 
+/// Total time allowed for a single LLM request (including server think time).
+const LLM_REQUEST_TIMEOUT_SECS: u64 = 60;
+/// Time allowed to establish a TCP connection to the LLM endpoint.
+const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
+
 /// Service constant used by `mur agent secret set` / `mur agent secret delete`.
 /// Account format is `{agent_name}/{KEY}` (e.g. `kelp/ANTHROPIC_API_KEY`).
 /// Must stay in sync with `mur-core/src/cmd/agent.rs::SECRET_SERVICE`.
@@ -58,12 +63,17 @@ pub struct AnthropicClient {
 
 impl AnthropicClient {
     pub fn new(base_url: String, api_key: String, model: String) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(LLM_REQUEST_TIMEOUT_SECS))
+            .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
+            .build()
+            .expect("failed to build reqwest client");
         Self {
             base_url,
             api_key,
             version: DEFAULT_VERSION.to_string(),
             model,
-            http: reqwest::Client::new(),
+            http,
         }
     }
 
@@ -220,13 +230,25 @@ impl LlmClient for AnthropicClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LlmError::Timeout
+                } else {
+                    LlmError::Http(e.to_string())
+                }
+            })?;
 
         let status = resp.status();
         let body_text = resp
             .text()
             .await
-            .map_err(|e| LlmError::Http(e.to_string()))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LlmError::Timeout
+                } else {
+                    LlmError::Http(e.to_string())
+                }
+            })?;
         if !status.is_success() {
             tracing::warn!(status = %status, body = %body_text, "anthropic non-2xx");
             if status == 429 {
