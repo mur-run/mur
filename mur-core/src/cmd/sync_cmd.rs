@@ -1150,6 +1150,14 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
             "mur-session-remove",
             include_str!("../skills/mur_session_remove.yaml"),
         ),
+        (
+            "vlc-control",
+            include_str!("../skills/vlc_control.yaml"),
+        ),
+        (
+            "scene-explain",
+            include_str!("../skills/scene_explain.yaml"),
+        ),
     ];
 
     let mur_skills_dir = home.join(".mur").join("skills");
