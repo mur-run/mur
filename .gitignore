@@ -18,5 +18,3 @@ research/
 .opencode/
 .superpowers/
 mur-hub-gui/src-tauri/resources/models/default/
-mur-hub-gui/src-tauri/binaries/mlx-server-*
-mur-hub-gui/src-tauri/binaries/mur-*
