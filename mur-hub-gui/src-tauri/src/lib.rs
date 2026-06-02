@@ -8,6 +8,7 @@
 pub mod companion;
 pub mod export_muragent;
 pub mod import_muragent;
+pub mod mlx_sidecar;
 pub mod onboarding;
 pub mod pet;
 pub mod preset;
