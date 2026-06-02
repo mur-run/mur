@@ -79,6 +79,7 @@ console = { version = "0.15", optional = true }
 open = "5"
 hostname = "0.4.2"
 dotenvy = "0.15"
+getrandom = "0.2"
 shellexpand = "3"
 urlencoding = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
