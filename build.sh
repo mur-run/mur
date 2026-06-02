@@ -56,5 +56,11 @@ if $INSTALL; then
 #  cp "$BINARY" /usr/local/bin/mur
   echo "📥 Installing to /opt/homebrew/bin/mur..."
   sudo cp "$BINARY" /opt/homebrew/bin/mur
+
+  MCP_BINARY="$SCRIPT_DIR/target/release/mur-mcp-server"
+  if [ -f "$MCP_BINARY" ]; then
+    sudo cp "$MCP_BINARY" /opt/homebrew/bin/mur-mcp-server
+    echo "Installed mur-mcp-server -> /opt/homebrew/bin/mur-mcp-server"
+  fi
   echo "✅ Installed: $(mur --version 2>/dev/null || echo 'done')"
 fi
