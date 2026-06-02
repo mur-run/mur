@@ -88,3 +88,150 @@ mod tests {
         assert_eq!(s.volume, 256);
     }
 }
+
+// ── Runtime management ──
+
+use super::{gen_password, load_runtime, pick_free_port, save_runtime};
+
+/// Get the persisted runtime or create + persist a fresh one (does not spawn).
+fn ensure_runtime(mur_home: &Path) -> Result<VlcRuntime> {
+    if let Some(rt) = load_runtime(mur_home) {
+        return Ok(rt);
+    }
+    let rt = VlcRuntime {
+        port: pick_free_port().context("pick free port")?,
+        password: gen_password(),
+        snapshot_dir: mur_home.join("runtime").join("vlc-snapshots"),
+    };
+    std::fs::create_dir_all(&rt.snapshot_dir).ok();
+    save_runtime(mur_home, &rt)?;
+    Ok(rt)
+}
+
+/// Spawn VLC with the HTTP interface + snapshot path if it is not already
+/// answering on the configured port.
+async fn ensure_vlc_running(mur_home: &Path, client: &reqwest::Client) -> Result<VlcRuntime> {
+    let rt = ensure_runtime(mur_home)?;
+    // Probe: if status responds, VLC is up.
+    if client
+        .get(status_url(rt.port))
+        .basic_auth("", Some(&rt.password))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+    {
+        return Ok(rt);
+    }
+    let vlc = detect_vlc().context("VLC not found (install VLC.app)")?;
+    std::process::Command::new(vlc)
+        .args([
+            "--extraintf=http",
+            "--http-host=127.0.0.1",
+            &format!("--http-port={}", rt.port),
+            &format!("--http-password={}", rt.password),
+            "--snapshot-format=png",
+            &format!("--snapshot-path={}", rt.snapshot_dir.display()),
+        ])
+        .spawn()
+        .context("spawn VLC")?;
+    // Give the HTTP iface a moment to come up.
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        if client
+            .get(status_url(rt.port))
+            .basic_auth("", Some(&rt.password))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+        {
+            return Ok(rt);
+        }
+    }
+    anyhow::bail!("VLC HTTP interface did not come up on port {}", rt.port)
+}
+
+async fn get_status(rt: &VlcRuntime, client: &reqwest::Client) -> Result<VlcStatus> {
+    let xml = client
+        .get(status_url(rt.port))
+        .basic_auth("", Some(&rt.password))
+        .send()
+        .await?
+        .text()
+        .await?;
+    Ok(parse_status_xml(&xml))
+}
+
+async fn send_command(
+    rt: &VlcRuntime,
+    client: &reqwest::Client,
+    cmd: &str,
+    extra: &[(&str, &str)],
+) -> Result<VlcStatus> {
+    let xml = client
+        .get(command_url(rt.port, cmd, extra))
+        .basic_auth("", Some(&rt.password))
+        .send()
+        .await?
+        .text()
+        .await?;
+    Ok(parse_status_xml(&xml))
+}
+
+// ── Public API ──
+
+fn mur_home() -> Result<PathBuf> {
+    crate::cmd::resolve_mur_home()
+}
+
+/// Open a local file path or a URL (e.g. YouTube) in VLC.
+pub async fn open(source: &str) -> Result<VlcStatus> {
+    let client = reqwest::Client::new();
+    let home = mur_home()?;
+    let rt = ensure_vlc_running(&home, &client).await?;
+    send_command(&rt, &client, "in_play", &[("input", source)]).await
+}
+
+/// Playback control. `action` ∈ {play, pause, toggle, stop, seek, volume}.
+/// `value` is seconds (seek) or raw VLC volume (volume).
+pub async fn playback(action: &str, value: Option<f64>) -> Result<VlcStatus> {
+    let client = reqwest::Client::new();
+    let home = mur_home()?;
+    let rt = ensure_vlc_running(&home, &client).await?;
+    let v = value.unwrap_or(0.0);
+    let vs = format!("{}", v as i64);
+    match action {
+        "play" => send_command(&rt, &client, "pl_forceresume", &[]).await,
+        "pause" => send_command(&rt, &client, "pl_forcepause", &[]).await,
+        "toggle" => send_command(&rt, &client, "pl_pause", &[]).await,
+        "stop" => send_command(&rt, &client, "pl_stop", &[]).await,
+        "seek" => send_command(&rt, &client, "seek", &[("val", &vs)]).await,
+        "volume" => send_command(&rt, &client, "volume", &[("val", &vs)]).await,
+        other => anyhow::bail!("unknown playback action: {other}"),
+    }
+}
+
+/// Current playback status.
+pub async fn status() -> Result<VlcStatus> {
+    let client = reqwest::Client::new();
+    let home = mur_home()?;
+    let rt = ensure_vlc_running(&home, &client).await?;
+    get_status(&rt, &client).await
+}
+
+/// Internal accessor for scene.rs: ensure running and return the runtime.
+pub(super) async fn ensure_for_snapshot(
+    client: &reqwest::Client,
+) -> Result<VlcRuntime> {
+    let home = mur_home()?;
+    ensure_vlc_running(&home, client).await
+}
+
+pub(super) async fn snapshot_command(
+    rt: &VlcRuntime,
+    client: &reqwest::Client,
+) -> Result<()> {
+    let _ = send_command(rt, client, "snapshot", &[]).await?;
+    Ok(())
+}
