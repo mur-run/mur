@@ -106,3 +106,48 @@ fn test_tools_list_response_under_token_budget() {
 
     child.kill().ok();
 }
+
+#[test]
+fn lists_project_search_tool() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#,
+    );
+    let _ = read_response(&mut stdout);
+
+    // Confirm initialization (required by MCP protocol)
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    );
+    let _ = read_response(&mut stdout);
+
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+    );
+    let resp = read_response(&mut stdout);
+
+    let names: Vec<String> = resp["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "mur_project_search"),
+        "tools/list must include mur_project_search; got {names:?}"
+    );
+
+    let _ = child.kill();
+}
