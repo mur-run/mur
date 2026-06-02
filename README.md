@@ -44,6 +44,14 @@ walkthrough (`create / start / send / card / list / export`).
 
 ## Quick Start
 
+### Easiest — MuR Hub for macOS (Apple Silicon)
+
+Download **[MuR Hub.dmg](https://github.com/mur-run/mur/releases/latest)**, drag
+**MuR Hub** to Applications, and open it. A built-in agent named **Mur** is ready
+immediately — offline, no API key. Double-click any `.muragent` a friend sends to
+install and run it. (For the CLI, use Hub's *Install Command-Line Tools* menu, or
+the one-liner below.)
+
 ```bash
 # macOS / Linux — one-liner
 curl -fsSL https://mur.run/install.sh | sh

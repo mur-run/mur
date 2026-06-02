@@ -17,3 +17,4 @@ research/
 /.pdfium-bin/
 .opencode/
 .superpowers/
+mur-hub-gui/src-tauri/resources/models/default/
