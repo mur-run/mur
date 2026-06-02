@@ -25,6 +25,33 @@ use mur_common::telemetry::{
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
+/// Fallback base URL when neither the registry entry, the env var, nor the
+/// shared file provides one (e.g. running outside Hub). Points at the
+/// conventional local sidecar port.
+pub(crate) const LOCAL_LLM_DEFAULT_BASE_URL: &str = "http://127.0.0.1:50320/v1";
+
+/// Placeholder API key for the local OpenAI-compatible MLX server, which does
+/// not authenticate. Not a secret.
+pub(crate) const LOCAL_LLM_PLACEHOLDER_KEY: &str = "local-no-key";
+
+/// Resolve the local model base URL: entry.base_url → env → shared file → default.
+pub(crate) fn resolve_local_base_url(
+    entry_base_url: Option<&str>,
+    env_base_url: Option<String>,
+    mur_home: &std::path::Path,
+) -> String {
+    if let Some(u) = entry_base_url {
+        return u.to_string();
+    }
+    if let Some(u) = env_base_url {
+        return u;
+    }
+    if let Some(u) = mur_common::local_llm::read_base_url(mur_home) {
+        return u;
+    }
+    LOCAL_LLM_DEFAULT_BASE_URL.to_string()
+}
+
 pub fn build_runner(
     client: Arc<dyn LlmClient>,
     base_system_prompt: Option<String>,
@@ -110,6 +137,24 @@ pub async fn build_provider_runner(
     };
 
     Ok(match entry.provider.as_str() {
+        "local" => {
+            let mur_home = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".mur");
+            let base = resolve_local_base_url(
+                entry.base_url.as_deref(),
+                std::env::var("MUR_LOCAL_LLM_BASE_URL").ok(),
+                &mur_home,
+            );
+            let key = secrecy::SecretString::from(LOCAL_LLM_PLACEHOLDER_KEY.to_string());
+            let client = Arc::new(OpenAiClient::from_secret_string_with_http(
+                &key,
+                entry.model.clone(),
+                Some(base),
+                guarded_http,
+            ));
+            build(client)
+        }
         "ollama" => {
             let base = entry.base_url.clone().unwrap_or_else(|| {
                 std::env::var("OLLAMA_BASE_URL")
@@ -295,4 +340,29 @@ pub(crate) async fn prepare_runtime(
         runtime_skills,
         skills_cfg,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_base_url_prefers_entry_then_env_then_file_then_default() {
+        use std::path::Path;
+        // entry wins
+        assert_eq!(
+            resolve_local_base_url(Some("http://e/v1"), None, Path::new("/nonexistent")),
+            "http://e/v1"
+        );
+        // env wins when entry absent
+        assert_eq!(
+            resolve_local_base_url(None, Some("http://env/v1".into()), Path::new("/nonexistent")),
+            "http://env/v1"
+        );
+        // default when nothing available
+        assert_eq!(
+            resolve_local_base_url(None, None, Path::new("/nonexistent")),
+            LOCAL_LLM_DEFAULT_BASE_URL
+        );
+    }
 }
