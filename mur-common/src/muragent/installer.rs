@@ -347,6 +347,44 @@ mod tests {
         out
     }
 
+    #[test]
+    fn install_extracts_sys_prompt_and_skills() {
+        // Regression: `.muragent` export must bundle the system prompt and
+        // skill files so the loaded agent keeps its persona + non-dangling
+        // skill registrations.
+        let _guard = crate::trust::test_env_lock::MUR_HOME_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path().join("mur");
+        let prev = std::env::var_os("MUR_HOME");
+        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+
+        let profile = AgentProfile::default_for_tests();
+        let manifest = build_manifest_from_profile(&profile, "2.13.0");
+        let profile_yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        let mut writer = MuragentWriter::new(manifest, profile_yaml, AgentIdentity::generate());
+        writer.set_sys_prompt("You are a helpful test agent.".into());
+        writer.add_skill("demo.md", b"# demo skill\nbody".to_vec());
+        let out = tmp.path().join("withextras.muragent");
+        writer.write(&out).unwrap();
+
+        let archive = MuragentArchive::read(&out).unwrap();
+        let outcome = install(&archive, &mur_home, "test").unwrap();
+        let agent_dir = mur_home.join("agents").join(&outcome.manifest.agent.slug);
+
+        let prompt = fs::read_to_string(agent_dir.join("sys_prompt.md")).unwrap();
+        assert_eq!(prompt, "You are a helpful test agent.");
+        let skill = fs::read_to_string(agent_dir.join("skills").join("demo.md")).unwrap();
+        assert_eq!(skill, "# demo skill\nbody");
+
+        unsafe {
+            if let Some(p) = prev {
+                std::env::set_var("MUR_HOME", p);
+            } else {
+                std::env::remove_var("MUR_HOME");
+            }
+        }
+    }
+
     fn make_test_package_with_identity(
         tmp: &TempDir,
         identity: &AgentIdentity,
