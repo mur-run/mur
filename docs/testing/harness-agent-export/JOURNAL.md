@@ -49,10 +49,11 @@ or the MuR Hub app. → **Bug #1: stale `--help`.**
 |-------|-------------|--------|
 | 0 | Journal / branches / isolated home | done |
 | A | export CLI sweep + find 3 bugs | DONE (3 bugs) |
-| B | build 2-3 agent team + A2A handoff | pending |
+| B | build 2-3 agent team + A2A handoff | DONE (team live; A2A transport verified) |
 | C | export → headless `--load` run round trip | DONE (verified) |
-| D | MuR Hub GUI build + load `.muragent` | pending |
-| E | bug-fix batch 1 → PR → CI → merge | PR #334 OPEN (CI running) |
+| D | MuR Hub GUI build + load `.muragent` | pending (Hub GUI builds green in #334 CI) |
+| E | bug-fix batch 1 → PR → CI → merge | PR #334 — all green except windows test pending |
+| E2 | bug-fix batch 2 (export fidelity) → PR | bugs found (see batch 2) |
 
 ## Bug buffer (batch 1, target 3) — ALL FOUND
 1. **Stale `--help`** — `mur agent export --help` (cmd `about` + `--format` help) advertises
@@ -75,6 +76,23 @@ or the MuR Hub app. → **Bug #1: stale `--help`.**
   Error should say "legacy .murpkg not loadable; re-export as .muragent". (low-risk, deferred)
 - Export edge cases graceful: missing agent / missing --out / bad --format / missing out-dir /
   out=dir all error cleanly with exit 1. Overwrite of existing export is silent (acceptable).
+- `mur agent remove <name> --force` preserves the data dir (by design) → blocks recreate
+  with a different provider; use `--purge` to fully reset. (expected, not a bug)
+
+## Bug buffer (batch 2 — export fidelity, found in Phase B team round-trip)
+Root cause: `export.rs::export_muragent` bundles only profile + icons + voice. The legacy
+pkg writer (`pkg.rs:91-109`) also bundled `sys_prompt.md` and `skills/*`; the `.muragent`
+path regressed and drops them. Confirmed via `tar tzf xx-pm.muragent` = only
+{manifest, manifest.signed.json, signatures.json, profile.yaml}.
+4. **`.muragent` export drops `sys_prompt.md`** — the agent's system prompt (its persona /
+   core instructions) is lost. After load, `agent prompt show` errors; the recipient agent
+   runs with NO system prompt. Severe data-fidelity loss for "share / run elsewhere".
+5. **`.muragent` export drops `skills/*.md`** — skill *registration* survives in profile, so
+   `skill list` still lists the id, but the backing file is gone → dangling ref; `skill show`
+   fails with "No such file or directory". Same root cause + fix site as #4.
+   (Both fixed together: bundle sys_prompt + skills in `export_muragent`; the installer's
+   `extract_payload` already restores any archived file. Batch is 2 real severe bugs sharing
+   one root cause — shipped as-is rather than padding to 3.)
 
 ## Operation log
 - 2026-06-02 Phase 0: branched `test/harness-agent-export` off the emoji test branch;
@@ -92,4 +110,14 @@ or the MuR Hub app. → **Bug #1: stale `--help`.**
   scrub help to 2 real formats, drop dead gui-only flags, preserve identity keypair in
   `clear_except_data` (+ regression test). Verified: fmt+clippy clean, 4 installer tests ok,
   end-to-end identity now survives `--load` and re-export exits 0. Commit `b7a74c97`
-  (author karajanchang). **PR #334 opened; CI running.**
+  (author karajanchang). **PR #334 opened**; CI all green except windows test pending.
+- 2026-06-02 Phase B: built lean 3-role team `xx-pm`/`xx-rust`/`xx-qa` (anthropic provider,
+  role prompts + web-researched skills: pm-prd-acceptance / rust-idiomatic-errors-api /
+  qa-release-gating). A2A transport verified live (`send` → task `completed` for each).
+  Bridge `ANTHROPIC_BASE_URL` present in sandbox but API key guarded → agents echo-fallback,
+  so collaboration content authored in `design-handoff.md` (`mur agent mood` PRD→impl→QA,
+  each to its skill, with HANDOFF lines). Real per-agent Claude relay already validated in
+  the sibling emoji test. **Team export round-trip:** all 3 exported (`inspect` shows VALID
+  signature, schema mur-agent/2); loaded `xx-pm.muragent` into a fresh home → supervisor
+  ready, B1 sandbox enforcing. **Found batch-2 bugs #4 (sys_prompt dropped) + #5 (skills
+  files dropped).** Artifacts: `setup.sh`, `launch.sh`, `relay.py`, `skills/`, `design-handoff.md`.
