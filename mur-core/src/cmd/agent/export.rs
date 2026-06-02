@@ -105,6 +105,33 @@ fn export_muragent(name: &str, agent_home: &Path, out: &Path) -> Result<()> {
         writer.set_voice_yaml(voice);
     }
 
+    // System prompt (persona / core instructions) — without this the loaded
+    // agent runs with no prompt.
+    let sys_prompt_path = agent_home.join("sys_prompt.md");
+    if sys_prompt_path.exists() {
+        let md = fs::read_to_string(&sys_prompt_path)
+            .with_context(|| format!("read {}", sys_prompt_path.display()))?;
+        writer.set_sys_prompt(md);
+    }
+
+    // Skill backing files — the profile keeps the skill registrations; bundle
+    // the files so they aren't dangling references after load.
+    let skills_dir = agent_home.join("skills");
+    if skills_dir.exists() {
+        for entry in fs::read_dir(&skills_dir)
+            .with_context(|| format!("read {}", skills_dir.display()))?
+            .flatten()
+        {
+            if entry.file_type().map(|t| t.is_file()).unwrap_or(false)
+                && let Some(name) = entry.file_name().to_str()
+            {
+                let data = fs::read(entry.path())
+                    .with_context(|| format!("read skill {}", entry.path().display()))?;
+                writer.add_skill(name, data);
+            }
+        }
+    }
+
     writer
         .write(out)
         .with_context(|| format!("write .muragent to {}", out.display()))?;

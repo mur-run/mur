@@ -19,6 +19,8 @@ pub struct MuragentWriter {
     identity: AgentIdentity,
     icon_files: Vec<(String, Vec<u8>)>,
     voice_yaml: Option<String>,
+    sys_prompt_md: Option<String>,
+    skill_files: Vec<(String, Vec<u8>)>,
     commander_assets: Vec<(String, Vec<u8>)>,
     hub_assets: Vec<(String, Vec<u8>)>,
 }
@@ -31,6 +33,8 @@ impl MuragentWriter {
             identity,
             icon_files: Vec::new(),
             voice_yaml: None,
+            sys_prompt_md: None,
+            skill_files: Vec::new(),
             commander_assets: Vec::new(),
             hub_assets: Vec::new(),
         }
@@ -42,6 +46,18 @@ impl MuragentWriter {
 
     pub fn set_voice_yaml(&mut self, yaml: String) {
         self.voice_yaml = Some(yaml);
+    }
+
+    /// Bundle the agent's system prompt so the recipient runs with the same
+    /// persona/instructions (without this the loaded agent has no prompt).
+    pub fn set_sys_prompt(&mut self, md: String) {
+        self.sys_prompt_md = Some(md);
+    }
+
+    /// Bundle a skill markdown file under `skills/<name>` so skill
+    /// registrations in the profile keep their backing file after load.
+    pub fn add_skill(&mut self, name: &str, data: Vec<u8>) {
+        self.skill_files.push((format!("skills/{name}"), data));
     }
 
     pub fn add_commander_asset(&mut self, path: &str, data: Vec<u8>) {
@@ -94,6 +110,14 @@ impl MuragentWriter {
             add_blob(&mut tar, "voice/voice.yaml", voice_yaml.as_bytes())?;
         }
 
+        if let Some(ref sys_prompt) = self.sys_prompt_md {
+            add_blob(&mut tar, "sys_prompt.md", sys_prompt.as_bytes())?;
+        }
+
+        for (name, data) in &self.skill_files {
+            add_blob(&mut tar, name, data)?;
+        }
+
         for (name, data) in &self.commander_assets {
             add_blob(&mut tar, name, data)?;
         }
@@ -129,6 +153,14 @@ impl MuragentWriter {
 
         if let Some(ref voice) = self.voice_yaml {
             files.push(("voice/voice.yaml".into(), voice.as_bytes().to_vec()));
+        }
+
+        if let Some(ref sys_prompt) = self.sys_prompt_md {
+            files.push(("sys_prompt.md".into(), sys_prompt.as_bytes().to_vec()));
+        }
+
+        for (name, data) in &self.skill_files {
+            files.push((name.clone(), data.clone()));
         }
 
         for (name, data) in &self.commander_assets {
