@@ -3,6 +3,12 @@ use std::path::PathBuf;
 
 pub const DEFAULT_LOCAL_LLM_MODEL: &str = "qwen3.5:4b";
 
+/// Default model id seeded for the built-in "Mur" agent and used to name the
+/// bundled MLX weights. This is the DEFAULT VALUE only — it is written into the
+/// seed agent's profile and can be changed by the user afterwards; it is not a
+/// behavioural constant baked into logic.
+pub const DEFAULT_BUNDLED_MODEL_ID: &str = "Qwen3.5-2B-MLX-4bit";
+
 /// Global MUR configuration (~/.mur/config.yaml)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -1076,6 +1082,14 @@ conversations:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_bundled_model_id_is_qwen35_2b() {
+        assert_eq!(
+            crate::config::DEFAULT_BUNDLED_MODEL_ID,
+            "Qwen3.5-2B-MLX-4bit"
+        );
+    }
 
     #[test]
     fn nudge_config_defaults() {
