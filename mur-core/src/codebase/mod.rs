@@ -760,3 +760,84 @@ fn codebase_schema(dim: i32) -> Arc<Schema> {
         ),
     ]))
 }
+
+#[cfg(test)]
+mod git_hook_tests {
+    use super::ensure_git_hook;
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static HOOK_TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// Build a temp dir that looks like a git repo (just needs `.git/hooks`).
+    fn temp_repo() -> std::path::PathBuf {
+        let n = HOOK_TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let base = std::env::temp_dir().join(format!("mur-hook-test-{}-{}", std::process::id(), n));
+        fs::create_dir_all(base.join(".git").join("hooks")).unwrap();
+        base
+    }
+
+    #[test]
+    fn creates_hook_with_shebang_when_absent() {
+        let repo = temp_repo();
+        let installed = ensure_git_hook(&repo, true).unwrap();
+        assert!(installed, "should report it installed the hook");
+
+        let hook = repo.join(".git/hooks/post-commit");
+        let body = fs::read_to_string(&hook).unwrap();
+        assert!(body.starts_with("#!/bin/sh"), "must start with shebang");
+        assert!(body.contains("# mur auto-index"), "must contain marker");
+        assert!(body.contains("project index"), "must run project index");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn is_idempotent_on_second_call() {
+        let repo = temp_repo();
+        assert!(ensure_git_hook(&repo, true).unwrap());
+        // Second call must be a no-op (marker already present).
+        let installed_again = ensure_git_hook(&repo, true).unwrap();
+        assert!(!installed_again, "second call should return false");
+
+        let body = fs::read_to_string(repo.join(".git/hooks/post-commit")).unwrap();
+        assert_eq!(
+            body.matches("# mur auto-index").count(),
+            1,
+            "marker must appear exactly once"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn appends_to_existing_hook_without_clobbering() {
+        let repo = temp_repo();
+        let hook = repo.join(".git/hooks/post-commit");
+        fs::write(&hook, "#!/bin/sh\necho existing-user-hook\n").unwrap();
+
+        let installed = ensure_git_hook(&repo, true).unwrap();
+        assert!(installed);
+
+        let body = fs::read_to_string(&hook).unwrap();
+        assert!(
+            body.contains("echo existing-user-hook"),
+            "must preserve the pre-existing hook content"
+        );
+        assert!(
+            body.contains("# mur auto-index"),
+            "must append marker block"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn returns_false_when_not_a_git_repo() {
+        let base = std::env::temp_dir().join(format!("mur-hook-nogit-{}", std::process::id()));
+        fs::create_dir_all(&base).unwrap();
+        // No .git/hooks dir → ensure_git_hook returns Ok(false).
+        assert!(!ensure_git_hook(&base, true).unwrap());
+        fs::remove_dir_all(&base).ok();
+    }
+}

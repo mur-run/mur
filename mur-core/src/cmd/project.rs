@@ -526,6 +526,10 @@ pub(crate) async fn cmd_project_index_worker(
             let _ = index.write_progress(&progress);
             index.release_lock();
 
+            // Parity with the foreground path: install the post-commit
+            // auto-reindex hook on first successful index (idempotent).
+            let _ = crate::codebase::ensure_git_hook(&project_path, true);
+
             // Desktop notification
             send_notification(
                 &format!("mur: {} indexed", project_name),

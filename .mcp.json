@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mur": {
+      "command": "mur-mcp-server",
+      "args": [],
+      "env": {}
+    }
+  }
+}

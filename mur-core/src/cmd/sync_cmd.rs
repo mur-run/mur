@@ -1143,6 +1143,10 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
             include_str!("../skills/mur_project_remove.yaml"),
         ),
         (
+            "mur-project-search",
+            include_str!("../skills/mur_project_search.yaml"),
+        ),
+        (
             "mur-session-remove",
             include_str!("../skills/mur_session_remove.yaml"),
         ),
@@ -1526,5 +1530,36 @@ mod sync_status_tests {
         // run_status uses default_location() which creates dirs under $HOME/.mur/.
         // We just verify it doesn't panic and returns Ok.
         run_status().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod sync_skill_tests {
+    #[test]
+    fn installs_project_search_skill() {
+        let home = std::env::temp_dir().join(format!(
+            "mur-skilltest-{}-{}",
+            std::process::id(),
+            std::fs::read_dir(std::env::temp_dir())
+                .map(|d| d.count())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&home).unwrap();
+
+        super::ensure_mur_skill(&home).unwrap();
+
+        let skill_yaml = home
+            .join(".mur")
+            .join("skills")
+            .join("mur-project-search")
+            .join("skill.yaml");
+        assert!(
+            skill_yaml.exists(),
+            "mur-project-search skill.yaml must be written"
+        );
+        let body = std::fs::read_to_string(&skill_yaml).unwrap();
+        assert!(body.contains("name: mur-project-search"));
+
+        std::fs::remove_dir_all(&home).ok();
     }
 }
