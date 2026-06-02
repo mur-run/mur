@@ -60,7 +60,11 @@ mod tests {
         make_template(tpl.path());
         assert!(seed_if_empty(tpl.path(), home.path()).unwrap());
         assert!(home.path().join("agents/mur/profile.yaml").exists());
-        assert!(home.path().join("agents/mur/skills/concierge.yaml").exists());
+        assert!(
+            home.path()
+                .join("agents/mur/skills/concierge.yaml")
+                .exists()
+        );
     }
 
     #[test]

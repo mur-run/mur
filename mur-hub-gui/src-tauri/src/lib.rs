@@ -250,7 +250,11 @@ pub fn run() {
             // Build tray.
             let open_item = MenuItem::with_id(app, "open", "Open Hub", true, None::<&str>)?;
             let cli_item = MenuItem::with_id(
-                app, "install_cli", "Install Command-Line Tools…", true, None::<&str>,
+                app,
+                "install_cli",
+                "Install Command-Line Tools…",
+                true,
+                None::<&str>,
             )?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open_item, &cli_item, &quit_item])?;
@@ -260,12 +264,14 @@ pub fn run() {
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => open_dashboard(app.clone(), None),
-                    "install_cli" => {
-                        match cli_tools::install_cli_tools() {
-                            Ok(p) => { let _ = app.emit("cli-tools-installed", p); }
-                            Err(e) => { let _ = app.emit("cli-tools-error", e); }
+                    "install_cli" => match cli_tools::install_cli_tools() {
+                        Ok(p) => {
+                            let _ = app.emit("cli-tools-installed", p);
                         }
-                    }
+                        Err(e) => {
+                            let _ = app.emit("cli-tools-error", e);
+                        }
+                    },
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -304,10 +310,10 @@ pub fn run() {
             }
 
             // Seed the built-in "Mur" agent on first run (idempotent).
-            if let Ok(template_dir) = app.path().resolve(
-                "mur-agent-template",
-                tauri::path::BaseDirectory::Resource,
-            ) {
+            if let Ok(template_dir) = app
+                .path()
+                .resolve("mur-agent-template", tauri::path::BaseDirectory::Resource)
+            {
                 let mur_home = mur_home_path();
                 match seed_mur::seed_if_empty(&template_dir, &mur_home) {
                     Ok(true) => {

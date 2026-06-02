@@ -58,19 +58,16 @@ pub fn start(app: &AppHandle) {
         warn!("mlx sidecar: failed to write base url: {e}");
     }
 
-    let cmd = app
-        .shell()
-        .sidecar("mlx-server")
-        .and_then(|c| {
-            Ok(c.args([
-                "--model",
-                model_dir.to_str().unwrap_or_default(),
-                "--host",
-                "127.0.0.1",
-                "--port",
-                &port.to_string(),
-            ]))
-        });
+    let cmd = app.shell().sidecar("mlx-server").and_then(|c| {
+        Ok(c.args([
+            "--model",
+            model_dir.to_str().unwrap_or_default(),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+        ]))
+    });
     let cmd = match cmd {
         Ok(c) => c,
         Err(e) => {
