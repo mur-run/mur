@@ -356,7 +356,11 @@ mod tests {
         );
         // env wins when entry absent
         assert_eq!(
-            resolve_local_base_url(None, Some("http://env/v1".into()), Path::new("/nonexistent")),
+            resolve_local_base_url(
+                None,
+                Some("http://env/v1".into()),
+                Path::new("/nonexistent")
+            ),
             "http://env/v1"
         );
         // default when nothing available

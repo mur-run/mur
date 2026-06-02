@@ -163,7 +163,12 @@ pub(crate) fn runtime_target_in_bundle(
     if dir.file_name().and_then(|s| s.to_str()) != Some("MacOS") {
         return None;
     }
-    if dir.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()) != Some("Contents") {
+    if dir
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        != Some("Contents")
+    {
         return None;
     }
     Some(dir.join(runtime_filename))
