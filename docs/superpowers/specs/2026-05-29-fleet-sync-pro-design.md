@@ -15,7 +15,7 @@ Fleet-sync is MUR's **first paid point** (Pro, ~$10–20/mo). It replicates a us
 **Non-goals (v1).**
 - No cross-device replication of Ed25519 signing private keys (explicitly rejected — see §5).
 - No plaintext secret sync (only secret-refs travel — see §5).
-- No companion appearance or voice-model sync (deferred to v2 — see §3). (Notes are not a separate entity — they are `category: note` skills and sync with the skill corpus.)
+- No notes, companion appearance, or voice-model sync (deferred to v2 — see §3).
 - No new sync protocol or storage engine; v1 extends the existing server-sync path (see §4).
 - No dependency on the server-side draft *accept* endpoint (still TBD per umbrella §10).
 - Out of scope: MUR Commander relay / SSH-tunnel transport (umbrella §10 stubs).
@@ -55,7 +55,7 @@ Syncable entities in v1:
 | Agent profile | `~/.mur/agents/<slug>/profile.yaml` (`AgentProfile`) | Minus signing private key (§5). System prompt file (`sys_prompt_file`) travels with it. Model bindings are the profile's `model_ref` + referenced `~/.mur/models.yaml` entries, secrets stripped to refs (§5). |
 | Skill corpus (unified) | `~/.mur/skills/<name>/` — all categories (`note`, `workflow`, `context`, `command`, `meta`) | Each skill dir = `skill.yaml` (signed manifest, `content_sha256`) + `stats.yaml` (evolved state, derived) + `events.jsonl` (append-only) [+ `runs.jsonl` for workflows]. Subsumes what were previously separate "installed skills", "workflows", and "pattern evolution state" — they are all skills now. |
 
-**Deferred to v2:** companion `appearance`, voice models/config. These add conflict surface without changing the core "evolved fleet" value proposition.
+**Deferred to v2:** notes-as-distinct-tree (no longer applicable — notes are skills), companion `appearance`, voice models/config. These add conflict surface without changing the core "evolved fleet" value proposition.
 
 **Out of scope (legacy):** `~/.mur/patterns/*.yaml`. Patterns are being removed by the Workflow-Engine-v2 / Notes migration (no automatic migration; users curate exported patterns into notes). Fleet-sync syncs the skill corpus, not the legacy pattern tree.
 
