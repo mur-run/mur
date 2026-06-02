@@ -149,6 +149,66 @@ pub fn all_tools() -> Vec<Tool> {
                 required: None,
             },
         },
+        // ── media tools ──
+        Tool {
+            name: "vlc_open".into(),
+            description: "Open a local video file path or a URL (e.g. a YouTube link) in VLC and start playing. Returns playback status.".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: Some(vec![
+                    ("source".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "Local file path or video URL (YouTube supported)".into(),
+                        default: None,
+                    }),
+                ]),
+                required: Some(vec!["source".into()]),
+            },
+        },
+        Tool {
+            name: "vlc_playback".into(),
+            description: "Control VLC playback. action ∈ play|pause|toggle|stop|seek|volume. For seek, value=seconds; for volume, value=0-512 (256=100%).".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: Some(vec![
+                    ("action".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "play|pause|toggle|stop|seek|volume".into(),
+                        default: None,
+                    }),
+                    ("value".into(), ToolParam {
+                        param_type: "number".into(),
+                        description: "Seconds (seek) or volume level (volume)".into(),
+                        default: None,
+                    }),
+                ]),
+                required: Some(vec!["action".into()]),
+            },
+        },
+        Tool {
+            name: "vlc_status".into(),
+            description: "Get current VLC playback status (state, time, length, volume). Use before narrating so the explanation matches the current frame.".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: None,
+                required: None,
+            },
+        },
+        Tool {
+            name: "scene_explain".into(),
+            description: "Capture the current VLC frame and explain what is on screen using the local multimodal model (offline, private). Optionally pass a specific question.".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: Some(vec![
+                    ("prompt".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "Optional question about the frame; defaults to a general description".into(),
+                        default: None,
+                    }),
+                ]),
+                required: None,
+            },
+        },
     ]
 }
 
@@ -292,6 +352,44 @@ pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
             }))
         }
 
+        "vlc_open" => {
+            let source = arguments
+                .get("source")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing required parameter: 'source' (string)".to_string())?;
+            let status = mur_core::cmd::media::vlc::open(source)
+                .await
+                .map_err(|e| format!("vlc_open failed: {}", e))?;
+            Ok(serde_json::to_value(status).unwrap_or(Value::Null))
+        }
+
+        "vlc_playback" => {
+            let action = arguments
+                .get("action")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing required parameter: 'action' (string)".to_string())?;
+            let value = arguments.get("value").and_then(|v| v.as_f64());
+            let status = mur_core::cmd::media::vlc::playback(action, value)
+                .await
+                .map_err(|e| format!("vlc_playback failed: {}", e))?;
+            Ok(serde_json::to_value(status).unwrap_or(Value::Null))
+        }
+
+        "vlc_status" => {
+            let status = mur_core::cmd::media::vlc::status()
+                .await
+                .map_err(|e| format!("vlc_status failed: {}", e))?;
+            Ok(serde_json::to_value(status).unwrap_or(Value::Null))
+        }
+
+        "scene_explain" => {
+            let prompt = arguments.get("prompt").and_then(|v| v.as_str());
+            let text = mur_core::cmd::media::scene::explain(prompt)
+                .await
+                .map_err(|e| format!("scene_explain failed: {}", e))?;
+            Ok(json!({ "explanation": text }))
+        }
+
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
@@ -299,4 +397,16 @@ pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
 /// Resolve ~/.mur from environment or default.
 fn resolve_mur_home() -> anyhow::Result<std::path::PathBuf> {
     mur_core::cmd::resolve_mur_home()
+}
+
+#[cfg(test)]
+mod media_tool_tests {
+    use super::*;
+    #[test]
+    fn media_tools_registered() {
+        let names: Vec<_> = all_tools().into_iter().map(|t| t.name).collect();
+        for n in ["vlc_open", "vlc_playback", "vlc_status", "scene_explain"] {
+            assert!(names.contains(&n.to_string()), "missing {n}");
+        }
+    }
 }

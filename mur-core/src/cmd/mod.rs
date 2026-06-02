@@ -34,6 +34,7 @@ pub(crate) mod init_local;
 pub(crate) mod inject_cmd;
 pub(crate) mod internals;
 pub(crate) mod learn;
+pub mod media;
 pub(crate) mod misc;
 pub(crate) mod model;
 pub(crate) mod murmurd;

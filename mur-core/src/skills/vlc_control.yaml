@@ -1,0 +1,28 @@
+name: vlc-control
+version: 0.1.0
+publisher: human:mur
+description: "Watch and control video in VLC — open a local file or a YouTube link, play/pause/seek/volume, and check status."
+category: media
+hosts: [all]
+content:
+  abstract: |
+    To watch a movie with the user, drive VLC via the MCP tools: vlc_open
+    (local path or YouTube URL), vlc_playback (play/pause/toggle/stop/seek/volume),
+    and vlc_status. Check vlc_status before narrating so commentary matches the
+    current frame.
+  context: |
+    # vlc-control — watch together
+
+    Use these tools when the user wants to watch or control a video:
+    - vlc_open(source): start a local file or a URL (YouTube supported).
+    - vlc_playback(action, value?): play | pause | toggle | stop | seek | volume.
+    - vlc_status(): current state/time/length/volume.
+
+    Be warm and concise. Pause before explaining a frame. DRM-protected streaming
+    services (Netflix etc.) cannot be captured — decline gracefully if asked.
+tags: [mur, media, vlc, video, builtin]
+triggers:
+  - type: keyword
+    pattern: "(watch (a )?(movie|video)|play .{0,30}(in vlc|on vlc)|看(電影|影片)|一起看|youtube)"
+  - type: manual
+priority: normal
