@@ -1,21 +1,20 @@
 //! VLC control via the HTTP interface.
-//!
-//! Most items here are `pub` but used only by the `mur-mcp-server` crate, not
-//! by the `mur` binary — so clippy flags them as dead code in the binary
-//! target. This is deliberate: these are library-facing exports.
-#![allow(dead_code)]
 
 use super::VlcRuntime;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-/// Default macOS VLC binary path; overridable via `MUR_VLC_PATH`.
+/// Default macOS VLC binary path.
+const DEFAULT_VLC_PATH: &str = "/Applications/VLC.app/Contents/MacOS/VLC";
+
+/// Locate VLC binary: env override `MUR_VLC_PATH`, else default path.
 pub fn detect_vlc() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("MUR_VLC_PATH") {
         let p = PathBuf::from(p);
         return p.exists().then_some(p);
     }
-    let candidate = Path::new("/Applications/VLC.app/Contents/MacOS/VLC");
+    let candidate = Path::new(DEFAULT_VLC_PATH);
     candidate.exists().then(|| candidate.to_path_buf())
 }
 
@@ -45,22 +44,45 @@ pub fn command_url(port: u16, cmd: &str, extra: &[(&str, &str)]) -> String {
     url
 }
 
-/// Extract the text between `<tag>` and `</tag>` (first occurrence).
-fn tag(xml: &str, tag: &str) -> Option<String> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = xml.find(&open)? + open.len();
-    let end = xml[start..].find(&close)? + start;
-    Some(xml[start..end].to_string())
-}
-
-/// Parse the subset of status.xml we use. Missing fields default sensibly.
+/// Parse the subset of VLC's `status.xml` using a proper XML reader.
+/// Missing fields default sensibly.
 pub fn parse_status_xml(xml: &str) -> VlcStatus {
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    let mut reader = Reader::from_str(xml);
+    let mut state = "stopped".to_string();
+    let mut time = 0i64;
+    let mut length = 0i64;
+    let mut volume = 0i64;
+    let mut buf = Vec::new();
+    let mut in_tag = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                in_tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+            }
+            Ok(Event::Text(ref e)) => {
+                let text = e.unescape().unwrap_or_default().to_string();
+                match in_tag.as_str() {
+                    "state" => state = text,
+                    "time" => time = text.parse().unwrap_or(0),
+                    "length" => length = text.parse().unwrap_or(0),
+                    "volume" => volume = text.parse().unwrap_or(0),
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
     VlcStatus {
-        state: tag(xml, "state").unwrap_or_else(|| "stopped".into()),
-        time: tag(xml, "time").and_then(|s| s.parse().ok()).unwrap_or(0),
-        length: tag(xml, "length").and_then(|s| s.parse().ok()).unwrap_or(0),
-        volume: tag(xml, "volume").and_then(|s| s.parse().ok()).unwrap_or(0),
+        state,
+        time,
+        length,
+        volume,
     }
 }
 
@@ -105,7 +127,7 @@ fn ensure_runtime(mur_home: &Path) -> Result<VlcRuntime> {
     }
     let rt = VlcRuntime {
         port: pick_free_port().context("pick free port")?,
-        password: gen_password(),
+        password: gen_password().context("generate VLC password")?,
         snapshot_dir: mur_home.join("runtime").join("vlc-snapshots"),
     };
     std::fs::create_dir_all(&rt.snapshot_dir).ok();
@@ -121,6 +143,7 @@ async fn ensure_vlc_running(mur_home: &Path, client: &reqwest::Client) -> Result
     if client
         .get(status_url(rt.port))
         .basic_auth("", Some(&rt.password))
+        .timeout(Duration::from_secs(3))
         .send()
         .await
         .map(|r| r.status().is_success())
@@ -146,6 +169,7 @@ async fn ensure_vlc_running(mur_home: &Path, client: &reqwest::Client) -> Result
         if client
             .get(status_url(rt.port))
             .basic_auth("", Some(&rt.password))
+            .timeout(Duration::from_secs(3))
             .send()
             .await
             .map(|r| r.status().is_success())
@@ -161,6 +185,7 @@ async fn get_status(rt: &VlcRuntime, client: &reqwest::Client) -> Result<VlcStat
     let xml = client
         .get(status_url(rt.port))
         .basic_auth("", Some(&rt.password))
+        .timeout(Duration::from_secs(5))
         .send()
         .await?
         .text()
@@ -177,6 +202,7 @@ async fn send_command(
     let xml = client
         .get(command_url(rt.port, cmd, extra))
         .basic_auth("", Some(&rt.password))
+        .timeout(Duration::from_secs(5))
         .send()
         .await?
         .text()
@@ -191,46 +217,51 @@ fn mur_home() -> Result<PathBuf> {
 }
 
 /// Open a local file path or a URL (e.g. YouTube) in VLC.
+#[allow(dead_code)]
 pub async fn open(source: &str) -> Result<VlcStatus> {
-    let client = reqwest::Client::new();
+    let client = super::shared_client();
     let home = mur_home()?;
-    let rt = ensure_vlc_running(&home, &client).await?;
-    send_command(&rt, &client, "in_play", &[("input", source)]).await
+    let rt = ensure_vlc_running(&home, client).await?;
+    send_command(&rt, client, "in_play", &[("input", source)]).await
 }
 
 /// Playback control. `action` ∈ {play, pause, toggle, stop, seek, volume}.
 /// `value` is seconds (seek) or raw VLC volume (volume).
+#[allow(dead_code)]
 pub async fn playback(action: &str, value: Option<f64>) -> Result<VlcStatus> {
-    let client = reqwest::Client::new();
+    let client = super::shared_client();
     let home = mur_home()?;
-    let rt = ensure_vlc_running(&home, &client).await?;
+    let rt = ensure_vlc_running(&home, client).await?;
     let v = value.unwrap_or(0.0);
     let vs = format!("{}", v as i64);
     match action {
-        "play" => send_command(&rt, &client, "pl_forceresume", &[]).await,
-        "pause" => send_command(&rt, &client, "pl_forcepause", &[]).await,
-        "toggle" => send_command(&rt, &client, "pl_pause", &[]).await,
-        "stop" => send_command(&rt, &client, "pl_stop", &[]).await,
-        "seek" => send_command(&rt, &client, "seek", &[("val", &vs)]).await,
-        "volume" => send_command(&rt, &client, "volume", &[("val", &vs)]).await,
+        "play" => send_command(&rt, client, "pl_forceresume", &[]).await,
+        "pause" => send_command(&rt, client, "pl_forcepause", &[]).await,
+        "toggle" => send_command(&rt, client, "pl_pause", &[]).await,
+        "stop" => send_command(&rt, client, "pl_stop", &[]).await,
+        "seek" => send_command(&rt, client, "seek", &[("val", &vs)]).await,
+        "volume" => send_command(&rt, client, "volume", &[("val", &vs)]).await,
         other => anyhow::bail!("unknown playback action: {other}"),
     }
 }
 
 /// Current playback status.
+#[allow(dead_code)]
 pub async fn status() -> Result<VlcStatus> {
-    let client = reqwest::Client::new();
+    let client = super::shared_client();
     let home = mur_home()?;
-    let rt = ensure_vlc_running(&home, &client).await?;
-    get_status(&rt, &client).await
+    let rt = ensure_vlc_running(&home, client).await?;
+    get_status(&rt, client).await
 }
 
 /// Internal accessor for scene.rs: ensure running and return the runtime.
+#[allow(dead_code)]
 pub(super) async fn ensure_for_snapshot(client: &reqwest::Client) -> Result<VlcRuntime> {
     let home = mur_home()?;
     ensure_vlc_running(&home, client).await
 }
 
+#[allow(dead_code)]
 pub(super) async fn snapshot_command(rt: &VlcRuntime, client: &reqwest::Client) -> Result<()> {
     let _ = send_command(rt, client, "snapshot", &[]).await?;
     Ok(())

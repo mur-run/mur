@@ -1,17 +1,14 @@
 //! Media companion: control VLC and explain the current frame with the local
 //! multimodal model. All control uses VLC's HTTP interface (no libVLC).
-//!
-//! Most items here are `pub` but used only by the `mur-mcp-server` crate, not
-//! by the `mur` binary — so clippy flags them as dead code in the binary
-//! target. The `expect` below is deliberate: these are library-facing exports.
-#![allow(dead_code)]
 
 pub mod scene;
 pub mod vlc;
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Per-session VLC HTTP connection details. Generated once and persisted so
 /// repeated tool calls reach the same running VLC instance.
@@ -30,10 +27,10 @@ pub fn pick_free_port() -> std::io::Result<u16> {
 
 /// 32-hex-char random password from the OS RNG (not a long-term secret, but
 /// must not be guessable by other local users).
-pub fn gen_password() -> String {
+pub fn gen_password() -> anyhow::Result<String> {
     let mut buf = [0u8; 16];
-    getrandom::getrandom(&mut buf).expect("OS RNG");
-    buf.iter().map(|b| format!("{b:02x}")).collect()
+    getrandom::getrandom(&mut buf)?;
+    Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 pub fn runtime_path(mur_home: &Path) -> PathBuf {
@@ -47,14 +44,26 @@ pub fn load_runtime(mur_home: &Path) -> Option<VlcRuntime> {
 }
 
 /// Persist the runtime config atomically.
-pub fn save_runtime(mur_home: &Path, rt: &VlcRuntime) -> std::io::Result<()> {
+pub fn save_runtime(mur_home: &Path, rt: &VlcRuntime) -> anyhow::Result<()> {
     let path = runtime_path(mur_home);
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p)?;
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(rt).unwrap())?;
-    std::fs::rename(&tmp, &path)
+    let data = serde_json::to_vec_pretty(rt).context("serialize VlcRuntime")?;
+    std::fs::write(&tmp, data).context("write runtime tmp")?;
+    std::fs::rename(&tmp, &path).context("rename runtime tmp")?;
+    Ok(())
+}
+
+/// Reusable HTTP client with connection pooling for VLC and VLM endpoints.
+pub fn shared_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .build()
+            .expect("build reqwest Client")
+    })
 }
 
 #[cfg(test)]
@@ -64,7 +73,7 @@ mod tests {
 
     #[test]
     fn password_is_32_hex_chars() {
-        let p = gen_password();
+        let p = gen_password().unwrap();
         assert_eq!(p.len(), 32);
         assert!(p.chars().all(|c| c.is_ascii_hexdigit()));
     }
