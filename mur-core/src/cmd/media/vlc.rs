@@ -1,4 +1,9 @@
 //! VLC control via the HTTP interface.
+//!
+//! Most items here are `pub` but used only by the `mur-mcp-server` crate, not
+//! by the `mur` binary — so clippy flags them as dead code in the binary
+//! target. This is deliberate: these are library-facing exports.
+#![allow(dead_code)]
 
 use super::VlcRuntime;
 use anyhow::{Context, Result};

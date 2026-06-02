@@ -1,5 +1,10 @@
 //! Media companion: control VLC and explain the current frame with the local
 //! multimodal model. All control uses VLC's HTTP interface (no libVLC).
+//!
+//! Most items here are `pub` but used only by the `mur-mcp-server` crate, not
+//! by the `mur` binary — so clippy flags them as dead code in the binary
+//! target. The `expect` below is deliberate: these are library-facing exports.
+#![allow(dead_code)]
 
 pub mod scene;
 pub mod vlc;
