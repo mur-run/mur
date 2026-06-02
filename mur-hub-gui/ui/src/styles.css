@@ -760,3 +760,34 @@ input {
 }
 .onboarding-banner strong { color: #93c5fd; }
 .onboarding-banner .toolbar-btn { padding: 2px 8px; font-size: 12px; }
+
+/* ── Upgrade nudge banner ──────────────────────────────────────────────── */
+.upgrade-nudge-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #3b1f5e;
+  border-bottom: 1px solid #6d28d9;
+  font-size: 13px;
+  color: #e9d5ff;
+}
+.upgrade-nudge-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.upgrade-nudge-actions .toolbar-btn--primary {
+  background: var(--brand);
+  color: #fff;
+}
+
+/* ── Brain badge ───────────────────────────────────────────────────────── */
+.brain-badge {
+  font-size: 12px;
+  opacity: 0.7;
+  cursor: default;
+  margin-left: auto;
+}
+.brain-badge:hover { opacity: 1; }

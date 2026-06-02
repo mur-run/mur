@@ -29,6 +29,14 @@ cd mur-hub-gui/ui && npm run dev
 cargo tauri dev --manifest-path mur-hub-gui/src-tauri/Cargo.toml
 ```
 
+## Bundling (self-contained .app)
+
+`tauri.conf.json` embeds three sidecars from `src-tauri/binaries/` —
+`mur`, `mur-agent-runtime`, `mlx-server` — each suffixed with the target triple
+(e.g. `mur-agent-runtime-aarch64-apple-darwin`), and the default model under
+`src-tauri/resources/models/default/`. The release workflow populates these;
+see `scripts/build-mlx-server.sh` and `scripts/fetch-bundle-model.sh`.
+
 ## Design reference
 
 `docs/superpowers/specs/2026-05-11-mur-hub-companion-design.md`

@@ -23,6 +23,7 @@ pub mod jcs;
 pub mod knowledge;
 pub mod ledger;
 pub mod llm;
+pub mod local_llm;
 pub mod lock_file;
 pub mod manifest;
 pub mod model;

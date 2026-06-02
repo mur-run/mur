@@ -286,6 +286,24 @@ export function Sidebar({ activeCategory, agents, onSelect }: SidebarProps) {
   );
 }
 
+// ─── BrainBadge ────────────────────────────────────────────────────────────
+
+function BrainBadge() {
+  const [model, setModel] = useState<string | null>(null);
+  useEffect(() => {
+    invoke<[boolean, string | null]>("nudge_status").then(([, m]) => setModel(m)).catch(() => {});
+  }, []);
+  if (!model) return null;
+  return (
+    <button
+      className="toolbar-btn brain-badge"
+      title="目前的大腦 — 點此升級成更聰明的模型"
+    >
+      🧠 {model}
+    </button>
+  );
+}
+
 // ─── DashboardApp ──────────────────────────────────────────────────────────
 
 export function DashboardApp() {
@@ -298,6 +316,8 @@ export function DashboardApp() {
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
   const [muragentImportPath, setMuragentImportPath] = useState<string | undefined>(undefined);
   const [showAppsBanner, setShowAppsBanner] = useState(false);
+  const [showUpgradeNudge, setShowUpgradeNudge] = useState(false);
+  const [nudgeDismissed, setNudgeDismissed] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Build a lookup map for runtime statuses.
@@ -343,6 +363,13 @@ export function DashboardApp() {
     }).catch(() => {});
   }, []);
 
+  // Check nudge dismissal on mount.
+  useEffect(() => {
+    invoke<[boolean, string | null]>("nudge_status")
+      .then(([dismissed]) => setNudgeDismissed(dismissed))
+      .catch(() => {});
+  }, []);
+
 
 
   // ⌘K focus search.
@@ -381,6 +408,31 @@ export function DashboardApp() {
             </button>
           </div>
         )}
+        {showUpgradeNudge && !nudgeDismissed && (
+          <div className="upgrade-nudge-banner">
+            <span>這個我現在的小腦袋有點吃力～要幫我接上更聰明的大腦嗎？</span>
+            <div className="upgrade-nudge-actions">
+              <button
+                className="toolbar-btn"
+                onClick={() => {
+                  invoke("nudge_dismiss").catch(() => {});
+                  setNudgeDismissed(true);
+                }}
+              >
+                不用了
+              </button>
+              <button
+                className="toolbar-btn toolbar-btn--primary"
+                onClick={() => {
+                  setShowUpgradeNudge(false);
+                  setWizardOpen(true);
+                }}
+              >
+                好啊
+              </button>
+            </div>
+          </div>
+        )}
         <div className="toolbar">
           <button
             className="toolbar-btn"
@@ -402,6 +454,7 @@ export function DashboardApp() {
           >
             Import Preset
           </button>
+          <BrainBadge />
           <input
             ref={searchRef}
             type="search"

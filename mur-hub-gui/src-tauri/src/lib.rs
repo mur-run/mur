@@ -5,12 +5,16 @@
 //! M-h4: onboarding wizard — wizard_open/set_persona/.../start_render/finish/cancel.
 //! M-h5: pet windows — pet_spawn_at/close/reposition/return_to_hub/list/get_expression.
 
+pub mod brain_badge;
+pub mod cli_tools;
 pub mod companion;
 pub mod export_muragent;
 pub mod import_muragent;
+pub mod mlx_sidecar;
 pub mod onboarding;
 pub mod pet;
 pub mod preset;
+pub mod seed_mur;
 
 use companion::BridgeState;
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
@@ -245,14 +249,29 @@ pub fn run() {
 
             // Build tray.
             let open_item = MenuItem::with_id(app, "open", "Open Hub", true, None::<&str>)?;
+            let cli_item = MenuItem::with_id(
+                app,
+                "install_cli",
+                "Install Command-Line Tools…",
+                true,
+                None::<&str>,
+            )?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&open_item, &cli_item, &quit_item])?;
 
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => open_dashboard(app.clone(), None),
+                    "install_cli" => match cli_tools::install_cli_tools() {
+                        Ok(p) => {
+                            let _ = app.emit("cli-tools-installed", p);
+                        }
+                        Err(e) => {
+                            let _ = app.emit("cli-tools-error", e);
+                        }
+                    },
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -289,6 +308,30 @@ pub fn run() {
                     }
                 }
             }
+
+            // Seed the built-in "Mur" agent on first run (idempotent).
+            if let Ok(template_dir) = app
+                .path()
+                .resolve("mur-agent-template", tauri::path::BaseDirectory::Resource)
+            {
+                let mur_home = mur_home_path();
+                match seed_mur::seed_if_empty(&template_dir, &mur_home) {
+                    Ok(true) => {
+                        tracing::info!("seeded built-in Mur agent");
+                        // Create the runtime symlink + start via the supervisor.
+                        let supervisor_state = app.state::<SupervisorState>();
+                        let supervisor = supervisor_state.0.clone();
+                        tauri::async_runtime::spawn(async move {
+                            supervisor.start("mur").await;
+                        });
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("seed Mur failed: {e}"),
+                }
+            }
+
+            // Start the bundled local inference server (best-effort).
+            mlx_sidecar::start(app.handle());
 
             Ok(())
         })
@@ -332,6 +375,9 @@ pub fn run() {
             companion::companion_unread_count,
             companion::companion_proactive,
             companion::companion_quiet,
+            cli_tools::install_cli_tools,
+            brain_badge::nudge_status,
+            brain_badge::nudge_dismiss,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -349,7 +395,7 @@ pub fn run() {
         });
 }
 
-fn mur_home_path() -> PathBuf {
+pub(crate) fn mur_home_path() -> PathBuf {
     std::env::var("MUR_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {

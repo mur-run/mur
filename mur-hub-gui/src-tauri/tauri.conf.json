@@ -64,6 +64,15 @@
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper" }
-    }
+    },
+    "externalBin": [
+      "binaries/mur",
+      "binaries/mur-agent-runtime",
+      "binaries/mlx-server"
+    ],
+    "resources": [
+      "resources/mur-agent-template/**/*",
+      "resources/models/**/*"
+    ]
   }
 }

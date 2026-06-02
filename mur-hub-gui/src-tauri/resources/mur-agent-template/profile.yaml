@@ -1,0 +1,82 @@
+schema: 1
+id: "00000000-0000-0000-0000-000000000000"
+name: Mur
+display_name: "Mur"
+version: "0.1.0"
+persona:
+  category: custom
+  description: "Mur is your built-in guide to MuR — warm, friendly, and helpful."
+  traits:
+    tone: "warm"
+    risk: "cautious"
+    verbosity: "medium"
+sys_prompt_file: sys_prompt.md
+model:
+  provider: local
+  name: Qwen3.5-2B-MLX-4bit
+  params:
+    temperature: 0.7
+    top_p: 0.8
+    max_tokens: 1024
+transport:
+  stdio: true
+  socket:
+    enabled: true
+    bind: "unix://PLACEHOLDER/agent.sock"
+    auth: ~
+  tcp:
+    enabled: false
+    bind: "127.0.0.1:0"
+  webhook: {}
+communication:
+  accepts_from:
+    - "*"
+  sends_to: []
+capabilities:
+  - a2a.message.send
+  - a2a.tasks
+entitlements:
+  network:
+    inbound:
+      ports: []
+    outbound:
+      mode: restricted
+      allow_hosts:
+        - "127.0.0.1"
+        - "localhost"
+  filesystem:
+    read: []
+    write: []
+    deny: []
+  processes:
+    spawn:
+      mode: "none"
+      allowed: []
+notifications:
+  enabled: false
+  channels: []
+retry:
+  llm:
+    max_retries: 3
+    backoff: exponential
+    initial_delay_ms: 1000
+    max_delay_ms: 30000
+    retry_on:
+      - rate_limit
+  tool:
+    max_retries: 1
+    backoff: fixed
+    initial_delay_ms: 500
+    max_delay_ms: ~
+    retry_on: []
+lifecycle:
+  restart: on_failure
+  max_restarts: 3
+  restart_window_secs: 600
+  stop_timeout_secs: 15
+  mcp_required: false
+  execution: daemon
+  schedule: []
+  idle_triggers: []
+created_at: "2026-01-01T00:00:00Z"
+updated_at: "2026-01-01T00:00:00Z"
