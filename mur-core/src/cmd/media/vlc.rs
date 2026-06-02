@@ -17,10 +17,10 @@ pub fn detect_vlc() -> Option<PathBuf> {
 /// Parsed subset of VLC's `requests/status.xml`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct VlcStatus {
-    pub state: String,   // "playing" | "paused" | "stopped"
-    pub time: i64,       // seconds elapsed
-    pub length: i64,     // seconds total
-    pub volume: i64,     // raw VLC volume (256 == 100%)
+    pub state: String, // "playing" | "paused" | "stopped"
+    pub time: i64,     // seconds elapsed
+    pub length: i64,   // seconds total
+    pub volume: i64,   // raw VLC volume (256 == 100%)
 }
 
 /// Base URL for the VLC HTTP interface.
@@ -221,17 +221,12 @@ pub async fn status() -> Result<VlcStatus> {
 }
 
 /// Internal accessor for scene.rs: ensure running and return the runtime.
-pub(super) async fn ensure_for_snapshot(
-    client: &reqwest::Client,
-) -> Result<VlcRuntime> {
+pub(super) async fn ensure_for_snapshot(client: &reqwest::Client) -> Result<VlcRuntime> {
     let home = mur_home()?;
     ensure_vlc_running(&home, client).await
 }
 
-pub(super) async fn snapshot_command(
-    rt: &VlcRuntime,
-    client: &reqwest::Client,
-) -> Result<()> {
+pub(super) async fn snapshot_command(rt: &VlcRuntime, client: &reqwest::Client) -> Result<()> {
     let _ = send_command(rt, client, "snapshot", &[]).await?;
     Ok(())
 }
