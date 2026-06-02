@@ -51,9 +51,9 @@ or the MuR Hub app. → **Bug #1: stale `--help`.**
 | A | export CLI sweep + find 3 bugs | DONE (3 bugs) |
 | B | build 2-3 agent team + A2A handoff | DONE (team live; A2A transport verified) |
 | C | export → headless `--load` run round trip | DONE (verified) |
-| D | MuR Hub GUI build + load `.muragent` | pending (Hub GUI builds green in #334 CI) |
-| E | bug-fix batch 1 → PR → CI → merge | PR #334 — all green except windows test pending |
-| E2 | bug-fix batch 2 (export fidelity) → PR | bugs found (see batch 2) |
+| D | MuR Hub GUI build + load `.muragent` | DONE (built locally; loads via GUI path) |
+| E | bug-fix batch 1 → PR → CI → merge | PR #334 MERGED ✅ |
+| E2 | bug-fix batch 2 (export fidelity) → PR | PR #335 — CI re-running with Phase D test |
 
 ## Bug buffer (batch 1, target 3) — ALL FOUND
 1. **Stale `--help`** — `mur agent export --help` (cmd `about` + `--format` help) advertises
@@ -121,3 +121,18 @@ path regressed and drops them. Confirmed via `tar tzf xx-pm.muragent` = only
   signature, schema mur-agent/2); loaded `xx-pm.muragent` into a fresh home → supervisor
   ready, B1 sandbox enforcing. **Found batch-2 bugs #4 (sys_prompt dropped) + #5 (skills
   files dropped).** Artifacts: `setup.sh`, `launch.sh`, `relay.py`, `skills/`, `design-handoff.md`.
+- 2026-06-02 Phase E (merge): **PR #334 CI all green → squash-merged to main** (`9565b941`).
+- 2026-06-02 Phase E2: implemented batch-2 fix on `fix/agent-export-fidelity-batch2` (off
+  main): `MuragentWriter::set_sys_prompt()/add_skill()` (added to tar AND in-toto subjects so
+  signatures verify); `export.rs` bundles `sys_prompt.md` + `skills/*`. Regression test
+  `install_extracts_sys_prompt_and_skills`. Verified end-to-end: export → `--load` fresh home
+  → prompt + skill file present, `skill show` works, `inspect` Signature VALID. fmt+clippy
+  clean, 5 installer tests ok. Commit `2441f303`. **PR #335 opened.**
+- 2026-06-02 Phase D: built MuR Hub GUI lib locally (`cargo build --manifest-path
+  mur-hub-gui/src-tauri/Cargo.toml --lib`) — compiles with the writer fix integrated; lib
+  tests pass (CI parity). Confirmed the GUI "open .muragent" command
+  (`import_muragent::install_muragent_file`) routes through the SAME
+  `installer::install(.., "hub")` as the CLI. Added Hub GUI integration test
+  `muragent_open_roundtrip.rs` that calls `install_muragent_file` on a real `.muragent` →
+  asserts bundled prompt + skill land. **Passes.** Committed to PR #335 (CI re-running).
+  All 3 Hub GUI CI platforms (ubuntu/macos/windows) green in #334/#335 runs.
