@@ -53,7 +53,10 @@ or the MuR Hub app. → **Bug #1: stale `--help`.**
 | C | export → headless `--load` run round trip | DONE (verified) |
 | D | MuR Hub GUI build + load `.muragent` | DONE (built locally; loads via GUI path) |
 | E | bug-fix batch 1 → PR → CI → merge | PR #334 MERGED ✅ |
-| E2 | bug-fix batch 2 (export fidelity) → PR | PR #335 — CI re-running with Phase D test |
+| E2 | bug-fix batch 2 (export fidelity) → PR | PR #335 MERGED ✅ |
+
+**FINAL: both PRs merged to main 2026-06-02 — #334 (`9565b941`, 3 CLI/identity bugs),
+#335 (`928da788`, 2 export-fidelity bugs + Hub GUI load test). 5 bugs found+fixed.**
 
 ## Bug buffer (batch 1, target 3) — ALL FOUND
 1. **Stale `--help`** — `mur agent export --help` (cmd `about` + `--format` help) advertises
