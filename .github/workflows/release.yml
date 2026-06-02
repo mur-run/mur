@@ -266,9 +266,85 @@ jobs:
             mur-aarch64-apple-darwin.pkg
             mur-aarch64-apple-darwin.dmg
 
+  hub-macos:
+    name: Build MuR Hub (macOS arm64)
+    needs: validate-version
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Build Hub UI
+        run: cd mur-hub-gui/ui && npm ci && npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install protobuf
+        run: brew install protobuf
+
+      - name: Build mur + runtime sidecars
+        run: |
+          cargo build --release --target aarch64-apple-darwin -p mur-core -p mur-agent-runtime
+          mkdir -p mur-hub-gui/src-tauri/binaries
+          cp target/aarch64-apple-darwin/release/mur \
+             mur-hub-gui/src-tauri/binaries/mur-aarch64-apple-darwin
+          cp target/aarch64-apple-darwin/release/mur-agent-runtime \
+             mur-hub-gui/src-tauri/binaries/mur-agent-runtime-aarch64-apple-darwin
+
+      - name: Build mlx-server sidecar
+        run: bash scripts/build-mlx-server.sh aarch64-apple-darwin
+
+      - name: Fetch bundled model
+        run: bash scripts/fetch-bundle-model.sh mlx-community/Qwen3.5-2B-MLX-4bit
+
+      - name: Install tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Import Apple signing certs
+        uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.APPLE_SIGNING_CERT }}
+          p12-password: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+
+      - name: Build, sign, bundle .dmg
+        env:
+          APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cargo tauri build --manifest-path mur-hub-gui/src-tauri/Cargo.toml --target aarch64-apple-darwin
+
+      - name: Notarize + staple
+        run: |
+          DMG=$(find mur-hub-gui/src-tauri/target -name "*.dmg" | head -n1)
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$TEAM_ID" \
+            --password "$NOTARY_PWD" \
+            --wait
+          xcrun stapler staple "$DMG"
+          mkdir -p dist && cp "$DMG" "dist/MuR-Hub-aarch64-apple-darwin.dmg"
+        env:
+          APPLE_ID: ${{ secrets.APPLE_NOTARY_USER }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_PWD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+
+      - name: Verify Gatekeeper acceptance
+        run: spctl -a -t open --context context:primary-signature "dist/MuR-Hub-aarch64-apple-darwin.dmg"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mur-hub-macos
+          path: dist/MuR-Hub-aarch64-apple-darwin.dmg
+
   release:
     name: Publish Release
-    needs: [build, package-macos]
+    needs: [build, package-macos, hub-macos]
     if: always() && contains(needs.build.result, 'success')
     runs-on: ubuntu-latest
     steps:
