@@ -75,8 +75,7 @@ lifecycle:
   restart_window_secs: 600
   stop_timeout_secs: 15
   mcp_required: false
-  execution:
-    mode: daemon
+  execution: daemon
   schedule: []
   idle_triggers: []
 created_at: "2026-01-01T00:00:00Z"

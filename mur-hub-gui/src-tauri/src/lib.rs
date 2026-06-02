@@ -12,6 +12,7 @@ pub mod mlx_sidecar;
 pub mod onboarding;
 pub mod pet;
 pub mod preset;
+pub mod seed_mur;
 
 use companion::BridgeState;
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
@@ -288,6 +289,27 @@ pub fn run() {
                         let _ = app.handle().emit("open-muragent-file", arg.clone());
                         break;
                     }
+                }
+            }
+
+            // Seed the built-in "Mur" agent on first run (idempotent).
+            if let Ok(template_dir) = app.path().resolve(
+                "mur-agent-template",
+                tauri::path::BaseDirectory::Resource,
+            ) {
+                let mur_home = mur_home_path();
+                match seed_mur::seed_if_empty(&template_dir, &mur_home) {
+                    Ok(true) => {
+                        tracing::info!("seeded built-in Mur agent");
+                        // Create the runtime symlink + start via the supervisor.
+                        let supervisor_state = app.state::<SupervisorState>();
+                        let supervisor = supervisor_state.0.clone();
+                        tauri::async_runtime::spawn(async move {
+                            supervisor.start("mur").await;
+                        });
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("seed Mur failed: {e}"),
                 }
             }
 
