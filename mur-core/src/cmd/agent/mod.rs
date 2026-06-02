@@ -126,12 +126,17 @@ pub(crate) fn resolve_runtime_target() -> PathBuf {
     } else {
         "mur-agent-runtime"
     };
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        let candidate = dir.join(runtime_filename);
-        if candidate.exists() {
-            return candidate;
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bundle) = runtime_target_in_bundle(&exe, runtime_filename) {
+            if bundle.exists() {
+                return bundle;
+            }
+        }
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(runtime_filename);
+            if candidate.exists() {
+                return candidate;
+            }
         }
     }
     PathBuf::from(runtime_filename)
@@ -146,6 +151,22 @@ pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::rename(&tmp, path)
         .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
+}
+
+/// If `exe` lives inside a macOS `.app` bundle's `Contents/MacOS` directory,
+/// return the sibling runtime path. Returns `None` otherwise. Pure (testable).
+pub(crate) fn runtime_target_in_bundle(
+    exe: &std::path::Path,
+    runtime_filename: &str,
+) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    if dir.file_name().and_then(|s| s.to_str()) != Some("MacOS") {
+        return None;
+    }
+    if dir.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()) != Some("Contents") {
+        return None;
+    }
+    Some(dir.join(runtime_filename))
 }
 
 /// Liveness probe for a pid. Delegates to the canonical implementation in
@@ -211,4 +232,29 @@ pub(super) fn refuse_if_running(agent_home: &Path, name: &str) -> Result<()> {
         bail!("agent '{name}' is running; stop it first");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn bundle_runtime_resolves_from_macos_dir() {
+        // Hub exe inside a .app → runtime sibling in Contents/MacOS.
+        let exe = Path::new("/Applications/MuR Hub.app/Contents/MacOS/mur-hub-gui");
+        let got = runtime_target_in_bundle(exe, "mur-agent-runtime");
+        assert_eq!(
+            got.as_deref(),
+            Some(Path::new(
+                "/Applications/MuR Hub.app/Contents/MacOS/mur-agent-runtime"
+            ))
+        );
+    }
+
+    #[test]
+    fn non_bundle_path_returns_none() {
+        let exe = Path::new("/opt/homebrew/bin/mur");
+        assert_eq!(runtime_target_in_bundle(exe, "mur-agent-runtime"), None);
+    }
 }
