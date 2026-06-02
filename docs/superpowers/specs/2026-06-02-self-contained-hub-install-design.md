@@ -247,3 +247,54 @@ this artifact.
 - Exact model-hosting mechanism in CI (HF download + cache vs release asset mirror).
 - Whether the local provider is a new provider variant or a reuse of the existing
   Ollama-style provider pointed at the sidecar port.
+
+## 16. Model-Upgrade Nudge
+
+The bundled `Qwen3.5-2B` is deliberately small. Mur should help the user discover
+that connecting a stronger brain (their API key, or a local 4B/larger model) makes
+her more capable — **without nagging**, which would destroy the warm, friendly
+feeling the whole onboarding is built around.
+
+Design — "capability-ceiling-triggered, in character, once, remembered":
+
+- **Passive, always-available affordance:** a low-key "brain" badge in the UI shows
+  the current model and offers an upgrade entry point. Always present, never
+  interrupts. This is the discovery path for users who go looking.
+- **Active prompt only when the local model hits a real ceiling:** when the bundled
+  model genuinely struggles with a task the user actually asked for (long reasoning,
+  code, complex scene explanation) or the user voices a wish the small model can't
+  meet, Mur says — once, in character — something like: "這個我現在的小腦袋有點吃
+  力～你願意幫我接上更聰明的大腦嗎？" with a one-tap link to the model wizard.
+- **Dismiss-and-remember:** dismissing the prompt is durable; Mur does not re-ask.
+
+Explicitly **not** allowed: timer-based or session-count-based upsell prompts. This
+follows the existing "companion nudge = emergence-only, not spam" principle.
+
+## 17. Signature First-Use Scene: Watch Together (VLC / YouTube)
+
+The flagship "must try" scene beyond first launch: if VLC is installed, Mur offers to
+**watch a movie with the user and explain what's on screen**, in Traditional Chinese,
+warmly — and entirely locally/privately, because the bundled model is natively
+multimodal (a cloud tool would have to upload your screen; MuR does not).
+
+High-level flow (warmth + WOW):
+
+1. **Detect** VLC (`/Applications/VLC.app` on macOS).
+2. **Warm proactive offer** (optionally spoken via the existing Kokoro TTS): "我看到
+   你有裝 VLC！想一起看部電影嗎？我可以陪你看，也能幫你解說畫面、人物，或聽不懂
+   的橋段～"
+3. **Pick / consent:** user picks a local file **or a YouTube URL**, or points Mur at
+   what's already playing; Mur drives playback.
+4. **WOW — live narration:** the user can pause anytime and ask "這一幕在演什麼？";
+   Mur grabs the current frame, runs it through the local multimodal model, and
+   explains, offline.
+5. **Companionship:** emotional reactions; auto-pause when the user steps away (reuses
+   the existing C6 idle triggers).
+
+This scene reuses existing companion presence, voice (Kokoro TTS / whisper STT), and
+idle-trigger infrastructure. The new capabilities — controlling VLC and explaining
+frames (including YouTube playback) — are specified separately in
+**`2026-06-02-companion-media-skills-design.md`** as the `vlc-control` and
+`scene-explain` skills. This install spec owns only the onboarding/UX framing of the
+scene; that spec owns the skill architecture. The default bundled model choice in §5
+(`Qwen3.5-2B`, natively multimodal) is what makes this scene possible locally.
