@@ -53,7 +53,7 @@ fn test_initialize_and_list_tools() {
     );
     let resp = read_response(&mut stdout);
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 6, "Expected 6 tools");
+    assert_eq!(tools.len(), 10, "Expected 10 tools");
 
     // Verify tool names
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -63,6 +63,10 @@ fn test_initialize_and_list_tools() {
     assert!(names.contains(&"mur_project_status"));
     assert!(names.contains(&"mur_agent_status"));
     assert!(names.contains(&"mur_hook_context"));
+    assert!(names.contains(&"vlc_open"));
+    assert!(names.contains(&"vlc_playback"));
+    assert!(names.contains(&"vlc_status"));
+    assert!(names.contains(&"scene_explain"));
 
     child.kill().ok();
 }

@@ -1,0 +1,24 @@
+name: scene-explain
+version: 0.1.0
+publisher: human:mur
+description: "Explain what is on screen in the currently playing video, using the local multimodal model (offline, private)."
+category: media
+hosts: [all]
+content:
+  abstract: |
+    When the user asks what's happening on screen, call scene_explain (optionally
+    with a specific question). It captures the current VLC frame and explains it
+    with the local model — no cloud, nothing uploaded.
+  context: |
+    # scene-explain — narrate the current frame
+
+    Call scene_explain(prompt?) to describe or interpret the current video frame.
+    Pause playback first (vlc_playback action=pause) so the frame is stable.
+    Answer in the user's language; default to warm Traditional Chinese.
+    Everything runs locally — emphasize privacy if the user asks.
+tags: [mur, media, vision, video, builtin]
+triggers:
+  - type: keyword
+    pattern: "(what('| i)s (happening|on screen|this scene)|explain (this|the) (scene|frame)|這(一)?幕|畫面.{0,6}(說明|解說)|他(剛)?說(的|了)什麼)"
+  - type: manual
+priority: normal
