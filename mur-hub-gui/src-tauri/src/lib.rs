@@ -5,6 +5,7 @@
 //! M-h4: onboarding wizard — wizard_open/set_persona/.../start_render/finish/cancel.
 //! M-h5: pet windows — pet_spawn_at/close/reposition/return_to_hub/list/get_expression.
 
+pub mod brain_badge;
 pub mod cli_tools;
 pub mod companion;
 pub mod export_muragent;
@@ -369,6 +370,8 @@ pub fn run() {
             companion::companion_proactive,
             companion::companion_quiet,
             cli_tools::install_cli_tools,
+            brain_badge::nudge_status,
+            brain_badge::nudge_dismiss,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
