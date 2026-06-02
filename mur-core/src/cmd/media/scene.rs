@@ -1,13 +1,9 @@
 //! scene-explain: capture the current VLC frame and explain it with the local
 //! multimodal model.
-//!
-//! Most items here are `pub` but used only by the `mur-mcp-server` crate, not
-//! by the `mur` binary — so clippy flags them as dead code in the binary
-//! target. This is deliberate: these are library-facing exports.
-#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Return the most recently modified regular file in `dir`, if any.
 pub fn newest_file(dir: &Path) -> Option<PathBuf> {
@@ -129,24 +125,49 @@ fn local_base_url() -> Result<String> {
 }
 
 /// Capture the current VLC frame and explain it with the local multimodal model.
+#[allow(dead_code)]
 pub async fn explain(prompt: Option<&str>) -> Result<String> {
-    let client = reqwest::Client::new();
+    let client = super::shared_client();
 
     // 1. Ensure VLC is up and take a snapshot.
-    let rt = super::vlc::ensure_for_snapshot(&client).await?;
-    super::vlc::snapshot_command(&rt, &client).await?;
+    let rt = super::vlc::ensure_for_snapshot(client).await?;
+    super::vlc::snapshot_command(&rt, client).await?;
 
     // 2. Read the newest snapshot file (retry briefly for the file to land).
     let mut img_path = None;
-    for _ in 0..10 {
+    for i in 0..10 {
         if let Some(p) = newest_file(&rt.snapshot_dir) {
             img_path = Some(p);
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        // Periodically verify VLC is still alive before retrying.
+        if i > 0 && i % 3 == 0 {
+            let alive = client
+                .get(super::vlc::status_url(rt.port))
+                .basic_auth("", Some(&rt.password))
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if !alive {
+                anyhow::bail!("VLC disconnected while waiting for snapshot");
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
     }
     let img_path = img_path.context("no snapshot produced by VLC")?;
-    let bytes = std::fs::read(&img_path).context("read snapshot")?;
+
+    // Handle race: VLC may replace the snapshot file between discovery and read.
+    let bytes = match std::fs::read(&img_path) {
+        Ok(b) => b,
+        Err(_) => {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let retry = newest_file(&rt.snapshot_dir)
+                .context("no snapshot (file vanished and no replacement found)")?;
+            std::fs::read(&retry).context("read snapshot")?
+        }
+    };
 
     // 3. Call the local OpenAI-compatible vision endpoint.
     let base = local_base_url()?;
@@ -158,6 +179,7 @@ pub async fn explain(prompt: Option<&str>) -> Result<String> {
     let resp: serde_json::Value = client
         .post(format!("{}/chat/completions", base.trim_end_matches('/')))
         .json(&body)
+        .timeout(Duration::from_secs(30))
         .send()
         .await
         .context("call local VLM")?
