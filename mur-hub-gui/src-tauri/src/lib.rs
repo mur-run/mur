@@ -291,6 +291,9 @@ pub fn run() {
                 }
             }
 
+            // Start the bundled local inference server (best-effort).
+            mlx_sidecar::start(app.handle());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -350,7 +353,7 @@ pub fn run() {
         });
 }
 
-fn mur_home_path() -> PathBuf {
+pub(crate) fn mur_home_path() -> PathBuf {
     std::env::var("MUR_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
