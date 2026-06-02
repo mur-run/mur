@@ -316,7 +316,7 @@ jobs:
           APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          cargo tauri build --manifest-path mur-hub-gui/src-tauri/Cargo.toml --target aarch64-apple-darwin
+          cargo tauri build --target aarch64-apple-darwin -- --manifest-path mur-hub-gui/src-tauri/Cargo.toml
 
       - name: Notarize + staple
         run: |
