@@ -127,10 +127,10 @@ pub(crate) fn resolve_runtime_target() -> PathBuf {
         "mur-agent-runtime"
     };
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(bundle) = runtime_target_in_bundle(&exe, runtime_filename) {
-            if bundle.exists() {
-                return bundle;
-            }
+        if let Some(bundle) = runtime_target_in_bundle(&exe, runtime_filename)
+            && bundle.exists()
+        {
+            return bundle;
         }
         if let Some(dir) = exe.parent() {
             let candidate = dir.join(runtime_filename);
