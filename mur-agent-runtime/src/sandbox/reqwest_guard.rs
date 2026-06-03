@@ -1,6 +1,30 @@
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
+/// Match a host against an allowlist pattern.
+///
+/// Canonical wildcard syntax is `*.example.com` (matches `api.example.com`
+/// and `example.com`).  For backward compatibility the legacy leading-dot
+/// form `.example.com` is also accepted and treated identically.
+///
+/// Both layers that perform host-allowlist checks (`HostGuard` DNS resolver
+/// and the B0 safety hook) must call this function so they share a single
+/// interpretation of wildcard patterns.
+pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    let pattern = pattern.to_ascii_lowercase();
+    // Strip leading `*.` (canonical) or leading `.` (legacy) to get the suffix.
+    let suffix = if let Some(s) = pattern.strip_prefix("*.") {
+        s
+    } else if let Some(s) = pattern.strip_prefix('.') {
+        s
+    } else {
+        // Exact match only.
+        return host == pattern;
+    };
+    host == suffix || host.ends_with(&format!(".{suffix}"))
+}
+
 /// True for IP ranges an outbound request must never reach: the link-local /
 /// cloud-metadata range (IPv4 169.254.0.0/16 — includes 169.254.169.254 — and
 /// IPv6 fe80::/10) plus the unspecified address.
@@ -57,16 +81,42 @@ impl HostGuard {
                 if list.is_empty() {
                     return false;
                 }
-                list.iter().any(|allowed| {
-                    if let Some(suffix) = allowed.strip_prefix("*.") {
-                        host == suffix || host.ends_with(&format!(".{suffix}"))
-                    } else {
-                        allowed == host
-                    }
-                })
+                list.iter()
+                    .any(|pattern| host_matches_pattern(host, pattern))
             }
         }
     }
+}
+
+/// Reject requests whose URL contains an IP-literal host in the blocked range.
+///
+/// `reqwest` only calls the custom DNS resolver for *hostnames* — IP-literal
+/// URLs (`http://169.254.169.254/`) bypass `HostGuard::resolve` entirely and
+/// connect directly.  Call this function before executing any request to
+/// close the gap.
+///
+/// Returns `Ok(())` if the URL is safe to send, `Err(msg)` if it must be
+/// rejected.
+pub fn check_request_url(url: &reqwest::Url) -> Result<(), String> {
+    use url::Host;
+    let host = match url.host() {
+        Some(h) => h,
+        None => return Ok(()), // no host — handled elsewhere
+    };
+    let ip: Option<std::net::IpAddr> = match host {
+        Host::Ipv4(ip) => Some(ip.into()),
+        Host::Ipv6(ip) => Some(ip.into()),
+        Host::Domain(_) => None,
+    };
+    if let Some(ip) = ip
+        && is_link_local_or_unspecified(ip)
+    {
+        return Err(format!(
+            "request to IP-literal URL '{url}' blocked: address {ip} is \
+             link-local or unspecified (SSRF guard)"
+        ));
+    }
+    Ok(())
 }
 
 impl Resolve for HostGuard {

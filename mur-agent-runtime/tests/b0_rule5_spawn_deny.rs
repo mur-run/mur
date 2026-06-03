@@ -29,6 +29,7 @@ fn ent_with_spawn(mode: SpawnMode, allowed: Vec<String>) -> Entitlements {
         syscalls: SyscallsEntitlement::default(),
         limits: LimitsEntitlement::default(),
         llm: Default::default(),
+        fail_closed_on_sandbox_error: true,
     }
 }
 

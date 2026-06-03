@@ -2,18 +2,20 @@
 //! with SO_PEERCRED caller resolution (Task 22 consumes this).
 
 use crate::protocol::a2a_server::Dispatcher;
+use futures::StreamExt;
 use mur_common::JsonRpcRequest;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
+use tokio_util::codec::{FramedRead, LinesCodec};
 
-/// Maximum bytes accepted for a single JSON-RPC line. Aligned with
-/// `transport::noise::MAX_FRAME_BYTES` (16 MiB). Lines exceeding this cap
-/// are discarded to prevent unbounded memory growth from a malicious sender.
-const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
+/// Maximum bytes accepted for a single JSON-RPC line. `LinesCodec` enforces
+/// this at read time — the internal buffer never exceeds this limit, giving
+/// true allocation-bounded reads. Aligned with `transport::noise::MAX_FRAME_BYTES`.
+const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PeerInfo {
@@ -63,24 +65,16 @@ pub async fn serve_unix(
                     let _ = w.flush().await;
                 }
             });
-            let mut reader = BufReader::new(read);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                let n = reader.read_line(&mut line).await.unwrap_or(0);
-                if n == 0 {
-                    break;
-                }
-                // Guard against a line that grew beyond the cap (sender streams
-                // bytes without a newline until EOF/disconnect).
-                if line.len() > MAX_LINE_BYTES as usize {
-                    tracing::warn!(
-                        len = line.len(),
-                        limit_bytes = MAX_LINE_BYTES,
-                        "unix_socket: incoming line exceeded cap — discarding"
-                    );
-                    continue;
-                }
+            let codec = LinesCodec::new_with_max_length(MAX_LINE_BYTES);
+            let mut framed = FramedRead::new(read, codec);
+            while let Some(result) = framed.next().await {
+                let line = match result {
+                    Ok(l) => l,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "unix_socket: codec error — discarding frame");
+                        continue;
+                    }
+                };
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
