@@ -71,3 +71,84 @@ export const BUILTIN_PRESETS: PresetSummary[] = [
   { id: "vtuber-soft",   display_name: "VTuber Soft",    family: "chibi",    description: "Soft anime VTuber style" },
   { id: "family-photo",  display_name: "Family Photo",   family: "polaroid", description: "Cartoon-ify your photo" },
 ];
+
+// ── Detail panel types (Plan 3) ──────────────────────────────────────────────
+
+export interface SkillView {
+  path: string;
+}
+
+export interface InstalledSkillView {
+  name: string;
+  version: string;
+  description: string;
+  category: string;
+}
+
+export interface McpServerView {
+  name: string;
+  command: string;
+  args: string[];
+}
+
+export type RenderStatusView =
+  | { status: "pending" }
+  | { status: "rendering"; done: number; total: number }
+  | { status: "ready" }
+  | { status: "failed"; reason: string };
+
+export interface AgentDetail {
+  persona_category: string;
+  persona_description: string;
+  persona_tone: string;
+  persona_risk: string;
+  persona_verbosity: string;
+  style_preset: string;
+  render_status: RenderStatusView;
+  behavior_preset: string;
+  skills: SkillView[];
+  installed_skills: InstalledSkillView[];
+  mcp_servers: McpServerView[];
+  capabilities: string[];
+  display_name: string;
+  agent_name: string;
+}
+
+export interface DetailPatch {
+  persona_category?: string;
+  persona_description?: string;
+  persona_tone?: string;
+  persona_risk?: string;
+  persona_verbosity?: string;
+  style_preset?: string;
+  behavior_preset?: string;
+}
+
+export type DetailTab =
+  | "persona"
+  | "style"
+  | "behavior"
+  | "skills"
+  | "mcp"
+  | "permissions"
+  | "inbox";
+
+export const ALL_DETAIL_TABS: DetailTab[] = [
+  "persona",
+  "style",
+  "behavior",
+  "skills",
+  "mcp",
+  "permissions",
+  "inbox",
+];
+
+export const TAB_LABELS: Record<DetailTab, string> = {
+  persona: "Persona",
+  style: "Style",
+  behavior: "Behavior",
+  skills: "Skills",
+  mcp: "MCP",
+  permissions: "Permissions",
+  inbox: "Inbox",
+};

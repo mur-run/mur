@@ -7,7 +7,8 @@ import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
-import { CompanionInbox, useUnreadCount } from "./CompanionInbox";
+import { useUnreadCount } from "./CompanionInbox";
+import { DetailPanel } from "./DetailPanel";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -523,28 +524,13 @@ export function DashboardApp() {
         </div>
       </div>
 
-      {/* Companion Inbox detail panel — slides in when an agent is selected */}
+      {/* Detail panel — slides in when an agent is selected */}
       {selectedAgent && (
-        <aside className="detail-panel">
-          <div className="detail-panel-header">
-            <span className="detail-panel-title">
-              {agents.find((a) => a.name === selectedAgent)?.display_name ?? selectedAgent}
-            </span>
-            <button
-              className="detail-panel-close"
-              onClick={() => setSelected(null)}
-              title="Close"
-            >
-              ×
-            </button>
-          </div>
-          <div className="detail-panel-tabs">
-            <span className="detail-tab detail-tab--active">Inbox</span>
-          </div>
-          <div className="detail-panel-body">
-            <CompanionInbox agentName={selectedAgent} />
-          </div>
-        </aside>
+        <DetailPanel
+          agentName={selectedAgent}
+          agents={agents}
+          onClose={() => setSelected(null)}
+        />
       )}
 
       <WizardModal
