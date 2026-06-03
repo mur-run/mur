@@ -392,6 +392,12 @@ pub struct Entitlements {
     /// so the supervisor refuses to construct an LLM client.
     #[serde(default)]
     pub llm: crate::bridge::llm_entitlement::LlmEntitlement,
+    /// When `true` (the default), a sandbox apply failure is fatal: the agent
+    /// refuses to start rather than running advisory-only (unconfined).
+    /// Set to `false` only for development or trusted-workstation agents that
+    /// intentionally run without kernel sandbox enforcement.
+    #[serde(default = "default_true")]
+    pub fail_closed_on_sandbox_error: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
