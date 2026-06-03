@@ -24,7 +24,11 @@ fn search_compress_then_retrieve_is_reversible() {
 
     // Full retrieve reproduces the original exactly.
     match eng.retrieve(res.hash.as_ref().unwrap(), None) {
-        RetrieveResult::Full { original_content, item_count, .. } => {
+        RetrieveResult::Full {
+            original_content,
+            item_count,
+            ..
+        } => {
             assert_eq!(original_content, input);
             assert_eq!(item_count, 40);
         }
@@ -56,7 +60,10 @@ fn fail_safe_passthrough_on_generic_prose() {
 fn retrieve_unknown_hash_is_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let eng = engine(dir.path());
-    assert!(matches!(eng.retrieve("nope", None), RetrieveResult::NotFound));
+    assert!(matches!(
+        eng.retrieve("nope", None),
+        RetrieveResult::NotFound
+    ));
 }
 
 #[test]
@@ -67,7 +74,9 @@ fn json_array_roundtrips_through_store() {
     let res = eng.compress(input, None);
     assert!(res.hash.is_some());
     match eng.retrieve(res.hash.as_ref().unwrap(), None) {
-        RetrieveResult::Full { original_content, .. } => assert_eq!(original_content, input),
+        RetrieveResult::Full {
+            original_content, ..
+        } => assert_eq!(original_content, input),
         _ => panic!("expected Full"),
     }
 }

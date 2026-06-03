@@ -38,7 +38,10 @@ impl StatsTracker {
             .ok()
             .and_then(|b| serde_json::from_slice::<StatsData>(&b).ok())
             .unwrap_or_default();
-        Self { path, inner: Mutex::new(inner) }
+        Self {
+            path,
+            inner: Mutex::new(inner),
+        }
     }
 
     fn flush(&self, d: &StatsData) {
