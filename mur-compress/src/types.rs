@@ -61,8 +61,6 @@ pub struct CompressResult {
     pub content_type: ContentType,
 }
 
-pub type CompressResultErr<T> = Result<T, CompressError>;
-
 #[derive(Debug, Error)]
 pub enum CompressError {
     #[error("tokenizer error: {0}")]
