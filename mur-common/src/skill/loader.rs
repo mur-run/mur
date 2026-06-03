@@ -6,6 +6,19 @@ use crate::skill::{DriftStatus, SkillManifest, content_sha256, drift_status, loc
 use crate::trust::skills::SkillTrustStore;
 use std::path::Path;
 
+/// Validate that a skill name contains only safe identifier characters.
+///
+/// Skill names are interpolated into XML-like `<skill-instruction source="…">`
+/// attributes.  Restricting the character set at load time means injection is
+/// blocked at the source rather than relying solely on escaping at emit time.
+pub fn is_valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillScope {
     Global,
@@ -66,6 +79,18 @@ fn load_one<F>(
 where
     F: FnOnce(&Path, &str) -> Result<SkillManifest, crate::skill::StoreError>,
 {
+    // Validate name before loading: only safe identifier characters allowed.
+    // Skill names are interpolated into XML attributes; an unvalidated name
+    // containing `"` or `>` could break the attribute boundary even after
+    // escaping if the validator itself is bypassed.
+    if !is_valid_skill_name(name) {
+        tracing::warn!(
+            skill = %name,
+            "skill name contains invalid characters (expected [A-Za-z0-9_.-]{{1,64}}); skipping"
+        );
+        return None;
+    }
+
     let manifest = match loader(mur_home, name) {
         Ok(m) => m,
         Err(e) => {

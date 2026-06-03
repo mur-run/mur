@@ -128,6 +128,7 @@ fn spawn_sandboxed_runs_true() {
         syscalls: Default::default(),
         limits: Default::default(),
         llm: Default::default(),
+        fail_closed_on_sandbox_error: true,
     };
     let home = PathBuf::from("/tmp");
     let policy = SandboxPolicy::from_entitlements(&ent, &home);
@@ -224,6 +225,7 @@ fn linux_ruleset_paths_are_absolute() {
         syscalls: Default::default(),
         limits: Default::default(),
         llm: Default::default(),
+        fail_closed_on_sandbox_error: true,
     };
 
     let agent_home = PathBuf::from("/tmp/b1_test_agent");

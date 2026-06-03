@@ -221,6 +221,11 @@ impl LlmClient for AnthropicClient {
         warn_if_oauth_key_misconfigured(&self.api_key, &self.base_url);
 
         let url = format!("{}/v1/messages", self.base_url);
+        if let Ok(parsed) = reqwest::Url::parse(&url)
+            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
+        {
+            return Err(LlmError::Http(e));
+        }
         let resp = self
             .http
             .post(url)
