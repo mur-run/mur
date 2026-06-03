@@ -7,7 +7,21 @@ use crate::tokenizer::TokenCounter;
 use crate::types::{CompressCtx, CompressError, CompressOutput, ContentType};
 
 fn file_of(line: &str) -> &str {
-    // "path:line:content" -> "path"
+    // grep emits "path:line:content". The path itself may contain a colon
+    // (e.g. a Windows drive `C:\src\x.rs`), so we can't just split on the first
+    // ':'. Instead find the first ":<digits>:" boundary and treat everything
+    // before it as the path.
+    let mut start = 0;
+    while let Some(rel) = line[start..].find(':') {
+        let colon = start + rel;
+        let after = &line[colon + 1..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 && after[digits..].starts_with(':') {
+            return &line[..colon];
+        }
+        start = colon + 1;
+    }
+    // No line-number marker found: fall back to the first colon segment.
     line.split(':').next().unwrap_or("")
 }
 
@@ -100,6 +114,13 @@ mod tests {
 
     fn mk(dir: &std::path::Path) -> CcrStore {
         CcrStore::new(dir, 3600, 100, 1 << 30, false).unwrap()
+    }
+
+    #[test]
+    fn file_of_handles_colons_in_path() {
+        assert_eq!(file_of("src/a.rs:10:fn foo"), "src/a.rs");
+        assert_eq!(file_of(r"C:\src\a.rs:10:fn foo"), r"C:\src\a.rs");
+        assert_eq!(file_of("no-marker-line"), "no-marker-line");
     }
 
     #[test]

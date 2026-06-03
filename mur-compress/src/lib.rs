@@ -153,6 +153,12 @@ impl CompressEngine {
         self.stats.record_retrieval();
         match query {
             Some(q) => {
+                // `retrieve_score_threshold` filters on score *relative to the
+                // best match* (scores are max-normalized below), not an absolute
+                // BM25 value — raw BM25 is unbounded and corpus-dependent. The
+                // top hit always normalizes to 1.0, so a query that matches at
+                // all returns at least its best item; the threshold prunes the
+                // long tail of weakly-related items.
                 let ranked = bm25_rank(q, &entry.items);
                 let max = ranked.first().map(|(_, s)| *s).unwrap_or(1.0).max(1e-6);
                 let results: Vec<String> = ranked
