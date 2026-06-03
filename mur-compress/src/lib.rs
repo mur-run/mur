@@ -44,7 +44,12 @@ impl CompressEngine {
             config.store.compress_at_rest,
         )?;
         let stats = StatsTracker::new(dir.join("stats.json"));
-        Ok(Self { store, tok: default_counter(), config, stats })
+        Ok(Self {
+            store,
+            tok: default_counter(),
+            config,
+            stats,
+        })
     }
 
     fn dispatch(
@@ -69,17 +74,26 @@ impl CompressEngine {
     /// Compress `content`. Never errors: any failure returns the original.
     pub fn compress(&self, content: &str, query: Option<&str>) -> CompressResult {
         let ct = detect_content_type(content, &self.config);
-        let ctx = CompressCtx { query, config: &self.config };
-        let out = self.dispatch(ct, content, &ctx).unwrap_or_else(|_| CompressOutput {
-            compressed: content.to_string(),
-            hash: None,
-            transforms: Vec::new(),
-        });
+        let ctx = CompressCtx {
+            query,
+            config: &self.config,
+        };
+        let out = self
+            .dispatch(ct, content, &ctx)
+            .unwrap_or_else(|_| CompressOutput {
+                compressed: content.to_string(),
+                hash: None,
+                transforms: Vec::new(),
+            });
 
         let before = self.tok.count(content);
         let after = self.tok.count(&out.compressed);
         let saved = before.saturating_sub(after);
-        let pct = if before > 0 { saved as f32 / before as f32 * 100.0 } else { 0.0 };
+        let pct = if before > 0 {
+            saved as f32 / before as f32 * 100.0
+        } else {
+            0.0
+        };
         self.stats.record_compression(before, after);
 
         CompressResult {
@@ -112,7 +126,11 @@ impl CompressEngine {
                     .take(self.config.retrieve_top_k)
                     .map(|(i, _)| entry.items[i].clone())
                     .collect();
-                RetrieveResult::Filtered { query: q.to_string(), count: results.len(), results }
+                RetrieveResult::Filtered {
+                    query: q.to_string(),
+                    count: results.len(),
+                    results,
+                }
             }
             None => RetrieveResult::Full {
                 content_type: entry.content_type,
@@ -124,6 +142,7 @@ impl CompressEngine {
 
     pub fn stats_snapshot(&self) -> StatsSnapshot {
         let (entries, bytes) = self.store.stats();
-        self.stats.snapshot(self.config.stats.cost_per_mtok_usd, entries, bytes)
+        self.stats
+            .snapshot(self.config.stats.cost_per_mtok_usd, entries, bytes)
     }
 }
