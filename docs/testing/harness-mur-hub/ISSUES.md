@@ -32,6 +32,31 @@ Batching rule: accumulate 3 CONFIRMED issues → one fix batch → commit (no pu
   `run.mur.agent.mur.plist` was created by sandbox launches and had to be removed
   (booted out + deleted). Isolate or clean up.
 
+### I-8 — Desktop pet: pet_spawn_at PANICS (tokio::spawn in a sync command) — CONFIRMED (live) — FIXED (Batch 3)
+- Spawning a pet crashed the whole Hub: `thread 'main' panicked at pet/mod.rs:114: there is no
+  reactor running, must be called from the context of a Tokio 1.x runtime`. `pet_spawn_at` is a
+  SYNC #[tauri::command] (no entered Tokio runtime) but called `tokio::spawn` (lines 114 + 206).
+- This was MASKED by I-7 (the drag never reached pet_spawn_at); fixing I-7 surfaced the crash.
+- Fix: `tokio::spawn` → `tauri::async_runtime::spawn` (holds the runtime handle; inner
+  tokio::time/select then run on it). VERIFIED: pet now spawns, app stays alive, no panic.
+
+### I-7 — Desktop pet: drag-to-spawn never fires (spawn gated on mouseleave) — CONFIRMED (live) — FIXED (Batch 3)
+- DashboardApp.tsx grid-card drag: `onMouseDown`→300ms hold→`dragging=true` works (card enters
+  dragging state, confirmed visually). On `mouseup` it only calls `pet_spawn_at` IF
+  `cursorOutsideRef.current` is true, and that ref is set ONLY by a document `mouseleave`
+  listener (lines 136/140/148-151).
+- During a button-held drag OUT of the window, macOS captures mouse events to the origin window,
+  so the document `mouseleave` does NOT fire → cursorOutsideRef stays false → no spawn. Confirmed
+  under synthetic drag (cliclick): drag engages but pet never spawns; reproduced twice.
+- Backend `pet_spawn_at` (pet/mod.rs:145) is correct (builds transparent always-on-top webview,
+  position persistence, event loop, pet.spawned). So if pet doesn't appear, the bug is the UI
+  spawn-gate, not the backend.
+- NEEDS manual confirm (real mouse): drag an agent card from the dashboard out to the desktop —
+  does a pet appear? If NO → real bug.
+- Proposed robust fix: in `onUp`, decide "outside" by comparing release screenX/screenY to the
+  Hub window bounds (or Tauri window position/size), instead of relying on `mouseleave`. Also
+  apply to PopoverApp drag path if it shares the pattern.
+
 ## Resolved
 ### I-1 — Default "Mur" never seeded for existing users — FIXED (Batch 1)
 - `seed_mur::seed_if_empty` (seed_mur.rs:35) returns Ok(false) if ANY agent dir exists.

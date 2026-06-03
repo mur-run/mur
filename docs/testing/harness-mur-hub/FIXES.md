@@ -72,6 +72,29 @@ dashboard, detail panel/tabs, Style render, and onboarding wizard all work.
 Minor follow-up (not an issue worth a batch): the grid card avatar doesn't live-refresh to the
 newly rendered idle.webp until reload; the detail panel does update correctly.
 
+## Batch 3 — desktop pet feature made to work (I-7 + I-8)
+
+The user asked to test the desktop pet. Found it doubly broken and fixed both; verified the pet
+now spawns on the desktop (screenshot 05). Two coupled fixes (both required for the feature).
+
+### I-8 — pet_spawn_at panics (crashes the whole Hub)
+- `mur-hub-gui/src-tauri/src/pet/mod.rs`: `pet_spawn_at` is a sync #[tauri::command] with no
+  entered Tokio runtime, so the two `tokio::spawn` calls (event loop + pet.spawned publish)
+  panicked ("there is no reactor running"). Changed both to `tauri::async_runtime::spawn`.
+
+### I-7 — drag-to-desktop never spawns a pet
+- `mur-hub-gui/ui/src/components/DashboardApp.tsx`: spawn was gated on a `cursorOutsideRef` set
+  only by a document `mouseleave`, which does not fire during a button-held drag out of the
+  window → pet never spawned. Now `onUp` also decides "outside" from the release coordinates vs
+  the window bounds (`window.screenX/Y/outerWidth/outerHeight`).
+
+### Verification (live, real app + cliclick drag + screenshots)
+- Before I-8 fix: drag-out (with I-7 fix) triggered spawn → app CRASHED with the tokio panic
+  (proves both the I-7 fix works AND I-8 was real).
+- After I-8 fix: drag an agent card to the desktop → pet window appears (beige idle sprite from
+  the offline mock render), app stays ALIVE, no panic. Screenshot
+  `screenshots/05-desktop-pet-spawned.png`. clippy -D warnings clean.
+
 ## Batch 2 — local-inference / MUR_HOME path correctness (I-4, I-6; I-5 deferred)
 
 Note: this batch ships TWO fixes, not three, by design. I-5 (modernising macOS launchd from
