@@ -18,8 +18,25 @@ pub enum LockError {
 
 #[derive(Debug)]
 pub struct LockHandle {
-    _file: File,
+    /// Held open so the exclusive flock stays active for this process's
+    /// lifetime.  This is the *sentinel* file, never renamed by `write_lock`,
+    /// so the flock inode is always stable — see `is_stale` for why.
+    _sentinel: File,
+    /// Path of the JSON data file (`running.lock`), removed on `release`.
     path: PathBuf,
+}
+
+/// Returns the sentinel file path for a given lock path.
+///
+/// The sentinel (`running.sentinel`) is a separate, always-stable file used
+/// exclusively for flock-based ownership tracking.  `write_lock` performs a
+/// temp-file + rename on the JSON data file, which swaps the inode.  If we
+/// flocked the JSON file directly the inode swap would leave `is_stale`
+/// probing an inode that nobody holds a lock on, incorrectly classifying a
+/// live agent as stale.  By keeping the flock on a file that is never
+/// renamed we avoid the race entirely.
+fn sentinel_path(path: &Path) -> PathBuf {
+    path.with_extension("sentinel")
 }
 
 impl LockHandle {
@@ -27,22 +44,24 @@ impl LockHandle {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
+        let sentinel = sentinel_path(path);
         let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             .truncate(false)
-            .open(path)?;
+            .open(&sentinel)?;
         file.try_lock_exclusive()
             .map_err(|_| LockError::AlreadyHeld)?;
         Ok(Self {
-            _file: file,
+            _sentinel: file,
             path: path.to_path_buf(),
         })
     }
 
     pub fn release(self) {
         let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_file(sentinel_path(&self.path));
     }
 }
 
@@ -80,13 +99,20 @@ pub fn is_stale(path: &Path) -> Result<bool, LockError> {
     if !mur_common::lock_file::pid_alive(lock.pid) {
         return Ok(true);
     }
-    // Step (b): flock probe — if this process owns the lock, flock on a
-    // fresh fd returns a misleading result on macOS/BSD (independent locks
-    // per open). Trust the pid in that case.
+    // Step (b): flock probe on the sentinel file (never renamed by write_lock,
+    // so its inode is always the one held by a live LockHandle).  If this
+    // process owns the lock, a fresh-fd flock returns a misleading result on
+    // macOS/BSD (independent locks per open) — trust the pid in that case.
     if lock.pid == std::process::id() {
         return Ok(false);
     }
-    let file = OpenOptions::new().read(true).write(true).open(path)?;
+    let sentinel = sentinel_path(path);
+    if !sentinel.exists() {
+        // Sentinel absent means the lock was never cleanly acquired or was
+        // already released; treat as stale.
+        return Ok(true);
+    }
+    let file = OpenOptions::new().read(true).write(true).open(&sentinel)?;
     let can_acquire = file.try_lock_exclusive().is_ok();
     if can_acquire {
         let _ = FileExt::unlock(&file);
