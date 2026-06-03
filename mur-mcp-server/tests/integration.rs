@@ -53,7 +53,7 @@ fn test_initialize_and_list_tools() {
     );
     let resp = read_response(&mut stdout);
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 10, "Expected 10 tools");
+    assert_eq!(tools.len(), 13, "Expected 13 tools");
 
     // Verify properties is an object (not an array) — MCP spec requires JSON object
     let first_tool_with_props = tools
@@ -78,6 +78,9 @@ fn test_initialize_and_list_tools() {
     assert!(names.contains(&"vlc_playback"));
     assert!(names.contains(&"vlc_status"));
     assert!(names.contains(&"scene_explain"));
+    assert!(names.contains(&"mur_compress"));
+    assert!(names.contains(&"mur_retrieve"));
+    assert!(names.contains(&"mur_compress_stats"));
 
     child.kill().ok();
 }
@@ -165,4 +168,61 @@ fn lists_project_search_tool() {
     );
 
     let _ = child.kill();
+}
+
+#[test]
+fn calls_mur_compress_tool() {
+    // Isolate the CCR store in a throwaway MUR_HOME for the child process.
+    let home = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
+        .env("MUR_HOME", home.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#,
+    );
+    let _ = read_response(&mut stdout);
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    );
+    let _ = read_response(&mut stdout);
+
+    // A long search-style payload that should compress and offload.
+    let mut lines = Vec::new();
+    for i in 0..40 {
+        lines.push(format!("src/f{i}.rs:{i}:token number {i}"));
+    }
+    let content = lines.join("\n");
+    let req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "mur_compress", "arguments": { "content": content, "query": "number 7" } }
+    })
+    .to_string();
+    send_request(&mut stdin, &req);
+    let resp = read_response(&mut stdout);
+
+    // The tool's JSON result is embedded in the MCP content array; rather than
+    // depend on the exact nesting, assert the markers appear anywhere in the response.
+    let resp_str = serde_json::to_string(&resp).unwrap();
+    assert!(
+        resp_str.contains("tokens_saved"),
+        "mur_compress result missing tokens_saved: {resp_str}"
+    );
+    assert!(
+        resp_str.contains("hash="),
+        "mur_compress result should include a retrieval-hash note: {resp_str}"
+    );
+
+    child.kill().ok();
 }
