@@ -56,6 +56,8 @@ try {
     $exe = Get-ChildItem -Path $tmp -Recurse -Filter 'mur.exe' | Select-Object -First 1
     if (-not $exe) { throw 'Archive did not contain mur.exe' }
     Move-Item -Force -Path $exe.FullName -Destination (Join-Path $installDir 'mur.exe')
+    $mcpexe = Get-ChildItem -Path $tmp -Recurse -Filter 'mur-mcp-server.exe' | Select-Object -First 1
+    if ($mcpexe) { Move-Item -Force -Path $mcpexe.FullName -Destination (Join-Path $installDir 'mur-mcp-server.exe') }
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

@@ -327,12 +327,38 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             }
         });
         let (tcp_shutdown_tx, tcp_shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        // Build the inbound peer allowlist: each trusted_peer's Ed25519 identity
+        // mapped to its X25519 static key (what Noise-XK authenticates). Invalid
+        // pubkeys are skipped with a warning. Fail-closed: if this ends up empty,
+        // every inbound TCP connection is rejected by the listener.
+        let allowed_peers: Vec<[u8; 32]> = profile
+            .inner
+            .trusted_peers
+            .iter()
+            .filter_map(|p| {
+                match mur_common::identity::x25519_pub_from_multibase(&p.pubkey_multibase) {
+                    Ok(k) => Some(k),
+                    Err(e) => {
+                        warn!(peer = %p.name, error = %e, "skipping trusted_peer with invalid pubkey");
+                        None
+                    }
+                }
+            })
+            .collect();
+        if allowed_peers.is_empty() {
+            warn!(
+                "TCP transport enabled but no valid trusted_peers — all inbound \
+                 TCP connections will be rejected (fail-closed)"
+            );
+        }
+        let allowed_peers = Arc::new(allowed_peers);
         let tcp_handle = spawn_tcp_listener(
             TcpTransportConfig {
                 bind: profile.inner.transport.tcp.bind.clone(),
             },
             identity.clone(),
             handler,
+            allowed_peers,
             tcp_shutdown_rx,
         )
         .await?;

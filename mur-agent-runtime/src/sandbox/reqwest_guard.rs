@@ -1,5 +1,21 @@
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
-use std::net::ToSocketAddrs;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+
+/// True for IP ranges an outbound request must never reach: the link-local /
+/// cloud-metadata range (IPv4 169.254.0.0/16 — includes 169.254.169.254 — and
+/// IPv6 fe80::/10) plus the unspecified address.
+///
+/// Loopback (127.0.0.0/8, ::1) and RFC1918/ULA private ranges are intentionally
+/// NOT blocked: this is a local-first platform that legitimately talks to local
+/// (127.0.0.1 Ollama) and LAN LLM endpoints. Blocking those would break core
+/// functionality; the metadata endpoint is the genuine SSRF target.
+fn is_link_local_or_unspecified(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_link_local() || v4.is_unspecified(),
+        // IPv6 link-local is fe80::/10; no stable std helper, so mask manually.
+        IpAddr::V6(v6) => v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
 
 /// reqwest DNS resolver guard. Rejects hostnames not in the allowlist
 /// before the OS resolver is called.
@@ -64,16 +80,27 @@ impl Resolve for HostGuard {
                     Box::new(HostGuardError(host)) as Box<dyn std::error::Error + Send + Sync>
                 );
             }
-            // Delegate to the OS resolver.
-            let addrs: Addrs = Box::new(
-                format!("{host}:0")
-                    .to_socket_addrs()
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
-                    .map(|mut sa| {
-                        sa.set_port(0);
-                        sa
-                    }),
-            );
+            // Delegate to the OS resolver, then drop any link-local/metadata
+            // address (defends against a hostname resolving — or DNS-rebinding
+            // — to the cloud metadata endpoint). NOTE: reqwest only invokes a
+            // custom resolver for *hostnames*; IP-literal URLs bypass this layer
+            // entirely and need a connector-level guard (tracked follow-up).
+            let resolved: Vec<SocketAddr> = format!("{host}:0")
+                .to_socket_addrs()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?
+                .filter(|sa| !is_link_local_or_unspecified(sa.ip()))
+                .map(|mut sa| {
+                    sa.set_port(0);
+                    sa
+                })
+                .collect();
+            if resolved.is_empty() {
+                return Err(Box::new(HostGuardError(format!(
+                    "{host} (resolved only to link-local/metadata addresses)"
+                )))
+                    as Box<dyn std::error::Error + Send + Sync>);
+            }
+            let addrs: Addrs = Box::new(resolved.into_iter());
             Ok(addrs)
         })
     }
@@ -93,3 +120,47 @@ impl std::fmt::Display for HostGuardError {
 }
 
 impl std::error::Error for HostGuardError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_and_link_local_blocked() {
+        assert!(is_link_local_or_unspecified(
+            "169.254.169.254".parse().unwrap()
+        )); // cloud metadata
+        assert!(is_link_local_or_unspecified("169.254.0.1".parse().unwrap()));
+        assert!(is_link_local_or_unspecified("0.0.0.0".parse().unwrap()));
+        assert!(is_link_local_or_unspecified("fe80::1".parse().unwrap()));
+        assert!(is_link_local_or_unspecified("::".parse().unwrap()));
+    }
+
+    #[test]
+    fn loopback_and_private_allowed() {
+        // Local-first: local Ollama + LAN endpoints must remain reachable.
+        assert!(!is_link_local_or_unspecified("127.0.0.1".parse().unwrap()));
+        assert!(!is_link_local_or_unspecified("::1".parse().unwrap()));
+        assert!(!is_link_local_or_unspecified(
+            "192.168.1.10".parse().unwrap()
+        ));
+        assert!(!is_link_local_or_unspecified("10.0.0.5".parse().unwrap()));
+        assert!(!is_link_local_or_unspecified("1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn host_allowlist_matches_exact_and_wildcard() {
+        let g = HostGuard::restricted(vec!["api.anthropic.com".into(), "*.openai.com".into()]);
+        assert!(g.is_allowed("api.anthropic.com"));
+        assert!(g.is_allowed("api.openai.com"));
+        assert!(g.is_allowed("openai.com"));
+        assert!(!g.is_allowed("evil.com"));
+        assert!(!g.is_allowed("api.anthropic.com.evil.com"));
+    }
+
+    #[test]
+    fn off_denies_all_unrestricted_allows_all() {
+        assert!(!HostGuard::off().is_allowed("anything.com"));
+        assert!(HostGuard::unrestricted().is_allowed("anything.com"));
+    }
+}

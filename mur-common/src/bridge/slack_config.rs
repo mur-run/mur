@@ -19,6 +19,11 @@ pub struct SlackConfig {
     /// Allowed Slack channel IDs (C…). Empty = all channels allowed.
     #[serde(default)]
     pub allowed_channels: Vec<String>,
+    /// Allowed Slack user IDs (U…) permitted to drive the agent. Empty = no
+    /// user filter (any workspace member who can DM/@mention the bot). Set this
+    /// to the owner's user ID(s) to bind the bridge to specific senders.
+    #[serde(default)]
+    pub allowed_user_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

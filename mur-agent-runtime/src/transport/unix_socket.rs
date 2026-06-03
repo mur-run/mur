@@ -10,6 +10,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 
+/// Maximum bytes accepted for a single JSON-RPC line. Aligned with
+/// `transport::noise::MAX_FRAME_BYTES` (16 MiB). Lines exceeding this cap
+/// are discarded to prevent unbounded memory growth from a malicious sender.
+const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy)]
 pub struct PeerInfo {
     pub pid: u32,
@@ -65,6 +70,16 @@ pub async fn serve_unix(
                 let n = reader.read_line(&mut line).await.unwrap_or(0);
                 if n == 0 {
                     break;
+                }
+                // Guard against a line that grew beyond the cap (sender streams
+                // bytes without a newline until EOF/disconnect).
+                if line.len() > MAX_LINE_BYTES as usize {
+                    tracing::warn!(
+                        len = line.len(),
+                        limit_bytes = MAX_LINE_BYTES,
+                        "unix_socket: incoming line exceeded cap — discarding"
+                    );
+                    continue;
                 }
                 let trimmed = line.trim();
                 if trimmed.is_empty() {

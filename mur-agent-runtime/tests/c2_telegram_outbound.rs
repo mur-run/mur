@@ -12,7 +12,10 @@ use std::sync::Arc;
 #[tokio::test]
 async fn list_tools_returns_chat_send_message() {
     let bot = Arc::new(MockBot::default());
-    let deps = McpDeps { bot: bot.clone() };
+    let deps = McpDeps {
+        bot: bot.clone(),
+        allowed_chats: vec![100],
+    };
     let req = serde_json::json!({
         "jsonrpc":"2.0","id":1,"method":"tools/list","params":{}
     });
@@ -24,7 +27,10 @@ async fn list_tools_returns_chat_send_message() {
 #[tokio::test]
 async fn chat_send_message_pushes_to_bot() {
     let bot = Arc::new(MockBot::default());
-    let deps = McpDeps { bot: bot.clone() };
+    let deps = McpDeps {
+        bot: bot.clone(),
+        allowed_chats: vec![100],
+    };
     let req = serde_json::json!({
         "jsonrpc":"2.0","id":2,"method":"tools/call","params":{
             "name":"chat.send_message",
@@ -40,7 +46,10 @@ async fn chat_send_message_pushes_to_bot() {
 #[tokio::test]
 async fn mcp_stdio_loop_handles_two_calls() {
     let bot = Arc::new(MockBot::default());
-    let deps = McpDeps { bot: bot.clone() };
+    let deps = McpDeps {
+        bot: bot.clone(),
+        allowed_chats: vec![100],
+    };
     for i in 0..2 {
         let req = serde_json::json!({
             "jsonrpc":"2.0","id":i,"method":"tools/call","params":{
@@ -52,6 +61,30 @@ async fn mcp_stdio_loop_handles_two_calls() {
     }
     let sent = bot.sent_messages.lock().unwrap().clone();
     assert_eq!(sent.len(), 2);
+}
+
+#[tokio::test]
+async fn chat_send_message_rejects_chat_not_in_allowlist() {
+    // Regression: the agent must not be able to message an arbitrary chat.
+    let bot = Arc::new(MockBot::default());
+    let deps = McpDeps {
+        bot: bot.clone(),
+        allowed_chats: vec![100],
+    };
+    let req = serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+            "name":"chat.send_message",
+            "arguments":{"chat_id":999,"body":"to a stranger"}
+        }
+    });
+    assert!(
+        handle_jsonrpc(req, &deps).await.is_err(),
+        "send to non-allowlisted chat must be rejected"
+    );
+    assert!(
+        bot.sent_messages.lock().unwrap().is_empty(),
+        "nothing should reach the bot"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -67,9 +100,12 @@ async fn mcp_stdio_loop_handles_two_calls() {
 #[tokio::test]
 async fn throttle_caps_global_to_thirty_per_second() {
     let bot = Arc::new(MockBot::throttled(30));
-    let deps = McpDeps { bot: bot.clone() };
+    let deps = McpDeps {
+        bot: bot.clone(),
+        allowed_chats: (1..=50).collect(),
+    };
     let start = std::time::Instant::now();
-    for i in 0..50 {
+    for i in 1..=50 {
         let req = serde_json::json!({
             "jsonrpc":"2.0","id":i,"method":"tools/call","params":{
                 "name":"chat.send_message","arguments":{"chat_id":i,"body":"x"}
@@ -97,7 +133,10 @@ async fn throttle_caps_global_to_thirty_per_second() {
 #[tokio::test]
 async fn per_chat_paces_at_one_per_second() {
     let bot = Arc::new(MockBot::per_chat(1));
-    let deps = McpDeps { bot: bot.clone() };
+    let deps = McpDeps {
+        bot: bot.clone(),
+        allowed_chats: vec![42],
+    };
     let start = std::time::Instant::now();
     for i in 0..5 {
         let req = serde_json::json!({
@@ -119,7 +158,10 @@ async fn per_chat_paces_at_one_per_second() {
 #[tokio::test]
 async fn per_chat_does_not_block_other_chats() {
     let bot = Arc::new(MockBot::per_chat(1));
-    let deps = McpDeps { bot: bot.clone() };
+    let deps = McpDeps {
+        bot: bot.clone(),
+        allowed_chats: (1000..1005).collect(),
+    };
     let start = std::time::Instant::now();
     // First message to each of 5 distinct chats — none have been sent
     // to before, so all should fire immediately.

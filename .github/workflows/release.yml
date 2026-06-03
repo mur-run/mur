@@ -123,14 +123,14 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.name }}.tar.gz mur
+          tar czf ../../../${{ matrix.name }}.tar.gz mur mur-mcp-server
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/mur.exe -DestinationPath ${{ matrix.name }}.zip
+          Compress-Archive -Path target/${{ matrix.target }}/release/mur.exe,target/${{ matrix.target }}/release/mur-mcp-server.exe -DestinationPath ${{ matrix.name }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -170,7 +170,9 @@ jobs:
           mkdir -p pkg-root/usr/local/bin
           mkdir -p pkg-root/usr/local/share/doc/mur
           cp mur pkg-root/usr/local/bin/mur
+          cp mur-mcp-server pkg-root/usr/local/bin/mur-mcp-server
           chmod +x pkg-root/usr/local/bin/mur
+          chmod +x pkg-root/usr/local/bin/mur-mcp-server
           cp LICENSE pkg-root/usr/local/share/doc/mur/LICENSE
           mkdir -p scripts-pkg
           cat > scripts-pkg/postinstall <<'EOF'
@@ -185,8 +187,10 @@ jobs:
         run: |
           codesign --force --options runtime --timestamp \
             --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
-            pkg-root/usr/local/bin/mur
-          codesign --verify --verbose pkg-root/usr/local/bin/mur
+            pkg-root/usr/local/bin/mur \
+            pkg-root/usr/local/bin/mur-mcp-server
+          codesign --verify --verbose pkg-root/usr/local/bin/mur \
+            pkg-root/usr/local/bin/mur-mcp-server
         env:
           APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -418,6 +422,7 @@ jobs:
 
             def install
               bin.install "mur"
+              bin.install "mur-mcp-server"
             end
 
             test do
