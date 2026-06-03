@@ -242,6 +242,45 @@ function StyleTab({
   const [selected, setSelected] = useState(detail.style_preset);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [rendering, setRendering] = useState(detail.render_status.status === "rendering");
+
+  // Poll for render completion while a render is in flight, refreshing the
+  // panel so the status text/progress and preset thumbnails stay current.
+  useEffect(() => {
+    if (!rendering) return;
+    let cancelled = false;
+    const started = Date.now();
+    const timer = setInterval(async () => {
+      try {
+        const fresh = await invoke<AgentDetail>("get_agent_detail", {
+          name: detail.agent_name,
+        });
+        if (cancelled) return;
+        onSaved(fresh);
+        if (fresh.render_status.status === "ready" || fresh.render_status.status === "failed") {
+          setRendering(false);
+        }
+      } catch {
+        // transient; keep polling
+      }
+      if (Date.now() - started > 120_000) setRendering(false); // safety timeout
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [rendering, detail.agent_name, onSaved]);
+
+  async function triggerRender() {
+    setSaveError(null);
+    setRendering(true);
+    try {
+      await invoke("render_agent_expressions", { name: detail.agent_name });
+    } catch (e) {
+      setSaveError(String(e));
+      setRendering(false);
+    }
+  }
 
   async function pickPreset(id: string) {
     setSelected(id);
@@ -292,6 +331,19 @@ function StyleTab({
           />
         </div>
       )}
+      <button
+        className="toolbar-btn"
+        style={{ marginTop: 8 }}
+        onClick={triggerRender}
+        disabled={rendering || detail.render_status.status === "rendering"}
+        title="Generate the 12 avatar expressions for this agent"
+      >
+        {rendering || detail.render_status.status === "rendering"
+          ? "Rendering…"
+          : detail.render_status.status === "ready"
+            ? "Re-render avatar"
+            : "Render avatar"}
+      </button>
 
       <label className="field-label" style={{ marginTop: 16 }}>Preset gallery</label>
       <div className="preset-gallery">
