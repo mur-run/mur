@@ -55,6 +55,17 @@ fn test_initialize_and_list_tools() {
     let tools = resp["result"]["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 10, "Expected 10 tools");
 
+    // Verify properties is an object (not an array) — MCP spec requires JSON object
+    let first_tool_with_props = tools
+        .iter()
+        .find(|t| !t["inputSchema"]["properties"].is_null())
+        .unwrap();
+    let props = first_tool_with_props["inputSchema"]["properties"].as_object();
+    assert!(
+        props.is_some(),
+        "inputSchema.properties must be a JSON object (record), not an array"
+    );
+
     // Verify tool names
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"mur_notes_search"));

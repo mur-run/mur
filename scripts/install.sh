@@ -110,8 +110,9 @@ fi
 # --- Extract + install ---
 tar -xzf "$TMP/$ASSET" -C "$TMP"
 [ -f "$TMP/mur" ] || die "Archive did not contain a mur binary."
-chmod +x "$TMP/mur"
+chmod +x "$TMP/mur" "$TMP/mur-mcp-server"
 mv "$TMP/mur" "$INSTALL_DIR/mur"
+mv "$TMP/mur-mcp-server" "$INSTALL_DIR/mur-mcp-server"
 
 # --- PATH check ---
 case ":$PATH:" in
