@@ -143,6 +143,17 @@ export function MuragentImportModal({ isOpen, onClose, initialPath }: Props) {
     return () => clearInterval(id);
   }, [delayRemaining]);
 
+  // NOTE: all hooks must run before any early return. `importDisabledReason` is a
+  // hoisted function declaration below, so it can be referenced here. Keeping this
+  // useMemo above `if (!isOpen) return null` avoids React error #310 (hook count
+  // changing between isOpen=false/true renders), which blanked the whole UI.
+  const disabledReason = useMemo(importDisabledReason, [
+    inspection,
+    delayRemaining,
+    installing,
+  ]);
+  const importDisabled = disabledReason !== null;
+
   if (!isOpen) return null;
 
   async function chooseFile() {
@@ -219,13 +230,6 @@ export function MuragentImportModal({ isOpen, onClose, initialPath }: Props) {
     if (installing) return "Installing…";
     return null;
   }
-
-  const disabledReason = useMemo(importDisabledReason, [
-    inspection,
-    delayRemaining,
-    installing,
-  ]);
-  const importDisabled = disabledReason !== null;
 
   return (
     <div className="modal-overlay" onClick={onClose}>

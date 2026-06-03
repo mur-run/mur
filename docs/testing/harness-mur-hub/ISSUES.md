@@ -73,16 +73,25 @@ desktop pet (Batch 3). Brain badge shows model.
   so the real value displays for ANY agent; also aligned the seed template traits to canonical
   (friendly/conservative/balanced). Verified: Persona renders; template still deserializes.
 
-### I-10 — One-off blank/white dashboard after a modal-close→modal-open sequence — SUSPECTED (not reproduced)
-- After (MCP-tab misclick that closed the panel →) opening Import Preset → closing it → opening
-  Import Agent, the whole React UI went blank (Rust app stayed alive; no panic — a frontend
-  crash/unmount). Could NOT reproduce with a clean single "Import Agent" click. Needs the webview
-  devtools console to capture the JS error. Candidate: an unmount/state error during rapid
-  modal switching. Investigate with devtools before fixing.
+### I-10 — White-screen crash on rapid modal switching (React #310) — CONFIRMED & FIXED (Batch 6)
+- Root cause found via a root ErrorBoundary: `MuragentImportModal` called `useMemo` AFTER the
+  `if (!isOpen) return null` early return, so the hook count changed between isOpen false/true
+  renders → React error #310 ("rendered fewer hooks than expected") → the whole tree unmounted
+  (blank window). Triggered by switching Import Preset ↔ Import Agent.
+- Fix: (1) added `ErrorBoundary` at the app root (main.tsx) so any future render error shows a
+  message + "Try again" instead of a blank window; (2) moved the `useMemo` above the early
+  return in MuragentImportModal.tsx. Verified: the same switch sequence no longer crashes; both
+  modals render. (PresetImportModal checked — no hooks after its early return, OK.)
 
-### I-11 — Dashboard window can open narrower than its declared minWidth (560) — MINOR (observed)
-- tauri.conf.json sets dashboard minWidth 560, but a launch showed the window at 462 pt wide;
-  window size also varied between launches (923 vs 462). Cosmetic; low priority.
+### I-11 — Dashboard window opened below its declared minWidth (560) — CONFIRMED & FIXED (Batch 6)
+- `tauri_plugin_window_state` restored a persisted size (saw 462pt) below the configured
+  minWidth, and didn't clamp to min. Fix: configure the plugin with `StateFlags::all() -
+  StateFlags::SIZE` so it remembers position but not size — the window always opens at the
+  tauri.conf default (720×520, ≥ min). Verified: window now opens 720 wide.
+
+### I-12 — Import Preset and Import Agent modals can be open simultaneously — MINOR (observed, not fixed)
+- Opening one doesn't close the other; both dock side-by-side. Cosmetic; should be mutually
+  exclusive. Low priority.
 
 ## Resolved
 ### I-1 — Default "Mur" never seeded for existing users — FIXED (Batch 1)

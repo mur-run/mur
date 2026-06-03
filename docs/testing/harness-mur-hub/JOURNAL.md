@@ -103,6 +103,13 @@ nudge_dismiss, get_agent_detail, update_agent_detail
 
 ## STATUS LOG (newest first)
 
+- 2026-06-04: Batch 6 (I-10 + I-11) + ErrorBoundary. Added root ErrorBoundary (main.tsx) → the
+  earlier "blank UI" reproduced and revealed React #310: MuragentImportModal called useMemo after
+  `if(!isOpen) return null` → moved it above (fixed). Verified modal-switch no longer crashes;
+  Import Agent modal renders. I-11: window-state plugin now excludes SIZE (StateFlags) → window
+  opens 720 (≥min), was 462. Also drove wizard step1 (renders). I-12 logged (both modals open at
+  once, cosmetic). Full wizard create flow not driven end-to-end (fragile). NEXT after this:
+  push branch + open PR (user approved a+b+c+d).
 - 2026-06-04: REMAINING-FUNCTIONS round (live UI). Verified working: dashboard, detail
   open/close + tabs, Persona/Style/Behavior tabs, Import Preset modal, wizard step 1, pet.
   Found+fixed I-9 (Batch 5): Persona tone/risk/verbosity selects snapped to first option when the
