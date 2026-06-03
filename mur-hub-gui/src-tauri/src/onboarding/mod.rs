@@ -155,6 +155,10 @@ pub fn wizard_set_name(
     if name.trim().is_empty() {
         return Err("name must not be empty".into());
     }
+    // The name later becomes an agent directory component (wizard_start_render
+    // / wizard_finish); validate it here at the single entry point.
+    mur_common::agent_name::validate_agent_name(name.trim())
+        .map_err(|e| format!("invalid name: {e}"))?;
     update_session(&state, |s| {
         s.name = Some(name.trim().to_string());
         s.description = Some(description.trim().to_string());
