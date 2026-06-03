@@ -40,14 +40,24 @@ pub fn start(app: &AppHandle) {
         }
     };
 
-    // Resolve the bundled model directory from app resources.
-    let model_dir = match app
-        .path()
-        .resolve("models/default", tauri::path::BaseDirectory::Resource)
+    // Resolve the bundled model directory from app resources. Tauri stages the
+    // `resources/**` bundle glob under `<Resource>/resources/...`, so resolve that
+    // path first and fall back to the bare name for dev / alternate layouts.
+    let model_dir = match ["resources/models/default", "models/default"]
+        .iter()
+        .filter_map(|rel| {
+            app.path()
+                .resolve(rel, tauri::path::BaseDirectory::Resource)
+                .ok()
+        })
+        .find(|p| p.is_dir())
     {
-        Ok(p) => p,
-        Err(e) => {
-            warn!("mlx sidecar: cannot resolve model resource: {e}");
+        Some(p) => p,
+        None => {
+            warn!(
+                "mlx sidecar: bundled model resource not found (resources/models/default); \
+                 skipping local inference"
+            );
             return;
         }
     };
