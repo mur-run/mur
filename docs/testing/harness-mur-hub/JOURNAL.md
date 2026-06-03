@@ -103,6 +103,13 @@ nudge_dismiss, get_agent_detail, update_agent_detail
 
 ## STATUS LOG (newest first)
 
+- 2026-06-04: REMAINING-FUNCTIONS round (live UI). Verified working: dashboard, detail
+  open/close + tabs, Persona/Style/Behavior tabs, Import Preset modal, wizard step 1, pet.
+  Found+fixed I-9 (Batch 5): Persona tone/risk/verbosity selects snapped to first option when the
+  agent's value wasn't canned → withCurrent() in DetailPanel.tsx + seed template traits aligned.
+  Logged I-10 (one-off blank UI after rapid modal switching — NOT reproduced, needs devtools) and
+  I-11 (window narrower than minWidth, cosmetic). Pixel-driving tabs is fragile (Retina + variable
+  window size) — coords need /2 mapping; tab bar y varies per layout. Cleaned app/sandbox/launchd.
 - 2026-06-04: I-5 (Batch 4) FIXED & verified — macOS autostart launchd domain. register now
   bootstraps into gui/$UID (was legacy `load`); start/stop/unregister target gui/$UID/<label>
   (was user/$UID → kickstart exit 113). autostart/macos.rs + gui_domain/service_target helpers +

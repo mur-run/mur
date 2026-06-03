@@ -97,6 +97,28 @@ is a GUI app, so its LaunchAgents live in the `gui/$UID` (Aqua) domain.
   register+start logs **no** "kickstart failed"/"Could not find service" (previously it did).
   Created `~/Library/LaunchAgents/run.mur.agent.mur.plist` removed afterward; real ~/.mur untouched.
 
+## Batch 5 — Persona tab shows the agent's real tone/risk/verbosity (I-9)
+
+Found while testing the remaining detail-panel functions. The Persona tab's tone/risk/verbosity
+`<select>`s only listed canned options, so an agent whose stored value wasn't in the list (the
+seed template used warm/cautious/medium) displayed the FIRST option instead — misrepresenting
+the agent and risking clobbering the value on save.
+
+- `mur-hub-gui/ui/src/components/DetailPanel.tsx`: `withCurrent(options, current)` prepends the
+  current value when it isn't already an option, applied to all three selects.
+- `mur-hub-gui/src-tauri/resources/mur-agent-template/profile.yaml`: aligned the seed Mur traits
+  to the canned vocabulary (friendly / conservative / balanced).
+
+### Verification
+- `npm run build` (tsc) clean; `cargo test bundled_profile_deserializes` passes (template parses).
+- Live: Persona tab opens and renders for an agent seeded with non-canonical traits; dashboard
+  also confirmed the seeded Mur appears (by-name seed). Pixel-level confirmation of the dropdown
+  text below the fold was skipped (Retina + variable window size made it costly); the fix is
+  trivially correct and type-checked.
+
+Also logged this round (not fixed): I-10 (one-off blank UI after rapid modal switching — could
+not reproduce; needs devtools), I-11 (window can open narrower than declared minWidth). See ISSUES.md.
+
 ## Batch 3 — desktop pet feature made to work (I-7 + I-8)
 
 The user asked to test the desktop pet. Found it doubly broken and fixed both; verified the pet

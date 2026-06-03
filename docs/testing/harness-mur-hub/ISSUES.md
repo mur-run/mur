@@ -57,6 +57,33 @@ Batching rule: accumulate 3 CONFIRMED issues → one fix batch → commit (no pu
   Hub window bounds (or Tauri window position/size), instead of relying on `mouseleave`. Also
   apply to PopoverApp drag path if it shares the pattern.
 
+## Remaining-functions test round (live UI)
+
+Verified working: dashboard grid + sidebar counts, agent cards (Run/Stop/Share), detail panel
+open/close + tab switching, Persona tab, Style tab (+Render), Behavior tab (Quiet/Normal/Lively),
+Import Preset modal (From File / From URL), onboarding wizard step 1 (persona categories),
+desktop pet (Batch 3). Brain badge shows model.
+
+### I-9 — Persona tab shows WRONG tone/risk/verbosity for non-canned values — CONFIRMED (live) — FIXED (Batch 5)
+- Agent traits not in the dropdown option lists (e.g. seed template had tone "warm", risk
+  "cautious", verbosity "medium"; options are professional…/conservative…/concise…) made the
+  <select> snap to the FIRST option → the panel showed professional/conservative/concise,
+  misrepresenting the agent and risking clobbering on save.
+- Fix: `withCurrent()` prepends the current value when it isn't a canned option (DetailPanel.tsx),
+  so the real value displays for ANY agent; also aligned the seed template traits to canonical
+  (friendly/conservative/balanced). Verified: Persona renders; template still deserializes.
+
+### I-10 — One-off blank/white dashboard after a modal-close→modal-open sequence — SUSPECTED (not reproduced)
+- After (MCP-tab misclick that closed the panel →) opening Import Preset → closing it → opening
+  Import Agent, the whole React UI went blank (Rust app stayed alive; no panic — a frontend
+  crash/unmount). Could NOT reproduce with a clean single "Import Agent" click. Needs the webview
+  devtools console to capture the JS error. Candidate: an unmount/state error during rapid
+  modal switching. Investigate with devtools before fixing.
+
+### I-11 — Dashboard window can open narrower than its declared minWidth (560) — MINOR (observed)
+- tauri.conf.json sets dashboard minWidth 560, but a launch showed the window at 462 pt wide;
+  window size also varied between launches (923 vs 462). Cosmetic; low priority.
+
 ## Resolved
 ### I-1 — Default "Mur" never seeded for existing users — FIXED (Batch 1)
 - `seed_mur::seed_if_empty` (seed_mur.rs:35) returns Ok(false) if ANY agent dir exists.
