@@ -4,7 +4,16 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use mur_compress::{CompressConfig, CompressEngine, RetrieveResult};
 use mur_core::cmd::notes_cmd;
+
+/// Build a per-call compression engine rooted at <mur_home>/compress.
+fn compress_engine() -> Result<CompressEngine, String> {
+    let home = resolve_mur_home().map_err(|e| format!("compress engine unavailable: {e}"))?;
+    let cfg = CompressConfig::load(&home);
+    CompressEngine::new(home.join("compress"), cfg)
+        .map_err(|e| format!("compress engine unavailable: {e}"))
+}
 
 /// JSON Schema for a tool parameter (MCP uses JSON Schema subset).
 #[derive(Debug, Clone, Serialize)]
@@ -211,6 +220,56 @@ pub fn all_tools() -> Vec<Tool> {
                 required: None,
             },
         },
+        // ── compress tools ──
+        Tool {
+            name: "mur_compress".into(),
+            description: "Compress bulky agent text (tool output, logs, search results, diffs, JSON) before it reaches the LLM. Reversible: the original is stored locally and retrievable by hash via mur_retrieve.".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: Some(BTreeMap::from([
+                    ("content".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "The text to compress.".into(),
+                        default: None,
+                    }),
+                    ("query".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "Optional query to bias which lines/items are kept.".into(),
+                        default: None,
+                    }),
+                ])),
+                required: Some(vec!["content".into()]),
+            },
+        },
+        Tool {
+            name: "mur_retrieve".into(),
+            description: "Retrieve the original content stored by mur_compress, by its hash. With a query, returns only the BM25-relevant items.".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: Some(BTreeMap::from([
+                    ("hash".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "Hash from a prior mur_compress result (e.g. hash=abc123...).".into(),
+                        default: None,
+                    }),
+                    ("query".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "Optional query to filter the stored items.".into(),
+                        default: None,
+                    }),
+                ])),
+                required: Some(vec!["hash".into()]),
+            },
+        },
+        Tool {
+            name: "mur_compress_stats".into(),
+            description: "Show cumulative token-compression savings (compressions, tokens saved, % saved, estimated cost saved, store size).".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: None,
+                required: None,
+            },
+        },
     ]
 }
 
@@ -390,6 +449,86 @@ pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 .await
                 .map_err(|e| format!("scene_explain failed: {}", e))?;
             Ok(json!({ "explanation": text }))
+        }
+
+        "mur_compress" => {
+            let content = arguments
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing required parameter: 'content' (string)".to_string())?;
+            let query = arguments.get("query").and_then(|v| v.as_str());
+
+            let eng = compress_engine()?;
+            let r = eng.compress(content, query);
+            let note = match &r.hash {
+                Some(h) => format!(
+                    "Original stored with hash={h}. Use mur_retrieve to fetch full content."
+                ),
+                None => "No content offloaded; nothing to retrieve.".to_string(),
+            };
+            Ok(json!({
+                "compressed": r.compressed,
+                "hash": r.hash,
+                "content_type": r.content_type.as_str(),
+                "original_tokens": r.original_tokens,
+                "compressed_tokens": r.compressed_tokens,
+                "tokens_saved": r.tokens_saved,
+                "savings_percent": r.savings_percent,
+                "transforms": r.transforms,
+                "note": note,
+            }))
+        }
+
+        "mur_retrieve" => {
+            let hash = arguments
+                .get("hash")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing required parameter: 'hash' (string)".to_string())?;
+            let query = arguments.get("query").and_then(|v| v.as_str());
+
+            let eng = compress_engine()?;
+            match eng.retrieve(hash, query) {
+                RetrieveResult::Full {
+                    content_type,
+                    original_content,
+                    item_count,
+                } => Ok(json!({
+                    "hash": hash,
+                    "content_type": content_type,
+                    "original_content": original_content,
+                    "item_count": item_count,
+                })),
+                RetrieveResult::Filtered {
+                    query,
+                    results,
+                    count,
+                } => Ok(json!({
+                    "hash": hash,
+                    "query": query,
+                    "results": results,
+                    "count": count,
+                })),
+                RetrieveResult::NotFound => Ok(json!({
+                    "error": "Content not found or expired.",
+                    "hash": hash,
+                    "hint": "The hash may be wrong or the entry's TTL has elapsed.",
+                })),
+            }
+        }
+
+        "mur_compress_stats" => {
+            let eng = compress_engine()?;
+            let s = eng.stats_snapshot();
+            Ok(json!({
+                "compressions": s.compressions,
+                "retrievals": s.retrievals,
+                "total_input_tokens": s.total_input_tokens,
+                "total_output_tokens": s.total_output_tokens,
+                "total_tokens_saved": s.total_tokens_saved,
+                "savings_percent": s.savings_percent,
+                "estimated_cost_saved_usd": s.estimated_cost_saved_usd,
+                "store": { "entries": s.store_entries, "bytes": s.store_bytes },
+            }))
         }
 
         _ => Err(format!("Unknown tool: {}", name)),
