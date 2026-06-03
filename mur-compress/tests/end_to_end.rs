@@ -70,9 +70,15 @@ fn retrieve_unknown_hash_is_not_found() {
 fn json_array_roundtrips_through_store() {
     let dir = tempfile::tempdir().unwrap();
     let eng = engine(dir.path());
-    let input = r#"[{"id":1},{"id":2},{"id":3},{"id":4},{"id":5},{"id":6},{"id":7},{"id":8}]"#;
-    let res = eng.compress(input, None);
+    // A large array of fat rows: the schema+sample+offload form is genuinely
+    // smaller than the original, so the bloat guard keeps the compressed result.
+    let rows: Vec<String> = (0..60)
+        .map(|i| format!(r#"{{"id":{i},"name":"item number {i}","value":{i}}}"#))
+        .collect();
+    let input = format!("[{}]", rows.join(","));
+    let res = eng.compress(&input, None);
     assert!(res.hash.is_some());
+    assert!(res.tokens_saved > 0);
     match eng.retrieve(res.hash.as_ref().unwrap(), None) {
         RetrieveResult::Full {
             original_content, ..
