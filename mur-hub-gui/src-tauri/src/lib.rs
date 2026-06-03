@@ -230,6 +230,15 @@ pub fn run() {
         .manage(EventBusState(EventBus::new(256)))
         .manage(BridgeState::default())
         .setup(move |app| {
+            // `setup` runs on the main thread after the event loop starts, where
+            // Tauri's global Tokio runtime is NOT entered as the current context.
+            // The background `tokio::spawn` calls below (discovery, watchers, stub
+            // scan) would otherwise panic with "no reactor running". Enter the
+            // runtime for the duration of setup so every spawn lands on the app's
+            // long-lived runtime. Mirrors the guard around `Supervisor::new` above.
+            let rt_handle = tauri::async_runtime::handle();
+            let _rt_guard = rt_handle.inner().enter();
+
             // Start agent discovery (filesystem scan).
             let (discovery, agent_rx) = AgentDiscovery::new(mur_home.clone());
             {
