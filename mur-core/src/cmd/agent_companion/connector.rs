@@ -591,6 +591,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
                 processes: 16,
             },
             llm: LlmEntitlement { mode: LlmMode::Off },
+            fail_closed_on_sandbox_error: true,
         },
         notifications: NotificationsConfig::default(),
         retry: RetryConfig {

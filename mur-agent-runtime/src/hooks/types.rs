@@ -161,6 +161,7 @@ fn test_default_entitlements() -> Entitlements {
         syscalls: SyscallsEntitlement::default(),
         limits: LimitsEntitlement::default(),
         llm: Default::default(),
+        fail_closed_on_sandbox_error: true,
     }
 }
 
