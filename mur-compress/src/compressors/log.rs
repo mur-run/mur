@@ -71,7 +71,11 @@ pub fn compress(
         n - kept.len(),
         hash
     ));
-    Ok(CompressOutput { compressed: body, hash: Some(hash), transforms })
+    Ok(CompressOutput {
+        compressed: body,
+        hash: Some(hash),
+        transforms,
+    })
 }
 
 #[cfg(test)]
@@ -87,7 +91,10 @@ mod tests {
         cfg.protect_tail_lines = 0;
         let dir = tempfile::tempdir().unwrap();
         let store = CcrStore::new(dir.path(), 3600, 100, 1 << 30, false).unwrap();
-        let ctx = CompressCtx { query: None, config: &cfg };
+        let ctx = CompressCtx {
+            query: None,
+            config: &cfg,
+        };
         let mut lines = vec![];
         for _ in 0..50 {
             lines.push("DEBUG noise".to_string());

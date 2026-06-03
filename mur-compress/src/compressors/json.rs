@@ -16,8 +16,7 @@ pub fn compress(
     let val: serde_json::Value =
         serde_json::from_str(content.trim()).map_err(|e| CompressError::Parse(e.to_string()))?;
     let mut transforms = vec!["json.minify".to_string()];
-    let minified =
-        serde_json::to_string(&val).map_err(|e| CompressError::Parse(e.to_string()))?;
+    let minified = serde_json::to_string(&val).map_err(|e| CompressError::Parse(e.to_string()))?;
     let cfg = ctx.config;
 
     if let serde_json::Value::Array(arr) = &val {
@@ -27,8 +26,10 @@ pub fn compress(
                 Some(serde_json::Value::Object(m)) => m.keys().cloned().collect(),
                 _ => Vec::new(),
             };
-            let items: Vec<String> =
-                arr.iter().map(|v| serde_json::to_string(v).unwrap_or_default()).collect();
+            let items: Vec<String> = arr
+                .iter()
+                .map(|v| serde_json::to_string(v).unwrap_or_default())
+                .collect();
             let hash = store
                 .put_original(content, items, ContentType::Json, tok)
                 .map_err(|e| CompressError::Store(e.to_string()))?;
@@ -50,7 +51,11 @@ pub fn compress(
         }
     }
 
-    Ok(CompressOutput { compressed: minified, hash: None, transforms })
+    Ok(CompressOutput {
+        compressed: minified,
+        hash: None,
+        transforms,
+    })
 }
 
 #[cfg(test)]
@@ -65,7 +70,10 @@ mod tests {
         cfg.protect_head_lines = 2;
         let dir = tempfile::tempdir().unwrap();
         let store = CcrStore::new(dir.path(), 3600, 100, 1 << 30, false).unwrap();
-        let ctx = CompressCtx { query: None, config: &cfg };
+        let ctx = CompressCtx {
+            query: None,
+            config: &cfg,
+        };
         let input = r#"[{"id":1},{"id":2},{"id":3},{"id":4},{"id":5},{"id":6}]"#;
         let out = compress(input, &ctx, &store, &HeuristicCounter).unwrap();
         assert!(out.hash.is_some());
@@ -79,7 +87,10 @@ mod tests {
         let cfg = CompressConfig::default();
         let dir = tempfile::tempdir().unwrap();
         let store = CcrStore::new(dir.path(), 3600, 100, 1 << 30, false).unwrap();
-        let ctx = CompressCtx { query: None, config: &cfg };
+        let ctx = CompressCtx {
+            query: None,
+            config: &cfg,
+        };
         let out = compress("{\n  \"a\": 1\n}", &ctx, &store, &HeuristicCounter).unwrap();
         assert_eq!(out.compressed, r#"{"a":1}"#);
         assert!(out.hash.is_none());

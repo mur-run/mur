@@ -21,7 +21,10 @@ fn group_by_file(items: &[String]) -> String {
             current = f;
         }
         // strip the leading "path:" so the file header carries it
-        let rest = it.strip_prefix(f).and_then(|r| r.strip_prefix(':')).unwrap_or(it);
+        let rest = it
+            .strip_prefix(f)
+            .and_then(|r| r.strip_prefix(':'))
+            .unwrap_or(it);
         out.push_str("  ");
         out.push_str(rest);
         out.push('\n');
@@ -48,8 +51,11 @@ pub fn compress(
         if ranked.is_empty() {
             (0..items.len().min(cfg.protect_head_lines)).collect()
         } else {
-            let mut idx: Vec<usize> =
-                ranked.into_iter().take(cfg.retrieve_top_k).map(|(i, _)| i).collect();
+            let mut idx: Vec<usize> = ranked
+                .into_iter()
+                .take(cfg.retrieve_top_k)
+                .map(|(i, _)| i)
+                .collect();
             idx.sort_unstable();
             idx
         }
@@ -79,7 +85,11 @@ pub fn compress(
         items.len() - kept.len(),
         hash
     ));
-    Ok(CompressOutput { compressed: body, hash: Some(hash), transforms })
+    Ok(CompressOutput {
+        compressed: body,
+        hash: Some(hash),
+        transforms,
+    })
 }
 
 #[cfg(test)]
@@ -99,7 +109,10 @@ mod tests {
         cfg.retrieve_top_k = 1;
         let dir = tempfile::tempdir().unwrap();
         let store = mk(dir.path());
-        let ctx = CompressCtx { query: Some("database"), config: &cfg };
+        let ctx = CompressCtx {
+            query: Some("database"),
+            config: &cfg,
+        };
         let input = "a.rs:1:hello world\nb.rs:2:database connection\nc.rs:3:weather";
         let out = compress(input, &ctx, &store, &HeuristicCounter).unwrap();
         assert!(out.hash.is_some());
