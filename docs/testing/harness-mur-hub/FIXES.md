@@ -97,6 +97,31 @@ is a GUI app, so its LaunchAgents live in the `gui/$UID` (Aqua) domain.
   register+start logs **no** "kickstart failed"/"Could not find service" (previously it did).
   Created `~/Library/LaunchAgents/run.mur.agent.mur.plist` removed afterward; real ~/.mur untouched.
 
+## Batch 6 — white-screen crash + window-size (I-10, I-11) + ErrorBoundary
+
+### I-10 — modal-switch white screen (React #310)
+- `ui/src/components/ErrorBoundary.tsx` (new) wraps `<App/>` in main.tsx → render errors show a
+  message + stack + "Try again" instead of a blank window (this is how I-10's cause was found).
+- `MuragentImportModal.tsx`: moved `useMemo(importDisabledReason, …)` ABOVE the
+  `if (!isOpen) return null` early return. It was called after the return, so the hook count
+  changed between isOpen false/true → React #310 unmounted the whole tree.
+
+### I-11 — window opened below minWidth
+- `lib.rs`: `tauri_plugin_window_state` now uses `StateFlags::all().difference(StateFlags::SIZE)`
+  → remembers position, not size; window always opens at the tauri.conf default (≥ min).
+
+### Verification (live)
+- I-10: the Import Preset ↔ Import Agent switch that previously blanked the UI now renders both
+  modals, no crash, no ErrorBoundary screen. Import Agent (.muragent) modal renders its
+  inspect/install UI. tsc clean.
+- I-11: dashboard window now opens 720pt wide (was restoring 462). Verified via window bounds.
+- Also re-verified this round: wizard step 1 (persona categories) renders; Import Preset modal.
+- Logged (not fixed): I-12 (both import modals can be open at once — cosmetic).
+
+NOTE on coverage: the FULL onboarding wizard create flow (type name → preset → behavior → render
+→ finish) was not driven end-to-end (precise multi-step clicking + text entry is fragile under
+synthetic input); wizard entry + step 1 + backend commands are verified/implemented.
+
 ## Batch 5 — Persona tab shows the agent's real tone/risk/verbosity (I-9)
 
 Found while testing the remaining detail-panel functions. The Persona tab's tone/risk/verbosity
