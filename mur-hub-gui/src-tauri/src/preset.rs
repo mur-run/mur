@@ -53,7 +53,11 @@ pub fn import_preset_file(path: String) -> Result<String, String> {
 pub fn import_preset_url(url: String) -> Result<String, String> {
     // Require HTTPS: rejects cleartext and file:// / other schemes, keeping the
     // fetch surface to TLS endpoints only.
-    if !url.trim_start().to_ascii_lowercase().starts_with("https://") {
+    if !url
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("https://")
+    {
         return Err("preset URL must use https".into());
     }
     let client = reqwest::blocking::Client::builder()
