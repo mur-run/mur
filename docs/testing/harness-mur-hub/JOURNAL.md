@@ -103,6 +103,13 @@ nudge_dismiss, get_agent_detail, update_agent_detail
 
 ## STATUS LOG (newest first)
 
+- 2026-06-04: SESSION CHECKPOINT. Full test suites green: hub crate 20/20, mur-gui-core 42/42
+  (62 total) — broad unit/integration verification that implemented commands work. Real system
+  left clean (no stray launchd plist, real ~/.mur untouched, sandbox removed). 2 local commits
+  on branch (Batch 1 + Batch 2), unpushed. To RESUME: read this JOURNAL + ISSUES.md; next work =
+  I-5 launchctl (review+verify), then continue live testing UI-driven functions (blocked here by
+  no-screencapture — needs a real driven session). User action: rebuild+reinstall Hub to get the
+  fixes (their installed build is the old 0.1.0).
 - 2026-06-04: BATCH 2 (I-4 + I-6) DONE & committed locally; I-5 DEFERRED for review.
   I-6: mlx_sidecar resolves `resources/models/default` (same fix class as I-3). I-4: launchd
   plist now sets EnvironmentVariables/MUR_HOME via extracted pure `plist_contents()`
