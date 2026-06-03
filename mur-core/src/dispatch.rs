@@ -1021,9 +1021,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Compress { file, query } => {
             cmd::compress::do_compress(file.as_deref(), query.as_deref())?
         }
-        Commands::Retrieve { hash, query } => {
-            cmd::compress::do_retrieve(&hash, query.as_deref())?
-        }
+        Commands::Retrieve { hash, query } => cmd::compress::do_retrieve(&hash, query.as_deref())?,
     }
 
     Ok(())

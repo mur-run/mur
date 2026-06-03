@@ -131,6 +131,7 @@ For the full Agent platform — MCP server, skills, action pipeline, companion, 
 | **Workflow Engine** | Multi-step workflows with variables, tools, and session extraction |
 | **Embedded Dashboard** | Built-in web UI for pattern management, workflow editing, and session review |
 | **YAML + Git Friendly** | Human-readable patterns, version-controllable, no opaque database lock-in |
+| **Token Compression** | Offline, reversible token compression via `mur compress` / `mur retrieve` and three MCP tools (`mur_compress`, `mur_retrieve`, `mur_compress_stats`). Reduces large payloads 40–80% while keeping originals retrievable by blake3 hash. |
 | **100% Local First** | All data on your machine. Zero telemetry. Injection scanning + content hashing for security. |
 | **Multi-language** | Dashboard UI in English, 繁體中文, 简体中文 |
 
