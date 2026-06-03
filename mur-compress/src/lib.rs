@@ -1,4 +1,5 @@
 pub mod bm25;
+pub mod compressors;
 pub mod ccr;
 pub mod config;
 pub mod detect;
