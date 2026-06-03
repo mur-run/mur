@@ -47,7 +47,10 @@ mod tests {
         let cfg = CompressConfig::default();
         let dir = tempfile::tempdir().unwrap();
         let store = CcrStore::new(dir.path(), 3600, 10, 1 << 30, false).unwrap();
-        let ctx = CompressCtx { query: None, config: &cfg };
+        let ctx = CompressCtx {
+            query: None,
+            config: &cfg,
+        };
         let input = "line one   \n\n\n\nline two\n";
         let out = compress(input, &ctx, &store, &HeuristicCounter).unwrap();
         assert_eq!(out.compressed, "line one\n\nline two\n");

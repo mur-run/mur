@@ -40,14 +40,20 @@ pub fn compress(
             }
         } else {
             if context_run > CONTEXT_KEEP {
-                kept.push(format!("... ({} unchanged lines)", context_run - CONTEXT_KEEP));
+                kept.push(format!(
+                    "... ({} unchanged lines)",
+                    context_run - CONTEXT_KEEP
+                ));
             }
             context_run = 0;
             kept.push((*l).to_string());
         }
     }
     if context_run > CONTEXT_KEEP {
-        kept.push(format!("... ({} unchanged lines)", context_run - CONTEXT_KEEP));
+        kept.push(format!(
+            "... ({} unchanged lines)",
+            context_run - CONTEXT_KEEP
+        ));
     }
 
     if dropped == 0 {
@@ -68,7 +74,11 @@ pub fn compress(
     body.push_str(&format!(
         "\n[diff context trimmed; {dropped} lines offloaded. Full diff: hash={hash}]"
     ));
-    Ok(CompressOutput { compressed: body, hash: Some(hash), transforms })
+    Ok(CompressOutput {
+        compressed: body,
+        hash: Some(hash),
+        transforms,
+    })
 }
 
 #[cfg(test)]
@@ -82,7 +92,10 @@ mod tests {
         let cfg = CompressConfig::default();
         let dir = tempfile::tempdir().unwrap();
         let store = CcrStore::new(dir.path(), 3600, 100, 1 << 30, false).unwrap();
-        let ctx = CompressCtx { query: None, config: &cfg };
+        let ctx = CompressCtx {
+            query: None,
+            config: &cfg,
+        };
         let mut s = String::from("diff --git a/x b/x\n@@ -1,20 +1,20 @@\n");
         for _ in 0..20 {
             s.push_str(" unchanged\n");
