@@ -111,7 +111,11 @@ fn start_event_loop(
     let mut sm = ExpressionStateMachine::new(agent_name.clone(), triggers);
     let mut rx = bus.subscribe();
 
-    tokio::spawn(async move {
+    // Use Tauri's managed runtime: pet_spawn_at is a SYNC #[tauri::command] that
+    // runs on a thread with no entered Tokio runtime, so a bare tokio::spawn here
+    // panics ("there is no reactor running"). async_runtime::spawn holds the runtime
+    // handle; tokio::time/select inside then run on that runtime.
+    tauri::async_runtime::spawn(async move {
         tokio::pin!(shutdown_rx);
         let tick_interval = tokio::time::Duration::from_millis(100);
         let mut interval = tokio::time::interval(tick_interval);
@@ -203,7 +207,7 @@ pub fn pet_spawn_at(
     // Publish spawn event so the state machine fires the wave sequence.
     let bus = bus_state.0.clone();
     let name = agent_name.clone();
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
         bus.publish(HubEvent::new(&name, "pet.spawned"));
     });
