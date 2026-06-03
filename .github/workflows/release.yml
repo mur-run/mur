@@ -315,6 +315,11 @@ jobs:
         env:
           APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Tauri signs the .app, its sidecars, and the .dmg with this identity
+          # (already imported into the keychain by import-codesign-certs above).
+          # Without it the bundle is ad-hoc signed and notarization returns
+          # "Invalid" (notarytool exit code 65).
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }} (${{ secrets.APPLE_TEAM_ID }})"
         run: |
           cd mur-hub-gui/src-tauri
           cargo tauri build --target aarch64-apple-darwin
