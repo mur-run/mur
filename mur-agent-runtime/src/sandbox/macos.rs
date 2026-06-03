@@ -130,7 +130,9 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
         Some(ports) => {
             lines.push("(deny network-outbound)".to_string());
             for port in ports {
-                lines.push(format!("(allow network-outbound (remote tcp \"*:{port}\"))"));
+                lines.push(format!(
+                    "(allow network-outbound (remote tcp \"*:{port}\"))"
+                ));
             }
         }
     }
@@ -148,7 +150,6 @@ unsafe extern "C" {
 
     fn sandbox_free_error(errorbuf: *mut libc::c_char);
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,7 +190,10 @@ mod tests {
         let allow = sbpl
             .find("(allow file-write* (subpath \"/data/agent\"))")
             .expect("declared write path must be allowed");
-        assert!(allow > baseline, "allow must follow the deny baseline (last-match-wins)");
+        assert!(
+            allow > baseline,
+            "allow must follow the deny baseline (last-match-wins)"
+        );
     }
 
     #[test]
@@ -202,7 +206,10 @@ mod tests {
             !sbpl.contains("x\") (allow file-write* (subpath \"/\"))"),
             "unescaped injection payload leaked into profile:\n{sbpl}"
         );
-        assert!(sbpl.contains("\\\""), "quote should be backslash-escaped:\n{sbpl}");
+        assert!(
+            sbpl.contains("\\\""),
+            "quote should be backslash-escaped:\n{sbpl}"
+        );
     }
 
     #[test]
