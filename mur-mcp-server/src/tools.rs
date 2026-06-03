@@ -1,4 +1,6 @@
 // mur-mcp-server/src/tools.rs
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -28,7 +30,7 @@ pub struct ToolInputSchema {
     #[serde(rename = "type")]
     pub schema_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub properties: Option<Vec<(String, ToolParam)>>,
+    pub properties: Option<BTreeMap<String, ToolParam>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<Vec<String>>,
 }
@@ -42,7 +44,7 @@ pub fn all_tools() -> Vec<Tool> {
             description: "Search MUR notes and patterns by keyword query. Returns ranked results with name, description, maturity, and relevance score.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
-                properties: Some(vec![
+                properties: Some(BTreeMap::from([
                     ("query".into(), ToolParam {
                         param_type: "string".into(),
                         description: "Search query".into(),
@@ -53,7 +55,7 @@ pub fn all_tools() -> Vec<Tool> {
                         description: "Max results, 1-10 (default: 5)".into(),
                         default: Some(json!(5)),
                     }),
-                ]),
+                ])),
                 required: Some(vec!["query".into()]),
             },
         },
@@ -62,13 +64,13 @@ pub fn all_tools() -> Vec<Tool> {
             description: "Load a specific note or pattern by name. Returns full body, metadata, maturity, and tags.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
-                properties: Some(vec![
+                properties: Some(BTreeMap::from([
                     ("name".into(), ToolParam {
                         param_type: "string".into(),
                         description: "Note name (exact match)".into(),
                         default: None,
                     }),
-                ]),
+                ])),
                 required: Some(vec!["name".into()]),
             },
         },
@@ -78,7 +80,7 @@ pub fn all_tools() -> Vec<Tool> {
             description: "Search indexed project source code using hybrid vector+BM25. Returns code snippets with file paths, line numbers, and relevance scores. Only works after 'mur project index' has been run for the project.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
-                properties: Some(vec![
+                properties: Some(BTreeMap::from([
                     ("query".into(), ToolParam {
                         param_type: "string".into(),
                         description: "Search query".into(),
@@ -94,7 +96,7 @@ pub fn all_tools() -> Vec<Tool> {
                         description: "Max results, 1-10 (default: 5)".into(),
                         default: Some(json!(5)),
                     }),
-                ]),
+                ])),
                 required: Some(vec!["query".into()]),
             },
         },
@@ -113,13 +115,13 @@ pub fn all_tools() -> Vec<Tool> {
             description: "List configured MUR agents with their running state, health, transport, and tool counts. Use to check if agents are online before sending A2A messages. Pass a name to get detail for one agent; omit to list all.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
-                properties: Some(vec![
+                properties: Some(BTreeMap::from([
                     ("name".into(), ToolParam {
                         param_type: "string".into(),
                         description: "Optional agent name. Shows detail for one agent; lists all if omitted.".into(),
                         default: None,
                     }),
-                ]),
+                ])),
                 required: None,
             },
         },
@@ -129,7 +131,7 @@ pub fn all_tools() -> Vec<Tool> {
             description: "Get the patterns that MUR would inject for the current project context. Returns top-ranked patterns within a token budget. Use at session start or when switching project contexts.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
-                properties: Some(vec![
+                properties: Some(BTreeMap::from([
                     ("query".into(), ToolParam {
                         param_type: "string".into(),
                         description: "Override auto-detected context query".into(),
@@ -145,7 +147,7 @@ pub fn all_tools() -> Vec<Tool> {
                         description: "Token budget for returned content (default: 2000)".into(),
                         default: Some(json!(2000)),
                     }),
-                ]),
+                ])),
                 required: None,
             },
         },
@@ -155,13 +157,13 @@ pub fn all_tools() -> Vec<Tool> {
             description: "Open a local video file path or a URL (e.g. a YouTube link) in VLC and start playing. Returns playback status.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
-                properties: Some(vec![
+                properties: Some(BTreeMap::from([
                     ("source".into(), ToolParam {
                         param_type: "string".into(),
                         description: "Local file path or video URL (YouTube supported)".into(),
                         default: None,
                     }),
-                ]),
+                ])),
                 required: Some(vec!["source".into()]),
             },
         },
@@ -170,7 +172,7 @@ pub fn all_tools() -> Vec<Tool> {
             description: "Control VLC playback. action ∈ play|pause|toggle|stop|seek|volume. For seek, value=seconds; for volume, value=0-512 (256=100%).".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
-                properties: Some(vec![
+                properties: Some(BTreeMap::from([
                     ("action".into(), ToolParam {
                         param_type: "string".into(),
                         description: "play|pause|toggle|stop|seek|volume".into(),
@@ -181,7 +183,7 @@ pub fn all_tools() -> Vec<Tool> {
                         description: "Seconds (seek) or volume level (volume)".into(),
                         default: None,
                     }),
-                ]),
+                ])),
                 required: Some(vec!["action".into()]),
             },
         },
@@ -199,13 +201,13 @@ pub fn all_tools() -> Vec<Tool> {
             description: "Capture the current VLC frame and explain what is on screen using the local multimodal model (offline, private). Optionally pass a specific question.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
-                properties: Some(vec![
+                properties: Some(BTreeMap::from([
                     ("prompt".into(), ToolParam {
                         param_type: "string".into(),
                         description: "Optional question about the frame; defaults to a general description".into(),
                         default: None,
                     }),
-                ]),
+                ])),
                 required: None,
             },
         },

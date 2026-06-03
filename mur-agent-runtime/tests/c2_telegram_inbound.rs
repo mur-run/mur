@@ -78,6 +78,29 @@ async fn group_skipped_in_dm_only_mode() {
 }
 
 #[tokio::test]
+async fn dm_from_non_owner_chat_is_dropped() {
+    // Regression: a Telegram bot receives DMs from anyone who starts it.
+    // `is_private` alone must not authorize — only the configured owner
+    // `chat_id` may reach the agent in DmOnly mode.
+    let bot = MockBot::default();
+    bot.queued_updates.lock().unwrap().push(MockUpdate {
+        id: 9,
+        chat_id: 999, // not the configured owner (100)
+        is_private: true,
+        text: Some("stranger DM".into()),
+        voice_file_id: None,
+        document_file_id: None,
+        photo_file_id: None,
+        caption: None,
+        file_size: None,
+    });
+    let deps = test_deps();
+    let mut l = TelegramInboundLoop::new(bot, deps);
+    let n = l.tick_once().await.unwrap();
+    assert_eq!(n, 0, "DM from non-owner chat_id must be dropped");
+}
+
+#[tokio::test]
 async fn allow_groups_passes_listed_chat() {
     let bot = MockBot::default();
     bot.queued_updates.lock().unwrap().push(MockUpdate {

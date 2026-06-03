@@ -7,6 +7,16 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
+/// Maximum bytes accepted for a single JSON-RPC line. Aligned with
+/// `transport::noise::MAX_FRAME_BYTES` (16 MiB). Oversized lines are dropped
+/// rather than dispatched. NOTE: this caps *processing*, not allocation —
+/// `read_line` still buffers the full line before returning, so a sender that
+/// streams without a newline can still grow the buffer until EOF. Acceptable
+/// here because stdio is fed by the controlling parent process (not a remote
+/// peer); the network-facing TCP/noise transport is hard-bounded at read time.
+/// A fully allocation-bounded reader (LinesCodec/fill_buf) is fast-follow.
+const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+
 pub async fn serve_stdio<R, W>(
     dispatcher: Arc<Dispatcher>,
     reader: R,
@@ -35,6 +45,18 @@ where
         let n = reader.read_line(&mut line).await?;
         if n == 0 {
             break;
+        }
+        // Guard against a line that grew beyond the cap. This can happen when
+        // a sender streams bytes without ever emitting a newline — read_line
+        // accumulates until EOF. Discard and keep going rather than processing
+        // an arbitrarily large frame.
+        if line.len() > MAX_LINE_BYTES {
+            tracing::warn!(
+                len = line.len(),
+                limit_bytes = MAX_LINE_BYTES,
+                "stdio: incoming line exceeded cap — discarding"
+            );
+            continue;
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {

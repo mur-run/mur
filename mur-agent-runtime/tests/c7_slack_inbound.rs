@@ -19,6 +19,7 @@ fn test_config(privacy: SlackPrivacyMode, allowed: Vec<String>) -> SlackConfig {
         app_token_keychain_account: "mur_slack_app_test".into(),
         privacy_mode: privacy,
         allowed_channels: allowed,
+        allowed_user_ids: vec![],
     }
 }
 
@@ -143,6 +144,35 @@ async fn dm_allowed_in_dm_only_mode() {
     let env = dm_envelope("D_DM", "1000000002.000001", "hello");
     let result = loop_.tick_once(env).await.unwrap();
     assert!(result.forwarded, "DM should pass DmOnly gate");
+}
+
+#[tokio::test]
+async fn allowed_user_ids_gate_drops_non_owner() {
+    // Regression: when an owner allowlist is set, a DM/mention from any other
+    // Slack user must not reach the agent.
+    let dir = TempDir::new().unwrap();
+    let bot = MockSlackBot::new();
+    let mut deps = make_deps(SlackPrivacyMode::DmAndMentions, vec![], &dir);
+    deps.config.allowed_user_ids = vec!["U_OWNER".into()];
+    deps.user_agent = Some(MockUserAgentHandle::ok("reply text"));
+    let mut loop_ = SlackInboundLoop::new(bot, deps);
+    // mention_envelope/dm_envelope use sender "U_SENDER", not the owner.
+    let env = dm_envelope("D_DM", "1000000009.000001", "stranger DM");
+    let result = loop_.tick_once(env).await.unwrap();
+    assert!(!result.forwarded, "non-owner sender must be dropped");
+}
+
+#[tokio::test]
+async fn allowed_user_ids_gate_passes_owner() {
+    let dir = TempDir::new().unwrap();
+    let bot = MockSlackBot::new();
+    let mut deps = make_deps(SlackPrivacyMode::DmAndMentions, vec![], &dir);
+    deps.config.allowed_user_ids = vec!["U_SENDER".into()]; // fixtures' sender
+    deps.user_agent = Some(MockUserAgentHandle::ok("reply text"));
+    let mut loop_ = SlackInboundLoop::new(bot, deps);
+    let env = dm_envelope("D_DM", "1000000010.000001", "owner DM");
+    let result = loop_.tick_once(env).await.unwrap();
+    assert!(result.forwarded, "allowlisted owner must pass");
 }
 
 #[tokio::test]

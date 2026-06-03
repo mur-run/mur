@@ -159,6 +159,26 @@ pub fn decode_pubkey(text: &str) -> Result<[u8; 32], IdentityError> {
     Ok(out)
 }
 
+/// Convert an Ed25519 public key to its X25519 (Montgomery `u`) public key.
+///
+/// Ed25519 and X25519 share Curve25519; an Ed25519 verifying key is an Edwards
+/// point whose Montgomery form is the corresponding X25519 public key. This is
+/// the public-key analogue of [`AgentIdentity::to_x25519_static_secret`], and
+/// lets us match a Noise-XK peer's authenticated static key against a peer's
+/// Ed25519 identity. Returns `None` if `ed_pub` is not a valid Edwards point.
+pub fn ed25519_pub_to_x25519(ed_pub: &[u8; 32]) -> Option<[u8; 32]> {
+    let compressed = curve25519_dalek::edwards::CompressedEdwardsY(*ed_pub);
+    let point = compressed.decompress()?;
+    Some(point.to_montgomery().to_bytes())
+}
+
+/// Decode a multibase Ed25519 pubkey and convert it to its X25519 public key.
+pub fn x25519_pub_from_multibase(text: &str) -> Result<[u8; 32], IdentityError> {
+    let ed = decode_pubkey(text)?;
+    ed25519_pub_to_x25519(&ed)
+        .ok_or_else(|| IdentityError::InvalidKey("pubkey is not a valid Edwards point".into()))
+}
+
 /// Default location: `<agent_home>/identity.{key,pub}`.
 pub fn default_dir(agent_home: &Path) -> PathBuf {
     agent_home.to_path_buf()
@@ -512,5 +532,21 @@ fn write_canonical(out: &mut Vec<u8>, v: &serde_json::Value) {
             }
             out.push(b'}');
         }
+    }
+}
+
+#[cfg(test)]
+mod identity_x25519_tests {
+    use super::*;
+
+    #[test]
+    fn x25519_pub_matches_secret_derivation() {
+        // The public-side Ed25519→X25519 conversion must equal the X25519
+        // public derived from the agent's own static secret — otherwise the
+        // Noise peer-auth allowlist would never match `get_remote_static()`.
+        let id = AgentIdentity::generate();
+        let from_secret = x25519_dalek::PublicKey::from(&id.to_x25519_static_secret());
+        let from_pub = x25519_pub_from_multibase(&id.public_key_multibase()).unwrap();
+        assert_eq!(from_secret.as_bytes(), &from_pub);
     }
 }

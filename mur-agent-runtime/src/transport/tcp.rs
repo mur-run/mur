@@ -38,10 +38,17 @@ impl TcpListenerHandle {
 }
 
 /// Spawn a Noise-XK TCP listener. Shutdown by dropping `shutdown_rx` sender.
+///
+/// `allowed_peers` is the set of X25519 static public keys (derived from the
+/// agent's `trusted_peers`) permitted to connect. Noise-XK authenticates the
+/// initiator's static key to the responder; this enforces authorization on top
+/// of that authentication. **Fail-closed: an empty allowlist rejects every
+/// peer**, so an exposed TCP agent with no declared peers accepts nothing.
 pub async fn spawn_tcp_listener<F, Fut>(
     cfg: TcpTransportConfig,
     identity: Arc<AgentIdentity>,
     handler: Arc<F>,
+    allowed_peers: Arc<Vec<[u8; 32]>>,
     mut shutdown_rx: mpsc::Receiver<()>,
 ) -> io::Result<TcpListenerHandle>
 where
@@ -67,8 +74,9 @@ where
                             debug!(%peer, "TCP accepted");
                             let h = handler.clone();
                             let s = static_secret;
+                            let peers = allowed_peers.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(stream, s, h).await {
+                                if let Err(e) = handle_connection(stream, s, h, peers).await {
                                     warn!(?e, "connection ended with error");
                                 }
                             });
@@ -89,6 +97,7 @@ async fn handle_connection<F, Fut>(
     mut stream: TcpStream,
     static_secret: [u8; 32],
     handler: Arc<F>,
+    allowed_peers: Arc<Vec<[u8; 32]>>,
 ) -> io::Result<()>
 where
     F: Fn(Vec<u8>) -> Fut + Send + Sync + 'static,
@@ -110,13 +119,31 @@ where
         .map_err(|e| io::Error::other(e.to_string()))?;
     write_framed(&mut stream, &out[..n]).await?;
 
-    // msg 3 in
+    // msg 3 in — carries the initiator's authenticated static key (XK)
     let buf = read_framed(&mut stream).await?;
     noise
         .read_message(&buf, &mut tmp)
         .map_err(|e| io::Error::other(e.to_string()))?;
 
     debug_assert!(noise.is_handshake_finished());
+
+    // Peer authorization: Noise-XK has now authenticated the initiator's
+    // static X25519 key. Require it to be in the trusted-peer allowlist before
+    // dispatching anything. Fail-closed: an empty allowlist rejects all peers.
+    let remote_authorized = noise
+        .get_remote_static()
+        .filter(|key| key.len() == 32)
+        .map(|key| {
+            let mut k = [0u8; 32];
+            k.copy_from_slice(key);
+            k
+        })
+        .is_some_and(|k| allowed_peers.contains(&k));
+    if !remote_authorized {
+        warn!("TCP peer not in trusted_peers allowlist — rejecting connection");
+        return Ok(());
+    }
+
     let mut transport = noise
         .into_transport_mode()
         .map_err(|e| io::Error::other(e.to_string()))?;

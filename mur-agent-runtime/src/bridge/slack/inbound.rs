@@ -167,6 +167,18 @@ impl<B: SlackBotLike> SlackInboundLoop<B> {
             return Ok(TickResult { forwarded: false });
         }
 
+        // Sender authorization: when an owner allowlist is configured, only the
+        // listed Slack user IDs may drive the agent. Empty = no user filter.
+        if !deps.config.allowed_user_ids.is_empty() {
+            let sender_authorized = event
+                .user
+                .as_deref()
+                .is_some_and(|u| deps.config.allowed_user_ids.iter().any(|a| a == u));
+            if !sender_authorized {
+                return Ok(TickResult { forwarded: false });
+            }
+        }
+
         let dedupe_key = format!("{}:{}", event.channel, event.ts);
         if deps.dedupe.is_seen(&dedupe_key).unwrap_or(false) {
             return Ok(TickResult { forwarded: false });

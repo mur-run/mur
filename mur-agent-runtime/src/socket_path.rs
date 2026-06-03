@@ -31,10 +31,12 @@ pub fn resolve_bind_target(
             symlink_created: false,
         });
     }
-    let short = PathBuf::from(format!(
-        "/tmp/mur-{}.sock",
-        uuid.chars().take(8).collect::<String>()
-    ));
+    // Use the full agent UUID, not a prefix. UUIDv7's leading hex digits are
+    // the high bits of a millisecond timestamp (deterministic, not random), so
+    // a short prefix collides for any two agents created in the same window.
+    // The full UUID (36 chars) keeps `/tmp/mur-<uuid>.sock` at ~50 bytes, well
+    // under MAX_SAFE_PATH_BYTES.
+    let short = PathBuf::from(format!("/tmp/mur-{uuid}.sock"));
     if let Some(parent) = canonical.parent() {
         fs::create_dir_all(parent)?;
     }
