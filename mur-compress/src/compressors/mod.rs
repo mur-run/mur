@@ -1,3 +1,4 @@
 pub mod fallback;
+pub mod log;
 pub mod search;
-// log, diff, json added in Tasks 10–12.
+// diff, json added in Tasks 11–12.
