@@ -71,9 +71,34 @@ impl CompressEngine {
         }
     }
 
+    /// A no-op result that returns `content` unchanged.
+    fn passthrough(content: &str, before: usize, ct: ContentType) -> CompressResult {
+        CompressResult {
+            compressed: content.to_string(),
+            hash: None,
+            original_tokens: before,
+            compressed_tokens: before,
+            tokens_saved: 0,
+            savings_percent: 0.0,
+            transforms: vec!["passthrough".to_string()],
+            content_type: ct,
+        }
+    }
+
     /// Compress `content`. Never errors: any failure returns the original.
+    ///
+    /// The result is only kept if it actually pays off — it must be strictly
+    /// smaller than the input, and any result that offloaded to the store must
+    /// clear `bloat_threshold`. Otherwise the original is returned unchanged so
+    /// compression can never "help backwards". Disabled config is also a no-op.
     pub fn compress(&self, content: &str, query: Option<&str>) -> CompressResult {
         let ct = detect_content_type(content, &self.config);
+        let before = self.tok.count(content);
+
+        if !self.config.enabled {
+            return Self::passthrough(content, before, ct);
+        }
+
         let ctx = CompressCtx {
             query,
             config: &self.config,
@@ -86,14 +111,25 @@ impl CompressEngine {
                 transforms: Vec::new(),
             });
 
-        let before = self.tok.count(content);
         let after = self.tok.count(&out.compressed);
         let saved = before.saturating_sub(after);
-        let pct = if before > 0 {
-            saved as f32 / before as f32 * 100.0
+        let saved_frac = if before > 0 {
+            saved as f32 / before as f32
         } else {
             0.0
         };
+
+        // Reject results that don't pay off. Reformat-only output (no hash) just
+        // has to be smaller; offloaded output (hash present, paid a store write)
+        // must also clear the bloat gate. A rejected offload leaves an orphan
+        // store entry that ages out via TTL/eviction — a future estimate_bloat()
+        // pre-gate could avoid the wasted write entirely.
+        let worth_it =
+            after < before && (out.hash.is_none() || saved_frac >= self.config.bloat_threshold);
+        if !worth_it {
+            return Self::passthrough(content, before, ct);
+        }
+
         self.stats.record_compression(before, after);
 
         CompressResult {
@@ -102,7 +138,7 @@ impl CompressEngine {
             original_tokens: before,
             compressed_tokens: after,
             tokens_saved: saved,
-            savings_percent: pct,
+            savings_percent: saved_frac * 100.0,
             transforms: out.transforms,
             content_type: ct,
         }
@@ -144,5 +180,60 @@ impl CompressEngine {
         let (entries, bytes) = self.store.stats();
         self.stats
             .snapshot(self.config.stats.cost_per_mtok_usd, entries, bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn engine(dir: &std::path::Path, cfg: CompressConfig) -> CompressEngine {
+        CompressEngine::new(dir, cfg).unwrap()
+    }
+
+    #[test]
+    fn disabled_config_is_a_passthrough() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = CompressConfig::default();
+        cfg.enabled = false;
+        let eng = engine(dir.path(), cfg);
+        // A long search result that would normally offload.
+        let input = (0..40)
+            .map(|i| format!("src/f{i}.rs:{i}:line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let res = eng.compress(&input, Some("line 7"));
+        assert!(res.hash.is_none(), "disabled engine must not offload");
+        assert_eq!(
+            res.compressed, input,
+            "disabled engine returns input verbatim"
+        );
+        assert_eq!(res.tokens_saved, 0);
+        assert_eq!(
+            eng.stats_snapshot().compressions,
+            0,
+            "no-op is not recorded"
+        );
+    }
+
+    #[test]
+    fn expanding_result_passes_through_instead_of_helping_backwards() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = CompressConfig::default();
+        cfg.store.compress_at_rest = false;
+        cfg.protect_head_lines = 2;
+        let eng = engine(dir.path(), cfg);
+        // A tiny array just over the collapse threshold: the schema+sample+hash
+        // wrapper is larger than the original, so it must NOT be kept.
+        let input = r#"[{"id":1},{"id":2},{"id":3},{"id":4},{"id":5},{"id":6}]"#;
+        let res = eng.compress(input, None);
+        assert!(
+            res.hash.is_none(),
+            "expanding compression must pass through"
+        );
+        assert_eq!(res.compressed, input);
+        assert_eq!(res.tokens_saved, 0);
+        assert!(res.compressed_tokens <= res.original_tokens);
+        assert_eq!(eng.stats_snapshot().compressions, 0);
     }
 }
