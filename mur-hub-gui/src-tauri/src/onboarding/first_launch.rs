@@ -67,8 +67,8 @@ fn check_in_applications() -> bool {
 
 #[cfg(target_os = "macos")]
 fn bundle_path() -> Option<PathBuf> {
-    // binary: /Applications/MuR Hub.app/Contents/MacOS/mur-hub-gui
-    // bundle: /Applications/MuR Hub.app
+    // binary: /Applications/MUR Hub.app/Contents/MacOS/mur-hub-gui
+    // bundle: /Applications/MUR Hub.app
     let exe = std::env::current_exe().ok()?;
     let bundle = exe.parent()?.parent()?.parent()?;
     if bundle.extension().and_then(|e| e.to_str()) == Some("app") {
