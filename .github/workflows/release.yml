@@ -157,7 +157,13 @@ jobs:
           name: mur-aarch64-apple-darwin
 
       - name: Extract binary from tar.gz
-        run: tar xzf mur-aarch64-apple-darwin.tar.gz
+        # Extract into a dedicated dir: the tarball contains a `mur-mcp-server`
+        # binary, but the checked-out source tree has a `mur-mcp-server/` crate
+        # directory at the repo root. Extracting in place fails with
+        # "Can't replace existing directory with non-directory".
+        run: |
+          mkdir -p dist
+          tar xzf mur-aarch64-apple-darwin.tar.gz -C dist
 
       - name: Import Apple signing certs
         uses: apple-actions/import-codesign-certs@v2
@@ -169,8 +175,8 @@ jobs:
         run: |
           mkdir -p pkg-root/usr/local/bin
           mkdir -p pkg-root/usr/local/share/doc/mur
-          cp mur pkg-root/usr/local/bin/mur
-          cp mur-mcp-server pkg-root/usr/local/bin/mur-mcp-server
+          cp dist/mur pkg-root/usr/local/bin/mur
+          cp dist/mur-mcp-server pkg-root/usr/local/bin/mur-mcp-server
           chmod +x pkg-root/usr/local/bin/mur
           chmod +x pkg-root/usr/local/bin/mur-mcp-server
           cp LICENSE pkg-root/usr/local/share/doc/mur/LICENSE
