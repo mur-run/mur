@@ -81,7 +81,8 @@ impl HostGuard {
                 if list.is_empty() {
                     return false;
                 }
-                list.iter().any(|pattern| host_matches_pattern(host, pattern))
+                list.iter()
+                    .any(|pattern| host_matches_pattern(host, pattern))
             }
         }
     }
