@@ -115,6 +115,14 @@ const TONE_OPTIONS = ["professional", "casual", "friendly", "direct", "playful",
 const RISK_OPTIONS = ["conservative", "balanced", "bold"];
 const VERBOSITY_OPTIONS = ["concise", "balanced", "detailed"];
 
+// Include the agent's current value as an option even when it isn't one of the
+// canned choices (older agents / custom vocab), so the <select> shows the real
+// value instead of silently snapping to the first option — which misrepresents
+// the persona and risks clobbering the value on save.
+function withCurrent(options: string[], current: string): string[] {
+  return current && !options.includes(current) ? [current, ...options] : options;
+}
+
 function PersonaTab({
   detail,
   onSaved,
@@ -191,7 +199,7 @@ function PersonaTab({
         value={tone}
         onChange={(e) => { setTone(e.target.value); }}
       >
-        {TONE_OPTIONS.map((t) => (
+        {withCurrent(TONE_OPTIONS, tone).map((t) => (
           <option key={t} value={t}>{t}</option>
         ))}
       </select>
@@ -202,7 +210,7 @@ function PersonaTab({
         value={risk}
         onChange={(e) => { setRisk(e.target.value); }}
       >
-        {RISK_OPTIONS.map((r) => (
+        {withCurrent(RISK_OPTIONS, risk).map((r) => (
           <option key={r} value={r}>{r}</option>
         ))}
       </select>
@@ -213,7 +221,7 @@ function PersonaTab({
         value={verbosity}
         onChange={(e) => { setVerbosity(e.target.value); }}
       >
-        {VERBOSITY_OPTIONS.map((v) => (
+        {withCurrent(VERBOSITY_OPTIONS, verbosity).map((v) => (
           <option key={v} value={v}>{v}</option>
         ))}
       </select>
