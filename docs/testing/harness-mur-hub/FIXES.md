@@ -50,6 +50,28 @@ Addresses the user's three reported problems directly.
   mismatch → "Could not find service", exit 113). DEFERRED — see below.
 - I-6: `mlx_sidecar` resolved `"models/default"` (same missing-`resources/`-prefix bug as I-3).
 
+## Visual verification via the real app (2026-06-04, after Screen Recording was granted)
+
+Driven the real bundled .app with screenshots + cliclick (screencapture now works once the
+terminal got Screen Recording permission). Sandbox MUR_HOME pre-seeded with mur+Author+Coach
+(so seeding skipped → no launchd side effects). Screenshots in `screenshots/`:
+1. `01-dashboard-with-mur.png` — dashboard renders; **Mur** appears alongside other agents
+   (I-1/I-3 fix visible), brain badge "Qwen3.5-2B-MLX-4bit", category counts, toolbar.
+2. `02-style-not-rendered-with-render-button.png` — Mur → Style tab: "Not rendered yet" PLUS
+   the new **"Render avatar"** button (I-2 fix) + 6-preset gallery.
+3. `03-style-ready-after-render.png` — after clicking Render avatar: status flips to **"Ready ✓"**,
+   button relabels **"Re-render avatar"**; 9+ expression .webp + manifest.json written to
+   agents/mur/expressions/, profile render_status=ready (offline Mock provider). I-2 end-to-end.
+4. `04-onboarding-wizard-step1.png` — "+ New Agent" opens the wizard; step 1 persona categories
+   (Research/Automation/Monitor/Notify/Commerce/Custom) render — confirms wizard works.
+
+Conclusion: the three reported problems are fixed and confirmed in the live UI. The "many
+functions not implemented" complaint was the old installed 0.1.0 build; the current build's
+dashboard, detail panel/tabs, Style render, and onboarding wizard all work.
+
+Minor follow-up (not an issue worth a batch): the grid card avatar doesn't live-refresh to the
+newly rendered idle.webp until reload; the detail panel does update correctly.
+
 ## Batch 2 — local-inference / MUR_HOME path correctness (I-4, I-6; I-5 deferred)
 
 Note: this batch ships TWO fixes, not three, by design. I-5 (modernising macOS launchd from

@@ -103,6 +103,11 @@ nudge_dismiss, get_agent_detail, update_agent_detail
 
 ## STATUS LOG (newest first)
 
+- 2026-06-04: VISUAL VERIFICATION (screencapture fixed via Screen Recording grant to terminal;
+  cliclick installed). Drove the real .app: dashboard shows Mur (I-1/I-3), Style tab shows the
+  new "Render avatar" button (I-2), clicking it rendered offline → "Ready ✓"/"Re-render"
+  (I-2 end-to-end), onboarding wizard opens. Screenshots committed under screenshots/. App +
+  sandbox cleaned, no stray launchd plist. All 3 reported problems confirmed fixed in live UI.
 - 2026-06-04: SESSION CHECKPOINT. Full test suites green: hub crate 20/20, mur-gui-core 42/42
   (62 total) — broad unit/integration verification that implemented commands work. Real system
   left clean (no stray launchd plist, real ~/.mur untouched, sandbox removed). 2 local commits
