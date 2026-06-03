@@ -86,22 +86,16 @@ mod tests {
     }
 }
 
-/// Match a host string against an allowlist that supports leading-dot
-/// wildcards (`.example.com` matches `api.example.com` and
-/// `example.com`). Exact match also passes.
+/// Match a host string against an allowlist.
+///
+/// Delegates to [`crate::sandbox::reqwest_guard::host_matches_pattern`] so
+/// both the B0 gate and the HostGuard DNS resolver share a single wildcard
+/// interpretation.  The canonical form is `*.example.com`; the legacy
+/// `.example.com` leading-dot form is also accepted.
 pub fn host_is_allowlisted(host: &str, allow: &[String]) -> bool {
-    let host = host.to_ascii_lowercase();
-    for pattern in allow {
-        let pattern = pattern.to_ascii_lowercase();
-        if let Some(suffix) = pattern.strip_prefix('.') {
-            if host == suffix || host.ends_with(&format!(".{suffix}")) {
-                return true;
-            }
-        } else if host == pattern {
-            return true;
-        }
-    }
-    false
+    allow
+        .iter()
+        .any(|p| crate::sandbox::reqwest_guard::host_matches_pattern(host, p))
 }
 
 #[cfg(test)]
