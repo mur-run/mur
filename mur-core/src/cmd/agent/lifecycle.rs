@@ -251,6 +251,7 @@ fn default_entitlements_custom() -> Entitlements {
             processes: 32,
         },
         llm: Default::default(),
+        fail_closed_on_sandbox_error: true,
     }
 }
 

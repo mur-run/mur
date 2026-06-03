@@ -186,8 +186,18 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // BEFORE telemetry writer (its file I/O must be within sandbox bounds).
     // BEFORE on_startup hooks.
     // On platforms without Landlock/SBPL support, returns enforcing=false — B0 still applies.
+    let fail_closed = profile.inner.entitlements.fail_closed_on_sandbox_error;
     match crate::sandbox::apply(&profile.inner.entitlements, &agent_home) {
         Ok(status) => {
+            if !status.enforcing && fail_closed {
+                anyhow::bail!(
+                    "B1 sandbox applied but not enforcing on this platform \
+                     (enforcing=false) and fail_closed_on_sandbox_error=true; \
+                     refusing to start unconfined. Set \
+                     entitlements.fail_closed_on_sandbox_error: false in the \
+                     profile to allow advisory-only mode."
+                );
+            }
             tracing::info!(
                 platform = %status.platform,
                 effective_abi = ?status.effective_abi,
@@ -196,6 +206,13 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             );
         }
         Err(e) => {
+            if fail_closed {
+                return Err(e.context(
+                    "B1 sandbox::apply failed and fail_closed_on_sandbox_error=true; \
+                     refusing to start. Set entitlements.fail_closed_on_sandbox_error: \
+                     false in the profile to allow advisory-only mode.",
+                ));
+            }
             tracing::warn!(error = %e, "B1 sandbox::apply failed; running advisory-only (B0 remains active)");
         }
     }

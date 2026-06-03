@@ -59,6 +59,11 @@ impl LlmClient for OllamaClient {
         if let Some(m) = req.max_tokens {
             body["options"]["num_predict"] = json!(m);
         }
+        if let Ok(parsed) = reqwest::Url::parse(&url)
+            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
+        {
+            return Err(LlmError::Http(e));
+        }
         let resp = self.http.post(url).json(&body).send().await.map_err(|e| {
             if e.is_timeout() {
                 LlmError::Timeout

@@ -167,6 +167,11 @@ impl LlmClient for OpenAiClient {
         }
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        if let Ok(parsed) = reqwest::Url::parse(&url)
+            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
+        {
+            return Err(LlmError::Http(e));
+        }
         let resp = self
             .http
             .post(url)

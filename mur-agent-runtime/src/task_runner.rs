@@ -37,9 +37,16 @@ pub enum RunnerBackend {
     Llm(Arc<dyn LlmClient>),
 }
 
+/// Cap on task-state entries retained in memory. Oldest entries are evicted
+/// when this limit is exceeded so long-lived agents don't leak unboundedly.
+const MAX_REGISTRY_ENTRIES: usize = 1_024;
+
 pub struct TaskRunner {
     backend: RunnerBackend,
     registry: Arc<Mutex<HashMap<String, TaskState>>>,
+    /// Insertion-order index used to evict the oldest entry when `registry`
+    /// exceeds `MAX_REGISTRY_ENTRIES`.
+    registry_keys: Arc<Mutex<VecDeque<String>>>,
     cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
     telemetry: Option<mpsc::Sender<Event>>,
     system_prompt: Option<String>,
@@ -71,6 +78,7 @@ impl TaskRunner {
         Self {
             backend,
             registry: Arc::new(Mutex::new(HashMap::new())),
+            registry_keys: Arc::new(Mutex::new(VecDeque::new())),
             cancel_signals: Arc::new(Mutex::new(HashMap::new())),
             telemetry: None,
             system_prompt: None,
@@ -128,7 +136,10 @@ impl TaskRunner {
             .turn_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let recently: HashSet<String> = {
-            let q = self.recently_fired.lock().unwrap();
+            let q = self
+                .recently_fired
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let horizon = turn.saturating_sub(
                 self.skills_cfg
                     .adaptive
@@ -173,10 +184,25 @@ impl TaskRunner {
             layer3.push('\n');
             layer3.push_str(&format_layer3(&loaded.name, loaded.trust, &body));
             suppress_names.insert(loaded.name.as_str());
-            self.recently_fired
-                .lock()
-                .unwrap()
-                .push_back((turn, loaded.name.clone()));
+            {
+                let mut q = self
+                    .recently_fired
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                q.push_back((turn, loaded.name.clone()));
+                // Prune entries that have fallen below the boost horizon so
+                // the deque doesn't grow unboundedly on long-lived agents.
+                let boost_turns = self
+                    .skills_cfg
+                    .adaptive
+                    .as_ref()
+                    .map(|a| a.recent_fire_boost_turns as u64)
+                    .unwrap_or(0);
+                let horizon = turn.saturating_sub(boost_turns);
+                while q.front().map(|(t, _)| *t < horizon).unwrap_or(false) {
+                    q.pop_front();
+                }
+            }
         }
 
         // Suppress Layer 2 lines for skills whose Layer 3 just loaded.
@@ -253,7 +279,7 @@ impl TaskRunner {
         let (tx_cancel, mut rx_cancel) = oneshot::channel::<()>();
         self.cancel_signals
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), tx_cancel);
         self.set_state(&id, TaskState::Working);
         let id_clone = id.clone();
@@ -262,7 +288,7 @@ impl TaskRunner {
             tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
                     let reply = echo_response(&spec.input);
-                    registry.lock().unwrap().insert(id_clone.clone(), TaskState::Completed);
+                    registry.lock().unwrap_or_else(|e| e.into_inner()).insert(id_clone.clone(), TaskState::Completed);
                     let _ = tx_done.send(TaskOutcome::Completed(Task {
                         id: id_clone.clone(),
                         state: TaskState::Completed,
@@ -274,7 +300,7 @@ impl TaskRunner {
                     }));
                 }
                 _ = &mut rx_cancel => {
-                    registry.lock().unwrap().insert(id_clone.clone(), TaskState::Cancelled);
+                    registry.lock().unwrap_or_else(|e| e.into_inner()).insert(id_clone.clone(), TaskState::Cancelled);
                     let _ = tx_done.send(TaskOutcome::Cancelled(Task {
                         id: id_clone.clone(),
                         state: TaskState::Cancelled,
@@ -291,7 +317,11 @@ impl TaskRunner {
     }
 
     pub async fn cancel(&self, task_id: &str) -> Result<(), String> {
-        let tx = self.cancel_signals.lock().unwrap().remove(task_id);
+        let tx = self
+            .cancel_signals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(task_id);
         match tx {
             Some(tx) => {
                 let _ = tx.send(());
@@ -302,11 +332,28 @@ impl TaskRunner {
     }
 
     fn set_state(&self, id: &str, state: TaskState) {
-        self.registry.lock().unwrap().insert(id.to_string(), state);
+        let mut reg = self.registry.lock().unwrap_or_else(|e| e.into_inner());
+        let mut keys = self.registry_keys.lock().unwrap_or_else(|e| e.into_inner());
+        if !reg.contains_key(id) {
+            keys.push_back(id.to_string());
+            // Evict oldest entries when over the cap.
+            while reg.len() >= MAX_REGISTRY_ENTRIES {
+                if let Some(oldest) = keys.pop_front() {
+                    reg.remove(&oldest);
+                } else {
+                    break;
+                }
+            }
+        }
+        reg.insert(id.to_string(), state);
     }
 
     pub fn get_state(&self, id: &str) -> Option<TaskState> {
-        self.registry.lock().unwrap().get(id).cloned()
+        self.registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .cloned()
     }
 
     /// Unix timestamp of the last inbound task (`run_sync`/`start_async`).

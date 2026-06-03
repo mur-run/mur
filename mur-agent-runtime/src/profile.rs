@@ -81,11 +81,16 @@ fn validate_uuid_v7(id: &str) -> Result<(), ProfileLoadError> {
 fn validate_filesystem_paths(p: &AgentProfile, _agent_home: &Path) -> Result<(), ProfileLoadError> {
     for entry in &p.entitlements.filesystem.read {
         if entry.starts_with('/') && !entry.contains('*') {
+            // Warn-only: existence at boot time doesn't imply access at use
+            // time (TOCTOU) and breaks agents on transient mounts. The sandbox
+            // layer enforces actual access; this check would add no security.
             let path = Path::new(entry);
             if !path.exists() {
-                return Err(ProfileLoadError::Validation(format!(
-                    "entitlements.filesystem.read: path '{entry}' does not exist"
-                )));
+                tracing::warn!(
+                    path = %entry,
+                    "entitlements.filesystem.read: path does not exist at startup \
+                     (may be a transient mount — continuing)"
+                );
             }
         }
     }

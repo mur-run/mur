@@ -38,6 +38,7 @@ fn ent_with_outbound(mode: NetworkOutboundMode, allow: Vec<String>) -> Entitleme
         syscalls: SyscallsEntitlement::default(),
         limits: LimitsEntitlement::default(),
         llm: Default::default(),
+        fail_closed_on_sandbox_error: true,
     }
 }
 
