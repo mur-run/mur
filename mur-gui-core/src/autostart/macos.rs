@@ -8,24 +8,17 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub fn register(
+/// Build the launchd plist contents for an agent. Pure (no I/O) so it is unit-testable.
+/// Sets `MUR_HOME` in the agent's environment so the launchd-spawned runtime resolves
+/// the same data directory the Hub used to register it (not just the default ~/.mur).
+fn plist_contents(
     slug: &str,
-    display_name: &str,
     runtime_binary: &Path,
     mur_home: &Path,
-) -> Result<()> {
-    let plist_path = plist_path(slug)?;
-    if let Some(parent) = plist_path.parent() {
-        std::fs::create_dir_all(parent).context("create LaunchAgents dir")?;
-    }
-
-    let log_dir = mur_home.join("agents").join(slug);
-    std::fs::create_dir_all(&log_dir).context("create agent log dir")?;
-
-    let stdout_log = log_dir.join("stdout.log");
-    let stderr_log = log_dir.join("stderr.log");
-
-    let plist = format!(
+    stdout_log: &Path,
+    stderr_log: &Path,
+) -> String {
+    format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -43,6 +36,11 @@ pub fn register(
         <string>{slug}</string>
         <string>start</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MUR_HOME</key>
+        <string>{mur_home}</string>
+    </dict>
     <key>KeepAlive</key>
     <true/>
     <key>RunAtLoad</key>
@@ -56,9 +54,31 @@ pub fn register(
 "#,
         slug = slug,
         runtime = runtime_binary.display(),
+        mur_home = mur_home.display(),
         stdout = stdout_log.display(),
         stderr = stderr_log.display(),
-    );
+    )
+}
+
+pub fn register(
+    slug: &str,
+    display_name: &str,
+    runtime_binary: &Path,
+    mur_home: &Path,
+) -> Result<()> {
+    let plist_path = plist_path(slug)?;
+    if let Some(parent) = plist_path.parent() {
+        std::fs::create_dir_all(parent).context("create LaunchAgents dir")?;
+    }
+
+    let log_dir = mur_home.join("agents").join(slug);
+    std::fs::create_dir_all(&log_dir).context("create agent log dir")?;
+
+    let stdout_log = log_dir.join("stdout.log");
+    let stderr_log = log_dir.join("stderr.log");
+
+    let _ = display_name; // kept for cross-platform API symmetry
+    let plist = plist_contents(slug, runtime_binary, mur_home, &stdout_log, &stderr_log);
 
     std::fs::write(&plist_path, &plist).context("write launchd plist")?;
 
@@ -152,40 +172,7 @@ mod tests {
         let stdout_log = log_dir.join("stdout.log");
         let stderr_log = log_dir.join("stderr.log");
 
-        let plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>run.mur.agent.{slug}</string>
-    <key>AssociatedBundleIdentifiers</key>
-    <array>
-        <string>run.mur.host</string>
-    </array>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{runtime}</string>
-        <string>--profile</string>
-        <string>{slug}</string>
-        <string>start</string>
-    </array>
-    <key>KeepAlive</key>
-    <true/>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>{stdout}</string>
-    <key>StandardErrorPath</key>
-    <string>{stderr}</string>
-</dict>
-</plist>
-"#,
-            slug = "coach",
-            runtime = runtime.display(),
-            stdout = stdout_log.display(),
-            stderr = stderr_log.display(),
-        );
+        let plist = plist_contents("coach", runtime, mur_home, &stdout_log, &stderr_log);
 
         assert!(plist.contains("AssociatedBundleIdentifiers"));
         assert!(plist.contains("run.mur.host"));
@@ -194,5 +181,21 @@ mod tests {
         assert!(plist.contains("RunAtLoad"));
         assert!(plist.contains("--profile"));
         assert!(plist.contains("stdout.log"));
+    }
+
+    #[test]
+    fn plist_sets_mur_home_env() {
+        // The launchd-spawned runtime must inherit MUR_HOME so it resolves the
+        // same data directory the Hub registered it with.
+        let plist = plist_contents(
+            "coach",
+            Path::new("/usr/local/bin/mur-agent-runtime"),
+            Path::new("/tmp/custom-mur-home"),
+            Path::new("/tmp/custom-mur-home/agents/coach/stdout.log"),
+            Path::new("/tmp/custom-mur-home/agents/coach/stderr.log"),
+        );
+        assert!(plist.contains("<key>EnvironmentVariables</key>"));
+        assert!(plist.contains("<key>MUR_HOME</key>"));
+        assert!(plist.contains("<string>/tmp/custom-mur-home</string>"));
     }
 }

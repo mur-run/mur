@@ -44,7 +44,36 @@ Addresses the user's three reported problems directly.
 - I-2 render: covered by compile + clippy + the existing mur-gui-core RenderJob/Mock tests that
   the new command reuses; UI type-checks. (No screencapture available to click the button live.)
 
-### New issue surfaced during live test (queued for Batch 2)
-- I-4: supervisor spawns `mur-agent-runtime` WITHOUT propagating `MUR_HOME` → seeded agent's
-  runtime looked for the profile at real `~/.mur/agents/mur/profile.yaml` instead of the
-  sandbox. Production (no MUR_HOME) is consistent, but MUR_HOME users are broken. See ISSUES.md.
+### New issues surfaced during live test (Batch 2)
+- I-4: launchd-spawned `mur-agent-runtime` didn't get `MUR_HOME`.
+- I-5: macOS autostart uses legacy `launchctl load` but `kickstart user/$UID/...` (domain
+  mismatch → "Could not find service", exit 113). DEFERRED — see below.
+- I-6: `mlx_sidecar` resolved `"models/default"` (same missing-`resources/`-prefix bug as I-3).
+
+## Batch 2 — local-inference / MUR_HOME path correctness (I-4, I-6; I-5 deferred)
+
+Note: this batch ships TWO fixes, not three, by design. I-5 (modernising macOS launchd from
+`launchctl load` to `bootstrap gui/$UID`) changes autostart semantics for ALL agents and has
+real-system side effects (writes/loads plists in the user's real `~/Library/LaunchAgents`).
+It cannot be verified safely under this automation tonight without risking the user's launchd
+state, so it is documented precisely in ISSUES.md (I-5) for review rather than auto-committed
+unverified. The two fixes below are surgical and verified.
+
+### I-6 — mlx_sidecar bundled-model resource path wrong (same class as I-3)
+- `mur-hub-gui/src-tauri/src/mlx_sidecar.rs`: resolve `resources/models/default` (Tauri's actual
+  staged path), fall back to the bare name, require an existing dir, else warn + skip. Without
+  this, local inference can't find the model even when it IS bundled in a release build.
+
+### I-4 — MUR_HOME not propagated to launchd-spawned agent runtime
+- `mur-gui-core/src/autostart/macos.rs`: extracted a pure `plist_contents()` and added an
+  `EnvironmentVariables` dict setting `MUR_HOME` to the dir the Hub registered the agent with,
+  so the runtime resolves the same data directory (fixes MUR_HOME users + any non-default home).
+
+### Verification
+- `cargo clippy -p mur-gui-core --all-targets -- -D warnings`: clean.
+- hub crate `cargo clippy --all-targets -- -D warnings`: clean.
+- `cargo test -p mur-gui-core autostart`: 2/2 pass — incl. new `plist_sets_mur_home_env`.
+- I-6: code-verified (resolve path now matches Tauri's staged layout; dev build has an empty
+  models dir so local inference still skips, as expected — release bundles the model).
+- Not live-run: I-4 end-to-end needs real launchd (avoided to not touch user's system); I-6
+  needs a bundled model (release-only). Both committed locally for morning review.

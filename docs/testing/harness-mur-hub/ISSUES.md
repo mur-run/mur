@@ -6,14 +6,31 @@ Batching rule: accumulate 3 CONFIRMED issues → one fix batch → commit (no pu
 ## Batch 1 — FIXED & verified (commit on test/harness-mur-hub)
 - I-1, I-2, I-3 fixed; see FIXES.md. Live: empty + existing-agents both seed Mur.
 
-## Open queue (Batch 2 accumulating — need 3 confirmed)
+## Batch 2 — I-4 + I-6 FIXED (committed); I-5 DEFERRED for review
 
-### I-4 — supervisor does not propagate MUR_HOME to spawned agent runtime — CONFIRMED (live)
-- Seeded Mur's runtime logged `profile not found at /Users/david/.mur/agents/mur/profile.yaml`
-  while Hub ran with MUR_HOME=/tmp/hub-harness/A. The child `mur-agent-runtime` defaults to
-  ~/.mur because the supervisor spawn doesn't pass MUR_HOME through. Breaks MUR_HOME users
-  (and all sandboxed runs). Fix: pass MUR_HOME env (and/or --mur-home) to the spawned runtime
-  in mur-gui-core sidecar Supervisor. NOTE: production w/o MUR_HOME is unaffected.
+### I-4 — MUR_HOME not propagated to launchd-spawned runtime — FIXED (Batch 2)
+- Was: seeded Mur's runtime logged `profile not found at ~/.mur/agents/mur/profile.yaml` while
+  Hub ran with MUR_HOME=sandbox; launchd plist had no MUR_HOME env. Fix: plist now sets
+  EnvironmentVariables/MUR_HOME (mur-gui-core/src/autostart/macos.rs, `plist_contents`).
+
+### I-6 — mlx_sidecar model resource path missing `resources/` prefix — FIXED (Batch 2)
+- Same bug class as I-3. Fix: resolve `resources/models/default` w/ fallback (mlx_sidecar.rs).
+
+### I-5 — macOS autostart launchctl domain mismatch — CONFIRMED (live), DEFERRED
+- `register` uses legacy `launchctl load <plist>` (macos.rs:~66) but `start_service` uses
+  `launchctl kickstart -k user/$UID/<label>` and `stop_service` similar → on modern macOS the
+  service isn't found in that domain (`Could not find service "run.mur.agent.mur"`, kickstart
+  exit 113). So a freshly-seeded/started agent never actually runs via the Hub.
+- Proposed fix (NOT YET DONE — needs review + real-launchd verification): modernise to
+  `launchctl bootstrap gui/$UID <plist>` (bootout first to be idempotent) in register,
+  `kickstart -k gui/$UID/<label>` in start_service, `kill TERM gui/$UID/<label>` in stop,
+  `bootout gui/$UID/<label>` in unregister. Blast radius: affects autostart for ALL agents;
+  has real-system side effects (writes/loads in ~/Library/LaunchAgents). Verify by bootstrapping
+  one test agent, confirming `launchctl print gui/$UID/run.mur.agent.<slug>`, then bootout+rm.
+- WARNING for whoever runs this: launchctl operates in the USER domain regardless of MUR_HOME,
+  so testing WILL touch ~/Library/LaunchAgents. During this session a stray
+  `run.mur.agent.mur.plist` was created by sandbox launches and had to be removed
+  (booted out + deleted). Isolate or clean up.
 
 ## Resolved
 ### I-1 — Default "Mur" never seeded for existing users — FIXED (Batch 1)

@@ -103,6 +103,13 @@ nudge_dismiss, get_agent_detail, update_agent_detail
 
 ## STATUS LOG (newest first)
 
+- 2026-06-04: BATCH 2 (I-4 + I-6) DONE & committed locally; I-5 DEFERRED for review.
+  I-6: mlx_sidecar resolves `resources/models/default` (same fix class as I-3). I-4: launchd
+  plist now sets EnvironmentVariables/MUR_HOME via extracted pure `plist_contents()`
+  (autostart/macos.rs) + new unit test. clippy clean (gui-core + hub); autostart tests 2/2.
+  Batch is intentionally 2 not 3: I-5 (launchctl load→bootstrap gui/$UID) is blast-radius +
+  needs real-launchd verification → left for morning review (see ISSUES.md I-5). Cleaned a
+  stray ~/Library/LaunchAgents/run.mur.agent.mur.plist created by earlier sandbox launches.
 - 2026-06-04: BATCH 1 DONE (I-1,I-2,I-3) — seed-by-name+atomic+heal (seed_mur.rs), correct
   resource path `resources/mur-agent-template` (lib.rs), render_agent_expressions command
   (onboarding/mod.rs)+handler, Style-tab Render/Re-render button+poll (DetailPanel.tsx).
