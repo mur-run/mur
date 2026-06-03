@@ -103,6 +103,12 @@ nudge_dismiss, get_agent_detail, update_agent_detail
 
 ## STATUS LOG (newest first)
 
+- 2026-06-04: I-5 (Batch 4) FIXED & verified — macOS autostart launchd domain. register now
+  bootstraps into gui/$UID (was legacy `load`); start/stop/unregister target gui/$UID/<label>
+  (was user/$UID → kickstart exit 113). autostart/macos.rs + gui_domain/service_target helpers +
+  unit test. Verified: launchctl smoke (bootstrap+kickstart gui OK, the exact user/ call that
+  failed), and integration (Hub seeds+starts Mur with NO "kickstart failed"/"Could not find
+  service"). Cleaned real launchd plist + sandbox. ALL of I-1..I-8 now fixed. Committing Batch 4.
 - 2026-06-04: DESKTOP PET (Batch 3, I-7+I-8) FIXED & verified live. User asked to test the pet;
   it was doubly broken: (I-7) drag-to-desktop never spawned (spawn gated on a `mouseleave` that
   doesn't fire during a button-held drag) and (I-8) pet_spawn_at PANICKED the whole app

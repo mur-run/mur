@@ -16,7 +16,7 @@ Batching rule: accumulate 3 CONFIRMED issues → one fix batch → commit (no pu
 ### I-6 — mlx_sidecar model resource path missing `resources/` prefix — FIXED (Batch 2)
 - Same bug class as I-3. Fix: resolve `resources/models/default` w/ fallback (mlx_sidecar.rs).
 
-### I-5 — macOS autostart launchctl domain mismatch — CONFIRMED (live), DEFERRED
+### I-5 — macOS autostart launchctl domain mismatch — FIXED (Batch 4) & verified live
 - `register` uses legacy `launchctl load <plist>` (macos.rs:~66) but `start_service` uses
   `launchctl kickstart -k user/$UID/<label>` and `stop_service` similar → on modern macOS the
   service isn't found in that domain (`Could not find service "run.mur.agent.mur"`, kickstart

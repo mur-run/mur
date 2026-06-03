@@ -72,6 +72,31 @@ dashboard, detail panel/tabs, Style render, and onboarding wizard all work.
 Minor follow-up (not an issue worth a batch): the grid card avatar doesn't live-refresh to the
 newly rendered idle.webp until reload; the detail panel does update correctly.
 
+## Batch 4 — macOS autostart launchd domain fix (I-5)
+
+A seeded/started agent never actually ran via the Hub: `register` used legacy
+`launchctl load`, but `start_service`/`stop_service` targeted `user/$UID/<label>`, so
+`kickstart` failed with "Could not find service … in domain for uid" (exit 113). The Hub
+is a GUI app, so its LaunchAgents live in the `gui/$UID` (Aqua) domain.
+
+### Fix (`mur-gui-core/src/autostart/macos.rs`)
+- Extracted `gui_domain(uid)` / `service_target(uid, slug)` → `gui/$UID/run.mur.agent.<slug>`.
+- `register`: `bootout`(modern, gui) + `unload`(legacy) best-effort to clear any prior
+  registration, then `launchctl bootstrap gui/$UID <plist>` (RunAtLoad starts it). Idempotent
+  and migrates agents previously `launchctl load`-ed.
+- `start_service`: `kickstart -k gui/$UID/<label>`; `stop_service`: `kill TERM gui/$UID/<label>`;
+  `unregister`: `bootout gui/$UID/<label>` + legacy unload + rm plist. `is_running` unchanged
+  (`launchctl list <label>` is domain-agnostic).
+
+### Verification
+- Unit: `service_target_uses_gui_domain` (gui/, correct label). clippy -D warnings clean.
+- Live launchctl smoke (real `launchctl`, throwaway sleeper service): `bootstrap gui/$UID` OK,
+  `launchctl list` shows it, **`kickstart -k gui/$UID/<label>` exit 0** (the exact call that
+  returned 113 with `user/$UID`), then `bootout` + rm → clean, no leak.
+- Live integration: rebuilt .app, launched with empty MUR_HOME → seeds Mur → supervisor
+  register+start logs **no** "kickstart failed"/"Could not find service" (previously it did).
+  Created `~/Library/LaunchAgents/run.mur.agent.mur.plist` removed afterward; real ~/.mur untouched.
+
 ## Batch 3 — desktop pet feature made to work (I-7 + I-8)
 
 The user asked to test the desktop pet. Found it doubly broken and fixed both; verified the pet
