@@ -34,16 +34,34 @@ pub struct CompressOutput {
     pub transforms: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetrieveResult {
-    pub hash: String,
-    pub original_text: String,
-    pub items: Vec<String>,
-    pub original_tokens: usize,
-    pub item_count: usize,
+#[derive(Debug, Clone)]
+pub enum RetrieveResult {
+    Full {
+        content_type: String,
+        original_content: String,
+        item_count: usize,
+    },
+    Filtered {
+        query: String,
+        count: usize,
+        results: Vec<String>,
+    },
+    NotFound,
 }
 
-pub type CompressResult<T> = Result<T, CompressError>;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressResult {
+    pub compressed: String,
+    pub hash: Option<String>,
+    pub original_tokens: usize,
+    pub compressed_tokens: usize,
+    pub tokens_saved: usize,
+    pub savings_percent: f32,
+    pub transforms: Vec<String>,
+    pub content_type: ContentType,
+}
+
+pub type CompressResultErr<T> = Result<T, CompressError>;
 
 #[derive(Debug, Error)]
 pub enum CompressError {
