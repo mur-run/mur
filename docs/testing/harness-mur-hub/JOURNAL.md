@@ -103,6 +103,14 @@ nudge_dismiss, get_agent_detail, update_agent_detail
 
 ## STATUS LOG (newest first)
 
+- 2026-06-04: DESKTOP PET (Batch 3, I-7+I-8) FIXED & verified live. User asked to test the pet;
+  it was doubly broken: (I-7) drag-to-desktop never spawned (spawn gated on a `mouseleave` that
+  doesn't fire during a button-held drag) and (I-8) pet_spawn_at PANICKED the whole app
+  (tokio::spawn in a sync command). Fixed I-7 in DashboardApp.tsx (coordinate-based outside
+  check) and I-8 in pet/mod.rs (tauri::async_runtime::spawn ×2). Verified via cliclick drag: pet
+  window now appears on the desktop with the idle sprite, app stays alive (screenshot 05).
+  Cleaned app/sandbox/launchd. Committing Batch 3 locally. Tooling: installed cliclick (drag
+  sim); note synthetic drag needed the coordinate fix to be drivable.
 - 2026-06-04: VISUAL VERIFICATION (screencapture fixed via Screen Recording grant to terminal;
   cliclick installed). Drove the real .app: dashboard shows Mur (I-1/I-3), Style tab shows the
   new "Render avatar" button (I-2), clicking it rendered offline → "Ready ✓"/"Re-render"
