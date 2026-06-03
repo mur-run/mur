@@ -46,7 +46,8 @@ fn agent_inbox(agent: &str) -> PathBuf {
 /// joined under `~/.mur/agents/`. Uses the canonical agent-name rules so the
 /// GUI and CLI/HTTP surfaces agree.
 fn check_agent(agent: &str) -> Result<(), String> {
-    mur_common::agent_name::validate_agent_name(agent).map_err(|e| format!("invalid agent name: {e}"))
+    mur_common::agent_name::validate_agent_name(agent)
+        .map_err(|e| format!("invalid agent name: {e}"))
 }
 
 /// Lightweight traversal check for an opaque id used as a filename component
