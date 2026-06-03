@@ -8,6 +8,7 @@
 pub mod brain_badge;
 pub mod cli_tools;
 pub mod companion;
+pub mod detail;
 pub mod export_muragent;
 pub mod import_muragent;
 pub mod mlx_sidecar;
@@ -396,6 +397,8 @@ pub fn run() {
             cli_tools::install_cli_tools,
             brain_badge::nudge_status,
             brain_badge::nudge_dismiss,
+            detail::get_agent_detail,
+            detail::update_agent_detail,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
