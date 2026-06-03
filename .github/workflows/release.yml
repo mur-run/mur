@@ -333,20 +333,20 @@ jobs:
             --password "$NOTARY_PWD" \
             --wait
           xcrun stapler staple "$DMG"
-          mkdir -p dist && cp "$DMG" "dist/MuR-Hub-aarch64-apple-darwin.dmg"
+          mkdir -p dist && cp "$DMG" "dist/MUR-Hub-aarch64-apple-darwin.dmg"
         env:
           APPLE_ID: ${{ secrets.APPLE_NOTARY_USER }}
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           NOTARY_PWD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
 
       - name: Verify Gatekeeper acceptance
-        run: spctl -a -t open --context context:primary-signature "dist/MuR-Hub-aarch64-apple-darwin.dmg"
+        run: spctl -a -t open --context context:primary-signature "dist/MUR-Hub-aarch64-apple-darwin.dmg"
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
           name: mur-hub-macos
-          path: dist/MuR-Hub-aarch64-apple-darwin.dmg
+          path: dist/MUR-Hub-aarch64-apple-darwin.dmg
 
   release:
     name: Publish Release

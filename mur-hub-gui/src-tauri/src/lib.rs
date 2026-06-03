@@ -1,4 +1,4 @@
-//! MuR Hub — Tauri 2 desktop app.
+//! MUR Hub — Tauri 2 desktop app.
 //!
 //! M-h1: tray icon, popover + dashboard windows, agent discovery, global shortcut.
 //! M-h2: sidecar Supervisor — spawn/supervise agent runtimes; start_agent/stop_agent commands.
@@ -193,7 +193,16 @@ pub fn run() {
     if let Err(e) = write_host_path(env!("CARGO_PKG_VERSION"), &mur_home) {
         tracing::warn!("failed to write host_path: {e}");
     }
-    let supervisor = Supervisor::new(mur_home.clone());
+    // `run()` is a plain fn, so Tauri's async runtime is not yet entered here.
+    // `Supervisor::new` calls `tokio::spawn` internally, which panics ("no reactor
+    // running") without an active runtime context. Enter Tauri's global runtime —
+    // which `handle()` lazily initializes and Tauri later reuses — so the supervisor
+    // actor spawns onto the same runtime that lives for the app's lifetime.
+    let rt_handle = tauri::async_runtime::handle();
+    let supervisor = {
+        let _rt_guard = rt_handle.inner().enter();
+        Supervisor::new(mur_home.clone())
+    };
     let runtime_rx = supervisor.status_receiver();
 
     tauri::Builder::default()
