@@ -7,7 +7,7 @@ use crate::skills::RuntimeSkills;
 use crate::skills::injector::inject_layer2;
 use crate::skills::trigger_matcher::{format_layer3, layer3_body, match_prompt};
 use crate::telemetry_writer::{Event, SkillOutcome};
-use mur_common::a2a::{Message, MessagePart, Task, TaskState};
+use mur_common::a2a::{Message, MessagePart, Task, TaskError, TaskState};
 use mur_common::config::SkillsConfig;
 use mur_common::skill::McpInventory;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -196,26 +196,53 @@ impl TaskRunner {
     }
 
     pub async fn run_sync(&self, spec: TaskSpec) -> TaskOutcome {
+        // Record real inbound activity so idle triggers measure genuine
+        // quiescence. Previously only `start_async` (a non-production path)
+        // bumped this, leaving `last_activity_at` permanently 0 and causing
+        // every idle trigger to fire on its first tick.
+        self.last_activity_at
+            .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
         let id = format!("task-{}", Uuid::now_v7());
         self.set_state(&id, TaskState::Working);
-        let result = match &self.backend {
-            RunnerBackend::StubEcho => echo_response(&spec.input),
+        let result: Result<Message, TaskError> = match &self.backend {
+            RunnerBackend::StubEcho => Ok(echo_response(&spec.input)),
             RunnerBackend::StubSlow => {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                echo_response(&spec.input)
+                Ok(echo_response(&spec.input))
             }
             RunnerBackend::Llm(client) => self.run_llm(&id, client.as_ref(), &spec.input).await,
         };
-        self.set_state(&id, TaskState::Completed);
-        TaskOutcome::Completed(Task {
-            id,
-            state: TaskState::Completed,
-            messages: vec![spec.input, result],
-            created_at: chrono::Utc::now().to_rfc3339(),
-            completed_at: Some(chrono::Utc::now().to_rfc3339()),
-            error: None,
-            usage: None,
-        })
+        let now = chrono::Utc::now().to_rfc3339();
+        match result {
+            Ok(reply) => {
+                self.set_state(&id, TaskState::Completed);
+                TaskOutcome::Completed(Task {
+                    id,
+                    state: TaskState::Completed,
+                    messages: vec![spec.input, reply],
+                    created_at: now.clone(),
+                    completed_at: Some(now),
+                    error: None,
+                    usage: None,
+                })
+            }
+            Err(err) => {
+                // A provider/runtime failure must surface as Failed with a
+                // populated `error` — not a Completed task whose reply body
+                // happens to contain "llm error:". Callers (message/send) and
+                // the scheduler's `Failed` branch rely on this distinction.
+                self.set_state(&id, TaskState::Failed);
+                TaskOutcome::Failed(Task {
+                    id,
+                    state: TaskState::Failed,
+                    messages: vec![spec.input],
+                    created_at: now.clone(),
+                    completed_at: Some(now),
+                    error: Some(err),
+                    usage: None,
+                })
+            }
+        }
     }
 
     pub fn start_async(&self, spec: TaskSpec) -> AsyncTaskHandle {
@@ -282,12 +309,18 @@ impl TaskRunner {
         self.registry.lock().unwrap().get(id).cloned()
     }
 
-    /// Unix timestamp of the last `start_async` call. Returns 0 if no task has been started.
+    /// Unix timestamp of the last inbound task (`run_sync`/`start_async`).
+    /// Returns 0 if no task has been handled yet.
     pub fn last_activity_at(&self) -> i64 {
         self.last_activity_at.load(Ordering::Relaxed)
     }
 
-    async fn run_llm(&self, task_id: &str, client: &dyn LlmClient, input: &Message) -> Message {
+    async fn run_llm(
+        &self,
+        task_id: &str,
+        client: &dyn LlmClient,
+        input: &Message,
+    ) -> Result<Message, TaskError> {
         let prompt = text_of(input);
         let mut messages: Vec<LlmMessage> = Vec::new();
 
@@ -298,7 +331,11 @@ impl TaskRunner {
             (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
         {
             if cancel.is_cancelled() {
-                return error_message("cancelled before prompt submit");
+                return Err(task_error(
+                    "cancelled",
+                    "cancelled before prompt submit".to_string(),
+                    true,
+                ));
             }
             let mut turn_ctx = ctx.clone();
             turn_ctx.turn_id = self.turn_counter.load(Ordering::Relaxed);
@@ -384,18 +421,23 @@ impl TaskRunner {
                         let _ = tx.send(ev).await;
                     }
                 }
-                Message {
+                Ok(Message {
                     role: "agent".into(),
                     parts: vec![MessagePart::Text { text: resp.text }],
-                }
+                })
             }
-            Err(e) => Message {
-                role: "agent".into(),
-                parts: vec![MessagePart::Text {
-                    text: format!("llm error: {e}"),
-                }],
-            },
+            Err(e) => Err(task_error("llm_error", format!("{e}"), true)),
         }
+    }
+}
+
+/// Build a `TaskError` for a failed task outcome.
+fn task_error(code: &str, message: String, recoverable: bool) -> TaskError {
+    TaskError {
+        code: code.to_string(),
+        message,
+        recoverable,
+        details: None,
     }
 }
 
@@ -445,15 +487,6 @@ impl AsyncTaskHandle {
                 usage: None,
             })
         })
-    }
-}
-
-fn error_message(text: &str) -> Message {
-    Message {
-        role: "agent".into(),
-        parts: vec![MessagePart::Text {
-            text: text.to_string(),
-        }],
     }
 }
 
@@ -508,5 +541,42 @@ mod tests {
             activity >= before && activity <= after,
             "activity={activity} not in [{before},{after}]"
         );
+    }
+
+    #[tokio::test]
+    async fn run_sync_bumps_last_activity() {
+        // Regression: the production inbound path must record activity so idle
+        // triggers measure real quiescence (previously only start_async did).
+        let runner = TaskRunner::new_stub_echo();
+        let before = chrono::Utc::now().timestamp();
+        let _ = runner.run_sync(ping_spec()).await;
+        let activity = runner.last_activity_at();
+        let after = chrono::Utc::now().timestamp();
+        assert!(
+            activity >= before && activity <= after,
+            "activity={activity} not in [{before},{after}]"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_sync_llm_error_yields_failed() {
+        // Regression: a provider failure must surface as Failed with a
+        // populated error, not a Completed task whose body says "llm error:".
+        use crate::llm::stub::StubLlm;
+        let yaml = r#"
+- match: { contains: "ping" }
+  fault: rate_limit
+"#;
+        let client = std::sync::Arc::new(StubLlm::from_yaml(yaml).unwrap());
+        let runner = TaskRunner::with_llm(client);
+        let outcome = runner.run_sync(ping_spec()).await;
+        match outcome {
+            TaskOutcome::Failed(task) => {
+                assert_eq!(task.state, TaskState::Failed);
+                let err = task.error.expect("Failed task must carry an error");
+                assert_eq!(err.code, "llm_error");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
     }
 }

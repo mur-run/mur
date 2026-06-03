@@ -188,13 +188,15 @@ impl TelegramInboundLoop<MockBot> {
                 continue;
             }
 
-            // (3) privacy gate — non-private chats only when explicitly
-            // allow-listed in `AllowGroups` mode. Default `DmOnly`
-            // drops every group/channel update.
+            // (3) privacy gate. A Telegram bot receives DMs from *anyone* who
+            // starts it, so `is_private` alone is not authorization — the DM
+            // must come from the configured owner `chat_id`. `AllowGroups`
+            // additionally accepts groups explicitly listed in `allow_groups`.
             let allowed = match deps.config.privacy_mode {
-                PrivacyMode::DmOnly => u.is_private,
+                PrivacyMode::DmOnly => u.is_private && u.chat_id == deps.config.chat_id,
                 PrivacyMode::AllowGroups => {
-                    u.is_private || deps.config.allow_groups.contains(&u.chat_id)
+                    (u.is_private && u.chat_id == deps.config.chat_id)
+                        || deps.config.allow_groups.contains(&u.chat_id)
                 }
             };
             if !allowed {

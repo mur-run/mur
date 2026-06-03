@@ -150,7 +150,6 @@ unsafe extern "C" {
 
     fn sandbox_free_error(errorbuf: *mut libc::c_char);
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

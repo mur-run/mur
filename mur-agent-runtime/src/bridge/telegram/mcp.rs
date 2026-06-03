@@ -31,11 +31,20 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 use crate::bridge::telegram::mock::MockBot;
 
-/// Dependencies the JSON-RPC dispatcher closes over. Currently just the
-/// bot handle; future fields (per-chat ACL, rate-limit observer) slot in
-/// here without touching call sites.
+/// Telegram's hard limit on a single text message is 4096 UTF-16 code units.
+/// We approximate with `char` count (always ≤ the UTF-16 length for the BMP
+/// and a safe bound otherwise) to reject oversized bodies before sending.
+const MAX_BODY_CHARS: usize = 4096;
+
+/// Dependencies the JSON-RPC dispatcher closes over. Currently the bot handle
+/// plus the send allowlist; future fields (rate-limit observer) slot in here
+/// without touching call sites.
 pub struct McpDeps {
     pub bot: Arc<MockBot>,
+    /// Chat IDs this bridge may send to — the owner DM `chat_id` plus any
+    /// `AllowGroups` entries. **Empty = deny all (fail closed).** Populated
+    /// from `TelegramConfig` when the production MCP wiring lands.
+    pub allowed_chats: Vec<i64>,
 }
 
 /// Dispatch one JSON-RPC request. Returns the JSON-RPC response value
@@ -71,7 +80,23 @@ pub async fn handle_jsonrpc(req: Value, deps: &McpDeps) -> anyhow::Result<Value>
             }
             let args = &req["params"]["arguments"];
             let chat_id = args["chat_id"].as_i64().unwrap_or(0);
-            let body = args["body"].as_str().unwrap_or("").to_string();
+            // Authorization: the agent may only message chats the bridge owner
+            // has authorized. `unwrap_or(0)` also collapses a missing/garbled
+            // chat_id to the rejected sentinel 0.
+            if chat_id == 0 {
+                anyhow::bail!("invalid chat_id 0");
+            }
+            if !deps.allowed_chats.contains(&chat_id) {
+                anyhow::bail!("chat_id {chat_id} not in the bridge send allowlist");
+            }
+            let body = args["body"].as_str().unwrap_or("");
+            if body.is_empty() {
+                anyhow::bail!("empty message body");
+            }
+            if body.chars().count() > MAX_BODY_CHARS {
+                anyhow::bail!("message body exceeds {MAX_BODY_CHARS} chars");
+            }
+            let body = body.to_string();
             // M-c2.6: route through `MockBot::send_message` so the bot
             // applies its [`ThrottlePolicy`] (none / global 30 / per-chat
             // 1 per second). When the real teloxide bot lands this becomes

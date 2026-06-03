@@ -293,6 +293,7 @@ async fn run_slack_setup(bridge_id: &str) -> Result<()> {
         app_token_keychain_account: app_account,
         privacy_mode: SlackPrivacyMode::DmAndMentions,
         allowed_channels: vec![],
+        allowed_user_ids: vec![],
     };
     let yaml = serde_yaml_ng::to_string(&slack_config).context("serialising slack.yaml")?;
     std::fs::write(agent_dir.join("slack.yaml"), yaml).context("writing slack.yaml")?;
