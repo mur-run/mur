@@ -1,5 +1,7 @@
 //! Persistent, bounded CCR store. One JSON(.gz) file per entry under
-//! <dir>/entries/. Atomic temp+rename writes. TTL on read, size/count eviction.
+//! <dir>/entries/. Atomic temp+rename writes. TTL on read; size/count eviction
+//! is LRU — `get()` touches an entry's mtime so frequently-retrieved originals
+//! outlive cold ones.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -129,6 +131,11 @@ impl CcrStore {
             let _ = std::fs::remove_file(&path);
             return Ok(None);
         }
+        // Touch mtime so eviction (which orders by mtime) is LRU, not FIFO.
+        // Best-effort: a failure here only affects eviction ordering.
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&path) {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
         Ok(Some(entry))
     }
 
@@ -155,7 +162,10 @@ impl CcrStore {
         for e in std::fs::read_dir(&self.entries_dir)? {
             let e = e?;
             let md = e.metadata()?;
-            if !md.is_file() {
+            // Skip non-files and in-flight temp files: a `.tmp` belongs to an
+            // active writer (possibly another process) and must not be counted
+            // toward the budget or deleted out from under its rename.
+            if !md.is_file() || e.path().extension().is_some_and(|x| x == "tmp") {
                 continue;
             }
             let mtime = md.modified().unwrap_or(std::time::UNIX_EPOCH);
