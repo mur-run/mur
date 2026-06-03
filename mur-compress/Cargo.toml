@@ -13,6 +13,7 @@ serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 blake3 = "1"
 flate2 = "1"
+fs2 = { workspace = true }
 tiktoken-rs = "0.6"
 regex = "1"
 
