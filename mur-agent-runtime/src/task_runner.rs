@@ -136,7 +136,10 @@ impl TaskRunner {
             .turn_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let recently: HashSet<String> = {
-            let q = self.recently_fired.lock().unwrap_or_else(|e| e.into_inner());
+            let q = self
+                .recently_fired
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let horizon = turn.saturating_sub(
                 self.skills_cfg
                     .adaptive
@@ -182,7 +185,10 @@ impl TaskRunner {
             layer3.push_str(&format_layer3(&loaded.name, loaded.trust, &body));
             suppress_names.insert(loaded.name.as_str());
             {
-                let mut q = self.recently_fired.lock().unwrap_or_else(|e| e.into_inner());
+                let mut q = self
+                    .recently_fired
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 q.push_back((turn, loaded.name.clone()));
                 // Prune entries that have fallen below the boost horizon so
                 // the deque doesn't grow unboundedly on long-lived agents.
@@ -311,7 +317,11 @@ impl TaskRunner {
     }
 
     pub async fn cancel(&self, task_id: &str) -> Result<(), String> {
-        let tx = self.cancel_signals.lock().unwrap_or_else(|e| e.into_inner()).remove(task_id);
+        let tx = self
+            .cancel_signals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(task_id);
         match tx {
             Some(tx) => {
                 let _ = tx.send(());
@@ -339,7 +349,11 @@ impl TaskRunner {
     }
 
     pub fn get_state(&self, id: &str) -> Option<TaskState> {
-        self.registry.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
+        self.registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .cloned()
     }
 
     /// Unix timestamp of the last inbound task (`run_sync`/`start_async`).

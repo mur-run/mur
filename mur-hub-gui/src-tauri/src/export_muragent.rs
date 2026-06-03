@@ -10,7 +10,11 @@ fn validate_out_path(out_path: &str) -> Result<(), String> {
     let path = Path::new(out_path);
     match path.extension().and_then(|e| e.to_str()) {
         Some("muragent") => {}
-        _ => return Err(format!("out_path must have a .muragent extension: {out_path}")),
+        _ => {
+            return Err(format!(
+                "out_path must have a .muragent extension: {out_path}"
+            ));
+        }
     }
     for component in path.components() {
         use std::path::Component;
