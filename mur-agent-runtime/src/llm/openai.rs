@@ -186,16 +186,13 @@ impl LlmClient for OpenAiClient {
         if status == 429 {
             return Err(LlmError::RateLimit);
         }
-        let v: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::Timeout
-                } else {
-                    LlmError::Http(e.to_string())
-                }
-            })?;
+        let v: serde_json::Value = resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                LlmError::Timeout
+            } else {
+                LlmError::Http(e.to_string())
+            }
+        })?;
         if !status.is_success() {
             let msg = v["error"]["message"].as_str().unwrap_or("unknown");
             return Err(LlmError::Http(format!("status {status}: {msg}")));

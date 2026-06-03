@@ -45,8 +45,12 @@ pub fn import_pkg(pkg_path: &Path, mur_home: &Path, opts: ImportOptions) -> Resu
         // Bounded extraction: guard against decompression bombs.
         let mut total_bytes: u64 = 0;
         let mut entry_count: usize = 0;
-        for entry in archive.entries().with_context(|| format!("read entries from {}", pkg_path.display()))? {
-            let mut entry = entry.with_context(|| format!("read entry from {}", pkg_path.display()))?;
+        for entry in archive
+            .entries()
+            .with_context(|| format!("read entries from {}", pkg_path.display()))?
+        {
+            let mut entry =
+                entry.with_context(|| format!("read entry from {}", pkg_path.display()))?;
             entry_count += 1;
             if entry_count > MAX_EXTRACT_ENTRIES {
                 bail!(

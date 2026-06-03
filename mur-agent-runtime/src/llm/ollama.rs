@@ -59,32 +59,23 @@ impl LlmClient for OllamaClient {
         if let Some(m) = req.max_tokens {
             body["options"]["num_predict"] = json!(m);
         }
-        let resp = self
-            .http
-            .post(url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::Timeout
-                } else {
-                    LlmError::Http(e.to_string())
-                }
-            })?;
+        let resp = self.http.post(url).json(&body).send().await.map_err(|e| {
+            if e.is_timeout() {
+                LlmError::Timeout
+            } else {
+                LlmError::Http(e.to_string())
+            }
+        })?;
         if resp.status() == 429 {
             return Err(LlmError::RateLimit);
         }
-        let v: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::Timeout
-                } else {
-                    LlmError::Http(e.to_string())
-                }
-            })?;
+        let v: serde_json::Value = resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                LlmError::Timeout
+            } else {
+                LlmError::Http(e.to_string())
+            }
+        })?;
         let text = v["message"]["content"]
             .as_str()
             .ok_or_else(|| LlmError::InvalidResponse("missing message.content".into()))?

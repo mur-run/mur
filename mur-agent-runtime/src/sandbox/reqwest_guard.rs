@@ -97,7 +97,8 @@ impl Resolve for HostGuard {
             if resolved.is_empty() {
                 return Err(Box::new(HostGuardError(format!(
                     "{host} (resolved only to link-local/metadata addresses)"
-                ))) as Box<dyn std::error::Error + Send + Sync>);
+                )))
+                    as Box<dyn std::error::Error + Send + Sync>);
             }
             let addrs: Addrs = Box::new(resolved.into_iter());
             Ok(addrs)
@@ -126,7 +127,9 @@ mod tests {
 
     #[test]
     fn metadata_and_link_local_blocked() {
-        assert!(is_link_local_or_unspecified("169.254.169.254".parse().unwrap())); // cloud metadata
+        assert!(is_link_local_or_unspecified(
+            "169.254.169.254".parse().unwrap()
+        )); // cloud metadata
         assert!(is_link_local_or_unspecified("169.254.0.1".parse().unwrap()));
         assert!(is_link_local_or_unspecified("0.0.0.0".parse().unwrap()));
         assert!(is_link_local_or_unspecified("fe80::1".parse().unwrap()));
@@ -138,7 +141,9 @@ mod tests {
         // Local-first: local Ollama + LAN endpoints must remain reachable.
         assert!(!is_link_local_or_unspecified("127.0.0.1".parse().unwrap()));
         assert!(!is_link_local_or_unspecified("::1".parse().unwrap()));
-        assert!(!is_link_local_or_unspecified("192.168.1.10".parse().unwrap()));
+        assert!(!is_link_local_or_unspecified(
+            "192.168.1.10".parse().unwrap()
+        ));
         assert!(!is_link_local_or_unspecified("10.0.0.5".parse().unwrap()));
         assert!(!is_link_local_or_unspecified("1.1.1.1".parse().unwrap()));
     }

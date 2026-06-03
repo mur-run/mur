@@ -17,7 +17,8 @@ async fn end_to_end_handshake_and_echo() {
         bind: "127.0.0.1:0".into(), // kernel picks free port
     };
     let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
-    let client_pub = *x25519_dalek::PublicKey::from(&client_id.to_x25519_static_secret()).as_bytes();
+    let client_pub =
+        *x25519_dalek::PublicKey::from(&client_id.to_x25519_static_secret()).as_bytes();
     let handle = spawn_tcp_listener(
         cfg,
         server_id.clone(),
@@ -57,8 +58,9 @@ async fn rejects_peer_not_in_allowlist() {
     let handler = Arc::new(|p: Vec<u8>| async move { Ok::<_, std::io::Error>(p) });
     let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
     // Allowlist holds some *other* key, not the client's.
-    let other = *x25519_dalek::PublicKey::from(&AgentIdentity::generate().to_x25519_static_secret())
-        .as_bytes();
+    let other =
+        *x25519_dalek::PublicKey::from(&AgentIdentity::generate().to_x25519_static_secret())
+            .as_bytes();
     let handle = spawn_tcp_listener(
         TcpTransportConfig {
             bind: "127.0.0.1:0".into(),
@@ -72,8 +74,12 @@ async fn rejects_peer_not_in_allowlist() {
     .unwrap();
 
     let server_pub = x25519_dalek::PublicKey::from(&server_id.to_x25519_static_secret());
-    let dial =
-        TcpConnector::dial(&handle.local_addr().to_string(), client_id, server_pub.as_bytes()).await;
+    let dial = TcpConnector::dial(
+        &handle.local_addr().to_string(),
+        client_id,
+        server_pub.as_bytes(),
+    )
+    .await;
     // The server drops the connection right after msg-3, so either the dial or
     // the first request round-trip fails — never a successful exchange.
     let failed = match dial {
@@ -83,7 +89,10 @@ async fn rejects_peer_not_in_allowlist() {
             conn.send(&payload).await.is_err() || conn.recv().await.is_err()
         }
     };
-    assert!(failed, "non-allowlisted peer must not get a working session");
+    assert!(
+        failed,
+        "non-allowlisted peer must not get a working session"
+    );
     drop(shutdown_tx);
 }
 
