@@ -1,4 +1,4 @@
-//! Agent discovery — filesystem scan of `~/.mur/agents/*/agent.yaml`.
+//! Agent discovery — filesystem scan of `~/.mur/agents/*/profile.yaml`.
 //!
 //! Publishes a `Vec<AgentEntry>` snapshot every 5 seconds via a
 //! `tokio::sync::watch` channel so Tauri backends can push `agents-updated`
@@ -43,7 +43,7 @@ pub struct AgentEntry {
     pub model_id: String,
 }
 
-/// Background scanner that polls `$mur_home/agents/*/agent.yaml` at 5s intervals.
+/// Background scanner that polls `$mur_home/agents/*/profile.yaml` at 5s intervals.
 pub struct AgentDiscovery {
     mur_home: PathBuf,
     tx: watch::Sender<Vec<AgentEntry>>,
@@ -81,7 +81,7 @@ impl AgentDiscovery {
     }
 }
 
-/// Scan `$mur_home/agents/*/agent.yaml` and return current entries sorted by name.
+/// Scan `$mur_home/agents/*/profile.yaml` and return current entries sorted by name.
 pub fn scan_agents(mur_home: &Path) -> Vec<AgentEntry> {
     let agents_dir = mur_home.join("agents");
     let Ok(dir) = std::fs::read_dir(&agents_dir) else {
@@ -93,7 +93,7 @@ pub fn scan_agents(mur_home: &Path) -> Vec<AgentEntry> {
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .filter_map(|dir_entry| {
             let agent_dir = dir_entry.path();
-            let yaml_path = agent_dir.join("agent.yaml");
+            let yaml_path = agent_dir.join("profile.yaml");
             let bytes = std::fs::read(&yaml_path).ok()?;
             let profile: AgentProfile = serde_yaml_ng::from_slice(&bytes).ok()?;
             let lock_path = agent_dir.join("running.lock");
@@ -169,7 +169,7 @@ updated_at: "2026-01-01T00:00:00+00:00"
         let dir = tempdir().unwrap();
         let agents_dir = dir.path().join("agents").join("bad-agent");
         fs::create_dir_all(&agents_dir).unwrap();
-        fs::write(agents_dir.join("agent.yaml"), b"not: valid: yaml: [[[").unwrap();
+        fs::write(agents_dir.join("profile.yaml"), b"not: valid: yaml: [[[").unwrap();
         let result = scan_agents(dir.path());
         assert!(result.is_empty());
     }
@@ -180,7 +180,7 @@ updated_at: "2026-01-01T00:00:00+00:00"
         let agent_dir = dir.path().join("agents").join("test-agent");
         fs::create_dir_all(&agent_dir).unwrap();
         fs::write(
-            agent_dir.join("agent.yaml"),
+            agent_dir.join("profile.yaml"),
             make_agent_yaml(
                 "test-agent",
                 "Test Agent",
@@ -202,7 +202,7 @@ updated_at: "2026-01-01T00:00:00+00:00"
         let agent_dir = dir.path().join("agents").join("live-agent");
         fs::create_dir_all(&agent_dir).unwrap();
         fs::write(
-            agent_dir.join("agent.yaml"),
+            agent_dir.join("profile.yaml"),
             make_agent_yaml(
                 "live-agent",
                 "Live Agent",

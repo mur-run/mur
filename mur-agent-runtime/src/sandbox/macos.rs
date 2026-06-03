@@ -45,44 +45,97 @@ pub fn apply_macos(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     })
 }
 
-/// Build an SBPL profile string from the policy.
-/// Strategy: allow everything (allow default), deny explicit paths,
-/// then restrict writes to only allowed write paths.
-pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
-    let mut lines = vec!["(version 1)".to_string(), "(allow default)".to_string()];
+/// Standard macOS locations a process must be able to write to in order to
+/// function (per-user temp + cache used by dyld, confstr, NSURLSession, etc.).
+/// Under the default-deny-write baseline these are re-allowed so confinement
+/// blocks user data (Documents, etc.) without breaking the runtime.
+const MACOS_SYSTEM_WRITE_PATHS: &[&str] = &[
+    "/private/var/folders", // per-user temp + dyld closures + confstr dirs
+    "/private/tmp",         // /tmp symlinks here
+    "/dev/null",
+    "/dev/stdout",
+    "/dev/stderr",
+];
 
-    // Deny reads AND writes to explicitly denied paths.
+/// Escape a string for safe inclusion in an SBPL double-quoted literal.
+///
+/// SBPL (a TinyScheme dialect) honors `\\` and `\"` inside string literals.
+/// Without escaping, a path or host containing `"` / `)` could break out of
+/// the literal and rewrite the policy — and if the resulting profile fails to
+/// parse, `apply_macos` falls back to advisory-only (no sandbox). Since paths
+/// and hosts originate from `profile.yaml` (attacker-influenced for imported
+/// `.muragent` packages), escaping is a trust boundary, not cosmetics.
+fn sbpl_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            // Drop control characters that could corrupt the profile text.
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Build an SBPL profile string from the policy.
+///
+/// Strategy: default-allow for reads/exec/network (so the process can load
+/// system libraries and run), but **default-deny for filesystem writes** —
+/// nothing is writable except the agent's own declared write paths plus the
+/// standard macOS system-write locations. This matches the Linux Landlock
+/// posture for writes without the fragility of a full `(deny default)` that
+/// would also block dyld and system access. All interpolated paths/hosts are
+/// escaped to prevent s-expression injection via a malicious profile.
+pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
+    let mut lines = vec![
+        "(version 1)".to_string(),
+        "(allow default)".to_string(),
+        // Baseline: deny ALL writes. Specific paths are re-allowed below.
+        "(deny file-write* (subpath \"/\"))".to_string(),
+    ];
+
+    // Deny reads (and keep an explicit write-deny) on sensitive paths.
     for path in &policy.fs_deny {
-        let p = path.to_string_lossy();
-        lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
+        let p = sbpl_escape(&path.to_string_lossy());
         lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
+        lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
     }
 
-    // Allow writes to explicitly allowed write paths.
-    for path in &policy.fs_write {
-        let p = path.to_string_lossy();
+    // Re-allow writes for the standard macOS system-write locations so the
+    // runtime (dyld, temp, stdio) keeps working under the deny baseline.
+    for p in MACOS_SYSTEM_WRITE_PATHS {
         lines.push(format!("(allow file-write* (subpath \"{p}\"))"));
     }
 
-    // Network restrictions.
-    if let Some(hosts) = &policy.net_allow_hosts {
-        if hosts.is_empty() {
+    // Re-allow writes to the policy's explicitly allowed write paths. These
+    // come last so they win the last-match-wins evaluation over the baseline.
+    for path in &policy.fs_write {
+        let p = sbpl_escape(&path.to_string_lossy());
+        lines.push(format!("(allow file-write* (subpath \"{p}\"))"));
+    }
+
+    // Network restrictions. NOTE: macOS SBPL `remote tcp` only accepts `*` or
+    // `localhost` as the host — a hostname like "api.anthropic.com:443" is a
+    // hard parse error that fails sandbox_init for the WHOLE profile (silent
+    // fail-open). So we restrict by PORT here (host `*`) and delegate hostname
+    // allowlisting to the HostGuard reqwest layer.
+    match &policy.net_allow_ports {
+        None => { /* Unrestricted: (allow default) covers outbound. */ }
+        Some(ports) if ports.is_empty() => {
             // Off: deny all outbound TCP.
             lines.push("(deny network-outbound)".to_string());
-        } else {
-            // Restricted: deny all, then allow listed hosts on ports 443 and 80.
+        }
+        Some(ports) => {
             lines.push("(deny network-outbound)".to_string());
-            for host in hosts {
+            for port in ports {
                 lines.push(format!(
-                    "(allow network-outbound (remote tcp \"{host}:443\"))"
-                ));
-                lines.push(format!(
-                    "(allow network-outbound (remote tcp \"{host}:80\"))"
+                    "(allow network-outbound (remote tcp \"*:{port}\"))"
                 ));
             }
         }
     }
-    // None (Unrestricted): leave network unblocked — (allow default) covers it.
 
     lines.join("\n")
 }
@@ -96,4 +149,103 @@ unsafe extern "C" {
     ) -> libc::c_int;
 
     fn sandbox_free_error(errorbuf: *mut libc::c_char);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn policy_with(write: Vec<PathBuf>, deny: Vec<PathBuf>) -> SandboxPolicy {
+        SandboxPolicy {
+            fs_write: write,
+            fs_deny: deny,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn writes_are_default_deny_with_baseline() {
+        let sbpl = build_sbpl_profile(&policy_with(vec![], vec![]));
+        assert!(
+            sbpl.contains("(deny file-write* (subpath \"/\"))"),
+            "missing default-deny-write baseline:\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn system_write_paths_are_reallowed() {
+        let sbpl = build_sbpl_profile(&policy_with(vec![], vec![]));
+        for p in MACOS_SYSTEM_WRITE_PATHS {
+            assert!(
+                sbpl.contains(&format!("(allow file-write* (subpath \"{p}\"))")),
+                "missing system write allow for {p}:\n{sbpl}"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_write_path_is_allowed_after_baseline() {
+        let sbpl = build_sbpl_profile(&policy_with(vec![PathBuf::from("/data/agent")], vec![]));
+        let baseline = sbpl.find("(deny file-write* (subpath \"/\"))").unwrap();
+        let allow = sbpl
+            .find("(allow file-write* (subpath \"/data/agent\"))")
+            .expect("declared write path must be allowed");
+        assert!(
+            allow > baseline,
+            "allow must follow the deny baseline (last-match-wins)"
+        );
+    }
+
+    #[test]
+    fn malicious_path_is_escaped_not_injected() {
+        // A path crafted to break out of the SBPL string literal must be
+        // neutralized — the raw injection payload must not appear verbatim.
+        let evil = PathBuf::from("x\") (allow file-write* (subpath \"/");
+        let sbpl = build_sbpl_profile(&policy_with(vec![evil], vec![]));
+        assert!(
+            !sbpl.contains("x\") (allow file-write* (subpath \"/\"))"),
+            "unescaped injection payload leaked into profile:\n{sbpl}"
+        );
+        assert!(
+            sbpl.contains("\\\""),
+            "quote should be backslash-escaped:\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn off_mode_denies_network() {
+        let mut policy = policy_with(vec![], vec![]);
+        policy.net_allow_ports = Some(vec![]);
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(sbpl.contains("(deny network-outbound)"));
+        assert!(
+            !sbpl.contains("(allow network-outbound"),
+            "Off mode must not allow any outbound:\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn restricted_uses_port_wildcard_not_hostname() {
+        // Regression: hostname-based `remote tcp` is invalid SBPL and fails
+        // sandbox_init for the whole profile (silent fail-open). Restricted
+        // mode must emit `*:<port>` rules only.
+        let mut policy = policy_with(vec![], vec![]);
+        policy.net_allow_ports = Some(vec![443, 80]);
+        policy.net_allow_hosts = Some(vec!["api.anthropic.com".to_string()]);
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(sbpl.contains("(allow network-outbound (remote tcp \"*:443\"))"));
+        assert!(sbpl.contains("(allow network-outbound (remote tcp \"*:80\"))"));
+        assert!(
+            !sbpl.contains("api.anthropic.com"),
+            "SBPL must not contain hostnames (invalid `remote tcp` host):\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn unrestricted_emits_no_network_rules() {
+        let policy = policy_with(vec![], vec![]); // net_allow_ports defaults to None
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(!sbpl.contains("network-outbound"));
+    }
 }
