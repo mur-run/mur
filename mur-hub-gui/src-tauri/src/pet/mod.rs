@@ -48,12 +48,24 @@ fn pet_position_path(agent_name: &str) -> PathBuf {
         .join("pet_position.json")
 }
 
+/// True if `agent_name` is safe to use as a path component under
+/// `~/.mur/agents/` (canonical agent-name rules).
+fn valid_agent(agent_name: &str) -> bool {
+    mur_common::agent_name::validate_agent_name(agent_name).is_ok()
+}
+
 fn load_position(agent_name: &str) -> Option<PetPosition> {
+    if !valid_agent(agent_name) {
+        return None;
+    }
     let data = std::fs::read_to_string(pet_position_path(agent_name)).ok()?;
     serde_json::from_str(&data).ok()
 }
 
 fn save_position(agent_name: &str, pos: &PetPosition) {
+    if !valid_agent(agent_name) {
+        return;
+    }
     let path = pet_position_path(agent_name);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -254,6 +266,17 @@ pub fn pet_list(state: State<'_, PetState>) -> Vec<String> {
 
 #[tauri::command]
 pub fn pet_get_expression(agent_name: String, expression: String) -> String {
+    // Both segments become path components; reject traversal so a malicious
+    // IPC caller can't read arbitrary files (the bytes are returned to the UI).
+    if !valid_agent(&agent_name)
+        || expression.is_empty()
+        || expression.contains('/')
+        || expression.contains('\\')
+        || expression.contains("..")
+        || expression.contains('\0')
+    {
+        return String::new();
+    }
     let path = mur_home()
         .join("agents")
         .join(&agent_name)

@@ -42,11 +42,28 @@ fn agent_inbox(agent: &str) -> PathBuf {
         .join("companion/inbox")
 }
 
+/// Reject agent names that aren't safe as a path component before they're
+/// joined under `~/.mur/agents/`. Uses the canonical agent-name rules so the
+/// GUI and CLI/HTTP surfaces agree.
+fn check_agent(agent: &str) -> Result<(), String> {
+    mur_common::agent_name::validate_agent_name(agent).map_err(|e| format!("invalid agent name: {e}"))
+}
+
+/// Lightweight traversal check for an opaque id used as a filename component
+/// (lenient on charset so real message ids still pass, strict on separators).
+fn check_path_component(s: &str, what: &str) -> Result<(), String> {
+    if s.is_empty() || s.contains('/') || s.contains('\\') || s.contains("..") || s.contains('\0') {
+        return Err(format!("invalid {what}"));
+    }
+    Ok(())
+}
+
 // ─── Tauri commands ──────────────────────────────────────────────────────────
 
 /// Return all pending (unresponded) inbox messages for `agent`.
 #[tauri::command]
 pub fn companion_bridge_pending(agent: String) -> Result<Vec<BridgeEvent>, String> {
+    check_agent(&agent)?;
     scan_pending(&agent_inbox(&agent)).map_err(|e| format!("{e:#}"))
 }
 
@@ -58,6 +75,7 @@ pub async fn companion_bridge_subscribe(
     on_event: Channel<BridgeEvent>,
     state: tauri::State<'_, BridgeState>,
 ) -> Result<(), String> {
+    check_agent(&agent)?;
     let (tx, mut rx) = mpsc::channel::<BridgeEvent>(32);
     let watcher = InboxWatcher::start(agent_inbox(&agent), tx).map_err(|e| format!("{e:#}"))?;
 
@@ -84,6 +102,7 @@ pub fn companion_bridge_unsubscribe(
     agent: String,
     state: tauri::State<'_, BridgeState>,
 ) -> Result<(), String> {
+    check_agent(&agent)?;
     state
         .watchers
         .lock()
@@ -95,6 +114,8 @@ pub fn companion_bridge_unsubscribe(
 /// Acknowledge a message (rewrite `>>> response: <unset>` → `>>> response: <signal>`).
 #[tauri::command]
 pub fn companion_ack(agent: String, msg_id: String, signal: String) -> Result<(), String> {
+    check_agent(&agent)?;
+    check_path_component(&msg_id, "msg_id")?;
     if !matches!(signal.as_str(), "good" | "bad" | "dismiss" | "snooze") {
         return Err(format!("unknown signal `{signal}`"));
     }
@@ -115,6 +136,9 @@ pub fn companion_ack(agent: String, msg_id: String, signal: String) -> Result<()
 /// Count unread (BridgeResponse::Unset) messages for `agent`.
 #[tauri::command]
 pub fn companion_unread_count(agent: String) -> u32 {
+    if check_agent(&agent).is_err() {
+        return 0;
+    }
     scan_pending(&agent_inbox(&agent))
         .map(|evs| {
             evs.iter()
