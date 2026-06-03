@@ -368,4 +368,23 @@ pub enum Commands {
         #[command(subcommand)]
         action: ProjectAction,
     },
+    /// Compress stdin or a file; print the result + token delta on stderr
+    #[command(hide = true)]
+    Compress {
+        /// File to compress; omit (or pass `-`) to read stdin
+        #[arg(long)]
+        file: Option<String>,
+        /// Optional semantic filter for scoring
+        #[arg(long)]
+        query: Option<String>,
+    },
+    /// Retrieve original content by blake3 hash
+    #[command(hide = true)]
+    Retrieve {
+        /// Blake3 hash returned by `mur compress`
+        hash: String,
+        /// Optional filter query (returns matching subset)
+        #[arg(long)]
+        query: Option<String>,
+    },
 }
