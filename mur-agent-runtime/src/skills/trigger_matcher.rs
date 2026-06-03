@@ -105,9 +105,28 @@ fn render_step(idx: usize, step: &ProcedureStep, res: &Resolution) -> String {
     }
 }
 
+/// Escape a string for safe inclusion in an XML attribute value (double-quoted).
+/// Prevents a skill `name` or `trust` containing `"` or `>` from breaking
+/// the attribute boundary and injecting arbitrary markup.
+fn xml_attr_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 pub fn format_layer3(skill_name: &str, trust: TrustLevel, body: &str) -> String {
+    let safe_name = xml_attr_escape(skill_name);
+    let safe_trust = xml_attr_escape(&format!("{trust:?}"));
     format!(
-        "<skill-instruction source=\"{skill_name}\" trust=\"{trust:?}\">\n{body}\n</skill-instruction>"
+        "<skill-instruction source=\"{safe_name}\" trust=\"{safe_trust}\">\n{body}\n</skill-instruction>"
     )
 }
 
