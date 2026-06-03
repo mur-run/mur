@@ -83,8 +83,7 @@ pub struct DetailPatch {
 pub fn get_agent_detail(name: String) -> Result<AgentDetail, String> {
     let mur_home = crate::mur_home_path();
     let profile_path = mur_home.join("agents").join(&name).join("profile.yaml");
-    let bytes =
-        std::fs::read(&profile_path).map_err(|e| format!("read profile: {e}"))?;
+    let bytes = std::fs::read(&profile_path).map_err(|e| format!("read profile: {e}"))?;
     let profile: mur_common::AgentProfile =
         serde_yaml_ng::from_slice(&bytes).map_err(|e| format!("parse profile: {e}"))?;
 
@@ -140,8 +139,7 @@ pub fn get_agent_detail(name: String) -> Result<AgentDetail, String> {
 pub fn update_agent_detail(name: String, patch: DetailPatch) -> Result<AgentDetail, String> {
     let mur_home = crate::mur_home_path();
     let profile_path = mur_home.join("agents").join(&name).join("profile.yaml");
-    let bytes =
-        std::fs::read(&profile_path).map_err(|e| format!("read profile: {e}"))?;
+    let bytes = std::fs::read(&profile_path).map_err(|e| format!("read profile: {e}"))?;
     let mut profile: mur_common::AgentProfile =
         serde_yaml_ng::from_slice(&bytes).map_err(|e| format!("parse profile: {e}"))?;
 
