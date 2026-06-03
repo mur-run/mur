@@ -14,11 +14,15 @@ use std::process::{Child, Command};
 ///    so the assert would fire.  Children inherit the supervisor's own
 ///    Landlock / seccomp restrictions (B1 Tasks 2–3).
 ///
-/// 2. **macOS**: `Sandbox::spawn()` calls `sandbox_init()` which applies
-///    the SBPL to the *calling* process (not only the child).  The
-///    supervisor has already applied its own SBPL via `sandbox_init_with_
-///    parameters` (B1 Task 3).  A second `sandbox_init` call is undefined
-///    behaviour and typically returns an error.
+/// 2. **macOS**: SBPL (`sandbox_init`/`sandbox_init_with_parameters`) is NOT
+///    inherited across `exec`.  Unlike Landlock on Linux, the SBPL policy
+///    applied to the supervisor is not propagated to spawned children.
+///    **macOS children spawned here are therefore unconfined.**  `cage.spawn`
+///    is not used because it calls `sandbox_init()` on the *calling* process
+///    (re-initialising the already-applied supervisor policy, which is
+///    undefined behaviour).  A dedicated pre-fork single-threaded launcher
+///    subprocess is required to confine macOS children at spawn time; that
+///    work is tracked as a follow-up.
 ///
 /// When the supervisor adopts a pre-fork single-threaded launcher subprocess
 /// the `cage.spawn(birdcage_cmd)` call below can be activated.
