@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/mur-run/mur"
-description = "MuR Hub — cross-agent desktop app (Tauri 2). Replaces mur-agent-gui in v1."
+description = "MUR Hub — cross-agent desktop app (Tauri 2). Replaces mur-agent-gui in v1."
 
 # Mark as a standalone workspace so cargo doesn't walk past the root
 # Cargo.toml and accidentally attach to the main workspace, which excludes

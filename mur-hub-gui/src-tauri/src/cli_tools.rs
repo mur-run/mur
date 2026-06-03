@@ -62,10 +62,10 @@ mod tests {
 
     #[test]
     fn bundled_mur_is_sibling_of_hub() {
-        let exe = Path::new("/Applications/MuR Hub.app/Contents/MacOS/mur-hub-gui");
+        let exe = Path::new("/Applications/MUR Hub.app/Contents/MacOS/mur-hub-gui");
         assert_eq!(
             bundled_mur_path(exe).unwrap(),
-            PathBuf::from("/Applications/MuR Hub.app/Contents/MacOS/mur")
+            PathBuf::from("/Applications/MUR Hub.app/Contents/MacOS/mur")
         );
     }
 }
