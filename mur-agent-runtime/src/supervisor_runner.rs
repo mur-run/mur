@@ -303,10 +303,13 @@ pub(crate) async fn prepare_runtime(
         .mcp_servers
         .iter()
         .filter_map(|s| {
-            s.command
-                .split_whitespace()
-                .next()
-                .map(std::path::PathBuf::from)
+            // PATH-resolve so the B0 signature/pin checks (rules 6 & 11) inspect
+            // the same binary `Command::new` will spawn. A bare `node`/`npx`
+            // taken verbatim is a CWD-relative path that doesn't exist, which
+            // silently skips both checks. Unresolvable → drop (treated as
+            // "uninstalled", matching the soft-fail behaviour in rule 6).
+            let prog = s.command.split_whitespace().next().unwrap_or(&s.command);
+            mur_common::exec::resolve_command(prog).ok()
         })
         .collect();
     let hook_ctx = HookCtx {

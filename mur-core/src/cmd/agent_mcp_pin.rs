@@ -34,34 +34,9 @@ use std::path::{Path, PathBuf};
 /// install-time hashing and startup verification so a bare `command`
 /// like "mcp-weather" stays consistent across the two passes.
 pub fn resolve_command(command: &str) -> Result<PathBuf> {
-    let p = Path::new(command);
-    if p.is_absolute() || command.contains('/') || command.contains('\\') {
-        return p
-            .canonicalize()
-            .with_context(|| format!("canonicalize {command}"));
-    }
-    // Walk PATH (or %PATH% on Windows) looking for `command`.
-    let path_var = std::env::var_os("PATH")
-        .ok_or_else(|| anyhow::anyhow!("PATH env var unset; cannot resolve `{command}`"))?;
-    for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(command);
-        if candidate.is_file() {
-            return candidate
-                .canonicalize()
-                .with_context(|| format!("canonicalize {}", candidate.display()));
-        }
-        // Windows: try with .exe suffix.
-        #[cfg(target_os = "windows")]
-        {
-            let with_exe = dir.join(format!("{command}.exe"));
-            if with_exe.is_file() {
-                return with_exe
-                    .canonicalize()
-                    .with_context(|| format!("canonicalize {}", with_exe.display()));
-            }
-        }
-    }
-    bail!("could not find `{command}` on PATH");
+    // Single source of truth in mur-common so install-time pinning and the
+    // runtime startup verification (B0 rules 6 & 11) resolve identically.
+    mur_common::exec::resolve_command(command)
 }
 
 /// Stream-hash the file at `path` with SHA-256. Returns lowercase
