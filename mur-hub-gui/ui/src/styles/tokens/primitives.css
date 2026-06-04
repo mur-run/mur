@@ -1,0 +1,38 @@
+/* Raw scales. Never referenced directly by components — only by semantic.css. */
+:root {
+  /* brand blue */
+  --blue-700:#2F6FB0; --blue-500:#4A90D9; --blue-soft:#EAF3FC;
+  /* accent coral */
+  --coral-600:#F0563D; --coral-500:#FB6B53; --coral-soft:#FFF1EE;
+  /* category */
+  --cat-research:#4A90D9; --cat-automation:#10B981; --cat-monitor:#F59E0B;
+  --cat-notify:#EF4444; --cat-commerce:#8B5CF6; --cat-custom:#64748B;
+  /* status */
+  --green-500:#22C55E; --green-600:#16A34A; --amber-500:#F59E0B;
+  --red-500:#EF4444; --red-600:#DC2626; --slate-400:#94A3B8;
+  /* neutral light */
+  --n-bg:#F6FAFE; --n-secondary:#EAF3FC; --n-card:#FFFFFF; --n-hover:#EAF1F9;
+  --n-line:#EAF0F7; --n-text:#16243B; --n-text2:#64758A; --n-text3:#9AA8B8;
+  /* neutral dark */
+  --d-bg:#0F1117; --d-secondary:#161922; --d-card:#1A1E29; --d-hover:#232838;
+  --d-line:rgba(255,255,255,.08); --d-text:#F1F5F9; --d-text2:#94A3B8; --d-text3:#6B7688;
+  /* space (4px base) */
+  --space-1:2px; --space-2:4px; --space-3:6px; --space-4:8px; --space-5:12px;
+  --space-6:16px; --space-7:20px; --space-8:24px; --space-9:32px; --space-10:40px;
+  /* radius */
+  --radius-sm:6px; --radius-md:10px; --radius-lg:14px; --radius-xl:18px; --radius-2xl:20px; --radius-full:9999px;
+  /* type */
+  --font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang TC","Microsoft JhengHei",sans-serif;
+  --text-xs:11px; --text-sm:12.5px; --text-base:14px; --text-md:15px;
+  --text-lg:17px; --text-xl:19px; --text-2xl:22px;
+  --fw-regular:400; --fw-semi:600; --fw-bold:700; --fw-heavy:800;
+  /* shadow */
+  --shadow-sm:0 1px 2px rgba(16,40,80,.06);
+  --shadow-card:0 1px 3px rgba(16,40,80,.08),0 1px 2px rgba(16,40,80,.04);
+  --shadow-pop:0 16px 40px rgba(16,40,80,.16);
+  --shadow-focus:0 0 0 3px rgba(74,144,217,.18);
+  /* motion */
+  --dur-fast:130ms; --dur-base:180ms; --dur-slow:280ms;
+  --ease-out:cubic-bezier(.2,.85,.25,1);
+  --ease-spring:cubic-bezier(.34,1.56,.64,1);
+}

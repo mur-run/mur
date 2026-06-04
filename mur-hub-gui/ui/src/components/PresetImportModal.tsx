@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useT } from "../i18n";
 
 interface Props {
   isOpen: boolean;
@@ -10,6 +11,7 @@ interface Props {
 type Mode = "file" | "url";
 
 export function PresetImportModal({ isOpen, onClose }: Props) {
+  const { t } = useT();
   const [mode, setMode] = useState<Mode>("file");
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState<string | null>(null);
@@ -46,7 +48,7 @@ export function PresetImportModal({ isOpen, onClose }: Props) {
       const id = await invoke<string>("import_preset_file", {
         path: typeof selected === "string" ? selected : selected[0],
       });
-      setStatus(`Imported preset "${id}"`);
+      setStatus(t("modal.preset.imported", { id }));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -61,7 +63,7 @@ export function PresetImportModal({ isOpen, onClose }: Props) {
     setStatus(null);
     try {
       const id = await invoke<string>("import_preset_url", { url: url.trim() });
-      setStatus(`Imported preset "${id}"`);
+      setStatus(t("modal.preset.imported", { id }));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -70,66 +72,64 @@ export function PresetImportModal({ isOpen, onClose }: Props) {
   }
 
   return (
-    <div className="modal-overlay" onClick={handleClose}>
+    <div className="modal__overlay" onClick={handleClose}>
       <div
-        className="modal-panel"
-        style={{ maxWidth: 440 }}
+        className="modal"
+        style={{ width: 440 }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="modal-header">
-          <h2>Import Style Preset</h2>
-          <button className="modal-close" onClick={handleClose}>×</button>
+        <div className="modal__header">
+          <h2 className="modal__title">{t("modal.preset.title")}</h2>
+          <button className="modal__close" onClick={handleClose}>
+            ×
+          </button>
         </div>
 
-        <div className="modal-body">
+        <div className="modal__body">
           <div className="tab-row" style={{ display: "flex", gap: 8, marginBottom: 16 }}>
             <button
               className={`toolbar-btn${mode === "file" ? " active" : ""}`}
               onClick={() => setMode("file")}
             >
-              From File
+              {t("modal.preset.fromFile")}
             </button>
             <button
               className={`toolbar-btn${mode === "url" ? " active" : ""}`}
               onClick={() => setMode("url")}
             >
-              From URL
+              {t("modal.preset.fromUrl")}
             </button>
           </div>
 
           {mode === "file" ? (
             <div>
               <p style={{ marginBottom: 12, color: "var(--text-secondary, #888)", fontSize: 13 }}>
-                Select a <code>.yaml</code> file containing a StylePreset definition.
-                It will be copied to <code>~/.mur/hub/presets/</code>.
+                {t("modal.preset.file.body")}
               </p>
-              <button
-                className="toolbar-btn"
-                onClick={importFile}
-                disabled={loading}
-              >
-                {loading ? "Importing…" : "Choose File…"}
+              <button className="btn btn--primary" onClick={importFile} disabled={loading}>
+                {loading ? t("modal.preset.file.importing") : t("modal.preset.file.choose")}
               </button>
             </div>
           ) : (
             <div>
               <p style={{ marginBottom: 8, color: "var(--text-secondary, #888)", fontSize: 13 }}>
-                Enter a URL pointing to a StylePreset YAML file.
+                {t("modal.preset.url.body")}
               </p>
               <input
+                className="input"
                 type="url"
-                placeholder="https://example.com/my-preset.yaml"
+                placeholder={t("modal.preset.url.placeholder")}
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && importUrl()}
                 style={{ width: "100%", marginBottom: 8 }}
               />
               <button
-                className="toolbar-btn"
+                className="btn btn--primary"
                 onClick={importUrl}
                 disabled={loading || !url.trim()}
               >
-                {loading ? "Fetching…" : "Import from URL"}
+                {loading ? t("modal.preset.url.fetching") : t("modal.preset.url.import")}
               </button>
             </div>
           )}

@@ -1,13 +1,15 @@
 import type { WizardPersona, WizardSnapshot } from "../../../types";
 import { invoke } from "@tauri-apps/api/core";
+import { useT } from "../../../i18n";
+import type { TranslationKey } from "../../../i18n/types";
 
-const PERSONAS: { id: WizardPersona; label: string; icon: string }[] = [
-  { id: "research",   label: "Research",   icon: "🔍" },
-  { id: "automation", label: "Automation", icon: "⚙️" },
-  { id: "monitor",    label: "Monitor",    icon: "📡" },
-  { id: "notify",     label: "Notify",     icon: "🔔" },
-  { id: "commerce",   label: "Commerce",   icon: "🛒" },
-  { id: "custom",     label: "Custom",     icon: "✨" },
+const PERSONAS: { id: WizardPersona; labelKey: TranslationKey; icon: string }[] = [
+  { id: "research",   labelKey: "wizard.persona.research",   icon: "🔍" },
+  { id: "automation", labelKey: "wizard.persona.automation", icon: "⚙️" },
+  { id: "monitor",    labelKey: "wizard.persona.monitor",    icon: "📡" },
+  { id: "notify",     labelKey: "wizard.persona.notify",     icon: "🔔" },
+  { id: "commerce",   labelKey: "wizard.persona.commerce",   icon: "🛒" },
+  { id: "custom",     labelKey: "wizard.persona.custom",     icon: "✨" },
 ];
 
 interface Props {
@@ -16,6 +18,7 @@ interface Props {
 }
 
 export function Step1Persona({ snapshot, onUpdate }: Props) {
+  const { t } = useT();
   async function pick(id: WizardPersona) {
     const next: WizardSnapshot = await invoke("wizard_set_persona", { persona: id });
     onUpdate(next);
@@ -23,17 +26,17 @@ export function Step1Persona({ snapshot, onUpdate }: Props) {
 
   return (
     <div className="wz-step">
-      <h2>What does this agent do?</h2>
-      <p className="wz-hint">Choose a persona category to get started.</p>
+      <h2>{t("wizard.persona.title")}</h2>
+      <p className="wz-hint">{t("wizard.persona.hint")}</p>
       <div className="wz-persona-grid">
-        {PERSONAS.map(({ id, label, icon }) => (
+        {PERSONAS.map(({ id, labelKey, icon }) => (
           <button
             key={id}
             className={`wz-persona-card${snapshot.persona === id ? " selected" : ""}`}
             onClick={() => pick(id)}
           >
             <span className="wz-persona-icon">{icon}</span>
-            <span className="wz-persona-label">{label}</span>
+            <span className="wz-persona-label">{t(labelKey)}</span>
           </button>
         ))}
       </div>
