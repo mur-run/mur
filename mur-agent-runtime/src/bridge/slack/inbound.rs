@@ -183,9 +183,10 @@ impl<B: SlackBotLike> SlackInboundLoop<B> {
         if deps.dedupe.is_seen(&dedupe_key).unwrap_or(false) {
             return Ok(TickResult { forwarded: false });
         }
-        deps.dedupe
-            .mark_seen(&dedupe_key)
-            .map_err(|e| SlackError::Network(e.to_string()))?;
+        // NOTE: do NOT mark seen here. We mark only after a successful forward
+        // (Phase 6) so a transient user-agent failure is retried on the next
+        // delivery instead of being silently dropped — matching the Telegram
+        // bridge and the AckTracker, which likewise only advances on a 2xx.
 
         // Phase 4: strip bot mention prefix "<@U…> " from text
         let raw_text = event.text.clone().unwrap_or_default();
@@ -233,12 +234,18 @@ impl<B: SlackBotLike> SlackInboundLoop<B> {
         if did_forward {
             deps.ack.start_pending(event.ts.clone());
             deps.ack.confirm();
+            // Mark seen only now — a successfully delivered message must not be
+            // forwarded again, but a failed one (below) must remain unseen so it
+            // is retried on redelivery.
+            deps.dedupe
+                .mark_seen(&dedupe_key)
+                .map_err(|e| SlackError::Network(e.to_string()))?;
         } else {
             tracing::warn!(
                 channel = %event.channel,
                 ts = %event.ts,
                 status,
-                "A2A forward failed — AckTracker not advanced"
+                "A2A forward failed — not marked seen, will retry on redelivery"
             );
         }
 
