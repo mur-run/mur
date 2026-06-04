@@ -14,6 +14,12 @@ use std::path::Path;
 pub fn is_valid_skill_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
+        // Reserved path components: a skill name is joined into
+        // `<mur_home>/skills/<name>`, so `.`/`..` must never be accepted.
+        && name != "."
+        && name != ".."
+        // The character set already excludes `/` and `\`, which keeps a name to
+        // a single path component (no traversal into sibling/parent dirs).
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
@@ -162,6 +168,24 @@ content:
         let dir = tempdir().unwrap();
         let loaded = load_all(dir.path(), "alice");
         assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn is_valid_skill_name_rejects_traversal_and_reserved() {
+        // Legit names.
+        assert!(is_valid_skill_name("web-search"));
+        assert!(is_valid_skill_name("my.skill_v2"));
+        // Reserved path components.
+        assert!(!is_valid_skill_name("."));
+        assert!(!is_valid_skill_name(".."));
+        // Path separators (the dangerous traversal form) and absolutes.
+        assert!(!is_valid_skill_name("../agents/victim/skills/evil"));
+        assert!(!is_valid_skill_name("a/b"));
+        assert!(!is_valid_skill_name("a\\b"));
+        assert!(!is_valid_skill_name("/etc/passwd"));
+        // Bounds.
+        assert!(!is_valid_skill_name(""));
+        assert!(!is_valid_skill_name(&"x".repeat(65)));
     }
 
     #[test]
