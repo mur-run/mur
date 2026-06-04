@@ -14,6 +14,7 @@ pub mod error;
 /// B0 M11 — JSONL output schema for the eval harness.
 pub mod eval;
 pub mod event;
+pub mod exec;
 pub mod expression;
 pub mod guard;
 pub mod hooks_config;
