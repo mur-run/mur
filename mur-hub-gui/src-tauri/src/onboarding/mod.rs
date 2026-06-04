@@ -342,7 +342,100 @@ pub fn wizard_cancel(state: State<'_, WizardState>) {
     *state.0.lock().unwrap() = None;
 }
 
+/// Render (or re-render) the 12 expressions for an EXISTING agent, outside the
+/// onboarding wizard. Used by the detail panel's Style tab so seeded/imported
+/// agents stuck at "Not rendered yet" have a working action.
+///
+/// Persists `render_status` to the agent's profile.yaml (Rendering on start;
+/// Ready / Failed on completion) and emits `agent-render-progress`,
+/// `agent-render-done`, `agent-render-error` events keyed by agent `name`.
+/// Falls back to the offline mock provider when no Gemini key is set, so it
+/// always produces a usable result locally.
+#[tauri::command]
+pub async fn render_agent_expressions(app: AppHandle, name: String) -> Result<(), String> {
+    let mur_home = mur_home_path();
+    let agent_dir = mur_home.join("agents").join(&name);
+    let profile_path = agent_dir.join("profile.yaml");
+
+    let yaml = std::fs::read_to_string(&profile_path).map_err(|e| format!("read profile: {e}"))?;
+    let mut profile: mur_common::AgentProfile =
+        serde_yaml_ng::from_str(&yaml).map_err(|e| format!("parse profile: {e}"))?;
+    let hub_dir = mur_home.join("hub");
+    let preset_id = profile.appearance.style_preset.clone();
+    let preset = find_preset(&preset_id, &hub_dir).unwrap_or_else(|_| default_blob());
+
+    // Mark Rendering and persist so the status survives a reload mid-render.
+    profile.appearance.render_status = RenderStatus::Rendering { done: 0, total: 12 };
+    write_profile(&profile_path, &profile)?;
+
+    let provider: std::sync::Arc<dyn mur_gui_core::image_gen::ImageGenProvider> =
+        match read_gemini_key() {
+            Some(key) => {
+                std::sync::Arc::new(GeminiImageGenProvider::new(key, "gemini-2.5-flash-image"))
+            }
+            None => std::sync::Arc::new(MockImageGenProvider),
+        };
+    let job = RenderJob::new(preset, provider, &agent_dir);
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<RenderProgress>(64);
+    let app_progress = app.clone();
+    let name_progress = name.clone();
+    tokio::spawn(async move {
+        while let Some(p) = rx.recv().await {
+            let snap = RenderProgressSnapshot::from(&p);
+            let _ = app_progress.emit(
+                "agent-render-progress",
+                serde_json::json!({ "name": name_progress, "progress": snap }),
+            );
+        }
+    });
+
+    let profile_path_done = profile_path.clone();
+    tokio::spawn(async move {
+        match job.run(CancelToken::new(), Some(tx)).await {
+            Ok(manifest) => {
+                if let Ok(yaml) = std::fs::read_to_string(&profile_path_done)
+                    && let Ok(mut prof) = serde_yaml_ng::from_str::<mur_common::AgentProfile>(&yaml)
+                {
+                    prof.appearance.render_status = RenderStatus::Ready;
+                    prof.appearance.last_rendered_at = Some(chrono::Utc::now());
+                    let _ = write_profile(&profile_path_done, &prof);
+                }
+                let _ = app.emit(
+                    "agent-render-done",
+                    serde_json::json!({
+                        "name": name,
+                        "expressions_rendered": manifest.expressions.len(),
+                    }),
+                );
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                if let Ok(yaml) = std::fs::read_to_string(&profile_path_done)
+                    && let Ok(mut prof) = serde_yaml_ng::from_str::<mur_common::AgentProfile>(&yaml)
+                {
+                    prof.appearance.render_status = RenderStatus::Failed {
+                        reason: reason.clone(),
+                    };
+                    let _ = write_profile(&profile_path_done, &prof);
+                }
+                let _ = app.emit(
+                    "agent-render-error",
+                    serde_json::json!({ "name": name, "reason": reason }),
+                );
+            }
+        }
+    });
+
+    Ok(())
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────────
+
+fn write_profile(path: &std::path::Path, profile: &mur_common::AgentProfile) -> Result<(), String> {
+    let out = serde_yaml_ng::to_string(profile).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(path, out).map_err(|e| format!("write {e}"))
+}
 
 fn update_session(
     state: &State<'_, WizardState>,

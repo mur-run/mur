@@ -209,7 +209,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            // Remember window position but NOT size: restoring a persisted size could
+            // reopen the dashboard below its configured minWidth/minHeight (cramped).
+            // Without SIZE, the window always opens at the tauri.conf default (>= min).
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        .difference(tauri_plugin_window_state::StateFlags::SIZE),
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -328,25 +338,38 @@ pub fn run() {
                 }
             }
 
-            // Seed the built-in "Mur" agent on first run (idempotent).
-            if let Ok(template_dir) = app
-                .path()
-                .resolve("mur-agent-template", tauri::path::BaseDirectory::Resource)
-            {
-                let mur_home = mur_home_path();
-                match seed_mur::seed_if_empty(&template_dir, &mur_home) {
-                    Ok(true) => {
-                        tracing::info!("seeded built-in Mur agent");
-                        // Create the runtime symlink + start via the supervisor.
-                        let supervisor_state = app.state::<SupervisorState>();
-                        let supervisor = supervisor_state.0.clone();
-                        tauri::async_runtime::spawn(async move {
-                            supervisor.start("mur").await;
-                        });
+            // Seed the built-in "Mur" agent on first run (idempotent, by-name).
+            // The template is bundled under `resources/mur-agent-template`, which Tauri
+            // stages at `<Resource>/resources/mur-agent-template`. Resolve that first and
+            // fall back to the bare name for dev / alternate layouts; pick what exists.
+            let template_dir = ["resources/mur-agent-template", "mur-agent-template"]
+                .iter()
+                .filter_map(|rel| {
+                    app.path()
+                        .resolve(rel, tauri::path::BaseDirectory::Resource)
+                        .ok()
+                })
+                .find(|p| p.is_dir());
+            match template_dir {
+                Some(template_dir) => {
+                    let mur_home = mur_home_path();
+                    match seed_mur::seed_mur_if_missing(&template_dir, &mur_home) {
+                        Ok(true) => {
+                            tracing::info!("seeded built-in Mur agent");
+                            // Create the runtime symlink + start via the supervisor.
+                            let supervisor_state = app.state::<SupervisorState>();
+                            let supervisor = supervisor_state.0.clone();
+                            tauri::async_runtime::spawn(async move {
+                                supervisor.start("mur").await;
+                            });
+                        }
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!("seed Mur failed: {e}"),
                     }
-                    Ok(false) => {}
-                    Err(e) => tracing::warn!("seed Mur failed: {e}"),
                 }
+                None => tracing::warn!(
+                    "seed Mur: bundled mur-agent-template resource not found; skipping"
+                ),
             }
 
             // Start the bundled local inference server (best-effort).
@@ -369,6 +392,7 @@ pub fn run() {
             onboarding::wizard_start_render,
             onboarding::wizard_finish,
             onboarding::wizard_cancel,
+            onboarding::render_agent_expressions,
             onboarding::first_launch::check_first_launch,
             onboarding::first_launch::mark_first_launch_done,
             pet::pet_spawn_at,
