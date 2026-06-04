@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAgents } from "../context/AgentContext";
+import { useT } from "../i18n";
 import { AgentRow } from "./AgentRow";
+import { Mascot } from "./Mascot";
 import type { AgentEntry } from "../types";
 
 const CATEGORY_ORDER = ["research", "automation", "monitor", "notify", "commerce", "custom"];
@@ -15,6 +17,7 @@ function groupByCategory(agents: AgentEntry[]) {
 }
 
 export function PopoverApp() {
+  const { t } = useT();
   const { agents } = useAgents();
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -50,35 +53,47 @@ export function PopoverApp() {
   );
   const groups = groupByCategory(filtered);
 
-  function showToast(msg: string) {
-    // Minimal toast via alert fallback — no toast lib yet.
-    const el = document.createElement("div");
-    el.className = "toast";
-    el.textContent = msg;
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 2000);
+  function openCreate() {
+    window.open("https://docs.mur.run/agents/create", "_blank");
+  }
+
+  // First-run empty state: no agents at all.
+  if (agents.length === 0) {
+    return (
+      <div className="popover">
+        <div className="popover__empty">
+          <div className="empty-state">
+            <Mascot floating size={72} />
+            <h3>{t("popover.empty.title")}</h3>
+            <button className="btn btn--primary" onClick={openCreate}>
+              {t("popover.empty.cta")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="popover-root">
-      <div className="popover-search">
+    <div className="popover">
+      <div className="popover__search field">
         <input
           ref={searchRef}
           type="search"
-          placeholder="Search agents… (⌘F)"
+          placeholder={t("popover.search")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           autoFocus
         />
       </div>
 
-      <div className="popover-list">
+      <div className="popover__list">
         {filtered.length === 0 && (
-          <p className="empty-hint">No agents found.</p>
+          <p className="popover__empty-hint">{t("popover.noneFound")}</p>
         )}
         {CATEGORY_ORDER.filter((cat) => (groups[cat]?.length ?? 0) > 0).map((cat) => (
           <div key={cat} className="agent-group">
-            <div className="group-header">{cat}</div>
+            <div className="agent-group__header">{cat}</div>
             {groups[cat].map((agent) => (
               <AgentRow key={agent.name} agent={agent} />
             ))}
@@ -86,20 +101,15 @@ export function PopoverApp() {
         ))}
       </div>
 
-      <div className="popover-footer">
+      <div className="popover__footer">
+        <button className="btn btn--primary" onClick={openCreate}>
+          {t("app.newAgent")}
+        </button>
         <button
-          className="footer-btn primary"
-          onClick={() =>
-            window.open("https://docs.mur.run/agents/create", "_blank")
-          }
+          className="btn btn--secondary"
+          onClick={() => invoke("open_dashboard", {}).catch(console.error)}
         >
-          + New Agent
-        </button>
-        <button className="footer-btn" onClick={() => showToast("Coming soon")}>
-          ⚙ Settings
-        </button>
-        <button className="footer-btn" onClick={() => showToast("Coming soon")}>
-          📥 Import
+          {t("popover.openHub")}
         </button>
       </div>
     </div>

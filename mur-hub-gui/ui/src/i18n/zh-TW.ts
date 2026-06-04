@@ -94,4 +94,15 @@ export const zhTW: Table = {
   "action.stop": "停止",
   "action.share": "分享",
   "action.export": "匯出",
+  // ── Common ──
+  "common.new": "新增",
+  "common.close": "關閉",
+  // ── Menubar popover ──
+  "popover.search": "搜尋 agents… (⌘F)",
+  "popover.noneFound": "找不到 agents。",
+  "popover.group.running": "執行中",
+  "popover.group.idle": "閒置",
+  "popover.openHub": "開啟 Hub",
+  "popover.empty.title": "鳥群還沒成形",
+  "popover.empty.cta": "＋ 建立第一隻 Agent",
 };

@@ -92,4 +92,15 @@ export const en = {
   "action.stop": "Stop",
   "action.share": "Share",
   "action.export": "Export",
+  // ── Common ──
+  "common.new": "New",
+  "common.close": "Close",
+  // ── Menubar popover ──
+  "popover.search": "Search agents… (⌘F)",
+  "popover.noneFound": "No agents found.",
+  "popover.group.running": "Running",
+  "popover.group.idle": "Idle",
+  "popover.openHub": "Open Hub",
+  "popover.empty.title": "No flock yet",
+  "popover.empty.cta": "Create your first agent",
 } as const;
