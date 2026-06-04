@@ -68,7 +68,7 @@ impl YamlStore {
 
     /// Get a single pattern by name.
     pub fn get(&self, name: &str) -> Result<Pattern> {
-        let path = self.pattern_path(name);
+        let path = self.pattern_path(name)?;
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read pattern: {}", path.display()))?;
         let pattern: Pattern = serde_yaml::from_str(&content)
@@ -78,7 +78,7 @@ impl YamlStore {
 
     /// Save a pattern to disk (atomic: write temp → rename).
     pub fn save(&self, pattern: &Pattern) -> Result<()> {
-        let path = self.pattern_path(&pattern.name);
+        let path = self.pattern_path(&pattern.name)?;
         let yaml = serde_yaml::to_string(pattern)
             .with_context(|| format!("Failed to serialize pattern: {}", pattern.name))?;
 
@@ -116,7 +116,7 @@ impl YamlStore {
     /// Delete a pattern by name. Returns true if it existed.
     #[allow(dead_code)] // Public API
     pub fn delete(&self, name: &str) -> Result<bool> {
-        let path = self.pattern_path(name);
+        let path = self.pattern_path(name)?;
         if path.exists() {
             fs::remove_file(&path)?;
             Ok(true)
@@ -128,7 +128,7 @@ impl YamlStore {
     /// Move a pattern to the archive directory.
     #[allow(dead_code)]
     pub fn archive(&self, name: &str) -> Result<bool> {
-        let src = self.pattern_path(name);
+        let src = self.pattern_path(name)?;
         if !src.exists() {
             return Ok(false);
         }
@@ -139,14 +139,34 @@ impl YamlStore {
         Ok(true)
     }
 
-    /// Check if a pattern exists.
+    /// Check if a pattern exists. An invalid (path-unsafe) name can't exist as a
+    /// pattern, so it returns false rather than touching the filesystem.
     pub fn exists(&self, name: &str) -> bool {
-        self.pattern_path(name).exists()
+        self.pattern_path(name).map(|p| p.exists()).unwrap_or(false)
     }
 
-    /// Get the file path for a pattern name.
-    fn pattern_path(&self, name: &str) -> PathBuf {
-        self.patterns_dir.join(format!("{}.yaml", name))
+    /// Get the file path for a pattern name, rejecting any name that would
+    /// escape `patterns_dir`.
+    ///
+    /// A name becomes `<patterns_dir>/<name>.yaml`, so a value containing a path
+    /// separator, a `.`/`..` component, or a control character could otherwise
+    /// read or overwrite arbitrary files. This matters because the sync inbox
+    /// writes patterns straight from remote peers (`Inbox::apply_one`), so a
+    /// hostile `../config` / `../trust/trust` name would clobber local state.
+    fn pattern_path(&self, name: &str) -> Result<PathBuf> {
+        if name.is_empty() || name.len() > 128 {
+            anyhow::bail!("invalid pattern name (empty or too long): {name:?}");
+        }
+        if name == "." || name == ".." {
+            anyhow::bail!("invalid pattern name (reserved path component): {name:?}");
+        }
+        if name.contains('/')
+            || name.contains('\\')
+            || name.chars().any(|c| c == '\0' || c.is_control())
+        {
+            anyhow::bail!("invalid pattern name (path separator or control char): {name:?}");
+        }
+        Ok(self.patterns_dir.join(format!("{}.yaml", name)))
     }
 
     /// Get the assets directory for a pattern (e.g. ~/.mur/patterns/<name>/).
@@ -259,6 +279,36 @@ mod tests {
             origin: None,
             attachments: vec![],
         }
+    }
+
+    #[test]
+    fn rejects_path_traversal_pattern_names() -> Result<()> {
+        // patterns_dir is a subdir so traversal would land in a sibling.
+        let tmp = TempDir::new()?;
+        let patterns_dir = tmp.path().join("patterns");
+        let store = YamlStore::new(patterns_dir.clone())?;
+
+        // A hostile name (e.g. from a synced NewDraftPattern) must not write
+        // outside patterns_dir.
+        let mut hostile = make_test_pattern("safe");
+        hostile.name = "../config".into();
+        assert!(store.save(&hostile).is_err(), "save must reject traversal");
+        assert!(
+            !tmp.path().join("config.yaml").exists(),
+            "nothing may be written outside patterns_dir"
+        );
+
+        for bad in ["..", ".", "../config", "a/b", "a\\b", "x\0y", ""] {
+            assert!(store.get(bad).is_err(), "get must reject {bad:?}");
+            assert!(store.delete(bad).is_err(), "delete must reject {bad:?}");
+            assert!(!store.exists(bad), "exists must be false for {bad:?}");
+        }
+
+        // A normal name still works.
+        let ok = make_test_pattern("real-pattern");
+        store.save(&ok)?;
+        assert_eq!(store.get("real-pattern")?.name, "real-pattern");
+        Ok(())
     }
 
     #[test]
