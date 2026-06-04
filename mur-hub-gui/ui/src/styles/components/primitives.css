@@ -11,7 +11,7 @@
 .btn--danger { background:var(--color-accent-soft); color:var(--color-accent-strong); border-color:#FBD7CF; }
 .btn--link { background:transparent; color:var(--color-brand); padding:9px 6px; }
 .btn--sm { font-size:var(--text-sm); padding:6px 12px; }
-.btn:disabled,.btn--disabled { background:#EEF1F5; color:#A8B3C0; box-shadow:none; cursor:not-allowed; }
+.btn:disabled,.btn--disabled { background:var(--surface-secondary); color:var(--text-tertiary); box-shadow:none; cursor:not-allowed; }
 
 /* Category badge + status pill */
 .badge { font-size:var(--text-xs); font-weight:var(--fw-semi); padding:3px 9px; border-radius:var(--radius-sm); }
@@ -79,10 +79,6 @@
   transform: translateX(-50%);
   z-index: 9999;
   pointer-events: none;
-}
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 /* Brain badge — JSX: `toolbar-btn brain-badge` */

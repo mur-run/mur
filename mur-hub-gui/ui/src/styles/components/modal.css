@@ -65,7 +65,7 @@
 }
 
 .dropzone {
-  border: 2px dashed #cfe0f1;
+  border: 2px dashed var(--border-line);
   border-radius: var(--radius-lg);
   background: var(--surface-bg);
   padding: 26px;

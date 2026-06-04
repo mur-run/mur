@@ -29,7 +29,6 @@ export const en = {
   "dashboard.nudgeAccept": "Sure",
   "dashboard.stat.running": "Flying",
   "dashboard.stat.idle": "Resting",
-  "dashboard.stat.unread": "Unread",
   "dashboard.col.agent": "Agent",
   "dashboard.col.category": "Category",
   "dashboard.col.model": "Model",
@@ -115,8 +114,6 @@ export const en = {
   // ── Menubar popover ──
   "popover.search": "Search agents… (⌘F)",
   "popover.noneFound": "No agents found.",
-  "popover.group.running": "Running",
-  "popover.group.idle": "Idle",
   "popover.openHub": "Open Hub",
   "popover.empty.title": "No flock yet",
   "popover.empty.cta": "Create your first agent",

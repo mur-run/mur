@@ -31,7 +31,6 @@ export const zhTW: Table = {
   "dashboard.nudgeAccept": "好啊",
   "dashboard.stat.running": "飛行中",
   "dashboard.stat.idle": "休息中",
-  "dashboard.stat.unread": "未讀",
   "dashboard.col.agent": "Agent",
   "dashboard.col.category": "分類",
   "dashboard.col.model": "模型",
@@ -117,8 +116,6 @@ export const zhTW: Table = {
   // ── Menubar popover ──
   "popover.search": "搜尋 agents… (⌘F)",
   "popover.noneFound": "找不到 agents。",
-  "popover.group.running": "執行中",
-  "popover.group.idle": "閒置",
   "popover.openHub": "開啟 Hub",
   "popover.empty.title": "鳥群還沒成形",
   "popover.empty.cta": "＋ 建立第一隻 Agent",

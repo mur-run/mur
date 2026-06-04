@@ -267,7 +267,7 @@
   justify-content: space-between;
   margin-top: 15px;
   padding-top: 13px;
-  border-top: 1px solid #F0F4F9;
+  border-top: 1px solid var(--border-line);
 }
 .grid-card__open {
   font-size: var(--text-sm);
