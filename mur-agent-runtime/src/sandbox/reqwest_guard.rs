@@ -34,6 +34,15 @@ pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
 /// (127.0.0.1 Ollama) and LAN LLM endpoints. Blocking those would break core
 /// functionality; the metadata endpoint is the genuine SSRF target.
 fn is_link_local_or_unspecified(ip: IpAddr) -> bool {
+    // Normalize IPv4-in-IPv6 forms down to their embedded IPv4 first. Both the
+    // mapped form (`::ffff:a.b.c.d`) and the compatible form (`::a.b.c.d`) have
+    // `segments()[0] == 0`, so without this they slip past the IPv6 checks below
+    // (which only catch fe80::/10 and `::`) — e.g. `http://[::ffff:169.254.169.254]/`
+    // would otherwise reach the cloud-metadata endpoint.
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4().map_or(IpAddr::V6(v6), IpAddr::V4),
+        v4 => v4,
+    };
     match ip {
         IpAddr::V4(v4) => v4.is_link_local() || v4.is_unspecified(),
         // IPv6 link-local is fe80::/10; no stable std helper, so mask manually.
@@ -196,6 +205,42 @@ mod tests {
         ));
         assert!(!is_link_local_or_unspecified("10.0.0.5".parse().unwrap()));
         assert!(!is_link_local_or_unspecified("1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn ipv4_in_ipv6_metadata_blocked() {
+        // The metadata address must not slip through the IPv6 path via the
+        // mapped (`::ffff:`) or compatible (`::`) IPv4-in-IPv6 encodings.
+        assert!(is_link_local_or_unspecified(
+            "::ffff:169.254.169.254".parse().unwrap()
+        ));
+        assert!(is_link_local_or_unspecified(
+            "::169.254.169.254".parse().unwrap()
+        ));
+        assert!(is_link_local_or_unspecified(
+            "::ffff:169.254.0.1".parse().unwrap()
+        ));
+        // Mapped loopback/private/public stay reachable (local-first).
+        assert!(!is_link_local_or_unspecified(
+            "::ffff:127.0.0.1".parse().unwrap()
+        ));
+        assert!(!is_link_local_or_unspecified(
+            "::ffff:192.168.1.10".parse().unwrap()
+        ));
+        assert!(!is_link_local_or_unspecified(
+            "::ffff:1.1.1.1".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn check_request_url_blocks_ipv6_mapped_metadata() {
+        // End-to-end through the connector-level guard wired into the LLM
+        // clients: an IP-literal URL embedding the metadata address is refused.
+        let url = reqwest::Url::parse("http://[::ffff:169.254.169.254]/latest/meta-data/").unwrap();
+        assert!(check_request_url(&url).is_err());
+        // A normal IP-literal to a public host is fine.
+        let ok = reqwest::Url::parse("http://1.1.1.1/").unwrap();
+        assert!(check_request_url(&ok).is_ok());
     }
 
     #[test]
