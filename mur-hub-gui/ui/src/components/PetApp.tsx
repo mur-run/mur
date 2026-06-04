@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useT } from "../i18n";
 
 function getAgentName(): string {
   const hash = window.location.hash; // #/pet/<name>
@@ -23,6 +24,7 @@ interface BubbleState {
 const CLICK_MS = 300;
 
 export function PetApp() {
+  const { t } = useT();
   const agentName = getAgentName();
   const [expression, setExpression] = useState<string>("idle");
   const [imageSrc, setImageSrc] = useState<string>("");
@@ -157,9 +159,9 @@ export function PetApp() {
           className="pet-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <button className="pet-menu-item" onClick={handleReturnToHub}>📥 Return to Hub</button>
+          <button className="pet-menu-item" onClick={handleReturnToHub}>📥 {t("pet.returnToHub")}</button>
           <div className="pet-menu-divider" />
-          <button className="pet-menu-item pet-menu-item--danger" onClick={handleClose}>✕ Close</button>
+          <button className="pet-menu-item pet-menu-item--danger" onClick={handleClose}>✕ {t("common.close")}</button>
         </div>
       )}
     </div>
@@ -175,6 +177,7 @@ interface BubbleProps {
 }
 
 function Bubble({ text, dwellMs, onClose }: BubbleProps) {
+  const { t } = useT();
   const [remaining, setRemaining] = useState(dwellMs);
   const hoveredRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -205,7 +208,7 @@ function Bubble({ text, dwellMs, onClose }: BubbleProps) {
       <div className="pet-bubble-progress">
         <div className="pet-bubble-bar" style={{ width: `${pct}%` }} />
       </div>
-      <button className="pet-bubble-close" onClick={onClose} aria-label="Dismiss">✕</button>
+      <button className="pet-bubble-close" onClick={onClose} aria-label={t("pet.dismiss")}>✕</button>
     </div>
   );
 }
