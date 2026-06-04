@@ -97,6 +97,23 @@ export const zhTW: Table = {
   // ── Common ──
   "common.new": "新增",
   "common.close": "關閉",
+  // ── Companion inbox ──
+  "companion.empty": "目前沒有訊息。",
+  "companion.emptyHint": "當 agent 傳訊給你時，陪伴訊息會顯示在這裡。",
+  "companion.save": "存起來",
+  "companion.notNow": "現在不要",
+  "companion.noThanks": "不用了",
+  "companion.good": "讚",
+  "companion.bad": "不好",
+  "companion.dismiss": "忽略",
+  "companion.acked.saved": "💾 已儲存",
+  "companion.acked.good": "👍 已確認",
+  "companion.acked.bad": "👎 已記錄",
+  "companion.acked.snoozed": "⏳ 已延後",
+  "companion.acked.dismissed": "🚫 已忽略",
+  // ── Desktop pet ──
+  "pet.returnToHub": "返回 Hub",
+  "pet.dismiss": "關閉提示",
   // ── Menubar popover ──
   "popover.search": "搜尋 agents… (⌘F)",
   "popover.noneFound": "找不到 agents。",

@@ -95,6 +95,23 @@ export const en = {
   // ── Common ──
   "common.new": "New",
   "common.close": "Close",
+  // ── Companion inbox ──
+  "companion.empty": "No messages yet.",
+  "companion.emptyHint": "The companion will appear here when the agent sends you a message.",
+  "companion.save": "Save it",
+  "companion.notNow": "Not now",
+  "companion.noThanks": "No thanks",
+  "companion.good": "Good",
+  "companion.bad": "Bad",
+  "companion.dismiss": "Dismiss",
+  "companion.acked.saved": "💾 Saved",
+  "companion.acked.good": "👍 Acknowledged",
+  "companion.acked.bad": "👎 Noted",
+  "companion.acked.snoozed": "⏳ Snoozed",
+  "companion.acked.dismissed": "🚫 Dismissed",
+  // ── Desktop pet ──
+  "pet.returnToHub": "Return to Hub",
+  "pet.dismiss": "Dismiss",
   // ── Menubar popover ──
   "popover.search": "Search agents… (⌘F)",
   "popover.noneFound": "No agents found.",
