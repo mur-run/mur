@@ -13,13 +13,14 @@
 //! verifier and decoder without spinning up the runtime.
 
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
@@ -183,23 +184,45 @@ pub fn router(state: WebhookState) -> Router {
         .with_state(state)
 }
 
-/// Resolve the rate-limit source key for a request.
+/// Resolve the rate-limit bucket key for a request.
 ///
-/// Senders supply `X-Mur-Source: <identifier>` to scope buckets to
-/// their CI job / pipeline / app. Anonymous requests share the
-/// `"default"` bucket — coarse but enough to throttle a misbehaving
-/// caller. Per-IP scoping needs Axum's `ConnectInfo` extractor +
-/// `into_make_service_with_connect_info`; the listener wires that up
-/// already, but extracting in the handler currently runs into a
-/// trait-bound issue we'll revisit when we bring a typed
-/// `WebhookExtractors` struct online.
-fn rate_limit_key(headers: &HeaderMap) -> String {
-    headers
-        .get("x-mur-source")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| "default".to_string())
+/// Keyed on the remote peer IP. We deliberately do NOT key on a request header
+/// (the old `X-Mur-Source`): the limiter runs BEFORE the HMAC check (so a flood
+/// of unsigned junk can't burn CPU on signature verifies), which means any
+/// header value is unauthenticated and trivially varied per request — an
+/// attacker could mint a fresh bucket every time and bypass the limiter
+/// entirely. The peer IP cannot be spoofed per-request over TCP. A request with
+/// no socket peer (unix socket, test harness) shares the `"default"` bucket.
+fn rate_limit_key(peer: Option<IpAddr>) -> String {
+    match peer {
+        Some(ip) => ip.to_string(),
+        None => "default".to_string(),
+    }
+}
+
+/// Infallible extractor for the remote peer IP.
+///
+/// Reads the `ConnectInfo<SocketAddr>` that `into_make_service_with_connect_info`
+/// inserts into request extensions (always present in production). Extraction
+/// never fails: when the info is absent — a unix socket, or a `oneshot` test
+/// harness — it yields `None`, which the rate limiter maps to the shared
+/// `"default"` bucket. A plain `Option<ConnectInfo<_>>` extractor isn't usable
+/// here (axum 0.7 doesn't provide it), hence this small wrapper.
+struct PeerIp(Option<IpAddr>);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for PeerIp {
+    type Rejection = std::convert::Infallible;
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(PeerIp(
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ci| ci.0.ip()),
+        ))
+    }
 }
 
 /// `POST /agents/<slug>/webhook` handler.
@@ -213,6 +236,7 @@ fn rate_limit_key(headers: &HeaderMap) -> String {
 async fn handle_webhook(
     State(state): State<WebhookState>,
     Path(slug): Path<String>,
+    PeerIp(peer): PeerIp,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
@@ -223,8 +247,8 @@ async fn handle_webhook(
         return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
     }
     // Rate limit BEFORE HMAC check so a flood of unsigned junk
-    // can't burn CPU on signature verifies.
-    let key = rate_limit_key(&headers);
+    // can't burn CPU on signature verifies. Key on the (unspoofable) peer IP.
+    let key = rate_limit_key(peer);
     if !state.limiter.try_acquire(&key) {
         return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
     }
@@ -616,20 +640,14 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_key_uses_x_mur_source_when_present() {
-        use axum::http::HeaderValue;
-        let mut h = HeaderMap::new();
-        h.insert(
-            "x-mur-source",
-            HeaderValue::from_static("github-actions/myrepo"),
-        );
-        assert_eq!(rate_limit_key(&h), "github-actions/myrepo");
+    fn rate_limit_key_uses_peer_ip() {
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
+        assert_eq!(rate_limit_key(Some(ip)), "203.0.113.7");
     }
 
     #[test]
-    fn rate_limit_key_falls_back_to_default() {
-        let h = HeaderMap::new();
-        assert_eq!(rate_limit_key(&h), "default");
+    fn rate_limit_key_falls_back_to_default_without_peer() {
+        assert_eq!(rate_limit_key(None), "default");
     }
 
     #[tokio::test]
@@ -657,6 +675,41 @@ mod tests {
         assert_eq!(r1.status(), StatusCode::ACCEPTED);
         let r2 = app.oneshot(make_req()).await.unwrap();
         assert_eq!(r2.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn rate_limit_not_bypassable_via_x_mur_source_header() {
+        // Regression: pre-fix the limiter keyed on the client-supplied
+        // `x-mur-source` header, so a flood could mint a fresh bucket per
+        // request by varying it. Now the key is the peer IP; over oneshot
+        // (no peer) both requests collapse to the shared "default" bucket, so
+        // a differing header no longer escapes the limit.
+        let secret = b"x";
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = WebhookState::new("coach", secret, tmp.keep());
+        state.limiter = Arc::new(TokenBucketLimiter::new(1, Duration::from_secs(3600)));
+        let app = router(state);
+
+        let body = br#"{"kind":"text","value":"hi"}"#;
+        let header = sign(secret, body);
+        let make_req = |source: &str| {
+            Request::builder()
+                .method("POST")
+                .uri("/agents/coach/webhook")
+                .header("x-mur-signature", &header)
+                .header("x-mur-source", source)
+                .body(Body::from(&body[..]))
+                .unwrap()
+        };
+        let r1 = app.clone().oneshot(make_req("source-A")).await.unwrap();
+        assert_eq!(r1.status(), StatusCode::ACCEPTED);
+        // Different source header — must NOT get its own bucket.
+        let r2 = app.oneshot(make_req("source-B")).await.unwrap();
+        assert_eq!(
+            r2.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "varying x-mur-source must not bypass the rate limit"
+        );
     }
 
     #[test]
