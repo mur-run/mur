@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Channel } from "@tauri-apps/api/core";
+import { useT } from "../i18n";
 
 interface BridgeResponse {
   kind: "unset" | "signal";
@@ -22,6 +23,7 @@ interface Props {
 }
 
 export function CompanionInbox({ agentName }: Props) {
+  const { t } = useT();
   const [messages, setMessages] = useState<BridgeEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const channelRef = useRef<Channel<BridgeEvent> | null>(null);
@@ -75,18 +77,33 @@ export function CompanionInbox({ agentName }: Props) {
   }
 
   if (loading) {
-    return <div className="inbox-empty">Loading…</div>;
+    return <div className="inbox-empty">{t("detail.loading")}</div>;
   }
 
   if (messages.length === 0) {
     return (
       <div className="inbox-empty">
-        <p>No messages yet.</p>
-        <p style={{ fontSize: 12, color: "var(--text-secondary, #888)", marginTop: 4 }}>
-          The companion will appear here when the agent sends you a message.
+        <p>{t("companion.empty")}</p>
+        <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
+          {t("companion.emptyHint")}
         </p>
       </div>
     );
+  }
+
+  function ackedLabel(msg: BridgeEvent): string {
+    switch (msg.response.value) {
+      case "good":
+        return msg.situation === "workflow_nudge"
+          ? t("companion.acked.saved")
+          : t("companion.acked.good");
+      case "bad":
+        return t("companion.acked.bad");
+      case "snooze":
+        return t("companion.acked.snoozed");
+      default:
+        return t("companion.acked.dismissed");
+    }
   }
 
   return (
@@ -107,30 +124,20 @@ export function CompanionInbox({ agentName }: Props) {
             <p className="inbox-body">{msg.body}</p>
             {isUnread && msg.situation === "workflow_nudge" && (
               <div className="inbox-actions">
-                <button onClick={() => ack(msg.id, "good")}>Save it</button>
-                <button onClick={() => ack(msg.id, "snooze")}>Not now</button>
-                <button onClick={() => ack(msg.id, "dismiss")}>No thanks</button>
+                <button className="btn btn--sm btn--primary" onClick={() => ack(msg.id, "good")}>{t("companion.save")}</button>
+                <button className="btn btn--sm btn--secondary" onClick={() => ack(msg.id, "snooze")}>{t("companion.notNow")}</button>
+                <button className="btn btn--sm btn--secondary" onClick={() => ack(msg.id, "dismiss")}>{t("companion.noThanks")}</button>
               </div>
             )}
             {isUnread && msg.situation !== "workflow_nudge" && (
               <div className="inbox-actions">
-                <button onClick={() => ack(msg.id, "good")} title="Good">👍</button>
-                <button onClick={() => ack(msg.id, "bad")} title="Bad">👎</button>
-                <button onClick={() => ack(msg.id, "dismiss")} title="Dismiss">🚫</button>
+                <button className="btn btn--sm btn--primary" onClick={() => ack(msg.id, "good")} title={t("companion.good")}>👍</button>
+                <button className="btn btn--sm btn--secondary" onClick={() => ack(msg.id, "bad")} title={t("companion.bad")}>👎</button>
+                <button className="btn btn--sm btn--secondary" onClick={() => ack(msg.id, "dismiss")} title={t("companion.dismiss")}>🚫</button>
               </div>
             )}
             {!isUnread && (
-              <span className="inbox-acked">
-                {msg.response.value === "good"
-                  ? msg.situation === "workflow_nudge"
-                    ? "💾 Saved"
-                    : "👍 Acknowledged"
-                  : msg.response.value === "bad"
-                  ? "👎 Noted"
-                  : msg.response.value === "snooze"
-                  ? "⏳ Snoozed"
-                  : "🚫 Dismissed"}
-              </span>
+              <span className="inbox-acked">{ackedLabel(msg)}</span>
             )}
           </li>
         );
@@ -139,7 +146,7 @@ export function CompanionInbox({ agentName }: Props) {
   );
 }
 
-// ─── Unread badge hook ──────────────────────────────────────────────────────
+// ─── Unread badge hook ───────────────────────────────────────────────────────
 
 export function useUnreadCount(agentName: string): number {
   const [count, setCount] = useState(0);

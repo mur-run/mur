@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useT } from "../i18n";
 
 interface Props {
   isOpen: boolean;
@@ -89,6 +90,7 @@ interface ModelChoice {
 const FIRST_TIME_AUTHOR_DELAY_MS = 5_000;
 
 export function MuragentImportModal({ isOpen, onClose, initialPath }: Props) {
+  const { t } = useT();
   const [path, setPath] = useState<string | null>(null);
   const [inspection, setInspection] = useState<MuragentInspection | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -151,6 +153,7 @@ export function MuragentImportModal({ isOpen, onClose, initialPath }: Props) {
     inspection,
     delayRemaining,
     installing,
+    t,
   ]);
   const importDisabled = disabledReason !== null;
 
@@ -221,29 +224,34 @@ export function MuragentImportModal({ isOpen, onClose, initialPath }: Props) {
   }
 
   function importDisabledReason(): string | null {
-    if (!inspection) return "Select a file first";
-    if (!inspection.signature_valid) return "Signature is invalid";
-    if (inspection.trust_status.kind === "key_change_refused") return "Refused: key change without rotation";
+    if (!inspection) return t("modal.import.disabled.selectFirst");
+    if (!inspection.signature_valid) return t("modal.import.disabled.signatureInvalid");
+    if (inspection.trust_status.kind === "key_change_refused")
+      return t("modal.import.disabled.keyChange");
     if (delayRemaining > 0) {
-      return `Wait ${Math.ceil(delayRemaining / 1000)}s — please review the permissions`;
+      return t("modal.import.disabled.waitReview", {
+        seconds: Math.ceil(delayRemaining / 1000),
+      });
     }
-    if (installing) return "Installing…";
+    if (installing) return t("modal.import.installing");
     return null;
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal__overlay" onClick={onClose}>
       <div
-        className="modal-panel"
-        style={{ maxWidth: 520 }}
+        className="modal"
+        style={{ width: 520 }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="modal-header">
-          <h2>Import Agent</h2>
-          <button className="modal-close" onClick={onClose}>×</button>
+        <div className="modal__header">
+          <h2 className="modal__title">{t("modal.import.title")}</h2>
+          <button className="modal__close" onClick={onClose}>
+            ×
+          </button>
         </div>
 
-        <div className="modal-body">
+        <div className="modal__body">
           {!inspection && !receipt && (
             <ChooseFileStep onChoose={chooseFile} error={error} />
           )}
@@ -284,30 +292,23 @@ export function MuragentImportModal({ isOpen, onClose, initialPath }: Props) {
         </div>
 
         {inspection && !receipt && (
-          <div
-            className="modal-footer"
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              gap: 8,
-              padding: "12px 16px",
-              borderTop: "1px solid var(--border, #2a2a2a)",
-            }}
-          >
-            <button className="toolbar-btn" onClick={onClose}>
-              Cancel
+          <div className="modal__footer">
+            <button className="btn btn--secondary" onClick={onClose}>
+              {t("modal.import.cancel")}
             </button>
             <button
-              className="toolbar-btn primary"
+              className="btn btn--primary"
               onClick={confirmImport}
               disabled={importDisabled}
-              title={disabledReason ?? "Import this agent"}
+              title={disabledReason ?? t("modal.import.importTooltip")}
             >
               {installing
-                ? "Installing…"
+                ? t("modal.import.installing")
                 : delayRemaining > 0
-                ? `Import (${Math.ceil(delayRemaining / 1000)}s)`
-                : "Import"}
+                ? t("modal.import.importTimed", {
+                    seconds: Math.ceil(delayRemaining / 1000),
+                  })
+                : t("modal.import.import")}
             </button>
           </div>
         )}
@@ -325,14 +326,14 @@ function ChooseFileStep({
   onChoose: () => void;
   error: string | null;
 }) {
+  const { t } = useT();
   return (
     <div>
       <p style={{ marginBottom: 12, color: "var(--text-secondary, #888)", fontSize: 13 }}>
-        Select a <code>.muragent</code> file to inspect and (optionally) install.
-        The package will be validated before any data is written.
+        {t("modal.import.choose.body")}
       </p>
-      <button className="toolbar-btn" onClick={onChoose}>
-        Choose File…
+      <button className="btn btn--primary" onClick={onChoose}>
+        {t("modal.import.choose.button")}
       </button>
       {error && (
         <p style={{ marginTop: 12, color: "var(--color-error, #f44336)", fontSize: 13 }}>
@@ -354,6 +355,7 @@ function ReviewStep({
   delayRemaining: number;
   error: string | null;
 }) {
+  const { t } = useT();
   return (
     <div>
       {/* Identity header (spec §7.2 rule 2) */}
@@ -384,9 +386,9 @@ function ReviewStep({
             fontSize: 13,
           }}
         >
-          <strong>Refused — signature or integrity check failed.</strong>
+          <strong>{t("modal.import.refused.title")}</strong>
           <div style={{ marginTop: 4, fontFamily: "var(--font-mono, monospace)", fontSize: 11 }}>
-            {inspection.signature_error ?? "unknown error"}
+            {inspection.signature_error ?? t("modal.import.refused.unknownError")}
           </div>
         </div>
       )}
@@ -395,7 +397,7 @@ function ReviewStep({
       {inspection.signature_valid && (
         <div style={{ marginBottom: 12, fontSize: 12 }}>
           <div style={{ color: "var(--text-secondary, #888)", marginBottom: 2 }}>
-            Author fingerprint
+            {t("modal.import.review.fingerprint")}
           </div>
           <div style={{ fontFamily: "var(--font-mono, monospace)" }}>
             {inspection.fingerprint_hex} · {inspection.fingerprint_words}
@@ -418,8 +420,9 @@ function ReviewStep({
             fontStyle: "italic",
           }}
         >
-          Please review the permissions above. Import will be enabled in{" "}
-          {Math.ceil(delayRemaining / 1000)}s.
+          {t("modal.import.review.delayHint", {
+            seconds: Math.ceil(delayRemaining / 1000),
+          })}
         </p>
       )}
 
@@ -433,6 +436,7 @@ function ReviewStep({
 }
 
 function TrustBadge({ inspection }: { inspection: MuragentInspection }) {
+  const { t } = useT();
   if (!inspection.signature_valid) return null;
   const ts = inspection.trust_status;
   if (ts.kind === "known_author") {
@@ -451,7 +455,7 @@ function TrustBadge({ inspection }: { inspection: MuragentInspection }) {
           fontSize: 12,
         }}
       >
-        First time you've imported anything from this author.
+        {t("modal.import.trust.firstTime")}
       </div>
     );
   }
@@ -467,15 +471,18 @@ function TrustBadge({ inspection }: { inspection: MuragentInspection }) {
         fontSize: 12,
       }}
     >
-      Refused — signing key changed for a known author with no rotation manifest.
+      {t("modal.import.trust.keyChanged")}
       <div style={{ marginTop: 4, fontFamily: "var(--font-mono, monospace)", fontSize: 11 }}>
-        previous fingerprint: {ts.previous_fingerprint}
+        {t("modal.import.trust.previousFingerprint", {
+          fingerprint: ts.previous_fingerprint,
+        })}
       </div>
     </div>
   );
 }
 
 function PermissionsList({ permissions }: { permissions: DeclaredPermissions }) {
+  const { t } = useT();
   const empty =
     permissions.mcp_servers.length === 0 &&
     permissions.capabilities.length === 0 &&
@@ -491,15 +498,15 @@ function PermissionsList({ permissions }: { permissions: DeclaredPermissions }) 
           marginBottom: 4,
         }}
       >
-        This agent will be allowed to:
+        {t("modal.import.review.allowTitle")}
       </div>
       {empty && (
         <div style={{ fontSize: 13, fontStyle: "italic", color: "var(--text-secondary, #888)" }}>
-          (no declared permissions)
+          {t("modal.import.review.noPermissions")}
         </div>
       )}
       {permissions.mcp_servers.length > 0 && (
-        <Detail label="Spawn MCP servers">
+        <Detail label={t("modal.import.review.spawnMcp")}>
           {permissions.mcp_servers.map((m) => (
             <div key={m.name} style={{ fontFamily: "var(--font-mono, monospace)" }}>
               {m.name} <span style={{ opacity: 0.6 }}>({m.command_basename})</span>
@@ -508,14 +515,14 @@ function PermissionsList({ permissions }: { permissions: DeclaredPermissions }) 
         </Detail>
       )}
       {permissions.capabilities.length > 0 && (
-        <Detail label="Capabilities">
+        <Detail label={t("modal.import.review.capabilities")}>
           <div style={{ fontFamily: "var(--font-mono, monospace)" }}>
             {permissions.capabilities.join(", ")}
           </div>
         </Detail>
       )}
-      {permissions.voice_enabled && <Detail label="Use microphone + speakers" />}
-      {permissions.pet_enabled && <Detail label="Spawn a pet window" />}
+      {permissions.voice_enabled && <Detail label={t("modal.import.review.microphone")} />}
+      {permissions.pet_enabled && <Detail label={t("modal.import.review.spawnPet")} />}
     </div>
   );
 }
@@ -542,7 +549,10 @@ function Detail({
 // ─── Step 3: receipt ──────────────────────────────────────────────────────
 
 function ReceiptStep({ receipt }: { receipt: InstallReceipt }) {
-  const verb = receipt.was_update ? "Updated" : "Installed";
+  const { t } = useT();
+  const verb = receipt.was_update
+    ? t("modal.import.receipt.updated")
+    : t("modal.import.receipt.installed");
   return (
     <div>
       <div
@@ -558,7 +568,8 @@ function ReceiptStep({ receipt }: { receipt: InstallReceipt }) {
         ✓ {verb} <strong>{receipt.display_name}</strong> ({receipt.slug})
       </div>
       <div style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>
-        Trust: <code>{receipt.trust_level}</code> · Fingerprint{" "}
+        {t("modal.import.receipt.trustLabel")} <code>{receipt.trust_level}</code> ·{" "}
+        {t("modal.import.receipt.fingerprintLabel")}{" "}
         <code>{receipt.fingerprint_hex}</code>
       </div>
     </div>
@@ -582,6 +593,7 @@ function ModelResolutionStep({
   onApply: (choice: ModelChoice) => void;
   onSkip: () => void;
 }) {
+  const { t } = useT();
   const [provider, setProvider] = useState(
     view.recommendation === "local" ? "ollama" : "anthropic"
   );
@@ -596,30 +608,30 @@ function ModelResolutionStep({
     return (
       <div style={{ padding: "16px 0" }}>
         <p style={{ color: "var(--success, #4caf50)", marginBottom: 8 }}>
-          ✅ Model configured. <strong>{receipt.display_name}</strong> is ready to use.
+          ✅ {t("modal.import.model.configured", { name: receipt.display_name })}
         </p>
         <p style={{ fontSize: 12, color: "var(--muted, #888)" }}>
-          Change it anytime with <code>mur model add</code> or via Hub settings.
+          {t("modal.import.model.changeHint")}
         </p>
       </div>
     );
   }
 
   const recLabel: Record<string, string> = {
-    local: "Local model recommended (your hardware can run it)",
-    cloud: "Cloud model recommended (agent was authored against a frontier model)",
-    cloud_or_smaller_local: "Cloud recommended — your RAM may be too low for the original local model",
-    neutral_menu: "Choose a model backend for this agent",
+    local: t("modal.import.model.rec.local"),
+    cloud: t("modal.import.model.rec.cloud"),
+    cloud_or_smaller_local: t("modal.import.model.rec.cloudOrSmaller"),
+    neutral_menu: t("modal.import.model.rec.neutral"),
   };
 
   return (
     <div style={{ padding: "8px 0" }}>
-      <p style={{ fontWeight: 600, marginBottom: 4 }}>Set up a model</p>
+      <p style={{ fontWeight: 600, marginBottom: 4 }}>{t("modal.import.model.setup")}</p>
       <p style={{ fontSize: 13, color: "var(--muted, #888)", marginBottom: 12 }}>
         {recLabel[view.recommendation]}
         {view.hint && (
           <span>
-            {" "}(original: <code>{view.hint.provider}/{view.hint.name}</code>)
+            {" "}({t("modal.import.model.original")}: <code>{view.hint.provider}/{view.hint.name}</code>)
           </span>
         )}
       </p>
@@ -627,22 +639,22 @@ function ModelResolutionStep({
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", gap: 8 }}>
           <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 12 }}>Provider</label>
+            <label style={{ fontSize: 12 }}>{t("modal.import.model.provider")}</label>
             <input
               className="input"
               value={provider}
               onChange={(e) => setProvider(e.target.value)}
-              placeholder="ollama / anthropic / openai"
+              placeholder={t("modal.import.model.providerPlaceholder")}
               style={{ width: "100%", marginTop: 2 }}
             />
           </div>
           <div style={{ flex: 2 }}>
-            <label style={{ fontSize: 12 }}>Model</label>
+            <label style={{ fontSize: 12 }}>{t("modal.import.model.model")}</label>
             <input
               className="input"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="llama3.2:3b / claude-sonnet-4-6"
+              placeholder={t("modal.import.model.modelPlaceholder")}
               style={{ width: "100%", marginTop: 2 }}
             />
           </div>
@@ -650,13 +662,13 @@ function ModelResolutionStep({
 
         {provider !== "ollama" && (
           <div>
-            <label style={{ fontSize: 12 }}>API key (stored in your secret store)</label>
+            <label style={{ fontSize: 12 }}>{t("modal.import.model.apiKey")}</label>
             <input
               className="input"
               type="password"
               value={secret}
               onChange={(e) => setSecret(e.target.value)}
-              placeholder="sk-… or env:ANTHROPIC_API_KEY"
+              placeholder={t("modal.import.model.apiKeyPlaceholder")}
               style={{ width: "100%", marginTop: 2 }}
             />
           </div>
@@ -668,11 +680,11 @@ function ModelResolutionStep({
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-        <button className="toolbar-btn" onClick={onSkip} style={{ color: "var(--muted, #888)" }}>
-          Skip for now
+        <button className="btn btn--secondary" onClick={onSkip}>
+          {t("modal.import.model.skip")}
         </button>
         <button
-          className="toolbar-btn primary"
+          className="btn btn--primary"
           onClick={() =>
             onApply({
               provider,
@@ -682,7 +694,7 @@ function ModelResolutionStep({
           }
           disabled={!provider.trim() || !model.trim()}
         >
-          Save model
+          {t("modal.import.model.save")}
         </button>
       </div>
     </div>

@@ -26,16 +26,18 @@ export function AgentRow({ agent }: AgentRowProps) {
     invoke("open_dashboard", { agentName: agent.name }).catch(console.error);
   }
 
+  const statusMod = agent.status === "running" ? "run" : "idle";
+
   return (
     <button className="agent-row" onClick={handleClick}>
-      <div className="agent-avatar" style={{ background: color }}>
+      <div className="agent-row__avatar" style={{ background: color }}>
         {initials}
       </div>
-      <div className="agent-info">
-        <span className="agent-name">{agent.display_name}</span>
-        <span className="agent-category">{agent.category}</span>
+      <div className="agent-row__info">
+        <span className="agent-row__name">{agent.display_name}</span>
+        <span className="agent-row__category">{agent.category}</span>
       </div>
-      <span className={`status-dot status-${agent.status}`} />
+      <span className={`agent-row__status agent-row__status--${statusMod}`} />
     </button>
   );
 }

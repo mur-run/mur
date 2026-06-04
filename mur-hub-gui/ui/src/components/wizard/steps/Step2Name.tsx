@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { WizardSnapshot } from "../../../types";
 import { invoke } from "@tauri-apps/api/core";
+import { useT } from "../../../i18n";
 
 interface Props {
   snapshot: WizardSnapshot;
@@ -8,6 +9,7 @@ interface Props {
 }
 
 export function Step2Name({ snapshot, onUpdate }: Props) {
+  const { t } = useT();
   const [name, setName] = useState(snapshot.name ?? "");
   const [desc, setDesc] = useState(snapshot.description ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -24,28 +26,28 @@ export function Step2Name({ snapshot, onUpdate }: Props) {
 
   return (
     <div className="wz-step">
-      <h2>Name your agent</h2>
-      <p className="wz-hint">Use lowercase letters and hyphens only (e.g. <code>my-researcher</code>).</p>
+      <h2>{t("wizard.name.title")}</h2>
+      <p className="wz-hint">{t("wizard.name.hint")}</p>
 
       <label className="wz-label">
-        Agent name
+        {t("wizard.name.label")}
         <input
           className="wz-input"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="my-agent"
+          placeholder={t("wizard.name.placeholder")}
           autoFocus
           onKeyDown={(e) => e.key === "Enter" && next()}
         />
       </label>
 
       <label className="wz-label">
-        Short description <span className="wz-optional">(optional)</span>
+        {t("wizard.name.descLabel")} <span className="wz-optional">{t("wizard.name.optional")}</span>
         <textarea
           className="wz-textarea"
           value={desc}
           onChange={(e) => setDesc(e.target.value)}
-          placeholder="This agent helps me…"
+          placeholder={t("wizard.name.descPlaceholder")}
           rows={3}
         />
       </label>
@@ -53,8 +55,8 @@ export function Step2Name({ snapshot, onUpdate }: Props) {
       {error && <p className="wz-error">{error}</p>}
 
       <div className="wz-actions">
-        <button className="wz-btn primary" onClick={next} disabled={!name.trim()}>
-          Continue →
+        <button className="btn btn--primary" onClick={next} disabled={!name.trim()}>
+          {t("wizard.next")} →
         </button>
       </div>
     </div>

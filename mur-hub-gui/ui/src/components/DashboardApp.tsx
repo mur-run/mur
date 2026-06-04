@@ -9,6 +9,8 @@ import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
 import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
+import { Mascot } from "./Mascot";
+import { useT } from "../i18n";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
@@ -39,31 +41,19 @@ function showToast(msg: string) {
   setTimeout(() => el.remove(), 2000);
 }
 
-function runtimeLabel(rt: RuntimeState | undefined): string {
-  if (!rt) return "";
-  switch (rt.state) {
+// Maps a runtime state to a status pill { className, statusKey } for the new brand.
+function runtimePill(rt: RuntimeState | undefined): {
+  cls: string;
+  key: "status.running" | "status.idle" | "status.error";
+} {
+  switch (rt?.state) {
     case "running":
-      return `pid ${rt.pid}`;
     case "restarting":
-      return `restarting (attempt ${rt.attempt})`;
+      return { cls: "pill pill--run", key: "status.running" };
     case "failed":
-      return "failed";
-    case "stopped":
-      return "";
-  }
-}
-
-function runtimeDotClass(rt: RuntimeState | undefined): string {
-  if (!rt) return "";
-  switch (rt.state) {
-    case "running":
-      return "status-dot status-running";
-    case "restarting":
-      return "status-dot status-restarting";
-    case "failed":
-      return "status-dot status-stale";
+      return { cls: "pill pill--fail", key: "status.error" };
     default:
-      return "status-dot status-idle";
+      return { cls: "pill pill--idle", key: "status.idle" };
   }
 }
 
@@ -76,9 +66,11 @@ interface GridCardProps {
 }
 
 export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
+  const { t } = useT();
   const { setSelected } = useAgents();
   const unread = useUnreadCount(agent.name);
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
+  const pill = runtimePill(runtime?.state);
   const isRunning = runtime?.state.state === "running";
   const isBusy = runtime?.state.state === "restarting";
 
@@ -171,46 +163,50 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
     <>
       <div
         className={`grid-card${isSelected ? " grid-card--selected" : ""}${dragging ? " grid-card--dragging" : ""}`}
+        style={{ ["--cat" as string]: color }}
         data-agent={agent.name}
         onMouseDown={startHold}
         onMouseUp={cancelHold}
         onMouseLeave={cancelHold}
         onClick={() => setSelected(isSelected ? null : agent.name)}
       >
-        <div className="grid-avatar" style={{ background: color }}>
-          {avatarInitials(agent.display_name)}
-          {unread > 0 && (
-            <span className="unread-badge">{unread > 99 ? "99+" : unread}</span>
-          )}
+        <div className="grid-card__head">
+          <div className="grid-card__avatar" style={{ background: color }}>
+            {avatarInitials(agent.display_name)}
+            {unread > 0 && (
+              <span className="unread-badge">{unread > 99 ? "99+" : unread}</span>
+            )}
+          </div>
+          <div>
+            <p className="grid-card__name">{agent.display_name}</p>
+            <p className="grid-card__cat">{agent.category}</p>
+          </div>
         </div>
-        <p className="grid-name">{agent.display_name}</p>
-        <div className="grid-status">
-          <span className={runtimeDotClass(runtime?.state)} />
-          <span className="grid-status-text">
-            {runtimeLabel(runtime?.state) || agent.status}
-          </span>
-        </div>
-        <div className="grid-actions">
+        <div className="grid-card__actions">
           <button
             disabled={isRunning || isBusy}
             onClick={handleRun}
-            title="Start agent runtime"
+            title={t("dashboard.runTooltip")}
           >
-            ▶ Run
+            ▶ {t("dashboard.run")}
           </button>
           <button
             disabled={!isRunning && !isBusy}
             onClick={handleStop}
-            title="Stop agent runtime"
+            title={t("dashboard.stopTooltip")}
           >
-            ■ Stop
+            ■ {t("dashboard.stop")}
           </button>
-          <button
-            onClick={handleShare}
-            title="Export as .muragent to share"
-          >
-            ↑ Share
+          <button onClick={handleShare} title={t("dashboard.shareTooltip")}>
+            ↑ {t("dashboard.share")}
           </button>
+        </div>
+        <div className="grid-card__foot">
+          <span className={pill.cls}>
+            <span className="pill__dot" />
+            {t(pill.key)}
+          </span>
+          <span className="grid-card__open">{t("dashboard.open")} →</span>
         </div>
       </div>
 
@@ -243,23 +239,34 @@ interface ListRowProps {
 }
 
 export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
+  const { t } = useT();
+  const { setSelected } = useAgents();
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
+  const pill = runtimePill(runtime?.state);
   const model =
     agent.model_id.length > 24 ? agent.model_id.slice(0, 24) + "…" : agent.model_id;
   return (
     <div
       className={`list-row${isSelected ? " list-row--selected" : ""}`}
+      style={{ ["--cat" as string]: color }}
       data-agent={agent.name}
+      onClick={() => setSelected(isSelected ? null : agent.name)}
     >
-      <div className="list-avatar" style={{ background: color }}>
-        {avatarInitials(agent.display_name)}
+      <div className="list-row__main">
+        <div className="list-avatar" style={{ background: color }}>
+          {avatarInitials(agent.display_name)}
+        </div>
+        <span className="list-name">{agent.display_name}</span>
       </div>
-      <span className="list-name">{agent.display_name}</span>
       <span className="list-category">{agent.category}</span>
       <span className="list-model" title={agent.model_id}>
         {model}
       </span>
-      <span className={runtimeDotClass(runtime?.state)} />
+      <span className={pill.cls}>
+        <span className="pill__dot" />
+        {t(pill.key)}
+      </span>
+      <span className="list-row__open">{t("dashboard.open")} →</span>
     </div>
   );
 }
@@ -273,6 +280,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ activeCategory, agents, onSelect }: SidebarProps) {
+  const { t } = useT();
   const counts: Record<string, number> = {};
   for (const a of agents) counts[a.category] = (counts[a.category] ?? 0) + 1;
 
@@ -282,7 +290,7 @@ export function Sidebar({ activeCategory, agents, onSelect }: SidebarProps) {
         className={`sidebar-item${activeCategory === null ? " sidebar-item--active" : ""}`}
         onClick={() => onSelect(null)}
       >
-        All <span className="badge">{agents.length}</span>
+        {t("dashboard.all")} <span className="badge">{agents.length}</span>
       </button>
       {ALL_CATEGORIES.filter((c) => (counts[c] ?? 0) > 0).map((cat) => (
         <button
@@ -300,16 +308,14 @@ export function Sidebar({ activeCategory, agents, onSelect }: SidebarProps) {
 // ─── BrainBadge ────────────────────────────────────────────────────────────
 
 function BrainBadge() {
+  const { t } = useT();
   const [model, setModel] = useState<string | null>(null);
   useEffect(() => {
     invoke<[boolean, string | null]>("nudge_status").then(([, m]) => setModel(m)).catch(() => {});
   }, []);
   if (!model) return null;
   return (
-    <button
-      className="toolbar-btn brain-badge"
-      title="目前的大腦 — 點此升級成更聰明的模型"
-    >
+    <button className="toolbar-btn brain-badge" title={t("dashboard.brainTooltip")}>
       🧠 {model}
     </button>
   );
@@ -318,6 +324,7 @@ function BrainBadge() {
 // ─── DashboardApp ──────────────────────────────────────────────────────────
 
 export function DashboardApp() {
+  const { t, lang, setLang } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -335,6 +342,12 @@ export function DashboardApp() {
   const runtimeMap = new Map<string, AgentRuntimeStatus>(
     runtimeStatuses.map((s) => [s.name, s]),
   );
+
+  // Flock stats for the hero: count agents whose runtime is actively running.
+  const runningCount = agents.filter(
+    (a) => runtimeMap.get(a.name)?.state.state === "running",
+  ).length;
+  const idleCount = agents.length - runningCount;
 
   useEffect(() => {
     const unSelect = listen<string>("select-agent", (e) => {
@@ -405,15 +418,27 @@ export function DashboardApp() {
   return (
     <div className="dashboard-root">
       <Sidebar activeCategory={activeCategory} agents={agents} onSelect={setActiveCategory} />
-      <div className="dashboard-main">        {showAppsBanner && (
+      <div className="dashboard-main dashboard">
+        {showAppsBanner && (
           <div className="onboarding-banner">
             <span>
-              Move MuR Hub to your <strong>Applications</strong> folder so .muragent files open here automatically.
+              {t("dashboard.moveToAppsBody", {
+                folder: t("dashboard.applicationsFolder"),
+              })
+                .split(t("dashboard.applicationsFolder"))
+                .flatMap((part, i) =>
+                  i === 0
+                    ? [part]
+                    : [
+                        <strong key={i}>{t("dashboard.applicationsFolder")}</strong>,
+                        part,
+                      ],
+                )}
             </span>
             <button
               className="toolbar-btn"
               onClick={() => setShowAppsBanner(false)}
-              title="Dismiss"
+              title={t("dashboard.dismiss")}
             >
               ✕
             </button>
@@ -421,7 +446,7 @@ export function DashboardApp() {
         )}
         {showUpgradeNudge && !nudgeDismissed && (
           <div className="upgrade-nudge-banner">
-            <span>這個我現在的小腦袋有點吃力～要幫我接上更聰明的大腦嗎？</span>
+            <span>{t("dashboard.nudgePrompt")}</span>
             <div className="upgrade-nudge-actions">
               <button
                 className="toolbar-btn"
@@ -430,7 +455,7 @@ export function DashboardApp() {
                   setNudgeDismissed(true);
                 }}
               >
-                不用了
+                {t("dashboard.nudgeDecline")}
               </button>
               <button
                 className="toolbar-btn toolbar-btn--primary"
@@ -439,77 +464,121 @@ export function DashboardApp() {
                   setWizardOpen(true);
                 }}
               >
-                好啊
+                {t("dashboard.nudgeAccept")}
               </button>
             </div>
           </div>
         )}
-        <div className="toolbar">
-          <button
-            className="toolbar-btn"
-            onClick={() => setWizardOpen(true)}
-          >
-            + New Agent
-          </button>
-          <button
-            className="toolbar-btn"
-            onClick={() => setMuragentImportOpen(true)}
-            title="Install an agent from a signed .muragent package"
-          >
-            Import Agent
-          </button>
-          <button
-            className="toolbar-btn"
-            onClick={() => setPresetImportOpen(true)}
-            title="Import a custom style preset YAML"
-          >
-            Import Preset
-          </button>
-          <BrainBadge />
-          <input
-            ref={searchRef}
-            type="search"
-            className="toolbar-search"
-            placeholder="Search… (⌘K)"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <div className="view-toggle">
-            <button
-              className={viewMode === "grid" ? "active" : ""}
-              onClick={() => setViewMode("grid")}
-              title="Grid view"
-            >
-              ⊞
+
+        <div className="dashboard__bar">
+          <div className="dashboard__bar-actions">
+            <button className="toolbar-btn" onClick={() => setWizardOpen(true)}>
+              + {t("app.newAgent")}
             </button>
             <button
-              className={viewMode === "list" ? "active" : ""}
-              onClick={() => setViewMode("list")}
-              title="List view"
+              className="toolbar-btn"
+              onClick={() => setMuragentImportOpen(true)}
+              title={t("app.importAgentTooltip")}
             >
-              ☰
+              {t("app.importAgent")}
+            </button>
+            <button
+              className="toolbar-btn"
+              onClick={() => setPresetImportOpen(true)}
+              title={t("app.importPresetTooltip")}
+            >
+              {t("app.importPreset")}
+            </button>
+            <BrainBadge />
+            <label className="field dashboard__bar-search">
+              <input
+                ref={searchRef}
+                type="search"
+                placeholder={t("dashboard.search")}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="dashboard__bar-right">
+            <label className="lang-switch">
+              {t("settings.language")}
+              <select
+                value={lang}
+                onChange={(e) => setLang(e.target.value as "en" | "zh-TW")}
+              >
+                <option value="en">English</option>
+                <option value="zh-TW">繁體中文</option>
+              </select>
+            </label>
+            <div className="view-toggle">
+              <button
+                className={viewMode === "grid" ? "is-active" : ""}
+                onClick={() => setViewMode("grid")}
+                title={t("view.grid")}
+                aria-label={t("view.grid")}
+              >
+                ⊞
+              </button>
+              <button
+                className={viewMode === "list" ? "is-active" : ""}
+                onClick={() => setViewMode("list")}
+                title={t("view.list")}
+                aria-label={t("view.list")}
+              >
+                ☰
+              </button>
+            </div>
+            <button
+              className="toolbar-btn"
+              title={t("app.refresh")}
+              aria-label={t("app.refresh")}
+              onClick={() =>
+                invoke<AgentEntry[]>("list_agents")
+                  .then(() => {}) // state updated via event
+                  .catch(console.error)
+              }
+            >
+              ↺
             </button>
           </div>
-          <button
-            className="toolbar-btn"
-            onClick={() =>
-              invoke<AgentEntry[]>("list_agents")
-                .then(() => {}) // state updated via event
-                .catch(console.error)
-            }
-          >
-            ↺
-          </button>
+        </div>
+
+        <div className="dashboard__hero">
+          <Mascot floating />
+          <div>
+            <h3>{t("dashboard.greeting", { name: "there" })}</h3>
+            <p>
+              {t("dashboard.flockStatus", {
+                running: runningCount,
+                idle: idleCount,
+              })}
+            </p>
+          </div>
+          <div className="dashboard__stats">
+            <div className="stat">
+              <div className="stat__n stat__n--run">{runningCount}</div>
+              <div className="stat__l">{t("dashboard.stat.running")}</div>
+            </div>
+            <div className="stat">
+              <div className="stat__n">{idleCount}</div>
+              <div className="stat__l">{t("dashboard.stat.idle")}</div>
+            </div>
+          </div>
         </div>
 
         <div className="dashboard-content">
           {visible.length === 0 ? (
             <div className="empty-state">
-              <div className="empty-illustration">◎</div>
-              <p>No agents yet</p>
+              <Mascot floating size={96} />
+              <h3>{t("dashboard.empty.title")}</h3>
+              <p>{t("dashboard.empty.body")}</p>
+              <button className="btn btn--primary" onClick={() => setWizardOpen(true)}>
+                {t("dashboard.empty.cta")}
+              </button>
             </div>
           ) : viewMode === "grid" ? (
-            <div className="grid-view">
+            <div className="agent-grid">
               {visible.map((a) => (
                 <GridCard
                   key={a.name}
@@ -520,7 +589,14 @@ export function DashboardApp() {
               ))}
             </div>
           ) : (
-            <div className="list-view">
+            <div className="agent-list">
+              <div className="agent-list__head">
+                <span>{t("dashboard.col.agent")}</span>
+                <span>{t("dashboard.col.category")}</span>
+                <span>{t("dashboard.col.model")}</span>
+                <span>{t("dashboard.col.status")}</span>
+                <span />
+              </div>
               {visible.map((a) => (
                 <ListRow
                   key={a.name}

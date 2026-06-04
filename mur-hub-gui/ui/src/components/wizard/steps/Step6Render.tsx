@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { RenderProgressSnapshot, WizardSnapshot } from "../../../types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useT } from "../../../i18n";
 
 interface Props {
   snapshot: WizardSnapshot;
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function Step6Render({ snapshot, onFinish }: Props) {
+  const { t } = useT();
   const [progress, setProgress] = useState<RenderProgressSnapshot | null>(
     snapshot.render_progress ?? null,
   );
@@ -70,19 +72,16 @@ export function Step6Render({ snapshot, onFinish }: Props) {
 
   return (
     <div className="wz-step">
-      <h2>Generate expressions</h2>
-      <p className="wz-hint">
-        12 expression images will be rendered using AI.
-        This takes 30–60 seconds and costs ~$0.04.
-      </p>
+      <h2>{t("wizard.render.title")}</h2>
+      <p className="wz-hint">{t("wizard.render.hint")}</p>
 
       {!started && !done && (
         <div className="wz-render-actions">
-          <button className="wz-btn primary" onClick={startRender}>
-            ✨ Generate now
+          <button className="btn btn--primary" onClick={startRender}>
+            {t("wizard.render.generate")}
           </button>
-          <button className="wz-btn ghost" onClick={useDefaultBlob}>
-            🛟 Use default blob, render later
+          <button className="btn btn--secondary" onClick={useDefaultBlob}>
+            {t("wizard.render.useDefault")}
           </button>
         </div>
       )}
@@ -91,23 +90,26 @@ export function Step6Render({ snapshot, onFinish }: Props) {
         <div className="wz-progress">
           <div className="wz-progress-bar" style={{ width: `${pct}%` }} />
           <p className="wz-progress-text">
-            {progress.done} / {progress.total} done
+            {t("wizard.render.progress", { done: progress.done, total: progress.total })}
             {progress.failed > 0 && (
-              <span className="wz-progress-failed"> · {progress.failed} failed</span>
+              <span className="wz-progress-failed">
+                {" · "}
+                {t("wizard.render.failed", { failed: progress.failed })}
+              </span>
             )}
           </p>
         </div>
       )}
 
       {started && !done && !progress && (
-        <p className="wz-progress-text">Starting render…</p>
+        <p className="wz-progress-text">{t("wizard.render.starting")}</p>
       )}
 
       {done && (
         <div className="wz-render-done">
-          <p>✅ All expressions rendered!</p>
-          <button className="wz-btn primary" onClick={finish}>
-            Finish →
+          <p>{t("wizard.render.complete")}</p>
+          <button className="btn btn--primary" onClick={finish}>
+            {t("wizard.render.finish")}
           </button>
         </div>
       )}
@@ -115,8 +117,8 @@ export function Step6Render({ snapshot, onFinish }: Props) {
       {error && (
         <div className="wz-render-error">
           <p className="wz-error">{error}</p>
-          <button className="wz-btn ghost" onClick={useDefaultBlob}>
-            🛟 Continue with default blob
+          <button className="btn btn--secondary" onClick={useDefaultBlob}>
+            {t("wizard.render.continueDefault")}
           </button>
         </div>
       )}
