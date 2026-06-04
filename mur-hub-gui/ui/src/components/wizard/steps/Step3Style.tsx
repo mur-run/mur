@@ -1,6 +1,7 @@
 import type { WizardSnapshot, PresetSummary } from "../../../types";
 import { BUILTIN_PRESETS } from "../../../types";
 import { invoke } from "@tauri-apps/api/core";
+import { useT } from "../../../i18n";
 
 const FAMILY_EMOJI: Record<string, string> = {
   chibi:    "🐣",
@@ -15,6 +16,7 @@ interface Props {
 }
 
 export function Step3Style({ snapshot, onUpdate }: Props) {
+  const { t } = useT();
   async function pick(id: string) {
     const s: WizardSnapshot = await invoke("wizard_set_preset", { presetId: id });
     onUpdate(s);
@@ -22,8 +24,8 @@ export function Step3Style({ snapshot, onUpdate }: Props) {
 
   return (
     <div className="wz-step">
-      <h2>Choose a style preset</h2>
-      <p className="wz-hint">Your agent's visual identity — 12 expressions will be rendered by AI.</p>
+      <h2>{t("wizard.style.title")}</h2>
+      <p className="wz-hint">{t("wizard.style.hint")}</p>
 
       <div className="wz-preset-grid">
         {BUILTIN_PRESETS.map((p: PresetSummary) => (
