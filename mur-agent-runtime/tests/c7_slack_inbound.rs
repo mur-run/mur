@@ -207,6 +207,29 @@ async fn duplicate_event_skipped() {
     assert!(!r2.forwarded, "duplicate should be skipped");
 }
 
+#[tokio::test]
+async fn failed_forward_is_retried_not_dropped() {
+    // Regression: a transient user-agent failure must NOT mark the message
+    // seen, so it is retried on redelivery instead of being silently dropped.
+    let dir = TempDir::new().unwrap();
+    let bot = MockSlackBot::new();
+    let mut deps = make_deps(SlackPrivacyMode::DmAndMentions, vec![], &dir);
+    deps.user_agent = Some(MockUserAgentHandle::server_error()); // forward 5xx
+    let mut loop_ = SlackInboundLoop::new(bot, deps);
+    let env = mention_envelope("C_CHAN", "1000000099.000001", "<@U_BOT> retry me");
+
+    let r1 = loop_.tick_once(env.clone()).await.unwrap();
+    assert!(!r1.forwarded, "a 5xx forward should not report success");
+
+    // User agent recovers; the same message must be retried, not deduped away.
+    loop_.deps.as_mut().unwrap().user_agent = Some(MockUserAgentHandle::ok("ok now"));
+    let r2 = loop_.tick_once(env).await.unwrap();
+    assert!(
+        r2.forwarded,
+        "a previously-failed message must be retried on redelivery, not dropped"
+    );
+}
+
 // ── M-c7.4 tests ──────────────────────────────────────────────────────────
 
 #[tokio::test]
