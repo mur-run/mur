@@ -55,6 +55,10 @@ pub struct InstallOutcome {
     /// the agent already existed at the slug with matching UUID and the
     /// payload was replaced in place (preserving `data/`).
     pub was_update: bool,
+    /// Revocation outcome for this install. A *revoked* key/package never
+    /// reaches here (it is a hard error); this is `Clean`/`Stale`/`Unknown` so
+    /// the caller can warn or gate per its own policy.
+    pub revocation_status: trust::RevocationStatus,
 }
 
 /// Install or update a `.muragent` archive. See module docs for the flow.
@@ -79,12 +83,33 @@ pub fn install(
     // `identity.key` would plant/overwrite the agent's private signing key.
     reject_reserved_local_files(archive)?;
 
+    // Load the trust store up front: it carries the highest revocations
+    // `crl_number` we've accepted, which the revocation check needs to reject a
+    // rolled-back cache.
+    let mut trust_store = TrustStore::load()?;
+
     // Step 1.6: revocation check (§7.4.1). The validator defers this; enforce it
     // here against the locally-cached list. A missing cache is fail-open (v1
     // best-effort, matching offline installs), but a cached list that names this
     // author key or this package hash is a hard refusal — a compromised author
-    // key must not be re-accepted on import.
-    check_revocations(archive, mur_home, &result.author_pubkey)?;
+    // key must not be re-accepted on import. The non-revoked status is surfaced
+    // to the caller for policy.
+    let revocation_status = check_revocations(
+        archive,
+        mur_home,
+        &result.author_pubkey,
+        trust_store.revocation_crl_number,
+    )?;
+    // Advance the persisted high-water mark so a later rollback is rejected.
+    if let trust::RevocationStatus::Clean { crl_number }
+    | trust::RevocationStatus::Stale { crl_number } = revocation_status
+    {
+        let hi = trust_store
+            .revocation_crl_number
+            .unwrap_or(0)
+            .max(crl_number);
+        trust_store.revocation_crl_number = Some(hi);
+    }
 
     // Step 2: slug shape
     let slug = result.manifest.agent.slug.clone();
@@ -94,7 +119,6 @@ pub fn install(
     })?;
 
     // Step 3: trust store key-change check
-    let mut trust_store = TrustStore::load()?;
     let author_pubkey_b64 = B64.encode(result.author_pubkey);
     let existing_by_pubkey = trust_store.find_by_pubkey(&author_pubkey_b64).cloned();
 
@@ -171,20 +195,39 @@ pub fn install(
         fingerprint_hex,
         fingerprint_words,
         was_update,
+        revocation_status,
     })
 }
 
-/// Refuse to install a package whose author key or package hash appears in the
-/// locally-cached revocations list. No network fetch happens here; a missing or
-/// unparseable cache is treated as "nothing revoked" (v1 fail-open posture).
+/// Check an install against the locally-cached revocations list.
+///
+/// A revoked author key or package hash is a hard `TrustRefused` error. The
+/// non-revoked outcomes are returned as a [`RevocationStatus`] so the caller can
+/// apply its own policy to "unknown"/"stale" (v1 fail-open with a signal; a
+/// governance surface may fail-closed). No network fetch happens here.
+///
+/// `known_crl` is the highest `crl_number` this host has already accepted; a
+/// cached list older than that is a rollback (or tamper) and is ignored
+/// (→ `Unknown`) rather than trusted, so it can neither downgrade a "clean"
+/// verdict nor suppress a revocation we already knew about.
 fn check_revocations(
     archive: &MuragentArchive,
     mur_home: &Path,
     author_pubkey: &[u8; 32],
-) -> Result<(), MuragentError> {
+    known_crl: Option<u64>,
+) -> Result<trust::RevocationStatus, MuragentError> {
+    use trust::RevocationStatus;
+
     let Some(list) = trust::RevocationsList::load_cached(mur_home) else {
-        return Ok(());
+        return Ok(RevocationStatus::Unknown);
     };
+
+    // Rollback defence: never act on a cache older than what we have recorded.
+    if let Some(known) = known_crl
+        && list.crl_number < known
+    {
+        return Ok(RevocationStatus::Unknown);
+    }
 
     let author = format!("ed25519:{}", B64.encode(author_pubkey));
     if list.is_author_revoked(&author) {
@@ -203,7 +246,15 @@ fn check_revocations(
         }
     }
 
-    Ok(())
+    Ok(if list.is_expired() {
+        RevocationStatus::Stale {
+            crl_number: list.crl_number,
+        }
+    } else {
+        RevocationStatus::Clean {
+            crl_number: list.crl_number,
+        }
+    })
 }
 
 /// Refuse a package that carries any [`RESERVED_LOCAL_FILES`] entry at its top
@@ -587,14 +638,27 @@ mod tests {
             files: BTreeMap::new(),
         };
         assert!(matches!(
-            check_revocations(&archive, mur_home, &pk),
+            check_revocations(&archive, mur_home, &pk, None),
             Err(MuragentError::TrustRefused(_))
         ));
-        // A different (non-revoked) key passes.
-        assert!(check_revocations(&archive, mur_home, &[8u8; 32]).is_ok());
-        // No cached list → fail-open.
+        // A different (non-revoked) key passes, against a present, non-expired
+        // list → Clean with the list's crl_number.
+        assert!(matches!(
+            check_revocations(&archive, mur_home, &[8u8; 32], None),
+            Ok(trust::RevocationStatus::Clean { crl_number: 1 })
+        ));
+        // No cached list → Unknown (fail-open).
         let empty = TempDir::new().unwrap();
-        assert!(check_revocations(&archive, empty.path(), &pk).is_ok());
+        assert!(matches!(
+            check_revocations(&archive, empty.path(), &pk, None),
+            Ok(trust::RevocationStatus::Unknown)
+        ));
+        // A rolled-back cache (crl_number below what we've accepted) is ignored,
+        // not trusted — even though it lists the key, it yields Unknown.
+        assert!(matches!(
+            check_revocations(&archive, mur_home, &pk, Some(5)),
+            Ok(trust::RevocationStatus::Unknown)
+        ));
     }
 
     #[test]

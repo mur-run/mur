@@ -8,7 +8,7 @@ pub mod revocations;
 pub mod rotation;
 pub mod skills;
 
-pub use revocations::{RevocationsList, RevokedEntry};
+pub use revocations::{RevocationStatus, RevocationsList, RevokedEntry};
 
 use crate::muragent::MuragentError;
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,11 @@ pub struct TrustEntry {
 pub struct TrustStore {
     #[serde(default)]
     pub agents: Vec<TrustEntry>,
+    /// Highest revocations-list `crl_number` this host has accepted. Persisted
+    /// so a rolled-back (older) cached list is rejected — the monotonic counter,
+    /// not the wall clock, is the load-bearing anti-rollback defence (§7.4.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocation_crl_number: Option<u64>,
 }
 
 impl TrustStore {

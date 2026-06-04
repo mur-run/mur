@@ -36,6 +36,23 @@ pub fn cmd_install(path: &Path, model_ref_override: Option<&str>) -> Result<()> 
     println!("  fingerprint: {}", outcome.fingerprint_hex);
     println!("  words:       {}", outcome.fingerprint_words);
 
+    // Surface revocation freshness. A *revoked* package never gets here (install
+    // already refused it); this is the CLI's policy for the soft outcomes — warn,
+    // don't block (offline-friendly v1 posture).
+    match outcome.revocation_status {
+        mur_common::trust::RevocationStatus::Clean { .. } => {}
+        mur_common::trust::RevocationStatus::Stale { .. } => {
+            eprintln!(
+                "  ⚠ revocation list is expired — could not confirm this author is not revoked; run a refresh when online"
+            );
+        }
+        mur_common::trust::RevocationStatus::Unknown => {
+            eprintln!(
+                "  ⚠ no revocation data available — could not check whether this author key is revoked"
+            );
+        }
+    }
+
     if let Some(model_ref) = model_ref_override {
         apply_model_ref_override(&mur_home, &outcome.manifest.agent.slug, model_ref)?;
     } else {

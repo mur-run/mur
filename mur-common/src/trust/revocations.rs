@@ -134,6 +134,26 @@ impl RevocationsList {
     }
 }
 
+/// Result of checking an install against the cached revocations list.
+///
+/// A *revoked* key or package is not represented here — it is a hard error from
+/// the caller. This enum captures only the non-revoked outcomes, so a surface
+/// (CLI / Hub / Commander) can apply its own policy to "unknown" and "stale"
+/// (fail-open with a warning vs. fail-closed) rather than baking one global
+/// posture into the library. See `installer::check_revocations`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevocationStatus {
+    /// No usable cached list (absent, unparseable, or a rolled-back cache older
+    /// than the highest `crl_number` we have already accepted). Status unknown.
+    Unknown,
+    /// Checked against a present, non-expired list; nothing matched.
+    Clean { crl_number: u64 },
+    /// Checked against a present but *expired* list. Its revocations were still
+    /// enforced (a revocation is a monotonic fact), but a "clean" result is no
+    /// longer authoritative — the list should be refreshed.
+    Stale { crl_number: u64 },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
