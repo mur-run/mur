@@ -14,10 +14,11 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Json, Path, State};
+use axum::extract::{Json, Path, Request, State};
 use axum::http::StatusCode;
 use axum::http::header;
-use axum::response::IntoResponse;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use rust_embed::Embed;
 use serde::Serialize;
@@ -173,8 +174,17 @@ pub(super) fn wrap<T: Serialize>(data: T, pattern_count: usize) -> Json<ApiRespo
 
 // ─── Router ────────────────────────────────────────────────────────
 
-/// Build the axum router with all API endpoints.
+/// Build the axum router with all API endpoints. No authentication — this is the
+/// default for the loopback bind. Use [`build_router_with_auth`] to require a
+/// bearer token (done automatically when the server is bound beyond loopback).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn build_router(state: AppState) -> Router {
+    build_router_with_auth(state, None)
+}
+
+/// Build the router, optionally requiring a bearer token on `/api/*` routes.
+/// `/api/v1/health` and the static web UI stay reachable without a token.
+pub fn build_router_with_auth(state: AppState, auth_token: Option<Arc<str>>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin([
             "http://localhost:5173".parse().unwrap(),
@@ -187,7 +197,7 @@ pub fn build_router(state: AppState) -> Router {
         .allow_methods(AllowMethods::any())
         .allow_headers(AllowHeaders::any());
 
-    Router::new()
+    let router = Router::new()
         // Health
         .route("/api/v1/health", get(health))
         // Patterns CRUD
@@ -249,11 +259,51 @@ pub fn build_router(state: AppState) -> Router {
         // WebSocket for real-time events
         .route("/api/v1/ws", get(ws_handler))
         // Agents (Phase 4 read-only routes)
-        .nest("/api/v1/agents", crate::server_agents::router())
+        .nest("/api/v1/agents", crate::server_agents::router());
+
+    // When a token is configured (non-loopback bind), require it on /api/*.
+    let router = match auth_token {
+        Some(token) => router.layer(middleware::from_fn_with_state(token, require_auth)),
+        None => router,
+    };
+
+    router
         .layer(cors)
         .with_state(Arc::new(state))
         // Fallback: serve embedded web UI
         .fallback(get(serve_web_ui))
+}
+
+/// Bearer-token auth for `/api/*` routes. Applied only when the server is bound
+/// beyond loopback (see [`run_server`]); `/api/v1/health` is exempt so liveness
+/// probes work, and non-`/api/` paths (the static UI) are untouched.
+async fn require_auth(State(token): State<Arc<str>>, req: Request, next: Next) -> Response {
+    let path = req.uri().path();
+    let needs_token = path.starts_with("/api/") && path != "/api/v1/health";
+    if needs_token {
+        let presented = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "));
+        if !presented.is_some_and(|p| ct_eq(p.as_bytes(), token.as_bytes())) {
+            return (StatusCode::UNAUTHORIZED, "missing or invalid bearer token").into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// Constant-time byte comparison (avoids leaking the token via early-return
+/// timing). Length is allowed to differ observably — that's not secret.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Start the API server on the given port.
@@ -263,12 +313,39 @@ pub async fn run_server(
     port: u16,
     open_url: Option<String>,
 ) -> anyhow::Result<()> {
-    let app = build_router(state);
-    let addr = format!("0.0.0.0:{}", port);
+    // Bind loopback by default. The API has no built-in auth, so exposing it
+    // beyond loopback is an explicit opt-in (MUR_SERVER_HOST) that REQUIRES a
+    // bearer token (MUR_SERVER_TOKEN) — otherwise any host on the network could
+    // read and write every pattern/skill/agent (and delete them).
+    let host = std::env::var("MUR_SERVER_HOST")
+        .ok()
+        .filter(|h| !h.trim().is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let token = std::env::var("MUR_SERVER_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty());
+
+    let is_loopback = matches!(host.trim(), "127.0.0.1" | "::1" | "[::1]" | "localhost");
+    if !is_loopback && token.is_none() {
+        anyhow::bail!(
+            "refusing to bind {host}: the dashboard API has no built-in authentication, \
+             so exposing it beyond loopback requires a token. Set MUR_SERVER_TOKEN (and send \
+             `Authorization: Bearer <token>` on /api/* requests), or keep the default \
+             127.0.0.1 bind."
+        );
+    }
+
+    let app = build_router_with_auth(state, token.as_deref().map(Arc::from));
+    let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    eprintln!("🚀 MUR server listening on http://localhost:{}", port);
-    eprintln!("   Dashboard: http://localhost:{}", port);
-    eprintln!("   API: http://localhost:{}/api/v1/", port);
+    eprintln!("🚀 MUR server listening on http://{host}:{port}");
+    eprintln!("   Dashboard: http://{host}:{port}");
+    eprintln!("   API: http://{host}:{port}/api/v1/");
+    if token.is_some() {
+        eprintln!("   🔒 bearer-token auth enforced on /api/*");
+    } else {
+        eprintln!("   ⚠ loopback only, no auth — set MUR_SERVER_TOKEN before exposing remotely");
+    }
 
     if let Some(url) = open_url {
         // Open browser after bind (server is ready)

@@ -200,6 +200,14 @@ const TONE_OPTIONS = ["professional", "casual", "friendly", "direct", "playful",
 const RISK_OPTIONS = ["conservative", "balanced", "bold"];
 const VERBOSITY_OPTIONS = ["concise", "balanced", "detailed"];
 
+// Include the agent's current value as an option even when it isn't one of the
+// canned choices (older agents / custom vocab), so the <select> shows the real
+// value instead of silently snapping to the first option — which misrepresents
+// the persona and risks clobbering the value on save.
+function withCurrent(options: string[], current: string): string[] {
+  return current && !options.includes(current) ? [current, ...options] : options;
+}
+
 function PersonaTab({
   detail,
   onSaved,
@@ -281,7 +289,7 @@ function PersonaTab({
         value={tone}
         onChange={(e) => { setTone(e.target.value); }}
       >
-        {TONE_OPTIONS.map((opt) => (
+        {withCurrent(TONE_OPTIONS, tone).map((opt) => (
           <option key={opt} value={opt}>{opt}</option>
         ))}
       </select>
@@ -297,7 +305,7 @@ function PersonaTab({
         value={risk}
         onChange={(e) => { setRisk(e.target.value); }}
       >
-        {RISK_OPTIONS.map((r) => (
+        {withCurrent(RISK_OPTIONS, risk).map((r) => (
           <option key={r} value={r}>{r}</option>
         ))}
       </select>
@@ -313,7 +321,7 @@ function PersonaTab({
         value={verbosity}
         onChange={(e) => { setVerbosity(e.target.value); }}
       >
-        {VERBOSITY_OPTIONS.map((v) => (
+        {withCurrent(VERBOSITY_OPTIONS, verbosity).map((v) => (
           <option key={v} value={v}>{v}</option>
         ))}
       </select>
@@ -343,6 +351,45 @@ function StyleTab({
   const [selected, setSelected] = useState(detail.style_preset);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [rendering, setRendering] = useState(detail.render_status.status === "rendering");
+
+  // Poll for render completion while a render is in flight, refreshing the
+  // panel so the status text/progress and preset thumbnails stay current.
+  useEffect(() => {
+    if (!rendering) return;
+    let cancelled = false;
+    const started = Date.now();
+    const timer = setInterval(async () => {
+      try {
+        const fresh = await invoke<AgentDetail>("get_agent_detail", {
+          name: detail.agent_name,
+        });
+        if (cancelled) return;
+        onSaved(fresh);
+        if (fresh.render_status.status === "ready" || fresh.render_status.status === "failed") {
+          setRendering(false);
+        }
+      } catch {
+        // transient; keep polling
+      }
+      if (Date.now() - started > 120_000) setRendering(false); // safety timeout
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [rendering, detail.agent_name, onSaved]);
+
+  async function triggerRender() {
+    setSaveError(null);
+    setRendering(true);
+    try {
+      await invoke("render_agent_expressions", { name: detail.agent_name });
+    } catch (e) {
+      setSaveError(String(e));
+      setRendering(false);
+    }
+  }
 
   async function pickPreset(id: string) {
     setSelected(id);
@@ -398,6 +445,19 @@ function StyleTab({
           />
         </div>
       )}
+      <button
+        className="toolbar-btn"
+        style={{ marginTop: 8 }}
+        onClick={triggerRender}
+        disabled={rendering || detail.render_status.status === "rendering"}
+        title="Generate the 12 avatar expressions for this agent"
+      >
+        {rendering || detail.render_status.status === "rendering"
+          ? "Rendering…"
+          : detail.render_status.status === "ready"
+            ? "Re-render avatar"
+            : "Render avatar"}
+      </button>
 
       <label className="field-label" style={{ marginTop: 16 }}>{t("detail.presetGallery")}</label>
       <div className="style-gallery">

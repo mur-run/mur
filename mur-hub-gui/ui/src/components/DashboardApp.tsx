@@ -129,7 +129,17 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
     function onEnter() { cursorOutsideRef.current = false; }
     function onUp(e: MouseEvent) {
       setDragging(false);
-      if (cursorOutsideRef.current) {
+      // Treat the release as "dropped on the desktop" if it lands outside the Hub
+      // window. Decide from the release coordinates vs the window bounds rather than
+      // relying on a document `mouseleave`, which does NOT fire during a button-held
+      // drag out of the window (macOS captures mouse events to the origin window), so
+      // the pet would otherwise never spawn.
+      const outsideByBounds =
+        e.screenX < window.screenX ||
+        e.screenX > window.screenX + window.outerWidth ||
+        e.screenY < window.screenY ||
+        e.screenY > window.screenY + window.outerHeight;
+      if (cursorOutsideRef.current || outsideByBounds) {
         invoke("pet_spawn_at", {
           agentName: agent.name,
           screenX: e.screenX,

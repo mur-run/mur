@@ -35,6 +35,16 @@ impl MethodHandler for SkillsGetHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| HandlerError::InvalidParams("missing 'skill' field".into()))?;
 
+        // `skill` comes from a remote A2A peer and is joined into
+        // `<store_root>/skills/<name>`. Reject path-traversal so a peer can't
+        // read another agent's skill (or any `skill.yaml`/`skill.md`) outside
+        // the store via `../…`.
+        if !mur_common::skill::loader::is_valid_skill_name(skill_name) {
+            return Err(HandlerError::InvalidParams(format!(
+                "invalid skill name: {skill_name:?}"
+            )));
+        }
+
         let dir = global_skill_dir(&self.store_root, skill_name);
         let manifest = read_from_dir(&dir)
             .map_err(|e| HandlerError::Internal(format!("skill '{skill_name}' not found: {e}")))?;
@@ -105,5 +115,30 @@ content:
         let handler = SkillsGetHandler::new(dir.path().to_path_buf());
         let err = handler.handle(Some(json!({}))).await.unwrap_err();
         assert!(matches!(err, HandlerError::InvalidParams(_)));
+    }
+
+    #[tokio::test]
+    async fn rejects_path_traversal_skill_name() {
+        // A remote peer must not read a skill outside the store via `../…`. The
+        // dangerous (cross-agent / arbitrary-dir) forms all contain a separator,
+        // which is_valid_skill_name refuses.
+        let dir = tempdir().unwrap();
+        let handler = SkillsGetHandler::new(dir.path().to_path_buf());
+        for bad in [
+            "../secret",
+            "a/b",
+            "../../etc/passwd",
+            "../agents/victim/skills/x",
+            "a\\b",
+        ] {
+            let err = handler
+                .handle(Some(json!({ "skill": bad })))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, HandlerError::InvalidParams(_)),
+                "{bad:?} should be rejected, got {err:?}"
+            );
+        }
     }
 }

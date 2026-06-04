@@ -116,6 +116,89 @@ async fn test_list_patterns_empty() {
 }
 
 #[tokio::test]
+async fn skill_routes_reject_path_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = build_router(test_state(&tmp));
+
+    // DELETE with a traversal name must NOT remove_dir_all the parent (mur home):
+    // skills_dir is tmp/skills, so `..` would target tmp itself.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/skills/..")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::OK);
+    assert!(
+        tmp.path().join("patterns").exists(),
+        "DELETE /skills/.. must not delete the mur home"
+    );
+
+    // GET with an encoded traversal (`..%2F..%2Fpatterns` → `../../patterns`)
+    // must be rejected, not read outside skills_dir.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/skills/..%2F..%2Fpatterns")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn auth_token_enforced_on_api_when_configured() {
+    let tmp = tempfile::tempdir().unwrap();
+    let token: std::sync::Arc<str> = std::sync::Arc::from("s3cret-token");
+    let app = build_router_with_auth(test_state(&tmp), Some(token));
+
+    let api_req = |auth: Option<&str>| {
+        let mut b = Request::builder().uri("/api/v1/patterns");
+        if let Some(a) = auth {
+            b = b.header("authorization", a);
+        }
+        b.body(Body::empty()).unwrap()
+    };
+
+    // No token → 401.
+    let resp = app.clone().oneshot(api_req(None)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    // Wrong token → 401.
+    let resp = app
+        .clone()
+        .oneshot(api_req(Some("Bearer nope")))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    // Correct token → 200.
+    let resp = app
+        .clone()
+        .oneshot(api_req(Some("Bearer s3cret-token")))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // Health is exempt so liveness probes work without a token.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn test_create_and_get_pattern() {
     let tmp = tempfile::tempdir().unwrap();
     let state = test_state(&tmp);
