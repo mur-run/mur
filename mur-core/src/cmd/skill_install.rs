@@ -174,9 +174,20 @@ pub fn cmd_install_ctx(
     Ok(())
 }
 
+/// Resolve `<home>/skills/<name>` for install, refusing a skill whose name
+/// would escape the skills dir. The name comes from a fetched manifest (a
+/// registry/git source the user chose, but not necessarily one they vetted),
+/// so an unsafe `../…` name must not be written to an arbitrary path.
+fn safe_skill_dir(home: &Path, name: &str) -> Result<std::path::PathBuf> {
+    if !mur_common::skill::loader::is_valid_skill_name(name) {
+        anyhow::bail!("refusing to install skill with unsafe name {name:?} (path traversal)");
+    }
+    Ok(global_skill_dir(home, name))
+}
+
 fn install_resolved_node(home: &Path, node: &ResolvedNode) -> Result<()> {
     let report = scan_skill(&node.manifest)?;
-    let dir = global_skill_dir(home, &node.name);
+    let dir = safe_skill_dir(home, &node.name)?;
     write_to_dir(&dir, &node.manifest)?;
     let hash = content_sha256(&node.manifest)?;
     let mut trust = SkillTrustStore::load(home).map_err(|e| anyhow::anyhow!("load trust: {e}"))?;
@@ -280,7 +291,7 @@ fn install_from_agent(home: &Path, agent_name: &str, skill_name: &str) -> Result
     };
 
     // 6. Install — write to the target store.
-    let dir = global_skill_dir(home, &manifest.name);
+    let dir = safe_skill_dir(home, &manifest.name)?;
     write_to_dir(&dir, &manifest).context("write installed skill")?;
 
     // 7. Record in trust store.
@@ -494,6 +505,21 @@ fn try_embed_skill(home: &Path, name: &str, version: &str, manifest: &SkillManif
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn safe_skill_dir_rejects_traversal_names() {
+        let home = tempdir().unwrap();
+        // Separator/absolute forms (the dangerous traversal) are refused.
+        for bad in ["../evil", "a/b", "../../etc/x", "a\\b", "/abs", ""] {
+            assert!(
+                safe_skill_dir(home.path(), bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        // A normal name resolves under the skills dir.
+        let dir = safe_skill_dir(home.path(), "web-search").unwrap();
+        assert!(dir.starts_with(home.path().join("skills")));
+    }
 
     #[test]
     fn valid_yaml_parses_and_validates() {
