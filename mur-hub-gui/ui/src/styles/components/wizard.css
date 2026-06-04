@@ -11,7 +11,7 @@
 }
 .wz-modal {
   background: var(--bg-primary);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-line);
   border-radius: 12px;
   width: 480px;
   max-width: 95vw;
@@ -26,13 +26,13 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-line);
 }
 .wz-progress-dots { display: flex; gap: 6px; align-items: center; }
 .wz-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
-  background: var(--border);
+  background: var(--border-line);
   transition: background 0.15s, width 0.15s;
 }
 .wz-dot--active { background: var(--accent); width: 20px; border-radius: 4px; }
@@ -42,7 +42,7 @@
   color: var(--text-secondary); font-size: 14px; padding: 4px 6px;
   border-radius: 4px; line-height: 1;
 }
-.wz-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+.wz-close:hover { background: var(--surface-hover); color: var(--text-primary); }
 .wz-body {
   padding: 24px 28px;
   overflow-y: auto;
@@ -50,7 +50,7 @@
 }
 .wz-footer {
   padding: 12px 20px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-line);
 }
 .wz-loading { color: var(--text-secondary); text-align: center; padding: 40px 0; }
 .wz-step h2 { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
@@ -67,13 +67,13 @@
 .wz-btn.primary { background: var(--accent); color: #fff; }
 .wz-btn.primary:hover { background: var(--accent-hover, #4338CA); }
 .wz-btn.primary:disabled { opacity: 0.4; cursor: not-allowed; }
-.wz-btn.secondary { background: var(--bg-hover); color: var(--text-primary); }
-.wz-btn.secondary:hover { background: var(--border); }
+.wz-btn.secondary { background: var(--surface-hover); color: var(--text-primary); }
+.wz-btn.secondary:hover { background: var(--border-line); }
 .wz-btn.ghost {
   background: none; color: var(--text-secondary);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-line);
 }
-.wz-btn.ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+.wz-btn.ghost:hover { background: var(--surface-hover); color: var(--text-primary); }
 .wz-actions { margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end; }
 .wz-error { color: #EF4444; font-size: 13px; margin: 8px 0 0; }
 
@@ -83,8 +83,8 @@
   font-size: 13px; font-weight: 500; color: var(--text-primary); margin-bottom: 14px;
 }
 .wz-input, .wz-textarea {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-line);
   border-radius: 6px;
   color: var(--text-primary);
   font-size: 14px;
@@ -106,12 +106,12 @@
 .wz-persona-card {
   display: flex; flex-direction: column; align-items: center;
   gap: 6px; padding: 16px 12px;
-  background: var(--bg-secondary);
-  border: 2px solid var(--border);
+  background: var(--surface-secondary);
+  border: 2px solid var(--border-line);
   border-radius: 10px; cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
-.wz-persona-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.wz-persona-card:hover { border-color: var(--accent); background: var(--surface-hover); }
 .wz-persona-card.selected { border-color: var(--accent); background: rgba(99,102,241,0.08); }
 .wz-persona-icon { font-size: 26px; }
 .wz-persona-label { font-size: 13px; font-weight: 600; }
@@ -126,12 +126,12 @@
 .wz-preset-card {
   display: flex; flex-direction: column; gap: 3px;
   padding: 14px 14px; text-align: left;
-  background: var(--bg-secondary);
-  border: 2px solid var(--border);
+  background: var(--surface-secondary);
+  border: 2px solid var(--border-line);
   border-radius: 10px; cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
-.wz-preset-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.wz-preset-card:hover { border-color: var(--accent); background: var(--surface-hover); }
 .wz-preset-card.selected { border-color: var(--accent); background: rgba(99,102,241,0.08); }
 .wz-preset-family-icon { font-size: 22px; }
 .wz-preset-name { font-size: 13px; font-weight: 600; }
@@ -139,7 +139,7 @@
 .wz-preset-family-tag {
   display: inline-block; margin-top: 4px;
   font-size: 10px; color: var(--text-secondary);
-  background: var(--border); border-radius: 4px; padding: 1px 5px;
+  background: var(--border-line); border-radius: 4px; padding: 1px 5px;
   text-transform: capitalize;
 }
 
@@ -148,12 +148,12 @@
 .wz-behavior-card {
   display: flex; align-items: center; gap: 10px;
   padding: 14px 16px; text-align: left;
-  background: var(--bg-secondary);
-  border: 2px solid var(--border);
+  background: var(--surface-secondary);
+  border: 2px solid var(--border-line);
   border-radius: 10px; cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
-.wz-behavior-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.wz-behavior-card:hover { border-color: var(--accent); background: var(--surface-hover); }
 .wz-behavior-card.selected { border-color: var(--accent); background: rgba(99,102,241,0.08); }
 .wz-behavior-label { font-size: 14px; font-weight: 600; min-width: 60px; }
 .wz-behavior-desc { font-size: 12px; color: var(--text-secondary); }
@@ -167,7 +167,7 @@
 /* Step 6 — Render */
 .wz-render-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
 .wz-progress {
-  background: var(--bg-secondary);
+  background: var(--surface-secondary);
   border-radius: 6px; overflow: hidden;
   height: 8px; margin: 12px 0 6px;
   position: relative;

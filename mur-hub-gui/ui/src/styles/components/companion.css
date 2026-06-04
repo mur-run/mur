@@ -12,13 +12,13 @@
 }
 .inbox-msg {
   padding: 10px 12px;
-  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  border: 1px solid var(--border-line, rgba(255,255,255,0.08));
   border-radius: 8px;
-  background: var(--bg, #1F2937);
+  background: var(--surface-bg, #1F2937);
   font-size: 13px;
 }
 .inbox-msg--unread {
-  border-left: 3px solid var(--brand, #4F46E5);
+  border-left: 3px solid var(--color-brand, #4F46E5);
 }
 .inbox-msg-header {
   display: flex;
@@ -31,7 +31,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--brand-light, #818CF8);
+  color: var(--color-brand, #818CF8);
 }
 .inbox-time {
   font-size: 10px;
@@ -39,7 +39,7 @@
 }
 .inbox-body {
   font-size: 13px;
-  color: var(--text, #F9FAFB);
+  color: var(--text-primary, #F9FAFB);
   line-height: 1.5;
   margin-bottom: 6px;
   word-break: break-word;
@@ -52,16 +52,16 @@
 .inbox-actions button {
   padding: 4px 10px;
   font-size: 11px;
-  border: 1px solid var(--border, rgba(255,255,255,0.10));
+  border: 1px solid var(--border-line, rgba(255,255,255,0.10));
   border-radius: 4px;
-  background: var(--bg-secondary, #111827);
+  background: var(--surface-secondary, #111827);
   color: var(--text-secondary, #9CA3AF);
   cursor: pointer;
   transition: background 0.15s;
 }
 .inbox-actions button:hover {
-  background: var(--bg-hover, #374151);
-  color: var(--text, #F9FAFB);
+  background: var(--surface-hover, #374151);
+  color: var(--text-primary, #F9FAFB);
 }
 .inbox-acked {
   text-align: center;

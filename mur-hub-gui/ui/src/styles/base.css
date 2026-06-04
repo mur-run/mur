@@ -8,6 +8,7 @@ body {
   background: var(--surface-bg);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  overflow: hidden;
 }
 button { font-family: inherit; }
 :focus-visible { outline: none; box-shadow: var(--shadow-focus); border-radius: var(--radius-md); }

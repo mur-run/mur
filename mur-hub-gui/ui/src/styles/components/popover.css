@@ -3,27 +3,27 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: var(--surface-bg);
+  border: 1px solid var(--border-line);
   border-radius: 8px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-1);
   overflow: hidden;
 }
 
 .popover-search {
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-line);
 }
 .popover-search input {
   width: 100%;
   padding: 6px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-line);
   border-radius: 6px;
-  background: var(--bg-secondary);
+  background: var(--surface-secondary);
   outline: none;
 }
 .popover-search input:focus {
-  border-color: var(--brand);
+  border-color: var(--color-brand);
 }
 
 .popover-list {
@@ -52,7 +52,7 @@
   text-align: left;
   transition: background 0.1s;
 }
-.agent-row:hover { background: var(--bg-hover); }
+.agent-row:hover { background: var(--surface-hover); }
 
 .agent-avatar {
   width: 32px;
@@ -63,7 +63,7 @@
   justify-content: center;
   font-size: 12px;
   font-weight: 700;
-  color: var(--text-inverse);
+  color: #fff;
   flex-shrink: 0;
 }
 
@@ -88,21 +88,21 @@
   display: flex;
   gap: 6px;
   padding: 8px 12px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-line);
 }
 .footer-btn {
   flex: 1;
   padding: 5px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-line);
   border-radius: 6px;
   font-size: 12px;
-  background: var(--bg-secondary);
+  background: var(--surface-secondary);
   transition: background 0.1s;
 }
-.footer-btn:hover { background: var(--bg-hover); }
+.footer-btn:hover { background: var(--surface-hover); }
 .footer-btn.primary {
-  background: var(--brand);
-  color: var(--text-inverse);
+  background: var(--color-brand);
+  color: #fff;
   border-color: transparent;
 }
 .footer-btn.primary:hover { opacity: 0.9; }
