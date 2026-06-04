@@ -79,6 +79,13 @@ pub fn install(
     // `identity.key` would plant/overwrite the agent's private signing key.
     reject_reserved_local_files(archive)?;
 
+    // Step 1.6: revocation check (§7.4.1). The validator defers this; enforce it
+    // here against the locally-cached list. A missing cache is fail-open (v1
+    // best-effort, matching offline installs), but a cached list that names this
+    // author key or this package hash is a hard refusal — a compromised author
+    // key must not be re-accepted on import.
+    check_revocations(archive, mur_home, &result.author_pubkey)?;
+
     // Step 2: slug shape
     let slug = result.manifest.agent.slug.clone();
     let display_name = result.manifest.agent.display_name.clone();
@@ -165,6 +172,38 @@ pub fn install(
         fingerprint_words,
         was_update,
     })
+}
+
+/// Refuse to install a package whose author key or package hash appears in the
+/// locally-cached revocations list. No network fetch happens here; a missing or
+/// unparseable cache is treated as "nothing revoked" (v1 fail-open posture).
+fn check_revocations(
+    archive: &MuragentArchive,
+    mur_home: &Path,
+    author_pubkey: &[u8; 32],
+) -> Result<(), MuragentError> {
+    let Some(list) = trust::RevocationsList::load_cached(mur_home) else {
+        return Ok(());
+    };
+
+    let author = format!("ed25519:{}", B64.encode(author_pubkey));
+    if list.is_author_revoked(&author) {
+        return Err(MuragentError::TrustRefused(format!(
+            "author key {author} is revoked"
+        )));
+    }
+
+    if let Some(signed_json) = archive.get("manifest.signed.json") {
+        use sha2::Digest;
+        let manifest_hash = format!("sha256:{}", hex::encode(sha2::Sha256::digest(signed_json)));
+        if list.is_package_revoked(&manifest_hash) {
+            return Err(MuragentError::TrustRefused(format!(
+                "package {manifest_hash} is revoked"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Refuse a package that carries any [`RESERVED_LOCAL_FILES`] entry at its top
@@ -504,6 +543,46 @@ mod tests {
         files.insert("skills/demo.md".to_string(), b"skill".to_vec());
         let archive = MuragentArchive { files };
         assert!(reject_reserved_local_files(&archive).is_ok());
+    }
+
+    #[test]
+    fn revoked_author_key_is_refused() {
+        use std::collections::BTreeMap;
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path();
+        let pk = [7u8; 32];
+        let author = format!("ed25519:{}", B64.encode(pk));
+        let list = trust::RevocationsList {
+            version: 1,
+            this_update: chrono::Utc::now(),
+            next_update: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(30),
+            crl_number: 1,
+            revoked: vec![trust::RevokedEntry::Author {
+                pubkey: author,
+                reason: "compromised".into(),
+                revoked_at: chrono::Utc::now(),
+            }],
+        };
+        std::fs::create_dir_all(mur_home.join("trust")).unwrap();
+        std::fs::write(
+            mur_home.join("trust").join("revocations.json"),
+            serde_json::to_vec(&list).unwrap(),
+        )
+        .unwrap();
+
+        let archive = MuragentArchive {
+            files: BTreeMap::new(),
+        };
+        assert!(matches!(
+            check_revocations(&archive, mur_home, &pk),
+            Err(MuragentError::TrustRefused(_))
+        ));
+        // A different (non-revoked) key passes.
+        assert!(check_revocations(&archive, mur_home, &[8u8; 32]).is_ok());
+        // No cached list → fail-open.
+        let empty = TempDir::new().unwrap();
+        assert!(check_revocations(&archive, empty.path(), &pk).is_ok());
     }
 
     #[test]
