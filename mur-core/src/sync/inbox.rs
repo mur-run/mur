@@ -226,6 +226,18 @@ impl Inbox {
                 Ok(true)
             }
             SignalTarget::NewDraftSkill { payload } => {
+                // Reject a path-traversal name from a remote peer before it
+                // touches the filesystem: the name is joined into
+                // `<mur_home>/skills/<name>`, so an unvalidated value like
+                // `../agents/<other>/skills/x` would let a peer plant an
+                // instruction-bearing skill into another agent's context.
+                if !mur_common::skill::is_valid_skill_name(&payload.name) {
+                    tracing::warn!(
+                        name = %payload.name,
+                        "rejecting synced NewDraftSkill: invalid skill name"
+                    );
+                    return Ok(false);
+                }
                 // Never overwrite a skill the user may have edited
                 use mur_common::skill::global_skill_dir;
                 let skill_dir = global_skill_dir(&self.mur_home, &payload.name);
