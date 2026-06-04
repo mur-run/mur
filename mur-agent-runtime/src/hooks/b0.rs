@@ -167,17 +167,29 @@ impl Hook for B0SafetyHook {
                 // `mur agent mcp pin <name>` as the migration verb.
                 continue;
             };
-            // Same resolution as M9.2 install: the runtime's already-
-            // resolved `mcp_server_binaries` are paths derived from
-            // `command.split_whitespace().next()`. We mirror that here
-            // so install-side and verify-side hash the same bytes.
-            let path = std::path::PathBuf::from(
-                entry
-                    .command
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or(&entry.command),
-            );
+            // Resolve via PATH exactly as install does (mur_common::exec) so
+            // both passes hash the same binary `Command::new` will spawn. A bare
+            // `node`/`npx` opened verbatim is a CWD-relative path that doesn't
+            // exist, which previously soft-failed and skipped the pin entirely.
+            let prog = entry
+                .command
+                .split_whitespace()
+                .next()
+                .unwrap_or(&entry.command);
+            let path = match mur_common::exec::resolve_command(prog) {
+                Ok(p) => p,
+                Err(e) => {
+                    // Can't locate the binary (likely the user uninstalled the
+                    // MCP without removing the profile entry) — soft fail, same
+                    // as BinaryMissing below.
+                    tracing::warn!(
+                        mcp = %entry.name,
+                        error = %e,
+                        "B0 rule 6: pin verify soft-failed (command not resolvable); continuing",
+                    );
+                    continue;
+                }
+            };
             match crate::hooks::b0_helpers::verify_mcp_binary_hash(expected, &path) {
                 Ok(()) => {
                     tracing::debug!(mcp = %entry.name, "B0 rule 6: pin verified");
