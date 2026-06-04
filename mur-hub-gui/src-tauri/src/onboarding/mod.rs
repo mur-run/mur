@@ -395,8 +395,7 @@ pub async fn render_agent_expressions(app: AppHandle, name: String) -> Result<()
         match job.run(CancelToken::new(), Some(tx)).await {
             Ok(manifest) => {
                 if let Ok(yaml) = std::fs::read_to_string(&profile_path_done)
-                    && let Ok(mut prof) =
-                        serde_yaml_ng::from_str::<mur_common::AgentProfile>(&yaml)
+                    && let Ok(mut prof) = serde_yaml_ng::from_str::<mur_common::AgentProfile>(&yaml)
                 {
                     prof.appearance.render_status = RenderStatus::Ready;
                     prof.appearance.last_rendered_at = Some(chrono::Utc::now());
@@ -413,8 +412,7 @@ pub async fn render_agent_expressions(app: AppHandle, name: String) -> Result<()
             Err(e) => {
                 let reason = e.to_string();
                 if let Ok(yaml) = std::fs::read_to_string(&profile_path_done)
-                    && let Ok(mut prof) =
-                        serde_yaml_ng::from_str::<mur_common::AgentProfile>(&yaml)
+                    && let Ok(mut prof) = serde_yaml_ng::from_str::<mur_common::AgentProfile>(&yaml)
                 {
                     prof.appearance.render_status = RenderStatus::Failed {
                         reason: reason.clone(),
