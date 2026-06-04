@@ -1,4 +1,78 @@
 /* ── Modal (preset / muragent import, dropzone, overlay) ──────────────── */
-/* No standalone modal rules existed in the pre-split stylesheet; the wizard
-   overlay/modal lives in wizard.css. This file is the home for modal styles
-   in the redesign and is intentionally empty for the pure-movement step. */
+/* Brand modal shell shared by the import modals. The wizard keeps its own
+   overlay in wizard.css; these rules are for the lighter import dialogs. */
+
+.modal__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 40, 80, 0.35);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+}
+
+.modal {
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  background: var(--surface-card);
+  border: 1px solid var(--border-line);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 24px 60px rgba(16, 40, 80, 0.22);
+  overflow: hidden;
+}
+
+.modal__header {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal__title {
+  font-size: var(--text-md);
+  font-weight: var(--fw-heavy);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.modal__close {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.modal__close:hover {
+  background: var(--color-brand-soft);
+  color: var(--color-brand-strong);
+}
+
+.modal__body {
+  padding: 20px;
+}
+
+.modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-line);
+  background: var(--surface-secondary);
+}
+
+.dropzone {
+  border: 2px dashed #cfe0f1;
+  border-radius: var(--radius-lg);
+  background: var(--surface-bg);
+  padding: 26px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+}
+.dropzone b {
+  color: var(--color-brand-strong);
+}
