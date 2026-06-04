@@ -1,0 +1,141 @@
+/* ── Design tokens ────────────────────────────────────────────────────── */
+:root {
+  --brand: #4F46E5;
+  --brand-light: #818CF8;
+
+  /* Status dot colours */
+  --status-running: #22C55E;
+  --status-idle: #6B7280;
+  --status-stale: #EF4444;
+  --status-restarting: #F59E0B;
+
+  /* Surface */
+  --bg: #FFFFFF;
+  --bg-secondary: #F9FAFB;
+  --bg-hover: #F3F4F6;
+  --border: rgba(0, 0, 0, 0.12);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.06);
+
+  /* Text */
+  --text: #111827;
+  --text-secondary: #6B7280;
+  --text-inverse: #FFFFFF;
+
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1F2937;
+    --bg-secondary: #111827;
+    --bg-hover: #374151;
+    --border: rgba(255, 255, 255, 0.10);
+    --text: #F9FAFB;
+    --text-secondary: #9CA3AF;
+  }
+}
+
+/* ── Reset ────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+}
+input {
+  font: inherit;
+  color: inherit;
+}
+
+/* ── Status dots ──────────────────────────────────────────────────────── */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.status-running    { background: var(--status-running); }
+.status-dot.status-idle       { background: var(--status-idle); }
+.status-dot.status-stale      { background: var(--status-stale); }
+.status-dot.status-restarting { background: var(--status-restarting); animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* ── Toast ────────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1F2937;
+  color: #F9FAFB;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  z-index: 9999;
+  pointer-events: none;
+  animation: fadeInUp 0.2s ease;
+}
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ── Brain badge ──────────────────────────────────────────────────────── */
+.brain-badge {
+  font-size: 12px;
+  opacity: 0.7;
+  cursor: default;
+  margin-left: auto;
+}
+.brain-badge:hover { opacity: 1; }
+
+/* ── Form inputs ──────────────────────────────────────────────────────── */
+.input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: var(--bg-secondary, #111827);
+  color: var(--text, #F9FAFB);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+.input:focus {
+  border-color: var(--brand, #4F46E5);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+}
+textarea.input {
+  resize: vertical;
+  min-height: 60px;
+}
+
+/* ── Toolbar primary button variant ───────────────────────────────────── */
+.toolbar-btn.primary,
+button.primary {
+  background: var(--brand, #4F46E5);
+  color: var(--text-inverse, #FFFFFF);
+  border: none;
+}
+.toolbar-btn.primary:hover,
+button.primary:hover {
+  background: var(--brand-light, #818CF8);
+}
+.toolbar-btn.primary:disabled,
+button.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

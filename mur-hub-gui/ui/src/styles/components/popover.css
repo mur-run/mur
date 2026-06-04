@@ -1,0 +1,108 @@
+/* ── Popover ──────────────────────────────────────────────────────────── */
+.popover-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.popover-search {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.popover-search input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  outline: none;
+}
+.popover-search input:focus {
+  border-color: var(--brand);
+}
+
+.popover-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.agent-group {}
+.group-header {
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.agent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 12px;
+  border-radius: 0;
+  text-align: left;
+  transition: background 0.1s;
+}
+.agent-row:hover { background: var(--bg-hover); }
+
+.agent-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-inverse);
+  flex-shrink: 0;
+}
+
+.agent-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.agent-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-category {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.popover-footer {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+.footer-btn {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--bg-secondary);
+  transition: background 0.1s;
+}
+.footer-btn:hover { background: var(--bg-hover); }
+.footer-btn.primary {
+  background: var(--brand);
+  color: var(--text-inverse);
+  border-color: transparent;
+}
+.footer-btn.primary:hover { opacity: 0.9; }

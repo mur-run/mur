@@ -1,0 +1,4 @@
+/* ── Modal (preset / muragent import, dropzone, overlay) ──────────────── */
+/* No standalone modal rules existed in the pre-split stylesheet; the wizard
+   overlay/modal lives in wizard.css. This file is the home for modal styles
+   in the redesign and is intentionally empty for the pure-movement step. */
