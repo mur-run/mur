@@ -90,8 +90,8 @@ export const zhTW: Table = {
   "detail.skillsSummary": "{installed} 個已安裝 + {legacy} 個舊版 — 詳情請見技能分頁。",
   "detail.permissionsHint": "權限於建立 agent 時宣告。請使用 CLI 的 mur agent update 來修改授權。",
   // ── Header actions ──
+  "action.run": "啟動",
   "action.stop": "停止",
-  "action.share": "分享",
   "action.export": "匯出",
   // ── Common ──
   "common.new": "新增",

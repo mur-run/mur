@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import type { AgentEntry } from "../types";
 import {
   ALL_DETAIL_TABS,
@@ -33,6 +34,16 @@ interface Props {
   onClose: () => void;
 }
 
+// Lightweight toast — appends a bare `.toast` element to <body>, mirrors
+// the feedback pattern in DashboardApp (its showToast is module-local there).
+function showToast(msg: string) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2000);
+}
+
 export function DetailPanel({ agentName, agents, onClose }: Props) {
   const { t } = useT();
   const [detail, setDetail] = useState<AgentDetail | null>(null);
@@ -54,6 +65,26 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
 
   function handleSaved(updated: AgentDetail) {
     setDetail(updated);
+  }
+
+  function handleRun(name: string) {
+    invoke("start_agent", { name }).catch((e) => showToast(`Failed: ${e}`));
+  }
+  function handleStop(name: string) {
+    invoke("stop_agent", { name }).catch((e) => showToast(`Failed: ${e}`));
+  }
+  async function handleExport(name: string) {
+    const outPath = await save({
+      defaultPath: `${name}.muragent`,
+      filters: [{ name: "MuR Agent", extensions: ["muragent"] }],
+    }).catch((e) => {
+      showToast(`Export failed: ${e}`);
+      return null;
+    });
+    if (!outPath) return;
+    invoke<string>("export_muragent_file", { name, outPath })
+      .then(() => showToast(`Exported ${name}.muragent`))
+      .catch((e) => showToast(`Export failed: ${e}`));
   }
 
   function Header({ name }: { name: string }) {
@@ -78,9 +109,27 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
           </button>
         </div>
         <div className="detail-panel__actions">
-          <button className="btn btn--sm btn--danger">{t("action.stop")}</button>
-          <button className="btn btn--sm btn--secondary">{t("action.share")}</button>
-          <button className="btn btn--sm btn--secondary">{t("action.export")}</button>
+          {isRunning ? (
+            <button
+              className="btn btn--sm btn--danger"
+              onClick={() => handleStop(agentName)}
+            >
+              {t("action.stop")}
+            </button>
+          ) : (
+            <button
+              className="btn btn--sm btn--primary"
+              onClick={() => handleRun(agentName)}
+            >
+              {t("action.run")}
+            </button>
+          )}
+          <button
+            className="btn btn--sm btn--secondary"
+            onClick={() => handleExport(agentName)}
+          >
+            {t("action.export")}
+          </button>
         </div>
       </div>
     );

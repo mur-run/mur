@@ -88,8 +88,8 @@ export const en = {
   "detail.skillsSummary": "{installed} installed + {legacy} legacy — see Skills tab.",
   "detail.permissionsHint": "Permissions are declared at agent creation time. Use mur agent update from the CLI to modify entitlements.",
   // ── Header actions ──
+  "action.run": "Run",
   "action.stop": "Stop",
-  "action.share": "Share",
   "action.export": "Export",
   // ── Common ──
   "common.new": "New",
