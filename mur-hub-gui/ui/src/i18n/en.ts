@@ -1,0 +1,17 @@
+export const en = {
+  "app.newAgent": "New Agent",
+  "app.importAgent": "Import Agent",
+  "dashboard.heading": "Agents",
+  "dashboard.search": "Search… (⌘K)",
+  "dashboard.empty.title": "No flock yet",
+  "dashboard.empty.body": "Create your first agent and let it start learning in your workflow.",
+  "dashboard.empty.cta": "Create your first agent",
+  "dashboard.greeting": "Good evening, {name} 👋",
+  "dashboard.flockStatus": "Your flock is learning — {running} flying, {idle} resting",
+  "view.grid": "Grid view",
+  "view.list": "List view",
+  "status.running": "running",
+  "status.idle": "idle",
+  "status.error": "error",
+  "settings.language": "Language",
+} as const;
