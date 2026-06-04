@@ -43,7 +43,7 @@ pub use inventory::McpInventory;
 pub use lifecycle::{
     calculate_decay, half_life_days, next_state, on_promotion, transition_allowed,
 };
-pub use loader::{LoadedSkill, SkillScope, load_all};
+pub use loader::{LoadedSkill, SkillScope, is_valid_skill_name, load_all};
 pub use lockfile::{LockfileError, SkillLock};
 pub use manifest::*;
 pub use mcp::{McpRequirement, ParseCapabilityError, SkillCapability, validate_requirements};
