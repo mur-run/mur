@@ -249,6 +249,18 @@ fn try_apply_rotation(
     display_name: &str,
     mur_home: &Path,
 ) -> Result<(), String> {
+    // Revocation takes precedence over rotation. A revoked old key must not be
+    // able to authorize a rotation — otherwise an attacker holding a compromised
+    // (and therefore revoked) key could mint a rotation to a key they control
+    // and hijack the agent's identity. Checked before anything else so a revoked
+    // key fails fast, regardless of whether a rotation manifest is present.
+    if let Some(entry) = old_entry
+        && let Some(list) = trust::RevocationsList::load_cached(mur_home)
+        && list.is_author_revoked(&format!("ed25519:{}", entry.public_key))
+    {
+        return Err("previous signing key is revoked; rotation refused".into());
+    }
+
     let manifest_path = rotation_manifest_path(mur_home, display_name);
     if !manifest_path.exists() {
         return Err(
@@ -583,6 +595,65 @@ mod tests {
         // No cached list → fail-open.
         let empty = TempDir::new().unwrap();
         assert!(check_revocations(&archive, empty.path(), &pk).is_ok());
+    }
+
+    #[test]
+    fn revoked_old_key_cannot_authorize_rotation() {
+        // Revocation must beat rotation: a compromised+revoked old key cannot
+        // sign itself a successor, or it could hijack the agent identity.
+        let tmp = TempDir::new().unwrap();
+        let mur_home = tmp.path();
+        let old_pk_b64 = B64.encode([3u8; 32]);
+        let list = trust::RevocationsList {
+            version: 1,
+            this_update: chrono::Utc::now(),
+            next_update: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::days(30),
+            crl_number: 1,
+            revoked: vec![trust::RevokedEntry::Author {
+                pubkey: format!("ed25519:{old_pk_b64}"),
+                reason: "compromised".into(),
+                revoked_at: chrono::Utc::now(),
+            }],
+        };
+        std::fs::create_dir_all(mur_home.join("trust")).unwrap();
+        std::fs::write(
+            mur_home.join("trust").join("revocations.json"),
+            serde_json::to_vec(&list).unwrap(),
+        )
+        .unwrap();
+
+        let entry = |pk_b64: String| TrustEntry {
+            public_key: pk_b64,
+            display_name_seen: "Coach".into(),
+            first_seen: "2026-01-01T00:00:00Z".into(),
+            last_seen: "2026-01-01T00:00:00Z".into(),
+            last_seen_surface: "cli".into(),
+            trust_level: TrustLevel::Known,
+            fingerprint: "ff".into(),
+            word_list: "a b c d".into(),
+            rotated_from: None,
+            superseded_at: None,
+            last_rotation_at: None,
+        };
+        let mut ts = TrustStore::default();
+
+        // Revoked old key → refused with the revocation reason, before any
+        // rotation manifest is even consulted.
+        let revoked = entry(old_pk_b64);
+        let err =
+            try_apply_rotation(&mut ts, Some(&revoked), "NEWKEY", "Coach", mur_home).unwrap_err();
+        assert!(err.contains("revoked"), "got: {err}");
+
+        // A non-revoked old key falls through to the (absent) rotation manifest,
+        // i.e. it is NOT short-circuited by the revocation check.
+        let clean = entry(B64.encode([9u8; 32]));
+        let err2 =
+            try_apply_rotation(&mut ts, Some(&clean), "NEWKEY", "Coach", mur_home).unwrap_err();
+        assert!(
+            !err2.contains("revoked"),
+            "should fail for a different reason, got: {err2}"
+        );
     }
 
     #[test]
