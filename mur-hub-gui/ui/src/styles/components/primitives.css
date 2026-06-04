@@ -133,3 +133,32 @@ button.primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ── Mascot (CSS starling) ── */
+.bird { position:relative; flex:none; cursor:pointer; }
+.bird--float { animation:float-y 3.6s ease-in-out infinite; }
+.bird__feet { position:absolute; bottom:0; left:0; right:0; height:18%; }
+.bird__feet::before,.bird__feet::after { content:""; position:absolute; bottom:0; width:3%; min-width:2px; height:100%; background:#16243B; }
+.bird__feet::before { left:36%; transform:rotate(8deg); }
+.bird__feet::after  { right:36%; transform:rotate(-8deg); }
+.bird__body { position:absolute; left:6%; right:6%; top:16%; bottom:13%;
+  background:linear-gradient(160deg,#5BA0E0,#4187CF);
+  border-radius:50% 50% 47% 47%/58% 58% 42% 42%; box-shadow:inset -5px -7px 14px rgba(0,0,0,.08); }
+.bird__wing { position:absolute; top:48%; width:20%; height:29%; background:#3D7DC4; border-radius:50%; }
+.bird__wing--l { left:4%; transform:rotate(18deg); }
+.bird__wing--r { right:4%; transform:rotate(-18deg); }
+.bird__brow { position:absolute; top:7%; width:40%; height:24%; background:#13203A; z-index:3;
+  transition:transform var(--dur-base) var(--ease-out); }
+.bird__brow--l { left:12%; border-radius:70% 30% 30% 0/100% 100% 30% 0; transform:rotate(-10deg); }
+.bird__brow--r { right:12%; border-radius:30% 70% 0 30%/100% 100% 0 30%; transform:rotate(10deg); }
+.bird__eye { position:absolute; top:32%; width:24%; height:27%; background:#FBF6E9;
+  border-radius:50%; z-index:2; box-shadow:inset 0 -3px 4px rgba(0,0,0,.06); }
+.bird__eye--l { left:24%; } .bird__eye--r { right:24%; }
+.bird__eye::after { content:""; position:absolute; left:30%; top:30%; width:36%; height:38%;
+  background:#13203A; border-radius:50%; transition:transform var(--dur-base) var(--ease-out); }
+.bird__beak { position:absolute; top:50%; left:50%; transform:translateX(-50%); width:12%; height:11%;
+  background:var(--color-brand-strong); border-radius:40% 40% 60% 60%; z-index:2; }
+/* Easter egg */
+.bird:hover .bird__brow--l { transform:rotate(-18deg) translateY(-2px); }
+.bird:hover .bird__brow--r { transform:rotate(18deg) translateY(-2px); }
+.bird:hover .bird__eye::after { transform:translate(18%,18%) scale(1.05); }
