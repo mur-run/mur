@@ -8,12 +8,24 @@ import type { AgentEntry } from "../types";
 import {
   ALL_DETAIL_TABS,
   BUILTIN_PRESETS,
-  TAB_LABELS,
   type AgentDetail,
   type DetailPatch,
   type DetailTab,
 } from "../types";
 import { CompanionInbox } from "./CompanionInbox";
+import { useT } from "../i18n";
+import type { TranslationKey } from "../i18n/types";
+
+// Tab → i18n key map (replaces the hardcoded TAB_LABELS lookup).
+const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
+  persona: "detail.persona",
+  style: "detail.style",
+  behavior: "detail.behavior",
+  skills: "detail.skills",
+  mcp: "detail.mcp",
+  permissions: "detail.permissions",
+  inbox: "detail.inbox",
+};
 
 interface Props {
   agentName: string;
@@ -22,6 +34,7 @@ interface Props {
 }
 
 export function DetailPanel({ agentName, agents, onClose }: Props) {
+  const { t } = useT();
   const [detail, setDetail] = useState<AgentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>("inbox");
@@ -34,22 +47,51 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
       .catch((e) => setError(String(e)));
   }, [agentName]);
 
-  const displayName =
-    agents.find((a) => a.name === agentName)?.display_name ?? agentName;
+  const entry = agents.find((a) => a.name === agentName);
+  const displayName = entry?.display_name ?? agentName;
+  const status = entry?.status ?? "idle";
+  const isRunning = status === "running";
 
   function handleSaved(updated: AgentDetail) {
     setDetail(updated);
   }
 
+  function Header({ name }: { name: string }) {
+    return (
+      <div className="detail-panel__header">
+        <div className="detail-panel__top">
+          <div className="detail-panel__avatar">🐦</div>
+          <div className="detail-panel__ident">
+            <div className="detail-panel__name">{name}</div>
+            <span className={`pill pill--${isRunning ? "run" : "idle"}`}>
+              <span className="pill__dot" />
+              {t(isRunning ? "status.running" : "status.idle")}
+            </span>
+          </div>
+          <button
+            className="detail-panel__close"
+            onClick={onClose}
+            title={t("detail.close")}
+            aria-label={t("detail.close")}
+          >
+            ×
+          </button>
+        </div>
+        <div className="detail-panel__actions">
+          <button className="btn btn--sm btn--danger">{t("action.stop")}</button>
+          <button className="btn btn--sm btn--secondary">{t("action.share")}</button>
+          <button className="btn btn--sm btn--secondary">{t("action.export")}</button>
+        </div>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <aside className="detail-panel">
-        <div className="detail-panel-header">
-          <span className="detail-panel-title">{displayName}</span>
-          <button className="detail-panel-close" onClick={onClose}>×</button>
-        </div>
-        <div className="detail-panel-body">
-          <p className="detail-error">Failed to load: {error}</p>
+        <Header name={displayName} />
+        <div className="detail-panel__body">
+          <p className="detail-error">{t("detail.loadFailed", { error })}</p>
         </div>
       </aside>
     );
@@ -58,12 +100,9 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   if (!detail) {
     return (
       <aside className="detail-panel">
-        <div className="detail-panel-header">
-          <span className="detail-panel-title">{displayName}</span>
-          <button className="detail-panel-close" onClick={onClose}>×</button>
-        </div>
-        <div className="detail-panel-body">
-          <p className="detail-loading">Loading…</p>
+        <Header name={displayName} />
+        <div className="detail-panel__body">
+          <p className="detail-loading">{t("detail.loading")}</p>
         </div>
       </aside>
     );
@@ -71,10 +110,7 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
 
   return (
     <aside className="detail-panel">
-      <div className="detail-panel-header">
-        <span className="detail-panel-title">{detail.display_name}</span>
-        <button className="detail-panel-close" onClick={onClose} title="Close">×</button>
-      </div>
+      <Header name={detail.display_name} />
       <div className="detail-panel-tabs">
         {ALL_DETAIL_TABS.map((tab) => (
           <span
@@ -82,11 +118,11 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
             className={`detail-tab${activeTab === tab ? " detail-tab--active" : ""}`}
             onClick={() => setActiveTab(tab)}
           >
-            {TAB_LABELS[tab]}
+            {t(TAB_LABEL_KEYS[tab])}
           </span>
         ))}
       </div>
-      <div className="detail-panel-body">
+      <div className="detail-panel__body">
         {activeTab === "persona" && (
           <PersonaTab detail={detail} onSaved={handleSaved} />
         )}
@@ -105,7 +141,7 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   );
 }
 
-// ─── Persona Tab ──────────────────────────────────────────────────────────────
+// ─── Persona Tab ──────────────────────────────────────────────────────────
 
 const PERSONA_CATEGORIES = [
   "research", "automation", "monitor", "notify", "commerce", "custom",
@@ -122,6 +158,7 @@ function PersonaTab({
   detail: AgentDetail;
   onSaved: (d: AgentDetail) => void;
 }) {
+  const { t } = useT();
   const [category, setCategory] = useState(detail.persona_category);
   const [description, setDescription] = useState(detail.persona_description);
   const [tone, setTone] = useState(detail.persona_tone);
@@ -163,9 +200,13 @@ function PersonaTab({
     risk !== detail.persona_risk ||
     verbosity !== detail.persona_verbosity;
 
+  // Visual meter level for risk / verbosity (0-2 → 1-3 bars on).
+  const riskLevel = Math.max(0, RISK_OPTIONS.indexOf(risk));
+  const verbosityLevel = Math.max(0, VERBOSITY_OPTIONS.indexOf(verbosity));
+
   return (
     <div className="tab-form">
-      <label className="field-label">Category</label>
+      <label className="field-label">{t("detail.category")}</label>
       <select
         className="input"
         value={category}
@@ -176,27 +217,32 @@ function PersonaTab({
         ))}
       </select>
 
-      <label className="field-label">Description</label>
+      <label className="field-label">{t("detail.description")}</label>
       <textarea
         className="input"
         rows={3}
         value={description}
         onChange={(e) => { setDescription(e.target.value); }}
-        placeholder="What this agent does…"
+        placeholder={t("detail.descPlaceholder")}
       />
 
-      <label className="field-label">Tone</label>
+      <label className="field-label">{t("detail.tone")}</label>
       <select
         className="input"
         value={tone}
         onChange={(e) => { setTone(e.target.value); }}
       >
-        {TONE_OPTIONS.map((t) => (
-          <option key={t} value={t}>{t}</option>
+        {TONE_OPTIONS.map((opt) => (
+          <option key={opt} value={opt}>{opt}</option>
         ))}
       </select>
 
-      <label className="field-label">Risk tolerance</label>
+      <label className="field-label">{t("detail.risk")}</label>
+      <div className="meter">
+        {[0, 1, 2].map((i) => (
+          <i key={i} className={i <= riskLevel ? "is-on" : ""} />
+        ))}
+      </div>
       <select
         className="input"
         value={risk}
@@ -207,7 +253,12 @@ function PersonaTab({
         ))}
       </select>
 
-      <label className="field-label">Verbosity</label>
+      <label className="field-label">{t("detail.verbosity")}</label>
+      <div className="meter">
+        {[0, 1, 2].map((i) => (
+          <i key={i} className={i <= verbosityLevel ? "is-on" : ""} />
+        ))}
+      </div>
       <select
         className="input"
         value={verbosity}
@@ -219,18 +270,18 @@ function PersonaTab({
       </select>
 
       <button
-        className="toolbar-btn primary save-btn"
+        className="btn btn--primary btn--sm save-btn"
         disabled={!changed || saving}
         onClick={save}
       >
-        {saving ? "Saving…" : saved ? "✓ Saved" : "Save Changes"}
+        {saving ? t("detail.saving") : saved ? t("detail.saved") : t("detail.save")}
       </button>
       {saveError && <p className="save-error">{saveError}</p>}
     </div>
   );
 }
 
-// ─── Style Tab ────────────────────────────────────────────────────────────────
+// ─── Style Tab ────────────────────────────────────────────────────────────
 
 function StyleTab({
   detail,
@@ -239,6 +290,7 @@ function StyleTab({
   detail: AgentDetail;
   onSaved: (d: AgentDetail) => void;
 }) {
+  const { t } = useT();
   const [selected, setSelected] = useState(detail.style_preset);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -262,25 +314,30 @@ function StyleTab({
 
   function statusText(): string {
     switch (detail.render_status.status) {
-      case "pending": return "Not rendered yet";
-      case "rendering": return `Rendering: ${detail.render_status.done}/${detail.render_status.total}`;
-      case "ready": return "Ready ✓";
-      case "failed": return `Failed: ${detail.render_status.reason}`;
+      case "pending": return t("detail.notRendered");
+      case "rendering": return t("detail.rendering", {
+        done: detail.render_status.done,
+        total: detail.render_status.total,
+      });
+      case "ready": return t("detail.renderReady");
+      case "failed": return t("detail.renderFailed", { reason: detail.render_status.reason });
     }
   }
 
+  const current = BUILTIN_PRESETS.find((p) => p.id === selected);
+
   return (
     <div className="tab-form">
-      <label className="field-label">Current style</label>
+      <label className="field-label">{t("detail.currentStyle")}</label>
       <p className="field-value">
-        {BUILTIN_PRESETS.find((p) => p.id === selected)?.display_name ?? selected}
+        {current?.display_name ?? selected}
         {" "}
         <span className="field-muted">
-          ({BUILTIN_PRESETS.find((p) => p.id === selected)?.family ?? "unknown"})
+          ({current?.family ?? t("detail.unknown")})
         </span>
       </p>
 
-      <label className="field-label">Render status</label>
+      <label className="field-label">{t("detail.renderStatus")}</label>
       <p className="field-muted" style={{ fontSize: 12 }}>{statusText()}</p>
       {detail.render_status.status === "rendering" && (
         <div className="progress-bar" style={{ marginTop: 6 }}>
@@ -293,18 +350,18 @@ function StyleTab({
         </div>
       )}
 
-      <label className="field-label" style={{ marginTop: 16 }}>Preset gallery</label>
-      <div className="preset-gallery">
+      <label className="field-label" style={{ marginTop: 16 }}>{t("detail.presetGallery")}</label>
+      <div className="style-gallery">
         {BUILTIN_PRESETS.map((p) => (
           <button
             key={p.id}
-            className={`preset-card${selected === p.id ? " preset-card--active" : ""}`}
+            className={`style-thumb${selected === p.id ? " is-selected" : ""}`}
             onClick={() => pickPreset(p.id)}
             disabled={saving}
             title={p.description}
           >
-            <div className="preset-card-label">{p.display_name}</div>
-            <div className="preset-card-family">{p.family}</div>
+            <div className="style-thumb__label">{p.display_name}</div>
+            <div className="style-thumb__family">{p.family}</div>
           </button>
         ))}
       </div>
@@ -313,12 +370,12 @@ function StyleTab({
   );
 }
 
-// ─── Behavior Tab ─────────────────────────────────────────────────────────────
+// ─── Behavior Tab ─────────────────────────────────────────────────────────
 
-const BEHAVIOR_OPTIONS: { id: string; label: string; desc: string }[] = [
-  { id: "quiet", label: "Quiet", desc: "Only speaks when spoken to. No proactive messages." },
-  { id: "normal", label: "Normal", desc: "Sends notifications for important events. Balanced." },
-  { id: "lively", label: "Lively", desc: "Proactive suggestions, pet animations, chatty." },
+const BEHAVIOR_OPTIONS: { id: string; labelKey: TranslationKey; descKey: TranslationKey }[] = [
+  { id: "quiet", labelKey: "detail.quiet", descKey: "detail.quietDesc" },
+  { id: "normal", labelKey: "detail.normal", descKey: "detail.normalDesc" },
+  { id: "lively", labelKey: "detail.lively", descKey: "detail.livelyDesc" },
 ];
 
 function BehaviorTab({
@@ -328,6 +385,7 @@ function BehaviorTab({
   detail: AgentDetail;
   onSaved: (d: AgentDetail) => void;
 }) {
+  const { t } = useT();
   const [selected, setSelected] = useState(detail.behavior_preset);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -352,7 +410,7 @@ function BehaviorTab({
   return (
     <div className="tab-form">
       <p className="field-muted" style={{ marginBottom: 12, fontSize: 12 }}>
-        Controls how proactive the agent is — when it sends messages and how the pet behaves.
+        {t("detail.behaviorHint")}
       </p>
       {BEHAVIOR_OPTIONS.map((opt) => (
         <label
@@ -368,28 +426,29 @@ function BehaviorTab({
             disabled={saving}
             style={{ display: "none" }}
           />
-          <div className="radio-card-label">{opt.label}</div>
-          <div className="radio-card-desc">{opt.desc}</div>
+          <div className="radio-card-label">{t(opt.labelKey)}</div>
+          <div className="radio-card-desc">{t(opt.descKey)}</div>
         </label>
       ))}
-      {saving && <p className="field-muted" style={{ fontSize: 12 }}>Saving…</p>}
+      {saving && <p className="field-muted" style={{ fontSize: 12 }}>{t("detail.saving")}</p>}
       {saveError && <p className="save-error">{saveError}</p>}
     </div>
   );
 }
 
-// ─── Skills Tab ───────────────────────────────────────────────────────────────
+// ─── Skills Tab ───────────────────────────────────────────────────────────
 
 function SkillsTab({ detail }: { detail: AgentDetail }) {
+  const { t } = useT();
   const hasInstalled = detail.installed_skills.length > 0;
   const hasLegacy = detail.skills.length > 0;
 
   if (!hasInstalled && !hasLegacy) {
     return (
       <div className="tab-empty">
-        <p>No skills installed.</p>
+        <p>{t("detail.noSkills")}</p>
         <p className="field-muted" style={{ fontSize: 12 }}>
-          Use <code>mur skill install</code> to add skills to this agent.
+          {t("detail.skillInstallHint")}
         </p>
       </div>
     );
@@ -399,7 +458,9 @@ function SkillsTab({ detail }: { detail: AgentDetail }) {
     <div className="tab-form">
       {hasInstalled && (
         <>
-          <label className="field-label">Installed Skills ({detail.installed_skills.length})</label>
+          <label className="field-label">
+            {t("detail.installedSkills", { count: detail.installed_skills.length })}
+          </label>
           <ul className="item-list">
             {detail.installed_skills.map((s) => (
               <li key={s.name} className="item-card">
@@ -422,7 +483,7 @@ function SkillsTab({ detail }: { detail: AgentDetail }) {
       {hasLegacy && (
         <>
           <label className="field-label" style={{ marginTop: hasInstalled ? 16 : 0 }}>
-            Legacy Skill Paths ({detail.skills.length})
+            {t("detail.legacySkillPaths", { count: detail.skills.length })}
           </label>
           <ul className="item-list">
             {detail.skills.map((s) => (
@@ -437,15 +498,16 @@ function SkillsTab({ detail }: { detail: AgentDetail }) {
   );
 }
 
-// ─── MCP Tab ──────────────────────────────────────────────────────────────────
+// ─── MCP Tab ──────────────────────────────────────────────────────────────
 
 function McpTab({ detail }: { detail: AgentDetail }) {
+  const { t } = useT();
   if (detail.mcp_servers.length === 0) {
     return (
       <div className="tab-empty">
-        <p>No MCP servers configured.</p>
+        <p>{t("detail.noMcp")}</p>
         <p className="field-muted" style={{ fontSize: 12 }}>
-          Use <code>mur agent mcp add</code> to connect tools to this agent.
+          {t("detail.mcpAddHint")}
         </p>
       </div>
     );
@@ -453,7 +515,7 @@ function McpTab({ detail }: { detail: AgentDetail }) {
 
   return (
     <div className="tab-form">
-      <label className="field-label">MCP Servers ({detail.mcp_servers.length})</label>
+      <label className="field-label">{t("detail.mcpServersCount", { count: detail.mcp_servers.length })}</label>
       <ul className="item-list">
         {detail.mcp_servers.map((m) => (
           <li key={m.name} className="item-card">
@@ -473,39 +535,42 @@ function McpTab({ detail }: { detail: AgentDetail }) {
   );
 }
 
-// ─── Permissions Tab ──────────────────────────────────────────────────────────
+// ─── Permissions Tab ──────────────────────────────────────────────────────
 
 function PermissionsTab({ detail }: { detail: AgentDetail }) {
+  const { t } = useT();
   return (
     <div className="tab-form">
-      <label className="field-label">Capabilities</label>
+      <label className="field-label">{t("detail.capabilities")}</label>
       {detail.capabilities.length === 0 ? (
-        <p className="field-muted" style={{ fontSize: 12 }}>No special capabilities declared.</p>
+        <p className="field-muted" style={{ fontSize: 12 }}>{t("detail.noCaps")}</p>
       ) : (
         <div className="badge-row">
           {detail.capabilities.map((c) => (
-            <span key={c} className="badge-cap">{c}</span>
+            <span key={c} className="cap-tag"><span className="cap-dot" />{c}</span>
           ))}
         </div>
       )}
 
-      <label className="field-label" style={{ marginTop: 16 }}>MCP Servers</label>
+      <label className="field-label" style={{ marginTop: 16 }}>{t("detail.mcpServers")}</label>
       <p className="field-muted" style={{ fontSize: 12 }}>
         {detail.mcp_servers.length === 0
-          ? "No MCP servers configured."
-          : `${detail.mcp_servers.length} server(s) — see MCP tab for details.`}
+          ? t("detail.noMcp")
+          : t("detail.mcpSummary", { count: detail.mcp_servers.length })}
       </p>
 
-      <label className="field-label" style={{ marginTop: 16 }}>Skills</label>
+      <label className="field-label" style={{ marginTop: 16 }}>{t("detail.skills")}</label>
       <p className="field-muted" style={{ fontSize: 12 }}>
         {detail.installed_skills.length === 0 && detail.skills.length === 0
-          ? "No skills installed."
-          : `${detail.installed_skills.length} installed + ${detail.skills.length} legacy — see Skills tab.`}
+          ? t("detail.noSkills")
+          : t("detail.skillsSummary", {
+              installed: detail.installed_skills.length,
+              legacy: detail.skills.length,
+            })}
       </p>
 
       <p className="field-muted" style={{ marginTop: 24, fontSize: 11, fontStyle: "italic" }}>
-        Permissions are declared at agent creation time. Use{" "}
-        <code>mur agent update</code> from the CLI to modify entitlements.
+        {t("detail.permissionsHint")}
       </p>
     </div>
   );
