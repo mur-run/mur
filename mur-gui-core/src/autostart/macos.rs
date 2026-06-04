@@ -103,7 +103,9 @@ pub fn register(
     let domain = gui_domain(uid);
     let target = service_target(uid, slug);
     let plist_str = plist_path.to_string_lossy().to_string();
-    let _ = Command::new("launchctl").args(["bootout", &target]).status();
+    let _ = Command::new("launchctl")
+        .args(["bootout", &target])
+        .status();
     let _ = Command::new("launchctl")
         .args(["unload", &plist_str])
         .status();
@@ -124,7 +126,9 @@ pub fn unregister(slug: &str, _mur_home: &Path) -> Result<()> {
     let uid = unsafe { libc::getuid() };
     let target = service_target(uid, slug);
     // Modern bootout (gui domain); fall back to legacy unload. Both best-effort.
-    let _ = Command::new("launchctl").args(["bootout", &target]).status();
+    let _ = Command::new("launchctl")
+        .args(["bootout", &target])
+        .status();
     let plist_path = plist_path(slug)?;
     if plist_path.exists() {
         let _ = Command::new("launchctl")
