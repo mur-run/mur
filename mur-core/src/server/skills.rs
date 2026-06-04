@@ -11,6 +11,32 @@ use mur_common::skill::{SkillManifest, read_from_dir, write_to_dir};
 
 use super::{AppError, AppState, notify, wrap};
 
+/// Resolve `skills_dir/<name>`, rejecting any request-supplied name that would
+/// escape the skills directory. The dashboard server binds a network interface
+/// without auth, so an unvalidated name on these routes is a remote
+/// path-traversal — most severely `delete_skill`, where a name of `..` would
+/// `remove_dir_all` the entire mur home. A skill name is a single directory
+/// component: separators, `.`/`..`, control chars, and empty/oversize are
+/// refused.
+fn safe_skill_dir(
+    skills_dir: &std::path::Path,
+    name: &str,
+) -> Result<std::path::PathBuf, AppError> {
+    if name.is_empty()
+        || name.len() > 64
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.chars().any(|c| c == '\0' || c.is_control())
+    {
+        return Err(AppError::BadRequest(format!(
+            "invalid skill name: {name:?}"
+        )));
+    }
+    Ok(skills_dir.join(name))
+}
+
 #[derive(Deserialize, Default)]
 pub struct SkillFilter {
     pub category: Option<String>,
@@ -57,7 +83,7 @@ pub(super) async fn get_skill(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     let skills_dir = state.skills_dir();
-    let skill_dir = skills_dir.join(&name);
+    let skill_dir = safe_skill_dir(&skills_dir, &name)?;
     let skill = read_from_dir(&skill_dir)
         .map_err(|_| AppError::NotFound(format!("Skill '{}' not found", name)))?;
 
@@ -88,7 +114,7 @@ pub(super) async fn create_skill(
     }
 
     let skills_dir = state.skills_dir();
-    let skill_dir = skills_dir.join(&req.manifest.name);
+    let skill_dir = safe_skill_dir(&skills_dir, &req.manifest.name)?;
     if skill_dir.exists() {
         return Err(AppError::BadRequest(format!(
             "Skill '{}' already exists",
@@ -112,7 +138,7 @@ pub(super) async fn update_skill(
     }
 
     let skills_dir = state.skills_dir();
-    let skill_dir = skills_dir.join(&name);
+    let skill_dir = safe_skill_dir(&skills_dir, &name)?;
     let mut skill = read_from_dir(&skill_dir)
         .map_err(|_| AppError::NotFound(format!("Skill '{}' not found", name)))?;
 
@@ -148,7 +174,7 @@ pub(super) async fn delete_skill(
     }
 
     let skills_dir = state.skills_dir();
-    let skill_dir = skills_dir.join(&name);
+    let skill_dir = safe_skill_dir(&skills_dir, &name)?;
     if !skill_dir.exists() {
         return Err(AppError::NotFound(format!("Skill '{}' not found", name)));
     }

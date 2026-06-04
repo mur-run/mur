@@ -116,6 +116,45 @@ async fn test_list_patterns_empty() {
 }
 
 #[tokio::test]
+async fn skill_routes_reject_path_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = build_router(test_state(&tmp));
+
+    // DELETE with a traversal name must NOT remove_dir_all the parent (mur home):
+    // skills_dir is tmp/skills, so `..` would target tmp itself.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/skills/..")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::OK);
+    assert!(
+        tmp.path().join("patterns").exists(),
+        "DELETE /skills/.. must not delete the mur home"
+    );
+
+    // GET with an encoded traversal (`..%2F..%2Fpatterns` → `../../patterns`)
+    // must be rejected, not read outside skills_dir.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/skills/..%2F..%2Fpatterns")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_create_and_get_pattern() {
     let tmp = tempfile::tempdir().unwrap();
     let state = test_state(&tmp);
