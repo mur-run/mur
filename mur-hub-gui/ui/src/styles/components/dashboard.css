@@ -96,7 +96,7 @@
   gap: 18px;
   margin: 4px 24px 8px;
   padding: 18px 22px;
-  background: linear-gradient(120deg, var(--surface-card), #F2F8FF);
+  background: linear-gradient(120deg, var(--surface-card), var(--surface-secondary));
   border: 1px solid var(--border-line);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-1);
