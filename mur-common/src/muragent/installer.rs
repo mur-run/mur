@@ -32,6 +32,18 @@ use crate::trust::{self, TrustEntry, TrustLevel, TrustStore};
 /// Files in the .muragent that belong to the package envelope (not payload).
 const ENVELOPE_FILES: &[&str] = &["manifest.yaml", "manifest.signed.json", "signatures.json"];
 
+/// Host-local files a `.muragent` must never carry. `identity.key` is the
+/// agent's *private* signing key, minted locally and stripped by export; a
+/// package that ships one of these is malformed or hostile, since extracting it
+/// would plant or overwrite the agent's identity (impersonation, or breaking
+/// re-export). Matched against the top-level extraction path.
+const RESERVED_LOCAL_FILES: &[&str] = &[
+    "identity.key",
+    "identity.pub",
+    "identity.key.prev",
+    "identity.pub.prev",
+];
+
 /// Result of a successful install or update.
 #[derive(Debug)]
 pub struct InstallOutcome {
@@ -61,6 +73,11 @@ pub fn install(
 ) -> Result<InstallOutcome, MuragentError> {
     // Step 1: validation pipeline — fatal on any failure per §7.5
     let result = validator::validate(archive)?;
+
+    // Step 1.5: reject host-local identity material in the payload. Extraction
+    // writes every payload file into the agent dir, so a package shipping
+    // `identity.key` would plant/overwrite the agent's private signing key.
+    reject_reserved_local_files(archive)?;
 
     // Step 2: slug shape
     let slug = result.manifest.agent.slug.clone();
@@ -150,6 +167,20 @@ pub fn install(
     })
 }
 
+/// Refuse a package that carries any [`RESERVED_LOCAL_FILES`] entry at its top
+/// level — extracting it would plant/overwrite host-minted identity material.
+fn reject_reserved_local_files(archive: &MuragentArchive) -> Result<(), MuragentError> {
+    for path in archive.files.keys() {
+        if RESERVED_LOCAL_FILES.contains(&path.as_str()) {
+            return Err(MuragentError::Other(format!(
+                "package contains reserved local file '{path}' \
+                 (private identity material is host-minted and must not be shipped)"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Convert a display name to a filesystem-safe slug for rotation manifest lookup.
 fn display_name_slug(name: &str) -> String {
     name.to_lowercase()
@@ -207,14 +238,22 @@ fn try_apply_rotation(
     manifest.verify()?;
 
     // Replay prevention: issued_at must be strictly newer than last_rotation_at.
+    // Compare parsed instants, not raw strings — RFC3339 is not lexicographically
+    // ordered across offsets/precision ("Z" vs "+00:00", fractional seconds), so a
+    // string compare could let a replayed manifest slip through.
     if let Some(entry) = old_entry
         && let Some(last_at) = &entry.last_rotation_at
-        && manifest.issued_at <= *last_at
     {
-        return Err(format!(
-            "rotation manifest issued_at ({}) is not newer than last_rotation_at ({})",
-            manifest.issued_at, last_at
-        ));
+        let issued = chrono::DateTime::parse_from_rfc3339(&manifest.issued_at)
+            .map_err(|e| format!("rotation manifest issued_at is not valid RFC3339: {e}"))?;
+        let last = chrono::DateTime::parse_from_rfc3339(last_at)
+            .map_err(|e| format!("stored last_rotation_at is not valid RFC3339: {e}"))?;
+        if issued <= last {
+            return Err(format!(
+                "rotation manifest issued_at ({}) is not newer than last_rotation_at ({})",
+                manifest.issued_at, last_at
+            ));
+        }
     }
 
     // Apply: mark old entry Superseded, insert new entry.
@@ -279,7 +318,8 @@ fn clear_except_data(dir: &Path) -> Result<(), MuragentError> {
 
 fn extract_payload(archive: &MuragentArchive, agent_dir: &Path) -> Result<(), MuragentError> {
     for (path, data) in &archive.files {
-        if ENVELOPE_FILES.contains(&path.as_str()) {
+        if ENVELOPE_FILES.contains(&path.as_str()) || RESERVED_LOCAL_FILES.contains(&path.as_str())
+        {
             continue;
         }
         let dest = agent_dir.join(path);
@@ -441,6 +481,29 @@ mod tests {
                 std::env::remove_var("MUR_HOME");
             }
         }
+    }
+
+    #[test]
+    fn reserved_local_files_are_rejected() {
+        // A package carrying private identity material must be refused before
+        // extraction (which would plant/overwrite the agent's signing key).
+        use std::collections::BTreeMap;
+        for reserved in RESERVED_LOCAL_FILES {
+            let mut files = BTreeMap::new();
+            files.insert("profile.yaml".to_string(), b"ok".to_vec());
+            files.insert((*reserved).to_string(), b"ATTACKER-KEY".to_vec());
+            let archive = MuragentArchive { files };
+            assert!(
+                reject_reserved_local_files(&archive).is_err(),
+                "must reject package carrying {reserved}"
+            );
+        }
+        // A clean payload passes.
+        let mut files = BTreeMap::new();
+        files.insert("profile.yaml".to_string(), b"ok".to_vec());
+        files.insert("skills/demo.md".to_string(), b"skill".to_vec());
+        let archive = MuragentArchive { files };
+        assert!(reject_reserved_local_files(&archive).is_ok());
     }
 
     #[test]
