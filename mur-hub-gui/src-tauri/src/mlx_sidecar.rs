@@ -27,6 +27,20 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
 use tracing::{info, warn};
 
+/// Whether the bundled MLX model directory is present, i.e. local in-process
+/// inference is possible. Used to decide whether the built-in concierge needs a
+/// fallback model so it can actually respond on machines without the bundle.
+pub fn model_available(app: &AppHandle) -> bool {
+    ["resources/models/default", "models/default"]
+        .iter()
+        .filter_map(|rel| {
+            app.path()
+                .resolve(rel, tauri::path::BaseDirectory::Resource)
+                .ok()
+        })
+        .any(|p| p.is_dir())
+}
+
 /// Start the bundled `mlx-server` sidecar against the bundled model, write its
 /// base URL to the shared file, and stream its logs. Idempotent at the
 /// application level (call once on setup). Errors are logged, not fatal: if MLX

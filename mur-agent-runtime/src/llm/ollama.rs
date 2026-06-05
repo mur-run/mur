@@ -94,4 +94,103 @@ impl LlmClient for OllamaClient {
             model: self.model.clone(),
         })
     }
+
+    async fn generate_stream(
+        &self,
+        req: LlmRequest,
+        sink: tokio::sync::mpsc::Sender<super::StreamDelta>,
+    ) -> Result<LlmResponse, LlmError> {
+        let url = format!("{}/api/chat", self.base_url);
+        let messages: Vec<_> = req
+            .messages
+            .iter()
+            .map(|m| json!({"role": m.role, "content": m.content}))
+            .collect();
+        let mut body = json!({"model": self.model, "messages": messages, "stream": true});
+        if let Some(t) = req.temperature {
+            body["options"]["temperature"] = json!(t);
+        }
+        if let Some(m) = req.max_tokens {
+            body["options"]["num_predict"] = json!(m);
+        }
+        if let Ok(parsed) = reqwest::Url::parse(&url)
+            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
+        {
+            return Err(LlmError::Http(e));
+        }
+        let mut resp = self.http.post(url).json(&body).send().await.map_err(|e| {
+            if e.is_timeout() {
+                LlmError::Timeout
+            } else {
+                LlmError::Http(e.to_string())
+            }
+        })?;
+        if resp.status() == 429 {
+            return Err(LlmError::RateLimit);
+        }
+
+        // Ollama streams newline-delimited JSON objects. Read incrementally
+        // (Response::chunk needs no extra reqwest features), buffer partial
+        // lines, and forward each `message.content` delta to the sink.
+        let mut buf: Vec<u8> = Vec::new();
+        let mut text = String::new();
+        let mut input_tokens = 0u64;
+        let mut output_tokens = 0u64;
+        while let Some(chunk) = resp.chunk().await.map_err(|e| {
+            if e.is_timeout() {
+                LlmError::Timeout
+            } else {
+                LlmError::Http(e.to_string())
+            }
+        })? {
+            buf.extend_from_slice(&chunk);
+            while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=nl).collect();
+                let line = &line[..line.len().saturating_sub(1)];
+                if line.is_empty() {
+                    continue;
+                }
+                let Ok(v) = serde_json::from_slice::<serde_json::Value>(line) else {
+                    continue;
+                };
+                // Thinking models (e.g. qwen3) emit reasoning in a separate
+                // `thinking` field before the answer — forward it so the user
+                // sees activity immediately instead of a long silent wait.
+                if let Some(think) = v["message"]["thinking"].as_str()
+                    && !think.is_empty()
+                {
+                    let _ = sink
+                        .send(super::StreamDelta {
+                            text: think.to_string(),
+                            thinking: true,
+                        })
+                        .await;
+                }
+                if let Some(delta) = v["message"]["content"].as_str()
+                    && !delta.is_empty()
+                {
+                    text.push_str(delta);
+                    let _ = sink
+                        .send(super::StreamDelta {
+                            text: delta.to_string(),
+                            thinking: false,
+                        })
+                        .await;
+                }
+                if v["done"].as_bool() == Some(true) {
+                    input_tokens = v["prompt_eval_count"].as_u64().unwrap_or(input_tokens);
+                    output_tokens = v["eval_count"].as_u64().unwrap_or(output_tokens);
+                }
+            }
+        }
+        if text.is_empty() {
+            return Err(LlmError::InvalidResponse("empty streamed response".into()));
+        }
+        Ok(LlmResponse {
+            text,
+            input_tokens,
+            output_tokens,
+            model: self.model.clone(),
+        })
+    }
 }

@@ -32,6 +32,34 @@ pub enum DialMode {
     ForceEphemeral,
 }
 
+/// Resolve a user-typed agent name to the canonical on-disk agent name,
+/// matching case-insensitively. CLI users shouldn't have to remember the
+/// exact casing (`mur agent send mur` should work as well as `... Mur`).
+///
+/// The runtime's spoof check ([`mur-agent-runtime`] `verify_name_match`)
+/// requires the name passed downstream to equal the profile's `name` field,
+/// which for every MUR-created agent equals its directory name — so we
+/// return the real directory name. If an exact match already exists, or no
+/// case-insensitive match is found, the input is returned unchanged so
+/// downstream code emits its normal "not found / not running" error.
+pub fn canonicalize_agent_name(home: &Path, typed: &str) -> String {
+    let agents = home.join("agents");
+    // Exact match wins — cheapest, and correct on case-sensitive filesystems.
+    if agents.join(typed).join("profile.yaml").is_file() {
+        return typed.to_string();
+    }
+    if let Ok(entries) = fs::read_dir(&agents) {
+        for entry in entries.flatten() {
+            let dir = entry.file_name();
+            let dir = dir.to_string_lossy();
+            if dir.eq_ignore_ascii_case(typed) && entry.path().join("profile.yaml").is_file() {
+                return dir.into_owned();
+            }
+        }
+    }
+    typed.to_string()
+}
+
 /// Dial the named agent and return the `result` field of the JSON-RPC
 /// response. Errors carry the agent name and method for diagnosability.
 ///
@@ -44,6 +72,11 @@ pub fn dial_method(
     params: Value,
     mode: DialMode,
 ) -> Result<Value> {
+    // Case-insensitive name resolution: `mur agent send mur` works the same as
+    // `... Mur`. Returns the canonical (on-disk) name so the runtime's
+    // exact-match spoof check still passes downstream.
+    let canonical = canonicalize_agent_name(home, agent_name);
+    let agent_name = canonical.as_str();
     let _span = tracing::info_span!("a2a.dial", agent = %agent_name, method = %method).entered();
     tracing::debug!(?mode, "dialing");
 
@@ -65,7 +98,27 @@ pub fn dial_method(
         ),
         (DialMode::ForceEphemeral, _) => dial_ephemeral(home, agent_name, &request, &request_id),
         (_, true) => dial_socket(&lock_path, agent_name, &request, &request_id),
-        (_, false) => dial_ephemeral(home, agent_name, &request, &request_id),
+        (_, false) => match dial_ephemeral(home, agent_name, &request, &request_id) {
+            Ok(v) => Ok(v),
+            // Race: another runtime (e.g. the Hub's auto-start) came up between
+            // our lock check and the spawn, so the ephemeral child refused with
+            // "already running". The agent IS up — wait for it to publish its
+            // running.lock, then dial its socket instead of failing.
+            Err(e) if e.to_string().contains("already running") => {
+                for _ in 0..20 {
+                    if lock_path.exists() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if lock_path.exists() {
+                    dial_socket(&lock_path, agent_name, &request, &request_id)
+                } else {
+                    Err(e)
+                }
+            }
+            Err(e) => Err(e),
+        },
     }
 }
 
@@ -98,6 +151,80 @@ fn dial_socket(
                 Err(_) => continue,
             };
             if v.get("id") == Some(request_id) {
+                if let Some(err) = v.get("error") {
+                    bail!("agent '{agent_name}' returned error: {err}");
+                }
+                return Ok(v.get("result").cloned().unwrap_or(Value::Null));
+            }
+        }
+        bail!("EOF before matching response from '{agent_name}'");
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = sock;
+        bail!("unix socket transport is only supported on unix hosts")
+    }
+}
+
+/// Dial a *running* agent's `message/send` and stream token deltas to
+/// `on_delta` as they arrive, returning the final task result. Requires the
+/// agent to be up (uses its unix socket); the runtime emits `message/delta`
+/// notifications during generation. Names resolve case-insensitively.
+#[allow(dead_code)] // used by workspace-excluded mur-hub-gui
+pub fn dial_message_streaming(
+    home: &Path,
+    agent_name: &str,
+    params: Value,
+    mut on_delta: impl FnMut(&str, bool),
+) -> Result<Value> {
+    let agent_name = &canonicalize_agent_name(home, agent_name);
+    let lock_path = home.join("agents").join(agent_name).join("running.lock");
+    if !lock_path.exists() {
+        bail!(
+            "agent '{agent_name}' is not running (no {})",
+            lock_path.display()
+        );
+    }
+    let request_id = json!(1);
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "message/send",
+        "params": params,
+    });
+    let bytes = fs::read(&lock_path).with_context(|| format!("read {}", lock_path.display()))?;
+    let lock: LockFile = serde_json::from_slice(&bytes).context("parse running.lock")?;
+    let sock = lock
+        .transports
+        .unix_socket
+        .ok_or_else(|| anyhow!("agent '{agent_name}' has no unix-socket transport"))?;
+
+    #[cfg(unix)]
+    {
+        use std::io::{BufRead, BufReader, Write};
+        let mut stream = std::os::unix::net::UnixStream::connect(&sock)
+            .with_context(|| format!("connect {sock}"))?;
+        let line = format!("{}\n", serde_json::to_string(&request)?);
+        stream.write_all(line.as_bytes())?;
+        let reader = BufReader::new(stream.try_clone()?);
+        for line in reader.lines() {
+            let line = line.context("read response line")?;
+            let v: Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if v.get("method").and_then(Value::as_str) == Some("message/delta") {
+                let params = v.get("params");
+                if let Some(t) = params.and_then(|p| p.get("text")).and_then(Value::as_str) {
+                    let thinking = params
+                        .and_then(|p| p.get("thinking"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    on_delta(t, thinking);
+                }
+                continue;
+            }
+            if v.get("id") == Some(&request_id) {
                 if let Some(err) = v.get("error") {
                     bail!("agent '{agent_name}' returned error: {err}");
                 }
@@ -147,6 +274,17 @@ fn dial_ephemeral(
         .stdout
         .take()
         .ok_or_else(|| anyhow!("no stdout on spawned runtime"))?;
+    // Drain stderr on a thread so a failed startup (invalid profile.id,
+    // name mismatch, etc.) is surfaced instead of swallowed (H2). Reading on
+    // a thread also avoids a pipe-buffer deadlock if the runtime is chatty.
+    let stderr_thread = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = String::new();
+            let _ = err.read_to_string(&mut buf);
+            buf
+        })
+    });
 
     let req_line = format!("{}\n", serde_json::to_string(request)?);
     stdin
@@ -187,7 +325,27 @@ fn dial_ephemeral(
     if let Some(err) = last_err {
         bail!("agent '{agent_name}' returned error: {err}");
     }
-    found.ok_or_else(|| anyhow!("ephemeral runtime did not produce a response for '{agent_name}'"))
+    if let Some(result) = found {
+        return Ok(result);
+    }
+
+    // No JSON-RPC result. Surface the runtime's stderr tail so startup
+    // failures (invalid profile.id, name mismatch, sandbox errors) aren't
+    // swallowed behind a generic message (H2).
+    let stderr = stderr_thread
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let tail: Vec<&str> = stderr
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .rev()
+        .take(8)
+        .collect();
+    if tail.is_empty() {
+        bail!("ephemeral runtime did not produce a response for '{agent_name}'");
+    }
+    let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+    bail!("ephemeral runtime for '{agent_name}' exited before responding:\n{tail}");
 }
 
 #[cfg(test)]

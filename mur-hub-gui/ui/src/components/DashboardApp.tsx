@@ -83,18 +83,18 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
 
   async function handleRun() {
     await invoke("start_agent", { name: agent.name }).catch((e) =>
-      showToast(`Failed: ${e}`),
+      showToast(t("dashboard.startFailed", { error: String(e) })),
     );
   }
   async function handleStop() {
     await invoke("stop_agent", { name: agent.name }).catch((e) =>
-      showToast(`Failed: ${e}`),
+      showToast(t("dashboard.stopFailed", { error: String(e) })),
     );
   }
   async function handleShare() {
     const outPath = await save({
       defaultPath: `${agent.name}.muragent`,
-      filters: [{ name: "MuR Agent", extensions: ["muragent"] }],
+      filters: [{ name: "MUR Agent", extensions: ["muragent"] }],
     });
     if (!outPath) return;
     invoke<string>("export_muragent_file", { name: agent.name, outPath })

@@ -32,8 +32,14 @@ pub struct SandboxStatus {
 
 /// Apply the kernel sandbox derived from `entitlements` to the current process.
 /// Must be called once, early in `supervisor::entrypoint()`, after profile load.
-pub fn apply(entitlements: &Entitlements, agent_home: &Path) -> anyhow::Result<SandboxStatus> {
-    let policy = SandboxPolicy::from_entitlements(entitlements, agent_home);
+pub fn apply(
+    entitlements: &Entitlements,
+    agent_home: &Path,
+    extra_ports: &[u16],
+) -> anyhow::Result<SandboxStatus> {
+    let mut policy = SandboxPolicy::from_entitlements(entitlements, agent_home);
+    // An agent must always be able to reach its own configured local LLM.
+    policy.allow_extra_ports(extra_ports);
     let status = apply_policy(&policy)?;
     // Store for attestation. OnceLock: if called twice, second call is ignored.
     let _ = SANDBOX_STATUS.set(status.clone());

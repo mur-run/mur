@@ -14,11 +14,13 @@ import {
   type DetailTab,
 } from "../types";
 import { CompanionInbox } from "./CompanionInbox";
+import { ChatTab } from "./ChatTab";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
 
 // Tab → i18n key map (replaces the hardcoded TAB_LABELS lookup).
 const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
+  chat: "detail.chat",
   persona: "detail.persona",
   style: "detail.style",
   behavior: "detail.behavior",
@@ -48,11 +50,11 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   const { t } = useT();
   const [detail, setDetail] = useState<AgentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<DetailTab>("inbox");
+  const [activeTab, setActiveTab] = useState<DetailTab>("chat");
 
   useEffect(() => {
     setError(null);
-    setActiveTab("inbox");
+    setActiveTab("chat");
     invoke<AgentDetail>("get_agent_detail", { name: agentName })
       .then(setDetail)
       .catch((e) => setError(String(e)));
@@ -76,7 +78,7 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   async function handleExport(name: string) {
     const outPath = await save({
       defaultPath: `${name}.muragent`,
-      filters: [{ name: "MuR Agent", extensions: ["muragent"] }],
+      filters: [{ name: "MUR Agent", extensions: ["muragent"] }],
     }).catch((e) => {
       showToast(`Export failed: ${e}`);
       return null;
@@ -172,6 +174,9 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
         ))}
       </div>
       <div className="detail-panel__body">
+        {activeTab === "chat" && (
+          <ChatTab agentName={agentName} displayName={detail.display_name} />
+        )}
         {activeTab === "persona" && (
           <PersonaTab detail={detail} onSaved={handleSaved} />
         )}

@@ -6,6 +6,7 @@
 //! M-h5: pet windows — pet_spawn_at/close/reposition/return_to_hub/list/get_expression.
 
 pub mod brain_badge;
+pub mod chat;
 pub mod cli_tools;
 pub mod companion;
 pub mod detail;
@@ -49,8 +50,7 @@ fn list_agents(state: State<'_, AgentState>) -> Vec<AgentEntry> {
 
 #[tauri::command]
 async fn start_agent(name: String, supervisor: State<'_, SupervisorState>) -> Result<(), String> {
-    supervisor.0.start(&name).await;
-    Ok(())
+    supervisor.0.start(&name).await
 }
 
 #[tauri::command]
@@ -355,15 +355,19 @@ pub fn run() {
                     let mur_home = mur_home_path();
                     match seed_mur::seed_mur_if_missing(&template_dir, &mur_home) {
                         Ok(true) => {
-                            tracing::info!("seeded built-in Mur agent");
-                            // Create the runtime symlink + start via the supervisor.
-                            let supervisor_state = app.state::<SupervisorState>();
-                            let supervisor = supervisor_state.0.clone();
-                            tauri::async_runtime::spawn(async move {
-                                supervisor.start("mur").await;
-                            });
+                            tracing::info!("seeded built-in MUR agent");
                         }
-                        Ok(false) => {}
+                        Ok(false) => {
+                            // Already seeded — repair older/broken profiles so
+                            // they can start (id / socket bind / name slug).
+                            match seed_mur::repair_mur_profile(&mur_home) {
+                                Ok(true) => {
+                                    tracing::info!("repaired built-in Mur profile");
+                                }
+                                Ok(false) => {}
+                                Err(e) => tracing::warn!("repair Mur failed: {e}"),
+                            }
+                        }
                         Err(e) => tracing::warn!("seed Mur failed: {e}"),
                     }
                 }
@@ -375,12 +379,36 @@ pub fn run() {
             // Start the bundled local inference server (best-effort).
             mlx_sidecar::start(app.handle());
 
+            // If the bundled MLX model isn't present, the stock concierge has no
+            // working backend — fall back to a reachable local ollama model so
+            // it can actually respond out of the box.
+            if !mlx_sidecar::model_available(app.handle()) {
+                let home = mur_home_path();
+                match seed_mur::ensure_concierge_model(&home) {
+                    Ok(true) => tracing::info!("concierge: fell back to a local ollama model"),
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("concierge model fallback failed: {e}"),
+                }
+            }
+
+            // Ensure the built-in concierge's runtime is running on EVERY launch
+            // (not only on first seed). Idempotent: a no-op if it's already up.
+            {
+                let supervisor = app.state::<SupervisorState>().0.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = supervisor.start("mur").await {
+                        tracing::warn!("auto-start of built-in MUR failed: {e}");
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             list_agents,
             start_agent,
             stop_agent,
+            chat::agent_chat_send,
             open_dashboard,
             toggle_popover,
             onboarding::wizard_open,

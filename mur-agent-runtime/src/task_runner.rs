@@ -222,6 +222,25 @@ impl TaskRunner {
     }
 
     pub async fn run_sync(&self, spec: TaskSpec) -> TaskOutcome {
+        self.run_sync_inner(spec, None).await
+    }
+
+    /// Like `run_sync`, but forwards each LLM token delta to `sink` as it is
+    /// generated (used by message/send streaming). The final task is returned
+    /// as usual once generation completes.
+    pub async fn run_sync_streaming(
+        &self,
+        spec: TaskSpec,
+        sink: tokio::sync::mpsc::Sender<crate::llm::StreamDelta>,
+    ) -> TaskOutcome {
+        self.run_sync_inner(spec, Some(sink)).await
+    }
+
+    async fn run_sync_inner(
+        &self,
+        spec: TaskSpec,
+        sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+    ) -> TaskOutcome {
         // Record real inbound activity so idle triggers measure genuine
         // quiescence. Previously only `start_async` (a non-production path)
         // bumped this, leaving `last_activity_at` permanently 0 and causing
@@ -236,7 +255,9 @@ impl TaskRunner {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 Ok(echo_response(&spec.input))
             }
-            RunnerBackend::Llm(client) => self.run_llm(&id, client.as_ref(), &spec.input).await,
+            RunnerBackend::Llm(client) => {
+                self.run_llm(&id, client.as_ref(), &spec.input, sink).await
+            }
         };
         let now = chrono::Utc::now().to_rfc3339();
         match result {
@@ -367,6 +388,7 @@ impl TaskRunner {
         task_id: &str,
         client: &dyn LlmClient,
         input: &Message,
+        sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
     ) -> Result<Message, TaskError> {
         let prompt = text_of(input);
         let mut messages: Vec<LlmMessage> = Vec::new();
@@ -422,7 +444,11 @@ impl TaskRunner {
             max_tokens: None,
         };
         let start = std::time::Instant::now();
-        match client.generate(req).await {
+        let llm_result = match sink {
+            Some(sink) => client.generate_stream(req, sink).await,
+            None => client.generate(req).await,
+        };
+        match llm_result {
             Ok(resp) => {
                 let latency_ms = start.elapsed().as_millis() as u64;
                 let _prev = self

@@ -1,0 +1,191 @@
+/* Two-way chat panel (H1) — lives inside the detail panel's Chat tab. */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.chat__log {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 2px 12px;
+}
+
+.chat__empty {
+  margin: auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-base, 13px);
+  text-align: center;
+  padding: 24px 12px;
+}
+
+.chat__msg {
+  max-width: 82%;
+  padding: 8px 12px;
+  border-radius: var(--radius-lg, 14px);
+  font-size: var(--text-base, 13px);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: chat-pop 140ms ease-out;
+}
+
+.chat__msg--user {
+  align-self: flex-end;
+  background: var(--color-brand);
+  color: #fff;
+  border-bottom-right-radius: var(--radius-sm, 6px);
+}
+
+.chat__msg--agent {
+  align-self: flex-start;
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  border-bottom-left-radius: var(--radius-sm, 6px);
+}
+
+.chat__msg--error {
+  align-self: flex-start;
+  background: var(--coral-soft, #fde8e6);
+  color: var(--color-accent-strong, #c0392b);
+  font-size: var(--text-xs, 12px);
+}
+
+/* Transient "thinking" trace shown while a reasoning model deliberates,
+   before the answer starts streaming. */
+.chat__think {
+  align-self: flex-start;
+  max-width: 82%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface-card);
+  border: 1px dashed var(--surface-hover);
+}
+.chat__think-label {
+  font-size: var(--text-xs, 11px);
+  font-weight: 600;
+  color: var(--color-brand);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chat__think-label::after {
+  content: "…";
+  animation: chat-blink 1.2s steps(3, start) infinite;
+}
+/* The reasoning itself — flows top-to-bottom and auto-scrolls to the latest
+   line (DeepSeek-style), instead of a single horizontally-sliding line. */
+.chat__think-scroll {
+  font-size: var(--text-xs, 11px);
+  color: var(--text-tertiary);
+  font-style: italic;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 132px; /* ~8 lines while thinking */
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  /* fade the top edge so older reasoning recedes upward */
+  mask-image: linear-gradient(to bottom, transparent, #000 16px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16px);
+}
+
+/* Once the answer starts, the reasoning collapses to a small trace above it. */
+.chat__think--collapsed .chat__think-scroll {
+  max-height: 34px;
+  opacity: 0.7;
+}
+
+/* Blinking caret trailing the typewriter reveal. */
+.chat__caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--text-primary);
+  animation: chat-blink 1s steps(2, start) infinite;
+}
+
+/* Typing indicator — three bouncing dots. */
+.chat__typing {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.chat__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--text-tertiary);
+  animation: chat-bounce 1s infinite ease-in-out;
+}
+.chat__dot:nth-child(2) { animation-delay: 0.15s; }
+.chat__dot:nth-child(3) { animation-delay: 0.3s; }
+
+.chat__compose {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding-top: 8px;
+  border-top: 1px solid var(--surface-hover);
+}
+
+.chat__input {
+  flex: 1 1 auto;
+  resize: none;
+  max-height: 120px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md, 10px);
+  border: 1px solid var(--surface-hover);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-base, 13px);
+  line-height: 1.4;
+}
+
+.chat__input:focus-visible {
+  border-color: var(--color-brand);
+}
+
+.chat__send {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--radius-md, 10px);
+  background: var(--color-brand);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chat__send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@keyframes chat-pop {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes chat-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+@keyframes chat-blink {
+  0% { opacity: 1; }
+  50% { opacity: 0; }
+  100% { opacity: 1; }
+}
