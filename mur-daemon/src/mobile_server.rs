@@ -134,15 +134,20 @@ async fn run_server(mur_home: PathBuf, pair_token: String) -> Result<()> {
         paired_path,
     };
 
-    let app = Router::new()
-        .route(MOBILE_WS_PATH, get(ws_handler))
-        .with_state(state);
+    let app = router(state);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind mobile server to {addr}"))?;
     eprintln!("murmurd mobile-server listening on {addr}{MOBILE_WS_PATH}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Build the axum router for the mobile endpoint (shared by the server and tests).
+fn router(state: MobileState) -> Router {
+    Router::new()
+        .route(MOBILE_WS_PATH, get(ws_handler))
+        .with_state(state)
 }
 
 async fn ws_handler(State(state): State<MobileState>, ws: WebSocketUpgrade) -> Response {
@@ -371,4 +376,187 @@ fn persist_paired(path: &Path, devices: &[String]) -> Result<()> {
 fn mur_home() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
     Ok(home.join(".mur"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use mur_common::a2a::{JsonRpcRequest, Message as A2aMessage, MessagePart};
+    use mur_common::bridge::envelope::{sign_payload, SignedEnvelope};
+    use mur_common::identity::{encode_pubkey, AgentIdentity};
+    use std::net::SocketAddr;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
+    use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+    const TEST_TOKEN: &str = "test-token";
+    type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+    async fn start_server(token: &str) -> (SocketAddr, TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().to_path_buf();
+        let state = MobileState {
+            mur_home: home.clone(),
+            pair_token: token.to_string(),
+            paired: Arc::new(Mutex::new(HashSet::new())),
+            paired_path: home.join(PAIRED_DEVICES_FILE),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(state);
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (addr, tmp)
+    }
+
+    async fn connect(addr: SocketAddr) -> Ws {
+        let url = format!("ws://{addr}{MOBILE_WS_PATH}");
+        let (ws, _) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+        ws
+    }
+
+    async fn send_frame(ws: &mut Ws, frame: &ClientFrame) {
+        let txt = serde_json::to_string(frame).unwrap();
+        ws.send(WsMessage::Text(txt.into())).await.unwrap();
+    }
+
+    async fn recv_server(ws: &mut Ws) -> ServerFrame {
+        loop {
+            let msg = tokio::time::timeout(Duration::from_secs(5), ws.next())
+                .await
+                .expect("recv timeout")
+                .expect("stream ended")
+                .expect("ws error");
+            if let WsMessage::Text(t) = msg {
+                return serde_json::from_str(t.as_str()).unwrap();
+            }
+        }
+    }
+
+    fn make_envelope(id: &AgentIdentity, text: &str) -> SignedEnvelope {
+        let msg = A2aMessage {
+            role: "user".to_string(),
+            parts: vec![MessagePart::Text {
+                text: text.to_string(),
+            }],
+        };
+        let mut params = serde_json::Map::new();
+        params.insert("agent".to_string(), serde_json::Value::String("mur".to_string()));
+        params.insert("message".to_string(), serde_json::to_value(&msg).unwrap());
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            method: "agent/send".to_string(),
+            params: Some(serde_json::Value::Object(params)),
+        };
+        let payload = serde_json::to_vec(&req).unwrap();
+        sign_payload(payload, id, 1)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rejects_bad_token() {
+        let (addr, _tmp) = start_server(TEST_TOKEN).await;
+        let mut ws = connect(addr).await;
+        send_frame(
+            &mut ws,
+            &ClientFrame::Hello {
+                pubkey: "zBogus".to_string(),
+                token: "wrong".to_string(),
+                agent: "mur".to_string(),
+            },
+        )
+        .await;
+        assert!(matches!(recv_server(&mut ws).await, ServerFrame::Rejected { .. }));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn accepts_pairing() {
+        let (addr, _tmp) = start_server(TEST_TOKEN).await;
+        let id = AgentIdentity::generate();
+        let mut ws = connect(addr).await;
+        send_frame(
+            &mut ws,
+            &ClientFrame::Hello {
+                pubkey: encode_pubkey(&id.verifying_key()),
+                token: TEST_TOKEN.to_string(),
+                agent: "mur".to_string(),
+            },
+        )
+        .await;
+        match recv_server(&mut ws).await {
+            ServerFrame::Paired { agent } => assert_eq!(agent, "mur"),
+            other => panic!("expected Paired, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rejects_unpaired_envelope() {
+        let (addr, _tmp) = start_server(TEST_TOKEN).await;
+        let id_a = AgentIdentity::generate();
+        let mut ws = connect(addr).await;
+        send_frame(
+            &mut ws,
+            &ClientFrame::Hello {
+                pubkey: encode_pubkey(&id_a.verifying_key()),
+                token: TEST_TOKEN.to_string(),
+                agent: "mur".to_string(),
+            },
+        )
+        .await;
+        assert!(matches!(recv_server(&mut ws).await, ServerFrame::Paired { .. }));
+
+        // An envelope signed by a DIFFERENT identity than the paired one.
+        let id_b = AgentIdentity::generate();
+        send_frame(
+            &mut ws,
+            &ClientFrame::Envelope {
+                envelope: make_envelope(&id_b, "intrude"),
+            },
+        )
+        .await;
+        assert!(matches!(recv_server(&mut ws).await, ServerFrame::Rejected { .. }));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn valid_envelope_mirrors_user_transcript() {
+        let (addr, tmp) = start_server(TEST_TOKEN).await;
+        let id = AgentIdentity::generate();
+        let mut ws = connect(addr).await;
+        send_frame(
+            &mut ws,
+            &ClientFrame::Hello {
+                pubkey: encode_pubkey(&id.verifying_key()),
+                token: TEST_TOKEN.to_string(),
+                agent: "mur".to_string(),
+            },
+        )
+        .await;
+        assert!(matches!(recv_server(&mut ws).await, ServerFrame::Paired { .. }));
+
+        send_frame(
+            &mut ws,
+            &ClientFrame::Envelope {
+                envelope: make_envelope(&id, "hello mur"),
+            },
+        )
+        .await;
+
+        // The user's turn is mirrored before the agent dial, so it appears
+        // regardless of whether an agent is actually running.
+        let path = tmp.path().join("agents/mur/mobile-events.jsonl");
+        let mut found = false;
+        for _ in 0..50 {
+            if let Ok(s) = std::fs::read_to_string(&path) {
+                if s.contains("mobile.transcript") && s.contains("hello mur") {
+                    found = true;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(found, "expected mirrored transcript at {}", path.display());
+    }
 }
