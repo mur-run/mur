@@ -1,0 +1,374 @@
+//! LAN WebSocket endpoint for the MUR mobile app (P1).
+//!
+//! Binds a LAN-reachable address (default `0.0.0.0:9430`, override with
+//! `MUR_MOBILE_PORT` / `MUR_MOBILE_BIND`) and serves
+//! [`mur_common::mobile::MOBILE_WS_PATH`]. Flow:
+//!
+//! 1. Phone connects and sends [`ClientFrame::Hello`] with the one-time
+//!    pairing token (from the QR) + its Ed25519 public key. On a matching
+//!    token the key is recorded as a paired device and we reply
+//!    [`ServerFrame::Paired`].
+//! 2. Subsequent [`ClientFrame::Envelope`] frames are Ed25519-verified against
+//!    the paired key, the inner A2A `JsonRpcRequest` is dialed to the agent via
+//!    `mur_core::a2a_dial`, and the reply is returned as a `mobile.reply`
+//!    event.
+//! 3. Each turn is also mirrored to `~/.mur/agents/<agent>/mobile-events.jsonl`
+//!    — the sink the Hub tails to show the same conversation (P1 #3b wires the
+//!    Hub renderer).
+//!
+//! Security for P1: pairing token + per-message Ed25519 signature. TLS and the
+//! off-LAN relay path land in P4; full `trusted_peers` profile integration is a
+//! follow-up (the paired-device store here is the daemon-side equivalent).
+
+use anyhow::{Context, Result};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::State;
+use axum::response::Response;
+use axum::routing::get;
+use axum::Router;
+use chrono::Utc;
+use mur_common::a2a::JsonRpcRequest;
+use mur_common::bridge::envelope::verify_envelope_with_pubkey;
+use mur_common::mobile::{ClientFrame, ServerFrame, MOBILE_WS_PATH};
+use mur_core::a2a_dial::{canonicalize_agent_name, dial_method, DialMode};
+use serde_json::{json, Value};
+use std::collections::HashSet;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+/// Default LAN port for the mobile endpoint (distinct from the signal server's
+/// 9421). Override with `MUR_MOBILE_PORT`.
+const DEFAULT_MOBILE_PORT: u16 = 9430;
+/// Default bind address — `0.0.0.0` so a phone on the LAN can reach it.
+/// Override with `MUR_MOBILE_BIND`.
+const DEFAULT_MOBILE_BIND: &str = "0.0.0.0";
+/// Agent the phone talks to when its Hello doesn't name one (P1: the
+/// concierge). Display name is "MUR"; the on-disk slug is lowercase.
+const DEFAULT_MOBILE_AGENT: &str = "mur";
+/// Pairing-token file under `~/.mur/`.
+const PAIR_TOKEN_FILE: &str = "mobile/pair-token";
+/// Paired-device store under `~/.mur/`.
+const PAIRED_DEVICES_FILE: &str = "mobile/paired.json";
+
+#[derive(Clone)]
+struct MobileState {
+    mur_home: PathBuf,
+    pair_token: String,
+    paired: Arc<Mutex<HashSet<String>>>,
+    paired_path: PathBuf,
+}
+
+impl MobileState {
+    fn is_paired(&self, pubkey: &str) -> bool {
+        self.paired
+            .lock()
+            .map(|s| s.contains(pubkey))
+            .unwrap_or(false)
+    }
+
+    fn add_paired(&self, pubkey: &str) {
+        let mut changed = false;
+        if let Ok(mut set) = self.paired.lock() {
+            changed = set.insert(pubkey.to_string());
+            if changed {
+                let all: Vec<String> = set.iter().cloned().collect();
+                if let Err(e) = persist_paired(&self.paired_path, &all) {
+                    tracing::warn!(error = %e, "mobile: persist paired devices failed");
+                }
+            }
+        }
+        if changed {
+            tracing::info!(pubkey = %pubkey, "mobile: paired new device");
+        }
+    }
+}
+
+/// Generate or read the one-time pairing token at `~/.mur/mobile/pair-token`.
+/// Encode this (plus the LAN address) into the QR the Hub shows.
+pub fn ensure_pair_token() -> Result<String> {
+    let path = mur_home()?.join(PAIR_TOKEN_FILE);
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    if path.exists() {
+        let t =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        return Ok(t.trim().to_owned());
+    }
+    let token = uuid::Uuid::new_v4().to_string();
+    std::fs::write(&path, &token)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(token)
+}
+
+/// Spawn the mobile WebSocket server as a background tokio task (best-effort).
+pub fn spawn(mur_home: PathBuf, pair_token: String) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Err(e) = run_server(mur_home, pair_token).await {
+            eprintln!("murmurd mobile-server error: {e:#}");
+        }
+    })
+}
+
+async fn run_server(mur_home: PathBuf, pair_token: String) -> Result<()> {
+    let port: u16 = std::env::var("MUR_MOBILE_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_MOBILE_PORT);
+    let bind = std::env::var("MUR_MOBILE_BIND").unwrap_or_else(|_| DEFAULT_MOBILE_BIND.to_string());
+    let addr: std::net::SocketAddr = format!("{bind}:{port}")
+        .parse()
+        .with_context(|| format!("parse mobile bind {bind}:{port}"))?;
+
+    let paired_path = mur_home.join(PAIRED_DEVICES_FILE);
+    let paired = load_paired(&paired_path);
+    let state = MobileState {
+        mur_home,
+        pair_token,
+        paired: Arc::new(Mutex::new(paired)),
+        paired_path,
+    };
+
+    let app = Router::new()
+        .route(MOBILE_WS_PATH, get(ws_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("bind mobile server to {addr}"))?;
+    eprintln!("murmurd mobile-server listening on {addr}{MOBILE_WS_PATH}");
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn ws_handler(State(state): State<MobileState>, ws: WebSocketUpgrade) -> Response {
+    ws.on_upgrade(move |socket| handle_socket(socket, state))
+}
+
+async fn handle_socket(mut socket: WebSocket, state: MobileState) {
+    // 1. Pairing handshake.
+    let (pubkey, agent) = match recv_text(&mut socket).await {
+        Some(txt) => match serde_json::from_str::<ClientFrame>(&txt) {
+            Ok(ClientFrame::Hello {
+                pubkey,
+                token,
+                agent,
+            }) => {
+                if token != state.pair_token {
+                    let _ = send_frame(&mut socket, &reject("invalid pairing token")).await;
+                    return;
+                }
+                state.add_paired(&pubkey);
+                let agent = resolve_agent(&state.mur_home, &agent);
+                (pubkey, agent)
+            }
+            _ => {
+                let _ = send_frame(&mut socket, &reject("expected hello")).await;
+                return;
+            }
+        },
+        None => return,
+    };
+
+    if send_frame(&mut socket, &ServerFrame::Paired { agent: agent.clone() })
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    // 2. Application loop.
+    while let Some(txt) = recv_text(&mut socket).await {
+        let frame = match serde_json::from_str::<ClientFrame>(&txt) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!(error = %e, "mobile: bad client frame");
+                continue;
+            }
+        };
+        let ClientFrame::Envelope { envelope } = frame else {
+            continue; // ignore a duplicate hello
+        };
+
+        // Auth: the envelope's key must be the paired key and the signature
+        // must verify against it.
+        if envelope.bridge_pubkey_multibase != pubkey
+            || !state.is_paired(&pubkey)
+            || verify_envelope_with_pubkey(&envelope, &pubkey).is_err()
+        {
+            let _ = send_frame(&mut socket, &reject("unauthorized")).await;
+            continue;
+        }
+
+        let req: JsonRpcRequest = match serde_json::from_slice(&envelope.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "mobile: bad payload");
+                continue;
+            }
+        };
+
+        // Mirror the user's turn for the Hub.
+        let user_text = extract_user_text(req.params.as_ref());
+        mirror(&state.mur_home, &agent, "mobile.transcript", &json!({
+            "role": "user",
+            "text": user_text,
+            "final": true,
+        }));
+
+        // Dial the agent (blocking socket I/O → spawn_blocking).
+        let home = state.mur_home.clone();
+        let agent_c = agent.clone();
+        let method = req.method.clone();
+        let params = req.params.clone().unwrap_or(Value::Null);
+        let dialed = tokio::task::spawn_blocking(move || {
+            dial_method(&home, &agent_c, &method, params, DialMode::Auto)
+        })
+        .await;
+
+        let reply_text = match dialed {
+            Ok(Ok(value)) => extract_reply_text(&value),
+            Ok(Err(e)) => format!("[error] {e}"),
+            Err(e) => format!("[error] dial task: {e}"),
+        };
+
+        mirror(&state.mur_home, &agent, "mobile.reply", &json!({ "text": reply_text }));
+        if send_frame(
+            &mut socket,
+            &ServerFrame::Event {
+                name: "mobile.reply".to_string(),
+                payload: json!({ "text": reply_text }),
+            },
+        )
+        .await
+        .is_err()
+        {
+            break;
+        }
+    }
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────
+
+async fn recv_text(socket: &mut WebSocket) -> Option<String> {
+    while let Some(msg) = socket.recv().await {
+        match msg {
+            Ok(Message::Text(t)) => return Some(t.to_string()),
+            Ok(Message::Close(_)) => return None,
+            Ok(_) => continue, // ping/pong/binary
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+async fn send_frame(socket: &mut WebSocket, frame: &ServerFrame) -> Result<(), axum::Error> {
+    let txt = serde_json::to_string(frame).unwrap_or_default();
+    socket.send(Message::Text(txt.into())).await
+}
+
+fn reject(reason: &str) -> ServerFrame {
+    ServerFrame::Rejected {
+        reason: reason.to_string(),
+    }
+}
+
+fn resolve_agent(home: &Path, requested: &str) -> String {
+    let name = if requested.trim().is_empty() {
+        DEFAULT_MOBILE_AGENT
+    } else {
+        requested
+    };
+    canonicalize_agent_name(home, name)
+}
+
+/// Extract the user's text from an `agent/send` request's params.
+fn extract_user_text(params: Option<&Value>) -> String {
+    params
+        .and_then(|p| p.get("message"))
+        .and_then(|m| m.get("parts"))
+        .and_then(|parts| parts.as_array())
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+}
+
+/// Pull the agent's reply text out of a dialed A2A result (a `Task`).
+fn extract_reply_text(value: &Value) -> String {
+    if let Some(messages) = value.get("messages").and_then(|m| m.as_array()) {
+        for message in messages.iter().rev() {
+            let role = message.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            if role == "agent" || role == "assistant" {
+                if let Some(parts) = message.get("parts").and_then(|p| p.as_array()) {
+                    let text: String = parts
+                        .iter()
+                        .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("");
+                    if !text.is_empty() {
+                        return text;
+                    }
+                }
+            }
+        }
+    }
+    if let Some(text) = value.get("text").and_then(|t| t.as_str()) {
+        return text.to_string();
+    }
+    value.to_string()
+}
+
+/// Append a turn to the per-agent mirror log the Hub tails.
+fn mirror(home: &Path, agent: &str, name: &str, payload: &Value) {
+    let dir = home.join("agents").join(agent);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(error = %e, "mobile: mirror dir");
+        return;
+    }
+    let line = json!({
+        "ts": Utc::now().to_rfc3339(),
+        "name": name,
+        "payload": payload,
+    })
+    .to_string();
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("mobile-events.jsonl"))
+    {
+        Ok(mut f) => {
+            let _ = writeln!(f, "{line}");
+        }
+        Err(e) => tracing::warn!(error = %e, "mobile: mirror write"),
+    }
+}
+
+fn load_paired(path: &Path) -> HashSet<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_default()
+}
+
+fn persist_paired(path: &Path, devices: &[String]) -> Result<()> {
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(devices)?)?;
+    Ok(())
+}
+
+fn mur_home() -> Result<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
+    Ok(home.join(".mur"))
+}

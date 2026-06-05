@@ -2,6 +2,7 @@ mod action_tick;
 mod consumer;
 mod inbox;
 mod lock;
+mod mobile_server;
 mod signal_server;
 mod sleep;
 mod store_health;
@@ -82,6 +83,14 @@ async fn main() -> Result<()> {
             signal_server::spawn(token);
         }
         Err(e) => eprintln!("murmurd: signal-server token error: {e:#}"),
+    }
+
+    // P1 — start the mobile WebSocket endpoint (best-effort; failure is non-fatal)
+    match mobile_server::ensure_pair_token() {
+        Ok(token) => {
+            mobile_server::spawn(mur_dir.clone(), token);
+        }
+        Err(e) => eprintln!("murmurd: mobile-server token error: {e:#}"),
     }
 
     let queue_file = consumer::queue_path();

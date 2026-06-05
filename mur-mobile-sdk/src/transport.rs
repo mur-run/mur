@@ -14,8 +14,8 @@ use mur_common::bridge::envelope::SignedEnvelope;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::protocol::{ClientFrame, ServerFrame};
 use crate::MobileEvent;
+use mur_common::mobile::{ClientFrame, ServerFrame};
 
 /// Commands the client pushes to the live transport task.
 pub enum Command {

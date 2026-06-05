@@ -19,7 +19,6 @@
 uniffi::setup_scaffolding!();
 
 mod error;
-mod protocol;
 mod transport;
 
 use std::path::Path;
@@ -33,9 +32,6 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 
 pub use error::SdkError;
 use transport::Command;
-
-/// WebSocket path the Mac endpoint (hosted in `mur-daemon`) listens on.
-const MOBILE_WS_PATH: &str = "/api/v1/mobile/ws";
 
 /// Key-rotation version stamped into envelopes for the phone's identity.
 /// First-generation keys are version 1; rotation (P4+) increments it.
@@ -143,7 +139,7 @@ impl MobileClient {
         if let Ok(mut guard) = self.cmd_tx.lock() {
             *guard = Some(tx);
         }
-        let hello = protocol::ClientFrame::Hello {
+        let hello = mur_common::mobile::ClientFrame::Hello {
             pubkey: self.public_key(),
             token: pair_token,
             agent: self.default_agent.clone(),
@@ -152,7 +148,7 @@ impl MobileClient {
         self.rt.spawn(transport::run_lan(
             host,
             port,
-            MOBILE_WS_PATH.to_string(),
+            mur_common::mobile::MOBILE_WS_PATH.to_string(),
             hello,
             rx,
             emit,
