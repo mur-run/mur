@@ -284,4 +284,150 @@ impl LlmClient for AnthropicClient {
             model: self.model.clone(),
         })
     }
+
+    async fn generate_stream(
+        &self,
+        req: LlmRequest,
+        sink: tokio::sync::mpsc::Sender<super::StreamDelta>,
+    ) -> Result<LlmResponse, LlmError> {
+        let mut system_chunks: Vec<String> = Vec::new();
+        let mut convo: Vec<serde_json::Value> = Vec::new();
+        for m in &req.messages {
+            if m.role == "system" {
+                system_chunks.push(m.content.clone());
+            } else {
+                let role = if m.role == "agent" {
+                    "assistant"
+                } else {
+                    m.role.as_str()
+                };
+                convo.push(json!({"role": role, "content": m.content}));
+            }
+        }
+        let mut body = json!({
+            "model": self.model,
+            "max_tokens": req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+            "messages": convo,
+            "stream": true,
+        });
+        if !system_chunks.is_empty() {
+            body["system"] = json!(system_chunks.join("\n\n"));
+        }
+        if let Some(t) = req.temperature {
+            body["temperature"] = json!(t);
+        }
+        warn_if_oauth_key_misconfigured(&self.api_key, &self.base_url);
+
+        let url = format!("{}/v1/messages", self.base_url);
+        if let Ok(parsed) = reqwest::Url::parse(&url)
+            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
+        {
+            return Err(LlmError::Http(e));
+        }
+        let mut resp = self
+            .http
+            .post(url)
+            .header("anthropic-version", &self.version)
+            .header("content-type", "application/json")
+            .header("x-api-key", &self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LlmError::Timeout
+                } else {
+                    LlmError::Http(e.to_string())
+                }
+            })?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::Http(format!("status {status}: {body_text}")));
+        }
+
+        // Anthropic streams SSE: `event: <type>` + `data: {json}`. Each data
+        // line carries a `type` (content_block_delta / message_start / …); we
+        // parse those and forward `text_delta` (answer) + `thinking_delta`.
+        let mut buf: Vec<u8> = Vec::new();
+        let mut text = String::new();
+        let mut input_tokens = 0u64;
+        let mut output_tokens = 0u64;
+        while let Some(chunk) = resp.chunk().await.map_err(|e| {
+            if e.is_timeout() {
+                LlmError::Timeout
+            } else {
+                LlmError::Http(e.to_string())
+            }
+        })? {
+            buf.extend_from_slice(&chunk);
+            while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+                let raw: Vec<u8> = buf.drain(..=nl).collect();
+                let line = std::str::from_utf8(&raw).unwrap_or("").trim();
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let data = data.trim();
+                if data.is_empty() {
+                    continue;
+                }
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
+                    continue;
+                };
+                match v["type"].as_str() {
+                    Some("content_block_delta") => {
+                        let d = &v["delta"];
+                        match d["type"].as_str() {
+                            Some("text_delta") => {
+                                if let Some(t) = d["text"].as_str()
+                                    && !t.is_empty()
+                                {
+                                    text.push_str(t);
+                                    let _ = sink
+                                        .send(super::StreamDelta {
+                                            text: t.to_string(),
+                                            thinking: false,
+                                        })
+                                        .await;
+                                }
+                            }
+                            Some("thinking_delta") => {
+                                if let Some(t) = d["thinking"].as_str()
+                                    && !t.is_empty()
+                                {
+                                    let _ = sink
+                                        .send(super::StreamDelta {
+                                            text: t.to_string(),
+                                            thinking: true,
+                                        })
+                                        .await;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some("message_start") => {
+                        input_tokens = v["message"]["usage"]["input_tokens"]
+                            .as_u64()
+                            .unwrap_or(input_tokens);
+                    }
+                    Some("message_delta") => {
+                        output_tokens = v["usage"]["output_tokens"]
+                            .as_u64()
+                            .unwrap_or(output_tokens);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if text.is_empty() {
+            return Err(LlmError::InvalidResponse("empty streamed response".into()));
+        }
+        Ok(LlmResponse {
+            text,
+            input_tokens,
+            output_tokens,
+            model: self.model.clone(),
+        })
+    }
 }

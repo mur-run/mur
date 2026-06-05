@@ -61,8 +61,38 @@ pub enum LlmError {
     InvalidResponse(String),
 }
 
+/// One streamed chunk: either part of the model's hidden reasoning
+/// (`thinking = true`, shown as a transient "thinking" indicator) or part of
+/// the user-facing answer (`thinking = false`).
+#[derive(Debug, Clone)]
+pub struct StreamDelta {
+    pub text: String,
+    pub thinking: bool,
+}
+
 #[async_trait]
 pub trait LlmClient: Send + Sync {
     async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError>;
     fn model_name(&self) -> &str;
+
+    /// Generate a reply, sending each chunk to `sink` as it arrives, and return
+    /// the assembled response. The default implementation is non-streaming: it
+    /// runs `generate` and emits the whole answer once, so providers without
+    /// streaming still satisfy the contract.
+    async fn generate_stream(
+        &self,
+        req: LlmRequest,
+        sink: tokio::sync::mpsc::Sender<StreamDelta>,
+    ) -> Result<LlmResponse, LlmError> {
+        let resp = self.generate(req).await?;
+        if !resp.text.is_empty() {
+            let _ = sink
+                .send(StreamDelta {
+                    text: resp.text.clone(),
+                    thinking: false,
+                })
+                .await;
+        }
+        Ok(resp)
+    }
 }
