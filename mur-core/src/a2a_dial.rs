@@ -98,7 +98,27 @@ pub fn dial_method(
         ),
         (DialMode::ForceEphemeral, _) => dial_ephemeral(home, agent_name, &request, &request_id),
         (_, true) => dial_socket(&lock_path, agent_name, &request, &request_id),
-        (_, false) => dial_ephemeral(home, agent_name, &request, &request_id),
+        (_, false) => match dial_ephemeral(home, agent_name, &request, &request_id) {
+            Ok(v) => Ok(v),
+            // Race: another runtime (e.g. the Hub's auto-start) came up between
+            // our lock check and the spawn, so the ephemeral child refused with
+            // "already running". The agent IS up — wait for it to publish its
+            // running.lock, then dial its socket instead of failing.
+            Err(e) if e.to_string().contains("already running") => {
+                for _ in 0..20 {
+                    if lock_path.exists() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if lock_path.exists() {
+                    dial_socket(&lock_path, agent_name, &request, &request_id)
+                } else {
+                    Err(e)
+                }
+            }
+            Err(e) => Err(e),
+        },
     }
 }
 

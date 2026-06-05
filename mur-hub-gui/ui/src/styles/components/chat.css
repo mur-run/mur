@@ -56,6 +56,17 @@
   font-size: var(--text-xs, 12px);
 }
 
+/* Blinking caret trailing the typewriter reveal. */
+.chat__caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--text-primary);
+  animation: chat-blink 1s steps(2, start) infinite;
+}
+
 /* Typing indicator — three bouncing dots. */
 .chat__typing {
   display: inline-flex;
@@ -124,4 +135,10 @@
 @keyframes chat-bounce {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
   30% { transform: translateY(-4px); opacity: 1; }
+}
+
+@keyframes chat-blink {
+  0% { opacity: 1; }
+  50% { opacity: 0; }
+  100% { opacity: 1; }
 }
