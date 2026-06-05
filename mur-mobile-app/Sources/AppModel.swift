@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import AVFoundation
+@preconcurrency import AVFoundation
 import Speech
 
 @MainActor
@@ -21,6 +21,12 @@ final class AppModel {
 
     private var client: MobileClient?
     private var bridge: EventBridge?
+
+    // TTS playback
+    private var ttsEngine = AVAudioEngine()
+    private var ttsPlayerNode = AVAudioPlayerNode()
+    private var ttsBuffer: Data = Data()
+    private var ttsSampleRate: AVAudioFrameCount = 24000
 
     // Voice capture
     private var audioEngine = AVAudioEngine()
@@ -198,6 +204,61 @@ final class AppModel {
         }
     }
 
+    private func playTTSBuffer() {
+        let bytes = ttsBuffer
+        ttsBuffer = Data()
+        let sr = ttsSampleRate
+        guard !bytes.isEmpty else { return }
+
+        // f32 LE PCM → AVAudioPCMBuffer at 24 kHz mono
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(sr), channels: 1, interleaved: false)!
+        let frameCount = AVAudioFrameCount(bytes.count / 4)
+        guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
+        buf.frameLength = frameCount
+        bytes.withUnsafeBytes { ptr in
+            if let f32 = ptr.baseAddress?.assumingMemoryBound(to: Float.self),
+               let ch = buf.floatChannelData?[0] {
+                ch.update(from: f32, count: Int(frameCount))
+            }
+        }
+
+        ttsEngine.attach(ttsPlayerNode)
+        let outputFormat = ttsEngine.outputNode.inputFormat(forBus: 0)
+        ttsEngine.connect(ttsPlayerNode, to: ttsEngine.outputNode, format: outputFormat)
+
+        do {
+            try ttsEngine.start()
+        } catch {
+            tracing(error); return
+        }
+
+        let convertFormat = outputFormat
+        guard let converter = AVAudioConverter(from: format, to: convertFormat),
+              let outBuf = AVAudioPCMBuffer(pcmFormat: convertFormat,
+                                            frameCapacity: AVAudioFrameCount(Double(frameCount) * convertFormat.sampleRate / Double(sr)))
+        else { return }
+
+        var convError: NSError?
+        converter.convert(to: outBuf, error: &convError) { _, status in
+            status.pointee = .haveData; return buf
+        }
+
+        ttsPlayerNode.scheduleBuffer(outBuf) { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.mascot = self.isConnected ? .idle : .offline
+                self.ttsEngine.stop()
+                if self.micMode == .handsFree { self.beginCapture() }
+            }
+        }
+        ttsPlayerNode.play()
+        mascot = .speaking
+    }
+
+    private func tracing(_ error: Error) {
+        mascot = .error(error.localizedDescription)
+    }
+
     private func stopAudioCapture() {
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
@@ -235,10 +296,12 @@ final class AppModel {
             }
         case let .reply(text):
             transcript.append(.init(role: "agent", text: text))
-            mascot = isConnected ? .idle : .offline
-            // in hands-free mode, resume listening after agent replies
-            if micMode == .handsFree {
-                beginCapture()
+            mascot = isConnected ? .speaking : .offline
+        case let .audioChunk(data, sampleRate, done):
+            ttsBuffer.append(contentsOf: data)
+            ttsSampleRate = AVAudioFrameCount(sampleRate)
+            if done {
+                playTTSBuffer()
             }
         case let .error(message):
             mascot = .error(message)

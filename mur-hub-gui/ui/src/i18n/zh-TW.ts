@@ -76,6 +76,7 @@ export const zhTW: Table = {
   "detail.mcp": "MCP",
   "detail.permissions": "權限",
   "detail.inbox": "收件匣",
+  "detail.mobile": "手機",
   "detail.loading": "載入中…",
   "detail.loadFailed": "載入失敗：{error}",
   "detail.saving": "儲存中…",

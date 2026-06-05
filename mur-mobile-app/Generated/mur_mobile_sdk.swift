@@ -441,6 +441,22 @@ fileprivate struct FfiConverterUInt16: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
+    typealias FfiType = UInt32
+    typealias SwiftType = UInt32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -500,6 +516,24 @@ fileprivate struct FfiConverterString: FfiConverter {
         let len = Int32(value.utf8.count)
         writeInt(&buf, len)
         writeBytes(&buf, value.utf8)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
     }
 }
 
@@ -838,6 +872,11 @@ public enum MobileEvent: Equatable, Hashable {
      */
     case error(message: String
     )
+    /**
+     * A chunk of Kokoro TTS audio (f32 LE PCM). Accumulate until `done`.
+     */
+    case audioChunk(data: Data, sampleRate: UInt32, done: Bool
+    )
 
 
 
@@ -874,6 +913,9 @@ public struct FfiConverterTypeMobileEvent: FfiConverterRustBuffer {
         )
         
         case 6: return .error(message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 7: return .audioChunk(data: try FfiConverterData.read(from: &buf), sampleRate: try FfiConverterUInt32.read(from: &buf), done: try FfiConverterBool.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -914,6 +956,13 @@ public struct FfiConverterTypeMobileEvent: FfiConverterRustBuffer {
         case let .error(message):
             writeInt(&buf, Int32(6))
             FfiConverterString.write(message, into: &buf)
+            
+        
+        case let .audioChunk(data,sampleRate,done):
+            writeInt(&buf, Int32(7))
+            FfiConverterData.write(data, into: &buf)
+            FfiConverterUInt32.write(sampleRate, into: &buf)
+            FfiConverterBool.write(done, into: &buf)
             
         }
     }

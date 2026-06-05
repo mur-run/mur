@@ -99,6 +99,12 @@ pub async fn run_lan<E>(
                             Ok(ServerFrame::Event { name, payload }) => {
                                 emit_event(&emit, &name, payload);
                             }
+                            Ok(ServerFrame::AudioChunk { base64, sample_rate, done }) => {
+                                use base64::Engine as _;
+                                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&base64) {
+                                    emit(MobileEvent::AudioChunk { data: bytes, sample_rate, done });
+                                }
+                            }
                             Err(e) => tracing::warn!("mur-mobile-sdk: bad server frame: {e}"),
                         }
                     }

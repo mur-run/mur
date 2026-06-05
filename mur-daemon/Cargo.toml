@@ -11,6 +11,10 @@ path = "src/main.rs"
 [dependencies]
 mur-common = { path = "../mur-common" }
 mur-core = { path = "../mur-core" }
+mur-agent-runtime = { path = "../mur-agent-runtime" }
+base64 = "0.22"
+mdns-sd = "0.20"
+hostname = "0.4"
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

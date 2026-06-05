@@ -218,6 +218,24 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
         {
             break;
         }
+
+        // TTS: synthesize reply and stream audio back (best-effort, skipped if
+        // models are not yet downloaded).
+        if !reply_text.starts_with("[error]") {
+            let home = state.mur_home.clone();
+            let text = reply_text.clone();
+            if let Some((base64, sample_rate)) =
+                tokio::task::spawn_blocking(move || crate::tts_sink::synthesize(&home, &text))
+                    .await
+                    .unwrap_or(None)
+            {
+                let _ = send_frame(
+                    &mut socket,
+                    &ServerFrame::AudioChunk { base64, sample_rate, done: true },
+                )
+                .await;
+            }
+        }
     }
 }
 

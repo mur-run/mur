@@ -48,4 +48,12 @@ pub enum ServerFrame {
         name: String,
         payload: serde_json::Value,
     },
+    /// A chunk of Kokoro TTS audio (f32 LE PCM, 24 kHz mono). The phone
+    /// accumulates chunks until `done: true`, then plays them back.
+    /// `base64` is the standard base64 encoding of the raw bytes.
+    AudioChunk {
+        base64: String,
+        sample_rate: u32,
+        done: bool,
+    },
 }

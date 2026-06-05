@@ -75,6 +75,8 @@ pub enum MobileEvent {
     Reply { text: String },
     /// A non-fatal error worth surfacing in the UI.
     Error { message: String },
+    /// A chunk of Kokoro TTS audio (f32 LE PCM). Accumulate until `done`.
+    AudioChunk { data: Vec<u8>, sample_rate: u32, done: bool },
 }
 
 /// Foreign-implemented sink for [`MobileEvent`]s. Swift/Kotlin provide this.

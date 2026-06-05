@@ -1,8 +1,8 @@
 import SwiftUI
 import AVFoundation
+import Network
 
-/// Parsed contents of a `mur-pair://host:port/?token=…&agent=…` pairing URI
-/// (printed by `mur agent pair` on the Mac).
+/// Parsed contents of a `mur-pair://host:port/?token=…&agent=…` pairing URI.
 struct PairingInfo: Equatable {
     let host: String
     let port: UInt16
@@ -25,19 +25,68 @@ struct PairingInfo: Equatable {
     }
 }
 
-/// Live-camera QR scanner. Calls `onScan` once with the first decoded payload.
+// MARK: - Bonjour discovery
+
+/// Discovers `_mur._tcp` services on the LAN and vends `PairingInfo` for each.
+@Observable
+final class BonjourDiscovery {
+    private(set) var services: [PairingInfo] = []
+    private var browser: NWBrowser?
+
+    func start() {
+        let params = NWParameters()
+        params.includePeerToPeer = true
+        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_mur._tcp", domain: nil), using: params)
+        self.browser = browser
+        browser.stateUpdateHandler = { _ in }
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
+            Task { @MainActor [weak self] in
+                self?.handleResults(results)
+            }
+        }
+        browser.start(queue: .main)
+    }
+
+    func stop() { browser?.cancel(); browser = nil }
+
+    @MainActor
+    private func handleResults(_ results: Set<NWBrowser.Result>) {
+        services = results.compactMap { result in
+            guard case let .service(name, _, _, _) = result.endpoint else { return nil }
+            guard case let .bonjour(record) = result.metadata else { return nil }
+            let txt = record.dictionary
+            guard let token = txt["token"], let agentName = txt["agent"] else { return nil }
+
+            // Resolve host synchronously by connecting; for now build a best-effort URI.
+            // The host will be filled in once NWConnection resolves it.
+            let _ = name  // instance name (e.g. "MUR on MacBook")
+            let portStr = txt["port"] ?? "9430"
+            let port = UInt16(portStr) ?? 9430
+
+            // Extract host from the endpoint description as a fallback.
+            let host = endpointHost(result.endpoint) ?? name
+            return PairingInfo(uri: "mur-pair://\(host):\(port)/?token=\(token)&agent=\(agentName)")
+        }
+    }
+
+    private func endpointHost(_ endpoint: NWEndpoint) -> String? {
+        if case let .service(_, type_, domain, _) = endpoint {
+            return "\(type_).\(domain)"
+        }
+        return nil
+    }
+}
+
+// MARK: - QR Scanner
+
 struct QRScannerView: UIViewControllerRepresentable {
     var onScan: (String) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onScan: onScan) }
-
     func makeUIViewController(context: Context) -> ScannerController {
-        let vc = ScannerController()
-        vc.coordinator = context.coordinator
-        return vc
+        let vc = ScannerController(); vc.coordinator = context.coordinator; return vc
     }
-
-    func updateUIViewController(_ uiViewController: ScannerController, context: Context) {}
+    func updateUIViewController(_ vc: ScannerController, context: Context) {}
 
     final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
         let onScan: (String) -> Void
@@ -45,10 +94,10 @@ struct QRScannerView: UIViewControllerRepresentable {
         init(onScan: @escaping (String) -> Void) { self.onScan = onScan }
 
         func metadataOutput(_ output: AVCaptureMetadataOutput,
-                            didOutput metadataObjects: [AVMetadataObject],
+                            didOutput objects: [AVMetadataObject],
                             from connection: AVCaptureConnection) {
             guard !fired,
-                  let obj = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+                  let obj = objects.first as? AVMetadataMachineReadableCodeObject,
                   let value = obj.stringValue else { return }
             fired = true
             DispatchQueue.main.async { self.onScan(value) }
@@ -67,32 +116,25 @@ struct QRScannerView: UIViewControllerRepresentable {
                   let input = try? AVCaptureDeviceInput(device: device),
                   session.canAddInput(input) else { return }
             session.addInput(input)
-
             let output = AVCaptureMetadataOutput()
             guard session.canAddOutput(output) else { return }
             session.addOutput(output)
             output.setMetadataObjectsDelegate(coordinator, queue: .main)
             output.metadataObjectTypes = [.qr]
-
-            let preview = AVCaptureVideoPreviewLayer(session: session)
-            preview.videoGravity = .resizeAspectFill
-            preview.frame = view.layer.bounds
-            view.layer.addSublayer(preview)
-            self.preview = preview
+            let layer = AVCaptureVideoPreviewLayer(session: session)
+            layer.videoGravity = .resizeAspectFill
+            layer.frame = view.layer.bounds
+            view.layer.addSublayer(layer)
+            self.preview = layer
         }
-
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
-            if !session.isRunning {
-                DispatchQueue.global(qos: .userInitiated).async { self.session.startRunning() }
-            }
+            if !session.isRunning { DispatchQueue.global(qos: .userInitiated).async { self.session.startRunning() } }
         }
-
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
             if session.isRunning { session.stopRunning() }
         }
-
         override func viewDidLayoutSubviews() {
             super.viewDidLayoutSubviews()
             preview?.frame = view.layer.bounds
@@ -100,12 +142,12 @@ struct QRScannerView: UIViewControllerRepresentable {
     }
 }
 
-/// Pairing sheet: scan a QR, or enter the address/token by hand (useful on the
-/// simulator, which has no camera).
+// MARK: - Pairing Sheet
+
 struct PairingSheet: View {
     var onPaired: (PairingInfo) -> Void
     @Environment(\.dismiss) private var dismiss
-
+    @State private var discovery = BonjourDiscovery()
     @State private var manualHost = ""
     @State private var manualPort = "9430"
     @State private var manualToken = ""
@@ -116,8 +158,7 @@ struct PairingSheet: View {
             VStack(spacing: 0) {
                 QRScannerView { value in
                     if let info = PairingInfo(uri: value) {
-                        onPaired(info)
-                        dismiss()
+                        onPaired(info); dismiss()
                     } else {
                         scanError = "That QR isn't a MUR pairing code."
                     }
@@ -131,26 +172,40 @@ struct PairingSheet: View {
                 }
 
                 Form {
-                    Section("Or enter manually") {
+                    if !discovery.services.isEmpty {
+                        Section("Nearby MUR") {
+                            ForEach(discovery.services, id: \.host) { info in
+                                Button {
+                                    onPaired(info); dismiss()
+                                } label: {
+                                    Label("MUR on \(info.host)", systemImage: "laptopcomputer.and.iphone")
+                                }
+                            }
+                        }
+                    }
+                    Section("Enter manually") {
                         TextField("Host (e.g. 192.168.1.20)", text: $manualHost)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("Port", text: $manualPort).keyboardType(.numberPad)
                         TextField("Token", text: $manualToken)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                         Button("Connect") {
-                            guard let port = UInt16(manualPort), !manualHost.isEmpty, !manualToken.isEmpty
+                            guard let port = UInt16(manualPort),
+                                  !manualHost.isEmpty, !manualToken.isEmpty
                             else { scanError = "Fill in host, port and token."; return }
                             onPaired(PairingInfo(uri: "mur-pair://\(manualHost):\(port)/?token=\(manualToken)&agent=mur")!)
                             dismiss()
                         }
                     }
-                    if let scanError { Text(scanError).foregroundStyle(.red).font(.footnote) }
+                    if let e = scanError { Text(e).foregroundStyle(.red).font(.footnote) }
                 }
-                .frame(height: 260)
+                .frame(height: 300)
             }
             .navigationTitle("Pair with MUR")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         }
+        .onAppear { discovery.start() }
+        .onDisappear { discovery.stop() }
     }
 }

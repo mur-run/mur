@@ -1,9 +1,11 @@
 mod action_tick;
+mod bonjour;
 mod consumer;
 mod inbox;
 mod lock;
 mod mobile_server;
 mod signal_server;
+mod tts_sink;
 mod sleep;
 mod store_health;
 
@@ -88,7 +90,8 @@ async fn main() -> Result<()> {
     // P1 — start the mobile WebSocket endpoint (best-effort; failure is non-fatal)
     match mur_core::mobile::ensure_pair_token(&mur_dir) {
         Ok(token) => {
-            mobile_server::spawn(mur_dir.clone(), token);
+            mobile_server::spawn(mur_dir.clone(), token.clone());
+            bonjour::advertise(mur_core::mobile::mobile_port(), &token);
         }
         Err(e) => eprintln!("murmurd: mobile-server token error: {e:#}"),
     }

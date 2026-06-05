@@ -74,6 +74,7 @@ export const en = {
   "detail.mcp": "MCP",
   "detail.permissions": "Permissions",
   "detail.inbox": "Inbox",
+  "detail.mobile": "Mobile",
   "detail.loading": "Loading…",
   "detail.loadFailed": "Failed to load: {error}",
   "detail.saving": "Saving…",
