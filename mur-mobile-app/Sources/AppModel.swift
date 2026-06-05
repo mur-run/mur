@@ -1,10 +1,8 @@
 import Foundation
 import Observation
+import AVFoundation
+import Speech
 
-/// App-wide state + the bridge to the Rust `MobileClient`.
-///
-/// The SDK's `MobileEventListener` callbacks arrive on a background thread; we
-/// hop to the main actor before touching any `@Observable` state.
 @MainActor
 @Observable
 final class AppModel {
@@ -18,19 +16,60 @@ final class AppModel {
     private(set) var micMode: MicMode = .pushToTalk
     private(set) var transcript: [ChatLine] = []
     private(set) var connectedAgent: String?
-    /// On-device partial transcript (filled by SFSpeech in P3).
     var partial: String = ""
-    /// Live mic amplitude 0...1 (drives the mascot ring in P3).
     var micLevel: Double = 0
 
     private var client: MobileClient?
     private var bridge: EventBridge?
 
+    // Voice capture
+    private var audioEngine = AVAudioEngine()
+    private var recognizer: SFSpeechRecognizer?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+
+    // All locales the device's SFSpeech supports, sorted: preferred languages first,
+    // then alphabetical by display name.
+    static let availableLocales: [Locale] = {
+        let preferred = Locale.preferredLanguages.compactMap { Locale(identifier: $0) }
+        let all = SFSpeechRecognizer.supportedLocales()
+            .sorted { a, b in
+                let nameA = a.localizedString(forIdentifier: a.identifier) ?? a.identifier
+                let nameB = b.localizedString(forIdentifier: b.identifier) ?? b.identifier
+                return nameA < nameB
+            }
+        var seen = Set<String>()
+        var ordered: [Locale] = []
+        for locale in preferred where all.contains(locale) {
+            if seen.insert(locale.identifier).inserted { ordered.append(locale) }
+        }
+        for locale in all {
+            if seen.insert(locale.identifier).inserted { ordered.append(locale) }
+        }
+        return ordered
+    }()
+
+    private(set) var speechLocale: Locale = {
+        let preferred = Locale.preferredLanguages.compactMap { Locale(identifier: $0) }
+        let supported = SFSpeechRecognizer.supportedLocales()
+        return preferred.first(where: { supported.contains($0) }) ?? Locale.current
+    }()
+
+    var speechLocaleLabel: String {
+        speechLocale.localizedString(forIdentifier: speechLocale.identifier)
+            ?? speechLocale.identifier
+    }
+
+    func setSpeechLocale(_ locale: Locale) {
+        speechLocale = locale
+        recognizer = SFSpeechRecognizer(locale: locale)
+    }
+
     var isConnected: Bool { connectedAgent != nil }
 
-    /// Construct the Rust client + register the event listener (idempotent).
     func start() {
         guard client == nil else { return }
+        recognizer = SFSpeechRecognizer(locale: speechLocale)
         do {
             let config = MobileConfig(
                 murHome: Self.appHome(),
@@ -50,7 +89,6 @@ final class AppModel {
         }
     }
 
-    /// Connect to a Mac endpoint discovered via the pairing QR.
     func connect(host: String, port: UInt16, token: String) {
         start()
         client?.connectLan(host: host, port: port, pairToken: token)
@@ -62,15 +100,20 @@ final class AppModel {
         mascot = .offline
     }
 
-    // MARK: Push-to-talk (P2 shell; real audio capture lands in P3)
+    // MARK: Voice capture
 
     func beginCapture() {
         guard mascot != .offline else { return }
-        mascot = .listening
-        // P3: start AVAudioEngine capture + on-device SFSpeech partial here.
+        SFSpeechRecognizer.requestAuthorization { [weak self] status in
+            Task { @MainActor [weak self] in
+                guard let self, status == .authorized else { return }
+                self.startAudioCapture()
+            }
+        }
     }
 
     func endCaptureAndSend() {
+        stopAudioCapture()
         let text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
         partial = ""
         guard !text.isEmpty else {
@@ -80,13 +123,93 @@ final class AppModel {
         send(text)
     }
 
-    /// Send a typed message (the text field stands in for voice until P3).
     func sendTyped(_ text: String) {
         send(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     func toggleMicMode() {
         micMode = (micMode == .pushToTalk) ? .handsFree : .pushToTalk
+        if micMode == .handsFree {
+            beginCapture()
+        } else {
+            endCaptureAndSend()
+        }
+    }
+
+    // MARK: Private
+
+    private func startAudioCapture() {
+        stopAudioCapture()
+
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+        } catch {
+            mascot = .error("mic: \(error.localizedDescription)")
+            return
+        }
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = false
+        recognitionRequest = request
+
+        let inputNode = audioEngine.inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+
+        recognitionTask = recognizer?.recognitionTask(with: request) { [weak self] result, error in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let result {
+                    self.partial = result.bestTranscription.formattedString
+                    // hands-free: auto-send when speech pauses (isFinal)
+                    if result.isFinal && self.micMode == .handsFree {
+                        self.endCaptureAndSend()
+                    }
+                }
+                if error != nil {
+                    self.stopAudioCapture()
+                    if self.micMode == .handsFree {
+                        // restart listening loop
+                        self.beginCapture()
+                    }
+                }
+            }
+        }
+
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            self?.recognitionRequest?.append(buffer)
+            // mic level for mascot ring
+            guard let channelData = buffer.floatChannelData?[0] else { return }
+            let frameLength = Int(buffer.frameLength)
+            var sum: Float = 0
+            for i in 0..<frameLength { sum += channelData[i] * channelData[i] }
+            let rms = Double(sqrt(sum / Float(frameLength)))
+            Task { @MainActor [weak self] in self?.micLevel = min(rms * 10, 1.0) }
+        }
+
+        do {
+            try audioEngine.start()
+            mascot = .listening
+        } catch {
+            stopAudioCapture()
+            mascot = .error("audio engine: \(error.localizedDescription)")
+        }
+    }
+
+    private func stopAudioCapture() {
+        audioEngine.stop()
+        audioEngine.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        micLevel = 0
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if mascot == .listening {
+            mascot = isConnected ? .idle : .offline
+        }
     }
 
     private func send(_ text: String) {
@@ -107,14 +230,16 @@ final class AppModel {
             connectedAgent = nil
             mascot = .offline
         case let .transcript(role, text, isFinal):
-            // The user's own turn is shown locally on send; only surface the
-            // agent's authoritative transcript here.
             if role != "user", isFinal, !text.isEmpty {
                 transcript.append(.init(role: "agent", text: text))
             }
         case let .reply(text):
             transcript.append(.init(role: "agent", text: text))
-            mascot = .idle
+            mascot = isConnected ? .idle : .offline
+            // in hands-free mode, resume listening after agent replies
+            if micMode == .handsFree {
+                beginCapture()
+            }
         case let .error(message):
             mascot = .error(message)
         }
@@ -130,8 +255,6 @@ final class AppModel {
     }
 }
 
-/// Adapts the SDK's `MobileEventListener` protocol to a Swift closure.
-/// `final` + a `@Sendable` closure makes it safe to hand across the FFI thread.
 final class EventBridge: MobileEventListener {
     private let handler: @Sendable (MobileEvent) -> Void
     init(_ handler: @escaping @Sendable (MobileEvent) -> Void) { self.handler = handler }

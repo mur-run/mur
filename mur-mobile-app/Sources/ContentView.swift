@@ -1,35 +1,39 @@
 import SwiftUI
 
-/// Main screen (spec wireframe): 椋鳥 mascot on top, live transcript, then the
-/// big orange "speech" button. A text field stands in for voice until P3.
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var showPairing = false
     @State private var draft = ""
 
     var body: some View {
-        VStack(spacing: 16) {
-            header
+        ScrollView {
+            VStack(spacing: 16) {
+                header
 
-            StarlingMascot(state: model.mascot, micLevel: model.micLevel)
-                .padding(.top, 4)
+                StarlingMascot(state: model.mascot, micLevel: model.micLevel)
+                    .padding(.top, 4)
 
-            transcriptView
-            statusLine
+                transcriptView
+                statusLine
 
-            Spacer(minLength: 0)
-
-            OrangeButton(
-                state: model.mascot,
-                micMode: model.micMode,
-                onPressStart: { model.beginCapture() },
-                onPressEnd: { model.endCaptureAndSend() },
-                onTripleTap: { model.toggleMicMode() }
-            )
-
-            typeBar
+                OrangeButton(
+                    state: model.mascot,
+                    micMode: model.micMode,
+                    onPressStart: { model.beginCapture() },
+                    onPressEnd: { model.endCaptureAndSend() },
+                    onTripleTap: { model.toggleMicMode() }
+                )
+                .padding(.bottom, 8)
+            }
+            .padding()
         }
-        .padding()
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom) {
+            typeBar
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(.bar)
+        }
         .sheet(isPresented: $showPairing) {
             PairingSheet { info in
                 model.connect(host: info.host, port: info.port, token: info.token)
@@ -46,6 +50,25 @@ struct ContentView: View {
             Text(model.isConnected ? "MUR · \(model.connectedAgent ?? "")" : "Not paired")
                 .font(.footnote).foregroundStyle(.secondary)
             Spacer()
+            Menu {
+                ForEach(AppModel.availableLocales, id: \.identifier) { locale in
+                    Button {
+                        model.setSpeechLocale(locale)
+                    } label: {
+                        let name = locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
+                        if locale == model.speechLocale {
+                            Label(name, systemImage: "checkmark")
+                        } else {
+                            Text(name)
+                        }
+                    }
+                }
+            } label: {
+                Text(model.speechLocaleLabel)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             Button(model.isConnected ? "Re-pair" : "Pair") { showPairing = true }
                 .font(.footnote.weight(.semibold))
         }
@@ -53,21 +76,18 @@ struct ContentView: View {
 
     private var transcriptView: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(model.transcript) { line in
-                        bubble(line).id(line.id)
-                    }
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(model.transcript) { line in
+                    bubble(line).id(line.id)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .onChange(of: model.transcript.count) { _, _ in
                 if let last = model.transcript.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
             }
         }
-        .frame(maxHeight: 220)
     }
 
     private func bubble(_ line: AppModel.ChatLine) -> some View {
@@ -94,6 +114,12 @@ struct ContentView: View {
             TextField("Type a message…", text: $draft)
                 .textFieldStyle(.roundedBorder)
                 .disabled(!model.isConnected)
+                .submitLabel(.send)
+                .onSubmit {
+                    guard !draft.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                    model.sendTyped(draft)
+                    draft = ""
+                }
             Button {
                 model.sendTyped(draft)
                 draft = ""

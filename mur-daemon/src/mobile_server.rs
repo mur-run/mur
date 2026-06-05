@@ -408,7 +408,7 @@ mod tests {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: None,
-            method: "agent/send".to_string(),
+            method: "message/send".to_string(),
             params: Some(serde_json::Value::Object(params)),
         };
         let payload = serde_json::to_vec(&req).unwrap();

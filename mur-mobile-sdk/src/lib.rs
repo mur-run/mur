@@ -190,8 +190,8 @@ impl MobileClient {
 }
 
 impl MobileClient {
-    /// Build an `agent/send` request, canonicalize it, and sign it into an
-    /// envelope using the phone's identity.
+    /// Build a `message/send` request and sign it into an envelope using the
+    /// phone's identity.
     fn sign_agent_send(
         &self,
         text: &str,
@@ -213,7 +213,7 @@ impl MobileClient {
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(serde_json::Value::from(id)),
-            method: "agent/send".to_string(),
+            method: "message/send".to_string(),
             params: Some(serde_json::Value::Object(params)),
         };
 
