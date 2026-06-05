@@ -152,6 +152,10 @@ When making changes, check whether these need updating:
 5. **Read narrowly.** Prefer LSP queries (goToDefinition, findReferences) and `grep`/`Grep` over reading whole large files. When you must read a file, target the relevant range with `offset`/`limit` if you already know the section.
 6. **CLAUDE.md is operational, not a changelog.** Historical milestone descriptions, completed phase notes, and detailed design walkthroughs belong in `docs/architecture/` or `docs/superpowers/specs/`. Keep this file lean so every session starts cheap.
 
+7. **Brand name is uppercase "MUR".** Everywhere a user can see it — GUI strings, `display_name`, docs, marketing copy, companion/voice text, notifications — the brand is the three uppercase letters **MUR** (never "Mur" or "MuR"). The ONLY exceptions are the CLI binary/command (`mur`), code identifiers, file paths, internal `name`/directory slugs (e.g. the concierge agent's dir + `name: mur`), and the `~/.mur` home. Use `display_name` for the uppercase user-facing label; keep internal `name` lowercase so it matches the on-disk directory (the runtime spoof check is exact-match).
+
+8. **Agent name lookup is case-insensitive (CLI).** `mur agent send mur` and `... Mur` must both resolve. Resolution maps the typed name to the canonical on-disk name via `a2a_dial::canonicalize_agent_name`; downstream still uses the exact canonical name so the runtime spoof check passes.
+
 
 5. **Token saving rules**
 - Skip brainstorming unless explicitly requested

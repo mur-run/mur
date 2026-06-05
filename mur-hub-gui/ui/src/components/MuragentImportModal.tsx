@@ -166,7 +166,7 @@ export function MuragentImportModal({ isOpen, onClose, initialPath }: Props) {
     try {
       const selected = await open({
         multiple: false,
-        filters: [{ name: "MuR Agent Package", extensions: ["muragent"] }],
+        filters: [{ name: "MUR Agent Package", extensions: ["muragent"] }],
       });
       if (!selected) return;
       const chosen = typeof selected === "string" ? selected : selected[0];

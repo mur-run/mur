@@ -1,21 +1,23 @@
-//! OS-managed agent lifecycle for MuR Hub (spec §3.1).
+//! Agent lifecycle supervisor for MUR Hub.
 //!
-//! Hub no longer spawns agent processes directly. Instead, `start()` registers
-//! the agent with the OS init system (launchd / systemd --user / Run registry)
-//! and tells it to start immediately. `stop()` asks the OS to stop it.
-//! A 5-second polling task reflects OS-reported status in the watch channel.
+//! The Hub spawns each interactive agent runtime as a direct child process and
+//! owns its lifetime — no launchd / systemd. This guarantees exactly one
+//! runtime per agent (so nothing competes for the agent's lock) and no orphaned
+//! processes: children are killed when the Hub shuts down. `start()` is
+//! idempotent — if a live runtime already holds the lock it is reused. A
+//! 5-second poll reflects child/lock liveness in the watch channel.
 //!
-//! Public API is unchanged from the child-process supervisor: callers see the
-//! same `start`/`stop`/`status_receiver` surface.
+//! (launchd-based always-on background services remain available separately via
+//! `mur agent install-service` for non-interactive/scheduled agents.)
 
 use serde::Serialize;
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
+use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::{info, warn};
-
-use crate::autostart;
 
 // ─── Public types ──────────────────────────────────────────────────────────
 
@@ -41,7 +43,10 @@ pub struct AgentRuntimeStatus {
 // ─── Internal messages ──────────────────────────────────────────────────────
 
 enum Msg {
-    Start(String),
+    /// Start an agent and report back whether it actually launched, so the
+    /// caller (and ultimately the Hub UI) can surface failures instead of
+    /// swallowing them into the log.
+    Start(String, oneshot::Sender<Result<(), String>>),
     Stop(String),
     Shutdown,
 }
@@ -69,8 +74,19 @@ impl Supervisor {
     }
 
     /// Register and start an agent via the OS init system.
-    pub async fn start(&self, name: impl Into<String>) {
-        let _ = self.msg_tx.send(Msg::Start(name.into())).await;
+    ///
+    /// Returns `Err` with a human-readable reason if the agent could not be
+    /// launched (e.g. the runtime binary is missing or the service refused to
+    /// start), so callers can surface it to the user instead of failing silently.
+    pub async fn start(&self, name: impl Into<String>) -> Result<(), String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.msg_tx
+            .send(Msg::Start(name.into(), reply_tx))
+            .await
+            .map_err(|_| "supervisor is not running".to_string())?;
+        reply_rx
+            .await
+            .map_err(|_| "supervisor dropped the start request".to_string())?
     }
 
     /// Stop an agent via the OS init system.
@@ -91,6 +107,9 @@ async fn os_actor(
     mut rx: tokio::sync::mpsc::Receiver<Msg>,
     status_tx: watch::Sender<Vec<AgentRuntimeStatus>>,
 ) {
+    // Agents this Hub spawned and supervises directly. The Hub owns each
+    // child's lifetime, so there is exactly one runtime per agent.
+    let mut children: HashMap<String, Child> = HashMap::new();
     let mut known: HashSet<String> = HashSet::new();
     let mut poll_interval = tokio::time::interval(Duration::from_secs(5));
     poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -99,51 +118,61 @@ async fn os_actor(
         tokio::select! {
             Some(msg) = rx.recv() => {
                 match msg {
-                    Msg::Shutdown => break,
-
-                    Msg::Start(slug) => {
-                        known.insert(slug.clone());
-                        match find_runtime_binary() {
-                            Ok(runtime_bin) => {
-                                let display_name = slug.clone(); // best-effort; profile not loaded here
-                                if let Err(e) = autostart::register(&slug, &display_name, &runtime_bin, &mur_home) {
-                                    warn!(agent = %slug, "autostart register failed: {e}");
-                                }
-                                if let Err(e) = autostart::start_service(&slug) {
-                                    warn!(agent = %slug, "autostart start_service failed: {e}");
-                                } else {
-                                    info!(agent = %slug, "agent service started via OS");
-                                }
-                            }
-                            Err(e) => warn!(agent = %slug, "runtime binary not found: {e}"),
+                    Msg::Shutdown => {
+                        for (slug, mut child) in children.drain() {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            info!(agent = %slug, "stopped supervised runtime");
                         }
-                        emit_status(&known, &status_tx);
+                        break;
+                    }
+
+                    Msg::Start(slug, reply) => {
+                        known.insert(slug.clone());
+                        let result = ensure_running(&slug, &mur_home, &mut children);
+                        match &result {
+                            Ok(()) => info!(agent = %slug, "runtime running"),
+                            Err(e) => warn!(agent = %slug, "start failed: {e}"),
+                        }
+                        emit_status(&known, &mur_home, &mut children, &status_tx);
+                        let _ = reply.send(result);
                     }
 
                     Msg::Stop(slug) => {
-                        if let Err(e) = autostart::stop_service(&slug) {
-                            warn!(agent = %slug, "autostart stop_service failed: {e}");
+                        if let Some(mut child) = children.remove(&slug) {
+                            let _ = child.kill();
+                            let _ = child.wait();
                         }
+                        clear_runtime_state(&mur_home, &slug);
                         known.remove(&slug);
-                        emit_status(&known, &status_tx);
+                        emit_status(&known, &mur_home, &mut children, &status_tx);
                     }
                 }
             }
 
             _ = poll_interval.tick() => {
                 if !known.is_empty() {
-                    emit_status(&known, &status_tx);
+                    emit_status(&known, &mur_home, &mut children, &status_tx);
                 }
             }
         }
     }
 }
 
-fn emit_status(known: &HashSet<String>, tx: &watch::Sender<Vec<AgentRuntimeStatus>>) {
+fn emit_status(
+    known: &HashSet<String>,
+    mur_home: &Path,
+    children: &mut HashMap<String, Child>,
+    tx: &watch::Sender<Vec<AgentRuntimeStatus>>,
+) {
     let mut snapshot: Vec<AgentRuntimeStatus> = known
         .iter()
         .map(|name| {
-            let state = if autostart::is_running(name) {
+            let child_alive = children
+                .get_mut(name)
+                .map(|c| matches!(c.try_wait(), Ok(None)))
+                .unwrap_or(false);
+            let state = if child_alive || lock_is_live(mur_home, name) {
                 RuntimeState::Running { pid: 0 }
             } else {
                 RuntimeState::Stopped
@@ -158,26 +187,127 @@ fn emit_status(known: &HashSet<String>, tx: &watch::Sender<Vec<AgentRuntimeStatu
     let _ = tx.send(snapshot);
 }
 
-/// Find the `mur-agent-runtime` binary alongside the current executable.
-fn find_runtime_binary() -> anyhow::Result<PathBuf> {
-    let exe = std::env::current_exe()?;
-    let dir = exe
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("no parent dir for current exe"))?;
+/// Ensure a supervised runtime is up for `slug`, spawning one if needed.
+/// Idempotent: a no-op if our child is still alive or a live runtime already
+/// holds the lock (e.g. one started from the CLI).
+fn ensure_running(
+    slug: &str,
+    mur_home: &Path,
+    children: &mut HashMap<String, Child>,
+) -> Result<(), String> {
+    if let Some(child) = children.get_mut(slug) {
+        match child.try_wait() {
+            Ok(None) => return Ok(()), // still running
+            _ => {
+                children.remove(slug); // exited — fall through to respawn
+            }
+        }
+    }
+    if lock_is_live(mur_home, slug) {
+        return Ok(());
+    }
+    let child = spawn_runtime(slug, mur_home)?;
+    children.insert(slug.to_string(), child);
+    Ok(())
+}
 
+/// Spawn the agent runtime as a direct child process, returning a
+/// human-readable error so the Hub UI can surface a failure (C3).
+fn spawn_runtime(slug: &str, mur_home: &Path) -> Result<Child, String> {
+    let runtime_bin = find_runtime_binary().map_err(|e| {
+        format!(
+            "agent runtime not found ({e}). Reinstall MUR so mur-agent-runtime \
+             is available, or run build.sh to install it."
+        )
+    })?;
+    // Clear any stale lock/socket a previously crashed runtime left behind so
+    // the new one binds cleanly.
+    clear_runtime_state(mur_home, slug);
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(mur_home.join("agents").join(slug).join("stderr.log"))
+        .map(Stdio::from)
+        .unwrap_or_else(|_| Stdio::null());
+    Command::new(&runtime_bin)
+        .arg("--profile")
+        .arg(slug)
+        .env("MUR_HOME", mur_home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log)
+        .spawn()
+        .map_err(|e| format!("could not start the agent runtime: {e}"))
+}
+
+/// Whether a live process currently owns the agent's `running.lock`.
+fn lock_is_live(mur_home: &Path, slug: &str) -> bool {
+    let lock = mur_home.join("agents").join(slug).join("running.lock");
+    match mur_common::lock_file::read(&lock) {
+        Ok(Some(l)) => mur_common::lock_file::pid_alive(l.pid),
+        _ => false,
+    }
+}
+
+/// Remove an agent's lock/socket/sentinel files (after stopping or before a
+/// fresh spawn).
+fn clear_runtime_state(mur_home: &Path, slug: &str) {
+    let dir = mur_home.join("agents").join(slug);
+    for f in ["running.lock", "agent.sock", "running.sentinel"] {
+        let _ = std::fs::remove_file(dir.join(f));
+    }
+}
+
+/// A non-empty regular file. The `binaries/` directory ships zero-byte
+/// `externalBin` placeholders in git that are only filled in at release time;
+/// spawning one fails, so a candidate must have real bytes to count.
+fn is_real_binary(p: &Path) -> bool {
+    std::fs::metadata(p)
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false)
+}
+
+/// Locate the `mur-agent-runtime` binary across the locations it can live in:
+/// an explicit override, alongside the Hub binary (dev builds), inside the
+/// macOS `.app` bundle's Resources, or on `PATH` (installed next to `mur`).
+/// Zero-byte placeholders are skipped so we never spawn a broken stub (C2).
+fn find_runtime_binary() -> anyhow::Result<PathBuf> {
     #[cfg(target_os = "windows")]
     let name = "mur-agent-runtime.exe";
     #[cfg(not(target_os = "windows"))]
     let name = "mur-agent-runtime";
 
-    let candidate = dir.join(name);
-    if candidate.exists() {
-        return Ok(candidate);
+    // Explicit override wins, matching mur-core's resolver.
+    if let Some(v) = std::env::var_os("MUR_AGENT_RUNTIME_BIN") {
+        let p = PathBuf::from(v);
+        if is_real_binary(&p) {
+            return Ok(p);
+        }
     }
 
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join(name)); // dev build / simple install
+        // macOS .app: Contents/MacOS/<exe> → Contents/Resources/binaries/<name>
+        candidates.push(dir.join("../Resources/binaries").join(name));
+        candidates.push(dir.join("../Resources").join(name));
+    }
+    // Anywhere on PATH (e.g. installed next to the `mur` CLI).
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            candidates.push(dir.join(name));
+        }
+    }
+
+    for c in &candidates {
+        if is_real_binary(c) {
+            return Ok(c.clone());
+        }
+    }
     anyhow::bail!(
-        "mur-agent-runtime not found alongside Hub binary at {}",
-        dir.display()
+        "mur-agent-runtime not found (looked alongside the Hub, in the app bundle, and on PATH)"
     )
 }
 
@@ -212,8 +342,9 @@ mod tests {
         let sup = Supervisor::new(dir.path().to_path_buf());
         assert!(sup.status_receiver().borrow().is_empty());
 
-        // With no runtime binary present, start logs a warning and continues.
-        sup.start("ghost").await;
+        // With no runtime binary present, start returns Err but the agent is
+        // still tracked (it was inserted before the launch attempt).
+        let _ = sup.start("ghost").await;
         sup.stop("ghost").await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         sup.shutdown().await;
@@ -224,8 +355,8 @@ mod tests {
         use tempfile::tempdir;
         let dir = tempdir().unwrap();
         let sup = Supervisor::new(dir.path().to_path_buf());
-        sup.start("alpha").await;
-        sup.start("beta").await;
+        let _ = sup.start("alpha").await;
+        let _ = sup.start("beta").await;
         sup.stop("alpha").await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         sup.shutdown().await;
