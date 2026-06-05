@@ -32,6 +32,34 @@ pub enum DialMode {
     ForceEphemeral,
 }
 
+/// Resolve a user-typed agent name to the canonical on-disk agent name,
+/// matching case-insensitively. CLI users shouldn't have to remember the
+/// exact casing (`mur agent send mur` should work as well as `... Mur`).
+///
+/// The runtime's spoof check ([`mur-agent-runtime`] `verify_name_match`)
+/// requires the name passed downstream to equal the profile's `name` field,
+/// which for every MUR-created agent equals its directory name — so we
+/// return the real directory name. If an exact match already exists, or no
+/// case-insensitive match is found, the input is returned unchanged so
+/// downstream code emits its normal "not found / not running" error.
+pub fn canonicalize_agent_name(home: &Path, typed: &str) -> String {
+    let agents = home.join("agents");
+    // Exact match wins — cheapest, and correct on case-sensitive filesystems.
+    if agents.join(typed).join("profile.yaml").is_file() {
+        return typed.to_string();
+    }
+    if let Ok(entries) = fs::read_dir(&agents) {
+        for entry in entries.flatten() {
+            let dir = entry.file_name();
+            let dir = dir.to_string_lossy();
+            if dir.eq_ignore_ascii_case(typed) && entry.path().join("profile.yaml").is_file() {
+                return dir.into_owned();
+            }
+        }
+    }
+    typed.to_string()
+}
+
 /// Dial the named agent and return the `result` field of the JSON-RPC
 /// response. Errors carry the agent name and method for diagnosability.
 ///
@@ -44,6 +72,11 @@ pub fn dial_method(
     params: Value,
     mode: DialMode,
 ) -> Result<Value> {
+    // Case-insensitive name resolution: `mur agent send mur` works the same as
+    // `... Mur`. Returns the canonical (on-disk) name so the runtime's
+    // exact-match spoof check still passes downstream.
+    let canonical = canonicalize_agent_name(home, agent_name);
+    let agent_name = canonical.as_str();
     let _span = tracing::info_span!("a2a.dial", agent = %agent_name, method = %method).entered();
     tracing::debug!(?mode, "dialing");
 
@@ -147,6 +180,17 @@ fn dial_ephemeral(
         .stdout
         .take()
         .ok_or_else(|| anyhow!("no stdout on spawned runtime"))?;
+    // Drain stderr on a thread so a failed startup (invalid profile.id,
+    // name mismatch, etc.) is surfaced instead of swallowed (H2). Reading on
+    // a thread also avoids a pipe-buffer deadlock if the runtime is chatty.
+    let stderr_thread = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = String::new();
+            let _ = err.read_to_string(&mut buf);
+            buf
+        })
+    });
 
     let req_line = format!("{}\n", serde_json::to_string(request)?);
     stdin
@@ -187,7 +231,27 @@ fn dial_ephemeral(
     if let Some(err) = last_err {
         bail!("agent '{agent_name}' returned error: {err}");
     }
-    found.ok_or_else(|| anyhow!("ephemeral runtime did not produce a response for '{agent_name}'"))
+    if let Some(result) = found {
+        return Ok(result);
+    }
+
+    // No JSON-RPC result. Surface the runtime's stderr tail so startup
+    // failures (invalid profile.id, name mismatch, sandbox errors) aren't
+    // swallowed behind a generic message (H2).
+    let stderr = stderr_thread
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let tail: Vec<&str> = stderr
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .rev()
+        .take(8)
+        .collect();
+    if tail.is_empty() {
+        bail!("ephemeral runtime did not produce a response for '{agent_name}'");
+    }
+    let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+    bail!("ephemeral runtime for '{agent_name}' exited before responding:\n{tail}");
 }
 
 #[cfg(test)]

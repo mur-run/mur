@@ -34,6 +34,93 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Replace the `id:` line in a freshly-staged `profile.yaml` with a new UUIDv7.
+///
+/// The bundled template carries an all-zeros placeholder so it can stay a static
+/// resource. The runtime rejects any profile whose `id` is not a UUIDv7, so each
+/// install must mint its own — otherwise the seeded concierge can never start.
+fn assign_fresh_profile_id(profile_path: &Path) -> std::io::Result<()> {
+    let content = std::fs::read_to_string(profile_path)?;
+    let new_id = uuid::Uuid::now_v7();
+    let mut replaced = false;
+    let mut out = content
+        .lines()
+        .map(|line| {
+            if !replaced && line.trim_start().starts_with("id:") {
+                replaced = true;
+                let indent = &line[..line.len() - line.trim_start().len()];
+                format!("{indent}id: \"{new_id}\"")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if content.ends_with('\n') {
+        out.push('\n');
+    }
+    std::fs::write(profile_path, out)
+}
+
+/// Repair an already-seeded `agents/mur` profile from older/broken builds so it
+/// can actually start. Idempotent; returns Ok(true) if it changed anything.
+///
+/// Fixes the three startup-blockers shipped by earlier templates:
+///   1. `id` all-zeros placeholder → a fresh UUIDv7 (runtime requires UUIDv7).
+///   2. `unix://PLACEHOLDER/agent.sock` → `unix://{{agent_home}}/agent.sock`
+///      (the runtime only expands the `{{agent_home}}` token).
+///   3. top-level `name:` → `mur` so it matches the on-disk directory (the
+///      runtime's spoof check is an exact string match).
+pub fn repair_mur_profile(mur_home: &Path) -> std::io::Result<bool> {
+    let profile_path = mur_home.join("agents").join("mur").join("profile.yaml");
+    if !profile_path.is_file() {
+        return Ok(false);
+    }
+    let original = std::fs::read_to_string(&profile_path)?;
+    let mut out = original.clone();
+
+    if out.contains("00000000-0000-0000-0000-000000000000") {
+        out = out.replace(
+            "00000000-0000-0000-0000-000000000000",
+            &uuid::Uuid::now_v7().to_string(),
+        );
+    }
+    out = out.replace(
+        "unix://PLACEHOLDER/agent.sock",
+        "unix://{{agent_home}}/agent.sock",
+    );
+    // Align the top-level `name:` (not `display_name:`) with the dir slug, and
+    // normalise the old default `display_name: "Mur"` to the uppercase brand
+    // "MUR" (only the stock value — never clobber a user rename).
+    out = out
+        .lines()
+        .map(|l| {
+            if l.starts_with("name:") && l["name:".len()..].trim() != "mur" {
+                "name: mur".to_string()
+            } else if l.starts_with("display_name:") {
+                let v = l["display_name:".len()..].trim().trim_matches('"');
+                if v == "Mur" || v == "MuR" {
+                    "display_name: \"MUR\"".to_string()
+                } else {
+                    l.to_string()
+                }
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if original.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+
+    if out != original {
+        std::fs::write(&profile_path, out)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Seed Mur from `template_dir` into `<mur_home>/agents/mur` iff Mur is not already
 /// seeded. Returns Ok(true) if seeding happened, Ok(false) if skipped.
 ///
@@ -67,6 +154,13 @@ pub fn seed_mur_if_missing(template_dir: &Path, mur_home: &Path) -> std::io::Res
         std::fs::remove_dir_all(&staging)?;
     }
     copy_tree(template_dir, &staging)?;
+
+    // The bundled template ships a placeholder `id` (all-zeros) so it stays a
+    // static resource. The runtime rejects any profile whose `id` is not a
+    // UUIDv7 (`profile.id must be UUIDv7`), so mint a fresh one per install —
+    // otherwise the seeded concierge can never start and two-way comms break
+    // out of the box.
+    assign_fresh_profile_id(&staging.join("profile.yaml"))?;
 
     // Replace any broken/empty existing dir, then atomically move staging into place.
     if dst.exists() {

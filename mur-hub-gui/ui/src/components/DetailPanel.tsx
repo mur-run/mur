@@ -76,7 +76,7 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   async function handleExport(name: string) {
     const outPath = await save({
       defaultPath: `${name}.muragent`,
-      filters: [{ name: "MuR Agent", extensions: ["muragent"] }],
+      filters: [{ name: "MUR Agent", extensions: ["muragent"] }],
     }).catch((e) => {
       showToast(`Export failed: ${e}`);
       return null;

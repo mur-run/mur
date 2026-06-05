@@ -49,8 +49,7 @@ fn list_agents(state: State<'_, AgentState>) -> Vec<AgentEntry> {
 
 #[tauri::command]
 async fn start_agent(name: String, supervisor: State<'_, SupervisorState>) -> Result<(), String> {
-    supervisor.0.start(&name).await;
-    Ok(())
+    supervisor.0.start(&name).await
 }
 
 #[tauri::command]
@@ -360,10 +359,22 @@ pub fn run() {
                             let supervisor_state = app.state::<SupervisorState>();
                             let supervisor = supervisor_state.0.clone();
                             tauri::async_runtime::spawn(async move {
-                                supervisor.start("mur").await;
+                                if let Err(e) = supervisor.start("mur").await {
+                                    tracing::warn!("auto-start of built-in Mur failed: {e}");
+                                }
                             });
                         }
-                        Ok(false) => {}
+                        Ok(false) => {
+                            // Already seeded — repair older/broken profiles so
+                            // they can start (id / socket bind / name slug).
+                            match seed_mur::repair_mur_profile(&mur_home) {
+                                Ok(true) => {
+                                    tracing::info!("repaired built-in Mur profile");
+                                }
+                                Ok(false) => {}
+                                Err(e) => tracing::warn!("repair Mur failed: {e}"),
+                            }
+                        }
                         Err(e) => tracing::warn!("seed Mur failed: {e}"),
                     }
                 }
