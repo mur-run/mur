@@ -355,15 +355,7 @@ pub fn run() {
                     let mur_home = mur_home_path();
                     match seed_mur::seed_mur_if_missing(&template_dir, &mur_home) {
                         Ok(true) => {
-                            tracing::info!("seeded built-in Mur agent");
-                            // Create the runtime symlink + start via the supervisor.
-                            let supervisor_state = app.state::<SupervisorState>();
-                            let supervisor = supervisor_state.0.clone();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(e) = supervisor.start("mur").await {
-                                    tracing::warn!("auto-start of built-in Mur failed: {e}");
-                                }
-                            });
+                            tracing::info!("seeded built-in MUR agent");
                         }
                         Ok(false) => {
                             // Already seeded — repair older/broken profiles so
@@ -397,6 +389,17 @@ pub fn run() {
                     Ok(false) => {}
                     Err(e) => tracing::warn!("concierge model fallback failed: {e}"),
                 }
+            }
+
+            // Ensure the built-in concierge's runtime is running on EVERY launch
+            // (not only on first seed). Idempotent: a no-op if it's already up.
+            {
+                let supervisor = app.state::<SupervisorState>().0.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = supervisor.start("mur").await {
+                        tracing::warn!("auto-start of built-in MUR failed: {e}");
+                    }
+                });
             }
 
             Ok(())

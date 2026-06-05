@@ -34,25 +34,50 @@ pub(crate) const LOCAL_LLM_DEFAULT_BASE_URL: &str = "http://127.0.0.1:50320/v1";
 /// not authenticate. Not a secret.
 pub(crate) const LOCAL_LLM_PLACEHOLDER_KEY: &str = "local-no-key";
 
-/// The TCP port of the agent's own local LLM endpoint, if it uses a local
-/// provider. The runtime grants this port through the B1 sandbox so an agent
-/// can always reach its configured model (ollama → 11434, bundled MLX → 50320).
-/// Returns `None` for remote providers (anthropic/openai/etc.), which use 443.
+/// The TCP port of the agent's own local LLM endpoint, if its resolved model
+/// points at a loopback address. The runtime grants this port through the B1
+/// sandbox so an agent can always reach its configured model — whatever the
+/// provider or port (ollama 11434, bundled MLX 50320, an oMLX / LM Studio /
+/// OpenAI-compatible server on any local port via `base_url`). Returns `None`
+/// for remote endpoints (anthropic/openai cloud), which already use 443.
 pub(crate) fn local_llm_port(
-    model: &mur_common::agent::ModelConfig,
+    profile: &mur_common::agent::AgentProfile,
     mur_home: &std::path::Path,
 ) -> Option<u16> {
-    let url = match model.provider.as_str() {
-        "ollama" => std::env::var("OLLAMA_BASE_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string()),
-        "local" => {
-            resolve_local_base_url(None, std::env::var("MUR_LOCAL_LLM_BASE_URL").ok(), mur_home)
+    fn loopback_port(url: &str) -> Option<u16> {
+        let u = url.parse::<reqwest::Url>().ok()?;
+        match u.host_str()? {
+            "127.0.0.1" | "localhost" | "::1" => u.port_or_known_default(),
+            _ => None,
         }
-        _ => return None,
-    };
-    url.parse::<reqwest::Url>()
-        .ok()
-        .and_then(|u| u.port_or_known_default())
+    }
+
+    // Prefer the resolved registry entry (honours `model_ref`, e.g. a
+    // user-configured oMLX endpoint with an explicit base_url).
+    if let Ok(entry) = crate::supervisor::resolve_model_entry(profile) {
+        if let Some(base) = entry.base_url.as_deref()
+            && let Some(p) = loopback_port(base)
+        {
+            return Some(p);
+        }
+        match entry.provider.as_str() {
+            "ollama" => {
+                return loopback_port(
+                    &std::env::var("OLLAMA_BASE_URL")
+                        .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string()),
+                );
+            }
+            "local" => {
+                return loopback_port(&resolve_local_base_url(
+                    None,
+                    std::env::var("MUR_LOCAL_LLM_BASE_URL").ok(),
+                    mur_home,
+                ));
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Resolve the local model base URL: entry.base_url → env → shared file → default.
