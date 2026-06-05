@@ -13,6 +13,16 @@ name = "mur_mobile_sdk"
 # integration tests and other crates can link the core directly.
 crate-type = ["cdylib", "staticlib", "lib"]
 
+[features]
+# Enables the bundled `uniffi-bindgen` binary used to generate Swift/Kotlin
+# bindings. Off by default so normal workspace builds stay lean.
+cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
 [dependencies]
 mur-common = { path = "../mur-common" }
 uniffi = "0.31"

@@ -1,0 +1,7 @@
+module mur_mobile_sdkFFI {
+    header "mur_mobile_sdkFFI.h"
+    export *
+    use "Darwin"
+    use "_Builtin_stdbool"
+    use "_Builtin_stdint"
+}

@@ -1,0 +1,33 @@
+name: MurVoice
+options:
+  bundleIdPrefix: run.mur
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  MurVoice:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      # The UniFFI-generated Swift is compiled into the app target; the C FFI
+      # module it imports (mur_mobile_sdkFFI) is provided by the xcframework.
+      - path: Generated/mur_mobile_sdk.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: run.mur.voice
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSCameraUsageDescription: "Scan the pairing QR shown by MUR on your Mac to connect."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Talk to your MUR agent by voice."
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    dependencies:
+      # Produced by ./build-ios.sh (requires full Xcode + iOS Rust targets).
+      - framework: Frameworks/MurMobileSDK.xcframework
+        embed: true
+        codeSign: true
