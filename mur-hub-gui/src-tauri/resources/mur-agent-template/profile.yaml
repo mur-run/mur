@@ -43,6 +43,7 @@ entitlements:
       mode: restricted
       allow_hosts:
         - "localhost"
+        - "127.0.0.1"
   filesystem:
     read: []
     write: []

@@ -34,6 +34,27 @@ pub(crate) const LOCAL_LLM_DEFAULT_BASE_URL: &str = "http://127.0.0.1:50320/v1";
 /// not authenticate. Not a secret.
 pub(crate) const LOCAL_LLM_PLACEHOLDER_KEY: &str = "local-no-key";
 
+/// The TCP port of the agent's own local LLM endpoint, if it uses a local
+/// provider. The runtime grants this port through the B1 sandbox so an agent
+/// can always reach its configured model (ollama → 11434, bundled MLX → 50320).
+/// Returns `None` for remote providers (anthropic/openai/etc.), which use 443.
+pub(crate) fn local_llm_port(
+    model: &mur_common::agent::ModelConfig,
+    mur_home: &std::path::Path,
+) -> Option<u16> {
+    let url = match model.provider.as_str() {
+        "ollama" => std::env::var("OLLAMA_BASE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string()),
+        "local" => {
+            resolve_local_base_url(None, std::env::var("MUR_LOCAL_LLM_BASE_URL").ok(), mur_home)
+        }
+        _ => return None,
+    };
+    url.parse::<reqwest::Url>()
+        .ok()
+        .and_then(|u| u.port_or_known_default())
+}
+
 /// Resolve the local model base URL: entry.base_url → env → shared file → default.
 pub(crate) fn resolve_local_base_url(
     entry_base_url: Option<&str>,

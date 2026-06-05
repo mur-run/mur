@@ -77,6 +77,26 @@ impl SandboxPolicy {
             memory_limit_mb: Some(ent.limits.memory_mb),
         }
     }
+
+    /// Grant outbound access to extra TCP ports — used to ensure an agent can
+    /// always reach its own configured local LLM endpoint (e.g. ollama on
+    /// 11434, the bundled MLX server on 50320), which is core function rather
+    /// than arbitrary egress.
+    ///
+    /// Only applies in *Restricted* mode: `None` (Unrestricted) already allows
+    /// everything, and `Some([])` (Off) means the user explicitly denied all
+    /// outbound TCP — we respect that and do not silently re-open it.
+    pub fn allow_extra_ports(&mut self, extra: &[u16]) {
+        if let Some(ports) = &mut self.net_allow_ports
+            && !ports.is_empty()
+        {
+            for p in extra {
+                if !ports.contains(p) {
+                    ports.push(*p);
+                }
+            }
+        }
+    }
 }
 
 fn system_exec_paths(home: &Path) -> Vec<PathBuf> {
@@ -216,5 +236,39 @@ mod tests {
         let home = PathBuf::from("/tmp/agent_home");
         let policy = SandboxPolicy::from_entitlements(&ent, &home);
         assert_eq!(policy.net_allow_hosts, Some(vec![]));
+    }
+
+    #[test]
+    fn allow_extra_ports_adds_llm_port_in_restricted_mode() {
+        let mut ent = minimal_entitlements();
+        ent.network.outbound.mode = NetworkOutboundMode::Restricted;
+        let mut policy = SandboxPolicy::from_entitlements(&ent, &PathBuf::from("/tmp/a"));
+        policy.allow_extra_ports(&[11434]);
+        let ports = policy.net_allow_ports.unwrap();
+        assert!(ports.contains(&11434), "ollama port must be granted: {ports:?}");
+        // Idempotent — re-adding doesn't duplicate.
+        let mut p2 = SandboxPolicy::from_entitlements(&ent, &PathBuf::from("/tmp/a"));
+        p2.allow_extra_ports(&[443]);
+        assert_eq!(
+            p2.net_allow_ports.unwrap().iter().filter(|&&p| p == 443).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn allow_extra_ports_respects_off_and_unrestricted() {
+        // Off mode (Some([])) must NOT be silently re-opened.
+        let mut off = minimal_entitlements();
+        off.network.outbound.mode = NetworkOutboundMode::Off;
+        let mut p_off = SandboxPolicy::from_entitlements(&off, &PathBuf::from("/tmp/a"));
+        p_off.allow_extra_ports(&[11434]);
+        assert_eq!(p_off.net_allow_ports, Some(vec![]));
+
+        // Unrestricted (None) already allows everything — stays None.
+        let mut unr = minimal_entitlements();
+        unr.network.outbound.mode = NetworkOutboundMode::Unrestricted;
+        let mut p_unr = SandboxPolicy::from_entitlements(&unr, &PathBuf::from("/tmp/a"));
+        p_unr.allow_extra_ports(&[11434]);
+        assert_eq!(p_unr.net_allow_ports, None);
     }
 }

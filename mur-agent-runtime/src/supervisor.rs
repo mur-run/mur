@@ -187,7 +187,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // BEFORE on_startup hooks.
     // On platforms without Landlock/SBPL support, returns enforcing=false — B0 still applies.
     let fail_closed = profile.inner.entitlements.fail_closed_on_sandbox_error;
-    match crate::sandbox::apply(&profile.inner.entitlements, &agent_home) {
+    // Always allow the agent's own local LLM port through the kernel sandbox.
+    let llm_ports: Vec<u16> =
+        crate::supervisor_runner::local_llm_port(&profile.inner.model, &mur_home)
+            .into_iter()
+            .collect();
+    match crate::sandbox::apply(&profile.inner.entitlements, &agent_home, &llm_ports) {
         Ok(status) => {
             if !status.enforcing && fail_closed {
                 anyhow::bail!(
