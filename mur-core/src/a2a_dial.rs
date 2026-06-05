@@ -170,6 +170,7 @@ fn dial_socket(
 /// `on_delta` as they arrive, returning the final task result. Requires the
 /// agent to be up (uses its unix socket); the runtime emits `message/delta`
 /// notifications during generation. Names resolve case-insensitively.
+#[allow(dead_code)] // used by workspace-excluded mur-hub-gui
 pub fn dial_message_streaming(
     home: &Path,
     agent_name: &str,

@@ -97,8 +97,8 @@ pub fn repair_mur_profile(mur_home: &Path) -> std::io::Result<bool> {
         .map(|l| {
             if l.starts_with("name:") && l["name:".len()..].trim() != "mur" {
                 "name: mur".to_string()
-            } else if l.starts_with("display_name:") {
-                let v = l["display_name:".len()..].trim().trim_matches('"');
+            } else if let Some(rest) = l.strip_prefix("display_name:") {
+                let v = rest.trim().trim_matches('"');
                 if v == "Mur" || v == "MuR" {
                     "display_name: \"MUR\"".to_string()
                 } else {
