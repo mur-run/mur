@@ -216,4 +216,139 @@ impl LlmClient for OpenAiClient {
             model: self.model.clone(),
         })
     }
+
+    async fn generate_stream(
+        &self,
+        req: LlmRequest,
+        sink: tokio::sync::mpsc::Sender<super::StreamDelta>,
+    ) -> Result<LlmResponse, LlmError> {
+        let messages: Vec<_> = req
+            .messages
+            .iter()
+            .map(|m| {
+                let role = if m.role == "agent" {
+                    "assistant"
+                } else {
+                    m.role.as_str()
+                };
+                json!({"role": role, "content": m.content})
+            })
+            .collect();
+        let mut body = json!({
+            "model": self.model,
+            "messages": messages,
+            "stream": true,
+            "stream_options": {"include_usage": true},
+        });
+        if let Some(t) = req.temperature {
+            body["temperature"] = json!(t);
+        }
+        if let Some(m) = req.max_tokens {
+            body["max_tokens"] = json!(m);
+        }
+
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        if let Ok(parsed) = reqwest::Url::parse(&url)
+            && let Err(e) = crate::sandbox::reqwest_guard::check_request_url(&parsed)
+        {
+            return Err(LlmError::Http(e));
+        }
+        let mut resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LlmError::Timeout
+                } else {
+                    LlmError::Http(e.to_string())
+                }
+            })?;
+        let status = resp.status();
+        if status == 429 {
+            return Err(LlmError::RateLimit);
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(LlmError::Http(format!(
+                "status {status}: {}",
+                body.chars().take(200).collect::<String>()
+            )));
+        }
+
+        // OpenAI streams Server-Sent Events: `data: {json}\n\n`, ending with
+        // `data: [DONE]`. Read incrementally (Response::chunk needs no extra
+        // reqwest features), buffer partial lines, forward content + reasoning.
+        let mut buf: Vec<u8> = Vec::new();
+        let mut text = String::new();
+        let mut input_tokens = 0u64;
+        let mut output_tokens = 0u64;
+        while let Some(chunk) = resp.chunk().await.map_err(|e| {
+            if e.is_timeout() {
+                LlmError::Timeout
+            } else {
+                LlmError::Http(e.to_string())
+            }
+        })? {
+            buf.extend_from_slice(&chunk);
+            while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+                let raw: Vec<u8> = buf.drain(..=nl).collect();
+                let line = std::str::from_utf8(&raw).unwrap_or("").trim();
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let data = data.trim();
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
+                    continue;
+                };
+                let delta = &v["choices"][0]["delta"];
+                // Reasoning models (DeepSeek-R1 etc.) put thinking in a separate
+                // field — forward it so the UI can show a "thinking" trace.
+                if let Some(r) = delta["reasoning_content"]
+                    .as_str()
+                    .or_else(|| delta["reasoning"].as_str())
+                    && !r.is_empty()
+                {
+                    let _ = sink
+                        .send(super::StreamDelta {
+                            text: r.to_string(),
+                            thinking: true,
+                        })
+                        .await;
+                }
+                if let Some(c) = delta["content"].as_str()
+                    && !c.is_empty()
+                {
+                    text.push_str(c);
+                    let _ = sink
+                        .send(super::StreamDelta {
+                            text: c.to_string(),
+                            thinking: false,
+                        })
+                        .await;
+                }
+                if v["usage"].is_object() {
+                    input_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(input_tokens);
+                    output_tokens = v["usage"]["completion_tokens"]
+                        .as_u64()
+                        .unwrap_or(output_tokens);
+                }
+            }
+        }
+        if text.is_empty() {
+            return Err(LlmError::InvalidResponse("empty streamed response".into()));
+        }
+        Ok(LlmResponse {
+            text,
+            input_tokens,
+            output_tokens,
+            model: self.model.clone(),
+        })
+    }
 }

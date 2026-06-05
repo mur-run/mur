@@ -80,13 +80,27 @@
   content: "…";
   animation: chat-blink 1.2s steps(3, start) infinite;
 }
-.chat__think-text {
+/* The reasoning itself — flows top-to-bottom and auto-scrolls to the latest
+   line (DeepSeek-style), instead of a single horizontally-sliding line. */
+.chat__think-scroll {
   font-size: var(--text-xs, 11px);
   color: var(--text-tertiary);
   font-style: italic;
-  line-height: 1.4;
-  max-height: 3.6em;
-  overflow: hidden;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 132px; /* ~8 lines while thinking */
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  /* fade the top edge so older reasoning recedes upward */
+  mask-image: linear-gradient(to bottom, transparent, #000 16px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16px);
+}
+
+/* Once the answer starts, the reasoning collapses to a small trace above it. */
+.chat__think--collapsed .chat__think-scroll {
+  max-height: 34px;
+  opacity: 0.7;
 }
 
 /* Blinking caret trailing the typewriter reveal. */

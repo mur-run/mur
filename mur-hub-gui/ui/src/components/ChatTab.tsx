@@ -43,6 +43,12 @@ export function ChatTab({ agentName, displayName }: Props) {
   const thinkingRef = useRef("");
   const taskIdRef = useRef<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const thinkRef = useRef<HTMLDivElement>(null);
+
+  // Keep the reasoning box scrolled to the latest line (vertical flow).
+  useEffect(() => {
+    if (thinkRef.current) thinkRef.current.scrollTop = thinkRef.current.scrollHeight;
+  }, [thinking]);
 
   // Fresh conversation when the selected agent changes.
   useEffect(() => {
@@ -64,11 +70,8 @@ export function ChatTab({ agentName, displayName }: Props) {
       } else {
         streamingRef.current += e.payload.text;
         setStreaming(streamingRef.current);
-        // The answer has started — drop the transient thinking trace.
-        if (thinkingRef.current) {
-          thinkingRef.current = "";
-          setThinking(null);
-        }
+        // Keep the reasoning visible (collapsed) above the answer once it
+        // starts — like DeepSeek's deepthink — rather than dropping it.
       }
     });
     return () => {
@@ -132,10 +135,12 @@ export function ChatTab({ agentName, displayName }: Props) {
             {m.text}
           </div>
         ))}
-        {!hasAnswer && thinking !== null && thinking.length > 0 && (
-          <div className="chat__think">
-            <span className="chat__think-label">{t("chat.thinking")}</span>
-            <span className="chat__think-text">{thinking.slice(-160)}</span>
+        {thinking !== null && thinking.length > 0 && (
+          <div className={`chat__think${hasAnswer ? " chat__think--collapsed" : ""}`}>
+            <div className="chat__think-label">{t("chat.thinking")}</div>
+            <div className="chat__think-scroll" ref={thinkRef}>
+              {thinking}
+            </div>
           </div>
         )}
         {hasAnswer && (
