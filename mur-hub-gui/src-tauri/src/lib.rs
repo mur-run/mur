@@ -6,6 +6,7 @@
 //! M-h5: pet windows — pet_spawn_at/close/reposition/return_to_hub/list/get_expression.
 
 pub mod brain_badge;
+pub mod chat;
 pub mod cli_tools;
 pub mod companion;
 pub mod detail;
@@ -392,6 +393,7 @@ pub fn run() {
             list_agents,
             start_agent,
             stop_agent,
+            chat::agent_chat_send,
             open_dashboard,
             toggle_popover,
             onboarding::wizard_open,
