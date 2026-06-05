@@ -134,6 +134,11 @@ pub fn ensure_concierge_model(mur_home: &Path) -> std::io::Result<bool> {
         return Ok(false);
     }
     let original = std::fs::read_to_string(&profile_path)?;
+    // Never override an explicit model choice: a `model_ref` points the agent at
+    // a registry entry (e.g. a user-configured oMLX / OpenAI endpoint).
+    if original.contains("model_ref:") {
+        return Ok(false);
+    }
     // Only touch the stock local/MLX model — leave any user choice alone.
     if !original.contains("provider: local") {
         return Ok(false);
