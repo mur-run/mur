@@ -121,6 +121,99 @@ pub fn repair_mur_profile(mur_home: &Path) -> std::io::Result<bool> {
     Ok(false)
 }
 
+/// When the bundled MLX model is unavailable, point the stock concierge at a
+/// reachable local ollama chat model so it can actually respond out of the box
+/// (otherwise the seeded concierge has no working inference backend).
+///
+/// Scoped to the *stock* `provider: local` concierge model — never overrides a
+/// model the user chose. No-op if ollama isn't reachable. Returns Ok(true) if
+/// it switched the model.
+pub fn ensure_concierge_model(mur_home: &Path) -> std::io::Result<bool> {
+    let profile_path = mur_home.join("agents").join("mur").join("profile.yaml");
+    if !profile_path.is_file() {
+        return Ok(false);
+    }
+    let original = std::fs::read_to_string(&profile_path)?;
+    // Only touch the stock local/MLX model — leave any user choice alone.
+    if !original.contains("provider: local") {
+        return Ok(false);
+    }
+    let Some(model) = first_ollama_chat_model() else {
+        return Ok(false);
+    };
+
+    let out = rewrite_model_block(&original, "ollama", &model);
+    if out != original {
+        std::fs::write(&profile_path, out)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// The name of a usable local ollama chat model, if ollama is reachable.
+/// Prefers known small/fast models; skips embedding-only models.
+fn first_ollama_chat_model() -> Option<String> {
+    let base =
+        std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_millis(900))
+        .build()
+        .ok()?;
+    let json: serde_json::Value = client
+        .get(format!("{base}/api/tags"))
+        .send()
+        .ok()?
+        .json()
+        .ok()?;
+    let names: Vec<String> = json
+        .get("models")?
+        .as_array()?
+        .iter()
+        .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(String::from))
+        .filter(|n| !n.contains("embed")) // embedding models can't chat
+        .collect();
+    // Prefer a small, fast general chat model when present.
+    for pref in ["qwen3:4b", "llama3.2:3b", "qwen3:8b"] {
+        if let Some(n) = names.iter().find(|n| n.as_str() == pref) {
+            return Some(n.clone());
+        }
+    }
+    names.into_iter().next()
+}
+
+/// Rewrite the `provider:` and `name:` lines inside the top-level `model:` block.
+fn rewrite_model_block(yaml: &str, provider: &str, name: &str) -> String {
+    let mut in_model = false;
+    let mut out: Vec<String> = Vec::new();
+    for line in yaml.lines() {
+        if line.starts_with("model:") {
+            in_model = true;
+            out.push(line.to_string());
+            continue;
+        }
+        if in_model {
+            let trimmed = line.trim_start();
+            let indent = &line[..line.len() - trimmed.len()];
+            // A non-indented, non-empty line ends the block.
+            if indent.is_empty() && !line.trim().is_empty() {
+                in_model = false;
+            } else if trimmed.starts_with("provider:") {
+                out.push(format!("{indent}provider: {provider}"));
+                continue;
+            } else if trimmed.starts_with("name:") {
+                out.push(format!("{indent}name: {name}"));
+                continue;
+            }
+        }
+        out.push(line.to_string());
+    }
+    let mut joined = out.join("\n");
+    if yaml.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
 /// Seed Mur from `template_dir` into `<mur_home>/agents/mur` iff Mur is not already
 /// seeded. Returns Ok(true) if seeding happened, Ok(false) if skipped.
 ///

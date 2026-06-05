@@ -1,8 +1,11 @@
 /* ── Dashboard ────────────────────────────────────────────────────────── */
 .dashboard-root {
   display: grid;
-  grid-template-columns: 160px 1fr;
+  /* 3rd track holds the detail/chat panel when an agent is selected; it
+     collapses to nothing when the panel is absent. */
+  grid-template-columns: 160px 1fr auto;
   height: 100vh;
+  overflow: hidden;
 }
 
 .dashboard {

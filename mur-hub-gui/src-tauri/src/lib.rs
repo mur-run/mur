@@ -387,6 +387,18 @@ pub fn run() {
             // Start the bundled local inference server (best-effort).
             mlx_sidecar::start(app.handle());
 
+            // If the bundled MLX model isn't present, the stock concierge has no
+            // working backend — fall back to a reachable local ollama model so
+            // it can actually respond out of the box.
+            if !mlx_sidecar::model_available(app.handle()) {
+                let home = mur_home_path();
+                match seed_mur::ensure_concierge_model(&home) {
+                    Ok(true) => tracing::info!("concierge: fell back to a local ollama model"),
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("concierge model fallback failed: {e}"),
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
