@@ -5,13 +5,16 @@ use crate::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 use crate::telemetry_writer::Event;
 use async_trait::async_trait;
 use mur_common::a2a::Message;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub struct MessageSendHandler {
     runner: Arc<TaskRunner>,
     progress: Option<mpsc::Sender<Event>>,
+    /// Socket notification channel. When present, LLM token deltas are streamed
+    /// to connected clients as `message/delta` notifications as they generate.
+    notifier: Option<mpsc::Sender<Value>>,
 }
 
 impl MessageSendHandler {
@@ -19,6 +22,7 @@ impl MessageSendHandler {
         Self {
             runner,
             progress: None,
+            notifier: None,
         }
     }
 
@@ -26,7 +30,14 @@ impl MessageSendHandler {
         Self {
             runner,
             progress: Some(progress),
+            notifier: None,
         }
+    }
+
+    /// Stream token deltas over `notifier` (the socket notification channel).
+    pub fn with_streaming(mut self, notifier: mpsc::Sender<Value>) -> Self {
+        self.notifier = Some(notifier);
+        self
     }
 
     async fn emit_progress(&self, task_id: &str, stage: &str, percent: Option<u8>) {
@@ -60,7 +71,30 @@ impl MethodHandler for MessageSendHandler {
         };
 
         self.emit_progress("pending", "llm_reasoning", None).await;
-        let outcome = self.runner.run_sync(spec).await;
+        let outcome = match &self.notifier {
+            Some(notifier) => {
+                // Forward each LLM token delta to the connected client as a
+                // `message/delta` notification while the reply generates.
+                let (delta_tx, mut delta_rx) = mpsc::channel::<crate::llm::StreamDelta>(256);
+                let notifier = notifier.clone();
+                let forward = tokio::spawn(async move {
+                    while let Some(d) = delta_rx.recv().await {
+                        let note = json!({
+                            "jsonrpc": "2.0",
+                            "method": "message/delta",
+                            "params": { "text": d.text, "thinking": d.thinking },
+                        });
+                        if notifier.send(note).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                let outcome = self.runner.run_sync_streaming(spec, delta_tx).await;
+                let _ = forward.await;
+                outcome
+            }
+            None => self.runner.run_sync(spec).await,
+        };
         match outcome {
             TaskOutcome::Completed(task)
             | TaskOutcome::Failed(task)

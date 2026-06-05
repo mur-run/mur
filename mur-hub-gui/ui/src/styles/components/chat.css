@@ -56,6 +56,39 @@
   font-size: var(--text-xs, 12px);
 }
 
+/* Transient "thinking" trace shown while a reasoning model deliberates,
+   before the answer starts streaming. */
+.chat__think {
+  align-self: flex-start;
+  max-width: 82%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface-card);
+  border: 1px dashed var(--surface-hover);
+}
+.chat__think-label {
+  font-size: var(--text-xs, 11px);
+  font-weight: 600;
+  color: var(--color-brand);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chat__think-label::after {
+  content: "…";
+  animation: chat-blink 1.2s steps(3, start) infinite;
+}
+.chat__think-text {
+  font-size: var(--text-xs, 11px);
+  color: var(--text-tertiary);
+  font-style: italic;
+  line-height: 1.4;
+  max-height: 3.6em;
+  overflow: hidden;
+}
+
 /* Blinking caret trailing the typewriter reveal. */
 .chat__caret {
   display: inline-block;

@@ -1,26 +1,39 @@
-//! Two-way chat with an agent over A2A `message/send` (H1).
+//! Two-way chat with an agent over A2A `message/send` (H1), with token streaming.
 //!
-//! Uses `mur_core::a2a_dial` in `Auto` mode: if the agent is already running
-//! the message goes over its Unix socket (warm model + multi-turn continuity);
-//! otherwise an ephemeral runtime is spawned for the turn. Multi-turn context
-//! is threaded by passing the previous task's id back as `context.task_id`.
+//! When the agent is running we dial its socket and stream token deltas to the
+//! frontend as `chat-delta` Tauri events as they generate; otherwise we fall
+//! back to a one-shot ephemeral dial. Multi-turn context is threaded by passing
+//! the previous turn's task id back as `context.task_id`.
 
-use mur_core::a2a_dial::{DialMode, dial_method};
+use mur_core::a2a_dial::{DialMode, dial_message_streaming, dial_method};
 use serde::Serialize;
 use serde_json::{Value, json};
+use tauri::{AppHandle, Emitter};
+
+#[derive(Serialize, Clone)]
+pub struct ChatDelta {
+    pub agent: String,
+    pub text: String,
+    /// True for the model's transient reasoning (shown as a "thinking"
+    /// indicator), false for the user-facing answer.
+    pub thinking: bool,
+}
 
 #[derive(Serialize)]
 pub struct ChatReply {
-    /// The agent's reply text.
+    /// The agent's full reply text.
     pub reply: String,
-    /// The task id of this turn — pass it back as `context_task_id` on the next
-    /// turn to continue the same conversation.
+    /// The task id of this turn — pass it back as `context_task_id` next turn.
     pub task_id: String,
+    /// Whether the reply was streamed token-by-token (vs a one-shot fallback).
+    pub streamed: bool,
 }
 
-/// Send `text` to agent `name` and return its reply.
+/// Send `text` to agent `name` and return its reply, streaming token deltas as
+/// `chat-delta` events while it generates.
 #[tauri::command]
 pub async fn agent_chat_send(
+    app: AppHandle,
     name: String,
     text: String,
     context_task_id: Option<String>,
@@ -33,21 +46,39 @@ pub async fn agent_chat_send(
         params["context"] = json!({ "task_id": tid });
     }
 
-    // dial_method does blocking socket / process I/O — keep it off the async
-    // reactor so the UI stays responsive while the model thinks.
     let result = tokio::task::spawn_blocking(move || {
-        dial_method(&home, &name, "message/send", params, DialMode::Auto)
+        let agent = name.clone();
+        // Stream over the running agent's socket; fall back to a one-shot
+        // ephemeral dial if it isn't running.
+        match dial_message_streaming(&home, &name, params.clone(), |delta, thinking| {
+            let _ = app.emit(
+                "chat-delta",
+                ChatDelta {
+                    agent: agent.clone(),
+                    text: delta.to_string(),
+                    thinking,
+                },
+            );
+        }) {
+            Ok(v) => Ok((v, true)),
+            Err(e) if e.to_string().contains("is not running") => {
+                dial_method(&home, &name, "message/send", params, DialMode::Auto)
+                    .map(|v| (v, false))
+            }
+            Err(e) => Err(e),
+        }
     })
     .await
     .map_err(|e| format!("chat task panicked: {e}"))?
     .map_err(|e| e.to_string())?;
 
-    let task_id = result
+    let (task, streamed) = result;
+    let task_id = task
         .get("id")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let reply = result
+    let reply = task
         .get("messages")
         .and_then(Value::as_array)
         .and_then(|msgs| {
@@ -61,7 +92,11 @@ pub async fn agent_chat_send(
     if reply.is_empty() {
         return Err("the agent returned no reply".into());
     }
-    Ok(ChatReply { reply, task_id })
+    Ok(ChatReply {
+        reply,
+        task_id,
+        streamed,
+    })
 }
 
 /// Concatenate the text parts of an A2A message.

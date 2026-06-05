@@ -51,6 +51,7 @@ export const en = {
   "chat.empty": "Say hi to {name} 👋",
   "chat.placeholder": "Message {name}…",
   "chat.send": "Send",
+  "chat.thinking": "thinking",
   "detail.risk": "Risk tolerance",
   "detail.verbosity": "Verbosity",
   "detail.quiet": "Quiet",

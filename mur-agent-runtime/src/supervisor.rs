@@ -229,6 +229,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         writer,
         stdio_notif_rx,
         sock_notif_rx,
+        sock_notif_tx,
         hook_chain,
         hook_ctx,
         hook_cancel,
@@ -264,7 +265,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         &hook_cancel,
     )
     .await?;
-    let dispatcher = Arc::new(build_dispatcher(&profile_arc, &runner, &mur_home));
+    let dispatcher = Arc::new(build_dispatcher(
+        &profile_arc,
+        &runner,
+        &mur_home,
+        sock_notif_tx.clone(),
+    ));
 
     // 7. Transports
     let mut transport_tasks = vec![];
@@ -594,12 +600,13 @@ fn build_dispatcher(
     profile: &Arc<Profile>,
     runner: &Arc<TaskRunner>,
     mur_home: &Path,
+    notifier: tokio::sync::mpsc::Sender<serde_json::Value>,
 ) -> Dispatcher {
     let mut d = Dispatcher::new();
     d.register("agent/card", Box::new(CardHandler::new(profile.clone())));
     d.register(
         "message/send",
-        Box::new(MessageSendHandler::new(runner.clone())),
+        Box::new(MessageSendHandler::new(runner.clone()).with_streaming(notifier)),
     );
     d.register("tasks/get", Box::new(TasksGetHandler::new(runner.clone())));
     d.register(

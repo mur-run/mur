@@ -166,6 +166,79 @@ fn dial_socket(
     }
 }
 
+/// Dial a *running* agent's `message/send` and stream token deltas to
+/// `on_delta` as they arrive, returning the final task result. Requires the
+/// agent to be up (uses its unix socket); the runtime emits `message/delta`
+/// notifications during generation. Names resolve case-insensitively.
+pub fn dial_message_streaming(
+    home: &Path,
+    agent_name: &str,
+    params: Value,
+    mut on_delta: impl FnMut(&str, bool),
+) -> Result<Value> {
+    let agent_name = &canonicalize_agent_name(home, agent_name);
+    let lock_path = home.join("agents").join(agent_name).join("running.lock");
+    if !lock_path.exists() {
+        bail!(
+            "agent '{agent_name}' is not running (no {})",
+            lock_path.display()
+        );
+    }
+    let request_id = json!(1);
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "message/send",
+        "params": params,
+    });
+    let bytes = fs::read(&lock_path).with_context(|| format!("read {}", lock_path.display()))?;
+    let lock: LockFile = serde_json::from_slice(&bytes).context("parse running.lock")?;
+    let sock = lock
+        .transports
+        .unix_socket
+        .ok_or_else(|| anyhow!("agent '{agent_name}' has no unix-socket transport"))?;
+
+    #[cfg(unix)]
+    {
+        use std::io::{BufRead, BufReader, Write};
+        let mut stream = std::os::unix::net::UnixStream::connect(&sock)
+            .with_context(|| format!("connect {sock}"))?;
+        let line = format!("{}\n", serde_json::to_string(&request)?);
+        stream.write_all(line.as_bytes())?;
+        let reader = BufReader::new(stream.try_clone()?);
+        for line in reader.lines() {
+            let line = line.context("read response line")?;
+            let v: Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if v.get("method").and_then(Value::as_str) == Some("message/delta") {
+                let params = v.get("params");
+                if let Some(t) = params.and_then(|p| p.get("text")).and_then(Value::as_str) {
+                    let thinking = params
+                        .and_then(|p| p.get("thinking"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    on_delta(t, thinking);
+                }
+                continue;
+            }
+            if v.get("id") == Some(&request_id) {
+                if let Some(err) = v.get("error") {
+                    bail!("agent '{agent_name}' returned error: {err}");
+                }
+                return Ok(v.get("result").cloned().unwrap_or(Value::Null));
+            }
+        }
+        bail!("EOF before matching response from '{agent_name}'");
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = sock;
+        bail!("unix socket transport is only supported on unix hosts")
+    }
+}
+
 fn dial_ephemeral(
     home: &Path,
     agent_name: &str,

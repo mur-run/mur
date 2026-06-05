@@ -254,6 +254,7 @@ pub(crate) async fn prepare_runtime(
     TelemetryWriter,
     tokio::sync::mpsc::Receiver<serde_json::Value>,
     tokio::sync::mpsc::Receiver<serde_json::Value>,
+    tokio::sync::mpsc::Sender<serde_json::Value>,
     HookChain,
     HookCtx,
     CancellationToken,
@@ -270,6 +271,9 @@ pub(crate) async fn prepare_runtime(
     // Notification routing: Event → serde_json::Value channels for transports.
     let (stdio_notif_tx, stdio_notif_rx) = tokio::sync::mpsc::channel(256);
     let (sock_notif_tx, sock_notif_rx) = tokio::sync::mpsc::channel(256);
+    // A clone for the message/send handler to stream token deltas over the same
+    // socket-notification channel that telemetry events use.
+    let sock_notif_tx_for_dispatch = sock_notif_tx.clone();
 
     // M5a: stats aggregator — flushes skill execution counters to
     // ~/.mur/skills/<name>/stats.json sidecars on a 64-event / 2 s tick.
@@ -358,6 +362,7 @@ pub(crate) async fn prepare_runtime(
         writer,
         stdio_notif_rx,
         sock_notif_rx,
+        sock_notif_tx_for_dispatch,
         hook_chain,
         hook_ctx,
         hook_cancel,
