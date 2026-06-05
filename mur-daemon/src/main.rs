@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
     }
 
     // P1 — start the mobile WebSocket endpoint (best-effort; failure is non-fatal)
-    match mobile_server::ensure_pair_token() {
+    match mur_core::mobile::ensure_pair_token(&mur_dir) {
         Ok(token) => {
             mobile_server::spawn(mur_dir.clone(), token);
         }

@@ -173,6 +173,12 @@ pub enum AgentAction {
     },
     /// Manage companion (warm voice + optional proactive messaging).
     Companion(cmd::agent_companion::CompanionArgs),
+    /// Show a QR + URI to pair a phone (MUR mobile app) with an agent over LAN.
+    Pair {
+        /// Agent name to pair with (defaults to the concierge "mur").
+        #[arg(default_value = "mur")]
+        name: String,
+    },
     /// Run prereq checks for export targets (no build, just diagnostics)
     Doctor {
         /// What format the doctor should validate prereqs for: "gui" / "bin" / "pkg" / "all"

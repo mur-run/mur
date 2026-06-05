@@ -14,6 +14,9 @@ mod character_card;
 mod cli;
 mod cmd;
 mod community;
+// Shared with the daemon + lib; the binary uses only a subset of the helpers.
+#[allow(dead_code)]
+mod mobile;
 mod context_api;
 mod conversations;
 #[allow(dead_code)]

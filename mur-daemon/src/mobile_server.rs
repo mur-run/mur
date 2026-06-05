@@ -37,19 +37,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// Default LAN port for the mobile endpoint (distinct from the signal server's
-/// 9421). Override with `MUR_MOBILE_PORT`.
-const DEFAULT_MOBILE_PORT: u16 = 9430;
-/// Default bind address — `0.0.0.0` so a phone on the LAN can reach it.
-/// Override with `MUR_MOBILE_BIND`.
-const DEFAULT_MOBILE_BIND: &str = "0.0.0.0";
-/// Agent the phone talks to when its Hello doesn't name one (P1: the
-/// concierge). Display name is "MUR"; the on-disk slug is lowercase.
-const DEFAULT_MOBILE_AGENT: &str = "mur";
-/// Pairing-token file under `~/.mur/`.
-const PAIR_TOKEN_FILE: &str = "mobile/pair-token";
-/// Paired-device store under `~/.mur/`.
-const PAIRED_DEVICES_FILE: &str = "mobile/paired.json";
+// Ports, bind address, token paths, and the default agent live in
+// `mur_core::mobile` so the daemon and the `mur agent pair` CLI agree.
 
 #[derive(Clone)]
 struct MobileState {
@@ -84,28 +73,6 @@ impl MobileState {
     }
 }
 
-/// Generate or read the one-time pairing token at `~/.mur/mobile/pair-token`.
-/// Encode this (plus the LAN address) into the QR the Hub shows.
-pub fn ensure_pair_token() -> Result<String> {
-    let path = mur_home()?.join(PAIR_TOKEN_FILE);
-    if let Some(p) = path.parent() {
-        std::fs::create_dir_all(p)?;
-    }
-    if path.exists() {
-        let t =
-            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        return Ok(t.trim().to_owned());
-    }
-    let token = uuid::Uuid::new_v4().to_string();
-    std::fs::write(&path, &token)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(token)
-}
-
 /// Spawn the mobile WebSocket server as a background tokio task (best-effort).
 pub fn spawn(mur_home: PathBuf, pair_token: String) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -116,16 +83,13 @@ pub fn spawn(mur_home: PathBuf, pair_token: String) -> tokio::task::JoinHandle<(
 }
 
 async fn run_server(mur_home: PathBuf, pair_token: String) -> Result<()> {
-    let port: u16 = std::env::var("MUR_MOBILE_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_MOBILE_PORT);
-    let bind = std::env::var("MUR_MOBILE_BIND").unwrap_or_else(|_| DEFAULT_MOBILE_BIND.to_string());
+    let port = mur_core::mobile::mobile_port();
+    let bind = mur_core::mobile::mobile_bind();
     let addr: std::net::SocketAddr = format!("{bind}:{port}")
         .parse()
         .with_context(|| format!("parse mobile bind {bind}:{port}"))?;
 
-    let paired_path = mur_home.join(PAIRED_DEVICES_FILE);
+    let paired_path = mur_core::mobile::paired_devices_path(&mur_home);
     let paired = load_paired(&paired_path);
     let state = MobileState {
         mur_home,
@@ -284,7 +248,7 @@ fn reject(reason: &str) -> ServerFrame {
 
 fn resolve_agent(home: &Path, requested: &str) -> String {
     let name = if requested.trim().is_empty() {
-        DEFAULT_MOBILE_AGENT
+        mur_core::mobile::DEFAULT_MOBILE_AGENT
     } else {
         requested
     };
@@ -373,11 +337,6 @@ fn persist_paired(path: &Path, devices: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn mur_home() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
-    Ok(home.join(".mur"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,7 +360,7 @@ mod tests {
             mur_home: home.clone(),
             pair_token: token.to_string(),
             paired: Arc::new(Mutex::new(HashSet::new())),
-            paired_path: home.join(PAIRED_DEVICES_FILE),
+            paired_path: mur_core::mobile::paired_devices_path(&home),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
