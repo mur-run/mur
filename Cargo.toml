@@ -9,6 +9,7 @@ members = [
     "mur-agent-launcher",
     "mur-mcp-server",
     "mur-compress",
+    "mur-mobile-sdk",
     # "mur-commander",  # separate crate — v0.2.0 released
 ]
 exclude = [
