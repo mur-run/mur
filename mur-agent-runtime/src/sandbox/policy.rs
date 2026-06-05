@@ -245,12 +245,19 @@ mod tests {
         let mut policy = SandboxPolicy::from_entitlements(&ent, &PathBuf::from("/tmp/a"));
         policy.allow_extra_ports(&[11434]);
         let ports = policy.net_allow_ports.unwrap();
-        assert!(ports.contains(&11434), "ollama port must be granted: {ports:?}");
+        assert!(
+            ports.contains(&11434),
+            "ollama port must be granted: {ports:?}"
+        );
         // Idempotent — re-adding doesn't duplicate.
         let mut p2 = SandboxPolicy::from_entitlements(&ent, &PathBuf::from("/tmp/a"));
         p2.allow_extra_ports(&[443]);
         assert_eq!(
-            p2.net_allow_ports.unwrap().iter().filter(|&&p| p == 443).count(),
+            p2.net_allow_ports
+                .unwrap()
+                .iter()
+                .filter(|&&p| p == 443)
+                .count(),
             1
         );
     }
