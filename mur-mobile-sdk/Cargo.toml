@@ -27,7 +27,7 @@ required-features = ["cli"]
 mur-common = { path = "../mur-common" }
 uniffi = "0.31"
 tokio = { workspace = true }
-tokio-tungstenite = "0.29"
+tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 futures-util = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var showPairing = false
+    @State private var showSettings = false
     @State private var draft = ""
 
     var body: some View {
@@ -12,6 +13,9 @@ struct ContentView: View {
                 PairingSheet { info in
                     model.connect(host: info.host, port: info.port, token: info.token)
                 }
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsSheet()
             }
             .onAppear { model.start() }
     }
@@ -115,6 +119,10 @@ struct ContentView: View {
             }
             Button(model.isConnected ? "Re-pair" : "Pair") { showPairing = true }
                 .font(.footnote.weight(.semibold))
+            Button { showSettings = true } label: {
+                Image(systemName: "gearshape")
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

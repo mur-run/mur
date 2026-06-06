@@ -123,6 +123,13 @@ final class AppModel {
         client?.connectLan(host: host, port: port, pairToken: token)
     }
 
+    /// Connect via mur-server relay (for use away from home Wi-Fi).
+    func connectRelay(relayWsUrl: String, apiKey: String, pairToken: String) {
+        print("[MurVoice] connectRelay url=\(relayWsUrl)")
+        start()
+        client?.connectRelay(relayWsUrl: relayWsUrl, jwt: apiKey, pairToken: pairToken)
+    }
+
     func disconnect() {
         client?.disconnect()
         connectedAgent = nil

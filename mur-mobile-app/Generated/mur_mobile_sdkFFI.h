@@ -284,6 +284,11 @@ void uniffi_mur_mobile_sdk_fn_method_mobileclient_begin_audio_stream(uint64_t pt
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_connect_lan(uint64_t ptr, RustBuffer host, uint16_t port, RustBuffer pair_token, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_CONNECT_RELAY
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_CONNECT_RELAY
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_connect_relay(uint64_t ptr, RustBuffer relay_ws_url, RustBuffer jwt, RustBuffer pair_token, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_DISCONNECT
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_DISCONNECT
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_disconnect(uint64_t ptr, RustCallStatus *_Nonnull out_status
@@ -588,6 +593,12 @@ uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_begin_audio_stream(v
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_CONNECT_LAN
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_CONNECT_LAN
 uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_connect_lan(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_CONNECT_RELAY
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_CONNECT_RELAY
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_connect_relay(void
     
 );
 #endif

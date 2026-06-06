@@ -93,7 +93,7 @@ pub struct MobileClient {
     default_agent: String,
     id_counter: AtomicU64,
     listener: Arc<Mutex<Option<Box<dyn MobileEventListener>>>>,
-    cmd_tx: Mutex<Option<UnboundedSender<Command>>>,
+    cmd_tx: Arc<Mutex<Option<UnboundedSender<Command>>>>,
 }
 
 #[uniffi::export]
@@ -117,7 +117,7 @@ impl MobileClient {
             default_agent: config.default_agent,
             id_counter: AtomicU64::new(0),
             listener: Arc::new(Mutex::new(None)),
-            cmd_tx: Mutex::new(None),
+            cmd_tx: Arc::new(Mutex::new(None)),
         }))
     }
 
@@ -155,6 +155,57 @@ impl MobileClient {
             rx,
             emit,
         ));
+    }
+
+    /// Connect via the mur-server relay using a JWT or API key.
+    /// `relay_ws_url` should be the full WSS path, e.g.
+    /// `"wss://relay.mur.run/api/v1/relay/mobile/ws"`.
+    /// `pair_token` is still required — it is sent in the initial `Hello` so
+    /// the Mac daemon can verify the phone's identity on first relay connection.
+    ///
+    /// Reconnects automatically with exponential backoff on drops.
+    pub fn connect_relay(&self, relay_ws_url: String, jwt: String, pair_token: String) {
+        let cmd_tx_slot = self.cmd_tx.clone();     // Arc clone — OK
+        let listener = self.listener.clone();       // Arc clone — OK
+        let pubkey = self.public_key();
+        let default_agent = self.default_agent.clone();
+
+        // Build an emitter each loop iteration from the shared listener Arc.
+        let make_emit = move || {
+            let listener = listener.clone();
+            move |event: MobileEvent| {
+                if let Ok(guard) = listener.lock() {
+                    if let Some(l) = guard.as_ref() {
+                        l.on_event(event);
+                    }
+                }
+            }
+        };
+
+        self.rt.spawn(async move {
+            let mut delay = std::time::Duration::from_secs(2);
+            loop {
+                let (tx, rx) = mpsc::unbounded_channel();
+                if let Ok(mut guard) = cmd_tx_slot.lock() {
+                    *guard = Some(tx);
+                }
+                let hello = mur_common::mobile::ClientFrame::Hello {
+                    pubkey: pubkey.clone(),
+                    token: pair_token.clone(),
+                    agent: default_agent.clone(),
+                };
+                let emit = make_emit();
+                transport::run_relay(relay_ws_url.clone(), jwt.clone(), hello, rx, emit).await;
+
+                // Brief pause then reconnect.
+                let emit2 = make_emit();
+                emit2(MobileEvent::Disconnected {
+                    reason: format!("relay disconnected; retry in {}s", delay.as_secs()),
+                });
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(std::time::Duration::from_secs(60));
+            }
+        });
     }
 
     /// Send a user turn as text. The reply arrives as a [`MobileEvent::Reply`]

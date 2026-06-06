@@ -558,6 +558,17 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
     func connectLan(host: String, port: UInt16, pairToken: String) 
     
     /**
+     * Connect via the mur-server relay using a JWT or API key.
+     * `relay_ws_url` should be the full WSS path, e.g.
+     * `"wss://relay.mur.run/api/v1/relay/mobile/ws"`.
+     * `pair_token` is still required — it is sent in the initial `Hello` so
+     * the Mac daemon can verify the phone's identity on first relay connection.
+     *
+     * Reconnects automatically with exponential backoff on drops.
+     */
+    func connectRelay(relayWsUrl: String, jwt: String, pairToken: String) 
+    
+    /**
      * Tear down the current connection.
      */
     func disconnect() 
@@ -680,6 +691,25 @@ open func connectLan(host: String, port: UInt16, pairToken: String)  {try! rustC
             self.uniffiCloneHandle(),
         FfiConverterString.lower(host),
         FfiConverterUInt16.lower(port),
+        FfiConverterString.lower(pairToken),$0
+    )
+}
+}
+    
+    /**
+     * Connect via the mur-server relay using a JWT or API key.
+     * `relay_ws_url` should be the full WSS path, e.g.
+     * `"wss://relay.mur.run/api/v1/relay/mobile/ws"`.
+     * `pair_token` is still required — it is sent in the initial `Hello` so
+     * the Mac daemon can verify the phone's identity on first relay connection.
+     *
+     * Reconnects automatically with exponential backoff on drops.
+     */
+open func connectRelay(relayWsUrl: String, jwt: String, pairToken: String)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_connect_relay(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(relayWsUrl),
+        FfiConverterString.lower(jwt),
         FfiConverterString.lower(pairToken),$0
     )
 }
@@ -1323,6 +1353,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_connect_lan() != 42570) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_connect_relay() != 12779) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_disconnect() != 27364) {

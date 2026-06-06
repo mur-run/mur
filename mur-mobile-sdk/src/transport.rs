@@ -40,7 +40,7 @@ pub async fn run_lan<E>(
     port: u16,
     path: String,
     hello: ClientFrame,
-    mut cmd_rx: UnboundedReceiver<Command>,
+    cmd_rx: UnboundedReceiver<Command>,
     emit: E,
 ) where
     E: Fn(MobileEvent) + Send + 'static,
@@ -60,7 +60,60 @@ pub async fn run_lan<E>(
             return;
         }
     };
+    run_frame_loop(stream, hello, cmd_rx, emit, "lan").await;
+}
 
+/// Drive one relay connection to completion.
+///
+/// Identical to `run_lan` except the URL is the full WSS relay URL and a JWT
+/// or API key is sent as `Authorization: Bearer` in the upgrade request.
+pub async fn run_relay<E>(
+    relay_url: String,
+    jwt: String,
+    hello: ClientFrame,
+    cmd_rx: UnboundedReceiver<Command>,
+    emit: E,
+) where
+    E: Fn(MobileEvent) + Send + 'static,
+{
+    emit(MobileEvent::Connecting);
+
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut req = match relay_url.as_str().into_client_request() {
+        Ok(r) => r,
+        Err(e) => {
+            emit(MobileEvent::Error { message: format!("bad relay URL: {e}") });
+            emit(MobileEvent::Disconnected { reason: "bad relay URL".to_string() });
+            return;
+        }
+    };
+    if let Ok(hv) = format!("Bearer {jwt}").try_into() {
+        req.headers_mut().insert("Authorization", hv);
+    }
+
+    let stream = match tokio_tungstenite::connect_async_tls_with_config(req, None, false, None).await {
+        Ok((stream, _resp)) => stream,
+        Err(e) => {
+            emit(MobileEvent::Error { message: format!("relay connect failed: {e}") });
+            emit(MobileEvent::Disconnected { reason: "relay connect failed".to_string() });
+            return;
+        }
+    };
+    run_frame_loop(stream, hello, cmd_rx, emit, "relay").await;
+}
+
+/// Shared frame loop used by both `run_lan` and `run_relay` once the
+/// WebSocket is open. Transport type is `"lan"` or `"relay"`.
+async fn run_frame_loop<S, E>(
+    stream: tokio_tungstenite::WebSocketStream<S>,
+    hello: ClientFrame,
+    mut cmd_rx: UnboundedReceiver<Command>,
+    emit: E,
+    _transport: &'static str,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    E: Fn(MobileEvent) + Send + 'static,
+{
     let (mut write, mut read) = stream.split();
 
     // Pairing handshake.
