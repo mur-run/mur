@@ -33,6 +33,8 @@ final class AppModel {
     private var recognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var streamConverter: AVAudioConverter?   // native → 16 kHz mono f32
+    private var isStreamingAudio = false
 
     // All locales the device's SFSpeech supports, sorted: preferred languages first,
     // then alphabetical by display name.
@@ -140,14 +142,25 @@ final class AppModel {
     }
 
     func endCaptureAndSend() {
+        let wasStreaming = isStreamingAudio
         stopAudioCapture()
-        let text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
-        partial = ""
-        guard !text.isEmpty else {
-            mascot = isConnected ? .idle : .offline
-            return
+        if wasStreaming {
+            // Audio path: tell Mac to run whisper on the accumulated frames.
+            // The Mac sends ServerFrame::Transcript back, then the agent reply.
+            client?.endAudioStream()
+            partial = ""
+            if isConnected { mascot = .thinking }
+        } else {
+            // Fallback text path (no audio stream, e.g. not connected when
+            // capture started or SFSpeech-only without streaming).
+            let text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+            partial = ""
+            guard !text.isEmpty else {
+                mascot = isConnected ? .idle : .offline
+                return
+            }
+            send(text)
         }
-        send(text)
     }
 
     func sendTyped(_ text: String) {
@@ -205,19 +218,53 @@ final class AppModel {
             }
         }
 
+        // Converter: native hardware format → 16 kHz mono f32 for whisper on Mac.
+        let whisperFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: false
+        )!
+        streamConverter = AVAudioConverter(from: format, to: whisperFormat)
+
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
+            guard let self else { return }
+            self.recognitionRequest?.append(buffer)
             // mic level for mascot ring
-            guard let channelData = buffer.floatChannelData?[0] else { return }
-            let frameLength = Int(buffer.frameLength)
-            var sum: Float = 0
-            for i in 0..<frameLength { sum += channelData[i] * channelData[i] }
-            let rms = Double(sqrt(sum / Float(frameLength)))
-            Task { @MainActor [weak self] in self?.micLevel = min(rms * 10, 1.0) }
+            if let channelData = buffer.floatChannelData?[0] {
+                let frameLength = Int(buffer.frameLength)
+                var sum: Float = 0
+                for i in 0..<frameLength { sum += channelData[i] * channelData[i] }
+                let rms = Double(sqrt(sum / Float(frameLength)))
+                Task { @MainActor [weak self] in self?.micLevel = min(rms * 10, 1.0) }
+            }
+            // Stream 16 kHz mono f32 to Mac for whisper STT.
+            guard let converter = self.streamConverter else { return }
+            let ratio = 16_000.0 / format.sampleRate
+            let outFrames = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 1)
+            guard let outBuf = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
+                                                frameCapacity: outFrames) else { return }
+            var convErr: NSError?
+            var inputDone = false
+            let status = converter.convert(to: outBuf, error: &convErr) { _, outStatus in
+                if inputDone { outStatus.pointee = .noDataNow; return nil }
+                inputDone = true
+                outStatus.pointee = .haveData
+                return buffer
+            }
+            guard status != .error, outBuf.frameLength > 0,
+                  let ch = outBuf.floatChannelData?[0] else { return }
+            let byteCount = Int(outBuf.frameLength) * 4
+            let data = Data(bytes: UnsafeRawPointer(ch), count: byteCount)
+            Task { @MainActor [weak self] in
+                self?.client?.sendAudioFrame(data: data)
+            }
         }
 
         do {
             try audioEngine.start()
+            isStreamingAudio = true
+            client?.beginAudioStream(sampleRate: 16_000)
             mascot = .listening
         } catch {
             stopAudioCapture()
@@ -281,6 +328,8 @@ final class AppModel {
     }
 
     private func stopAudioCapture() {
+        isStreamingAudio = false
+        streamConverter = nil
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
@@ -313,7 +362,12 @@ final class AppModel {
             connectedAgent = nil
             mascot = .offline
         case let .transcript(role, text, isFinal):
-            if role != "user", isFinal, !text.isEmpty {
+            guard isFinal, !text.isEmpty else { break }
+            if role == "user" {
+                // Mac whisper authoritative transcript — add user bubble and update partial.
+                transcript.append(.init(role: "user", text: text))
+                partial = text
+            } else {
                 transcript.append(.init(role: "agent", text: text))
             }
         case let .reply(text):

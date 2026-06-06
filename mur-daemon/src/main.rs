@@ -5,6 +5,7 @@ mod inbox;
 mod lock;
 mod mobile_server;
 mod signal_server;
+mod stt_sink;
 mod tts_sink;
 mod sleep;
 mod store_health;

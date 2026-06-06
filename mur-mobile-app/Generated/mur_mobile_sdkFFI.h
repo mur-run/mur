@@ -274,6 +274,11 @@ void uniffi_mur_mobile_sdk_fn_free_mobileclient(uint64_t handle, RustCallStatus 
 uint64_t uniffi_mur_mobile_sdk_fn_constructor_mobileclient_new(RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_BEGIN_AUDIO_STREAM
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_BEGIN_AUDIO_STREAM
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_begin_audio_stream(uint64_t ptr, uint32_t sample_rate, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_CONNECT_LAN
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_CONNECT_LAN
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_connect_lan(uint64_t ptr, RustBuffer host, uint16_t port, RustBuffer pair_token, RustCallStatus *_Nonnull out_status
@@ -284,9 +289,19 @@ void uniffi_mur_mobile_sdk_fn_method_mobileclient_connect_lan(uint64_t ptr, Rust
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_disconnect(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_END_AUDIO_STREAM
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_END_AUDIO_STREAM
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_end_audio_stream(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_PUBLIC_KEY
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_PUBLIC_KEY
 RustBuffer uniffi_mur_mobile_sdk_fn_method_mobileclient_public_key(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SEND_AUDIO_FRAME
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SEND_AUDIO_FRAME
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_send_audio_frame(uint64_t ptr, RustBuffer data, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SEND_TEXT
@@ -564,6 +579,12 @@ void ffi_mur_mobile_sdk_rust_future_free_void(uint64_t handle
 void ffi_mur_mobile_sdk_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_BEGIN_AUDIO_STREAM
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_BEGIN_AUDIO_STREAM
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_begin_audio_stream(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_CONNECT_LAN
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_CONNECT_LAN
 uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_connect_lan(void
@@ -576,9 +597,21 @@ uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_disconnect(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_END_AUDIO_STREAM
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_END_AUDIO_STREAM
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_end_audio_stream(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_PUBLIC_KEY
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_PUBLIC_KEY
 uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_public_key(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_SEND_AUDIO_FRAME
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_SEND_AUDIO_FRAME
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_send_audio_frame(void
     
 );
 #endif

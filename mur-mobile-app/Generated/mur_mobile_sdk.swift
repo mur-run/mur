@@ -546,6 +546,12 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 public protocol MobileClientProtocol: AnyObject, Sendable {
     
     /**
+     * Signal the Mac that an audio utterance is starting. Call before the
+     * first `send_audio_frame`. `sample_rate` should be 16 000 (Hz).
+     */
+    func beginAudioStream(sampleRate: UInt32) 
+    
+    /**
      * Connect to the Mac endpoint over LAN and pair. `pair_token` is the
      * one-time token from the QR code. Progress arrives via the listener.
      */
@@ -557,10 +563,21 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
     func disconnect() 
     
     /**
+     * Signal end of utterance. The Mac runs whisper.cpp, dials the agent,
+     * and streams the TTS reply back as [`MobileEvent::AudioChunk`]s.
+     */
+    func endAudioStream() 
+    
+    /**
      * The phone's multibase Ed25519 public key — encode this into the QR /
      * share so the Mac can add it to the agent's `trusted_peers`.
      */
     func publicKey()  -> String
+    
+    /**
+     * Send one chunk of raw f32 LE PCM (16 kHz mono) to the Mac.
+     */
+    func sendAudioFrame(data: Data) 
     
     /**
      * Send a user turn as text. The reply arrives as a [`MobileEvent::Reply`]
@@ -643,6 +660,18 @@ public convenience init(config: MobileConfig)throws  {
 
     
     /**
+     * Signal the Mac that an audio utterance is starting. Call before the
+     * first `send_audio_frame`. `sample_rate` should be 16 000 (Hz).
+     */
+open func beginAudioStream(sampleRate: UInt32)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_begin_audio_stream(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(sampleRate),$0
+    )
+}
+}
+    
+    /**
      * Connect to the Mac endpoint over LAN and pair. `pair_token` is the
      * one-time token from the QR code. Progress arrives via the listener.
      */
@@ -667,6 +696,17 @@ open func disconnect()  {try! rustCall() {
 }
     
     /**
+     * Signal end of utterance. The Mac runs whisper.cpp, dials the agent,
+     * and streams the TTS reply back as [`MobileEvent::AudioChunk`]s.
+     */
+open func endAudioStream()  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_end_audio_stream(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+    
+    /**
      * The phone's multibase Ed25519 public key — encode this into the QR /
      * share so the Mac can add it to the agent's `trusted_peers`.
      */
@@ -676,6 +716,17 @@ open func publicKey() -> String  {
             self.uniffiCloneHandle(),$0
     )
 })
+}
+    
+    /**
+     * Send one chunk of raw f32 LE PCM (16 kHz mono) to the Mac.
+     */
+open func sendAudioFrame(data: Data)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_send_audio_frame(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(data),$0
+    )
+}
 }
     
     /**
@@ -1268,13 +1319,22 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_begin_audio_stream() != 37524) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_connect_lan() != 42570) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_disconnect() != 27364) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_end_audio_stream() != 16986) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_public_key() != 61081) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_send_audio_frame() != 33293) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_send_text() != 38827) {

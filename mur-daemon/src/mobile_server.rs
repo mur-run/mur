@@ -27,7 +27,8 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
 use chrono::Utc;
-use mur_common::a2a::JsonRpcRequest;
+use base64::Engine as _;
+use mur_common::a2a::{JsonRpcRequest, Message as A2aMessage, MessagePart};
 use mur_common::bridge::envelope::verify_envelope_with_pubkey;
 use mur_common::mobile::{ClientFrame, ServerFrame, MOBILE_WS_PATH};
 use mur_core::a2a_dial::{canonicalize_agent_name, dial_method, DialMode};
@@ -150,7 +151,10 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
         return;
     }
 
-    // 2. Application loop.
+    // 2. Application loop. Audio stream state is per-connection (one utterance
+    //    at a time; a new AudioStreamStart resets the accumulator).
+    let mut audio_buf: Vec<u8> = Vec::new();
+
     while let Some(txt) = recv_text(&mut socket).await {
         let frame = match serde_json::from_str::<ClientFrame>(&txt) {
             Ok(f) => f,
@@ -159,84 +163,171 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                 continue;
             }
         };
-        let ClientFrame::Envelope { envelope } = frame else {
-            continue; // ignore a duplicate hello
-        };
 
-        // Auth: the envelope's key must be the paired key and the signature
-        // must verify against it.
-        if envelope.bridge_pubkey_multibase != pubkey
-            || !state.is_paired(&pubkey)
-            || verify_envelope_with_pubkey(&envelope, &pubkey).is_err()
-        {
-            let _ = send_frame(&mut socket, &reject("unauthorized")).await;
-            continue;
-        }
-
-        let req: JsonRpcRequest = match serde_json::from_slice(&envelope.payload) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, "mobile: bad payload");
-                continue;
+        match frame {
+            ClientFrame::Hello { .. } => {
+                // Duplicate hello after pairing — ignore silently.
             }
-        };
 
-        // Mirror the user's turn for the Hub.
-        let user_text = extract_user_text(req.params.as_ref());
-        mirror(&state.mur_home, &agent, "mobile.transcript", &json!({
-            "role": "user",
-            "text": user_text,
-            "final": true,
-        }));
+            ClientFrame::Envelope { envelope } => {
+                // Auth: the envelope's key must be the paired key and the
+                // signature must verify against it.
+                if envelope.bridge_pubkey_multibase != pubkey
+                    || !state.is_paired(&pubkey)
+                    || verify_envelope_with_pubkey(&envelope, &pubkey).is_err()
+                {
+                    let _ = send_frame(&mut socket, &reject("unauthorized")).await;
+                    continue;
+                }
 
-        // Dial the agent (blocking socket I/O → spawn_blocking).
-        let home = state.mur_home.clone();
-        let agent_c = agent.clone();
-        let method = req.method.clone();
-        let params = req.params.clone().unwrap_or(Value::Null);
-        let dialed = tokio::task::spawn_blocking(move || {
-            dial_method(&home, &agent_c, &method, params, DialMode::Auto)
-        })
-        .await;
+                let req: JsonRpcRequest = match serde_json::from_slice(&envelope.payload) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "mobile: bad payload");
+                        continue;
+                    }
+                };
 
-        let reply_text = match dialed {
-            Ok(Ok(value)) => extract_reply_text(&value),
-            Ok(Err(e)) => format!("[error] {e}"),
-            Err(e) => format!("[error] dial task: {e}"),
-        };
-
-        mirror(&state.mur_home, &agent, "mobile.reply", &json!({ "text": reply_text }));
-        if send_frame(
-            &mut socket,
-            &ServerFrame::Event {
-                name: "mobile.reply".to_string(),
-                payload: json!({ "text": reply_text }),
-            },
-        )
-        .await
-        .is_err()
-        {
-            break;
-        }
-
-        // TTS: synthesize reply and stream audio back (best-effort, skipped if
-        // models are not yet downloaded).
-        if !reply_text.starts_with("[error]") {
-            let home = state.mur_home.clone();
-            let text = reply_text.clone();
-            if let Some((base64, sample_rate)) =
-                tokio::task::spawn_blocking(move || crate::tts_sink::synthesize(&home, &text))
+                let user_text = extract_user_text(req.params.as_ref());
+                let method = req.method.clone();
+                let params = req.params.clone().unwrap_or(Value::Null);
+                if !handle_agent_turn(&mut socket, &state, &agent, &user_text, method, params)
                     .await
-                    .unwrap_or(None)
-            {
+                {
+                    break;
+                }
+            }
+
+            ClientFrame::AudioStreamStart { sample_rate } => {
+                audio_buf.clear();
+                tracing::debug!(sample_rate, "mobile: audio stream start");
+            }
+
+            ClientFrame::AudioChunk { data } => {
+                match base64::engine::general_purpose::STANDARD.decode(&data) {
+                    Ok(bytes) => audio_buf.extend_from_slice(&bytes),
+                    Err(e) => tracing::warn!(error = %e, "mobile: bad audio chunk base64"),
+                }
+            }
+
+            ClientFrame::AudioStreamEnd => {
+                tracing::debug!(bytes = audio_buf.len(), "mobile: audio stream end → STT");
+                let pcm = std::mem::take(&mut audio_buf);
+                let home = state.mur_home.clone();
+
+                // STT: whisper.cpp (blocking) → authoritative transcript.
+                let transcript_opt =
+                    tokio::task::spawn_blocking(move || crate::stt_sink::transcribe(&home, &pcm))
+                        .await
+                        .unwrap_or(None);
+
+                let transcript_text = match transcript_opt {
+                    Some(t) => t,
+                    None => {
+                        tracing::debug!("mobile: STT returned empty; skipping turn");
+                        continue;
+                    }
+                };
+
+                // Send whisper result to phone so it can override the on-device
+                // SFSpeech partial transcript with the authoritative text.
                 let _ = send_frame(
                     &mut socket,
-                    &ServerFrame::AudioChunk { base64, sample_rate, done: true },
+                    &ServerFrame::Transcript { text: transcript_text.clone(), is_final: true },
                 )
                 .await;
+
+                // Dial agent using the authoritative transcript text.
+                let msg = A2aMessage {
+                    role: "user".to_string(),
+                    parts: vec![MessagePart::Text { text: transcript_text.clone() }],
+                };
+                let params = {
+                    let mut m = serde_json::Map::new();
+                    m.insert("agent".to_string(), Value::String(agent.clone()));
+                    m.insert(
+                        "message".to_string(),
+                        serde_json::to_value(&msg).unwrap_or(Value::Null),
+                    );
+                    Value::Object(m)
+                };
+                if !handle_agent_turn(
+                    &mut socket,
+                    &state,
+                    &agent,
+                    &transcript_text,
+                    "message/send".to_string(),
+                    params,
+                )
+                .await
+                {
+                    break;
+                }
             }
         }
     }
+}
+
+/// Dial the agent, mirror both sides, send reply + TTS audio to the phone.
+/// Returns `false` if the WebSocket connection died (caller should break).
+async fn handle_agent_turn(
+    socket: &mut WebSocket,
+    state: &MobileState,
+    agent: &str,
+    user_text: &str,
+    method: String,
+    params: Value,
+) -> bool {
+    mirror(state.mur_home.as_path(), agent, "mobile.transcript", &json!({
+        "role": "user",
+        "text": user_text,
+        "final": true,
+    }));
+
+    let home = state.mur_home.clone();
+    let agent_c = agent.to_string();
+    let dialed = tokio::task::spawn_blocking(move || {
+        dial_method(&home, &agent_c, &method, params, DialMode::Auto)
+    })
+    .await;
+
+    let reply_text = match dialed {
+        Ok(Ok(value)) => extract_reply_text(&value),
+        Ok(Err(e)) => format!("[error] {e}"),
+        Err(e) => format!("[error] dial task: {e}"),
+    };
+
+    mirror(state.mur_home.as_path(), agent, "mobile.reply", &json!({ "text": reply_text }));
+    if send_frame(
+        socket,
+        &ServerFrame::Event {
+            name: "mobile.reply".to_string(),
+            payload: json!({ "text": reply_text }),
+        },
+    )
+    .await
+    .is_err()
+    {
+        return false;
+    }
+
+    // TTS: synthesize reply and stream audio back (skipped if models absent).
+    if !reply_text.starts_with("[error]") {
+        let home = state.mur_home.clone();
+        let text = reply_text.clone();
+        if let Some((b64, sample_rate)) =
+            tokio::task::spawn_blocking(move || crate::tts_sink::synthesize(&home, &text))
+                .await
+                .unwrap_or(None)
+        {
+            let _ = send_frame(
+                socket,
+                &ServerFrame::AudioChunk { base64: b64, sample_rate, done: true },
+            )
+            .await;
+        }
+    }
+    true
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────

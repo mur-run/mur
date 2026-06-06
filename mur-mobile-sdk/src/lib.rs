@@ -169,29 +169,44 @@ impl MobileClient {
                 return;
             }
         };
-        let sent = self
-            .cmd_tx
-            .lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(|tx| tx.send(Command::Send(envelope))));
-        if !matches!(sent, Some(Ok(()))) {
-            self.emit(MobileEvent::Error {
-                message: "not connected".to_string(),
-            });
-        }
+        self.send_cmd(Command::Send(envelope));
+    }
+
+    /// Signal the Mac that an audio utterance is starting. Call before the
+    /// first `send_audio_frame`. `sample_rate` should be 16 000 (Hz).
+    pub fn begin_audio_stream(&self, sample_rate: u32) {
+        self.send_cmd(Command::AudioStreamStart { sample_rate });
+    }
+
+    /// Send one chunk of raw f32 LE PCM (16 kHz mono) to the Mac.
+    pub fn send_audio_frame(&self, data: Vec<u8>) {
+        self.send_cmd(Command::AudioFrame { data });
+    }
+
+    /// Signal end of utterance. The Mac runs whisper.cpp, dials the agent,
+    /// and streams the TTS reply back as [`MobileEvent::AudioChunk`]s.
+    pub fn end_audio_stream(&self) {
+        self.send_cmd(Command::AudioStreamEnd);
     }
 
     /// Tear down the current connection.
     pub fn disconnect(&self) {
-        if let Ok(mut guard) = self.cmd_tx.lock() {
-            if let Some(tx) = guard.take() {
-                let _ = tx.send(Command::Disconnect);
-            }
-        }
+        self.send_cmd(Command::Disconnect);
     }
 }
 
 impl MobileClient {
+    fn send_cmd(&self, cmd: Command) {
+        let sent = self
+            .cmd_tx
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|tx| tx.send(cmd)));
+        if !matches!(sent, Some(Ok(()))) {
+            self.emit(MobileEvent::Error { message: "not connected".to_string() });
+        }
+    }
+
     /// Build a `message/send` request and sign it into an envelope using the
     /// phone's identity.
     fn sign_agent_send(

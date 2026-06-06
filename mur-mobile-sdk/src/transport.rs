@@ -19,8 +19,14 @@ use mur_common::mobile::{ClientFrame, ServerFrame};
 
 /// Commands the client pushes to the live transport task.
 pub enum Command {
-    /// Send a signed A2A request to the agent.
+    /// Send a signed A2A request to the agent (text path).
     Send(SignedEnvelope),
+    /// Begin a voice utterance stream at `sample_rate` Hz.
+    AudioStreamStart { sample_rate: u32 },
+    /// One chunk of raw PCM (f32 LE) to forward to the Mac.
+    AudioFrame { data: Vec<u8> },
+    /// End the voice utterance; trigger Mac-side STT + agent turn.
+    AudioStreamEnd,
     /// Close the connection and end the task.
     Disconnect,
 }
@@ -99,6 +105,13 @@ pub async fn run_lan<E>(
                             Ok(ServerFrame::Event { name, payload }) => {
                                 emit_event(&emit, &name, payload);
                             }
+                            Ok(ServerFrame::Transcript { text, is_final }) => {
+                                emit(MobileEvent::Transcript {
+                                    role: "user".to_string(),
+                                    text,
+                                    is_final,
+                                });
+                            }
                             Ok(ServerFrame::AudioChunk { base64, sample_rate, done }) => {
                                 use base64::Engine as _;
                                 if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&base64) {
@@ -123,24 +136,51 @@ pub async fn run_lan<E>(
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
-                    Some(Command::Send(envelope)) => {
+                    Some(cmd) => {
                         if !paired {
                             emit(MobileEvent::Error { message: "not paired yet".to_string() });
                             continue;
                         }
-                        let frame = ClientFrame::Envelope { envelope };
+                        let frame = match cmd {
+                            Command::Send(envelope) => ClientFrame::Envelope { envelope },
+                            Command::AudioStreamStart { sample_rate } => {
+                                ClientFrame::AudioStreamStart { sample_rate }
+                            }
+                            Command::AudioFrame { data } => {
+                                use base64::Engine as _;
+                                let encoded =
+                                    base64::engine::general_purpose::STANDARD.encode(&data);
+                                ClientFrame::AudioChunk { data: encoded }
+                            }
+                            Command::AudioStreamEnd => ClientFrame::AudioStreamEnd,
+                            Command::Disconnect => {
+                                let _ = write.close().await;
+                                emit(MobileEvent::Disconnected {
+                                    reason: "client disconnect".to_string(),
+                                });
+                                break;
+                            }
+                        };
                         match serde_json::to_string(&frame) {
                             Ok(txt) => {
                                 if let Err(e) = write.send(Message::Text(txt.into())).await {
-                                    emit(MobileEvent::Error { message: format!("send failed: {e}") });
-                                    emit(MobileEvent::Disconnected { reason: "send failed".to_string() });
+                                    emit(MobileEvent::Error {
+                                        message: format!("send failed: {e}"),
+                                    });
+                                    emit(MobileEvent::Disconnected {
+                                        reason: "send failed".to_string(),
+                                    });
                                     break;
                                 }
                             }
-                            Err(e) => emit(MobileEvent::Error { message: format!("encode request: {e}") }),
+                            Err(e) => {
+                                emit(MobileEvent::Error {
+                                    message: format!("encode frame: {e}"),
+                                })
+                            }
                         }
                     }
-                    Some(Command::Disconnect) | None => {
+                    None => {
                         let _ = write.close().await;
                         emit(MobileEvent::Disconnected { reason: "client disconnect".to_string() });
                         break;

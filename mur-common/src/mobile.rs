@@ -8,6 +8,10 @@
 //! [`SignedEnvelope`]s whose `payload` is the canonical JSON of an A2A
 //! `JsonRpcRequest` — the same crypto MUR uses for agent↔agent bridge traffic.
 //!
+//! P3 adds a voice streaming path: the phone streams raw 16 kHz mono f32 PCM
+//! chunks, the Mac runs whisper.cpp for an authoritative transcript, then
+//! replies with Kokoro TTS audio chunks.
+//!
 //! Design: `docs/superpowers/specs/2026-06-05-mur-voice-mobile-app-design.md`.
 
 use crate::bridge::envelope::SignedEnvelope;
@@ -29,8 +33,17 @@ pub enum ClientFrame {
         token: String,
         agent: String,
     },
-    /// A signed A2A request destined for the agent.
+    /// A signed A2A request destined for the agent (text-only path).
     Envelope { envelope: SignedEnvelope },
+    /// Phone begins a voice utterance. The Mac clears its audio accumulator and
+    /// prepares for incoming chunks at `sample_rate` Hz, mono f32.
+    AudioStreamStart { sample_rate: u32 },
+    /// One chunk of raw PCM (f32 LE, `sample_rate` Hz mono, standard base64).
+    /// Authenticated by the connection (paired at `Hello`); no per-chunk sig.
+    AudioChunk { data: String },
+    /// Phone finished speaking. Mac should run STT on the accumulated audio,
+    /// forward to the agent, and stream TTS audio back.
+    AudioStreamEnd,
 }
 
 /// Frames the Mac endpoint sends back to the phone.
@@ -48,6 +61,10 @@ pub enum ServerFrame {
         name: String,
         payload: serde_json::Value,
     },
+    /// Mac whisper.cpp authoritative transcript for the user's just-spoken
+    /// utterance. Overrides the on-device SFSpeech partial. `is_final: true`
+    /// means this is the definitive text for this turn.
+    Transcript { text: String, is_final: bool },
     /// A chunk of Kokoro TTS audio (f32 LE PCM, 24 kHz mono). The phone
     /// accumulates chunks until `done: true`, then plays them back.
     /// `base64` is the standard base64 encoding of the raw bytes.
