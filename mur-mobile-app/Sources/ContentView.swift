@@ -6,16 +6,39 @@ struct ContentView: View {
     @State private var draft = ""
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                header
+        mainContent
+            .scrollDismissesKeyboard(.interactively)
+            .safeAreaInset(edge: .bottom) {
+                typeBar
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(.bar)
+            }
+            .sheet(isPresented: $showPairing) {
+                PairingSheet { info in
+                    model.connect(host: info.host, port: info.port, token: info.token)
+                }
+            }
+            .onAppear { model.start() }
+    }
 
-                StarlingMascot(state: model.mascot, micLevel: model.micLevel)
-                    .padding(.top, 4)
-
-                transcriptView
-                statusLine
-
+    @ViewBuilder private var mainContent: some View {
+        if model.transcript.isEmpty {
+            // Empty state: mascot group centred, button near bottom.
+            VStack(spacing: 0) {
+                header.padding([.horizontal, .top])
+                Spacer(minLength: 0)
+                // Mascot + hint grouped and centred together
+                VStack(spacing: 14) {
+                    StarlingMascot(state: model.mascot, micLevel: model.micLevel)
+                    if !model.isConnected {
+                        Text("Tap Pair to connect to MUR")
+                            .font(.footnote)
+                            .foregroundStyle(.tertiary)
+                    }
+                    statusLine
+                }
+                Spacer(minLength: 40)
                 OrangeButton(
                     state: model.mascot,
                     micMode: model.micMode,
@@ -23,23 +46,34 @@ struct ContentView: View {
                     onPressEnd: { model.endCaptureAndSend() },
                     onTripleTap: { model.toggleMicMode() }
                 )
-                .padding(.bottom, 8)
+                .padding(.bottom, 32)
             }
-            .padding()
-        }
-        .scrollDismissesKeyboard(.interactively)
-        .safeAreaInset(edge: .bottom) {
-            typeBar
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .background(.bar)
-        }
-        .sheet(isPresented: $showPairing) {
-            PairingSheet { info in
-                model.connect(host: info.host, port: info.port, token: info.token)
+        } else {
+            // Conversation: header pinned, transcript scrolls.
+            ScrollView {
+                VStack(spacing: 16) {
+                    StarlingMascot(state: model.mascot, micLevel: model.micLevel)
+                        .padding(.top, 4)
+                    transcriptView
+                    statusLine
+                    OrangeButton(
+                        state: model.mascot,
+                        micMode: model.micMode,
+                        onPressStart: { model.beginCapture() },
+                        onPressEnd: { model.endCaptureAndSend() },
+                        onTripleTap: { model.toggleMicMode() }
+                    )
+                    .padding(.bottom, 8)
+                }
+                .padding()
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                header
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(.bar)
             }
         }
-        .onAppear { model.start() }
     }
 
     private var header: some View {

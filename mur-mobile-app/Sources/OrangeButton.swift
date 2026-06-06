@@ -65,6 +65,6 @@ struct OrangeButton: View {
 
     private var caption: String {
         if micMode == .handsFree { return "hands-free" }
-        return state.isCapturing ? "listening" : "speech"
+        return state.isCapturing ? "listening" : "hold"
     }
 }

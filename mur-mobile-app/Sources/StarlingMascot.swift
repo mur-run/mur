@@ -29,8 +29,9 @@ struct StarlingMascot: View {
                 .opacity(state.isCapturing ? 1 : 0)
                 .animation(.easeOut(duration: 0.12), value: micLevel)
 
-            Text(glyph)
-                .font(.system(size: 92))
+            Image(systemName: symbol)
+                .font(.system(size: 80, weight: .light))
+                .foregroundStyle(symbolColor)
                 .scaleEffect(bounce ? 1.18 : (breathe ? 1.03 : 1.0))
                 .rotationEffect(.degrees(tilt))
                 .rotationEffect(.degrees(spin ? 360 : 0))
@@ -55,15 +56,23 @@ struct StarlingMascot: View {
         }
     }
 
-    /// Emoji stand-in; swapped for the Rive bird in P5.
-    private var glyph: String {
+    /// SF Symbol stand-in; swapped for the Rive bird in P5.
+    private var symbol: String {
         switch state {
-        case .offline:   return "🪹"
-        case .idle:      return "🐦"
-        case .listening: return "🐦"
-        case .thinking:  return "🐤"
-        case .speaking:  return "🐦"
-        case .error:     return "🥚"
+        case .offline:   return "bird"
+        case .idle:      return "bird.fill"
+        case .listening: return "waveform"
+        case .thinking:  return "bird"
+        case .speaking:  return "bird.fill"
+        case .error:     return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var symbolColor: Color {
+        switch state {
+        case .offline:   return .secondary
+        case .error:     return .red
+        default:         return .murOrange
         }
     }
 

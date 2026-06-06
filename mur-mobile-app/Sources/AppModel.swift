@@ -62,7 +62,10 @@ final class AppModel {
     }()
 
     var speechLocaleLabel: String {
-        speechLocale.localizedString(forIdentifier: speechLocale.identifier)
+        // Show language name only (no region) so the header stays compact.
+        let langCode = speechLocale.language.languageCode?.identifier ?? ""
+        return Locale.current.localizedString(forLanguageCode: langCode)
+            ?? speechLocale.localizedString(forIdentifier: speechLocale.identifier)
             ?? speechLocale.identifier
     }
 
