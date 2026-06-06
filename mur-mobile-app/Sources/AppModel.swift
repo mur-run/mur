@@ -95,10 +95,28 @@ final class AppModel {
             mascot = .offline
         } catch {
             mascot = .error("init: \(error.localizedDescription)")
+            return
+        }
+        // Debug: auto-connect from UserDefaults (set via xcrun simctl spawn defaults write)
+        let ud = UserDefaults.standard
+        if let host = ud.string(forKey: "debugConnectHost"),
+           let token = ud.string(forKey: "debugConnectToken") {
+            let port = UInt16(ud.integer(forKey: "debugConnectPort"))
+            print("[MurVoice] auto-connect from UserDefaults host=\(host) port=\(port)")
+            client?.connectLan(host: host, port: port == 0 ? 9430 : port, pairToken: token)
+            // If a debug message is also set, send it after a short delay for connection to establish
+            if let msg = ud.string(forKey: "debugSendMessage") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                    print("[MurVoice] auto-send debugSendMessage: \(msg)")
+                    self?.sendTyped(msg)
+                    ud.removeObject(forKey: "debugSendMessage")
+                }
+            }
         }
     }
 
     func connect(host: String, port: UInt16, token: String) {
+        print("[MurVoice] connect host=\(host) port=\(port)")
         start()
         client?.connectLan(host: host, port: port, pairToken: token)
     }
@@ -278,6 +296,7 @@ final class AppModel {
 
     private func send(_ text: String) {
         guard !text.isEmpty else { return }
+        print("[MurVoice] send: \(text)")
         transcript.append(.init(role: "user", text: text))
         mascot = .thinking
         client?.sendText(text: text)

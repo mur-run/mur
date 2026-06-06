@@ -24,11 +24,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: run.mur.voice
         TARGETED_DEVICE_FAMILY: "1"
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_NSCameraUsageDescription: "Scan the pairing QR shown by MUR on your Mac to connect."
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Talk to your MUR agent by voice."
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Voice is transcribed on-device to send messages to your MUR agent."
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_FILE: Sources/Info.plist
     dependencies:
       - sdk: Speech.framework
       # Produced by ./build-ios.sh (requires full Xcode + iOS Rust targets).
