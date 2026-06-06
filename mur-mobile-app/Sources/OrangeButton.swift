@@ -14,14 +14,15 @@ struct OrangeButton: View {
     var onPressEnd: () -> Void
     var onTripleTap: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pressed = false
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color.murOrange)
+                .fill(buttonFill)
                 .shadow(color: Color.murOrange.opacity(0.5), radius: pressed ? 4 : 14, y: 4)
-                .scaleEffect(pressed ? 0.94 : 1.0)
+                .scaleEffect(reduceMotion ? 1.0 : (pressed ? 0.94 : 1.0))
             VStack(spacing: 6) {
                 Image(systemName: iconName).font(.system(size: 30, weight: .bold))
                 Text(caption).font(.subheadline.weight(.semibold))
@@ -53,7 +54,19 @@ struct OrangeButton: View {
             }
         )
         .animation(.easeOut(duration: 0.12), value: pressed)
-        .accessibilityLabel("Speak. Hold to talk; triple-tap for hands-free.")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(accessibilityValue)
+        .accessibilityHint(accessibilityHint)
+        .accessibilityAddTraits(.isButton)
+    }
+
+    // MARK: - Derived
+
+    private var buttonFill: Color {
+        if case .offline = state { return Color.murOrange.opacity(0.45) }
+        if case .error = state   { return Color.red.opacity(0.75) }
+        return Color.murOrange
     }
 
     private var iconName: String {
@@ -66,5 +79,26 @@ struct OrangeButton: View {
     private var caption: String {
         if micMode == .handsFree { return "hands-free" }
         return state.isCapturing ? "listening" : "hold"
+    }
+
+    private var accessibilityLabel: String {
+        micMode == .handsFree ? "Microphone, hands-free mode" : "Speak"
+    }
+
+    private var accessibilityValue: String {
+        switch state {
+        case .offline:   return "Not connected"
+        case .idle:      return "Ready"
+        case .listening: return "Listening"
+        case .thinking:  return "Processing"
+        case .speaking:  return "MUR is speaking"
+        case .error(let m): return "Error: \(m)"
+        }
+    }
+
+    private var accessibilityHint: String {
+        micMode == .handsFree
+            ? "Triple tap to switch to push-to-talk."
+            : "Hold to talk, release to send. Triple tap for hands-free."
     }
 }

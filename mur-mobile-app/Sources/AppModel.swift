@@ -154,6 +154,8 @@ final class AppModel {
         if wasStreaming {
             // Audio path: tell Mac to run whisper on the accumulated frames.
             // The Mac sends ServerFrame::Transcript back, then the agent reply.
+            Earcons.playDone()
+            Haptics.release()
             client?.endAudioStream()
             partial = ""
             if isConnected { mascot = .thinking }
@@ -272,6 +274,7 @@ final class AppModel {
             try audioEngine.start()
             isStreamingAudio = true
             client?.beginAudioStream(sampleRate: 16_000)
+            Earcons.playListening()
             mascot = .listening
         } catch {
             stopAudioCapture()
@@ -379,6 +382,8 @@ final class AppModel {
             }
         case let .reply(text):
             transcript.append(.init(role: "agent", text: text))
+            Haptics.reply()
+            Earcons.playReply()
             mascot = isConnected ? .speaking : .offline
         case let .audioChunk(data, sampleRate, done):
             ttsBuffer.append(contentsOf: data)
@@ -387,6 +392,7 @@ final class AppModel {
                 playTTSBuffer()
             }
         case let .error(message):
+            Haptics.error()
             mascot = .error(message)
         }
     }

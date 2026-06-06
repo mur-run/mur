@@ -95,8 +95,14 @@ struct ContentView: View {
             Circle()
                 .fill(model.isConnected ? Color.green : Color.gray)
                 .frame(width: 10, height: 10)
+                .accessibilityHidden(true)  // announced via the adjacent text
             Text(model.isConnected ? "MUR · \(model.connectedAgent ?? "")" : "Not paired")
                 .font(.footnote).foregroundStyle(.secondary)
+                .accessibilityLabel(
+                    model.isConnected
+                        ? "Connected to \(model.connectedAgent ?? "MUR")"
+                        : "Not connected"
+                )
             Spacer()
             Menu {
                 ForEach(AppModel.availableLocales, id: \.identifier) { locale in
@@ -151,6 +157,7 @@ struct ContentView: View {
                 in: RoundedRectangle(cornerRadius: 12)
             )
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+            .accessibilityLabel(isUser ? "You said: \(line.text)" : "MUR replied: \(line.text)")
     }
 
     @ViewBuilder private var statusLine: some View {
