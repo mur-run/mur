@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "popover",
+  "description": "Capability set for the MUR Hub tray popover window.",
+  "windows": ["popover"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-size"
+  ]
+}

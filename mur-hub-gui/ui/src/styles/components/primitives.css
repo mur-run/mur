@@ -131,7 +131,8 @@ button.primary:disabled {
 }
 
 /* ── Mascot (CSS starling) ── */
-.bird { position:relative; flex:none; cursor:pointer; }
+.bird-wrap { position:relative; flex:none; display:inline-flex; flex-direction:column; align-items:center; }
+.bird { position:relative; cursor:pointer; }
 .bird--float { animation:float-y 3.6s ease-in-out infinite; }
 .bird__feet { position:absolute; bottom:0; left:0; right:0; height:18%; }
 .bird__feet::before,.bird__feet::after { content:""; position:absolute; bottom:0; width:3%; min-width:2px; height:100%; background:#16243B; }
@@ -139,7 +140,8 @@ button.primary:disabled {
 .bird__feet::after  { right:36%; transform:rotate(-8deg); }
 .bird__body { position:absolute; left:6%; right:6%; top:16%; bottom:13%;
   background:linear-gradient(160deg,#5BA0E0,#4187CF);
-  border-radius:50% 50% 47% 47%/58% 58% 42% 42%; box-shadow:inset -5px -7px 14px rgba(0,0,0,.08); }
+  border-radius:50% 50% 47% 47%/58% 58% 42% 42%; box-shadow:inset -5px -7px 14px rgba(0,0,0,.08);
+  transition:background 0.4s var(--ease-out); }
 .bird__wing { position:absolute; top:48%; width:20%; height:29%; background:#3D7DC4; border-radius:50%; }
 .bird__wing--l { left:4%; transform:rotate(18deg); }
 .bird__wing--r { right:4%; transform:rotate(-18deg); }
@@ -148,13 +150,69 @@ button.primary:disabled {
 .bird__brow--l { left:12%; border-radius:70% 30% 30% 0/100% 100% 30% 0; transform:rotate(-10deg); }
 .bird__brow--r { right:12%; border-radius:30% 70% 0 30%/100% 100% 0 30%; transform:rotate(10deg); }
 .bird__eye { position:absolute; top:32%; width:24%; height:27%; background:#FBF6E9;
-  border-radius:50%; z-index:2; box-shadow:inset 0 -3px 4px rgba(0,0,0,.06); }
+  border-radius:50%; z-index:2; box-shadow:inset 0 -3px 4px rgba(0,0,0,.06);
+  overflow:hidden; transition:transform 0.1s ease-in-out; }
 .bird__eye--l { left:24%; } .bird__eye--r { right:24%; }
-.bird__eye::after { content:""; position:absolute; left:30%; top:30%; width:36%; height:38%;
-  background:#13203A; border-radius:50%; transition:transform var(--dur-base) var(--ease-out); }
+/* Pupil — real div so JS can track cursor direction */
+.bird__pupil { position:absolute; left:30%; top:30%; width:36%; height:38%;
+  background:#13203A; border-radius:50%; }
 .bird__beak { position:absolute; top:50%; left:50%; transform:translateX(-50%); width:12%; height:11%;
-  background:var(--color-brand-strong); border-radius:40% 40% 60% 60%; z-index:2; }
-/* Easter egg */
+  background:var(--color-brand-strong); border-radius:40% 40% 60% 60%; z-index:2;
+  transition:background 0.4s var(--ease-out); }
+
+/* ── Blink ── */
+.bird--blink .bird__eye { transform:scaleY(0.06); }
+
+/* ── Wing flutter + body bounce on click ── */
+@keyframes bird-bounce { 0%,100%{transform:scale(1)} 30%{transform:scale(1.1)} 65%{transform:scale(0.96)} }
+@keyframes wing-flutter-l { 0%,100%{transform:rotate(18deg)} 35%{transform:rotate(44deg) translateY(-5px)} 65%{transform:rotate(8deg)} }
+@keyframes wing-flutter-r { 0%,100%{transform:rotate(-18deg)} 35%{transform:rotate(-44deg) translateY(-5px)} 65%{transform:rotate(-8deg)} }
+.bird--flutter { animation:bird-bounce 0.45s ease-in-out; }
+.bird--flutter .bird__wing--l { animation:wing-flutter-l 0.45s ease-in-out; }
+.bird--flutter .bird__wing--r { animation:wing-flutter-r 0.45s ease-in-out; }
+
+/* ── Mood states ── */
+/* happy — wide-eyed, brighter blue, relaxed brows */
+.bird--happy .bird__brow--l { transform:rotate(-6deg) translateY(-1px); }
+.bird--happy .bird__brow--r { transform:rotate(6deg) translateY(-1px); }
+.bird--happy .bird__body { background:linear-gradient(160deg,#6BB6F4,#4A98E0); }
+.bird--happy .bird__beak { background:#FF8C69; }
+/* worried — furrowed brows inward */
+.bird--worried .bird__brow--l { transform:rotate(-16deg) translateX(4px); }
+.bird--worried .bird__brow--r { transform:rotate(16deg) translateX(-4px); }
+.bird--worried .bird__body { background:linear-gradient(160deg,#5295C8,#3A72B8); }
+/* excited — brows high, wings lifted */
+.bird--excited .bird__brow--l { transform:rotate(-4deg) translateY(-3px); }
+.bird--excited .bird__brow--r { transform:rotate(4deg) translateY(-3px); }
+.bird--excited .bird__body { background:linear-gradient(160deg,#72C0F8,#5AAAE0); }
+.bird--excited .bird__wing--l { transform:rotate(8deg); }
+.bird--excited .bird__wing--r { transform:rotate(-8deg); }
+
+/* Hover easter egg — raises brows (overrides mood brow rules) */
 .bird:hover .bird__brow--l { transform:rotate(-18deg) translateY(-2px); }
 .bird:hover .bird__brow--r { transform:rotate(18deg) translateY(-2px); }
-.bird:hover .bird__eye::after { transform:translate(18%,18%) scale(1.05); }
+
+/* ── Speech bubble ── */
+.bird-bubble {
+  position:absolute; bottom:calc(100% + 10px); left:50%; transform:translateX(-50%);
+  background:var(--surface-card); border:1px solid var(--border-line);
+  border-radius:var(--radius-md); padding:8px 26px 8px 12px;
+  box-shadow:var(--shadow-pop); z-index:20; white-space:nowrap;
+  max-width:240px; white-space:normal;
+  animation:bird-bubble-in 0.18s var(--ease-out);
+}
+.bird-bubble::after {
+  content:""; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+  border:7px solid transparent; border-top-color:var(--surface-card); border-bottom:none; margin-top:-1px;
+}
+.bird-bubble__text { font-size:var(--text-sm); color:var(--text-primary); line-height:1.5; }
+.bird-bubble__close {
+  position:absolute; top:4px; right:4px; background:none; border:none; cursor:pointer;
+  color:var(--text-tertiary); font-size:10px; padding:2px 4px; line-height:1; border-radius:var(--radius-sm);
+  transition:color var(--dur-fast), background var(--dur-fast);
+}
+.bird-bubble__close:hover { color:var(--text-primary); background:var(--surface-hover); }
+@keyframes bird-bubble-in {
+  from { opacity:0; transform:translateX(-50%) translateY(5px); }
+  to   { opacity:1; transform:translateX(-50%) translateY(0); }
+}

@@ -75,7 +75,10 @@
   flex-shrink: 0;
 }
 .detail-tab {
-  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   cursor: pointer;
@@ -90,6 +93,13 @@
 .detail-tab--active {
   color: var(--color-brand);
   border-bottom-color: var(--color-brand);
+}
+.detail-tab__icon {
+  font-size: 13px;
+  line-height: 1;
+}
+.detail-tab__label {
+  font-size: var(--text-xs);
 }
 
 /* ── Body ─────────────────────────────────────────────────────────────── */
