@@ -5,8 +5,8 @@
 //! `mobile_server` reads, so the QR always matches what is actually served.
 
 use anyhow::Result;
-use qrcode::render::unicode;
 use qrcode::QrCode;
+use qrcode::render::unicode;
 
 use crate::cmd::agent::resolve_mur_home;
 use crate::mobile;
@@ -21,10 +21,7 @@ pub fn cmd_pair(name: &str) -> Result<()> {
     let uri = mobile::pairing_uri(&host, port, &token, name);
 
     let code = QrCode::new(uri.as_bytes())?;
-    let qr = code
-        .render::<unicode::Dense1x2>()
-        .quiet_zone(true)
-        .build();
+    let qr = code.render::<unicode::Dense1x2>().quiet_zone(true).build();
 
     println!("\nScan with the MUR mobile app to pair with agent \"{name}\":\n");
     println!("{qr}");

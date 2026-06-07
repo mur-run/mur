@@ -53,8 +53,8 @@ pub fn ensure_pair_token(home: &Path) -> Result<String> {
         std::fs::create_dir_all(parent)?;
     }
     if path.exists() {
-        let token = std::fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let token =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         return Ok(token.trim().to_owned());
     }
     let token = uuid::Uuid::new_v4().to_string();

@@ -21,7 +21,6 @@ pub mod daemon;
 #[allow(dead_code)]
 pub mod cmd;
 pub mod community;
-pub mod mobile;
 pub mod context_api;
 pub mod conversations;
 pub mod cross_agent;
@@ -34,6 +33,7 @@ pub mod extract_llm;
 pub mod federation;
 pub mod inject;
 pub mod interactive;
+pub mod mobile;
 pub mod nudge;
 pub mod paths;
 pub mod retrieve;

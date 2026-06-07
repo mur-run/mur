@@ -15,8 +15,6 @@ mod cli;
 mod cmd;
 mod community;
 // Shared with the daemon + lib; the binary uses only a subset of the helpers.
-#[allow(dead_code)]
-mod mobile;
 mod context_api;
 mod conversations;
 #[allow(dead_code)]
@@ -24,6 +22,8 @@ mod cross_agent;
 mod daemon;
 mod dashboard;
 mod dispatch;
+#[allow(dead_code)]
+mod mobile;
 // Discovery items (cache constants, LLM preference table, test-only fns) are
 // defined for library consumers and tests; the binary only uses a subset.
 mod action_pipeline;

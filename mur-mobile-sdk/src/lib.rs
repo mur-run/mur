@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use mur_common::a2a::{JsonRpcRequest, Message as A2aMessage, MessagePart};
 use mur_common::bridge::envelope::sign_payload;
-use mur_common::identity::{encode_pubkey, AgentIdentity};
+use mur_common::identity::{AgentIdentity, encode_pubkey};
 use tokio::sync::mpsc::{self, UnboundedSender};
 
 pub use error::SdkError;
@@ -76,7 +76,11 @@ pub enum MobileEvent {
     /// A non-fatal error worth surfacing in the UI.
     Error { message: String },
     /// A chunk of Kokoro TTS audio (f32 LE PCM). Accumulate until `done`.
-    AudioChunk { data: Vec<u8>, sample_rate: u32, done: bool },
+    AudioChunk {
+        data: Vec<u8>,
+        sample_rate: u32,
+        done: bool,
+    },
 }
 
 /// Foreign-implemented sink for [`MobileEvent`]s. Swift/Kotlin provide this.
@@ -165,8 +169,8 @@ impl MobileClient {
     ///
     /// Reconnects automatically with exponential backoff on drops.
     pub fn connect_relay(&self, relay_ws_url: String, jwt: String, pair_token: String) {
-        let cmd_tx_slot = self.cmd_tx.clone();     // Arc clone — OK
-        let listener = self.listener.clone();       // Arc clone — OK
+        let cmd_tx_slot = self.cmd_tx.clone(); // Arc clone — OK
+        let listener = self.listener.clone(); // Arc clone — OK
         let pubkey = self.public_key();
         let default_agent = self.default_agent.clone();
 
@@ -174,10 +178,10 @@ impl MobileClient {
         let make_emit = move || {
             let listener = listener.clone();
             move |event: MobileEvent| {
-                if let Ok(guard) = listener.lock() {
-                    if let Some(l) = guard.as_ref() {
-                        l.on_event(event);
-                    }
+                if let Ok(guard) = listener.lock()
+                    && let Some(l) = guard.as_ref()
+                {
+                    l.on_event(event);
                 }
             }
         };
@@ -254,7 +258,9 @@ impl MobileClient {
             .ok()
             .and_then(|g| g.as_ref().map(|tx| tx.send(cmd)));
         if !matches!(sent, Some(Ok(()))) {
-            self.emit(MobileEvent::Error { message: "not connected".to_string() });
+            self.emit(MobileEvent::Error {
+                message: "not connected".to_string(),
+            });
         }
     }
 
@@ -293,20 +299,20 @@ impl MobileClient {
     }
 
     fn emit(&self, event: MobileEvent) {
-        if let Ok(guard) = self.listener.lock() {
-            if let Some(listener) = guard.as_ref() {
-                listener.on_event(event);
-            }
+        if let Ok(guard) = self.listener.lock()
+            && let Some(listener) = guard.as_ref()
+        {
+            listener.on_event(event);
         }
     }
 
     fn make_emitter(&self) -> impl Fn(MobileEvent) + Send + 'static {
         let listener = self.listener.clone();
         move |event| {
-            if let Ok(guard) = listener.lock() {
-                if let Some(l) = guard.as_ref() {
-                    l.on_event(event);
-                }
+            if let Ok(guard) = listener.lock()
+                && let Some(l) = guard.as_ref()
+            {
+                l.on_event(event);
             }
         }
     }

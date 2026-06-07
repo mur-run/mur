@@ -2,7 +2,6 @@ pub mod agent;
 #[allow(unused_imports)]
 pub use agent::resolve_mur_home;
 pub mod agent_companion;
-pub mod agent_pair;
 /// B0 M11.4 — eval-harness JSONL → markdown report aggregator.
 pub(crate) mod agent_eval;
 pub mod agent_export;
@@ -12,6 +11,7 @@ pub(crate) mod agent_history;
 pub mod agent_hooks;
 /// B0 M9.2 — install-time MCP hash + publisher prompt for `mur agent mcp add`.
 pub(crate) mod agent_mcp_pin;
+pub mod agent_pair;
 pub(crate) mod agent_propagate;
 pub(crate) mod agent_rekey;
 /// C4 — schedule add/list/remove/next CLI verbs.
