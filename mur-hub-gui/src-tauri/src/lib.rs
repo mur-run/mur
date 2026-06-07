@@ -13,6 +13,7 @@ pub mod detail;
 pub mod export_muragent;
 pub mod import_muragent;
 pub mod mlx_sidecar;
+pub mod mobile;
 pub mod onboarding;
 pub mod pet;
 pub mod preset;
@@ -452,6 +453,7 @@ pub fn run() {
             brain_badge::nudge_dismiss,
             detail::get_agent_detail,
             detail::update_agent_detail,
+            mobile::mobile_events_read,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

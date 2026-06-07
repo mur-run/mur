@@ -15,6 +15,7 @@ import {
 } from "../types";
 import { CompanionInbox } from "./CompanionInbox";
 import { ChatTab } from "./ChatTab";
+import { MobileTab } from "./MobileTab";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
 import { CATEGORY_COLORS, TAB_ICONS, avatarInitials } from "../utils";
@@ -29,6 +30,7 @@ const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
   mcp: "detail.mcp",
   permissions: "detail.permissions",
   inbox: "detail.inbox",
+  mobile: "detail.mobile",
 };
 
 interface Props {
@@ -199,6 +201,7 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
         {activeTab === "mcp" && <McpTab detail={detail} />}
         {activeTab === "permissions" && <PermissionsTab detail={detail} />}
         {activeTab === "inbox" && <CompanionInbox agentName={agentName} />}
+        {activeTab === "mobile" && <MobileTab agentName={agentName} />}
       </div>
     </aside>
   );

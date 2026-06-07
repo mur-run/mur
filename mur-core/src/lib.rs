@@ -33,6 +33,7 @@ pub mod extract_llm;
 pub mod federation;
 pub mod inject;
 pub mod interactive;
+pub mod mobile;
 pub mod nudge;
 pub mod paths;
 pub mod retrieve;

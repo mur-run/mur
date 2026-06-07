@@ -1,10 +1,15 @@
 mod action_tick;
+mod bonjour;
 mod consumer;
 mod inbox;
 mod lock;
+mod mobile_server;
+mod relay_client;
 mod signal_server;
 mod sleep;
 mod store_health;
+mod stt_sink;
+mod tts_sink;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -82,6 +87,23 @@ async fn main() -> Result<()> {
             signal_server::spawn(token);
         }
         Err(e) => eprintln!("murmurd: signal-server token error: {e:#}"),
+    }
+
+    // P1 — start the mobile WebSocket endpoint (best-effort; failure is non-fatal)
+    match mur_core::mobile::ensure_pair_token(&mur_dir) {
+        Ok(token) => {
+            mobile_server::spawn(mur_dir.clone(), token.clone());
+            bonjour::advertise(mur_core::mobile::mobile_port(), &token);
+
+            // P4: start relay client if configured in ~/.mur/config.yaml
+            let cfg = mur_common::config::Config::load_or_default(&mur_dir.join("config.yaml"));
+            if let (Some(relay_url), Some(api_key)) =
+                (cfg.mobile_relay.relay_url, cfg.mobile_relay.api_key)
+            {
+                relay_client::spawn(mur_dir.clone(), relay_url, api_key);
+            }
+        }
+        Err(e) => eprintln!("murmurd: mobile-server token error: {e:#}"),
     }
 
     let queue_file = consumer::queue_path();
