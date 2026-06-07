@@ -82,8 +82,12 @@ pub async fn run_relay<E>(
     let mut req = match relay_url.as_str().into_client_request() {
         Ok(r) => r,
         Err(e) => {
-            emit(MobileEvent::Error { message: format!("bad relay URL: {e}") });
-            emit(MobileEvent::Disconnected { reason: "bad relay URL".to_string() });
+            emit(MobileEvent::Error {
+                message: format!("bad relay URL: {e}"),
+            });
+            emit(MobileEvent::Disconnected {
+                reason: "bad relay URL".to_string(),
+            });
             return;
         }
     };
@@ -91,14 +95,19 @@ pub async fn run_relay<E>(
         req.headers_mut().insert("Authorization", hv);
     }
 
-    let stream = match tokio_tungstenite::connect_async_tls_with_config(req, None, false, None).await {
-        Ok((stream, _resp)) => stream,
-        Err(e) => {
-            emit(MobileEvent::Error { message: format!("relay connect failed: {e}") });
-            emit(MobileEvent::Disconnected { reason: "relay connect failed".to_string() });
-            return;
-        }
-    };
+    let stream =
+        match tokio_tungstenite::connect_async_tls_with_config(req, None, false, None).await {
+            Ok((stream, _resp)) => stream,
+            Err(e) => {
+                emit(MobileEvent::Error {
+                    message: format!("relay connect failed: {e}"),
+                });
+                emit(MobileEvent::Disconnected {
+                    reason: "relay connect failed".to_string(),
+                });
+                return;
+            }
+        };
     run_frame_loop(stream, hello, cmd_rx, emit, "relay").await;
 }
 
@@ -265,7 +274,10 @@ where
                 .unwrap_or("agent")
                 .to_string(),
             text: text("text"),
-            is_final: payload.get("final").and_then(|v| v.as_bool()).unwrap_or(true),
+            is_final: payload
+                .get("final")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
         }),
         other => tracing::debug!("mur-mobile-sdk: ignoring event {other}"),
     }

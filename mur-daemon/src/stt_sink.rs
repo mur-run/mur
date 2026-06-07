@@ -36,9 +36,7 @@ fn load_stt(mur_home: &Path) -> Option<WhisperStt> {
         let home = mur_home.to_path_buf();
         std::thread::spawn(move || {
             let _ = ensure_model(&home, &WHISPER_SPEC, |_, _| {});
-            tracing::info!(
-                "mobile: whisper model downloaded — restart daemon to enable voice STT"
-            );
+            tracing::info!("mobile: whisper model downloaded — restart daemon to enable voice STT");
         });
         return None;
     }

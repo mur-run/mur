@@ -4,8 +4,8 @@
 use base64::Engine as _;
 use mur_agent_runtime::voice::{
     download::ensure_model,
-    tts::{KokoroTts, KOKORO_SAMPLE_RATE},
-    types::{VoiceModelPaths, KOKORO_ONNX_SPEC, KOKORO_VOICES_SPEC},
+    tts::{KOKORO_SAMPLE_RATE, KokoroTts},
+    types::{KOKORO_ONNX_SPEC, KOKORO_VOICES_SPEC, VoiceModelPaths},
 };
 use mur_common::agent::VoiceId;
 use std::path::Path;

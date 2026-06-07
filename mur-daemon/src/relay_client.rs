@@ -10,7 +10,7 @@
 //!
 //! Reconnects indefinitely with exponential backoff (1 s → 60 s).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -46,7 +46,7 @@ pub fn spawn(mur_home: PathBuf, relay_url: String, api_key: String) {
     });
 }
 
-async fn run_once(mur_home: &PathBuf, relay_url: &str, api_key: &str) -> Result<()> {
+async fn run_once(mur_home: &Path, relay_url: &str, api_key: &str) -> Result<()> {
     let ws_url = format!("{}{RELAY_WS_PATH}", relay_url.trim_end_matches('/'));
 
     let mut req = ws_url.into_client_request()?;
@@ -135,7 +135,7 @@ type WsWrite = futures_util::stream::SplitSink<
 >;
 
 async fn handle_frame(
-    home: &PathBuf,
+    home: &Path,
     write: &mut WsWrite,
     frame: ClientFrame,
     audio_buf: &mut Vec<u8>,
@@ -192,7 +192,7 @@ async fn handle_frame(
 
         ClientFrame::AudioStreamEnd => {
             let pcm = std::mem::take(audio_buf);
-            let home_c = home.clone();
+            let home_c = home.to_path_buf();
             let transcript_opt =
                 tokio::task::spawn_blocking(move || crate::stt_sink::transcribe(&home_c, &pcm))
                     .await
@@ -238,14 +238,14 @@ async fn handle_frame(
 }
 
 async fn agent_turn(
-    home: &PathBuf,
+    home: &Path,
     write: &mut WsWrite,
     agent: &str,
     user_text: &str,
     method: String,
     params: Value,
 ) -> Result<()> {
-    let home_c = home.clone();
+    let home_c = home.to_path_buf();
     let agent_c = agent.to_string();
     let dialed = tokio::task::spawn_blocking(move || {
         dial_method(&home_c, &agent_c, &method, params, DialMode::Auto)
@@ -269,7 +269,7 @@ async fn agent_turn(
     .await?;
 
     if !reply_text.starts_with("[error]") {
-        let home_c = home.clone();
+        let home_c = home.to_path_buf();
         let text = reply_text.clone();
         if let Some((b64, sample_rate)) =
             tokio::task::spawn_blocking(move || crate::tts_sink::synthesize(&home_c, &text))
@@ -316,7 +316,7 @@ fn extract_user_text(params: Option<&Value>) -> String {
         .unwrap_or_default()
 }
 
-fn extract_agent(params: Option<&Value>, home: &PathBuf) -> String {
+fn extract_agent(params: Option<&Value>, home: &Path) -> String {
     let name = params
         .and_then(|p| p.get("agent"))
         .and_then(|a| a.as_str())
