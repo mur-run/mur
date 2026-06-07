@@ -17,6 +17,7 @@ import { CompanionInbox } from "./CompanionInbox";
 import { ChatTab } from "./ChatTab";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
+import { CATEGORY_COLORS, TAB_ICONS, avatarInitials } from "../utils";
 
 // Tab → i18n key map (replaces the hardcoded TAB_LABELS lookup).
 const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
@@ -90,10 +91,16 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   }
 
   function Header({ name }: { name: string }) {
+    const avatarColor = CATEGORY_COLORS[entry?.category ?? "custom"] ?? "#64748B";
     return (
       <div className="detail-panel__header">
         <div className="detail-panel__top">
-          <div className="detail-panel__avatar">🐦</div>
+          <div
+            className="detail-panel__avatar"
+            style={{ background: avatarColor, color: "#fff", fontSize: "18px", fontWeight: 700 }}
+          >
+            {avatarInitials(name)}
+          </div>
           <div className="detail-panel__ident">
             <div className="detail-panel__name">{name}</div>
             <span className={`pill pill--${isRunning ? "run" : "idle"}`}>
@@ -168,8 +175,10 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
             key={tab}
             className={`detail-tab${activeTab === tab ? " detail-tab--active" : ""}`}
             onClick={() => setActiveTab(tab)}
+            title={t(TAB_LABEL_KEYS[tab])}
           >
-            {t(TAB_LABEL_KEYS[tab])}
+            <span className="detail-tab__icon">{TAB_ICONS[tab]}</span>
+            <span className="detail-tab__label">{t(TAB_LABEL_KEYS[tab])}</span>
           </span>
         ))}
       </div>

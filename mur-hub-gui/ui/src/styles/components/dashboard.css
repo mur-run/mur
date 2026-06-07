@@ -27,6 +27,7 @@
 .sidebar-item {
   display: flex;
   align-items: center;
+  gap: 6px;
   justify-content: space-between;
   padding: 6px 10px;
   border-radius: 6px;
@@ -34,6 +35,11 @@
   text-align: left;
   font-size: 13px;
   transition: background 0.1s;
+}
+.sidebar-item__icon {
+  font-size: 14px;
+  line-height: 1;
+  flex: none;
 }
 .sidebar-item:hover { background: var(--surface-hover); }
 .sidebar-item--active {

@@ -126,10 +126,35 @@ export function ChatTab({ agentName, displayName }: Props) {
   // Show the dots only before anything (thinking or answer) has streamed.
   const awaitingFirstToken = busy && !hasAnswer && (thinking === null || thinking.length === 0);
 
+  function handleSuggest(text: string) {
+    setInput(text);
+  }
+
+  function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setInput(e.target.value);
+    e.target.style.height = "auto";
+    e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+  }
+
   return (
     <div className="chat">
       <div className="chat__log">
-        {idle && <div className="chat__empty">{t("chat.empty", { name: displayName })}</div>}
+        {idle && (
+          <div className="chat__empty-wrap">
+            <p className="chat__empty">{t("chat.empty", { name: displayName })}</p>
+            <div className="chat__suggestions">
+              {(["chat.suggest.0", "chat.suggest.1", "chat.suggest.2"] as const).map((k) => (
+                <button
+                  key={k}
+                  className="chat__suggest-btn"
+                  onClick={() => handleSuggest(t(k))}
+                >
+                  {t(k)}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {messages.map((m, i) => (
           <div key={i} className={`chat__msg chat__msg--${m.role}`}>
             {m.text}
@@ -162,7 +187,7 @@ export function ChatTab({ agentName, displayName }: Props) {
         <textarea
           className="chat__input"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={handleTextareaChange}
           onKeyDown={onKeyDown}
           placeholder={t("chat.placeholder", { name: displayName })}
           rows={1}
