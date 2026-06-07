@@ -62,6 +62,25 @@ pub struct Config {
     // --- nudge additions ---
     #[serde(default)]
     pub nudge: NudgeConfig,
+
+    // --- mobile P4 additions ---
+    #[serde(default)]
+    pub mobile_relay: MobileRelayConfig,
+}
+
+/// Configuration for the mobile relay (P4).
+/// Stored in ~/.mur/config.yaml under the `mobile_relay:` key.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MobileRelayConfig {
+    /// Base URL of the mur-server relay, e.g. "wss://relay.mur.run".
+    /// Leave blank to disable relay forwarding on the Mac daemon side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_url: Option<String>,
+
+    /// API key or JWT used by the Mac daemon to authenticate with the relay.
+    /// The value is typically a `mur_...` API key from app.mur.run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 impl Config {

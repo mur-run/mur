@@ -1,0 +1,37 @@
+[package]
+name = "mur-mobile-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "MUR mobile core SDK: network A2A client, Ed25519 envelopes, and audio framing, exposed to Swift/Kotlin via UniFFI."
+
+[lib]
+name = "mur_mobile_sdk"
+# cdylib + staticlib for the iOS XCFramework / Android .so; `lib` so Rust
+# integration tests and other crates can link the core directly.
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[features]
+# Enables the bundled `uniffi-bindgen` binary used to generate Swift/Kotlin
+# bindings. Off by default so normal workspace builds stay lean.
+cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[dependencies]
+mur-common = { path = "../mur-common" }
+uniffi = "0.31"
+tokio = { workspace = true }
+tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
+futures-util = "0.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+base64 = "0.22"
