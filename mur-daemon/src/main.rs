@@ -4,12 +4,12 @@ mod consumer;
 mod inbox;
 mod lock;
 mod mobile_server;
-mod signal_server;
 mod relay_client;
-mod stt_sink;
-mod tts_sink;
+mod signal_server;
 mod sleep;
 mod store_health;
+mod stt_sink;
+mod tts_sink;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -96,13 +96,10 @@ async fn main() -> Result<()> {
             bonjour::advertise(mur_core::mobile::mobile_port(), &token);
 
             // P4: start relay client if configured in ~/.mur/config.yaml
-            let cfg = mur_common::config::Config::load_or_default(
-                &mur_dir.join("config.yaml"),
-            );
-            if let (Some(relay_url), Some(api_key)) = (
-                cfg.mobile_relay.relay_url,
-                cfg.mobile_relay.api_key,
-            ) {
+            let cfg = mur_common::config::Config::load_or_default(&mur_dir.join("config.yaml"));
+            if let (Some(relay_url), Some(api_key)) =
+                (cfg.mobile_relay.relay_url, cfg.mobile_relay.api_key)
+            {
                 relay_client::spawn(mur_dir.clone(), relay_url, api_key);
             }
         }

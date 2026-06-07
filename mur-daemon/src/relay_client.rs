@@ -16,11 +16,11 @@ use std::time::Duration;
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use mur_common::mobile::{ClientFrame, ServerFrame};
-use mur_core::a2a_dial::{canonicalize_agent_name, dial_method, DialMode};
-use serde_json::{json, Value};
+use mur_core::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
+use serde_json::{Value, json};
 use tokio_tungstenite::{
     connect_async_tls_with_config,
-    tungstenite::{client::IntoClientRequest, Message},
+    tungstenite::{Message, client::IntoClientRequest},
 };
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
@@ -130,9 +130,7 @@ async fn run_once(mur_home: &PathBuf, relay_url: &str, api_key: &str) -> Result<
 }
 
 type WsWrite = futures_util::stream::SplitSink<
-    tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     Message,
 >;
 
@@ -146,7 +144,11 @@ async fn handle_frame(
     use mur_common::bridge::envelope::verify_envelope_with_pubkey;
 
     match frame {
-        ClientFrame::Hello { pubkey: _, token: _, agent } => {
+        ClientFrame::Hello {
+            pubkey: _,
+            token: _,
+            agent,
+        } => {
             let canonical = canonicalize_agent_name(home, &agent);
             relay_send(write, &ServerFrame::Paired { agent: canonical }).await?;
         }
@@ -156,7 +158,9 @@ async fn handle_frame(
             if verify_envelope_with_pubkey(&envelope, &pubkey).is_err() {
                 relay_send(
                     write,
-                    &ServerFrame::Rejected { reason: "bad signature".to_string() },
+                    &ServerFrame::Rejected {
+                        reason: "bad signature".to_string(),
+                    },
                 )
                 .await?;
                 return Ok(());
@@ -199,8 +203,14 @@ async fn handle_frame(
                 None => return Ok(()),
             };
 
-            relay_send(write, &ServerFrame::Transcript { text: text.clone(), is_final: true })
-                .await?;
+            relay_send(
+                write,
+                &ServerFrame::Transcript {
+                    text: text.clone(),
+                    is_final: true,
+                },
+            )
+            .await?;
 
             let msg = mur_common::a2a::Message {
                 role: "user".to_string(),
@@ -213,7 +223,15 @@ async fn handle_frame(
                 m.insert("message".to_string(), serde_json::to_value(&msg)?);
                 Value::Object(m)
             };
-            agent_turn(home, write, &agent, &text, "message/send".to_string(), params).await?;
+            agent_turn(
+                home,
+                write,
+                &agent,
+                &text,
+                "message/send".to_string(),
+                params,
+            )
+            .await?;
         }
     }
     Ok(())
@@ -260,7 +278,11 @@ async fn agent_turn(
         {
             relay_send(
                 write,
-                &ServerFrame::AudioChunk { base64: b64, sample_rate, done: true },
+                &ServerFrame::AudioChunk {
+                    base64: b64,
+                    sample_rate,
+                    done: true,
+                },
             )
             .await?;
         }
@@ -271,7 +293,8 @@ async fn agent_turn(
 async fn relay_send(write: &mut WsWrite, frame: &ServerFrame) -> Result<()> {
     let payload_str = serde_json::to_string(frame)?;
     let payload_val: Value = serde_json::from_str(&payload_str)?;
-    let wrapped = serde_json::to_string(&json!({ "type": "mobile_frame", "payload": payload_val }))?;
+    let wrapped =
+        serde_json::to_string(&json!({ "type": "mobile_frame", "payload": payload_val }))?;
     write.send(Message::Text(wrapped.into())).await?;
     Ok(())
 }
@@ -305,16 +328,16 @@ fn extract_reply_text(value: &Value) -> String {
     if let Some(messages) = value.get("messages").and_then(|m| m.as_array()) {
         for message in messages.iter().rev() {
             let role = message.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            if role == "agent" || role == "assistant" {
-                if let Some(parts) = message.get("parts").and_then(|p| p.as_array()) {
-                    let text: String = parts
-                        .iter()
-                        .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
-                        .collect::<Vec<_>>()
-                        .join("");
-                    if !text.is_empty() {
-                        return text;
-                    }
+            if (role == "agent" || role == "assistant")
+                && let Some(parts) = message.get("parts").and_then(|p| p.as_array())
+            {
+                let text: String = parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("");
+                if !text.is_empty() {
+                    return text;
                 }
             }
         }

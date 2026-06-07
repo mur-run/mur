@@ -21,18 +21,18 @@
 //! follow-up (the paired-device store here is the daemon-side equivalent).
 
 use anyhow::{Context, Result};
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::Router;
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use axum::routing::get;
-use axum::Router;
-use chrono::Utc;
 use base64::Engine as _;
+use chrono::Utc;
 use mur_common::a2a::{JsonRpcRequest, Message as A2aMessage, MessagePart};
 use mur_common::bridge::envelope::verify_envelope_with_pubkey;
-use mur_common::mobile::{ClientFrame, ServerFrame, MOBILE_WS_PATH};
-use mur_core::a2a_dial::{canonicalize_agent_name, dial_method, DialMode};
-use serde_json::{json, Value};
+use mur_common::mobile::{ClientFrame, MOBILE_WS_PATH, ServerFrame};
+use mur_core::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -144,9 +144,14 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
         None => return,
     };
 
-    if send_frame(&mut socket, &ServerFrame::Paired { agent: agent.clone() })
-        .await
-        .is_err()
+    if send_frame(
+        &mut socket,
+        &ServerFrame::Paired {
+            agent: agent.clone(),
+        },
+    )
+    .await
+    .is_err()
     {
         return;
     }
@@ -191,8 +196,7 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                 let user_text = extract_user_text(req.params.as_ref());
                 let method = req.method.clone();
                 let params = req.params.clone().unwrap_or(Value::Null);
-                if !handle_agent_turn(&mut socket, &state, &agent, &user_text, method, params)
-                    .await
+                if !handle_agent_turn(&mut socket, &state, &agent, &user_text, method, params).await
                 {
                     break;
                 }
@@ -233,14 +237,19 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                 // SFSpeech partial transcript with the authoritative text.
                 let _ = send_frame(
                     &mut socket,
-                    &ServerFrame::Transcript { text: transcript_text.clone(), is_final: true },
+                    &ServerFrame::Transcript {
+                        text: transcript_text.clone(),
+                        is_final: true,
+                    },
                 )
                 .await;
 
                 // Dial agent using the authoritative transcript text.
                 let msg = A2aMessage {
                     role: "user".to_string(),
-                    parts: vec![MessagePart::Text { text: transcript_text.clone() }],
+                    parts: vec![MessagePart::Text {
+                        text: transcript_text.clone(),
+                    }],
                 };
                 let params = {
                     let mut m = serde_json::Map::new();
@@ -278,11 +287,16 @@ async fn handle_agent_turn(
     method: String,
     params: Value,
 ) -> bool {
-    mirror(state.mur_home.as_path(), agent, "mobile.transcript", &json!({
-        "role": "user",
-        "text": user_text,
-        "final": true,
-    }));
+    mirror(
+        state.mur_home.as_path(),
+        agent,
+        "mobile.transcript",
+        &json!({
+            "role": "user",
+            "text": user_text,
+            "final": true,
+        }),
+    );
 
     let home = state.mur_home.clone();
     let agent_c = agent.to_string();
@@ -297,7 +311,12 @@ async fn handle_agent_turn(
         Err(e) => format!("[error] dial task: {e}"),
     };
 
-    mirror(state.mur_home.as_path(), agent, "mobile.reply", &json!({ "text": reply_text }));
+    mirror(
+        state.mur_home.as_path(),
+        agent,
+        "mobile.reply",
+        &json!({ "text": reply_text }),
+    );
     if send_frame(
         socket,
         &ServerFrame::Event {
@@ -322,7 +341,11 @@ async fn handle_agent_turn(
         {
             let _ = send_frame(
                 socket,
-                &ServerFrame::AudioChunk { base64: b64, sample_rate, done: true },
+                &ServerFrame::AudioChunk {
+                    base64: b64,
+                    sample_rate,
+                    done: true,
+                },
             )
             .await;
         }
@@ -385,16 +408,16 @@ fn extract_reply_text(value: &Value) -> String {
     if let Some(messages) = value.get("messages").and_then(|m| m.as_array()) {
         for message in messages.iter().rev() {
             let role = message.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            if role == "agent" || role == "assistant" {
-                if let Some(parts) = message.get("parts").and_then(|p| p.as_array()) {
-                    let text: String = parts
-                        .iter()
-                        .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
-                        .collect::<Vec<_>>()
-                        .join("");
-                    if !text.is_empty() {
-                        return text;
-                    }
+            if (role == "agent" || role == "assistant")
+                && let Some(parts) = message.get("parts").and_then(|p| p.as_array())
+            {
+                let text: String = parts
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("");
+                if !text.is_empty() {
+                    return text;
                 }
             }
         }
@@ -451,8 +474,8 @@ mod tests {
     use super::*;
     use futures_util::{SinkExt, StreamExt};
     use mur_common::a2a::{JsonRpcRequest, Message as A2aMessage, MessagePart};
-    use mur_common::bridge::envelope::{sign_payload, SignedEnvelope};
-    use mur_common::identity::{encode_pubkey, AgentIdentity};
+    use mur_common::bridge::envelope::{SignedEnvelope, sign_payload};
+    use mur_common::identity::{AgentIdentity, encode_pubkey};
     use std::net::SocketAddr;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -482,7 +505,9 @@ mod tests {
 
     async fn connect(addr: SocketAddr) -> Ws {
         let url = format!("ws://{addr}{MOBILE_WS_PATH}");
-        let (ws, _) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+        let (ws, _) = tokio_tungstenite::connect_async(url.as_str())
+            .await
+            .unwrap();
         ws
     }
 
@@ -512,7 +537,10 @@ mod tests {
             }],
         };
         let mut params = serde_json::Map::new();
-        params.insert("agent".to_string(), serde_json::Value::String("mur".to_string()));
+        params.insert(
+            "agent".to_string(),
+            serde_json::Value::String("mur".to_string()),
+        );
         params.insert("message".to_string(), serde_json::to_value(&msg).unwrap());
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -537,7 +565,10 @@ mod tests {
             },
         )
         .await;
-        assert!(matches!(recv_server(&mut ws).await, ServerFrame::Rejected { .. }));
+        assert!(matches!(
+            recv_server(&mut ws).await,
+            ServerFrame::Rejected { .. }
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -574,7 +605,10 @@ mod tests {
             },
         )
         .await;
-        assert!(matches!(recv_server(&mut ws).await, ServerFrame::Paired { .. }));
+        assert!(matches!(
+            recv_server(&mut ws).await,
+            ServerFrame::Paired { .. }
+        ));
 
         // An envelope signed by a DIFFERENT identity than the paired one.
         let id_b = AgentIdentity::generate();
@@ -585,7 +619,10 @@ mod tests {
             },
         )
         .await;
-        assert!(matches!(recv_server(&mut ws).await, ServerFrame::Rejected { .. }));
+        assert!(matches!(
+            recv_server(&mut ws).await,
+            ServerFrame::Rejected { .. }
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -602,7 +639,10 @@ mod tests {
             },
         )
         .await;
-        assert!(matches!(recv_server(&mut ws).await, ServerFrame::Paired { .. }));
+        assert!(matches!(
+            recv_server(&mut ws).await,
+            ServerFrame::Paired { .. }
+        ));
 
         send_frame(
             &mut ws,
