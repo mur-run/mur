@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
@@ -10,28 +11,13 @@ import { MuragentImportModal } from "./MuragentImportModal";
 import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
 import { Mascot } from "./Mascot";
+import type { MascotMood } from "./Mascot";
 import { useT } from "../i18n";
+import { CATEGORY_COLORS, CATEGORY_ICONS, avatarInitials, timeGreetingKey } from "../utils";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
-const CATEGORY_COLORS: Record<string, string> = {
-  research: "#4F46E5",
-  automation: "#059669",
-  monitor: "#D97706",
-  notify: "#DC2626",
-  commerce: "#7C3AED",
-  custom: "#6B7280",
-};
-
 const ALL_CATEGORIES = ["research", "automation", "monitor", "notify", "commerce", "custom"];
-
-function avatarInitials(displayName: string): string {
-  return displayName
-    .split(" ")
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? "")
-    .join("");
-}
 
 function showToast(msg: string) {
   const el = document.createElement("div");
@@ -179,7 +165,7 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
           </div>
           <div>
             <p className="grid-card__name">{agent.display_name}</p>
-            <p className="grid-card__cat">{agent.category}</p>
+            <p className="grid-card__cat">{t(`category.${agent.category}` as Parameters<typeof t>[0])}</p>
           </div>
         </div>
         <div className="grid-card__actions">
@@ -258,7 +244,7 @@ export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
         </div>
         <span className="list-name">{agent.display_name}</span>
       </div>
-      <span className="list-category">{agent.category}</span>
+      <span className="list-category">{t(`category.${agent.category}` as Parameters<typeof t>[0])}</span>
       <span className="list-model" title={agent.model_id}>
         {model}
       </span>
@@ -298,7 +284,8 @@ export function Sidebar({ activeCategory, agents, onSelect }: SidebarProps) {
           className={`sidebar-item${activeCategory === cat ? " sidebar-item--active" : ""}`}
           onClick={() => onSelect(cat)}
         >
-          {cat} <span className="badge">{counts[cat]}</span>
+          <span className="sidebar-item__icon">{CATEGORY_ICONS[cat]}</span>
+          {t(`category.${cat}` as Parameters<typeof t>[0])} <span className="badge">{counts[cat]}</span>
         </button>
       ))}
     </nav>
@@ -349,6 +336,24 @@ export function DashboardApp() {
   ).length;
   const idleCount = agents.length - runningCount;
 
+  const mascotMood: MascotMood =
+    agents.length === 0
+      ? "excited"
+      : runningCount === agents.length
+        ? "happy"
+        : runningCount === 0
+          ? "worried"
+          : "idle";
+
+  const mascotBubble =
+    mascotMood === "excited"
+      ? t("mascot.bubble.excited")
+      : mascotMood === "happy"
+        ? t("mascot.bubble.happy")
+        : mascotMood === "worried"
+          ? t("mascot.bubble.worried")
+          : t("mascot.bubble.idle", { running: runningCount, idle: idleCount });
+
   useEffect(() => {
     const unSelect = listen<string>("select-agent", (e) => {
       setTimeout(() => {
@@ -373,6 +378,26 @@ export function DashboardApp() {
     };
   }, []);
 
+  // Listen for "open-wizard" event emitted by the popover's New Agent button
+  useEffect(() => {
+    const unlisten = listen("open-wizard", () => setWizardOpen(true));
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
+  // Auto-resize window when detail panel opens/closes
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const size = selectedAgent
+      ? new LogicalSize(1200, 720)
+      : new LogicalSize(960, 620);
+    win.setSize(size).catch(console.error);
+    if (selectedAgent) {
+      win.setMinSize(new LogicalSize(900, 480)).catch(console.error);
+    } else {
+      win.setMinSize(new LogicalSize(720, 480)).catch(console.error);
+    }
+  }, [selectedAgent]);
+
   // First-launch check: show banner if not running from /Applications
   useEffect(() => {
     invoke<{ is_first_launch: boolean; in_applications: boolean }>(
@@ -387,10 +412,13 @@ export function DashboardApp() {
     }).catch(() => {});
   }, []);
 
-  // Check nudge dismissal on mount.
+  // Check nudge dismissal on mount; show upgrade banner when not dismissed and a model is available.
   useEffect(() => {
     invoke<[boolean, string | null]>("nudge_status")
-      .then(([dismissed]) => setNudgeDismissed(dismissed))
+      .then(([dismissed, model]) => {
+        setNudgeDismissed(dismissed);
+        if (!dismissed && model) setShowUpgradeNudge(true);
+      })
       .catch(() => {});
   }, []);
 
@@ -545,9 +573,9 @@ export function DashboardApp() {
         </div>
 
         <div className="dashboard__hero">
-          <Mascot floating />
+          <Mascot floating mood={mascotMood} bubble={mascotBubble} />
           <div>
-            <h3>{t("dashboard.greeting", { name: "there" })}</h3>
+            <h3>{t(timeGreetingKey())}</h3>
             <p>
               {t("dashboard.flockStatus", {
                 running: runningCount,
@@ -570,7 +598,7 @@ export function DashboardApp() {
         <div className="dashboard-content">
           {visible.length === 0 ? (
             <div className="empty-state">
-              <Mascot floating size={96} />
+              <Mascot floating size={96} mood="excited" bubble={t("mascot.bubble.excited")} />
               <h3>{t("dashboard.empty.title")}</h3>
               <p>{t("dashboard.empty.body")}</p>
               <button className="btn btn--primary" onClick={() => setWizardOpen(true)}>
