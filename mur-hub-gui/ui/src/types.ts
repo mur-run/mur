@@ -132,7 +132,8 @@ export type DetailTab =
   | "skills"
   | "mcp"
   | "permissions"
-  | "inbox";
+  | "inbox"
+  | "mobile";
 
 export const ALL_DETAIL_TABS: DetailTab[] = [
   "chat",
@@ -143,6 +144,7 @@ export const ALL_DETAIL_TABS: DetailTab[] = [
   "mcp",
   "permissions",
   "inbox",
+  "mobile",
 ];
 
 export const TAB_LABELS: Record<DetailTab, string> = {
@@ -154,4 +156,5 @@ export const TAB_LABELS: Record<DetailTab, string> = {
   mcp: "MCP",
   permissions: "Permissions",
   inbox: "Inbox",
+  mobile: "Mobile",
 };

@@ -352,3 +352,41 @@
   font-size: var(--text-xs, 12px);
   margin-top: 4px;
 }
+
+/* ── Mobile mirror tab ──────────────────────────────────────────────────── */
+.mobile-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  overflow-y: auto;
+  flex: 1;
+}
+.mobile-tab--empty {
+  align-items: center;
+  justify-content: center;
+}
+.mobile-tab__hint {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+.mobile-tab__bubble {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mobile-tab__bubble--user {
+  align-self: flex-end;
+  background: var(--accent-blue, #3570C8);
+  color: #fff;
+}
+.mobile-tab__bubble--agent {
+  align-self: flex-start;
+  background: var(--surface-secondary);
+}
+.mobile-tab__text { font-size: var(--text-sm); }
+.mobile-tab__time { font-size: var(--text-xs); opacity: 0.6; }

@@ -1,0 +1,9 @@
+# XcodeGen output (regenerate with `xcodegen generate`)
+*.xcodeproj
+
+# Build artifacts
+Frameworks/*.xcframework
+Generated/headers/
+DerivedData/
+*.xcuserstate
+.DS_Store
