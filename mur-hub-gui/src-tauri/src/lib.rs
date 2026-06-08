@@ -13,6 +13,7 @@ pub mod detail;
 pub mod export_muragent;
 pub mod hitl;
 pub mod import_muragent;
+pub mod notif;
 pub mod mlx_sidecar;
 pub mod mobile;
 pub mod onboarding;
@@ -456,6 +457,8 @@ pub fn run() {
             detail::get_agent_detail,
             detail::update_agent_detail,
             mobile::mobile_events_read,
+            notif::agent_get_notif_config,
+            notif::agent_set_notif_config,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
