@@ -1,4 +1,5 @@
 pub mod bash;
+pub mod naming;
 
 use crate::llm::ToolDef;
 
