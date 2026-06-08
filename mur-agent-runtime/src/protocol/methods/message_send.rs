@@ -65,9 +65,18 @@ impl MethodHandler for MessageSendHandler {
             .and_then(|c| c.get("task_id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // Caller-supplied id for this turn (distinct from `context.task_id`,
+        // which threads multi-turn context). When present the runner honors it
+        // so the client can cancel by an id it already holds; absent → None,
+        // back-compatible.
+        let task_id = p
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let spec = TaskSpec {
             input: message,
             context_task_id,
+            task_id,
         };
 
         self.emit_progress("pending", "llm_reasoning", None).await;
@@ -103,5 +112,47 @@ impl MethodHandler for MessageSendHandler {
                 serde_json::to_value(&task).map_err(|e| HandlerError::Internal(e.to_string()))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::task_runner::TaskRunner;
+
+    fn user_params(task_id: Option<&str>) -> Value {
+        let mut p = json!({
+            "message": { "role": "user", "parts": [{ "kind": "text", "text": "hi" }] }
+        });
+        if let Some(id) = task_id {
+            p["task_id"] = json!(id);
+        }
+        p
+    }
+
+    #[tokio::test]
+    async fn supplied_task_id_flows_into_returned_task() {
+        let handler = MessageSendHandler::new(Arc::new(TaskRunner::new_stub_echo()));
+        let out = handler
+            .handle(Some(user_params(Some("task-from-client"))))
+            .await
+            .expect("handle ok");
+        assert_eq!(
+            out.get("id").and_then(Value::as_str),
+            Some("task-from-client")
+        );
+    }
+
+    #[tokio::test]
+    async fn absent_task_id_is_back_compatible() {
+        let handler = MessageSendHandler::new(Arc::new(TaskRunner::new_stub_echo()));
+        let out = handler
+            .handle(Some(user_params(None)))
+            .await
+            .expect("handle ok");
+        // Runner generated its own id (prefixed "task-"), not a client id.
+        let id = out.get("id").and_then(Value::as_str).unwrap_or_default();
+        assert!(id.starts_with("task-"), "generated id, got {id:?}");
+        assert_ne!(id, "task-from-client");
     }
 }
