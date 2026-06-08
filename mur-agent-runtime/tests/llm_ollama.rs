@@ -1,6 +1,6 @@
 use httpmock::prelude::*;
 use mur_agent_runtime::llm::ollama::OllamaClient;
-use mur_agent_runtime::llm::{LlmClient, LlmMessage, LlmRequest};
+use mur_agent_runtime::llm::{LlmClient, LlmRequest, RichMessage};
 use serde_json::json;
 
 #[tokio::test]
@@ -23,12 +23,13 @@ async fn ollama_generate_returns_text_and_usage() {
     let client = OllamaClient::new(server.base_url(), "llama3.2".into());
     let resp = client
         .generate(LlmRequest {
-            messages: vec![LlmMessage {
+            messages: vec![RichMessage::Text {
                 role: "user".into(),
                 content: "Hi".into(),
             }],
             temperature: Some(0.2),
             max_tokens: Some(100),
+            tools: vec![],
         })
         .await
         .unwrap();
