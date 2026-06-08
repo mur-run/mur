@@ -146,6 +146,11 @@ mod tests {
             "LlmMessage",
             "LlmRequest",
             "LlmResponse",
+            "RichMessage",
+            "StopReason",
+            "ToolCallResult",
+            "ToolDef",
+            "ToolResultEntry",
             // Provider sub-modules + their test stubs
             "anthropic",
             "ollama",

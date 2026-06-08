@@ -182,6 +182,102 @@ impl AnthropicClient {
     }
 }
 
+/// Convert `RichMessage` list to Anthropic wire format.
+/// Returns `(system_text, conversation_messages, agent_text_for_stream)`.
+/// Agent_text is the last assistant text for streaming (unused in non-streaming).
+fn rich_messages_to_anthropic(
+    msgs: &[RichMessage],
+) -> (Option<String>, Vec<serde_json::Value>, Option<String>) {
+    let mut system_chunks: Vec<String> = Vec::new();
+    let mut convo: Vec<serde_json::Value> = Vec::new();
+
+    for m in msgs {
+        match m {
+            RichMessage::Text { role, content } => {
+                if role == "system" {
+                    system_chunks.push(content.clone());
+                } else {
+                    let r = if role == "agent" { "assistant" } else { role.as_str() };
+                    convo.push(json!({"role": r, "content": content}));
+                }
+            }
+            RichMessage::ToolUse { text, calls } => {
+                let mut parts: Vec<serde_json::Value> = Vec::new();
+                if let Some(t) = text {
+                    if !t.is_empty() {
+                        parts.push(json!({"type": "text", "text": t}));
+                    }
+                }
+                for c in calls {
+                    parts.push(json!({
+                        "type": "tool_use",
+                        "id": c.call_id,
+                        "name": c.tool_name,
+                        "input": c.input,
+                    }));
+                }
+                convo.push(json!({"role": "assistant", "content": parts}));
+            }
+            RichMessage::ToolResults { results } => {
+                let parts: Vec<serde_json::Value> = results.iter().map(|r| json!({
+                    "type": "tool_result",
+                    "tool_use_id": r.call_id,
+                    "content": r.content,
+                    "is_error": r.is_error,
+                })).collect();
+                convo.push(json!({"role": "user", "content": parts}));
+            }
+        }
+    }
+
+    let system = if system_chunks.is_empty() {
+        None
+    } else {
+        Some(system_chunks.join("\n\n"))
+    };
+    (system, convo, None)
+}
+
+fn parse_response_body(
+    v: &serde_json::Value,
+) -> Result<(String, Vec<crate::llm::ToolCallResult>, crate::llm::StopReason), LlmError> {
+    use crate::llm::{StopReason, ToolCallResult};
+
+    let content = v["content"]
+        .as_array()
+        .ok_or_else(|| LlmError::InvalidResponse("missing content array".into()))?;
+
+    let text = content
+        .iter()
+        .filter_map(|b| {
+            if b["type"].as_str() == Some("text") {
+                b["text"].as_str().map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    let tool_calls: Vec<ToolCallResult> = content
+        .iter()
+        .filter(|b| b["type"].as_str() == Some("tool_use"))
+        .map(|b| ToolCallResult {
+            call_id: b["id"].as_str().unwrap_or("").to_string(),
+            tool_name: b["name"].as_str().unwrap_or("").to_string(),
+            input: b["input"].clone(),
+        })
+        .collect();
+
+    let stop_reason = match v["stop_reason"].as_str() {
+        Some("tool_use") => StopReason::ToolUse,
+        Some("max_tokens") => StopReason::MaxTokens,
+        _ => StopReason::EndTurn,
+    };
+
+    Ok((text, tool_calls, stop_reason))
+}
+
 #[async_trait]
 impl LlmClient for AnthropicClient {
     fn model_name(&self) -> &str {
@@ -189,34 +285,27 @@ impl LlmClient for AnthropicClient {
     }
 
     async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
-        // Split out system messages — Anthropic puts them at the top level.
-        let mut system_chunks: Vec<String> = Vec::new();
-        let mut convo: Vec<serde_json::Value> = Vec::new();
-        for m in &req.messages {
-            match m {
-                RichMessage::Text { role, content } => {
-                    if role == "system" {
-                        system_chunks.push(content.clone());
-                    } else {
-                        // Anthropic accepts roles "user" and "assistant" only.
-                        let r = if role == "agent" { "assistant" } else { role.as_str() };
-                        convo.push(json!({"role": r, "content": content}));
-                    }
-                }
-                _ => {} // tool variants handled in later tasks
-            }
-        }
+        let (system, convo, _) = rich_messages_to_anthropic(&req.messages);
 
         let mut body = json!({
             "model": self.model,
             "max_tokens": req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             "messages": convo,
         });
-        if !system_chunks.is_empty() {
-            body["system"] = json!(system_chunks.join("\n\n"));
+        if let Some(s) = system {
+            body["system"] = json!(s);
         }
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
+        }
+        if !req.tools.is_empty() {
+            body["tools"] = serde_json::json!(
+                req.tools.iter().map(|t| serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                })).collect::<Vec<_>>()
+            );
         }
 
         warn_if_oauth_key_misconfigured(&self.api_key, &self.base_url);
@@ -262,20 +351,7 @@ impl LlmClient for AnthropicClient {
         let v: serde_json::Value = serde_json::from_str(&body_text)
             .map_err(|e| LlmError::Http(format!("parse response: {e}")))?;
 
-        // Extract text from `content[0..n]` array of blocks; concatenate text blocks.
-        let text = v["content"]
-            .as_array()
-            .ok_or_else(|| LlmError::InvalidResponse("missing content array".into()))?
-            .iter()
-            .filter_map(|b| {
-                if b["type"].as_str() == Some("text") {
-                    b["text"].as_str().map(str::to_string)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("");
+        let (text, tool_calls, stop_reason) = parse_response_body(&v)?;
         let input_tokens = v["usage"]["input_tokens"].as_u64().unwrap_or(0);
         let output_tokens = v["usage"]["output_tokens"].as_u64().unwrap_or(0);
         Ok(LlmResponse {
@@ -283,8 +359,8 @@ impl LlmClient for AnthropicClient {
             input_tokens,
             output_tokens,
             model: self.model.clone(),
-            tool_calls: vec![],
-            stop_reason: StopReason::EndTurn,
+            tool_calls,
+            stop_reason,
         })
     }
 
@@ -293,32 +369,27 @@ impl LlmClient for AnthropicClient {
         req: LlmRequest,
         sink: tokio::sync::mpsc::Sender<super::StreamDelta>,
     ) -> Result<LlmResponse, LlmError> {
-        let mut system_chunks: Vec<String> = Vec::new();
-        let mut convo: Vec<serde_json::Value> = Vec::new();
-        for m in &req.messages {
-            match m {
-                RichMessage::Text { role, content } => {
-                    if role == "system" {
-                        system_chunks.push(content.clone());
-                    } else {
-                        let r = if role == "agent" { "assistant" } else { role.as_str() };
-                        convo.push(json!({"role": r, "content": content}));
-                    }
-                }
-                _ => {} // tool variants handled in later tasks
-            }
-        }
+        let (system, convo, _) = rich_messages_to_anthropic(&req.messages);
         let mut body = json!({
             "model": self.model,
             "max_tokens": req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             "messages": convo,
             "stream": true,
         });
-        if !system_chunks.is_empty() {
-            body["system"] = json!(system_chunks.join("\n\n"));
+        if let Some(s) = system {
+            body["system"] = json!(s);
         }
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
+        }
+        if !req.tools.is_empty() {
+            body["tools"] = serde_json::json!(
+                req.tools.iter().map(|t| serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                })).collect::<Vec<_>>()
+            );
         }
         warn_if_oauth_key_misconfigured(&self.api_key, &self.base_url);
 
@@ -435,5 +506,111 @@ impl LlmClient for AnthropicClient {
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{RichMessage, ToolCallResult, ToolDef, ToolResultEntry};
+    use serde_json::json;
+
+    fn make_client() -> AnthropicClient {
+        AnthropicClient::new(
+            "http://localhost".into(),
+            "test-key".into(),
+            "claude-3-5-sonnet-20241022".into(),
+        )
+    }
+
+    #[test]
+    fn rich_messages_to_anthropic_text_only() {
+        let msgs = vec![
+            RichMessage::Text { role: "system".into(), content: "Be helpful".into() },
+            RichMessage::Text { role: "user".into(), content: "hi".into() },
+        ];
+        let (sys, convo, _) = rich_messages_to_anthropic(&msgs);
+        assert_eq!(sys, Some("Be helpful".to_string()));
+        assert_eq!(convo.len(), 1);
+        assert_eq!(convo[0]["role"], "user");
+        assert_eq!(convo[0]["content"], "hi");
+    }
+
+    #[test]
+    fn rich_messages_tool_use_and_results() {
+        let msgs = vec![
+            RichMessage::Text { role: "user".into(), content: "run".into() },
+            RichMessage::ToolUse {
+                text: Some("Running bash".into()),
+                calls: vec![ToolCallResult {
+                    call_id: "id1".into(),
+                    tool_name: "bash".into(),
+                    input: json!({"command": "echo hi"}),
+                }],
+            },
+            RichMessage::ToolResults {
+                results: vec![ToolResultEntry {
+                    call_id: "id1".into(),
+                    content: "hi\n".into(),
+                    is_error: false,
+                }],
+            },
+        ];
+        let (sys, convo, _) = rich_messages_to_anthropic(&msgs);
+        assert!(sys.is_none());
+        assert_eq!(convo.len(), 3);
+        // assistant message with tool_use
+        let asst = &convo[1];
+        assert_eq!(asst["role"], "assistant");
+        let content = asst["content"].as_array().unwrap();
+        let has_tool_use = content.iter().any(|b| b["type"] == "tool_use");
+        assert!(has_tool_use, "expected tool_use block");
+        // user message with tool_result
+        let result_msg = &convo[2];
+        assert_eq!(result_msg["role"], "user");
+        let result_content = result_msg["content"].as_array().unwrap();
+        assert_eq!(result_content[0]["type"], "tool_result");
+        assert_eq!(result_content[0]["tool_use_id"], "id1");
+    }
+
+    #[test]
+    fn serializes_system_to_top_level() {
+        let msgs = vec![
+            RichMessage::Text { role: "system".into(), content: "Be helpful".into() },
+            RichMessage::Text { role: "user".into(), content: "hi".into() },
+        ];
+        let (sys, convo, _) = rich_messages_to_anthropic(&msgs);
+        assert_eq!(sys, Some("Be helpful".to_string()));
+        assert_eq!(convo[0]["role"], "user");
+    }
+
+    #[test]
+    fn parse_response_body_text_only() {
+        let body = json!({
+            "content": [{"type": "text", "text": "Done."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        });
+        let (text, tool_calls, stop_reason) = parse_response_body(&body).unwrap();
+        assert_eq!(text, "Done.");
+        assert!(tool_calls.is_empty());
+        assert_eq!(stop_reason, crate::llm::StopReason::EndTurn);
+    }
+
+    #[test]
+    fn parse_response_body_tool_use() {
+        let body = json!({
+            "content": [
+                {"type": "text", "text": "I'll run that."},
+                {"type": "tool_use", "id": "call_1", "name": "bash", "input": {"command": "echo hi"}}
+            ],
+            "stop_reason": "tool_use"
+        });
+        let (text, tool_calls, stop_reason) = parse_response_body(&body).unwrap();
+        assert_eq!(text, "I'll run that.");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].call_id, "call_1");
+        assert_eq!(tool_calls[0].tool_name, "bash");
+        assert_eq!(stop_reason, crate::llm::StopReason::ToolUse);
     }
 }
