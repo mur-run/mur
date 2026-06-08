@@ -1,9 +1,9 @@
 /* ── Dashboard ────────────────────────────────────────────────────────── */
 .dashboard-root {
   display: grid;
-  /* 3rd track holds the detail/chat panel when an agent is selected; it
-     collapses to nothing when the panel is absent. */
-  grid-template-columns: 160px 1fr auto;
+  /* 3rd track = conversation view (open convs); 4th = detail panel (selected agent).
+     Both collapse to nothing when absent. */
+  grid-template-columns: 160px 1fr auto auto;
   height: 100vh;
   overflow: hidden;
 }
@@ -478,4 +478,128 @@
 .upgrade-nudge-actions .toolbar-btn--primary {
   background: var(--color-brand);
   color: #fff;
+}
+
+/* ── Conversation Rail ─────────────────────────────────────────────────── */
+.conv-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 180px;
+  min-width: 140px;
+  padding: 8px 4px;
+  border-right: 1px solid var(--color-border, #e5e7eb);
+  background: var(--color-surface, #f9fafb);
+  overflow-y: auto;
+}
+
+.conv-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  color: var(--color-text, #111);
+  position: relative;
+}
+
+.conv-item:hover {
+  background: var(--color-hover, #f3f4f6);
+}
+
+.conv-item--active {
+  background: var(--color-selected, #ede9fe);
+  font-weight: 500;
+}
+
+.conv-status {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-idle, #9ca3af);
+}
+
+.conv-status--running {
+  background: var(--color-running, #22c55e);
+}
+
+.conv-status--idle {
+  background: var(--color-idle, #9ca3af);
+}
+
+.conv-status--stale {
+  background: var(--color-stale, #f59e0b);
+}
+
+.conv-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-badge {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.conv-badge--unread {
+  background: var(--color-brand, #7c3aed);
+}
+
+.conv-badge--hitl {
+  background: var(--color-warning, #f59e0b);
+}
+
+.conv-close {
+  flex-shrink: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--color-muted, #6b7280);
+  padding: 0;
+}
+
+.conv-item:hover .conv-close {
+  display: flex;
+}
+
+.conv-close:hover {
+  background: var(--color-danger-subtle, #fee2e2);
+  color: var(--color-danger, #ef4444);
+}
+
+/* ── Conversation Surface ──────────────────────────────────────────────── */
+.conv-surface {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.conv-panels {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.conv-panel {
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
 }

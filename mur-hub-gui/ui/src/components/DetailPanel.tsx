@@ -16,7 +16,6 @@ import {
   type NotifPatch,
 } from "../types";
 import { CompanionInbox } from "./CompanionInbox";
-import { ChatTab } from "./ChatTab";
 import { MobileTab } from "./MobileTab";
 import { MemoryTab } from "./MemoryTab";
 import { useT } from "../i18n";
@@ -25,7 +24,6 @@ import { CATEGORY_COLORS, TAB_ICONS, avatarInitials } from "../utils";
 
 // Tab → i18n key map (replaces the hardcoded TAB_LABELS lookup).
 const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
-  chat: "detail.chat",
   persona: "detail.persona",
   style: "detail.style",
   behavior: "detail.behavior",
@@ -57,11 +55,11 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   const { t } = useT();
   const [detail, setDetail] = useState<AgentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<DetailTab>("chat");
+  const [activeTab, setActiveTab] = useState<DetailTab>("persona");
 
   useEffect(() => {
     setError(null);
-    setActiveTab("chat");
+    setActiveTab("persona");
     invoke<AgentDetail>("get_agent_detail", { name: agentName })
       .then(setDetail)
       .catch((e) => setError(String(e)));
@@ -189,9 +187,6 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
         ))}
       </div>
       <div className="detail-panel__body">
-        {activeTab === "chat" && (
-          <ChatTab agentName={agentName} displayName={detail.display_name} />
-        )}
         {activeTab === "persona" && (
           <PersonaTab detail={detail} onSaved={handleSaved} />
         )}
