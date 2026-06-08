@@ -8,7 +8,7 @@
 //! (Together AI, Groq, Fireworks, vLLM, LM Studio, ...). The base URL is
 //! settable so non-openai.com endpoints work out of the box.
 
-use super::{LlmClient, LlmError, LlmRequest, LlmResponse};
+use super::{LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -148,14 +148,13 @@ impl LlmClient for OpenAiClient {
         let messages: Vec<_> = req
             .messages
             .iter()
-            .map(|m| {
-                // OpenAI uses {system,user,assistant}. Mur internally may use "agent".
-                let role = if m.role == "agent" {
-                    "assistant"
-                } else {
-                    m.role.as_str()
-                };
-                json!({"role": role, "content": m.content})
+            .filter_map(|m| match m {
+                RichMessage::Text { role, content } => {
+                    // OpenAI uses {system,user,assistant}. Mur internally may use "agent".
+                    let role = if role == "agent" { "assistant" } else { role.as_str() };
+                    Some(json!({"role": role, "content": content}))
+                }
+                _ => None,
             })
             .collect();
         let mut body = json!({"model": self.model, "messages": messages});
@@ -214,6 +213,8 @@ impl LlmClient for OpenAiClient {
             input_tokens,
             output_tokens,
             model: self.model.clone(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
 
@@ -225,13 +226,12 @@ impl LlmClient for OpenAiClient {
         let messages: Vec<_> = req
             .messages
             .iter()
-            .map(|m| {
-                let role = if m.role == "agent" {
-                    "assistant"
-                } else {
-                    m.role.as_str()
-                };
-                json!({"role": role, "content": m.content})
+            .filter_map(|m| match m {
+                RichMessage::Text { role, content } => {
+                    let role = if role == "agent" { "assistant" } else { role.as_str() };
+                    Some(json!({"role": role, "content": content}))
+                }
+                _ => None,
             })
             .collect();
         let mut body = json!({
@@ -349,6 +349,8 @@ impl LlmClient for OpenAiClient {
             input_tokens,
             output_tokens,
             model: self.model.clone(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
 }
