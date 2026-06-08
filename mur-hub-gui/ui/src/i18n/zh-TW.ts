@@ -80,6 +80,7 @@ export const zhTW: Table = {
   "detail.permissions": "權限",
   "detail.inbox": "收件匣",
   "detail.mobile": "手機",
+  "detail.memory": "記憶",
   "detail.loading": "載入中…",
   "detail.loadFailed": "載入失敗：{error}",
   "detail.saving": "儲存中…",
