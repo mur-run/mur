@@ -6,6 +6,7 @@ use anyhow::Context;
 use tracing::warn;
 
 use crate::companion::clock::SystemClock;
+use crate::hitl::HitlApprovals;
 use crate::hooks::{HookChain, HookCtx, TelemetryEmitter};
 use crate::llm::LlmClient;
 use crate::llm::{anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient};
@@ -98,6 +99,7 @@ pub(crate) fn resolve_local_base_url(
     LOCAL_LLM_DEFAULT_BASE_URL.to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_runner(
     client: Arc<dyn LlmClient>,
     base_system_prompt: Option<String>,
@@ -106,19 +108,30 @@ pub fn build_runner(
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
+    pending_approvals: Option<HitlApprovals>,
+    notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
+    hitl_timeout_secs: u32,
 ) -> Arc<TaskRunner> {
     let mut runner = TaskRunner::with_llm(client)
         .with_system_prompt(base_system_prompt)
         .with_skills(skills)
-        .with_skills_cfg(skills_cfg);
+        .with_skills_cfg(skills_cfg)
+        .with_hitl_timeout_secs(hitl_timeout_secs);
     if let (Some(chain), Some(ctx), Some(cancel)) = (hook_chain, hook_ctx, hook_cancel) {
         runner = runner.with_hook_chain(chain, ctx, cancel);
+    }
+    if let Some(pa) = pending_approvals {
+        runner = runner.with_pending_approvals(pa);
+    }
+    if let Some(notif) = notifier {
+        runner = runner.with_notifier(notif);
     }
     Arc::new(runner)
 }
 
 /// Build the LLM-backed TaskRunner for a resolved model entry.
 /// Returns (runner, optional LLM client for companion sharing).
+#[allow(clippy::too_many_arguments)]
 pub async fn build_provider_runner(
     force_echo: bool,
     profile: &Profile,
@@ -127,6 +140,9 @@ pub async fn build_provider_runner(
     hook_chain: &HookChain,
     hook_ctx: &HookCtx,
     hook_cancel: &CancellationToken,
+    pending_approvals: Option<HitlApprovals>,
+    notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
+    hitl_timeout_secs: u32,
 ) -> anyhow::Result<(Arc<TaskRunner>, Option<Arc<dyn LlmClient>>)> {
     if force_echo {
         return Ok((Arc::new(TaskRunner::new_stub_echo()), None));
@@ -178,6 +194,9 @@ pub async fn build_provider_runner(
             Some(Arc::new(hook_chain.clone())),
             Some(hook_ctx.clone()),
             Some(hook_cancel.clone()),
+            pending_approvals.clone(),
+            notifier.clone(),
+            hitl_timeout_secs,
         );
         (r, Some(client))
     };

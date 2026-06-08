@@ -3,7 +3,7 @@
 //!
 //! Spec §3.6 / §4.4 / §6.2.
 
-use crate::llm::{LlmClient, LlmError, LlmMessage, LlmRequest};
+use crate::llm::{LlmClient, LlmError, LlmRequest, RichMessage};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // EnsureLocaleOutcome
@@ -52,20 +52,21 @@ pub async fn ensure_locale(
 
     let req = LlmRequest {
         messages: vec![
-            LlmMessage {
+            RichMessage::Text {
                 role: "system".to_string(),
                 content: format!(
                     "Translate the following message into {target_locale} while preserving \
                      tone and brevity. Reply ONLY with the translated message, no preamble."
                 ),
             },
-            LlmMessage {
+            RichMessage::Text {
                 role: "user".to_string(),
                 content: text.to_string(),
             },
         ],
         temperature: Some(0.2),
         max_tokens: Some(400),
+        tools: vec![],
     };
 
     match llm.generate(req).await {

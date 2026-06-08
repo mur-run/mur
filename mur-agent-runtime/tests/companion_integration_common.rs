@@ -26,7 +26,7 @@ use mur_agent_runtime::companion::{
 };
 use mur_agent_runtime::durable::ledger::Ledger;
 use mur_agent_runtime::llm::stub::StubLlm;
-use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse};
+use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse, StopReason};
 use mur_common::agent::{ActiveHours, ProactiveConfig, QuietHours};
 use mur_common::companion::Situation;
 use rand::rngs::StdRng;
@@ -197,6 +197,8 @@ impl LlmClient for DirtyThenCleanStub {
             input_tokens: 0,
             output_tokens: 0,
             model: "dirty-then-clean-stub".into(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
 
