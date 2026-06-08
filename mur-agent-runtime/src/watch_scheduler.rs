@@ -28,6 +28,92 @@ pub fn dhash_from_luma(luma: &[u8], w: usize, h: usize) -> u64 {
     hash
 }
 
+use mur_common::media::Consent;
+
+/// What the scheduler should do this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    Narrate,
+    AskConsent,
+    Skip,
+}
+
+/// Pure gate — no I/O. Order of checks: mute → quiet → magnitude → cooldown → consent.
+#[allow(clippy::too_many_arguments)]
+pub fn should_interject(
+    now_ms: i64,
+    last_interjection_ms: i64,
+    cooldown_ms: i64,
+    distance: u32,
+    threshold: u32,
+    muted: bool,
+    quiet_now: bool,
+    consent: Consent,
+) -> Decision {
+    if muted || quiet_now {
+        return Decision::Skip;
+    }
+    if distance < threshold {
+        return Decision::Skip;
+    }
+    if last_interjection_ms != 0 && now_ms.saturating_sub(last_interjection_ms) < cooldown_ms {
+        return Decision::Skip;
+    }
+    match consent {
+        Consent::Unasked => Decision::AskConsent,
+        Consent::Granted => Decision::Narrate,
+        Consent::Declined => Decision::Skip,
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+
+    const CD: i64 = 45_000;
+    const TH: u32 = 18;
+
+    #[test]
+    fn small_change_skips() {
+        assert_eq!(
+            should_interject(100_000, 0, CD, 5, TH, false, false, Consent::Granted),
+            Decision::Skip
+        );
+    }
+
+    #[test]
+    fn first_big_change_asks_consent() {
+        assert_eq!(
+            should_interject(100_000, 0, CD, 30, TH, false, false, Consent::Unasked),
+            Decision::AskConsent
+        );
+    }
+
+    #[test]
+    fn granted_big_change_narrates() {
+        assert_eq!(
+            should_interject(100_000, 0, CD, 30, TH, false, false, Consent::Granted),
+            Decision::Narrate
+        );
+    }
+
+    #[test]
+    fn cooldown_blocks() {
+        // fired 10s ago, cooldown 45s ⇒ skip
+        assert_eq!(
+            should_interject(110_000, 100_000, CD, 30, TH, false, false, Consent::Granted),
+            Decision::Skip
+        );
+    }
+
+    #[test]
+    fn muted_quiet_declined_all_skip() {
+        assert_eq!(should_interject(200_000, 0, CD, 99, TH, true, false, Consent::Granted), Decision::Skip);
+        assert_eq!(should_interject(200_000, 0, CD, 99, TH, false, true, Consent::Granted), Decision::Skip);
+        assert_eq!(should_interject(200_000, 0, CD, 99, TH, false, false, Consent::Declined), Decision::Skip);
+    }
+}
+
 #[cfg(test)]
 mod hash_tests {
     use super::*;
