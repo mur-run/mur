@@ -2,7 +2,7 @@
 //! P0a only implements `run_sync` fully; streaming is P0b.
 
 use crate::hooks::{HookChain, HookCtx, PromptView};
-use crate::llm::{LlmClient, LlmMessage, LlmRequest};
+use crate::llm::{LlmClient, LlmRequest, RichMessage};
 use crate::skills::RuntimeSkills;
 use crate::skills::injector::inject_layer2;
 use crate::skills::trigger_matcher::{format_layer3, layer3_body, match_prompt};
@@ -391,7 +391,7 @@ impl TaskRunner {
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
     ) -> Result<Message, TaskError> {
         let prompt = text_of(input);
-        let mut messages: Vec<LlmMessage> = Vec::new();
+        let mut messages: Vec<RichMessage> = Vec::new();
 
         let (system, fired) = self.assemble_system_prompt(&prompt);
 
@@ -428,20 +428,21 @@ impl TaskRunner {
         };
 
         if !system.is_empty() {
-            messages.push(LlmMessage {
+            messages.push(RichMessage::Text {
                 role: "system".into(),
-                content: system,
+                content: system.clone(),
             });
         }
 
-        messages.push(LlmMessage {
+        messages.push(RichMessage::Text {
             role: input.role.clone(),
-            content: prompt,
+            content: prompt.clone(),
         });
         let req = LlmRequest {
             messages,
             temperature: None,
             max_tokens: None,
+            tools: vec![],
         };
         let start = std::time::Instant::now();
         let llm_result = match sink {

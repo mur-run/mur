@@ -12,7 +12,7 @@
 //! The Anthropic API has a top-level `system` field rather than a system role
 //! in `messages`. We translate `LlmMessage{role:"system"}` -> top-level system.
 
-use super::{LlmClient, LlmError, LlmRequest, LlmResponse};
+use super::{LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason};
 use async_trait::async_trait;
 use mur_common::llm::anthropic_base_url;
 use serde_json::json;
@@ -193,16 +193,17 @@ impl LlmClient for AnthropicClient {
         let mut system_chunks: Vec<String> = Vec::new();
         let mut convo: Vec<serde_json::Value> = Vec::new();
         for m in &req.messages {
-            if m.role == "system" {
-                system_chunks.push(m.content.clone());
-            } else {
-                // Anthropic accepts roles "user" and "assistant" only.
-                let role = if m.role == "agent" {
-                    "assistant"
-                } else {
-                    m.role.as_str()
-                };
-                convo.push(json!({"role": role, "content": m.content}));
+            match m {
+                RichMessage::Text { role, content } => {
+                    if role == "system" {
+                        system_chunks.push(content.clone());
+                    } else {
+                        // Anthropic accepts roles "user" and "assistant" only.
+                        let r = if role == "agent" { "assistant" } else { role.as_str() };
+                        convo.push(json!({"role": r, "content": content}));
+                    }
+                }
+                _ => {} // tool variants handled in later tasks
             }
         }
 
@@ -282,6 +283,8 @@ impl LlmClient for AnthropicClient {
             input_tokens,
             output_tokens,
             model: self.model.clone(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
 
@@ -293,15 +296,16 @@ impl LlmClient for AnthropicClient {
         let mut system_chunks: Vec<String> = Vec::new();
         let mut convo: Vec<serde_json::Value> = Vec::new();
         for m in &req.messages {
-            if m.role == "system" {
-                system_chunks.push(m.content.clone());
-            } else {
-                let role = if m.role == "agent" {
-                    "assistant"
-                } else {
-                    m.role.as_str()
-                };
-                convo.push(json!({"role": role, "content": m.content}));
+            match m {
+                RichMessage::Text { role, content } => {
+                    if role == "system" {
+                        system_chunks.push(content.clone());
+                    } else {
+                        let r = if role == "agent" { "assistant" } else { role.as_str() };
+                        convo.push(json!({"role": r, "content": content}));
+                    }
+                }
+                _ => {} // tool variants handled in later tasks
             }
         }
         let mut body = json!({
@@ -428,6 +432,8 @@ impl LlmClient for AnthropicClient {
             input_tokens,
             output_tokens,
             model: self.model.clone(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
 }

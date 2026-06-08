@@ -13,7 +13,7 @@ use mur_agent_runtime::companion::{
     outbox::{SkipReason, TickOutcome},
     telemetry::OutboxEvent,
 };
-use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse};
+use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason};
 use std::sync::{Arc, Mutex};
 
 // ─── local_as_utc helper (mirrors companion_gating.rs) ───────────────────────
@@ -60,6 +60,8 @@ impl LlmClient for DynamicStubLlm {
                     input_tokens: 0,
                     output_tokens: 0,
                     model: "dynamic-stub".into(),
+                    tool_calls: vec![],
+                    stop_reason: StopReason::EndTurn,
                 })
             }
             DynamicStubModeTag::EnglishOnceThenChinese => {
@@ -81,6 +83,8 @@ impl LlmClient for DynamicStubLlm {
                     input_tokens: 0,
                     output_tokens: 0,
                     model: "dynamic-stub".into(),
+                    tool_calls: vec![],
+                    stop_reason: StopReason::EndTurn,
                 })
             }
         }
@@ -284,7 +288,14 @@ struct MismatchAlwaysFailsTranslateLlm;
 #[async_trait]
 impl LlmClient for MismatchAlwaysFailsTranslateLlm {
     async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let combined: String = req.messages.iter().map(|m| m.content.as_str()).collect();
+        let combined: String = req
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                RichMessage::Text { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
         if combined.contains("Translate the following") {
             // Translate path always fails.
             return Err(LlmError::RateLimit);
@@ -295,6 +306,8 @@ impl LlmClient for MismatchAlwaysFailsTranslateLlm {
             input_tokens: 0,
             output_tokens: 0,
             model: "mismatch-fail-stub".into(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
 

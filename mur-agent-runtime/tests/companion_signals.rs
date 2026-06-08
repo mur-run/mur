@@ -9,7 +9,7 @@ use companion_integration_common::*;
 use async_trait::async_trait;
 use chrono::{Duration, Local, TimeZone, Utc};
 use mur_agent_runtime::companion::{outbox::TickOutcome, picker::Picker, telemetry::OutboxEvent};
-use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse};
+use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse, StopReason};
 use mur_common::companion::{Signal, Situation};
 use std::sync::{Arc, Mutex};
 
@@ -61,6 +61,8 @@ impl LlmClient for BannedThenCleanStub {
             input_tokens: 0,
             output_tokens: 0,
             model: "banned-then-clean".into(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
 
@@ -81,6 +83,8 @@ impl LlmClient for AlwaysDirty {
             input_tokens: 0,
             output_tokens: 0,
             model: "always-dirty".into(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
 

@@ -1,16 +1,17 @@
 //! StubLlm provider tests (M3.3).
 
 use mur_agent_runtime::llm::stub::StubLlm;
-use mur_agent_runtime::llm::{LlmClient, LlmError, LlmMessage, LlmRequest};
+use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, RichMessage};
 
 fn req(text: &str) -> LlmRequest {
     LlmRequest {
-        messages: vec![LlmMessage {
+        messages: vec![RichMessage::Text {
             role: "user".into(),
             content: text.into(),
         }],
         temperature: None,
         max_tokens: None,
+        tools: vec![],
     }
 }
 

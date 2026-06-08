@@ -1,6 +1,6 @@
 //! Ollama LLM client — local model inference via Ollama HTTP API.
 
-use super::{LlmClient, LlmError, LlmRequest, LlmResponse};
+use super::{LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -50,7 +50,12 @@ impl LlmClient for OllamaClient {
         let messages: Vec<_> = req
             .messages
             .iter()
-            .map(|m| json!({"role": m.role, "content": m.content}))
+            .filter_map(|m| match m {
+                RichMessage::Text { role, content } => {
+                    Some(json!({"role": role, "content": content}))
+                }
+                _ => None,
+            })
             .collect();
         let mut body = json!({"model": self.model, "messages": messages, "stream": false});
         if let Some(t) = req.temperature {
@@ -92,6 +97,8 @@ impl LlmClient for OllamaClient {
             input_tokens,
             output_tokens,
             model: self.model.clone(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
 
@@ -104,7 +111,12 @@ impl LlmClient for OllamaClient {
         let messages: Vec<_> = req
             .messages
             .iter()
-            .map(|m| json!({"role": m.role, "content": m.content}))
+            .filter_map(|m| match m {
+                RichMessage::Text { role, content } => {
+                    Some(json!({"role": role, "content": content}))
+                }
+                _ => None,
+            })
             .collect();
         let mut body = json!({"model": self.model, "messages": messages, "stream": true});
         if let Some(t) = req.temperature {
@@ -191,6 +203,8 @@ impl LlmClient for OllamaClient {
             input_tokens,
             output_tokens,
             model: self.model.clone(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
 }

@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use super::{LlmClient, LlmError, LlmRequest, LlmResponse};
+use super::{LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason};
 
 #[derive(Debug, Deserialize)]
 struct Scenario {
@@ -55,7 +55,10 @@ impl LlmClient for StubLlm {
         let joined: String = req
             .messages
             .iter()
-            .map(|m| m.content.as_str())
+            .filter_map(|m| match m {
+                RichMessage::Text { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let text = match self.pick(&joined) {
@@ -72,6 +75,8 @@ impl LlmClient for StubLlm {
             output_tokens: (text.len() / 4) as u64,
             text,
             model: "stub".into(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
     fn model_name(&self) -> &str {

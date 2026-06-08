@@ -10,7 +10,7 @@
 
 use httpmock::prelude::*;
 use mur_agent_runtime::llm::anthropic::AnthropicClient;
-use mur_agent_runtime::llm::{LlmClient, LlmMessage, LlmRequest};
+use mur_agent_runtime::llm::{LlmClient, LlmRequest, RichMessage};
 use mur_common::secret::keychain_set;
 use secrecy::SecretString;
 use serde_json::json;
@@ -40,17 +40,18 @@ fn reply_body() -> serde_json::Value {
 fn user_msg(text: &str) -> LlmRequest {
     LlmRequest {
         messages: vec![
-            LlmMessage {
+            RichMessage::Text {
                 role: "system".into(),
                 content: "be brief".into(),
             },
-            LlmMessage {
+            RichMessage::Text {
                 role: "user".into(),
                 content: text.into(),
             },
         ],
         temperature: None,
         max_tokens: Some(16),
+        tools: vec![],
     }
 }
 
