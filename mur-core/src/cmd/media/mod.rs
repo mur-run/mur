@@ -2,6 +2,7 @@
 //! multimodal model. All control uses VLC's HTTP interface (no libVLC).
 
 pub mod error;
+pub mod resolve;
 pub mod scene;
 pub mod transcript;
 pub mod vlc;
