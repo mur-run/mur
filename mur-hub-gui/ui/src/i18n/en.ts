@@ -78,6 +78,7 @@ export const en = {
   "detail.permissions": "Permissions",
   "detail.inbox": "Inbox",
   "detail.mobile": "Mobile",
+  "detail.memory": "Memory",
   "detail.loading": "Loading…",
   "detail.loadFailed": "Failed to load: {error}",
   "detail.saving": "Saving…",
