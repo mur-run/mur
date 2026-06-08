@@ -161,6 +161,7 @@ pub fn cmd_create(
         file_actions: vec![],
         action_pipeline: mur_common::action::ActionPipelineConfig::default(),
         installed_skills: vec![],
+        hitl: mur_common::HitlConfig::default(),
         created_at: now.clone(),
         updated_at: now,
     };

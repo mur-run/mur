@@ -390,3 +390,97 @@
 }
 .mobile-tab__text { font-size: var(--text-sm); }
 .mobile-tab__time { font-size: var(--text-xs); opacity: 0.6; }
+
+/* ── Notification budget section ── */
+.notif-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border, #2a2a2a);
+}
+.notif-section__title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, #888);
+  margin-bottom: 10px;
+}
+.notif-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--text-primary, #e0e0e0);
+  cursor: pointer;
+}
+.notif-toggle {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent, #4F46E5);
+}
+.notif-slider {
+  width: 110px;
+  accent-color: var(--accent, #4F46E5);
+}
+.notif-times {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.notif-times--disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.notif-time {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+.notif-time__label {
+  font-size: 10px;
+  color: var(--text-secondary, #888);
+}
+.notif-time input[type="time"] {
+  background: var(--bg-input, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--text-primary, #e0e0e0);
+  font-size: 12px;
+}
+
+/* ── Memory tab ── */
+.memory-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, #888);
+  margin-bottom: 10px;
+}
+.memory-fields { display: flex; flex-direction: column; gap: 10px; }
+.memory-fields--disabled { opacity: 0.5; pointer-events: none; }
+.memory-advanced-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #2a2a2a);
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  user-select: none;
+}
+.memory-advanced-header:hover { color: var(--text-primary, #e0e0e0); }
+.memory-prompt-editor { margin-top: 8px; }
+.memory-prompt-textarea {
+  width: 100%;
+  font-family: monospace;
+  font-size: 11px;
+  resize: vertical;
+  box-sizing: border-box;
+}

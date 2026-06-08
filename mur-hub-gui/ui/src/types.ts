@@ -133,7 +133,8 @@ export type DetailTab =
   | "mcp"
   | "permissions"
   | "inbox"
-  | "mobile";
+  | "mobile"
+  | "memory";
 
 export const ALL_DETAIL_TABS: DetailTab[] = [
   "chat",
@@ -145,7 +146,24 @@ export const ALL_DETAIL_TABS: DetailTab[] = [
   "permissions",
   "inbox",
   "mobile",
+  "memory",
 ];
+
+export interface NotifConfig {
+  enabled: boolean;
+  daily_cap: number;
+  quiet_hours_enabled: boolean;
+  quiet_start: string;
+  quiet_end: string;
+}
+
+export interface NotifPatch {
+  enabled?: boolean;
+  daily_cap?: number;
+  quiet_hours_enabled?: boolean;
+  quiet_start?: string;
+  quiet_end?: string;
+}
 
 export const TAB_LABELS: Record<DetailTab, string> = {
   chat: "Chat",
@@ -157,4 +175,29 @@ export const TAB_LABELS: Record<DetailTab, string> = {
   permissions: "Permissions",
   inbox: "Inbox",
   mobile: "Mobile",
+  memory: "Memory",
 };
+
+export interface MemoryView {
+  relationship: string;
+  formality: string;
+  first_memory: string;
+  sys_prompt: string;
+  companion_initialised: boolean;
+}
+
+export interface MemoryPatch {
+  relationship?: string;
+  formality?: string;
+  first_memory?: string;
+  sys_prompt?: string;
+}
+
+export interface HitlRequest {
+  agent: string;
+  hitl_id: string;
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  prompt: string;
+  timeout_ms: number;
+}

@@ -87,6 +87,9 @@ pub struct AgentProfile {
     /// continue to load without this block).
     #[serde(default)]
     pub companion: CompanionConfig,
+    /// Human-in-the-loop configuration (Phase 2). Default = disabled.
+    #[serde(default)]
+    pub hitl: HitlConfig,
     /// Voice I/O configuration (D1). Default = disabled.
     #[serde(default)]
     pub voice: VoiceConfig,
@@ -844,6 +847,28 @@ pub struct VoiceConfig {
     /// None means the OS default input device.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_device: Option<String>,
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Human-in-the-loop configuration (Phase 2)
+// ──────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HitlConfig {
+    #[serde(default = "default_hitl_timeout_secs")]
+    pub timeout_secs: u32,
+}
+
+fn default_hitl_timeout_secs() -> u32 {
+    300
+}
+
+impl Default for HitlConfig {
+    fn default() -> Self {
+        Self {
+            timeout_secs: default_hitl_timeout_secs(),
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
