@@ -1,6 +1,7 @@
 //! Media companion: control VLC and explain the current frame with the local
 //! multimodal model. All control uses VLC's HTTP interface (no libVLC).
 
+pub mod analyze;
 pub mod error;
 pub mod resolve;
 pub mod scene;
