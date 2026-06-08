@@ -118,10 +118,14 @@ async fn translate_429_pauses_then_resumes_after_resume_at() {
     #[async_trait]
     impl LlmClient for FlipLlm {
         async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
+            use crate::llm::{RichMessage, StopReason};
             let joined: String = req
                 .messages
                 .iter()
-                .map(|m| m.content.as_str())
+                .filter_map(|m| match m {
+                    RichMessage::Text { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             if joined.contains("Translate the following") {
@@ -135,6 +139,8 @@ async fn translate_429_pauses_then_resumes_after_resume_at() {
                     input_tokens: 0,
                     output_tokens: 0,
                     model: "flip".into(),
+                    tool_calls: vec![],
+                    stop_reason: StopReason::EndTurn,
                 });
             }
             // Generation call: return a body that passes linter but triggers
@@ -144,6 +150,8 @@ async fn translate_429_pauses_then_resumes_after_resume_at() {
                 input_tokens: 0,
                 output_tokens: 0,
                 model: "flip".into(),
+                tool_calls: vec![],
+                stop_reason: StopReason::EndTurn,
             })
         }
         fn model_name(&self) -> &str {
@@ -238,7 +246,7 @@ async fn translate_4_failures_drops_locale_unresolved() {
     let proactive = make_proactive(true, 10, None, None);
     let notifier = Arc::new(FakeNotifier::delivered());
 
-    use crate::llm::{LlmError, LlmRequest, LlmResponse};
+    use crate::llm::{LlmError, LlmRequest, LlmResponse, RichMessage, StopReason};
 
     struct AlwaysRateLimitTranslate;
 
@@ -248,7 +256,10 @@ async fn translate_4_failures_drops_locale_unresolved() {
             let joined: String = req
                 .messages
                 .iter()
-                .map(|m| m.content.as_str())
+                .filter_map(|m| match m {
+                    RichMessage::Text { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             if joined.contains("Translate the following") {
@@ -261,6 +272,8 @@ async fn translate_4_failures_drops_locale_unresolved() {
                 input_tokens: 0,
                 output_tokens: 0,
                 model: "always-rl".into(),
+                tool_calls: vec![],
+                stop_reason: StopReason::EndTurn,
             })
         }
         fn model_name(&self) -> &str {

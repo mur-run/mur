@@ -12,7 +12,7 @@ use mur_agent_runtime::companion::{
     picker::{BanditState, Picker, TemplateState},
 };
 use mur_agent_runtime::durable::ledger::Ledger;
-use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse};
+use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse, StopReason};
 use mur_common::agent::ProactiveConfig;
 use mur_common::companion::Situation;
 use std::collections::BTreeMap;
@@ -34,6 +34,8 @@ impl LlmClient for FakeLlm {
             input_tokens: 1,
             output_tokens: 3,
             model: "fake".into(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
     fn model_name(&self) -> &str {

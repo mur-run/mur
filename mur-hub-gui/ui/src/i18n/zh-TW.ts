@@ -282,4 +282,8 @@ export const zhTW: Table = {
   "modal.preset.url.import": "從網址匯入",
   "modal.preset.url.fetching": "擷取中…",
   "modal.preset.imported": "已匯入預設「{id}」",
+  "hitl.denyWithReason": "附理由拒絕",
+  "hitl.denyReason": "理由",
+  "hitl.reasonPlaceholder": "為什麼要拒絕？（選填）",
+  "hitl.confirmDeny": "確認拒絕",
 };
