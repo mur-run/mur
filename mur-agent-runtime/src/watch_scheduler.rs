@@ -108,9 +108,18 @@ mod gate_tests {
 
     #[test]
     fn muted_quiet_declined_all_skip() {
-        assert_eq!(should_interject(200_000, 0, CD, 99, TH, true, false, Consent::Granted), Decision::Skip);
-        assert_eq!(should_interject(200_000, 0, CD, 99, TH, false, true, Consent::Granted), Decision::Skip);
-        assert_eq!(should_interject(200_000, 0, CD, 99, TH, false, false, Consent::Declined), Decision::Skip);
+        assert_eq!(
+            should_interject(200_000, 0, CD, 99, TH, true, false, Consent::Granted),
+            Decision::Skip
+        );
+        assert_eq!(
+            should_interject(200_000, 0, CD, 99, TH, false, true, Consent::Granted),
+            Decision::Skip
+        );
+        assert_eq!(
+            should_interject(200_000, 0, CD, 99, TH, false, false, Consent::Declined),
+            Decision::Skip
+        );
     }
 }
 
@@ -147,7 +156,7 @@ use crate::task_runner::{TaskRunner, TaskSpec};
 use chrono::Local;
 use mur_common::a2a::{Message, MessagePart};
 use mur_common::agent::QuietHours;
-use mur_common::media::{load_watch, runtime_path, save_watch, VlcRuntime};
+use mur_common::media::{VlcRuntime, load_watch, runtime_path, save_watch};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -169,7 +178,11 @@ pub struct WatchScheduler {
 }
 
 impl WatchScheduler {
-    pub fn new(runner: Arc<TaskRunner>, mur_home: PathBuf, quiet_hours: Option<QuietHours>) -> Self {
+    pub fn new(
+        runner: Arc<TaskRunner>,
+        mur_home: PathBuf,
+        quiet_hours: Option<QuietHours>,
+    ) -> Self {
         Self {
             runner,
             mur_home,

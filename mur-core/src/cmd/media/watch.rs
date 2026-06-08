@@ -4,7 +4,7 @@
 // does not call them directly, so suppress the dead_code lint for this module.
 #![allow(dead_code)]
 
-use mur_common::media::{load_watch, save_watch, Consent, WatchSession};
+use mur_common::media::{Consent, WatchSession, load_watch, save_watch};
 use std::path::Path;
 
 /// Start (or restart) a proactive watch session: active, unmuted, consent reset.

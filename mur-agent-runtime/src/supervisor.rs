@@ -6,7 +6,6 @@ use anyhow::Context;
 use crate::entitlements::detect_warnings;
 use crate::hooks::ShutdownReason;
 use crate::idle_scheduler::IdleScheduler;
-use crate::watch_scheduler::WatchScheduler;
 use crate::lock_file::{LockHandle, write_lock};
 use crate::multi_call::{DispatchError, extract_profile_name, verify_name_match};
 use crate::profile::Profile;
@@ -26,6 +25,7 @@ use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
 use crate::transport::unix_socket::serve_unix;
 use crate::transport::webhook;
+use crate::watch_scheduler::WatchScheduler;
 use mur_common::identity::AgentIdentity;
 use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
 use std::collections::HashMap;
