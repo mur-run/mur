@@ -59,7 +59,7 @@ pub async fn agent_chat_send(
                     thinking,
                 },
             );
-        }) {
+        }, |_hitl| {}) {
             Ok(v) => Ok((v, true)),
             Err(e) if e.to_string().contains("is not running") => {
                 dial_method(&home, &name, "message/send", params, DialMode::Auto)
