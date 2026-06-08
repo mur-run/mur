@@ -59,6 +59,17 @@ pub struct TaskRunner {
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
+    pending_approvals: Option<
+        Arc<
+            tokio::sync::Mutex<
+                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
+            >,
+        >,
+    >,
+    notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
+    hitl_timeout_secs: u32,
+    max_iterations: u32,
+    tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
 }
 
 impl TaskRunner {
@@ -91,6 +102,11 @@ impl TaskRunner {
             hook_chain: None,
             hook_ctx: None,
             hook_cancel: None,
+            pending_approvals: None,
+            notifier: None,
+            hitl_timeout_secs: 300,
+            max_iterations: 10,
+            tools: vec![],
         }
     }
 
@@ -123,6 +139,33 @@ impl TaskRunner {
         self.hook_chain = Some(chain);
         self.hook_ctx = Some(ctx);
         self.hook_cancel = Some(cancel);
+        self
+    }
+
+    pub fn with_pending_approvals(
+        mut self,
+        pa: Arc<
+            tokio::sync::Mutex<
+                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
+            >,
+        >,
+    ) -> Self {
+        self.pending_approvals = Some(pa);
+        self
+    }
+
+    pub fn with_notifier(mut self, tx: tokio::sync::mpsc::Sender<serde_json::Value>) -> Self {
+        self.notifier = Some(tx);
+        self
+    }
+
+    pub fn with_hitl_timeout_secs(mut self, secs: u32) -> Self {
+        self.hitl_timeout_secs = secs;
+        self
+    }
+
+    pub fn with_max_iterations(mut self, n: u32) -> Self {
+        self.max_iterations = n;
         self
     }
 
@@ -256,7 +299,16 @@ impl TaskRunner {
                 Ok(echo_response(&spec.input))
             }
             RunnerBackend::Llm(client) => {
-                self.run_llm(&id, client.as_ref(), &spec.input, sink).await
+                if self.pending_approvals.is_some() {
+                    let system = self
+                        .prepare_system_prompt(&spec.input)
+                        .await
+                        .unwrap_or_default();
+                    self.run_agentic_loop(&id, client.as_ref(), system, &spec.input, sink)
+                        .await
+                } else {
+                    self.run_llm(&id, client.as_ref(), &spec.input, sink).await
+                }
             }
         };
         let now = chrono::Utc::now().to_rfc3339();
@@ -503,6 +555,181 @@ impl TaskRunner {
             Err(e) => Err(task_error("llm_error", format!("{e}"), true)),
         }
     }
+
+    fn tools_for_loop(&self) -> &[Arc<dyn crate::tools::ToolExecutor>] {
+        &self.tools
+    }
+
+    async fn prepare_system_prompt(&self, input: &Message) -> Result<String, TaskError> {
+        let prompt = text_of(input);
+        let (system, _fired) = self.assemble_system_prompt(&prompt);
+        if let (Some(chain), Some(ctx), Some(cancel)) =
+            (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
+        {
+            let _ = (chain, ctx, cancel);
+        }
+        Ok(system)
+    }
+
+    async fn handle_tool_call(
+        &self,
+        _task_id: &str,
+        call: &crate::llm::ToolCallResult,
+    ) -> Result<crate::llm::ToolResultEntry, TaskError> {
+        use crate::llm::ToolResultEntry;
+
+        // 1. Find tool — if no matching tool, return unknown-tool result immediately (skip HITL)
+        let tool = self
+            .tools_for_loop()
+            .iter()
+            .find(|t| t.name() == call.tool_name)
+            .cloned();
+
+        if tool.is_none() {
+            return Ok(ToolResultEntry {
+                call_id: call.call_id.clone(),
+                content: format!("unknown tool: {}", call.tool_name),
+                is_error: true,
+            });
+        }
+
+        // 2. Execute the tool
+        let tool = tool.unwrap();
+        let (output, is_error) = match tool.execute(call.input.clone()).await {
+            Ok(out) => (out, false),
+            Err(e) => (format!("tool error: {e}"), true),
+        };
+
+        // 3. HITL gate (only after tool execution)
+        let decision = if let (Some(pa), Some(notifier)) =
+            (&self.pending_approvals, &self.notifier)
+        {
+            let hitl_id = uuid::Uuid::now_v7().to_string();
+            let (tx, rx) =
+                tokio::sync::oneshot::channel::<crate::hitl::HitlDecision>();
+            pa.lock().await.insert(hitl_id.clone(), tx);
+            let notification = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "tool/approval_needed",
+                "params": {
+                    "hitl_id": hitl_id,
+                    "tool_name": call.tool_name,
+                    "tool_input": call.input,
+                    "output": output,
+                    "is_error": is_error,
+                    "timeout_ms": (self.hitl_timeout_secs as u64) * 1000,
+                }
+            });
+            let _ = notifier.send(notification).await;
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(self.hitl_timeout_secs as u64),
+                rx,
+            )
+            .await
+            {
+                Ok(Ok(d)) => d,
+                _ => {
+                    pa.lock().await.remove(&hitl_id);
+                    crate::hitl::HitlDecision {
+                        allow: false,
+                        reason: Some("timed out".into()),
+                    }
+                }
+            }
+        } else {
+            crate::hitl::HitlDecision { allow: true, reason: None }
+        };
+
+        if !decision.allow {
+            let reason_str = decision.reason.as_deref().unwrap_or("denied");
+            return Err(task_error(
+                "hitl_denied",
+                format!("tool call denied: {reason_str}"),
+                false,
+            ));
+        }
+
+        Ok(ToolResultEntry {
+            call_id: call.call_id.clone(),
+            content: output,
+            is_error,
+        })
+    }
+
+    async fn run_agentic_loop(
+        &self,
+        task_id: &str,
+        client: &dyn crate::llm::LlmClient,
+        system_prompt: String,
+        input: &Message,
+        _sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+    ) -> Result<Message, TaskError> {
+        use crate::llm::{LlmRequest, RichMessage, StopReason};
+
+        let tool_defs: Vec<_> = self.tools_for_loop().iter().map(|t| t.def()).collect();
+        let prompt = text_of(input);
+        let mut history: Vec<RichMessage> = vec![
+            RichMessage::Text {
+                role: "system".into(),
+                content: system_prompt,
+            },
+            RichMessage::Text {
+                role: input.role.clone(),
+                content: prompt,
+            },
+        ];
+
+        for _iteration in 0..self.max_iterations {
+            let req = LlmRequest {
+                messages: history.clone(),
+                temperature: None,
+                max_tokens: None,
+                tools: tool_defs.clone(),
+            };
+            let resp = client
+                .generate(req)
+                .await
+                .map_err(|e| task_error("llm_error", format!("{e}"), true))?;
+
+            self.cumulative_input_tokens
+                .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
+
+            history.push(RichMessage::ToolUse {
+                text: if resp.text.is_empty() {
+                    None
+                } else {
+                    Some(resp.text.clone())
+                },
+                calls: resp.tool_calls.clone(),
+            });
+
+            if resp.tool_calls.is_empty() || resp.stop_reason == StopReason::EndTurn {
+                return Ok(Message {
+                    role: "agent".into(),
+                    parts: vec![mur_common::a2a::MessagePart::Text { text: resp.text }],
+                });
+            }
+
+            // Execute tools and collect results
+            let mut results = Vec::new();
+            for call in &resp.tool_calls {
+                match self.handle_tool_call(task_id, call).await {
+                    Ok(entry) => results.push(entry),
+                    Err(e) => return Err(e),
+                }
+            }
+            history.push(RichMessage::ToolResults { results });
+        }
+
+        Err(task_error(
+            "max_iterations",
+            format!(
+                "agentic loop exceeded {} iteration limit",
+                self.max_iterations
+            ),
+            false,
+        ))
+    }
 }
 
 /// Build a `TaskError` for a failed task outcome.
@@ -651,6 +878,98 @@ mod tests {
                 assert_eq!(err.code, "llm_error");
             }
             other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    // Helper: build LlmResponse that signals tool_use stop with one call
+    fn tool_call_response(call_id: &str, command: &str) -> crate::llm::LlmResponse {
+        crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: call_id.into(),
+                tool_name: "bash".into(),
+                input: serde_json::json!({"command": command}),
+            }],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        }
+    }
+
+    fn end_turn_response(text: &str) -> crate::llm::LlmResponse {
+        crate::llm::LlmResponse {
+            text: text.into(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![],
+            stop_reason: crate::llm::StopReason::EndTurn,
+        }
+    }
+
+    #[tokio::test]
+    async fn loop_ends_on_end_turn_no_tools() {
+        use crate::llm::stub::SequenceLlm;
+        let llm = SequenceLlm::new(vec![end_turn_response("Completed.")]);
+        let (notif_tx, _rx) = tokio::sync::mpsc::channel(16);
+        let pa: Arc<
+            tokio::sync::Mutex<
+                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
+            >,
+        > = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(llm))
+                .with_pending_approvals(pa)
+                .with_notifier(notif_tx),
+        );
+        let spec = TaskSpec {
+            input: mur_common::a2a::Message {
+                role: "user".into(),
+                parts: vec![mur_common::a2a::MessagePart::Text { text: "hello".into() }],
+            },
+            context_task_id: None,
+        };
+        let outcome = runner.run_sync(spec).await;
+        assert!(matches!(outcome, TaskOutcome::Completed(_)));
+    }
+
+    #[tokio::test]
+    async fn max_iterations_exceeded_yields_failed() {
+        use crate::llm::stub::SequenceLlm;
+        // Always returns tool_use — loop never ends naturally
+        let responses: Vec<crate::llm::LlmResponse> = (0..12)
+            .map(|i| tool_call_response(&format!("id-{i}"), "echo loop"))
+            .collect();
+        let llm = SequenceLlm::new(responses);
+        let (notif_tx, _rx) = tokio::sync::mpsc::channel(16);
+        let pa: Arc<
+            tokio::sync::Mutex<
+                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
+            >,
+        > = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(llm))
+                .with_pending_approvals(pa)
+                .with_notifier(notif_tx)
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(3),
+        );
+        let spec = TaskSpec {
+            input: mur_common::a2a::Message {
+                role: "user".into(),
+                parts: vec![mur_common::a2a::MessagePart::Text { text: "loop".into() }],
+            },
+            context_task_id: None,
+        };
+        let outcome = runner.run_sync(spec).await;
+        assert!(
+            matches!(outcome, TaskOutcome::Failed(_)),
+            "expected Failed, got {outcome:?}"
+        );
+        if let TaskOutcome::Failed(task) = outcome {
+            let err = task.error.unwrap();
+            assert!(err.message.contains("iteration"), "got: {}", err.message);
         }
     }
 }
