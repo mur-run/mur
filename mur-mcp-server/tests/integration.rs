@@ -53,7 +53,7 @@ fn test_initialize_and_list_tools() {
     );
     let resp = read_response(&mut stdout);
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 14, "Expected 14 tools");
+    assert_eq!(tools.len(), 18, "Expected 18 tools");
 
     // Verify properties is an object (not an array) — MCP spec requires JSON object
     let first_tool_with_props = tools
@@ -79,6 +79,10 @@ fn test_initialize_and_list_tools() {
     assert!(names.contains(&"vlc_status"));
     assert!(names.contains(&"scene_explain"));
     assert!(names.contains(&"video_analyze"));
+    assert!(names.contains(&"watch_start"));
+    assert!(names.contains(&"watch_stop"));
+    assert!(names.contains(&"watch_mute"));
+    assert!(names.contains(&"watch_status"));
     assert!(names.contains(&"mur_compress"));
     assert!(names.contains(&"mur_retrieve"));
     assert!(names.contains(&"mur_compress_stats"));

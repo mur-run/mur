@@ -245,6 +245,42 @@ pub fn all_tools() -> Vec<Tool> {
                 required: None,
             },
         },
+        Tool {
+            name: "watch_start".into(),
+            description: "Begin a proactive co-watching session: MuR may briefly comment on big scene changes (runtime-only; consent-gated; say \"噓\" to mute).".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: None,
+                required: None,
+            },
+        },
+        Tool {
+            name: "watch_stop".into(),
+            description: "End the proactive co-watching session.".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: None,
+                required: None,
+            },
+        },
+        Tool {
+            name: "watch_mute".into(),
+            description: "Silence proactive interjections without ending the session (\"噓\").".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: None,
+                required: None,
+            },
+        },
+        Tool {
+            name: "watch_status".into(),
+            description: "Report the current co-watching session state (active/muted/consent).".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: None,
+                required: None,
+            },
+        },
         // ── compress tools ──
         Tool {
             name: "mur_compress".into(),
@@ -486,6 +522,30 @@ pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
             Ok(json!({ "analysis": markdown }))
         }
 
+        "watch_start" => {
+            let home = resolve_mur_home().map_err(|e| format!("watch_start failed: {e}"))?;
+            let s = mur_core::cmd::media::watch::start(&home)
+                .map_err(|e| format!("watch_start failed: {e}"))?;
+            Ok(serde_json::to_value(s).unwrap_or(Value::Null))
+        }
+        "watch_stop" => {
+            let home = resolve_mur_home().map_err(|e| format!("watch_stop failed: {e}"))?;
+            let s = mur_core::cmd::media::watch::stop(&home)
+                .map_err(|e| format!("watch_stop failed: {e}"))?;
+            Ok(serde_json::to_value(s).unwrap_or(Value::Null))
+        }
+        "watch_mute" => {
+            let home = resolve_mur_home().map_err(|e| format!("watch_mute failed: {e}"))?;
+            let s = mur_core::cmd::media::watch::mute(&home)
+                .map_err(|e| format!("watch_mute failed: {e}"))?;
+            Ok(serde_json::to_value(s).unwrap_or(Value::Null))
+        }
+        "watch_status" => {
+            let home = resolve_mur_home().map_err(|e| format!("watch_status failed: {e}"))?;
+            let s = mur_core::cmd::media::watch::status(&home);
+            Ok(serde_json::to_value(s).unwrap_or(Value::Null))
+        }
+
         "mur_compress" => {
             let content = arguments
                 .get("content")
@@ -587,6 +647,10 @@ mod media_tool_tests {
             "vlc_status",
             "scene_explain",
             "video_analyze",
+            "watch_start",
+            "watch_stop",
+            "watch_mute",
+            "watch_status",
         ] {
             assert!(names.contains(&n.to_string()), "missing {n}");
         }
