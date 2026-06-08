@@ -158,3 +158,12 @@ export const TAB_LABELS: Record<DetailTab, string> = {
   inbox: "Inbox",
   mobile: "Mobile",
 };
+
+export interface HitlRequest {
+  agent: string;
+  hitl_id: string;
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  prompt: string;
+  timeout_ms: number;
+}

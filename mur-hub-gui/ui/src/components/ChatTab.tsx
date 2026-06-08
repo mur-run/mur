@@ -7,6 +7,8 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "../i18n";
+import { HitlCard } from "./HitlCard";
+import type { HitlRequest } from "../types";
 
 interface ChatMsg {
   role: "user" | "agent" | "error";
@@ -33,6 +35,7 @@ interface Props {
 export function ChatTab({ agentName, displayName }: Props) {
   const { t } = useT();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [hitlRequests, setHitlRequests] = useState<HitlRequest[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   // Live answer text accumulating from `chat-delta` events (null when idle).
@@ -53,6 +56,7 @@ export function ChatTab({ agentName, displayName }: Props) {
   // Fresh conversation when the selected agent changes.
   useEffect(() => {
     setMessages([]);
+    setHitlRequests([]);
     setStreaming(null);
     setThinking(null);
     streamingRef.current = "";
@@ -74,8 +78,13 @@ export function ChatTab({ agentName, displayName }: Props) {
         // starts — like DeepSeek's deepthink — rather than dropping it.
       }
     });
+    const unHitl = listen<HitlRequest>("hitl-approval-needed", (e) => {
+      if (e.payload.agent !== agentName) return;
+      setHitlRequests((prev) => [...prev, e.payload]);
+    });
     return () => {
       void un.then((f) => f());
+      void unHitl.then((f) => f());
     };
   }, [agentName]);
 
@@ -181,6 +190,9 @@ export function ChatTab({ agentName, displayName }: Props) {
             <span className="chat__dot" />
           </div>
         )}
+        {hitlRequests.map((req) => (
+          <HitlCard key={req.hitl_id} request={req} />
+        ))}
         <div ref={endRef} />
       </div>
       <div className="chat__compose">
