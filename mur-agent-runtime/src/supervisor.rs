@@ -25,6 +25,7 @@ use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
 use crate::transport::unix_socket::serve_unix;
 use crate::transport::webhook;
+use crate::watch_scheduler::WatchScheduler;
 use mur_common::identity::AgentIdentity;
 use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
 use std::collections::HashMap;
@@ -494,6 +495,18 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             count = profile.inner.lifecycle.idle_triggers.len(),
             "IdleScheduler started"
         );
+    }
+
+    // 8d-bis. Proactive co-watching scheduler (spec §6). Cheap when no session is
+    //         active (one file read per tick); only acts while watch.json is active.
+    {
+        let ws = WatchScheduler::new(
+            runner.clone(),
+            mur_home.to_path_buf(),
+            profile.inner.companion.proactive.quiet_hours.clone(),
+        );
+        transport_tasks.push(ws.spawn());
+        info!("WatchScheduler started");
     }
 
     // 8e. E3 — agent-side sleep cycle: flush evidence outbox + pull snapshot.

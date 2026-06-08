@@ -1159,6 +1159,10 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
             "video-analyze",
             include_str!("../skills/video_analyze.yaml"),
         ),
+        (
+            "watch-together",
+            include_str!("../skills/watch_together.yaml"),
+        ),
     ];
 
     let mur_skills_dir = home.join(".mur").join("skills");
