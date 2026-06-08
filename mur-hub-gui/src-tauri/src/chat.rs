@@ -51,25 +51,34 @@ pub async fn agent_chat_send(
         let app2 = app.clone();
         // Stream over the running agent's socket; fall back to a one-shot
         // ephemeral dial if it isn't running.
-        match dial_message_streaming(&home, &name, params.clone(), |delta, thinking| {
-            let _ = app.emit(
-                "chat-delta",
-                ChatDelta {
-                    agent: agent.clone(),
-                    text: delta.to_string(),
-                    thinking,
-                },
-            );
-        }, |hitl_params| {
-            let _ = app2.emit("hitl-approval-needed", serde_json::json!({
-                "agent": name,
-                "hitl_id": hitl_params.get("hitl_id"),
-                "tool_name": hitl_params.get("tool_name"),
-                "tool_input": hitl_params.get("tool_input"),
-                "prompt": hitl_params.get("prompt"),
-                "timeout_ms": hitl_params.get("timeout_ms"),
-            }));
-        }) {
+        match dial_message_streaming(
+            &home,
+            &name,
+            params.clone(),
+            |delta, thinking| {
+                let _ = app.emit(
+                    "chat-delta",
+                    ChatDelta {
+                        agent: agent.clone(),
+                        text: delta.to_string(),
+                        thinking,
+                    },
+                );
+            },
+            |hitl_params| {
+                let _ = app2.emit(
+                    "hitl-approval-needed",
+                    serde_json::json!({
+                        "agent": name,
+                        "hitl_id": hitl_params.get("hitl_id"),
+                        "tool_name": hitl_params.get("tool_name"),
+                        "tool_input": hitl_params.get("tool_input"),
+                        "prompt": hitl_params.get("prompt"),
+                        "timeout_ms": hitl_params.get("timeout_ms"),
+                    }),
+                );
+            },
+        ) {
             Ok(v) => Ok((v, true)),
             Err(e) if e.to_string().contains("is not running") => {
                 dial_method(&home, &name, "message/send", params, DialMode::Auto)

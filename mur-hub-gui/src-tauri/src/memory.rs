@@ -25,33 +25,26 @@ pub fn get_memory_impl(home: &Path, name: &str) -> Result<MemoryView, String> {
         .join("relationship.json");
 
     let (relationship, formality, first_memory, companion_initialised) = if rel_path.exists() {
-        let bytes = std::fs::read(&rel_path)
-            .map_err(|e| format!("read relationship.json: {e}"))?;
-        let v: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|e| format!("parse relationship.json: {e}"))?;
+        let bytes = std::fs::read(&rel_path).map_err(|e| format!("read relationship.json: {e}"))?;
+        let v: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("parse relationship.json: {e}"))?;
 
-        let relationship = v["relationship"]
-            .as_str()
-            .unwrap_or("friend")
-            .to_string();
-        let formality = v["formality"]
-            .as_str()
-            .unwrap_or("neutral")
-            .to_string();
-        let first_memory = v["first_memory"]["text"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let relationship = v["relationship"].as_str().unwrap_or("friend").to_string();
+        let formality = v["formality"].as_str().unwrap_or("neutral").to_string();
+        let first_memory = v["first_memory"]["text"].as_str().unwrap_or("").to_string();
 
         (relationship, formality, first_memory, true)
     } else {
-        ("friend".to_string(), "neutral".to_string(), String::new(), false)
+        (
+            "friend".to_string(),
+            "neutral".to_string(),
+            String::new(),
+            false,
+        )
     };
 
-    let sys_prompt = std::fs::read_to_string(
-        home.join("agents").join(name).join("sys_prompt.md"),
-    )
-    .unwrap_or_default();
+    let sys_prompt = std::fs::read_to_string(home.join("agents").join(name).join("sys_prompt.md"))
+        .unwrap_or_default();
 
     Ok(MemoryView {
         relationship,
@@ -62,11 +55,7 @@ pub fn get_memory_impl(home: &Path, name: &str) -> Result<MemoryView, String> {
     })
 }
 
-pub fn set_memory_impl(
-    home: &Path,
-    name: &str,
-    patch: MemoryPatch,
-) -> Result<MemoryView, String> {
+pub fn set_memory_impl(home: &Path, name: &str, patch: MemoryPatch) -> Result<MemoryView, String> {
     let rel_path = home
         .join("agents")
         .join(name)
@@ -78,10 +67,9 @@ pub fn set_memory_impl(
             || patch.formality.is_some()
             || patch.first_memory.is_some())
     {
-        let bytes = std::fs::read(&rel_path)
-            .map_err(|e| format!("read relationship.json: {e}"))?;
-        let mut v: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|e| format!("parse relationship.json: {e}"))?;
+        let bytes = std::fs::read(&rel_path).map_err(|e| format!("read relationship.json: {e}"))?;
+        let mut v: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("parse relationship.json: {e}"))?;
 
         if let Some(rel) = patch.relationship {
             v["relationship"] = serde_json::Value::String(rel);
@@ -101,16 +89,13 @@ pub fn set_memory_impl(
             }
         }
 
-        let updated =
-            serde_json::to_string_pretty(&v).map_err(|e| format!("serialize: {e}"))?;
-        std::fs::write(&rel_path, updated)
-            .map_err(|e| format!("write relationship.json: {e}"))?;
+        let updated = serde_json::to_string_pretty(&v).map_err(|e| format!("serialize: {e}"))?;
+        std::fs::write(&rel_path, updated).map_err(|e| format!("write relationship.json: {e}"))?;
     }
 
     if let Some(prompt) = patch.sys_prompt {
         let sp_path = home.join("agents").join(name).join("sys_prompt.md");
-        std::fs::write(&sp_path, &prompt)
-            .map_err(|e| format!("write sys_prompt.md: {e}"))?;
+        std::fs::write(&sp_path, &prompt).map_err(|e| format!("write sys_prompt.md: {e}"))?;
     }
 
     get_memory_impl(home, name)
@@ -119,8 +104,7 @@ pub fn set_memory_impl(
 pub fn reset_sys_prompt_impl(home: &Path, name: &str) -> Result<String, String> {
     let content = format!("# {name}\n\nYou are an assistant.\n");
     let sp_path = home.join("agents").join(name).join("sys_prompt.md");
-    std::fs::write(&sp_path, &content)
-        .map_err(|e| format!("write sys_prompt.md: {e}"))?;
+    std::fs::write(&sp_path, &content).map_err(|e| format!("write sys_prompt.md: {e}"))?;
     Ok(content)
 }
 
@@ -186,8 +170,14 @@ mod tests {
     #[test]
     fn set_memory_round_trip() {
         let (dir, home) = make_agent("rtagent");
-        let rp = dir.path().join("agents/rtagent/companion/relationship.json");
-        fs::write(&rp, r#"{"version":1,"relationship":"friend","formality":"neutral"}"#).unwrap();
+        let rp = dir
+            .path()
+            .join("agents/rtagent/companion/relationship.json");
+        fs::write(
+            &rp,
+            r#"{"version":1,"relationship":"friend","formality":"neutral"}"#,
+        )
+        .unwrap();
         let patch = MemoryPatch {
             relationship: Some("mentor".to_string()),
             formality: None,
