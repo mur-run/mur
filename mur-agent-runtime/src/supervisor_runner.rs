@@ -1,5 +1,6 @@
 //! Extracted helpers for supervisor.rs — keeps it under 800 lines per CLAUDE.md §4.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -106,13 +107,29 @@ pub fn build_runner(
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
+    pending_approvals: Option<
+        Arc<
+            tokio::sync::Mutex<
+                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
+            >,
+        >,
+    >,
+    notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
+    hitl_timeout_secs: u32,
 ) -> Arc<TaskRunner> {
     let mut runner = TaskRunner::with_llm(client)
         .with_system_prompt(base_system_prompt)
         .with_skills(skills)
-        .with_skills_cfg(skills_cfg);
+        .with_skills_cfg(skills_cfg)
+        .with_hitl_timeout_secs(hitl_timeout_secs);
     if let (Some(chain), Some(ctx), Some(cancel)) = (hook_chain, hook_ctx, hook_cancel) {
         runner = runner.with_hook_chain(chain, ctx, cancel);
+    }
+    if let Some(pa) = pending_approvals {
+        runner = runner.with_pending_approvals(pa);
+    }
+    if let Some(notif) = notifier {
+        runner = runner.with_notifier(notif);
     }
     Arc::new(runner)
 }
@@ -127,6 +144,15 @@ pub async fn build_provider_runner(
     hook_chain: &HookChain,
     hook_ctx: &HookCtx,
     hook_cancel: &CancellationToken,
+    pending_approvals: Option<
+        Arc<
+            tokio::sync::Mutex<
+                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
+            >,
+        >,
+    >,
+    notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
+    hitl_timeout_secs: u32,
 ) -> anyhow::Result<(Arc<TaskRunner>, Option<Arc<dyn LlmClient>>)> {
     if force_echo {
         return Ok((Arc::new(TaskRunner::new_stub_echo()), None));
@@ -178,6 +204,9 @@ pub async fn build_provider_runner(
             Some(Arc::new(hook_chain.clone())),
             Some(hook_ctx.clone()),
             Some(hook_cancel.clone()),
+            pending_approvals.clone(),
+            notifier.clone(),
+            hitl_timeout_secs,
         );
         (r, Some(client))
     };
