@@ -246,6 +246,40 @@ impl Transcript {
     }
 }
 
+// ── Cache ──
+
+use std::path::{Path, PathBuf};
+
+/// Deterministic cache path for a source's transcript.
+pub fn cache_path(mur_home: &Path, source: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(source.as_bytes());
+    let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    mur_home
+        .join("runtime")
+        .join("transcripts")
+        .join(format!("{hex}.json"))
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn cache_path_is_stable_and_unique() {
+        let home = Path::new("/tmp/murhome");
+        let a = cache_path(home, "https://youtu.be/abc");
+        let a2 = cache_path(home, "https://youtu.be/abc");
+        let b = cache_path(home, "https://youtu.be/xyz");
+        assert_eq!(a, a2);
+        assert_ne!(a, b);
+        assert!(a.to_string_lossy().ends_with(".json"));
+        assert!(a.starts_with("/tmp/murhome/runtime/transcripts"));
+    }
+}
+
 #[cfg(test)]
 mod chunk_tests {
     use super::*;
@@ -286,4 +320,160 @@ mod chunk_tests {
         assert_eq!(chunks[0].text, "intro middle");
         assert_eq!(chunks[1].text, "end");
     }
+}
+
+// ── Acquisition orchestrators ──
+
+use crate::cmd::media::error::MediaError;
+use crate::cmd::media::resolve;
+use std::process::Command;
+
+/// Subtitle language preference chain (highest priority first).
+const SUB_LANG_PREF: &str = "zh-Hant,zh-Hans,zh,en";
+
+fn is_url(source: &str) -> bool {
+    source.starts_with("http://") || source.starts_with("https://")
+}
+
+/// Get a transcript for `source`, using the on-disk cache when present.
+pub fn get(mur_home: &Path, source: &str) -> Result<Transcript, MediaError> {
+    let cache = cache_path(mur_home, source);
+    if let Ok(body) = std::fs::read_to_string(&cache)
+        && let Ok(tr) = serde_json::from_str::<Transcript>(&body)
+    {
+        return Ok(tr);
+    }
+    let tr = if is_url(source) {
+        fetch_youtube(mur_home, source)?
+    } else {
+        read_local(source)?
+    };
+    if let Some(parent) = cache.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_vec_pretty(&tr) {
+        let tmp = cache.with_extension("json.tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, &cache);
+        }
+    }
+    Ok(tr)
+}
+
+/// Fetch captions for a URL via yt-dlp json3 (+ chapters from info-json).
+fn fetch_youtube(mur_home: &Path, source: &str) -> Result<Transcript, MediaError> {
+    let ytdlp = resolve::detect_ytdlp().ok_or(MediaError::YtdlpMissing)?;
+    let work = mur_home.join("runtime").join("yt-work");
+    let _ = std::fs::create_dir_all(&work);
+    let out_tpl = work.join("sub.%(ext)s");
+    let status = Command::new(&ytdlp)
+        .args([
+            "--skip-download",
+            "--write-subs",
+            "--write-auto-subs",
+            "--sub-lang",
+            SUB_LANG_PREF,
+            "--sub-format",
+            "json3",
+            "--write-info-json",
+            "-o",
+        ])
+        .arg(&out_tpl)
+        .arg(source)
+        .status()
+        .map_err(|_| MediaError::SourceUnresolvable)?;
+    if !status.success() {
+        return Err(MediaError::SourceUnresolvable);
+    }
+    let mut cues = Vec::new();
+    let mut lang = "und".to_string();
+    let mut chapters = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&work) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".json3") {
+                if let Ok(body) = std::fs::read_to_string(e.path()) {
+                    cues = parse_json3(&body);
+                    lang = name
+                        .trim_start_matches("sub.")
+                        .trim_end_matches(".json3")
+                        .to_string();
+                }
+            } else if name.ends_with(".info.json") {
+                if let Ok(body) = std::fs::read_to_string(e.path()) {
+                    chapters = parse_info_chapters(&body);
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&work);
+    if cues.is_empty() {
+        return Err(MediaError::NoTranscript);
+    }
+    Ok(Transcript { source_id: source.to_string(), lang, cues, chapters })
+}
+
+/// Extract chapters from a yt-dlp info-json (`chapters: [{start_time, title}]`).
+fn parse_info_chapters(json: &str) -> Vec<Chapter> {
+    let v: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    v.get("chapters")
+        .and_then(|c| c.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|ch| {
+                    let start = ch.get("start_time").and_then(|s| s.as_f64())?;
+                    let title = ch.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
+                    Some(Chapter { start_ms: (start * 1000.0) as i64, title })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Read a local file's transcript: sidecar .srt/.vtt, else embedded track via ffmpeg.
+fn read_local(path: &str) -> Result<Transcript, MediaError> {
+    let p = Path::new(path);
+    if !p.exists() {
+        return Err(MediaError::SourceUnresolvable);
+    }
+    for ext in ["srt", "vtt"] {
+        let sidecar = p.with_extension(ext);
+        if let Ok(body) = std::fs::read_to_string(&sidecar) {
+            let cues = if ext == "srt" { parse_srt(&body) } else { parse_vtt(&body) };
+            if !cues.is_empty() {
+                return Ok(Transcript {
+                    source_id: path.to_string(),
+                    lang: "und".into(),
+                    cues,
+                    chapters: Vec::new(),
+                });
+            }
+        }
+    }
+    if let Some(ffmpeg) = resolve::detect_ffmpeg() {
+        let tmp = std::env::temp_dir().join("mur-embedded-sub.srt");
+        let _ = std::fs::remove_file(&tmp);
+        let ok = Command::new(ffmpeg)
+            .args(["-y", "-i", path, "-map", "0:s:0"])
+            .arg(&tmp)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok && let Ok(body) = std::fs::read_to_string(&tmp) {
+            let cues = parse_srt(&body);
+            let _ = std::fs::remove_file(&tmp);
+            if !cues.is_empty() {
+                return Ok(Transcript {
+                    source_id: path.to_string(),
+                    lang: "und".into(),
+                    cues,
+                    chapters: Vec::new(),
+                });
+            }
+        }
+    }
+    Err(MediaError::NoTranscript)
 }
