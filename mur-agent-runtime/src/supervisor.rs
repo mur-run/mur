@@ -647,10 +647,7 @@ impl crate::protocol::a2a_server::MethodHandler for HitlTestRequestHandler {
         params: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, crate::protocol::a2a_server::HandlerError> {
         let p = params.unwrap_or(serde_json::json!({}));
-        let tool_name = p["tool_name"]
-            .as_str()
-            .unwrap_or("bash")
-            .to_string();
+        let tool_name = p["tool_name"].as_str().unwrap_or("bash").to_string();
         let tool_input = p["tool_input"].clone();
         let timeout_secs = p["timeout_secs"].as_u64().unwrap_or(300);
         let hitl_id = uuid::Uuid::now_v7().to_string();
