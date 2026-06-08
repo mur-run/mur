@@ -91,14 +91,20 @@ mod tests {
     #[tokio::test]
     async fn captures_stdout() {
         let t = make_tool();
-        let out = t.execute(serde_json::json!({"command": "echo hello"})).await.unwrap();
+        let out = t
+            .execute(serde_json::json!({"command": "echo hello"}))
+            .await
+            .unwrap();
         assert!(out.contains("hello"), "got: {out}");
     }
 
     #[tokio::test]
     async fn captures_stderr() {
         let t = make_tool();
-        let out = t.execute(serde_json::json!({"command": "echo err >&2"})).await.unwrap();
+        let out = t
+            .execute(serde_json::json!({"command": "echo err >&2"}))
+            .await
+            .unwrap();
         assert!(out.contains("err"), "got: {out}");
     }
 
@@ -106,7 +112,10 @@ mod tests {
     async fn nonzero_exit_in_output_not_err() {
         let t = make_tool();
         let result = t.execute(serde_json::json!({"command": "exit 1"})).await;
-        assert!(result.is_ok(), "non-zero exit should not be Err, got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "non-zero exit should not be Err, got: {result:?}"
+        );
     }
 
     #[tokio::test]

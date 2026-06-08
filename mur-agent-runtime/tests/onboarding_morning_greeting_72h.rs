@@ -48,7 +48,9 @@ use mur_agent_runtime::companion::{
 };
 use mur_agent_runtime::durable::ledger::Ledger;
 use mur_agent_runtime::llm::stub::StubLlm;
-use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason};
+use mur_agent_runtime::llm::{
+    LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason,
+};
 use mur_common::agent::ProactiveConfig;
 use mur_common::companion::Situation;
 use serde_json::json;

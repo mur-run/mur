@@ -103,7 +103,9 @@ impl SequenceLlm {
 #[async_trait]
 impl LlmClient for SequenceLlm {
     async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let idx = self.index.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let idx = self
+            .index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(self.responses[idx % self.responses.len()].clone())
     }
     fn model_name(&self) -> &str {

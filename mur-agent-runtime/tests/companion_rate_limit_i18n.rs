@@ -13,7 +13,9 @@ use mur_agent_runtime::companion::{
     outbox::{SkipReason, TickOutcome},
     telemetry::OutboxEvent,
 };
-use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason};
+use mur_agent_runtime::llm::{
+    LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason,
+};
 use std::sync::{Arc, Mutex};
 
 // ─── local_as_utc helper (mirrors companion_gating.rs) ───────────────────────

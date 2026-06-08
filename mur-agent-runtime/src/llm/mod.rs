@@ -66,7 +66,10 @@ pub struct ToolResultEntry {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum RichMessage {
-    Text { role: String, content: String },
+    Text {
+        role: String,
+        content: String,
+    },
     ToolUse {
         text: Option<String>,
         calls: Vec<ToolCallResult>,
@@ -148,7 +151,10 @@ mod tests {
 
     #[test]
     fn rich_message_text_roundtrip() {
-        let m = RichMessage::Text { role: "user".into(), content: "hello".into() };
+        let m = RichMessage::Text {
+            role: "user".into(),
+            content: "hello".into(),
+        };
         match m {
             RichMessage::Text { role, content } => {
                 assert_eq!(role, "user");
@@ -161,7 +167,10 @@ mod tests {
     #[test]
     fn llm_request_tools_defaults_empty() {
         let req = LlmRequest {
-            messages: vec![RichMessage::Text { role: "user".into(), content: "hi".into() }],
+            messages: vec![RichMessage::Text {
+                role: "user".into(),
+                content: "hi".into(),
+            }],
             temperature: None,
             max_tokens: None,
             tools: vec![],

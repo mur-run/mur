@@ -1031,7 +1031,9 @@ mod hitl_tests {
             pending_approvals: pending.clone(),
         };
         let result = handler
-            .handle(Some(json!({"hitl_id": "test-id", "allow": true, "reason": "looks good"})))
+            .handle(Some(
+                json!({"hitl_id": "test-id", "allow": true, "reason": "looks good"}),
+            ))
             .await;
         assert!(result.is_ok());
 
