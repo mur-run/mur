@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use mur_agent_runtime::companion::voice::{VoiceInput, compose_in_memory};
-use mur_agent_runtime::llm::{LlmClient, LlmMessage, LlmRequest};
+use mur_agent_runtime::llm::{LlmClient, LlmRequest, RichMessage};
 use mur_common::agent::AgentProfile;
 use mur_common::companion::Situation;
 use mur_common::companion::content_seed::{SituationFile, TemplateSeed, all_seeds, parse};
@@ -327,17 +327,18 @@ async fn generate_preview(
 ) -> Result<String> {
     let req = LlmRequest {
         messages: vec![
-            LlmMessage {
+            RichMessage::Text {
                 role: "system".to_string(),
                 content: voice_md.to_string(),
             },
-            LlmMessage {
+            RichMessage::Text {
                 role: "user".to_string(),
                 content: template.prompt_seed.clone(),
             },
         ],
         max_tokens: Some(400),
         temperature: Some(0.7),
+        tools: vec![],
     };
     let resp = llm
         .generate(req)
