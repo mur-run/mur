@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::companion::linter;
 use crate::companion::picker::TemplateId;
 use crate::companion::telemetry::OutboxEvent;
-use crate::llm::{LlmError, LlmMessage, LlmRequest};
+use crate::llm::{LlmError, LlmRequest, RichMessage};
 
 use super::Outbox;
 
@@ -83,17 +83,18 @@ impl<R: RngCore + Send> Outbox<R> {
 
             let req = LlmRequest {
                 messages: vec![
-                    LlmMessage {
+                    RichMessage::Text {
                         role: "system".to_string(),
                         content: self.voice_md.clone(),
                     },
-                    LlmMessage {
+                    RichMessage::Text {
                         role: "user".to_string(),
                         content: user_prompt,
                     },
                 ],
                 temperature: None,
                 max_tokens: None,
+                tools: vec![],
             };
 
             let text = match self.llm.generate(req).await {

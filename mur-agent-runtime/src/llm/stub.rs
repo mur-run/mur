@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use super::{LlmClient, LlmError, LlmRequest, LlmResponse};
+use super::{LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason};
 
 #[derive(Debug, Deserialize)]
 struct Scenario {
@@ -55,7 +55,10 @@ impl LlmClient for StubLlm {
         let joined: String = req
             .messages
             .iter()
-            .map(|m| m.content.as_str())
+            .filter_map(|m| match m {
+                RichMessage::Text { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let text = match self.pick(&joined) {
@@ -72,9 +75,40 @@ impl LlmClient for StubLlm {
             output_tokens: (text.len() / 4) as u64,
             text,
             model: "stub".into(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
     fn model_name(&self) -> &str {
         "stub"
+    }
+}
+
+/// Test stub that returns a pre-configured sequence of LlmResponse values.
+/// Wraps around when exhausted.
+pub struct SequenceLlm {
+    responses: Vec<LlmResponse>,
+    index: std::sync::atomic::AtomicUsize,
+}
+
+impl SequenceLlm {
+    pub fn new(responses: Vec<LlmResponse>) -> Self {
+        Self {
+            responses,
+            index: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl LlmClient for SequenceLlm {
+    async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
+        let idx = self
+            .index
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(self.responses[idx % self.responses.len()].clone())
+    }
+    fn model_name(&self) -> &str {
+        "sequence-stub"
     }
 }

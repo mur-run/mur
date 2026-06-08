@@ -1,16 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { HitlRequest } from "../types";
+import { useT } from "../i18n";
 
 interface Props {
   request: HitlRequest;
 }
 
 export function HitlCard({ request }: Props) {
+  const { t } = useT();
   const timeoutSecs = Math.floor(request.timeout_ms / 1000);
   const [remaining, setRemaining] = useState(timeoutSecs);
   const [responded, setResponded] = useState<"allowed" | "denied" | "timeout" | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showReasonInput, setShowReasonInput] = useState(false);
+  const [reason, setReason] = useState("");
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -27,7 +31,7 @@ export function HitlCard({ request }: Props) {
     return () => clearInterval(intervalRef.current!);
   }, []);
 
-  async function respond(allow: boolean) {
+  async function respond(allow: boolean, denyReason?: string) {
     if (responded || busy) return;
     setBusy(true);
     clearInterval(intervalRef.current!);
@@ -36,6 +40,7 @@ export function HitlCard({ request }: Props) {
         name: request.agent,
         hitlId: request.hitl_id,
         allow,
+        reason: denyReason ?? null,
       });
       setResponded(allow ? "allowed" : "denied");
     } catch {
@@ -87,22 +92,59 @@ export function HitlCard({ request }: Props) {
       {inputSummary && (
         <div className="hitl-card__input">{inputSummary}</div>
       )}
-      <div className="hitl-card__actions">
-        <button
-          className="hitl-card__btn hitl-card__btn--allow"
-          onClick={() => respond(true)}
-          disabled={busy}
-        >
-          Allow
-        </button>
-        <button
-          className="hitl-card__btn hitl-card__btn--deny"
-          onClick={() => respond(false)}
-          disabled={busy}
-        >
-          Deny
-        </button>
-      </div>
+      {showReasonInput ? (
+        <div className="hitl-card__reason-form">
+          <label className="hitl-card__reason-label">{t("hitl.denyReason")}</label>
+          <textarea
+            className="hitl-card__reason-input"
+            placeholder={t("hitl.reasonPlaceholder")}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+            disabled={busy}
+          />
+          <div className="hitl-card__actions">
+            <button
+              className="hitl-card__btn hitl-card__btn--deny"
+              onClick={() => respond(false, reason || undefined)}
+              disabled={busy}
+            >
+              {t("hitl.confirmDeny")}
+            </button>
+            <button
+              className="hitl-card__btn hitl-card__btn--cancel"
+              onClick={() => { setShowReasonInput(false); setReason(""); }}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="hitl-card__actions">
+          <button
+            className="hitl-card__btn hitl-card__btn--allow"
+            onClick={() => respond(true)}
+            disabled={busy}
+          >
+            Allow
+          </button>
+          <button
+            className="hitl-card__btn hitl-card__btn--deny"
+            onClick={() => respond(false)}
+            disabled={busy}
+          >
+            Deny
+          </button>
+          <button
+            className="hitl-card__btn hitl-card__btn--deny-reason"
+            onClick={() => setShowReasonInput(true)}
+            disabled={busy}
+          >
+            {t("hitl.denyWithReason")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

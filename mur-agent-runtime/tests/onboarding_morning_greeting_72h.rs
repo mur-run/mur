@@ -48,7 +48,9 @@ use mur_agent_runtime::companion::{
 };
 use mur_agent_runtime::durable::ledger::Ledger;
 use mur_agent_runtime::llm::stub::StubLlm;
-use mur_agent_runtime::llm::{LlmClient, LlmError, LlmRequest, LlmResponse};
+use mur_agent_runtime::llm::{
+    LlmClient, LlmError, LlmRequest, LlmResponse, RichMessage, StopReason,
+};
 use mur_common::agent::ProactiveConfig;
 use mur_common::companion::Situation;
 use serde_json::json;
@@ -213,14 +215,19 @@ impl LlmClient for CapturingLlm {
         // Capture the user message content (the prompt the outbox built from
         // prompt_seed). We deliberately DO NOT capture the system message
         // (voice_md) — the assertion is about user-prompt construction.
-        if let Some(user) = req.messages.iter().find(|m| m.role == "user") {
-            self.captured.lock().unwrap().push(user.content.clone());
+        if let Some(content) = req.messages.iter().find_map(|m| match m {
+            RichMessage::Text { role, content } if role == "user" => Some(content.clone()),
+            _ => None,
+        }) {
+            self.captured.lock().unwrap().push(content);
         }
         Ok(LlmResponse {
             text: self.response.clone(),
             input_tokens: 0,
             output_tokens: 0,
             model: "capturing-stub".to_string(),
+            tool_calls: vec![],
+            stop_reason: StopReason::EndTurn,
         })
     }
     fn model_name(&self) -> &str {

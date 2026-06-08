@@ -29,7 +29,8 @@ use mur_common::identity::AgentIdentity;
 use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
@@ -256,6 +257,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("supervisor refusing LLM construction: {e}"))?;
     // `llm_for_companion` carries the real LLM client (None when echo/stub) so
     // the companion subsystem can share the same provider without a second dial.
+    let pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let hitl_timeout_secs = profile.inner.hitl.timeout_secs;
     let (runner, llm_for_companion) = crate::supervisor_runner::build_provider_runner(
         force_echo,
         &profile,
@@ -264,10 +268,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         &hook_chain,
         &hook_ctx,
         &hook_cancel,
+        Some(pending_approvals.clone()),
+        Some(sock_notif_tx.clone()),
+        hitl_timeout_secs,
     )
     .await?;
-    let pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
     let dispatcher = Arc::new(build_dispatcher(
         &profile_arc,
         &runner,
@@ -601,7 +606,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
 }
 
 struct HitlRespondHandler {
-    pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>>,
 }
 
 #[async_trait::async_trait]
@@ -622,21 +627,22 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
         let allow = p["allow"].as_bool().ok_or_else(|| {
             crate::protocol::a2a_server::HandlerError::InvalidParams("missing allow".into())
         })?;
+        let reason = p["reason"].as_str().map(str::to_string);
         let tx = self
             .pending_approvals
             .lock()
-            .unwrap()
+            .await
             .remove(&hitl_id)
             .ok_or_else(|| {
                 crate::protocol::a2a_server::HandlerError::TaskNotFound(hitl_id.clone())
             })?;
-        let _ = tx.send(allow);
+        let _ = tx.send(crate::hitl::HitlDecision { allow, reason });
         Ok(serde_json::json!({}))
     }
 }
 
 struct HitlTestRequestHandler {
-    pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>>,
     notifier: tokio::sync::mpsc::Sender<serde_json::Value>,
 }
 
@@ -651,10 +657,10 @@ impl crate::protocol::a2a_server::MethodHandler for HitlTestRequestHandler {
         let tool_input = p["tool_input"].clone();
         let timeout_secs = p["timeout_secs"].as_u64().unwrap_or(300);
         let hitl_id = uuid::Uuid::now_v7().to_string();
-        let (tx, _rx) = oneshot::channel::<bool>();
+        let (tx, _rx) = oneshot::channel::<crate::hitl::HitlDecision>();
         self.pending_approvals
             .lock()
-            .unwrap()
+            .await
             .insert(hitl_id.clone(), tx);
         let notification = serde_json::json!({
             "jsonrpc": "2.0",
@@ -677,7 +683,7 @@ fn build_dispatcher(
     runner: &Arc<TaskRunner>,
     mur_home: &Path,
     notifier: tokio::sync::mpsc::Sender<serde_json::Value>,
-    pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>>,
 ) -> Dispatcher {
     let mut d = Dispatcher::new();
     d.register("agent/card", Box::new(CardHandler::new(profile.clone())));
@@ -1008,6 +1014,7 @@ pub fn resolve_model_entry(
 #[cfg(test)]
 mod hitl_tests {
     use super::*;
+    use crate::hitl::HitlDecision;
     use crate::protocol::a2a_server::MethodHandler;
     use serde_json::json;
     use std::time::Duration;
@@ -1015,26 +1022,49 @@ mod hitl_tests {
 
     #[tokio::test]
     async fn hitl_respond_resolves_pending() {
-        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
+        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<HitlDecision>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let (tx, rx) = oneshot::channel::<bool>();
-        pending.lock().unwrap().insert("test-id".to_string(), tx);
+        let (tx, rx) = oneshot::channel::<HitlDecision>();
+        pending.lock().await.insert("test-id".to_string(), tx);
 
         let handler = HitlRespondHandler {
             pending_approvals: pending.clone(),
         };
         let result = handler
-            .handle(Some(json!({"hitl_id": "test-id", "allow": true})))
+            .handle(Some(
+                json!({"hitl_id": "test-id", "allow": true, "reason": "looks good"}),
+            ))
             .await;
         assert!(result.is_ok());
 
-        let approved = rx.await.expect("sender dropped");
-        assert!(approved);
+        let decision = rx.await.expect("sender dropped");
+        assert!(decision.allow);
+        assert_eq!(decision.reason.as_deref(), Some("looks good"));
+    }
+
+    #[tokio::test]
+    async fn hitl_respond_no_reason() {
+        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<HitlDecision>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let (tx, rx) = oneshot::channel::<HitlDecision>();
+        pending.lock().await.insert("test-id".to_string(), tx);
+
+        let handler = HitlRespondHandler {
+            pending_approvals: pending.clone(),
+        };
+        let result = handler
+            .handle(Some(json!({"hitl_id": "test-id", "allow": false})))
+            .await;
+        assert!(result.is_ok());
+
+        let decision = rx.await.expect("sender dropped");
+        assert!(!decision.allow);
+        assert!(decision.reason.is_none());
     }
 
     #[tokio::test]
     async fn hitl_respond_unknown_id_returns_error() {
-        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
+        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<HitlDecision>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let handler = HitlRespondHandler {
             pending_approvals: pending.clone(),
@@ -1047,10 +1077,10 @@ mod hitl_tests {
 
     #[tokio::test]
     async fn hitl_timeout_auto_denies() {
-        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
+        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<HitlDecision>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let (tx, rx) = oneshot::channel::<bool>();
-        pending.lock().unwrap().insert("timeout-id".to_string(), tx);
+        let (tx, rx) = oneshot::channel::<HitlDecision>();
+        pending.lock().await.insert("timeout-id".to_string(), tx);
 
         let decision = tokio::time::timeout(Duration::from_millis(100), rx).await;
         assert!(decision.is_err(), "should have timed out");
