@@ -67,6 +67,32 @@ pub enum StopReason {
 
 Backward-compatible: existing callers with no tools continue to work unchanged.
 
+### `mur-agent-runtime/src/llm/mod.rs` — loop history type
+
+`LlmMessage` is currently text-only (`role + content: String`) and cannot carry structured tool-use history. The agentic loop uses a richer internal type:
+
+```rust
+pub enum RichMessage {
+    Text { role: String, content: String },
+    ToolUse {
+        // assistant turn that included tool calls
+        text: Option<String>,
+        calls: Vec<ToolCallResult>,
+    },
+    ToolResults {
+        results: Vec<ToolResultEntry>,
+    },
+}
+
+pub struct ToolResultEntry {
+    pub call_id: String,
+    pub content: String,
+    pub is_error: bool,
+}
+```
+
+`LlmClient::complete` signature gains an overload that accepts `Vec<RichMessage>` so providers can convert to their wire format. The existing `Vec<LlmMessage>` path remains for single-shot calls. Each provider's adapter converts `RichMessage` → its own JSON structure when building the request body.
+
 ### `mur-agent-runtime/src/tools/`
 
 ```rust
