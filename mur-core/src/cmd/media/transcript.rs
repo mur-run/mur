@@ -122,7 +122,10 @@ fn parse_ts(s: &str) -> Option<i64> {
         [m, sec] => (0, m.parse::<i64>().ok()?, sec.parse::<i64>().ok()?),
         _ => return None,
     };
-    let millis = format!("{ms:0<3}")[..3].parse::<i64>().ok()?;
+    // Take up to 3 fractional digits by char (never byte-slice — multibyte garbage
+    // in a corrupt subtitle must not panic), right-pad to milliseconds.
+    let ms3: String = ms.chars().take(3).collect();
+    let millis = format!("{ms3:0<3}").parse::<i64>().ok()?;
     Some(((h * 3600 + m * 60 + sec) * 1000) + millis)
 }
 
@@ -138,6 +141,9 @@ pub fn parse_vtt(s: &str) -> Vec<Cue> {
 
 /// Shared block parser: split on blank lines, find the `-->` line, join the rest.
 fn parse_cue_blocks(s: &str) -> Vec<Cue> {
+    // Normalize CRLF so Windows-authored / ffmpeg subtitles split into blocks correctly
+    // (otherwise `\r\n\r\n` contains no `\n\n` and the whole file is one block).
+    let s = s.replace("\r\n", "\n");
     let mut out = Vec::new();
     for block in s.split("\n\n") {
         let lines: Vec<&str> = block.lines().map(|l| l.trim_end()).collect();
@@ -212,6 +218,14 @@ mod subtitle_tests {
         assert_eq!(parse_ts("00:01:02,500"), Some(62500));
         assert_eq!(parse_ts("01:02.250"), Some(62250));
         assert_eq!(parse_ts("garbage"), None);
+    }
+
+    #[test]
+    fn srt_crlf_blocks_parse_all_cues() {
+        let srt = "1\r\n00:00:01,000 --> 00:00:02,000\r\nA\r\n\r\n2\r\n00:00:02,000 --> 00:00:03,000\r\nB";
+        let cues = parse_srt(srt);
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[1].text, "B");
     }
 }
 
