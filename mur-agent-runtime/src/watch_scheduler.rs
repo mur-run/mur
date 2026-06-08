@@ -151,9 +151,8 @@ mod hash_tests {
     }
 }
 
-use crate::companion::schedule::active_window_end_for_today;
 use crate::task_runner::{TaskRunner, TaskSpec};
-use chrono::Local;
+use chrono::{Local, Timelike};
 use mur_common::a2a::{Message, MessagePart};
 use mur_common::agent::QuietHours;
 use mur_common::media::{VlcRuntime, load_watch, runtime_path, save_watch};
@@ -282,6 +281,54 @@ fn inject(runner: &Arc<TaskRunner>, text: &str) {
     });
 }
 
+/// Parse `"HH:MM"` into minutes-since-midnight.
+fn parse_hhmm(s: &str) -> Option<i64> {
+    let (h, m) = s.split_once(':')?;
+    let h: i64 = h.trim().parse().ok()?;
+    let m: i64 = m.trim().parse().ok()?;
+    ((0..24).contains(&h) && (0..60).contains(&m)).then_some(h * 60 + m)
+}
+
+/// Is `now_min` (minutes since midnight) within the quiet window `[start, end)`,
+/// handling midnight wrap (`start > end` means the window crosses midnight)?
+fn in_quiet_window(now_min: i64, start: &str, end: &str) -> bool {
+    let (Some(s), Some(e)) = (parse_hhmm(start), parse_hhmm(end)) else {
+        return false;
+    };
+    if s == e {
+        return false; // degenerate / empty window → never quiet
+    }
+    if s < e {
+        now_min >= s && now_min < e
+    } else {
+        now_min >= s || now_min < e // wraps past midnight
+    }
+}
+
+#[cfg(test)]
+mod quiet_tests {
+    use super::*;
+
+    #[test]
+    fn overnight_window_wraps_midnight() {
+        // 22:00–08:00 quiet: 23:00 and 02:00 are quiet; 12:00 and 20:00 are not.
+        assert!(in_quiet_window(23 * 60, "22:00", "08:00"));
+        assert!(in_quiet_window(2 * 60, "22:00", "08:00"));
+        assert!(!in_quiet_window(12 * 60, "22:00", "08:00"));
+        assert!(!in_quiet_window(20 * 60, "22:00", "08:00"));
+    }
+
+    #[test]
+    fn same_day_window_and_degenerate() {
+        // 09:00–17:00 quiet: 12:00 quiet, 20:00 not.
+        assert!(in_quiet_window(12 * 60, "09:00", "17:00"));
+        assert!(!in_quiet_window(20 * 60, "09:00", "17:00"));
+        // Empty/degenerate or unparseable → never quiet.
+        assert!(!in_quiet_window(12 * 60, "08:00", "08:00"));
+        assert!(!in_quiet_window(12 * 60, "bad", "08:00"));
+    }
+}
+
 async fn run_loop(s: WatchScheduler, cancel: CancellationToken) {
     let client = reqwest::Client::new();
     loop {
@@ -289,7 +336,7 @@ async fn run_loop(s: WatchScheduler, cancel: CancellationToken) {
             _ = cancel.cancelled() => return,
             _ = tokio::time::sleep(s.tick) => {}
         }
-        let mut session = load_watch(&s.mur_home);
+        let session = load_watch(&s.mur_home);
         if !session.active {
             continue;
         }
@@ -303,13 +350,19 @@ async fn run_loop(s: WatchScheduler, cancel: CancellationToken) {
             continue;
         };
 
-        let now_ms = Local::now().timestamp_millis();
-        let quiet_now = active_window_end_for_today(Local::now(), s.quiet_hours.as_ref())
-            .map(|dt| now_ms >= dt.timestamp_millis())
+        let now_local = Local::now();
+        let now_ms = now_local.timestamp_millis();
+        let quiet_now = s
+            .quiet_hours
+            .as_ref()
+            .map(|q| {
+                let now_min = now_local.hour() as i64 * 60 + now_local.minute() as i64;
+                in_quiet_window(now_min, &q.start, &q.end)
+            })
             .unwrap_or(false);
         let distance = hamming(hash, session.last_scene_phash);
 
-        match should_interject(
+        let decision = should_interject(
             now_ms,
             session.last_interjection_ms,
             INTERJECTION_COOLDOWN_MS,
@@ -318,21 +371,31 @@ async fn run_loop(s: WatchScheduler, cancel: CancellationToken) {
             session.muted,
             quiet_now,
             session.consent,
-        ) {
-            Decision::Narrate => {
+        );
+
+        // Re-read just before acting/persisting: a concurrent watch_mute/watch_stop
+        // (separate MCP process) during the multi-second capture must not be clobbered
+        // (lost-mute/stop race). Only scheduler-owned fields are written back, and the
+        // injection is re-gated on the fresh mute/active state.
+        let mut fresh = load_watch(&s.mur_home);
+        if !fresh.active {
+            continue;
+        }
+        match decision {
+            Decision::Narrate if !fresh.muted => {
                 info!(distance, "watch: narrating scene change");
                 inject(&s.runner, NARRATE_PROMPT);
-                session.last_interjection_ms = now_ms;
+                fresh.last_interjection_ms = now_ms;
             }
-            Decision::AskConsent => {
+            Decision::AskConsent if !fresh.muted && fresh.consent == Consent::Unasked => {
                 info!("watch: asking consent");
                 inject(&s.runner, CONSENT_PROMPT);
-                session.consent = Consent::Granted; // proceed next time; "噓" mutes.
-                session.last_interjection_ms = now_ms;
+                fresh.consent = Consent::Granted; // proceed next time; "噓" mutes.
+                fresh.last_interjection_ms = now_ms;
             }
-            Decision::Skip => {}
+            _ => {}
         }
-        session.last_scene_phash = hash; // always track the latest frame
-        let _ = save_watch(&s.mur_home, &session);
+        fresh.last_scene_phash = hash; // always track the latest frame
+        let _ = save_watch(&s.mur_home, &fresh);
     }
 }
