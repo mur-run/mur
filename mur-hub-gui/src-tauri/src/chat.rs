@@ -8,7 +8,41 @@
 use mur_core::a2a_dial::{DialMode, dial_message_streaming, dial_method};
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
+
+/// Maps an agent name to the task id of its current in-flight chat turn, so a
+/// Stop action can cancel by an id the Hub already holds. Single source of
+/// truth for the cancel path.
+#[derive(Default)]
+pub struct ChatRegistry(Mutex<HashMap<String, String>>);
+
+impl ChatRegistry {
+    pub fn set(&self, agent: &str, task_id: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(agent.to_string(), task_id.to_string());
+    }
+    pub fn get(&self, agent: &str) -> Option<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(agent)
+            .cloned()
+    }
+    pub fn clear(&self, agent: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(agent);
+    }
+}
+
+/// Tauri-managed wrapper around [`ChatRegistry`].
+#[derive(Default)]
+pub struct ChatRegistryState(pub ChatRegistry);
 
 #[derive(Serialize, Clone)]
 pub struct ChatDelta {
@@ -34,19 +68,27 @@ pub struct ChatReply {
 #[tauri::command]
 pub async fn agent_chat_send(
     app: AppHandle,
+    registry: tauri::State<'_, ChatRegistryState>,
     name: String,
     text: String,
+    task_id: String,
     context_task_id: Option<String>,
 ) -> Result<ChatReply, String> {
     let home = crate::mur_home_path();
+    // Register the in-flight id synchronously so a Stop pressed mid-turn can
+    // cancel by it. Cleared once the turn returns (below).
+    registry.0.set(&name, &task_id);
+    let name_clear = name.clone();
+
     let mut params = json!({
-        "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] }
+        "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] },
+        "task_id": task_id,
     });
     if let Some(tid) = context_task_id {
         params["context"] = json!({ "task_id": tid });
     }
 
-    let result = tokio::task::spawn_blocking(move || {
+    let dialed = tokio::task::spawn_blocking(move || {
         let agent = name.clone();
         let app2 = app.clone();
         // Stream over the running agent's socket; fall back to a one-shot
@@ -88,10 +130,13 @@ pub async fn agent_chat_send(
         }
     })
     .await
-    .map_err(|e| format!("chat task panicked: {e}"))?
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("chat task panicked: {e}"))?;
 
-    let (task, streamed) = result;
+    // The turn is over (success or failure) — clear the in-flight id so a late
+    // Stop doesn't cancel an unrelated future turn.
+    registry.0.clear(&name_clear);
+
+    let (task, streamed) = dialed.map_err(|e| e.to_string())?;
     let task_id = task
         .get("id")
         .and_then(Value::as_str)
@@ -118,6 +163,42 @@ pub async fn agent_chat_send(
     })
 }
 
+/// Cancel agent `name`'s in-flight chat turn by dialing `tasks/cancel` with the
+/// id the Hub stored when the send began. No-ops if nothing is in flight; a
+/// benign "already finished / not running" error is swallowed (the turn is over).
+#[tauri::command]
+pub async fn agent_chat_cancel(
+    registry: tauri::State<'_, ChatRegistryState>,
+    name: String,
+) -> Result<(), String> {
+    let Some(task_id) = registry.0.get(&name) else {
+        return Ok(()); // nothing in flight — nothing to cancel
+    };
+    let home = crate::mur_home_path();
+    let params = json!({ "id": task_id });
+    tokio::task::spawn_blocking(move || {
+        // Separate connection so it doesn't fight the in-progress streaming read.
+        match dial_method(&home, &name, "tasks/cancel", params, DialMode::RequireRunning) {
+            Ok(_) => Ok(()),
+            // The turn may have just finished, or the agent stopped — benign for
+            // a cancel. Surface only genuine/unexpected failures.
+            Err(e)
+                if {
+                    let s = e.to_string();
+                    s.contains("not cancellable")
+                        || s.contains("not found")
+                        || s.contains("is not running")
+                } =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .map_err(|e| format!("cancel task panicked: {e}"))?
+}
+
 /// Concatenate the text parts of an A2A message.
 fn extract_text(message: &Value) -> String {
     message
@@ -131,4 +212,26 @@ fn extract_text(message: &Value) -> String {
                 .join("")
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_set_get_clear() {
+        let reg = ChatRegistry::default();
+        assert_eq!(reg.get("alice"), None);
+        reg.set("alice", "task-1");
+        assert_eq!(reg.get("alice").as_deref(), Some("task-1"));
+        reg.clear("alice");
+        assert_eq!(reg.get("alice"), None);
+    }
+
+    #[test]
+    fn cancel_lookup_is_none_when_absent() {
+        let reg = ChatRegistry::default();
+        // No id registered for "ghost" → cancel must no-op (None lookup).
+        assert_eq!(reg.get("ghost"), None);
+    }
 }
