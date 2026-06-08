@@ -1,5 +1,8 @@
 //! Watch-session mutators behind the MCP `watch_*` tools. These only flip flags in
 //! `watch.json`; the runtime `WatchScheduler` observes them (spec §3, §6).
+// These functions are consumed by mur-mcp-server (cross-crate); the mur binary
+// does not call them directly, so suppress the dead_code lint for this module.
+#![allow(dead_code)]
 
 use mur_common::media::{load_watch, save_watch, Consent, WatchSession};
 use std::path::Path;
