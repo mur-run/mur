@@ -22,6 +22,10 @@ use uuid::Uuid;
 pub struct TaskSpec {
     pub input: Message,
     pub context_task_id: Option<String>,
+    /// Caller-supplied task id. When `Some`, the runner uses it verbatim so the
+    /// client can cancel by an id it already holds; when `None` the runner
+    /// generates one (back-compatible).
+    pub task_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -292,28 +296,76 @@ impl TaskRunner {
         // every idle trigger to fire on its first tick.
         self.last_activity_at
             .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
-        let id = format!("task-{}", Uuid::now_v7());
+        // Use the caller-supplied id when present so the client can cancel by an
+        // id it already holds; otherwise generate one (back-compatible).
+        let id = spec
+            .task_id
+            .clone()
+            .unwrap_or_else(|| format!("task-{}", Uuid::now_v7()));
         self.set_state(&id, TaskState::Working);
-        let result: Result<Message, TaskError> = match &self.backend {
-            RunnerBackend::StubEcho => Ok(echo_response(&spec.input)),
-            RunnerBackend::StubSlow => {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                Ok(echo_response(&spec.input))
-            }
-            RunnerBackend::Llm(client) => {
-                if self.pending_approvals.is_some() {
-                    let system = self
-                        .prepare_system_prompt(&spec.input)
-                        .await
-                        .unwrap_or_default();
-                    self.run_agentic_loop(&id, client.as_ref(), system, &spec.input, sink)
-                        .await
-                } else {
-                    self.run_llm(&id, client.as_ref(), &spec.input, sink).await
+
+        // Register a cancel signal so `tasks/cancel{id}` can abort this in-flight
+        // generation. Mirrors `start_async`, but for the inline return-value path.
+        let (tx_cancel, mut rx_cancel) = oneshot::channel::<()>();
+        self.cancel_signals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.clone(), tx_cancel);
+
+        let generation = async {
+            match &self.backend {
+                RunnerBackend::StubEcho => Ok(echo_response(&spec.input)),
+                RunnerBackend::StubSlow => {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    Ok(echo_response(&spec.input))
+                }
+                RunnerBackend::Llm(client) => {
+                    if self.pending_approvals.is_some() {
+                        let system = self
+                            .prepare_system_prompt(&spec.input)
+                            .await
+                            .unwrap_or_default();
+                        self.run_agentic_loop(&id, client.as_ref(), system, &spec.input, sink)
+                            .await
+                    } else {
+                        self.run_llm(&id, client.as_ref(), &spec.input, sink).await
+                    }
                 }
             }
         };
+
+        // Race generation against the cancel signal. On cancel, the generation
+        // future is dropped (Rust async cancellation aborts the in-flight LLM
+        // call) and we return a Cancelled task so message/send terminates the
+        // stream cleanly.
+        let result: Option<Result<Message, TaskError>> = tokio::select! {
+            r = generation => Some(r),
+            _ = &mut rx_cancel => None,
+        };
+
+        // Always remove the cancel entry (success, failure, or cancel) to avoid
+        // leaking senders in `cancel_signals`.
+        self.cancel_signals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
+
         let now = chrono::Utc::now().to_rfc3339();
+        let result = match result {
+            None => {
+                self.set_state(&id, TaskState::Cancelled);
+                return TaskOutcome::Cancelled(Task {
+                    id,
+                    state: TaskState::Cancelled,
+                    messages: vec![spec.input],
+                    created_at: now.clone(),
+                    completed_at: Some(now),
+                    error: None,
+                    usage: None,
+                });
+            }
+            Some(r) => r,
+        };
         match result {
             Ok(reply) => {
                 self.set_state(&id, TaskState::Completed);
@@ -853,6 +905,7 @@ mod tests {
                 }],
             },
             context_task_id: None,
+            task_id: None,
         }
     }
 
@@ -888,6 +941,71 @@ mod tests {
             activity >= before && activity <= after,
             "activity={activity} not in [{before},{after}]"
         );
+    }
+
+    #[test]
+    fn task_spec_accepts_optional_task_id() {
+        let spec = TaskSpec {
+            input: mur_common::a2a::Message {
+                role: "user".into(),
+                parts: vec![MessagePart::Text { text: "hi".into() }],
+            },
+            context_task_id: None,
+            task_id: Some("task-fixed-1".to_string()),
+        };
+        assert_eq!(spec.task_id.as_deref(), Some("task-fixed-1"));
+    }
+
+    #[tokio::test]
+    async fn run_sync_uses_supplied_task_id() {
+        let runner = TaskRunner::new_stub_echo();
+        let spec = TaskSpec {
+            input: mur_common::a2a::Message {
+                role: "user".into(),
+                parts: vec![MessagePart::Text { text: "hi".into() }],
+            },
+            context_task_id: None,
+            task_id: Some("task-supplied-9".to_string()),
+        };
+        let outcome = runner.run_sync(spec).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed")
+        };
+        assert_eq!(task.id, "task-supplied-9");
+    }
+
+    #[tokio::test]
+    async fn run_sync_streaming_is_cancellable_by_id() {
+        use std::sync::Arc;
+        let runner = Arc::new(TaskRunner::new_stub_slow());
+        let (tx, _rx) = tokio::sync::mpsc::channel(8); // streaming sink, unused here
+        let spec = TaskSpec {
+            input: mur_common::a2a::Message {
+                role: "user".into(),
+                parts: vec![MessagePart::Text { text: "slow".into() }],
+            },
+            context_task_id: None,
+            task_id: Some("task-cancelme".to_string()),
+        };
+        let r2 = runner.clone();
+        let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx).await });
+
+        // Let the task register its cancel signal, then cancel by the known id.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        runner
+            .cancel("task-cancelme")
+            .await
+            .expect("cancel should succeed");
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("must finish promptly, not wait 60s")
+            .expect("join");
+        let TaskOutcome::Cancelled(task) = outcome else {
+            panic!("expected Cancelled, got {outcome:?}")
+        };
+        assert_eq!(task.id, "task-cancelme");
+        assert_eq!(task.state, TaskState::Cancelled);
     }
 
     #[tokio::test]
@@ -962,6 +1080,7 @@ mod tests {
                 }],
             },
             context_task_id: None,
+            task_id: None,
         };
         let outcome = runner.run_sync(spec).await;
         assert!(matches!(outcome, TaskOutcome::Completed(_)));
@@ -996,6 +1115,7 @@ mod tests {
                 }],
             },
             context_task_id: None,
+            task_id: None,
         };
         let outcome = runner.run_sync(spec).await;
         assert!(

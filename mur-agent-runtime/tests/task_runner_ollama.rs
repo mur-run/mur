@@ -30,6 +30,7 @@ async fn runner_with_llm_generates_and_emits_telemetry() {
             parts: vec![MessagePart::Text { text: "hi".into() }],
         },
         context_task_id: None,
+        task_id: None,
     };
     let outcome = runner.run_sync(spec).await;
     let task = match outcome {
