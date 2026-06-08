@@ -25,6 +25,7 @@ export const TAB_ICONS: Record<string, string> = {
   mcp: "🔌",
   permissions: "🔐",
   inbox: "📬",
+  memory: "🧠",
 };
 
 export function avatarInitials(displayName: string): string {

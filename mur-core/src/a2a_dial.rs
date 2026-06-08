@@ -176,6 +176,7 @@ pub fn dial_message_streaming(
     agent_name: &str,
     params: Value,
     mut on_delta: impl FnMut(&str, bool),
+    mut on_hitl: impl FnMut(Value),
 ) -> Result<Value> {
     let agent_name = &canonicalize_agent_name(home, agent_name);
     let lock_path = home.join("agents").join(agent_name).join("running.lock");
@@ -221,6 +222,12 @@ pub fn dial_message_streaming(
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                     on_delta(t, thinking);
+                }
+                continue;
+            }
+            if v.get("method").and_then(Value::as_str) == Some("tool/approval_needed") {
+                if let Some(params) = v.get("params").cloned() {
+                    on_hitl(params);
                 }
                 continue;
             }
