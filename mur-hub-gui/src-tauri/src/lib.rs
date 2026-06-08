@@ -11,9 +11,12 @@ pub mod cli_tools;
 pub mod companion;
 pub mod detail;
 pub mod export_muragent;
+pub mod hitl;
 pub mod import_muragent;
+pub mod memory;
 pub mod mlx_sidecar;
 pub mod mobile;
+pub mod notif;
 pub mod onboarding;
 pub mod pet;
 pub mod preset;
@@ -411,6 +414,7 @@ pub fn run() {
             start_agent,
             stop_agent,
             chat::agent_chat_send,
+            hitl::agent_hitl_respond,
             open_dashboard,
             toggle_popover,
             onboarding::wizard_open,
@@ -454,6 +458,11 @@ pub fn run() {
             detail::get_agent_detail,
             detail::update_agent_detail,
             mobile::mobile_events_read,
+            notif::agent_get_notif_config,
+            notif::agent_set_notif_config,
+            memory::agent_get_memory,
+            memory::agent_set_memory,
+            memory::agent_reset_sys_prompt,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

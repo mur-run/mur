@@ -12,10 +12,13 @@ import {
   type AgentDetail,
   type DetailPatch,
   type DetailTab,
+  type NotifConfig,
+  type NotifPatch,
 } from "../types";
 import { CompanionInbox } from "./CompanionInbox";
 import { ChatTab } from "./ChatTab";
 import { MobileTab } from "./MobileTab";
+import { MemoryTab } from "./MemoryTab";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
 import { CATEGORY_COLORS, TAB_ICONS, avatarInitials } from "../utils";
@@ -31,6 +34,7 @@ const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
   permissions: "detail.permissions",
   inbox: "detail.inbox",
   mobile: "detail.mobile",
+  memory: "detail.memory",
 };
 
 interface Props {
@@ -202,6 +206,7 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
         {activeTab === "permissions" && <PermissionsTab detail={detail} />}
         {activeTab === "inbox" && <CompanionInbox agentName={agentName} />}
         {activeTab === "mobile" && <MobileTab agentName={agentName} />}
+        {activeTab === "memory" && <MemoryTab agentName={agentName} />}
       </div>
     </aside>
   );
@@ -558,6 +563,99 @@ function BehaviorTab({
       ))}
       {saving && <p className="field-muted" style={{ fontSize: 12 }}>{t("detail.saving")}</p>}
       {saveError && <p className="save-error">{saveError}</p>}
+      <NotificationsSection agentName={detail.agent_name} />
+    </div>
+  );
+}
+
+function NotificationsSection({ agentName }: { agentName: string }) {
+  const { t } = useT();
+  const [cfg, setCfg] = useState<NotifConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke<NotifConfig>("agent_get_notif_config", { name: agentName })
+      .then(setCfg)
+      .catch((e) => setError(String(e)));
+  }, [agentName]);
+
+  async function patch(p: NotifPatch) {
+    try {
+      const updated = await invoke<NotifConfig>("agent_set_notif_config", {
+        name: agentName,
+        patch: p,
+      });
+      setCfg(updated);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  if (!cfg) return null;
+
+  return (
+    <div className="notif-section">
+      <div className="notif-section__title">{t("detail.notifications")}</div>
+
+      <label className="notif-row">
+        <span>{t("detail.proactiveMessages")}</span>
+        <input
+          type="checkbox"
+          className="notif-toggle"
+          checked={cfg.enabled}
+          onChange={(e) => patch({ enabled: e.target.checked })}
+        />
+      </label>
+
+      <label className="notif-row">
+        <span>
+          {t("detail.dailyCap")} <b>{cfg.daily_cap}</b>
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={20}
+          step={1}
+          value={cfg.daily_cap}
+          className="notif-slider"
+          onChange={(e) => patch({ daily_cap: Number(e.target.value) })}
+        />
+      </label>
+
+      <label className="notif-row">
+        <span>{t("detail.quietHours")}</span>
+        <input
+          type="checkbox"
+          className="notif-toggle"
+          checked={cfg.quiet_hours_enabled}
+          onChange={(e) => patch({ quiet_hours_enabled: e.target.checked })}
+        />
+      </label>
+
+      <div
+        className={`notif-times${cfg.quiet_hours_enabled ? "" : " notif-times--disabled"}`}
+      >
+        <div className="notif-time">
+          <span className="notif-time__label">{t("detail.quietFrom")}</span>
+          <input
+            type="time"
+            value={cfg.quiet_start}
+            disabled={!cfg.quiet_hours_enabled}
+            onChange={(e) => patch({ quiet_start: e.target.value })}
+          />
+        </div>
+        <div className="notif-time">
+          <span className="notif-time__label">{t("detail.quietUntil")}</span>
+          <input
+            type="time"
+            value={cfg.quiet_end}
+            disabled={!cfg.quiet_hours_enabled}
+            onChange={(e) => patch({ quiet_end: e.target.value })}
+          />
+        </div>
+      </div>
+
+      {error && <p className="save-error">{error}</p>}
     </div>
   );
 }
