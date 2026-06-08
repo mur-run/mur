@@ -7,6 +7,7 @@ pub mod resolve;
 pub mod scene;
 pub mod transcript;
 pub mod vlc;
+pub mod watch;
 
 use anyhow::Context;
 use std::net::TcpListener;
