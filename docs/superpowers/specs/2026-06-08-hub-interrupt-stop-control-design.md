@@ -2,143 +2,146 @@
 
 ## Goal
 
-Give the MUR Hub a single **Stop** control (button + Esc) that makes a busy agent stop: it **aborts
-active TTS playback** and **cancels in-flight generation**. This is the manual, buildable core of
-"barge-in" — table-stakes for chat, and the reusable substrate a future voice-activated barge-in
+Give the MUR Hub chat a **Stop** control (button + Esc) that **cancels an agent's in-flight
+generation** — letting the user halt a long or wrong reply instead of waiting it out. This is the
+buildable, verified core of "barge-in" and the reusable substrate a future voice-activated barge-in
 sits on.
 
-## Why this, not "voice barge-in"
+## Why this (and why NOT voice in v1)
 
-Grounding exploration found true voice barge-in is blocked on prerequisites that don't exist on
-desktop:
-- **The Hub never speaks chat replies** — only the pet/mascot speaks (`pet_speak` →
-  `VoicePlayer`), driven by the companion, not chat (`mur-hub-gui/src-tauri/src/pet/mod.rs:321-337`;
-  `chat.rs` has no speech).
-- **No desktop STT/VAD** — `is_mic_busy()`/`is_focus_active()` exist (`mur-gui-core/src/voice/dnd.rs`)
-  but there is zero speech recognition; STT is iOS-only. The desktop **cannot detect the user
-  speaking**, so interruption can only be *manual*.
-- **In-flight generation can't be cancelled** from the Hub — `dial_message_streaming`
-  (`mur-core/src/a2a_dial.rs:174-245`) is a blocking socket read with no cancel path.
+Grounding exploration + an ultra-review found true voice barge-in is blocked on prerequisites, and
+that bundling voice into v1 is both broken and incoherent:
 
-So v1 builds the manual Stop. Voice-*activated* barge-in, chat TTS, and STT/VAD are deferred.
+- **The Hub never speaks chat replies** — only the pet/mascot speaks (`pet_speak` → `VoicePlayer`,
+  `mur-hub-gui/src-tauri/src/pet/mod.rs:325-337`), driven by the companion, not chat. So a chat "Stop"
+  has no chat-voice to abort; silencing the unrelated mascot from a chat button is incoherent.
+- **`voice_abort` is not reachable today.** `pet_speak` creates a *local* `VoicePlayer`
+  (`pet/mod.rs:333`); nothing stores the instance, so no command can call its `abort()`. Exposing it
+  needs new state plumbing — not "expose the existing method."
+- **No desktop STT/VAD** — interruption can only be *manual* anyway.
+
+So v1 cancels generation only. Voice abort, voice-activated barge-in, chat TTS, and STT/VAD are
+deferred (see **Deferred** below).
 
 ## Scope
 
-- **In:** one Stop affordance (button + Esc); `voice_abort` Tauri command (exposes existing
-  `VoicePlayer::abort()`); additive `task/started` notification carrying the task id; an `on_task_id`
-  callback in `dial_message_streaming`; `agent_chat_cancel` Tauri command (dials existing
-  `tasks/cancel`); cancel-pending race handling.
-- **Out (deferred / other specs):** desktop STT/VAD; voice-*activated* barge-in; Hub chat TTS
-  (speaking replies); turn-taking / voice state machine.
+- **In:** a chat **Stop** affordance (button + Esc) that cancels in-flight generation via a
+  **client-supplied task id** + the existing `tasks/cancel` RPC; preserving the partial streamed reply.
+- **Out (deferred / other specs):**
+  - **Voice abort** — needs `VoicePlayer` abort-handle plumbing (store the active player's
+    `Arc<Notify>` in Tauri state, or make the speak loop bus-abortable) and belongs on the
+    **pet/companion** surface where speech actually happens. Ship separately or once chat-TTS lands.
+  - Desktop STT/VAD; voice-*activated* barge-in; Hub chat TTS; turn-taking state machine.
 
-## Current State (verified)
+## Verified Current State
 
-- **`VoicePlayer::abort()` already exists** (`mur-gui-core/src/voice/synth.rs:46-49`): non-blocking
-  `Notify`; the speak loop checks it every 200ms and stops playback + lipsync, emitting `voice.ended`.
-  **Not exposed as a Tauri command** — only `pet_speak` is wired (`pet/mod.rs:335`).
-- **`tasks/cancel` RPC exists** (`mur-agent-runtime/src/protocol/methods/tasks.rs:32-53`):
-  `TasksCancelHandler` → `TaskRunner.cancel(id)`; needs the task id.
-- **`dial_message_streaming`** reads `message/delta` + `tool/approval_needed` + the final `result`
-  (id-matched); **the task id is only in the final result** — not surfaced mid-stream
-  (`a2a_dial.rs:203-245`).
-- **`message_send.rs`** emits `message/delta` during generation
-  (`mur-agent-runtime/src/protocol/methods/message_send.rs:84`) but **no early id notification**.
-- **`ChatTab.tsx`** threads `taskIdRef` from the *previous* turn's result; during a turn it has no id.
+- **Cancel genuinely interrupts generation.** `run_sync_streaming` generates the id, registers
+  `cancel_signals[id]`, and `tokio::select!`s the generation future against a cancel oneshot
+  (`mur-agent-runtime/src/task_runner.rs:295,355-381`). `cancel(id)` fires it (`:394-405`). On cancel
+  the generation future is dropped (Rust async cancellation → the LLM call aborts) and
+  `message_send` returns `TaskOutcome::Cancelled(task)` (`message_send.rs:99-105`), which travels back
+  over the streaming socket as the final result, ending the stream cleanly. **The mechanism is real
+  and prompt.**
+- **The id is generated *inside* the runner** (`task_runner.rs:295`) and only returned at the end —
+  `message_send` never has it mid-flight. Hence the **client-supplied id** mechanism below.
+- **`dial_message_streaming` has exactly one caller** (`mur-hub-gui/src-tauri/src/chat.rs:54`); with
+  the client-supplied id it needs **no signature change**.
 
-## Cancel-Mechanism Decision
+## Cancel-Mechanism Decision: client-supplied task id
+
+The Hub **generates the task id** and passes it in `message/send` params; the runner honors it; the
+Hub cancels with the id it already holds.
 
 | Option | Verdict |
 |---|---|
-| **A — additive `task/started` notification + existing `tasks/cancel`** | **Chosen.** Runtime emits the task id at stream start; Hub stores it; cancel reuses the existing handler. Additive emit (low collision risk), correct, agent stops cleanly and sends its final result so the stream ends gracefully. |
-| B — close the streaming socket | Rejected — agent keeps generating server-side (burns tokens); fake cancel. |
-| C — new `tasks/cancelCurrent` (no id) | Rejected — needs the runtime to track "current task" + a brand-new method; more invasive and less precise than A. |
+| **Client-supplied id** | **Chosen.** No new notification; **no `dial_message_streaming` change**; **no race** (Hub knows the id before the stream starts). One additive runtime touch. |
+| `task/started` notification + `on_task_id` callback | Rejected — needs runner→message_send id surfacing, a new dial callback, and a cancel-pending race window. Strictly more moving parts. |
+| Close the streaming socket | Rejected — agent keeps generating server-side; fake cancel. |
 
 ## Architecture
 
 ```
-Send:   ChatTab → agent_chat_send → dial_message_streaming(..., on_task_id, on_delta, on_hitl)
-        runtime: create task → emit task/started{id}  ──► on_task_id ──► chat.rs registry (agent→id)
-                 → message/delta… (existing)                                  └─► emit to UI (busy)
-Stop:   user clicks Stop / presses Esc (only while busy)
-        ├─ voice_abort(agent)       → VoicePlayer::abort()      → "voice.interrupted"
-        └─ agent_chat_cancel(agent) → dial tasks/cancel{id} on a NEW connection
-                                       → TaskRunner.cancel(id) → generation stops
-                                       → agent sends final result on the streaming socket
-                                       → dial_message_streaming returns
-        ChatTab finalizes: keep partial streamed text, mark "stopped"
+Send:   ChatTab generates taskId (uuid) → agent_chat_send(name, text, taskId)
+        chat.rs: registry[name] = taskId ; dial_message_streaming(params{ ..., task_id: taskId })
+        runtime: message_send reads p["task_id"] → TaskSpec.task_id
+                 run_sync_streaming uses it (else generates) ; message/delta… (existing)
+Stop:   user clicks Stop / Esc (only while busy)
+        → agent_chat_cancel(name) → registry[name] → dial tasks/cancel{ id } on a NEW connection
+              → TaskRunner.cancel(id) → select! fires → TaskOutcome::Cancelled
+              → message_send returns final result on the streaming socket → dial returns
+        → ChatTab commits its OWN streamed buffer as the agent message + "stopped" marker
 ```
 
-The streaming socket is **not** force-closed; cancelling makes the agent finish early and send its
-final result, which the existing read loop consumes and returns. Cancel is dialed on a **separate**
+The streaming socket is never force-closed; cancel makes the agent finish early and send its final
+result, which the existing read loop consumes and returns. Cancel is dialed on a **separate**
 connection so it doesn't fight the in-progress read.
 
 ## Components
 
 | Unit | New/Change | Responsibility | Depends on |
 |---|---|---|---|
-| `voice_abort` command (`mur-hub-gui/src-tauri/src/voice.rs` or near `pet/mod.rs`) | New | Resolve the agent's `VoicePlayer`/bus and call `abort()`; emit `voice.interrupted`. | existing `VoicePlayer::abort()` |
-| `task/started` emit (`message_send.rs`) | Change (additive) | After the task is created and before the first delta, send one `task/started` notification `{ id }`. | runner task id |
-| `on_task_id` (`dial_message_streaming`, `a2a_dial.rs`) | Change | New `on_task_id: impl FnMut(&str)` param; fire on a `task/started` notification. | — |
-| in-flight registry (`chat.rs`) | Change | `Mutex<HashMap<agent, task_id>>`; set on `on_task_id`, clear on completion. | — |
-| `agent_chat_cancel` command (`chat.rs`) | New | Look up the agent's in-flight id; dial `tasks/cancel{ id }` (`DialMode::RequireRunning`). | `tasks/cancel`, registry |
-| `ChatTab.tsx` | Change | Stop button while `busy`; Esc handler; calls `agent_chat_cancel` + `voice_abort`; `cancelPending` race; preserve partial reply + "stopped" line. | the two commands |
+| `TaskSpec.task_id: Option<String>` (`task_runner.rs`) | Change (additive) | Optional caller-supplied id. | — |
+| `run_sync_streaming` id line (`task_runner.rs:295`) | Change | `let id = spec.task_id.clone().unwrap_or_else(\|\| format!("task-{}", Uuid::now_v7()));` | TaskSpec.task_id |
+| `message_send` params (`message_send.rs:60-71`) | Change (additive) | Read `p["task_id"]` into `TaskSpec.task_id` (ignored if absent → back-compatible). | — |
+| in-flight registry (`chat.rs`) | New | `Mutex<HashMap<agent, task_id>>`; set in `agent_chat_send`, cleared on completion. | — |
+| `agent_chat_send` (`chat.rs`) | Change | Accept `taskId` param; store in registry; pass `task_id` in `message/send` params. | registry |
+| `agent_chat_cancel` Tauri command (`chat.rs`) | New | Look up `registry[name]`; dial `tasks/cancel{ id }` (`DialMode::RequireRunning`); no-op if absent. | `tasks/cancel`, registry |
+| `ChatTab.tsx` | Change | Generate `taskId` per send; pass to `agent_chat_send`; **Stop** button while `busy`; Esc handler; on Stop call `agent_chat_cancel` and **commit the local streamed buffer** as the reply with a "stopped" marker. | the commands |
 
-`voice_abort` is independent of the cancel pieces and can ship on its own.
+## Partial-Reply Preservation (M1)
 
-## Data Flow Detail — cancel-pending race
-
-`agent_chat_send` may not yet have received `task/started` when the user hits Stop. Handle in the UI:
-
-```
-Stop pressed while busy:
-  always: invoke("voice_abort", { name })
-  if currentTaskId known: invoke("agent_chat_cancel", { name })
-  else: set cancelPending = true
-On task/started event (or when agent_chat_send resolves with an id):
-  if cancelPending: invoke("agent_chat_cancel", { name }); cancelPending = false
-```
-
-The Hub also needs the id in the UI to drive this. Two options, pick one in the plan: (a) surface
-`task/started` as a Tauri event the UI listens to, or (b) keep the id only in `chat.rs` and have
-`agent_chat_cancel` itself consult the registry (UI just calls cancel; backend no-ops if no id yet,
-and the UI sets `cancelPending` to retry on completion). **Prefer (b)** — less UI state, the registry
-is the single source of truth; `cancelPending` only guards the "Stop pressed, nothing to cancel yet"
-window.
+On cancel, the partial text already lives in ChatTab's `streamingRef.current` (streamed via
+`message/delta` before cancel). So ChatTab must **commit its own streamed buffer** as the agent
+message on Stop — it must **not** depend on the Cancelled task's body (which may be empty). Concretely,
+on Stop: snapshot `streamingRef.current`, push it as an `agent` message tagged "stopped", then clear
+streaming state. The subsequent `dial` return (final Cancelled result) is then ignored for content.
 
 ## Error Handling
 
 | Condition | Behavior |
 |---|---|
-| Stop before `task/started` arrives | abort TTS now; `agent_chat_cancel` no-ops (no id in registry); UI sets `cancelPending`, retries on send-resolution |
+| Stop pressed but no id in registry (extremely narrow — id is set synchronously in `agent_chat_send` before dialing) | `agent_chat_cancel` no-ops; ChatTab still commits the partial + stops the spinner |
 | Cancel after task already finished | `tasks/cancel` → `TaskNotFound` → swallowed (reply already delivered) |
-| `voice_abort` with nothing speaking | `abort()` is a no-op `Notify` → harmless |
 | Cancel dial fails (agent died) | streaming read hits EOF → `dial` errors → ChatTab shows partial + error line |
-| Multiple rapid Stops | idempotent: abort is a no-op when idle; cancel of an already-cancelled id → `TaskNotFound` swallowed |
+| Duplicate / rapid Stop | idempotent: second `tasks/cancel{id}` → `TaskNotFound` swallowed |
+| Client supplies a colliding id | single-user Hub + uuid → negligible; runner is last-writer for `cancel_signals[id]` |
 
 ## Testing
 
-- **Runtime** (`message_send`): emits `task/started` with the task id *before* any `message/delta`
-  (handler/integration test).
-- **`dial_message_streaming`**: `on_task_id` fires once when a `task/started` notification is read,
-  before deltas; final result still returns normally (fake-socket test mirroring existing dial tests).
-- **`chat.rs`**: registry set on `on_task_id`, cleared on completion; `agent_chat_cancel` dials
-  `tasks/cancel` with the stored id; no-ops cleanly when the registry has no id.
-- **`voice_abort`**: invokes `VoicePlayer::abort()` and emits `voice.interrupted`.
-- **`ChatTab`** (pure-logic where possible — this project has no DOM test harness): Stop visible only
-  while `busy`; triggers both commands; `cancelPending` set when no id yet and fired on resolution;
-  partial streamed text retained with a "stopped" marker.
+- **Runtime** (`task_runner`): `run_sync_streaming` with `spec.task_id = Some("task-x")` uses that id
+  (assert the registered `cancel_signals` key / returned `task.id`); with `None` it still generates one.
+- **Runtime** (`message_send`): `p["task_id"]` flows into `TaskSpec.task_id`; absent → `None`
+  (back-compatible).
+- **Cancel path** (existing/extended): a task cancelled by id yields `TaskOutcome::Cancelled` promptly
+  (mirror the existing cancel test).
+- **`chat.rs`**: `agent_chat_send` stores `registry[name]=taskId`; `agent_chat_cancel` dials
+  `tasks/cancel` with it; no-ops cleanly when absent; registry cleared on completion.
+- **`ChatTab`** (pure-logic where feasible — this project has **no DOM test harness**, only Vitest
+  node tests): Stop visible only while `busy`; Stop commits `streamingRef` content as the reply with a
+  "stopped" marker and stops the spinner; a fresh `taskId` is generated per send.
 
 ## File Boundaries / Coordination
 
-- `a2a_dial.rs` is 401 lines; adding one callback parameter + one notification branch is in-scope and
-  small. No split needed.
-- **Coordination:** `message_send.rs` is in `mur-agent-runtime` (touched by in-flight Phase 3/4) and
-  `ChatTab.tsx` is also touched by the multi-agent rail plan
-  (`2026-06-08-hub-multiagent-conversation-rail.md`). All changes here are additive (a new
-  notification, a new Stop button), but sequence them after those land or merge carefully.
+- All runtime edits are small and additive (`TaskSpec` field, one `unwrap_or_else`, one param read).
+  No file split needed.
+- **Coordination:** `task_runner.rs` + `message_send.rs` are in `mur-agent-runtime` (touched by
+  in-flight Phase 3/4) and `ChatTab.tsx` is also touched by the multi-agent rail plan
+  (`2026-06-08-hub-multiagent-conversation-rail.md`). Changes are additive; sequence after those land
+  or merge carefully.
+
+## Deferred — Voice Abort (separate piece)
+
+When wanted, `voice_abort` belongs on the **pet/companion** surface (the only place speech occurs) and
+requires reachability plumbing that does **not** exist today:
+- Store the active `VoicePlayer`'s `Arc<Notify>` (add a `VoicePlayer::abort_handle()` getter) in a
+  Tauri-managed `VoiceAbortState` keyed by agent, set at `pet_speak` start and cleared on `voice.ended`;
+  `voice_abort(agent)` signals it. (Alternative: make the speak loop subscribe to a bus abort event.)
+- This is independent of generation-cancel and reuses none of v1's chat plumbing, so deferring costs
+  v1 nothing.
 
 ## Future Seams (no v1 work)
 
-- **Voice-activated barge-in**: when desktop STT/VAD exists, a detected user-speech event simply calls
-  the same `voice_abort` + `agent_chat_cancel` — no new interruption plumbing.
-- **Chat TTS**: when the Hub speaks replies, `voice_abort` already silences it; Stop needs no change.
+- **Voice-activated barge-in**: when desktop STT/VAD exists, a detected-speech event calls the same
+  `agent_chat_cancel` (+ a future `voice_abort`) — no new interruption plumbing.
+- **Chat TTS**: when the Hub speaks replies, the chat Stop should *also* abort that playback — at which
+  point voice abort folds naturally into this same Stop control.
