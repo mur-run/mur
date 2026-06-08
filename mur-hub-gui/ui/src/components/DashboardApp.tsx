@@ -10,6 +10,8 @@ import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
 import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
+import { ConversationsView } from "./ConversationsView";
+import { useConversations } from "../conversation/ConversationContext";
 import { Mascot } from "./Mascot";
 import type { MascotMood } from "./Mascot";
 import { useT } from "../i18n";
@@ -54,6 +56,7 @@ interface GridCardProps {
 export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
   const { t } = useT();
   const { setSelected } = useAgents();
+  const { openConversation } = useConversations();
   const unread = useUnreadCount(agent.name);
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
   const pill = runtimePill(runtime?.state);
@@ -186,6 +189,12 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
           <button onClick={handleShare} title={t("dashboard.shareTooltip")}>
             ↑ {t("dashboard.share")}
           </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); openConversation(agent.name); }}
+            title={t("detail.chat")}
+          >
+            💬 {t("detail.chat")}
+          </button>
         </div>
         <div className="grid-card__foot">
           <span className={pill.cls}>
@@ -313,6 +322,7 @@ function BrainBadge() {
 export function DashboardApp() {
   const { t, lang, setLang } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
+  const { open: openConvs } = useConversations();
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [query, setQuery] = useState("");
@@ -637,6 +647,9 @@ export function DashboardApp() {
           )}
         </div>
       </div>
+
+      {/* Conversation rail — slides in when conversations are open */}
+      {openConvs.length > 0 && <ConversationsView />}
 
       {/* Detail panel — slides in when an agent is selected */}
       {selectedAgent && (

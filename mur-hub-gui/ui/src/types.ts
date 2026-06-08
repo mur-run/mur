@@ -125,7 +125,6 @@ export interface DetailPatch {
 }
 
 export type DetailTab =
-  | "chat"
   | "persona"
   | "style"
   | "behavior"
@@ -137,7 +136,6 @@ export type DetailTab =
   | "memory";
 
 export const ALL_DETAIL_TABS: DetailTab[] = [
-  "chat",
   "persona",
   "style",
   "behavior",
@@ -166,7 +164,6 @@ export interface NotifPatch {
 }
 
 export const TAB_LABELS: Record<DetailTab, string> = {
-  chat: "Chat",
   persona: "Persona",
   style: "Style",
   behavior: "Behavior",
