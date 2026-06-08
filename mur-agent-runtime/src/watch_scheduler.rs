@@ -141,3 +141,185 @@ mod hash_tests {
         assert_eq!(hamming(u64::MAX, 0), 64);
     }
 }
+
+use crate::companion::schedule::active_window_end_for_today;
+use crate::task_runner::{TaskRunner, TaskSpec};
+use chrono::Local;
+use mur_common::a2a::{Message, MessagePart};
+use mur_common::agent::QuietHours;
+use mur_common::media::{load_watch, runtime_path, save_watch, VlcRuntime};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
+use tracing::info;
+
+const DEFAULT_POLL_SECS: u64 = 6;
+const SCENE_CHANGE_THRESHOLD: u32 = 18;
+const INTERJECTION_COOLDOWN_MS: i64 = 45_000;
+const NARRATE_PROMPT: &str = "畫面剛切換了，看一下螢幕，用一句話簡短說你看到什麼。";
+const CONSENT_PROMPT: &str =
+    "我可以在劇情轉折時，偶爾插一句話幫你補充嗎？不想聽的話跟我說「噓」就好。";
+
+pub struct WatchScheduler {
+    runner: Arc<TaskRunner>,
+    mur_home: PathBuf,
+    quiet_hours: Option<QuietHours>,
+    tick: Duration,
+}
+
+impl WatchScheduler {
+    pub fn new(runner: Arc<TaskRunner>, mur_home: PathBuf, quiet_hours: Option<QuietHours>) -> Self {
+        Self {
+            runner,
+            mur_home,
+            quiet_hours,
+            tick: Duration::from_secs(DEFAULT_POLL_SECS),
+        }
+    }
+
+    pub fn with_tick(mut self, d: Duration) -> Self {
+        self.tick = d;
+        self
+    }
+
+    pub fn spawn(self) -> tokio::task::JoinHandle<()> {
+        let cancel = CancellationToken::new();
+        tokio::spawn(async move {
+            let _g = cancel.clone().drop_guard();
+            run_loop(self, cancel).await;
+        })
+    }
+}
+
+/// Read VLC runtime config, if present.
+fn vlc_runtime(mur_home: &std::path::Path) -> Option<VlcRuntime> {
+    let body = std::fs::read_to_string(runtime_path(mur_home)).ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+/// Newest regular file in `dir`, if any.
+fn newest_file(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        if !p.is_file() {
+            continue;
+        }
+        let m = e.metadata().ok()?.modified().ok()?;
+        if best.as_ref().map(|(t, _)| m > *t).unwrap_or(true) {
+            best = Some((m, p));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// Ask VLC for a snapshot, read the resulting PNG, delete it, and return its bytes.
+async fn capture_png(rt: &VlcRuntime, client: &reqwest::Client) -> Option<Vec<u8>> {
+    let base = format!("http://127.0.0.1:{}/requests/status.xml", rt.port);
+    let status = client
+        .get(&base)
+        .basic_auth("", Some(&rt.password))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+    if !status.contains("<state>playing</state>") {
+        return None;
+    }
+    let _ = client
+        .get(format!("{base}?command=snapshot"))
+        .basic_auth("", Some(&rt.password))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let path = newest_file(&rt.snapshot_dir)?;
+    let bytes = std::fs::read(&path).ok()?;
+    let _ = std::fs::remove_file(&path); // lifecycle: never accumulate (spec §6.3)
+    Some(bytes)
+}
+
+/// Decode PNG bytes → 9×8 grayscale → dHash.
+fn dhash_png(bytes: &[u8]) -> Option<u64> {
+    use image::imageops::FilterType;
+    let img = image::load_from_memory(bytes).ok()?;
+    let small = img.grayscale().resize_exact(9, 8, FilterType::Triangle);
+    let luma = small.to_luma8();
+    Some(dhash_from_luma(luma.as_raw(), 9, 8))
+}
+
+fn inject(runner: &Arc<TaskRunner>, text: &str) {
+    let runner = runner.clone();
+    let input = Message {
+        role: "user".into(),
+        parts: vec![MessagePart::Text { text: text.into() }],
+    };
+    tokio::spawn(async move {
+        let _ = runner
+            .run_sync(TaskSpec {
+                input,
+                context_task_id: None,
+                task_id: None,
+            })
+            .await;
+    });
+}
+
+async fn run_loop(s: WatchScheduler, cancel: CancellationToken) {
+    let client = reqwest::Client::new();
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return,
+            _ = tokio::time::sleep(s.tick) => {}
+        }
+        let mut session = load_watch(&s.mur_home);
+        if !session.active {
+            continue;
+        }
+        let Some(rt) = vlc_runtime(&s.mur_home) else {
+            continue;
+        };
+        let Some(png) = capture_png(&rt, &client).await else {
+            continue;
+        };
+        let Some(hash) = dhash_png(&png) else {
+            continue;
+        };
+
+        let now_ms = Local::now().timestamp_millis();
+        let quiet_now = active_window_end_for_today(Local::now(), s.quiet_hours.as_ref())
+            .map(|dt| now_ms >= dt.timestamp_millis())
+            .unwrap_or(false);
+        let distance = hamming(hash, session.last_scene_phash);
+
+        match should_interject(
+            now_ms,
+            session.last_interjection_ms,
+            INTERJECTION_COOLDOWN_MS,
+            distance,
+            SCENE_CHANGE_THRESHOLD,
+            session.muted,
+            quiet_now,
+            session.consent,
+        ) {
+            Decision::Narrate => {
+                info!(distance, "watch: narrating scene change");
+                inject(&s.runner, NARRATE_PROMPT);
+                session.last_interjection_ms = now_ms;
+            }
+            Decision::AskConsent => {
+                info!("watch: asking consent");
+                inject(&s.runner, CONSENT_PROMPT);
+                session.consent = Consent::Granted; // proceed next time; "噓" mutes.
+                session.last_interjection_ms = now_ms;
+            }
+            Decision::Skip => {}
+        }
+        session.last_scene_phash = hash; // always track the latest frame
+        let _ = save_watch(&s.mur_home, &session);
+    }
+}
