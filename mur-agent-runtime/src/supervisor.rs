@@ -6,6 +6,7 @@ use anyhow::Context;
 use crate::entitlements::detect_warnings;
 use crate::hooks::ShutdownReason;
 use crate::idle_scheduler::IdleScheduler;
+use crate::watch_scheduler::WatchScheduler;
 use crate::lock_file::{LockHandle, write_lock};
 use crate::multi_call::{DispatchError, extract_profile_name, verify_name_match};
 use crate::profile::Profile;
@@ -494,6 +495,18 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             count = profile.inner.lifecycle.idle_triggers.len(),
             "IdleScheduler started"
         );
+    }
+
+    // 8d-bis. Proactive co-watching scheduler (spec §6). Cheap when no session is
+    //         active (one file read per tick); only acts while watch.json is active.
+    {
+        let ws = WatchScheduler::new(
+            runner.clone(),
+            mur_home.to_path_buf(),
+            profile.inner.companion.proactive.quiet_hours.clone(),
+        );
+        transport_tasks.push(ws.spawn());
+        info!("WatchScheduler started");
     }
 
     // 8e. E3 — agent-side sleep cycle: flush evidence outbox + pull snapshot.
