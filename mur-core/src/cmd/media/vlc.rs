@@ -221,6 +221,9 @@ fn mur_home() -> Result<PathBuf> {
 pub async fn open(source: &str) -> Result<VlcStatus> {
     let client = super::shared_client();
     let home = mur_home()?;
+    // Remember the original source so `video_analyze` (no arg) can resolve it later;
+    // VLC's status.xml does not expose a usable source URI. (Spec §4.2.)
+    let _ = super::resolve::save_last_source(&home, source);
     let rt = ensure_vlc_running(&home, client).await?;
     send_command(&rt, client, "in_play", &[("input", source)]).await
 }

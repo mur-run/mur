@@ -220,6 +220,31 @@ pub fn all_tools() -> Vec<Tool> {
                 required: None,
             },
         },
+        Tool {
+            name: "video_analyze".into(),
+            description: "Analyze a whole video (YouTube link or local file) and return a structured zh-TW summary or conclusions with clickable timestamps. Uses captions + the local model. Omit 'source' to analyze the currently open video.".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: Some(BTreeMap::from([
+                    ("source".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "Video URL or local path; omit to use the currently open video".into(),
+                        default: None,
+                    }),
+                    ("mode".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "summary (default) | conclusions | qa".into(),
+                        default: None,
+                    }),
+                    ("focus".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "For qa mode: the question to answer".into(),
+                        default: None,
+                    }),
+                ])),
+                required: None,
+            },
+        },
         // ── compress tools ──
         Tool {
             name: "mur_compress".into(),
@@ -451,6 +476,16 @@ pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
             Ok(json!({ "explanation": text }))
         }
 
+        "video_analyze" => {
+            let source = arguments.get("source").and_then(|v| v.as_str());
+            let mode = arguments.get("mode").and_then(|v| v.as_str());
+            let focus = arguments.get("focus").and_then(|v| v.as_str());
+            let markdown = mur_core::cmd::media::analyze::analyze(source, mode, focus)
+                .await
+                .map_err(|e| format!("video_analyze failed: {}", e))?;
+            Ok(json!({ "analysis": markdown }))
+        }
+
         "mur_compress" => {
             let content = arguments
                 .get("content")
@@ -546,7 +581,13 @@ mod media_tool_tests {
     #[test]
     fn media_tools_registered() {
         let names: Vec<_> = all_tools().into_iter().map(|t| t.name).collect();
-        for n in ["vlc_open", "vlc_playback", "vlc_status", "scene_explain"] {
+        for n in [
+            "vlc_open",
+            "vlc_playback",
+            "vlc_status",
+            "scene_explain",
+            "video_analyze",
+        ] {
             assert!(names.contains(&n.to_string()), "missing {n}");
         }
     }
