@@ -50,14 +50,18 @@ pub(crate) fn set_notif_config_impl(
     let qh_enabled = patch
         .quiet_hours_enabled
         .unwrap_or_else(|| p.quiet_hours.is_some());
-    let start = patch
-        .quiet_start
-        .clone()
-        .unwrap_or_else(|| p.quiet_hours.as_ref().map(|q| q.start.clone()).unwrap_or_default());
-    let end = patch
-        .quiet_end
-        .clone()
-        .unwrap_or_else(|| p.quiet_hours.as_ref().map(|q| q.end.clone()).unwrap_or_default());
+    let start = patch.quiet_start.clone().unwrap_or_else(|| {
+        p.quiet_hours
+            .as_ref()
+            .map(|q| q.start.clone())
+            .unwrap_or_default()
+    });
+    let end = patch.quiet_end.clone().unwrap_or_else(|| {
+        p.quiet_hours
+            .as_ref()
+            .map(|q| q.end.clone())
+            .unwrap_or_default()
+    });
 
     p.quiet_hours = if qh_enabled {
         Some(QuietHours { start, end })
