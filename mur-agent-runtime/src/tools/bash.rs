@@ -88,6 +88,7 @@ mod tests {
         BashTool::new(std::env::temp_dir())
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn captures_stdout() {
         let t = make_tool();
@@ -98,6 +99,7 @@ mod tests {
         assert!(out.contains("hello"), "got: {out}");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn captures_stderr() {
         let t = make_tool();
