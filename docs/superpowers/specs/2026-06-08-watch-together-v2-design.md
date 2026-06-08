@@ -205,21 +205,40 @@ Surface:
 MuR runs as a murmur agent runtime with a delivery channel. MCP tools here are state
 flags, not the engine.
 
-### 6.1 `WatchSession` (runtime-persisted state)
+**Crate-layering constraint (resolved).** The dependency edge is
+**`mur-core → mur-agent-runtime`** (core needs the runtime for `cmd_export`), so the
+runtime is the *lower* layer and **cannot call `mur-core`'s media module** — doing so
+would be a dependency cycle. Therefore:
 
-The single source of truth, shared by the MCP `watch_*` tools (writers) and the
-runtime `WatchScheduler` (reader). Persisted at `~/.mur/runtime/watch.json` (same
-atomic temp+rename pattern as `vlc.json`):
+- **Shared serde types move to `mur-common`:** `VlcRuntime` (moved from `mur-core`,
+  behavior-preserving) and the new `WatchSession`/`Consent`. Both layers read them.
+- **The runtime owns capture + detection.** The runtime already has `tokio` + `reqwest`;
+  `WatchScheduler` takes its own VLC snapshot over HTTP and computes the dHash. The
+  `image` dependency is added to **`mur-agent-runtime`**, not `mur-core`.
+- **`mur-core/watch.rs` shrinks to session mutators** behind the MCP `watch_*` tools
+  (writers of `watch.json`).
+- **Interjection = a text turn, not a media payload.** The runtime cannot fetch
+  transcripts or call the VLM (both in `mur-core`). It injects a plain-text prompt; the
+  agent — equipped with the `watch-together` skill and the `scene_explain` MCP tool —
+  captures/explains the frame itself. Transcript-window grounding for interjections is
+  **deferred** (needs a shared media crate; §7).
+
+### 6.1 `WatchSession` (in `mur-common`, runtime-persisted state)
+
+A plain serde type in `mur-common`, shared by the MCP `watch_*` tools (writers, via
+`mur-core`) and the runtime `WatchScheduler` (reader). Persisted at
+`~/.mur/runtime/watch.json` (atomic temp+rename, like `vlc.json`):
 
 ```
 struct WatchSession {
-  active: bool, last_source: String, muted: bool,
+  active: bool, muted: bool,
   last_interjection_ms: i64, last_scene_phash: u64,
   consent: Consent,            // Unasked | Granted | Declined
 }
 ```
 
-(`last_source` is also written by `vlc::open`, §4.2, so Pillar A can reuse it.)
+(The source string is not needed here — the runtime injects "look at the screen" and the
+agent uses `scene_explain`. `last_source`, §4.2, remains a separate Pillar-A file.)
 
 ### 6.2 `WatchScheduler` (push; sibling of `IdleScheduler`, in the runtime)
 
@@ -232,11 +251,11 @@ Spawned by the supervisor (like `IdleScheduler`), holding `Arc<TaskRunner>`. Eve
 3. Gate (modeled on `should_fire`): distance ≥ `scene_change_threshold` **and**
    `(now − last_interjection_ms) ≥ interjection_cooldown_secs` **and** `!muted` **and**
    `consent == Granted` **and** not in quiet hours.
-4. On pass: inject a turn via `runner.run_sync(TaskSpec{..})` — frame data-url +
-   `window(now, ±span)` transcript + "briefly narrate this turn." The agent's output is
-   **delivered through the companion channel (voice/notification)** — without a delivery
-   channel the interjection is silent, so Pillar B requires one (§3). Update
-   `last_interjection_ms` and `last_scene_phash`.
+4. On pass: inject a **plain-text turn** via `runner.run_sync(TaskSpec{..})` — e.g.
+   "畫面剛切換了，看一下螢幕並用一句話說你看到什麼。" The agent then calls
+   `scene_explain` itself; its output is **delivered through the companion channel
+   (voice/notification)** — the same routing `IdleScheduler` relies on, so Pillar B
+   requires that channel (§3). Update `last_interjection_ms` and `last_scene_phash`.
 5. If `consent == Unasked` on the first large change: inject a **one-time consent ask**
    instead ("要我在劇情轉折時插話嗎？說「噓」可隨時靜音"). Record `Granted`/`Declined`.
 
@@ -261,7 +280,10 @@ on-demand path is unaffected.)
 - **Skill manifest:** `mur-core/src/skills/watch_together.yaml` — teaches session
   semantics and etiquette (ask consent before interjecting, "噓" = mute immediately,
   decline DRM). `vlc-control` and `scene-explain` manifests stay as-is.
-- **New dependency:** `image` (PNG decode for dHash). Flagged for the plan.
+- **New dependency:** `image` (PNG decode for dHash) added to **`mur-agent-runtime`**.
+- **Refactor:** `VlcRuntime` moves from `mur-core` to `mur-common` (behavior-preserving,
+  its own task) so the runtime can reach VLC; `WatchSession`/`Consent` are new in
+  `mur-common`.
 
 ## 7. Out of Scope (YAGNI v2)
 
@@ -304,12 +326,15 @@ Two implementation plans share one spec:
   `mur-core/src/cmd/media/vlc.rs` (persist `last_source` in `open`),
   `mur-mcp-server/src/tools.rs`, `mur-core/src/skills/video_analyze.yaml`,
   `mur-core/src/cmd/sync_cmd.rs` (register skill).
-- **Plan B — Proactive co-watching (runtime):** `WatchSession` + `watch.json`,
-  `watch_*` state-flag tools, `watch-together` skill, and the `WatchScheduler` itself.
-  Files: `mur-core/src/cmd/media/watch.rs` (session state + dHash + snapshot lifecycle;
-  new `image` dep), `mur-agent-runtime/src/watch_scheduler.rs` + `supervisor.rs`
-  wiring + companion voice/notification delivery, `mur-mcp-server/src/tools.rs`,
-  `mur-core/src/skills/watch_together.yaml`, `mur-core/src/cmd/sync_cmd.rs`.
+- **Plan B — Proactive co-watching (runtime):** Files:
+  `mur-common` (`VlcRuntime` moved here; new `WatchSession`/`Consent` + `watch.json`
+  load/save), `mur-core/src/cmd/media/mod.rs` (re-export/use `mur_common::VlcRuntime`),
+  `mur-core/src/cmd/media/watch.rs` (session-mutator fns for the tools),
+  `mur-agent-runtime/Cargo.toml` (+`image`),
+  `mur-agent-runtime/src/watch_scheduler.rs` (snapshot via reqwest + dHash +
+  `should_interject` gate + `TaskRunner` injection) + `supervisor.rs` wiring,
+  `mur-mcp-server/src/tools.rs` (`watch_*` tools), `mur-core/src/skills/watch_together.yaml`,
+  `mur-core/src/cmd/sync_cmd.rs`.
 
 Rationale for the split: Plan A is offline/batch, host-agnostic, and self-contained;
 Plan B is push, **runtime-only**, and depends on both the shared foundation and a
