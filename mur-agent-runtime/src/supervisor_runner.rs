@@ -10,11 +10,15 @@ use crate::hitl::HitlApprovals;
 use crate::hooks::{HookChain, HookCtx, TelemetryEmitter};
 use crate::llm::LlmClient;
 use crate::llm::{anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient};
+use crate::mcp::pool::McpPool;
 use crate::profile::Profile;
+use crate::sandbox::SandboxPolicy;
 use crate::sandbox::reqwest_guard::HostGuard;
 use crate::skills::RuntimeSkills;
 use crate::task_runner::TaskRunner;
 use crate::telemetry_writer::{TelemetryWriter, WriterTelemetryEmitter};
+use crate::tools::bash::BashTool;
+use crate::tools::registry::build_tools;
 use mur_common::agent::NetworkOutboundMode;
 use mur_common::config::SkillsConfig;
 use mur_common::model::ModelEntry;
@@ -111,12 +115,16 @@ pub fn build_runner(
     pending_approvals: Option<HitlApprovals>,
     notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     hitl_timeout_secs: u32,
+    tools: Vec<std::sync::Arc<dyn crate::tools::ToolExecutor>>,
+    tools_policy: Vec<mur_common::agent::ToolRule>,
 ) -> Arc<TaskRunner> {
     let mut runner = TaskRunner::with_llm(client)
         .with_system_prompt(base_system_prompt)
         .with_skills(skills)
         .with_skills_cfg(skills_cfg)
-        .with_hitl_timeout_secs(hitl_timeout_secs);
+        .with_hitl_timeout_secs(hitl_timeout_secs)
+        .with_tools(tools)
+        .with_tools_policy(tools_policy);
     if let (Some(chain), Some(ctx), Some(cancel)) = (hook_chain, hook_ctx, hook_cancel) {
         runner = runner.with_hook_chain(chain, ctx, cancel);
     }
@@ -130,10 +138,11 @@ pub fn build_runner(
 }
 
 /// Build the LLM-backed TaskRunner for a resolved model entry.
-/// Returns (runner, optional LLM client for companion sharing).
+/// Returns (runner, optional LLM client for companion sharing, optional McpPool for shutdown).
 #[allow(clippy::too_many_arguments)]
 pub async fn build_provider_runner(
     force_echo: bool,
+    agent_home: &std::path::Path,
     profile: &Profile,
     runtime_skills: Arc<RuntimeSkills>,
     skills_cfg: SkillsConfig,
@@ -143,9 +152,13 @@ pub async fn build_provider_runner(
     pending_approvals: Option<HitlApprovals>,
     notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     hitl_timeout_secs: u32,
-) -> anyhow::Result<(Arc<TaskRunner>, Option<Arc<dyn LlmClient>>)> {
+) -> anyhow::Result<(
+    Arc<TaskRunner>,
+    Option<Arc<dyn LlmClient>>,
+    Option<Arc<McpPool>>,
+)> {
     if force_echo {
-        return Ok((Arc::new(TaskRunner::new_stub_echo()), None));
+        return Ok((Arc::new(TaskRunner::new_stub_echo()), None, None));
     }
 
     let resolved = crate::supervisor::resolve_model_entry(&profile.inner);
@@ -185,6 +198,23 @@ pub async fn build_provider_runner(
         .build()
         .context("failed to build guarded HTTP client")?;
 
+    // Build MCP pool from the agent profile's configured servers, then discover
+    // and filter tools concurrently before constructing the runner.
+    let sandbox_policy = SandboxPolicy::from_entitlements(&profile.inner.entitlements, agent_home);
+    let pool = McpPool::new(profile.inner.mcp_servers.clone(), sandbox_policy);
+    let bash_exec: Arc<dyn crate::tools::ToolExecutor> =
+        Arc::new(BashTool::new(agent_home.to_path_buf()));
+    let bash_def = bash_exec.def();
+    let tools_policy = profile.inner.entitlements.tools.clone();
+    let (_defs, tool_map) = build_tools(
+        Some((bash_def, bash_exec)),
+        &profile.inner.mcp_servers,
+        &tools_policy,
+        pool.clone(),
+    )
+    .await;
+    let tools: Vec<Arc<dyn crate::tools::ToolExecutor>> = tool_map.into_values().collect();
+
     let build = |client: Arc<dyn LlmClient>| {
         let r = crate::supervisor_runner::build_runner(
             client.clone(),
@@ -197,8 +227,10 @@ pub async fn build_provider_runner(
             pending_approvals.clone(),
             notifier.clone(),
             hitl_timeout_secs,
+            tools.clone(),
+            tools_policy.clone(),
         );
-        (r, Some(client))
+        (r, Some(client), Some(pool.clone()))
     };
 
     Ok(match entry.provider.as_str() {
@@ -253,7 +285,11 @@ pub async fn build_provider_runner(
                 Ok(client) => build(client),
                 Err(e) => {
                     warn!(error = %e, "anthropic client unavailable; falling back to echo");
-                    (Arc::new(TaskRunner::new_stub_echo()), None)
+                    (
+                        Arc::new(TaskRunner::new_stub_echo()),
+                        None,
+                        Some(pool.clone()),
+                    )
                 }
             }
         }
@@ -278,13 +314,21 @@ pub async fn build_provider_runner(
                 Ok(client) => build(client),
                 Err(e) => {
                     warn!(error = %e, "openai client unavailable; falling back to echo");
-                    (Arc::new(TaskRunner::new_stub_echo()), None)
+                    (
+                        Arc::new(TaskRunner::new_stub_echo()),
+                        None,
+                        Some(pool.clone()),
+                    )
                 }
             }
         }
         other => {
             warn!(provider = %other, "no LLM client implemented; falling back to echo");
-            (Arc::new(TaskRunner::new_stub_echo()), None)
+            (
+                Arc::new(TaskRunner::new_stub_echo()),
+                None,
+                Some(pool.clone()),
+            )
         }
     })
 }

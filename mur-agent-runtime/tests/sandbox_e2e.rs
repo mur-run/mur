@@ -128,6 +128,7 @@ fn spawn_sandboxed_runs_true() {
         syscalls: Default::default(),
         limits: Default::default(),
         llm: Default::default(),
+        tools: vec![],
         fail_closed_on_sandbox_error: true,
     };
     let home = PathBuf::from("/tmp");
@@ -225,6 +226,7 @@ fn linux_ruleset_paths_are_absolute() {
         syscalls: Default::default(),
         limits: Default::default(),
         llm: Default::default(),
+        tools: vec![],
         fail_closed_on_sandbox_error: true,
     };
 

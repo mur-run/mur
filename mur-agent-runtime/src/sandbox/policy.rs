@@ -175,6 +175,7 @@ mod tests {
             syscalls: Default::default(),
             limits: Default::default(),
             llm: Default::default(),
+            tools: vec![],
             fail_closed_on_sandbox_error: true,
         }
     }

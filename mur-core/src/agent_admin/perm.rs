@@ -5,7 +5,7 @@
 //! need structured data (e.g. GUI Permissions tab) instead of stdout.
 
 use anyhow::Result;
-use mur_common::agent::Entitlements;
+use mur_common::agent::{Entitlements, ToolPolicy, ToolRule};
 
 use crate::cmd::agent;
 
@@ -45,6 +45,19 @@ pub fn deny_spawn(name: &str, binary: &str) -> Result<()> {
 
 pub fn set_limit(name: &str, key: &str, value: u64) -> Result<()> {
     agent::cmd_perm_set_limit(name, key, value)
+}
+
+pub fn set_tool_policy(name: &str, policy: ToolPolicy, pattern: &str) -> Result<()> {
+    agent::cmd_perm_set_tool(name, policy, pattern)
+}
+
+pub fn clear_tool_rule(name: &str, pattern: &str) -> Result<()> {
+    agent::cmd_perm_clear_tool(name, pattern)
+}
+
+pub fn list_tool_rules(name: &str) -> Result<Vec<ToolRule>> {
+    let (_path, profile) = agent::load_profile_for_edit(name)?;
+    Ok(profile.entitlements.tools)
 }
 
 // ─── queries (typed views) ─────────────────────────────────────────
