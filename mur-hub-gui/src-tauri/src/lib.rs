@@ -11,6 +11,7 @@ pub mod cli_tools;
 pub mod companion;
 pub mod detail;
 pub mod export_muragent;
+pub mod hitl;
 pub mod import_muragent;
 pub mod mlx_sidecar;
 pub mod mobile;
@@ -411,6 +412,7 @@ pub fn run() {
             start_agent,
             stop_agent,
             chat::agent_chat_send,
+            hitl::agent_hitl_respond,
             open_dashboard,
             toggle_popover,
             onboarding::wizard_open,
