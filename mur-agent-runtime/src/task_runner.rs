@@ -982,7 +982,9 @@ mod tests {
         let spec = TaskSpec {
             input: mur_common::a2a::Message {
                 role: "user".into(),
-                parts: vec![MessagePart::Text { text: "slow".into() }],
+                parts: vec![MessagePart::Text {
+                    text: "slow".into(),
+                }],
             },
             context_task_id: None,
             task_id: Some("task-cancelme".to_string()),

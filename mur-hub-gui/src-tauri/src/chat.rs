@@ -178,7 +178,13 @@ pub async fn agent_chat_cancel(
     let params = json!({ "id": task_id });
     tokio::task::spawn_blocking(move || {
         // Separate connection so it doesn't fight the in-progress streaming read.
-        match dial_method(&home, &name, "tasks/cancel", params, DialMode::RequireRunning) {
+        match dial_method(
+            &home,
+            &name,
+            "tasks/cancel",
+            params,
+            DialMode::RequireRunning,
+        ) {
             Ok(_) => Ok(()),
             // The turn may have just finished, or the agent stopped — benign for
             // a cancel. Surface only genuine/unexpected failures.
