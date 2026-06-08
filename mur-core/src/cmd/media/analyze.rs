@@ -165,3 +165,92 @@ mod render_tests {
         assert!(md.contains("### 結論"));
     }
 }
+
+use super::error::MediaError;
+use super::transcript::{self, Chunk};
+use mur_common::config::DEFAULT_BUNDLED_MODEL_ID;
+use serde_json::json;
+use std::time::Duration;
+
+/// Per-chunk "map" instruction: extract key points with approximate timestamps.
+fn map_system() -> &'static str {
+    "你是影片分析助手。針對這段字幕，列出 3-5 個重點，每點儘量附上時間（秒）。只回重點，不要客套。"
+}
+
+/// Final "reduce" instruction: emit STRICT JSON matching AnalysisResult.
+fn reduce_system(mode: AnalysisMode) -> &'static str {
+    match mode {
+        AnalysisMode::Conclusions => {
+            "你是影片分析助手。根據以下各段重點，輸出嚴格 JSON：{\"topic\":..,\"key_points\":[{\"text\":..,\"t_ms\":..}],\"key_moments\":[{\"text\":..,\"t_ms\":..}],\"conclusion\":\"深入的分析與結論\"}。只輸出 JSON，用繁體中文。"
+        }
+        _ => {
+            "你是影片分析助手。根據以下各段重點，輸出嚴格 JSON：{\"topic\":..,\"key_points\":[{\"text\":..,\"t_ms\":..}],\"key_moments\":[{\"text\":..,\"t_ms\":..}],\"conclusion\":\"摘要\"}。只輸出 JSON，用繁體中文。"
+        }
+    }
+}
+
+/// Build an OpenAI-compatible chat request (text-only, temperature 0 for determinism).
+fn chat_request(system: &str, user: &str) -> serde_json::Value {
+    json!({
+        "model": DEFAULT_BUNDLED_MODEL_ID,
+        "temperature": 0,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user }
+        ],
+        "max_tokens": 1024
+    })
+}
+
+async fn call_model(body: serde_json::Value) -> Result<String, MediaError> {
+    let client = super::shared_client();
+    let base = super::local_base_url().map_err(|_| MediaError::ModelOffline)?;
+    let resp: serde_json::Value = client
+        .post(format!("{}/chat/completions", base.trim_end_matches('/')))
+        .json(&body)
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|_| MediaError::ModelOffline)?
+        .json()
+        .await
+        .map_err(|_| MediaError::ModelOffline)?;
+    super::scene::parse_completion(&resp).ok_or(MediaError::ModelOffline)
+}
+
+/// Analyze a video. `source = None` ⇒ use the last-opened source (spec §4.2/§5).
+#[allow(dead_code)]
+pub async fn analyze(
+    source: Option<&str>,
+    mode: Option<&str>,
+    _focus: Option<&str>,
+) -> Result<String, MediaError> {
+    let mode = AnalysisMode::parse(mode);
+    let home = crate::cmd::resolve_mur_home().map_err(|_| MediaError::SourceUnresolvable)?;
+    let source = match source {
+        Some(s) => s.to_string(),
+        None => super::resolve::load_last_source(&home).ok_or(MediaError::SourceUnresolvable)?,
+    };
+    if super::resolve::is_drm_host(&source) {
+        return Err(MediaError::DrmProtected);
+    }
+    let tr = transcript::get(&home, &source)?;
+    let chunks: Vec<Chunk> = tr.chunks_for_analysis();
+    if chunks.is_empty() {
+        return Err(MediaError::NoTranscript);
+    }
+
+    // Map: summarize each chunk (sequential — local model, small machine).
+    let mut summaries = String::new();
+    for c in &chunks {
+        let secs = c.start_ms / 1000;
+        let user = format!("[t={secs}s]\n{}", c.text);
+        let s = call_model(chat_request(map_system(), &user)).await?;
+        summaries.push_str(&format!("[t={secs}s] {}\n", s.trim()));
+    }
+
+    // Reduce: produce structured JSON, parse, render.
+    let raw = call_model(chat_request(reduce_system(mode), &summaries)).await?;
+    let result = parse_analysis(&raw);
+    Ok(render_markdown(&result, &source))
+}

@@ -60,6 +60,13 @@ pub fn save_runtime(mur_home: &Path, rt: &VlcRuntime) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Resolve the local OpenAI-compatible model base URL (e.g. http://127.0.0.1:PORT/v1).
+pub(crate) fn local_base_url() -> anyhow::Result<String> {
+    let home = crate::cmd::resolve_mur_home()?;
+    mur_common::local_llm::read_base_url(&home)
+        .context("local model endpoint not available (is MuR Hub running?)")
+}
+
 /// Reusable HTTP client with connection pooling for VLC and VLM endpoints.
 pub fn shared_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
