@@ -7,22 +7,14 @@ pub mod resolve;
 pub mod scene;
 pub mod transcript;
 pub mod vlc;
+pub mod watch;
 
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 
-/// Per-session VLC HTTP connection details. Generated once and persisted so
-/// repeated tool calls reach the same running VLC instance.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct VlcRuntime {
-    pub port: u16,
-    pub password: String,
-    /// Directory VLC writes snapshots to (`--snapshot-path`).
-    pub snapshot_dir: PathBuf,
-}
+pub use mur_common::media::{VlcRuntime, runtime_path};
 
 /// Reserve a free localhost TCP port.
 pub fn pick_free_port() -> std::io::Result<u16> {
@@ -35,10 +27,6 @@ pub fn gen_password() -> anyhow::Result<String> {
     let mut buf = [0u8; 16];
     getrandom::getrandom(&mut buf)?;
     Ok(buf.iter().map(|b| format!("{b:02x}")).collect())
-}
-
-pub fn runtime_path(mur_home: &Path) -> PathBuf {
-    mur_home.join("runtime").join("vlc.json")
 }
 
 /// Load the persisted runtime config, if present and parseable.
