@@ -280,4 +280,8 @@ export const en = {
   "modal.preset.url.import": "Import from URL",
   "modal.preset.url.fetching": "Fetching…",
   "modal.preset.imported": "Imported preset \"{id}\"",
+  "hitl.denyWithReason": "Deny with reason",
+  "hitl.denyReason": "Reason",
+  "hitl.reasonPlaceholder": "Why are you denying this? (optional)",
+  "hitl.confirmDeny": "Confirm Deny",
 } as const;
