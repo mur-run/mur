@@ -3,6 +3,7 @@
 
 pub mod error;
 pub mod scene;
+pub mod transcript;
 pub mod vlc;
 
 use anyhow::Context;
