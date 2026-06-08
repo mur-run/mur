@@ -1,4 +1,5 @@
 import { AgentProvider } from "./context/AgentContext";
+import { ConversationProvider } from "./conversation/ConversationContext";
 import { PopoverApp } from "./components/PopoverApp";
 import { DashboardApp } from "./components/DashboardApp";
 import { PetApp } from "./components/PetApp";
@@ -15,7 +16,9 @@ export default function App() {
   if (route === "pet") return <PetApp />;
   return (
     <AgentProvider>
-      {route === "popover" ? <PopoverApp /> : <DashboardApp />}
+      <ConversationProvider>
+        {route === "popover" ? <PopoverApp /> : <DashboardApp />}
+      </ConversationProvider>
     </AgentProvider>
   );
 }

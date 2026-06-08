@@ -17,7 +17,6 @@ export const CATEGORY_ICONS: Record<string, string> = {
 };
 
 export const TAB_ICONS: Record<string, string> = {
-  chat: "💬",
   persona: "🎭",
   style: "🎨",
   behavior: "🦜",
