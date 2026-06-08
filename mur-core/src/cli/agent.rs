@@ -585,6 +585,16 @@ pub enum AgentPermAction {
         key: String,
         value: u64,
     },
+    /// Set tool policy: allow | ask | deny
+    ToolAllow { name: String, pattern: String },
+    /// Set tool policy to ask (HITL prompt before execution)
+    ToolAsk { name: String, pattern: String },
+    /// Deny a tool pattern entirely
+    ToolDeny { name: String, pattern: String },
+    /// Remove a tool rule
+    ToolClear { name: String, pattern: String },
+    /// List all tool rules
+    ToolList { name: String },
 }
 
 #[derive(Subcommand)]

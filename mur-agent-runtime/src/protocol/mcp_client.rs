@@ -13,6 +13,9 @@ pub struct McpClient {
     child: Mutex<std::process::Child>,
     stdin: Mutex<ChildStdin>,
     stdout: Mutex<Lines<BufReader<ChildStdout>>>,
+    /// Piped stderr, available once via `take_stderr()`. Callers should drain
+    /// this in a background task to prevent the child's stderr buffer filling.
+    stderr: Mutex<Option<std::process::ChildStderr>>,
     next_id: Mutex<u64>,
     pub server_name: String,
 }
@@ -61,6 +64,7 @@ impl McpClient {
 
         let raw_stdin = child.stdin.take().ok_or(McpError::StreamClosed)?;
         let raw_stdout = child.stdout.take().ok_or(McpError::StreamClosed)?;
+        let raw_stderr = child.stderr.take();
         let stdin = ChildStdin::from_std(raw_stdin)?;
         let stdout = ChildStdout::from_std(raw_stdout)?;
 
@@ -68,9 +72,16 @@ impl McpClient {
             child: Mutex::new(child),
             stdin: Mutex::new(stdin),
             stdout: Mutex::new(BufReader::new(stdout).lines()),
+            stderr: Mutex::new(raw_stderr),
             next_id: Mutex::new(1),
             server_name: entry.name.clone(),
         })
+    }
+
+    /// Take the child's stderr handle for background draining. Returns `None`
+    /// if already taken or if the child was spawned without a piped stderr.
+    pub async fn take_stderr(&self) -> Option<std::process::ChildStderr> {
+        self.stderr.lock().await.take()
     }
 
     async fn request(&self, method: &str, params: Value) -> Result<Value, McpError> {

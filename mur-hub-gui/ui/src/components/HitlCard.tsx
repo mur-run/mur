@@ -50,10 +50,13 @@ export function HitlCard({ request }: Props) {
     }
   }
 
-  const inputSummary = Object.entries(request.tool_input)
-    .slice(0, 2)
-    .map(([k, v]) => `${k}: ${String(v).slice(0, 40)}`)
-    .join(", ");
+  function toolLabel(name: string): string {
+    const m = name.match(/^mcp__([^_]+(?:_[^_]+)*)__(.+)$/);
+    if (m) return `${m[1].replace(/_/g, "-")} · ${m[2]}`;
+    return name;
+  }
+
+  const hasArgs = Object.keys(request.tool_input).length > 0;
 
   if (responded === "timeout") {
     return (
@@ -88,9 +91,10 @@ export function HitlCard({ request }: Props) {
         <span className="hitl-card__title">Approval needed</span>
         <span className="hitl-card__timer">{countdown}</span>
       </div>
+      <div className="hitl-card__tool">{toolLabel(request.tool_name)}</div>
       <div className="hitl-card__prompt">{request.prompt}</div>
-      {inputSummary && (
-        <div className="hitl-card__input">{inputSummary}</div>
+      {hasArgs && (
+        <pre className="hitl-args">{JSON.stringify(request.tool_input, null, 2)}</pre>
       )}
       {showReasonInput ? (
         <div className="hitl-card__reason-form">

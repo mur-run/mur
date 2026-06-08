@@ -395,6 +395,9 @@ pub struct Entitlements {
     /// so the supervisor refuses to construct an LLM client.
     #[serde(default)]
     pub llm: crate::bridge::llm_entitlement::LlmEntitlement,
+    /// Per-tool allow/ask/deny policy. Empty = all tools use default (Ask).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolRule>,
     /// When `true` (the default), a sandbox apply failure is fatal: the agent
     /// refuses to start rather than running advisory-only (unconfined).
     /// Set to `false` only for development or trusted-workstation agents that
@@ -516,6 +519,47 @@ fn default_fds() -> u32 {
 }
 fn default_procs() -> u32 {
     32
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolPolicy {
+    Allow,
+    #[default]
+    Ask,
+    Deny,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolRule {
+    pub pattern: String,
+    pub policy: ToolPolicy,
+}
+
+/// Resolve the effective policy for `tool_name` against an ordered rule list.
+///
+/// Precedence: exact-name match > longest-prefix glob (trailing `*`) > default (`Ask`).
+pub fn resolve_tool_policy(rules: &[ToolRule], tool_name: &str) -> ToolPolicy {
+    for rule in rules {
+        if rule.pattern == tool_name {
+            return rule.policy;
+        }
+    }
+    let mut best: Option<(&ToolRule, usize)> = None;
+    for rule in rules {
+        if let Some(prefix) = rule.pattern.strip_suffix('*')
+            && tool_name.starts_with(prefix)
+        {
+            let len = prefix.len();
+            if best.is_none_or(|(_, best_len)| len > best_len) {
+                best = Some((rule, len));
+            }
+        }
+    }
+    if let Some((rule, _)) = best {
+        return rule.policy;
+    }
+    ToolPolicy::default()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -1657,5 +1701,96 @@ mod skill_card_tests {
             !yaml.contains("abstract:"),
             "empty abstract must be skipped: {yaml}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tool_policy_tests {
+    use super::*;
+
+    fn rules() -> Vec<ToolRule> {
+        vec![
+            ToolRule {
+                pattern: "mcp__github__merge_pr".into(),
+                policy: ToolPolicy::Ask,
+            },
+            ToolRule {
+                pattern: "mcp__github__*".into(),
+                policy: ToolPolicy::Allow,
+            },
+            ToolRule {
+                pattern: "mcp__*".into(),
+                policy: ToolPolicy::Deny,
+            },
+            ToolRule {
+                pattern: "bash".into(),
+                policy: ToolPolicy::Allow,
+            },
+        ]
+    }
+
+    #[test]
+    fn exact_beats_glob() {
+        assert_eq!(
+            resolve_tool_policy(&rules(), "mcp__github__merge_pr"),
+            ToolPolicy::Ask
+        );
+    }
+
+    #[test]
+    fn longer_glob_wins() {
+        assert_eq!(
+            resolve_tool_policy(&rules(), "mcp__github__create_issue"),
+            ToolPolicy::Allow
+        );
+    }
+
+    #[test]
+    fn shorter_glob_fallback() {
+        assert_eq!(
+            resolve_tool_policy(&rules(), "mcp__slack__send"),
+            ToolPolicy::Deny
+        );
+    }
+
+    #[test]
+    fn exact_bash() {
+        assert_eq!(resolve_tool_policy(&rules(), "bash"), ToolPolicy::Allow);
+    }
+
+    #[test]
+    fn unknown_tool_defaults_ask() {
+        assert_eq!(
+            resolve_tool_policy(&rules(), "unknown_tool"),
+            ToolPolicy::Ask
+        );
+    }
+
+    #[test]
+    fn empty_rules_defaults_ask() {
+        assert_eq!(resolve_tool_policy(&[], "bash"), ToolPolicy::Ask);
+    }
+
+    fn minimal_entitlements_yaml() -> &'static str {
+        "network:\n  inbound: {}\n  outbound:\n    mode: off\nfilesystem: {}\nprocesses:\n  spawn:\n    mode: none\n"
+    }
+
+    #[test]
+    fn entitlements_tools_defaults_empty() {
+        let e: Entitlements = serde_yaml_ng::from_str(minimal_entitlements_yaml()).unwrap();
+        assert!(e.tools.is_empty());
+    }
+
+    #[test]
+    fn entitlements_tools_roundtrip() {
+        let base = minimal_entitlements_yaml();
+        let yaml = format!("{base}tools:\n  - pattern: \"mcp__github__*\"\n    policy: allow\n");
+        let e: Entitlements = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(e.tools.len(), 1);
+        assert_eq!(e.tools[0].policy, ToolPolicy::Allow);
+        let y = serde_yaml_ng::to_string(&e).unwrap();
+        let back: Entitlements = serde_yaml_ng::from_str(&y).unwrap();
+        assert_eq!(back.tools.len(), 1);
+        assert_eq!(back.tools[0].policy, ToolPolicy::Allow);
     }
 }
