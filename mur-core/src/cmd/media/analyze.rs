@@ -81,3 +81,87 @@ mod basics_tests {
         assert_eq!(deep_link("/movies/x.mkv", 3_725_000), "[01:02:05]");
     }
 }
+
+/// Parse the reducer's JSON into a structured result. On invalid JSON, wrap the raw
+/// text as the conclusion so the user still gets something useful.
+pub fn parse_analysis(raw: &str) -> AnalysisResult {
+    // The model may wrap JSON in a ```json fence; strip a leading/trailing fence.
+    let trimmed = raw.trim();
+    let body = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .map(|s| s.trim_end_matches("```").trim())
+        .unwrap_or(trimmed);
+    match serde_json::from_str::<AnalysisResult>(body) {
+        Ok(r) => r,
+        Err(_) => AnalysisResult {
+            topic: String::new(),
+            key_points: Vec::new(),
+            key_moments: Vec::new(),
+            conclusion: raw.trim().to_string(),
+        },
+    }
+}
+
+/// Render a result as markdown, with clickable timestamps for each point/moment.
+pub fn render_markdown(result: &AnalysisResult, source: &str) -> String {
+    let mut out = String::new();
+    if !result.topic.is_empty() {
+        out.push_str(&format!("## {}\n\n", result.topic));
+    }
+    if !result.key_points.is_empty() {
+        out.push_str("### 重點\n");
+        for kp in &result.key_points {
+            out.push_str(&format!("- {} （{}）\n", kp.text, deep_link(source, kp.t_ms)));
+        }
+        out.push('\n');
+    }
+    if !result.key_moments.is_empty() {
+        out.push_str("### 關鍵時刻\n");
+        for m in &result.key_moments {
+            out.push_str(&format!("- {} （{}）\n", m.text, deep_link(source, m.t_ms)));
+        }
+        out.push('\n');
+    }
+    if !result.conclusion.is_empty() {
+        out.push_str(&format!("### 結論\n{}\n", result.conclusion));
+    }
+    out.trim_end().to_string()
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+
+    #[test]
+    fn parse_valid_and_fenced_json() {
+        let json = r#"{"topic":"T","key_points":[{"text":"p","t_ms":1000}],"conclusion":"c"}"#;
+        let r = parse_analysis(json);
+        assert_eq!(r.topic, "T");
+        assert_eq!(r.key_points[0].text, "p");
+        let fenced = format!("```json\n{json}\n```");
+        assert_eq!(parse_analysis(&fenced).topic, "T");
+    }
+
+    #[test]
+    fn parse_invalid_falls_back_to_conclusion() {
+        let r = parse_analysis("not json at all");
+        assert!(r.topic.is_empty());
+        assert_eq!(r.conclusion, "not json at all");
+    }
+
+    #[test]
+    fn render_has_links() {
+        let r = AnalysisResult {
+            topic: "Topic".into(),
+            key_points: vec![KeyPoint { text: "first".into(), t_ms: 65_000 }],
+            key_moments: vec![],
+            conclusion: "done".into(),
+        };
+        let md = render_markdown(&r, "https://youtu.be/abc");
+        assert!(md.contains("## Topic"));
+        assert!(md.contains("first"));
+        assert!(md.contains("https://youtu.be/abc?t=65s"));
+        assert!(md.contains("### 結論"));
+    }
+}
