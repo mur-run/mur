@@ -44,8 +44,11 @@ impl McpPool {
             let server_name = server.to_string();
             tokio::task::spawn_blocking(move || {
                 use std::io::{BufRead, BufReader};
-                for line in BufReader::new(stderr).lines().flatten() {
-                    tracing::debug!(server = %server_name, "mcp stderr: {line}");
+                for line in BufReader::new(stderr).lines() {
+                    match line {
+                        Ok(l) => tracing::debug!(server = %server_name, "mcp stderr: {l}"),
+                        Err(_) => break,
+                    }
                 }
             });
         }
@@ -86,7 +89,10 @@ mod tests {
         match pool.client("nonexistent").await {
             Err(e) => {
                 let msg = e.to_string();
-                assert!(msg.contains("nonexistent"), "error should name the server: {msg}");
+                assert!(
+                    msg.contains("nonexistent"),
+                    "error should name the server: {msg}"
+                );
             }
             Ok(_) => panic!("expected error for unknown server"),
         }

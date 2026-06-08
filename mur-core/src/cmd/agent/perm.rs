@@ -241,7 +241,10 @@ pub fn cmd_perm_set_tool(name: &str, policy: ToolPolicy, pattern: &str) -> Resul
     if let Some(r) = rules.iter_mut().find(|r| r.pattern == pattern) {
         r.policy = policy;
     } else {
-        rules.push(ToolRule { pattern: pattern.to_string(), policy });
+        rules.push(ToolRule {
+            pattern: pattern.to_string(),
+            policy,
+        });
     }
     save_profile(&path, &mut profile)?;
     warn_if_running(name);
@@ -263,7 +266,11 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
         println!("(no tool rules — all tools use default policy: ask)");
     } else {
         for r in rules {
-            println!("{:10}  {}", format!("{:?}", r.policy).to_lowercase(), r.pattern);
+            println!(
+                "{:10}  {}",
+                format!("{:?}", r.policy).to_lowercase(),
+                r.pattern
+            );
         }
     }
     Ok(())

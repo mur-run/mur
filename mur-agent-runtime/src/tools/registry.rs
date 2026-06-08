@@ -9,8 +9,8 @@ use std::sync::Arc;
 use futures::future;
 use mur_common::agent::{McpServerEntry, ToolPolicy, ToolRule, resolve_tool_policy};
 
-use super::{ToolExecutor, mcp::McpToolExecutor};
 use super::naming::{sanitize_server, wire_name};
+use super::{ToolExecutor, mcp::McpToolExecutor};
 use crate::llm::ToolDef;
 use crate::mcp::pool::McpPool;
 
@@ -30,11 +30,11 @@ pub async fn build_tools(
     let mut defs: Vec<ToolDef> = Vec::new();
     let mut map: HashMap<String, Arc<dyn ToolExecutor>> = HashMap::new();
 
-    if let Some((def, exec)) = bash {
-        if resolve_tool_policy(rules, "bash") != ToolPolicy::Deny {
-            defs.push(def);
-            map.insert("bash".to_string(), exec);
-        }
+    if let Some((def, exec)) = bash
+        && resolve_tool_policy(rules, "bash") != ToolPolicy::Deny
+    {
+        defs.push(def);
+        map.insert("bash".to_string(), exec);
     }
 
     let discovery_futs: Vec<_> = servers
@@ -101,7 +101,9 @@ mod tests {
     #[tokio::test]
     async fn bash_tool_included_when_allowed() {
         use crate::tools::bash::BashTool;
-        let bash_exec: Arc<dyn ToolExecutor> = Arc::new(BashTool { working_dir: std::path::PathBuf::from("/tmp") });
+        let bash_exec: Arc<dyn ToolExecutor> = Arc::new(BashTool {
+            working_dir: std::path::PathBuf::from("/tmp"),
+        });
         let bash_def = bash_exec.def();
         let pool = McpPool::new(vec![], SandboxPolicy::default());
         let (defs, map) = build_tools(Some((bash_def, bash_exec)), &[], &[], pool).await;
@@ -112,7 +114,9 @@ mod tests {
     #[tokio::test]
     async fn bash_tool_excluded_when_denied() {
         use crate::tools::bash::BashTool;
-        let bash_exec: Arc<dyn ToolExecutor> = Arc::new(BashTool { working_dir: std::path::PathBuf::from("/tmp") });
+        let bash_exec: Arc<dyn ToolExecutor> = Arc::new(BashTool {
+            working_dir: std::path::PathBuf::from("/tmp"),
+        });
         let bash_def = bash_exec.def();
         let rules = vec![ToolRule {
             pattern: "bash".to_string(),

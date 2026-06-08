@@ -1162,9 +1162,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentPermAction::SetLimit { name, key, value } => {
                 cmd::agent::cmd_perm_set_limit(&name, &key, value)?
             }
-            AgentPermAction::ToolAllow { name, pattern } => {
-                cmd::agent::cmd_perm_set_tool(&name, mur_common::agent::ToolPolicy::Allow, &pattern)?
-            }
+            AgentPermAction::ToolAllow { name, pattern } => cmd::agent::cmd_perm_set_tool(
+                &name,
+                mur_common::agent::ToolPolicy::Allow,
+                &pattern,
+            )?,
             AgentPermAction::ToolAsk { name, pattern } => {
                 cmd::agent::cmd_perm_set_tool(&name, mur_common::agent::ToolPolicy::Ask, &pattern)?
             }
@@ -1174,9 +1176,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentPermAction::ToolClear { name, pattern } => {
                 cmd::agent::cmd_perm_clear_tool(&name, &pattern)?
             }
-            AgentPermAction::ToolList { name } => {
-                cmd::agent::cmd_perm_list_tools(&name)?
-            }
+            AgentPermAction::ToolList { name } => cmd::agent::cmd_perm_list_tools(&name)?,
         },
         AgentAction::Export { name, out, format } => {
             cmd::agent::cmd_export(&name, &out, &format)?;

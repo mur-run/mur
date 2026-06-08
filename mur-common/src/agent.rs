@@ -521,18 +521,13 @@ fn default_procs() -> u32 {
     32
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolPolicy {
     Allow,
+    #[default]
     Ask,
     Deny,
-}
-
-impl Default for ToolPolicy {
-    fn default() -> Self {
-        ToolPolicy::Ask
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -552,12 +547,12 @@ pub fn resolve_tool_policy(rules: &[ToolRule], tool_name: &str) -> ToolPolicy {
     }
     let mut best: Option<(&ToolRule, usize)> = None;
     for rule in rules {
-        if let Some(prefix) = rule.pattern.strip_suffix('*') {
-            if tool_name.starts_with(prefix) {
-                let len = prefix.len();
-                if best.map_or(true, |(_, best_len)| len > best_len) {
-                    best = Some((rule, len));
-                }
+        if let Some(prefix) = rule.pattern.strip_suffix('*')
+            && tool_name.starts_with(prefix)
+        {
+            let len = prefix.len();
+            if best.is_none_or(|(_, best_len)| len > best_len) {
+                best = Some((rule, len));
             }
         }
     }
@@ -1715,26 +1710,47 @@ mod tool_policy_tests {
 
     fn rules() -> Vec<ToolRule> {
         vec![
-            ToolRule { pattern: "mcp__github__merge_pr".into(), policy: ToolPolicy::Ask },
-            ToolRule { pattern: "mcp__github__*".into(), policy: ToolPolicy::Allow },
-            ToolRule { pattern: "mcp__*".into(), policy: ToolPolicy::Deny },
-            ToolRule { pattern: "bash".into(), policy: ToolPolicy::Allow },
+            ToolRule {
+                pattern: "mcp__github__merge_pr".into(),
+                policy: ToolPolicy::Ask,
+            },
+            ToolRule {
+                pattern: "mcp__github__*".into(),
+                policy: ToolPolicy::Allow,
+            },
+            ToolRule {
+                pattern: "mcp__*".into(),
+                policy: ToolPolicy::Deny,
+            },
+            ToolRule {
+                pattern: "bash".into(),
+                policy: ToolPolicy::Allow,
+            },
         ]
     }
 
     #[test]
     fn exact_beats_glob() {
-        assert_eq!(resolve_tool_policy(&rules(), "mcp__github__merge_pr"), ToolPolicy::Ask);
+        assert_eq!(
+            resolve_tool_policy(&rules(), "mcp__github__merge_pr"),
+            ToolPolicy::Ask
+        );
     }
 
     #[test]
     fn longer_glob_wins() {
-        assert_eq!(resolve_tool_policy(&rules(), "mcp__github__create_issue"), ToolPolicy::Allow);
+        assert_eq!(
+            resolve_tool_policy(&rules(), "mcp__github__create_issue"),
+            ToolPolicy::Allow
+        );
     }
 
     #[test]
     fn shorter_glob_fallback() {
-        assert_eq!(resolve_tool_policy(&rules(), "mcp__slack__send"), ToolPolicy::Deny);
+        assert_eq!(
+            resolve_tool_policy(&rules(), "mcp__slack__send"),
+            ToolPolicy::Deny
+        );
     }
 
     #[test]
@@ -1744,7 +1760,10 @@ mod tool_policy_tests {
 
     #[test]
     fn unknown_tool_defaults_ask() {
-        assert_eq!(resolve_tool_policy(&rules(), "unknown_tool"), ToolPolicy::Ask);
+        assert_eq!(
+            resolve_tool_policy(&rules(), "unknown_tool"),
+            ToolPolicy::Ask
+        );
     }
 
     #[test]

@@ -107,6 +107,11 @@ impl TaskRunner {
         }
     }
 
+    pub fn with_tools(mut self, tools: Vec<Arc<dyn crate::tools::ToolExecutor>>) -> Self {
+        self.tools = tools;
+        self
+    }
+
     pub fn with_tools_policy(mut self, rules: Vec<mur_common::agent::ToolRule>) -> Self {
         self.tools_policy = rules;
         self

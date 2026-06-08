@@ -83,10 +83,16 @@ impl ToolExecutor for McpToolExecutor {
         })
         .await
         .map_err(|_| {
-            ToolError::Execution(format!("tool `{}` timed out after {:?}", self.wire_name, self.timeout))
+            ToolError::Execution(format!(
+                "tool `{}` timed out after {:?}",
+                self.wire_name, self.timeout
+            ))
         })??;
 
-        let is_error = result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_error = result
+            .get("isError")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let text = render_mcp_result(&result);
         if is_error {
             Err(ToolError::Execution(text))
