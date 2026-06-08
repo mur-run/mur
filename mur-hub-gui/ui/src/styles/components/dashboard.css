@@ -1,9 +1,9 @@
 /* ── Dashboard ────────────────────────────────────────────────────────── */
 .dashboard-root {
   display: grid;
-  /* 3rd track holds the detail/chat panel when an agent is selected; it
-     collapses to nothing when the panel is absent. */
-  grid-template-columns: 160px 1fr auto;
+  /* 3rd track = conversation view (open convs); 4th = detail panel (selected agent).
+     Both collapse to nothing when absent. */
+  grid-template-columns: 160px 1fr auto auto;
   height: 100vh;
   overflow: hidden;
 }
