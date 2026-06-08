@@ -52,6 +52,9 @@ subtle = "2"
 # base64 (URL-safe, no padding) so we can decode them without a
 # multipart parser.
 base64 = "0.22"
+# C-watch — proactive co-watching scene detection (Task 6). dHash perceptual
+# hashing for scene-change detection from VLC snapshots.
+image = "0.25"
 mime_guess = "2"
 snow = { version = "0.9", default-features = false, features = ["default-resolver"] }
 hex = "0.4"

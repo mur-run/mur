@@ -20,6 +20,7 @@ pub mod federation;
 pub mod hitl;
 pub mod hooks;
 pub mod idle_scheduler;
+pub mod watch_scheduler;
 pub mod import;
 pub mod llm;
 pub mod lock_file;
