@@ -512,7 +512,7 @@ impl LlmClient for AnthropicClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::{RichMessage, ToolCallResult, ToolDef, ToolResultEntry};
+    use crate::llm::{RichMessage, ToolCallResult, ToolResultEntry};
     use serde_json::json;
 
     fn make_client() -> AnthropicClient {
