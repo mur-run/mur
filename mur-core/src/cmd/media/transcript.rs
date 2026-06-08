@@ -171,3 +171,119 @@ mod subtitle_tests {
         assert_eq!(parse_ts("garbage"), None);
     }
 }
+
+/// Default analysis chunk window / overlap (seconds). Spec §2: 60s windows w/ overlap.
+pub const DEFAULT_CHUNK_WINDOW_SECS: i64 = 60;
+pub const DEFAULT_CHUNK_OVERLAP_SECS: i64 = 10;
+
+impl Transcript {
+    /// Concatenated cue text within ±`span_ms` of `t_ms` (for live "what did he say").
+    pub fn window(&self, t_ms: i64, span_ms: i64) -> String {
+        let lo = t_ms - span_ms;
+        let hi = t_ms + span_ms;
+        self.cues
+            .iter()
+            .filter(|c| c.end_ms >= lo && c.start_ms <= hi)
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Fixed time-window chunks with overlap, timestamps preserved.
+    /// A cue belongs to a window if its `start_ms` is within `[win_start, win_end)`.
+    pub fn chunks(&self, window_secs: i64, overlap_secs: i64) -> Vec<Chunk> {
+        let window_ms = window_secs.max(1) * 1000;
+        let step_ms = (window_secs - overlap_secs).max(1) * 1000;
+        let last_end = self.cues.iter().map(|c| c.end_ms).max().unwrap_or(0);
+        let mut out = Vec::new();
+        let mut win_start = 0i64;
+        while win_start <= last_end {
+            let win_end = win_start + window_ms;
+            let text = self
+                .cues
+                .iter()
+                .filter(|c| c.start_ms >= win_start && c.start_ms < win_end)
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !text.is_empty() {
+                out.push(Chunk { start_ms: win_start, end_ms: win_end, text });
+            }
+            win_start += step_ms;
+        }
+        out
+    }
+
+    /// Chapter-aligned chunks when chapters exist, else `chunks()` with defaults.
+    pub fn chunks_for_analysis(&self) -> Vec<Chunk> {
+        if self.chapters.is_empty() {
+            return self.chunks(DEFAULT_CHUNK_WINDOW_SECS, DEFAULT_CHUNK_OVERLAP_SECS);
+        }
+        let mut out = Vec::new();
+        for (i, ch) in self.chapters.iter().enumerate() {
+            let start = ch.start_ms;
+            let end = self
+                .chapters
+                .get(i + 1)
+                .map(|n| n.start_ms)
+                .unwrap_or(i64::MAX);
+            let text = self
+                .cues
+                .iter()
+                .filter(|c| c.start_ms >= start && c.start_ms < end)
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !text.is_empty() {
+                out.push(Chunk { start_ms: start, end_ms: end.min(self.last_end()), text });
+            }
+        }
+        out
+    }
+
+    fn last_end(&self) -> i64 {
+        self.cues.iter().map(|c| c.end_ms).max().unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::*;
+
+    fn t(cues: Vec<Cue>, chapters: Vec<Chapter>) -> Transcript {
+        Transcript { source_id: "x".into(), lang: "en".into(), cues, chapters }
+    }
+
+    fn cue(start_ms: i64, text: &str) -> Cue {
+        Cue { start_ms, end_ms: start_ms + 1000, text: text.into() }
+    }
+
+    #[test]
+    fn window_picks_nearby() {
+        let tr = t(vec![cue(0, "a"), cue(5000, "b"), cue(10000, "c")], vec![]);
+        assert_eq!(tr.window(5000, 1500), "b");
+        assert_eq!(tr.window(5000, 6000), "a b c");
+    }
+
+    #[test]
+    fn chunks_overlap_and_skip_empty() {
+        // window 60s, overlap 10s ⇒ step 50s. Cues at 0s and 55s.
+        let tr = t(vec![cue(0, "one"), cue(55_000, "two")], vec![]);
+        let chunks = tr.chunks(60, 10);
+        // win [0,60s) has both "one" and "two"; win [50,110s) has "two".
+        assert_eq!(chunks[0], Chunk { start_ms: 0, end_ms: 60_000, text: "one two".into() });
+        assert_eq!(chunks[1], Chunk { start_ms: 50_000, end_ms: 110_000, text: "two".into() });
+    }
+
+    #[test]
+    fn chunks_for_analysis_uses_chapters() {
+        let tr = t(
+            vec![cue(0, "intro"), cue(30_000, "middle"), cue(90_000, "end")],
+            vec![Chapter { start_ms: 0, title: "A".into() }, Chapter { start_ms: 60_000, title: "B".into() }],
+        );
+        let chunks = tr.chunks_for_analysis();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].text, "intro middle");
+        assert_eq!(chunks[1].text, "end");
+    }
+}
