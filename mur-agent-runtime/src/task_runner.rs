@@ -65,6 +65,7 @@ pub struct TaskRunner {
     hitl_timeout_secs: u32,
     max_iterations: u32,
     tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
+    tools_policy: Vec<mur_common::agent::ToolRule>,
 }
 
 impl TaskRunner {
@@ -102,7 +103,13 @@ impl TaskRunner {
             hitl_timeout_secs: 300,
             max_iterations: 10,
             tools: vec![],
+            tools_policy: vec![],
         }
+    }
+
+    pub fn with_tools_policy(mut self, rules: Vec<mur_common::agent::ToolRule>) -> Self {
+        self.tools_policy = rules;
+        self
     }
 
     pub fn with_telemetry(mut self, tx: mpsc::Sender<Event>) -> Self {
@@ -208,7 +215,9 @@ impl TaskRunner {
             let Some(loaded) = skills.loaded.iter().find(|s| s.name == t.skill_name) else {
                 continue;
             };
-            let inventory = McpInventory::default(); // TODO: wire to MCP registry
+            let inventory = McpInventory::from_tool_names(
+                self.tools.iter().map(|t| t.name().to_string()).collect(),
+            );
             let Some(body) = layer3_body(&loaded.manifest, &inventory) else {
                 continue;
             };
@@ -579,6 +588,34 @@ impl TaskRunner {
                 content: format!("unknown tool: {}", call.tool_name),
                 is_error: true,
             });
+        }
+
+        // 1b. Policy gate: check before executing.
+        {
+            use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+            match resolve_tool_policy(&self.tools_policy, &call.tool_name) {
+                ToolPolicy::Deny => {
+                    return Ok(ToolResultEntry {
+                        call_id: call.call_id.clone(),
+                        content: format!("Tool `{}` is denied by policy.", call.tool_name),
+                        is_error: true,
+                    });
+                }
+                ToolPolicy::Allow => {
+                    // Execute without HITL gate below.
+                    let tool = tool.unwrap();
+                    let (output, is_error) = match tool.execute(call.input.clone()).await {
+                        Ok(out) => (out, false),
+                        Err(e) => (format!("tool error: {e}"), true),
+                    };
+                    return Ok(ToolResultEntry {
+                        call_id: call.call_id.clone(),
+                        content: output,
+                        is_error,
+                    });
+                }
+                ToolPolicy::Ask => {}
+            }
         }
 
         // 2. Execute the tool
