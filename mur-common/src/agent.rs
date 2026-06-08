@@ -857,6 +857,8 @@ pub struct VoiceConfig {
 pub struct HitlConfig {
     #[serde(default = "default_hitl_timeout_secs")]
     pub timeout_secs: u32,
+    #[serde(default)]
+    pub max_iterations: Option<u32>,
 }
 
 fn default_hitl_timeout_secs() -> u32 {
@@ -867,7 +869,25 @@ impl Default for HitlConfig {
     fn default() -> Self {
         Self {
             timeout_secs: default_hitl_timeout_secs(),
+            max_iterations: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod hitl_tests {
+    use super::*;
+
+    #[test]
+    fn hitl_config_default_max_iterations_is_none() {
+        let cfg = HitlConfig::default();
+        assert!(cfg.max_iterations.is_none());
+    }
+
+    #[test]
+    fn hitl_config_max_iterations_explicit() {
+        let cfg: HitlConfig = serde_yaml::from_str("timeout_secs: 60\nmax_iterations: 5").unwrap();
+        assert_eq!(cfg.max_iterations, Some(5));
     }
 }
 
