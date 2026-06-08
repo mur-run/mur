@@ -53,6 +53,8 @@ export const zhTW: Table = {
   "chat.empty": "跟 {name} 打聲招呼 👋  傳一則訊息開始對話。",
   "chat.placeholder": "傳訊息給 {name}…",
   "chat.send": "送出",
+  "chat.stop": "停止",
+  "chat.stopped": "已停止",
   "chat.thinking": "思考中",
   "chat.suggest.0": "你能幫我做什麼？",
   "chat.suggest.1": "你最近學了什麼？",

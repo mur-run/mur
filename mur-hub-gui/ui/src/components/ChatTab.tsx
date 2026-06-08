@@ -13,6 +13,20 @@ import type { HitlRequest } from "../types";
 interface ChatMsg {
   role: "user" | "agent" | "error";
   text: string;
+  /** True when this agent reply was committed early by a Stop action. */
+  stopped?: boolean;
+}
+
+/** Fresh per-turn task id, sent with each message so a Stop can cancel by it. */
+export function newTaskId(): string {
+  return `task-${crypto.randomUUID()}`;
+}
+
+/** Build the agent message committed when a turn is stopped — the partial
+ *  streamed buffer, tagged so the UI can mark it. Returns a stopped marker even
+ *  when nothing streamed yet. */
+export function buildStoppedMessage(partial: string): ChatMsg {
+  return { role: "agent", text: partial, stopped: true };
 }
 
 interface ChatReply {
@@ -45,6 +59,11 @@ export function ChatTab({ agentName, displayName }: Props) {
   const streamingRef = useRef("");
   const thinkingRef = useRef("");
   const taskIdRef = useRef<string | null>(null);
+  // The id of the turn currently in flight (for Stop); null when idle.
+  const currentTaskIdRef = useRef<string | null>(null);
+  // Set when Stop fired this turn, so the resolving send() doesn't append a
+  // second (full or empty) agent bubble after we already committed the partial.
+  const stoppedRef = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
   const thinkRef = useRef<HTMLDivElement>(null);
 
@@ -103,27 +122,62 @@ export function ChatTab({ agentName, displayName }: Props) {
     thinkingRef.current = "";
     setStreaming("");
     setThinking(null);
+    stoppedRef.current = false;
+    const taskId = newTaskId();
+    currentTaskIdRef.current = taskId;
     try {
       const res = await invoke<ChatReply>("agent_chat_send", {
         name: agentName,
         text,
+        taskId,
         contextTaskId: taskIdRef.current,
       });
       taskIdRef.current = res.task_id || taskIdRef.current;
-      setMessages((m) => [...m, { role: "agent", text: res.reply }]);
+      // If Stop already committed the partial reply, don't append again.
+      if (!stoppedRef.current) {
+        setMessages((m) => [...m, { role: "agent", text: res.reply }]);
+      }
     } catch (e) {
-      const msg = String(e).split("\n")[0].slice(0, 200);
-      setMessages((m) => [...m, { role: "error", text: msg }]);
+      // A stopped turn resolves as a Cancelled result, sometimes via the error
+      // path with no body — the partial is already committed, so stay quiet.
+      if (!stoppedRef.current) {
+        const msg = String(e).split("\n")[0].slice(0, 200);
+        setMessages((m) => [...m, { role: "error", text: msg }]);
+      }
     } finally {
       setStreaming(null);
       setThinking(null);
       streamingRef.current = "";
       thinkingRef.current = "";
+      currentTaskIdRef.current = null;
       setBusy(false);
     }
   }
 
+  async function stop() {
+    if (!busy) return;
+    // Snapshot whatever streamed so far and commit it as the reply, tagged
+    // "stopped", before asking the backend to cancel generation.
+    stoppedRef.current = true;
+    const partial = streamingRef.current;
+    setMessages((m) => [...m, buildStoppedMessage(partial)]);
+    setStreaming(null);
+    setThinking(null);
+    streamingRef.current = "";
+    thinkingRef.current = "";
+    try {
+      await invoke("agent_chat_cancel", { name: agentName });
+    } catch {
+      // Benign: the turn may have already finished server-side.
+    }
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Escape" && busy) {
+      e.preventDefault();
+      void stop();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void send();
@@ -165,8 +219,12 @@ export function ChatTab({ agentName, displayName }: Props) {
           </div>
         )}
         {messages.map((m, i) => (
-          <div key={i} className={`chat__msg chat__msg--${m.role}`}>
+          <div
+            key={i}
+            className={`chat__msg chat__msg--${m.role}${m.stopped ? " chat__msg--stopped" : ""}`}
+          >
             {m.text}
+            {m.stopped && <span className="chat__stopped-tag"> · {t("chat.stopped")}</span>}
           </div>
         ))}
         {thinking !== null && thinking.length > 0 && (
@@ -204,13 +262,23 @@ export function ChatTab({ agentName, displayName }: Props) {
           placeholder={t("chat.placeholder", { name: displayName })}
           rows={1}
         />
-        <button
-          className="chat__send"
-          onClick={() => void send()}
-          disabled={busy || !input.trim()}
-        >
-          {t("chat.send")}
-        </button>
+        {busy ? (
+          <button
+            className="chat__send chat__stop"
+            onClick={() => void stop()}
+            title={t("chat.stop")}
+          >
+            {t("chat.stop")}
+          </button>
+        ) : (
+          <button
+            className="chat__send"
+            onClick={() => void send()}
+            disabled={!input.trim()}
+          >
+            {t("chat.send")}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -51,6 +51,8 @@ export const en = {
   "chat.empty": "Say hi to {name} 👋  Send a message to get started.",
   "chat.placeholder": "Message {name}…",
   "chat.send": "Send",
+  "chat.stop": "Stop",
+  "chat.stopped": "stopped",
   "chat.thinking": "thinking",
   "chat.suggest.0": "What can you help me with?",
   "chat.suggest.1": "What have you been learning?",

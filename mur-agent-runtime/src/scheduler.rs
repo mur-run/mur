@@ -104,6 +104,7 @@ async fn run_entry(entry: ScheduleEntry, runner: Arc<TaskRunner>, cancel: Cancel
             .run_sync(TaskSpec {
                 input,
                 context_task_id: None,
+                task_id: None,
             })
             .await;
 

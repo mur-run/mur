@@ -239,6 +239,7 @@ pub fn run() {
             }
         }))
         .manage(AgentState(Mutex::new(Vec::new())))
+        .manage(chat::ChatRegistryState::default())
         .manage(SupervisorState(supervisor))
         .manage(WizardState(Mutex::new(None)))
         .manage(PetState(Mutex::new(std::collections::HashMap::new())))
@@ -414,6 +415,7 @@ pub fn run() {
             start_agent,
             stop_agent,
             chat::agent_chat_send,
+            chat::agent_chat_cancel,
             hitl::agent_hitl_respond,
             open_dashboard,
             toggle_popover,
