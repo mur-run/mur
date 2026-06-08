@@ -83,3 +83,30 @@ impl LlmClient for StubLlm {
         "stub"
     }
 }
+
+/// Test stub that returns a pre-configured sequence of LlmResponse values.
+/// Wraps around when exhausted.
+pub struct SequenceLlm {
+    responses: Vec<LlmResponse>,
+    index: std::sync::atomic::AtomicUsize,
+}
+
+impl SequenceLlm {
+    pub fn new(responses: Vec<LlmResponse>) -> Self {
+        Self {
+            responses,
+            index: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl LlmClient for SequenceLlm {
+    async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
+        let idx = self.index.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(self.responses[idx % self.responses.len()].clone())
+    }
+    fn model_name(&self) -> &str {
+        "sequence-stub"
+    }
+}
