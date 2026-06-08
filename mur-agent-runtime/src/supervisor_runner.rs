@@ -1,12 +1,12 @@
 //! Extracted helpers for supervisor.rs — keeps it under 800 lines per CLAUDE.md §4.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
 use tracing::warn;
 
 use crate::companion::clock::SystemClock;
+use crate::hitl::HitlApprovals;
 use crate::hooks::{HookChain, HookCtx, TelemetryEmitter};
 use crate::llm::LlmClient;
 use crate::llm::{anthropic::AnthropicClient, ollama::OllamaClient, openai::OpenAiClient};
@@ -99,6 +99,7 @@ pub(crate) fn resolve_local_base_url(
     LOCAL_LLM_DEFAULT_BASE_URL.to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_runner(
     client: Arc<dyn LlmClient>,
     base_system_prompt: Option<String>,
@@ -107,13 +108,7 @@ pub fn build_runner(
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
-    pending_approvals: Option<
-        Arc<
-            tokio::sync::Mutex<
-                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
-            >,
-        >,
-    >,
+    pending_approvals: Option<HitlApprovals>,
     notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     hitl_timeout_secs: u32,
 ) -> Arc<TaskRunner> {
@@ -136,6 +131,7 @@ pub fn build_runner(
 
 /// Build the LLM-backed TaskRunner for a resolved model entry.
 /// Returns (runner, optional LLM client for companion sharing).
+#[allow(clippy::too_many_arguments)]
 pub async fn build_provider_runner(
     force_echo: bool,
     profile: &Profile,
@@ -144,13 +140,7 @@ pub async fn build_provider_runner(
     hook_chain: &HookChain,
     hook_ctx: &HookCtx,
     hook_cancel: &CancellationToken,
-    pending_approvals: Option<
-        Arc<
-            tokio::sync::Mutex<
-                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
-            >,
-        >,
-    >,
+    pending_approvals: Option<HitlApprovals>,
     notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     hitl_timeout_secs: u32,
 ) -> anyhow::Result<(Arc<TaskRunner>, Option<Arc<dyn LlmClient>>)> {

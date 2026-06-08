@@ -1,6 +1,7 @@
 //! Task state machine and orchestration (§8.3).
 //! P0a only implements `run_sync` fully; streaming is P0b.
 
+use crate::hitl::HitlApprovals;
 use crate::hooks::{HookChain, HookCtx, PromptView};
 use crate::llm::{LlmClient, LlmRequest, RichMessage};
 use crate::skills::RuntimeSkills;
@@ -59,13 +60,7 @@ pub struct TaskRunner {
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
-    pending_approvals: Option<
-        Arc<
-            tokio::sync::Mutex<
-                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
-            >,
-        >,
-    >,
+    pending_approvals: Option<HitlApprovals>,
     notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     hitl_timeout_secs: u32,
     max_iterations: u32,
@@ -142,14 +137,7 @@ impl TaskRunner {
         self
     }
 
-    pub fn with_pending_approvals(
-        mut self,
-        pa: Arc<
-            tokio::sync::Mutex<
-                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
-            >,
-        >,
-    ) -> Self {
+    pub fn with_pending_approvals(mut self, pa: HitlApprovals) -> Self {
         self.pending_approvals = Some(pa);
         self
     }
@@ -601,12 +589,10 @@ impl TaskRunner {
         };
 
         // 3. HITL gate (only after tool execution)
-        let decision = if let (Some(pa), Some(notifier)) =
-            (&self.pending_approvals, &self.notifier)
+        let decision = if let (Some(pa), Some(notifier)) = (&self.pending_approvals, &self.notifier)
         {
             let hitl_id = uuid::Uuid::now_v7().to_string();
-            let (tx, rx) =
-                tokio::sync::oneshot::channel::<crate::hitl::HitlDecision>();
+            let (tx, rx) = tokio::sync::oneshot::channel::<crate::hitl::HitlDecision>();
             pa.lock().await.insert(hitl_id.clone(), tx);
             let notification = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -637,7 +623,10 @@ impl TaskRunner {
                 }
             }
         } else {
-            crate::hitl::HitlDecision { allow: true, reason: None }
+            crate::hitl::HitlDecision {
+                allow: true,
+                reason: None,
+            }
         };
 
         if !decision.allow {
@@ -926,7 +915,9 @@ mod tests {
         let spec = TaskSpec {
             input: mur_common::a2a::Message {
                 role: "user".into(),
-                parts: vec![mur_common::a2a::MessagePart::Text { text: "hello".into() }],
+                parts: vec![mur_common::a2a::MessagePart::Text {
+                    text: "hello".into(),
+                }],
             },
             context_task_id: None,
         };
@@ -958,7 +949,9 @@ mod tests {
         let spec = TaskSpec {
             input: mur_common::a2a::Message {
                 role: "user".into(),
-                parts: vec![mur_common::a2a::MessagePart::Text { text: "loop".into() }],
+                parts: vec![mur_common::a2a::MessagePart::Text {
+                    text: "loop".into(),
+                }],
             },
             context_task_id: None,
         };

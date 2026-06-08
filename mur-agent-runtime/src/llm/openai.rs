@@ -143,7 +143,11 @@ fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
     for m in msgs {
         match m {
             RichMessage::Text { role, content } => {
-                let r = if role == "agent" { "assistant" } else { role.as_str() };
+                let r = if role == "agent" {
+                    "assistant"
+                } else {
+                    role.as_str()
+                };
                 result.push(json!({"role": r, "content": content}));
             }
             RichMessage::ToolUse { text, calls } => {
@@ -159,10 +163,10 @@ fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
                     })
                     .collect();
                 let mut msg = json!({"role": "assistant", "tool_calls": tool_calls});
-                if let Some(t) = text {
-                    if !t.is_empty() {
-                        msg["content"] = json!(t);
-                    }
+                if let Some(t) = text
+                    && !t.is_empty()
+                {
+                    msg["content"] = json!(t);
                 }
                 result.push(msg);
             }
@@ -182,7 +186,14 @@ fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
 
 fn parse_response_body(
     v: &serde_json::Value,
-) -> Result<(String, Vec<crate::llm::ToolCallResult>, crate::llm::StopReason), LlmError> {
+) -> Result<
+    (
+        String,
+        Vec<crate::llm::ToolCallResult>,
+        crate::llm::StopReason,
+    ),
+    LlmError,
+> {
     use crate::llm::{StopReason, ToolCallResult};
     let choice = &v["choices"][0];
     let msg = &choice["message"];
@@ -199,7 +210,11 @@ fn parse_response_body(
                         .as_str()
                         .and_then(|s| serde_json::from_str(s).ok())
                         .unwrap_or(serde_json::Value::Object(Default::default()));
-                    Some(ToolCallResult { call_id, tool_name, input })
+                    Some(ToolCallResult {
+                        call_id,
+                        tool_name,
+                        input,
+                    })
                 })
                 .collect()
         })
@@ -231,14 +246,17 @@ impl LlmClient for OpenAiClient {
         }
         if !req.tools.is_empty() {
             body["tools"] = serde_json::json!(
-                req.tools.iter().map(|t| json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.input_schema,
-                    }
-                })).collect::<Vec<_>>()
+                req.tools
+                    .iter()
+                    .map(|t| json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.input_schema,
+                        }
+                    }))
+                    .collect::<Vec<_>>()
             );
         }
 
@@ -312,14 +330,17 @@ impl LlmClient for OpenAiClient {
         }
         if !req.tools.is_empty() {
             body["tools"] = serde_json::json!(
-                req.tools.iter().map(|t| json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.input_schema,
-                    }
-                })).collect::<Vec<_>>()
+                req.tools
+                    .iter()
+                    .map(|t| json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.input_schema,
+                        }
+                    }))
+                    .collect::<Vec<_>>()
             );
         }
 
@@ -440,8 +461,14 @@ mod tests {
     #[test]
     fn rich_messages_to_openai_text_only() {
         let msgs = vec![
-            RichMessage::Text { role: "system".into(), content: "Be helpful".into() },
-            RichMessage::Text { role: "user".into(), content: "hi".into() },
+            RichMessage::Text {
+                role: "system".into(),
+                content: "Be helpful".into(),
+            },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "hi".into(),
+            },
         ];
         let result = rich_messages_to_openai(&msgs);
         assert_eq!(result.len(), 2);
@@ -452,7 +479,10 @@ mod tests {
     #[test]
     fn rich_messages_tool_use_and_results() {
         let msgs = vec![
-            RichMessage::Text { role: "user".into(), content: "run it".into() },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "run it".into(),
+            },
             RichMessage::ToolUse {
                 text: Some("Running bash".into()),
                 calls: vec![ToolCallResult {

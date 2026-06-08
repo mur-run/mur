@@ -197,16 +197,20 @@ fn rich_messages_to_anthropic(
                 if role == "system" {
                     system_chunks.push(content.clone());
                 } else {
-                    let r = if role == "agent" { "assistant" } else { role.as_str() };
+                    let r = if role == "agent" {
+                        "assistant"
+                    } else {
+                        role.as_str()
+                    };
                     convo.push(json!({"role": r, "content": content}));
                 }
             }
             RichMessage::ToolUse { text, calls } => {
                 let mut parts: Vec<serde_json::Value> = Vec::new();
-                if let Some(t) = text {
-                    if !t.is_empty() {
-                        parts.push(json!({"type": "text", "text": t}));
-                    }
+                if let Some(t) = text
+                    && !t.is_empty()
+                {
+                    parts.push(json!({"type": "text", "text": t}));
                 }
                 for c in calls {
                     parts.push(json!({
@@ -219,12 +223,17 @@ fn rich_messages_to_anthropic(
                 convo.push(json!({"role": "assistant", "content": parts}));
             }
             RichMessage::ToolResults { results } => {
-                let parts: Vec<serde_json::Value> = results.iter().map(|r| json!({
-                    "type": "tool_result",
-                    "tool_use_id": r.call_id,
-                    "content": r.content,
-                    "is_error": r.is_error,
-                })).collect();
+                let parts: Vec<serde_json::Value> = results
+                    .iter()
+                    .map(|r| {
+                        json!({
+                            "type": "tool_result",
+                            "tool_use_id": r.call_id,
+                            "content": r.content,
+                            "is_error": r.is_error,
+                        })
+                    })
+                    .collect();
                 convo.push(json!({"role": "user", "content": parts}));
             }
         }
@@ -240,7 +249,14 @@ fn rich_messages_to_anthropic(
 
 fn parse_response_body(
     v: &serde_json::Value,
-) -> Result<(String, Vec<crate::llm::ToolCallResult>, crate::llm::StopReason), LlmError> {
+) -> Result<
+    (
+        String,
+        Vec<crate::llm::ToolCallResult>,
+        crate::llm::StopReason,
+    ),
+    LlmError,
+> {
     use crate::llm::{StopReason, ToolCallResult};
 
     let content = v["content"]
@@ -300,11 +316,14 @@ impl LlmClient for AnthropicClient {
         }
         if !req.tools.is_empty() {
             body["tools"] = serde_json::json!(
-                req.tools.iter().map(|t| serde_json::json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.input_schema,
-                })).collect::<Vec<_>>()
+                req.tools
+                    .iter()
+                    .map(|t| serde_json::json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "input_schema": t.input_schema,
+                    }))
+                    .collect::<Vec<_>>()
             );
         }
 
@@ -384,11 +403,14 @@ impl LlmClient for AnthropicClient {
         }
         if !req.tools.is_empty() {
             body["tools"] = serde_json::json!(
-                req.tools.iter().map(|t| serde_json::json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.input_schema,
-                })).collect::<Vec<_>>()
+                req.tools
+                    .iter()
+                    .map(|t| serde_json::json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "input_schema": t.input_schema,
+                    }))
+                    .collect::<Vec<_>>()
             );
         }
         warn_if_oauth_key_misconfigured(&self.api_key, &self.base_url);
@@ -526,8 +548,14 @@ mod tests {
     #[test]
     fn rich_messages_to_anthropic_text_only() {
         let msgs = vec![
-            RichMessage::Text { role: "system".into(), content: "Be helpful".into() },
-            RichMessage::Text { role: "user".into(), content: "hi".into() },
+            RichMessage::Text {
+                role: "system".into(),
+                content: "Be helpful".into(),
+            },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "hi".into(),
+            },
         ];
         let (sys, convo, _) = rich_messages_to_anthropic(&msgs);
         assert_eq!(sys, Some("Be helpful".to_string()));
@@ -539,7 +567,10 @@ mod tests {
     #[test]
     fn rich_messages_tool_use_and_results() {
         let msgs = vec![
-            RichMessage::Text { role: "user".into(), content: "run".into() },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "run".into(),
+            },
             RichMessage::ToolUse {
                 text: Some("Running bash".into()),
                 calls: vec![ToolCallResult {
@@ -576,8 +607,14 @@ mod tests {
     #[test]
     fn serializes_system_to_top_level() {
         let msgs = vec![
-            RichMessage::Text { role: "system".into(), content: "Be helpful".into() },
-            RichMessage::Text { role: "user".into(), content: "hi".into() },
+            RichMessage::Text {
+                role: "system".into(),
+                content: "Be helpful".into(),
+            },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "hi".into(),
+            },
         ];
         let (sys, convo, _) = rich_messages_to_anthropic(&msgs);
         assert_eq!(sys, Some("Be helpful".to_string()));
