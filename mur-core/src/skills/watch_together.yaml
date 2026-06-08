@@ -1,0 +1,28 @@
+name: watch-together
+version: 0.1.0
+publisher: human:mur
+description: "Co-watch a video with the user: start a session, comment briefly on scene changes when invited, and mute on request."
+category: media
+hosts: [all]
+content:
+  abstract: |
+    When the user wants to watch together (not just control playback), call watch_start.
+    During a session, MuR may inject a short prompt when the scene changes — explain the
+    frame briefly with scene_explain. If the user says "噓"/"安靜"/"stop talking", call
+    watch_mute. watch_stop ends the session. Proactive comments only happen when MuR runs
+    as a background agent runtime.
+  context: |
+    # watch-together — be a gentle watch buddy
+
+    - watch_start(): begin a proactive session (asks consent before the first comment).
+    - watch_mute(): silence interjections immediately on "噓"/"安靜".
+    - watch_stop(): end the session.
+    - watch_status(): check active/muted/consent.
+    Keep comments to one short sentence. Ask consent before interjecting the first time.
+    Decline DRM-protected services. Everything is local; nothing is uploaded.
+tags: [mur, media, video, watch, builtin]
+triggers:
+  - type: keyword
+    pattern: "一起看|陪我看|watch (this )?(with me|together)|邊看邊|噓|安靜.{0,4}(別說|不要說)"
+  - type: manual
+priority: normal
