@@ -93,3 +93,81 @@ mod json3_tests {
         assert!(parse_json3("{}").is_empty());
     }
 }
+
+/// Parse a timestamp like `00:01:02,500` or `00:01:02.500` into milliseconds.
+fn parse_ts(s: &str) -> Option<i64> {
+    let s = s.trim().replace(',', ".");
+    let (hms, ms) = s.split_once('.').unwrap_or((s.as_str(), "0"));
+    let parts: Vec<&str> = hms.split(':').collect();
+    let (h, m, sec) = match parts.as_slice() {
+        [h, m, sec] => (h.parse::<i64>().ok()?, m.parse::<i64>().ok()?, sec.parse::<i64>().ok()?),
+        [m, sec] => (0, m.parse::<i64>().ok()?, sec.parse::<i64>().ok()?),
+        _ => return None,
+    };
+    let millis = format!("{ms:0<3}")[..3].parse::<i64>().ok()?;
+    Some(((h * 3600 + m * 60 + sec) * 1000) + millis)
+}
+
+/// Parse SubRip (.srt) subtitle text into cues.
+pub fn parse_srt(s: &str) -> Vec<Cue> {
+    parse_cue_blocks(s)
+}
+
+/// Parse WebVTT (.vtt) subtitle text into cues (header + cue identifiers tolerated).
+pub fn parse_vtt(s: &str) -> Vec<Cue> {
+    parse_cue_blocks(s)
+}
+
+/// Shared block parser: split on blank lines, find the `-->` line, join the rest.
+fn parse_cue_blocks(s: &str) -> Vec<Cue> {
+    let mut out = Vec::new();
+    for block in s.split("\n\n") {
+        let lines: Vec<&str> = block.lines().map(|l| l.trim_end()).collect();
+        let Some(ts_idx) = lines.iter().position(|l| l.contains("-->")) else {
+            continue;
+        };
+        let ts_line = lines[ts_idx];
+        let Some((start_s, rest)) = ts_line.split_once("-->") else {
+            continue;
+        };
+        let end_s = rest.split_whitespace().next().unwrap_or("");
+        let (Some(start_ms), Some(end_ms)) = (parse_ts(start_s), parse_ts(end_s)) else {
+            continue;
+        };
+        let text = lines[ts_idx + 1..].join(" ").trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        out.push(Cue { start_ms, end_ms, text });
+    }
+    out
+}
+
+#[cfg(test)]
+mod subtitle_tests {
+    use super::*;
+
+    #[test]
+    fn srt_basic() {
+        let srt = "1\n00:00:01,000 --> 00:00:04,000\nHello world\n\n2\n00:00:04,000 --> 00:00:06,500\nNext\nline";
+        let cues = parse_srt(srt);
+        assert_eq!(cues.len(), 2);
+        assert_eq!(cues[0], Cue { start_ms: 1000, end_ms: 4000, text: "Hello world".into() });
+        assert_eq!(cues[1], Cue { start_ms: 4000, end_ms: 6500, text: "Next line".into() });
+    }
+
+    #[test]
+    fn vtt_with_header_and_dot_millis() {
+        let vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHi there";
+        let cues = parse_vtt(vtt);
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0], Cue { start_ms: 1000, end_ms: 3000, text: "Hi there".into() });
+    }
+
+    #[test]
+    fn parse_ts_forms() {
+        assert_eq!(parse_ts("00:01:02,500"), Some(62500));
+        assert_eq!(parse_ts("01:02.250"), Some(62250));
+        assert_eq!(parse_ts("garbage"), None);
+    }
+}
