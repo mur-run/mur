@@ -1,5 +1,12 @@
 # Hub Interrupt / Stop Control Design (v1)
 
+> **STATUS: DEFERRED (blocked on Phase 3/4).** Verification during planning found the core capability
+> this spec assumed — cancelling an in-flight `message/send` generation — **does not exist in the
+> production task path** and must be added to `mur-agent-runtime/src/task_runner.rs::run_sync_inner`,
+> the file Phase 3/4 is actively rewriting. Revisit once `task_runner.rs` settles so cancellation is
+> built on its final shape. See **Verified Current State** + **Required Runtime Work** below. No
+> implementation plan has been written.
+
 ## Goal
 
 Give the MUR Hub chat a **Stop** control (button + Esc) that **cancels an agent's in-flight
@@ -35,17 +42,36 @@ deferred (see **Deferred** below).
 
 ## Verified Current State
 
-- **Cancel genuinely interrupts generation.** `run_sync_streaming` generates the id, registers
-  `cancel_signals[id]`, and `tokio::select!`s the generation future against a cancel oneshot
-  (`mur-agent-runtime/src/task_runner.rs:295,355-381`). `cancel(id)` fires it (`:394-405`). On cancel
-  the generation future is dropped (Rust async cancellation → the LLM call aborts) and
-  `message_send` returns `TaskOutcome::Cancelled(task)` (`message_send.rs:99-105`), which travels back
-  over the streaming socket as the final result, ending the stream cleanly. **The mechanism is real
-  and prompt.**
-- **The id is generated *inside* the runner** (`task_runner.rs:295`) and only returned at the end —
-  `message_send` never has it mid-flight. Hence the **client-supplied id** mechanism below.
+- **⚠️ Cancellation is NOT supported on the production path.** The streaming path used by
+  `message/send` is `run_sync_streaming` → `run_sync_inner` (`task_runner.rs:276,284-347`). It
+  generates the id (`:295`), sets state Working, then simply `.await`s `run_agentic_loop`/`run_llm` to
+  completion — it **never inserts into `cancel_signals` and never `select!`s on a cancel signal.** The
+  `cancel_signals` registration + `tokio::select!` exist only in **`start_async`** (`:349-392`), a stub
+  path that races a 60-second echo sleep (`:364`) — *not* used by `message/send`. Therefore
+  `cancel(id)` for a real streaming task hits the empty map and returns
+  `Err("task … not cancellable")` (`:394-406`). **Adding real cancellation is required (see below).**
+- `message_send` *does* already return `TaskOutcome::Cancelled` if it ever receives one
+  (`message_send.rs:99-105`), so once `run_sync_inner` can produce a Cancelled outcome, the stream
+  return path works.
+- **The id is generated *inside* the runner** (`:295`) and only returned at the end — `message_send`
+  never has it mid-flight. Hence the **client-supplied id** mechanism below (still valid).
 - **`dial_message_streaming` has exactly one caller** (`mur-hub-gui/src-tauri/src/chat.rs:54`); with
   the client-supplied id it needs **no signature change**.
+
+## Required Runtime Work (the blocker)
+
+Cancellation must be added to the production path before any of the Hub-side work is meaningful:
+
+1. In `run_sync_inner`, after generating `id`, register a cancel oneshot:
+   `cancel_signals.insert(id.clone(), tx_cancel)` (like `start_async` does).
+2. **Race generation against the signal:** wrap the `match &self.backend { … }` await in
+   `tokio::select! { r = <generation> => r, _ = &mut rx_cancel => <cancelled> }`. On cancel, the
+   generation future is dropped (Rust async cancellation aborts the in-flight LLM call) and the path
+   returns `TaskOutcome::Cancelled(Task { id, messages: vec![spec.input], … })`.
+3. Remove the `cancel_signals` entry on completion (success, failure, or cancel) to avoid leaks.
+
+This lands in the same `run_sync_inner`/`run_agentic_loop` region Phase 3/4 is rewriting → **do it on
+the post-Phase-3/4 shape, not now.**
 
 ## Cancel-Mechanism Decision: client-supplied task id
 
@@ -80,6 +106,7 @@ connection so it doesn't fight the in-progress read.
 
 | Unit | New/Change | Responsibility | Depends on |
 |---|---|---|---|
+| **`run_sync_inner` cancellation (`task_runner.rs:284-347`)** | **Change (BLOCKER)** | Register `cancel_signals[id]`; `select!` generation vs cancel; return `Cancelled`; cleanup. See **Required Runtime Work**. | Phase 3/4 settling |
 | `TaskSpec.task_id: Option<String>` (`task_runner.rs`) | Change (additive) | Optional caller-supplied id. | — |
 | `run_sync_streaming` id line (`task_runner.rs:295`) | Change | `let id = spec.task_id.clone().unwrap_or_else(\|\| format!("task-{}", Uuid::now_v7()));` | TaskSpec.task_id |
 | `message_send` params (`message_send.rs:60-71`) | Change (additive) | Read `p["task_id"]` into `TaskSpec.task_id` (ignored if absent → back-compatible). | — |
