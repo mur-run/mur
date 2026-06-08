@@ -94,6 +94,9 @@ mod tests {
         let home = TempDir::new().unwrap();
         assert_eq!(load_last_source(home.path()), None);
         save_last_source(home.path(), "https://youtu.be/abc").unwrap();
-        assert_eq!(load_last_source(home.path()).as_deref(), Some("https://youtu.be/abc"));
+        assert_eq!(
+            load_last_source(home.path()).as_deref(),
+            Some("https://youtu.be/abc")
+        );
     }
 }

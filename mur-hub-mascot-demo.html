@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MUR Hub — Mascot Demo</title>
+<style>
+:root {
+  --color-brand-strong: #FF7A5A;
+  --surface-card: #1A1E29;
+  --surface-hover: #232838;
+  --border-line: rgba(255,255,255,0.1);
+  --text-primary: #F0F4FF;
+  --text-tertiary: #7A8AA0;
+  --shadow-pop: 0 8px 24px rgba(0,0,0,0.4);
+  --radius-md: 10px;
+  --radius-sm: 5px;
+  --text-sm: 13px;
+  --dur-base: 200ms;
+  --dur-fast: 80ms;
+  --ease-out: cubic-bezier(0.2, 0, 0.1, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0F1117;
+  color: #F0F4FF;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 48px 24px 64px;
+}
+
+.page-header {
+  text-align: center;
+  margin-bottom: 48px;
+}
+
+.page-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #FF7A5A;
+  letter-spacing: -0.3px;
+  margin-bottom: 6px;
+}
+
+.page-subtitle {
+  font-size: 14px;
+  color: #7A8AA0;
+  letter-spacing: 0.5px;
+}
+
+.demo-layout {
+  width: 100%;
+  max-width: 900px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.feature-card {
+  background: #1A1E29;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  padding: 28px 32px 32px;
+  position: relative;
+  overflow: visible;
+}
+
+.feature-card:hover {
+  border-color: rgba(255,255,255,0.13);
+}
+
+.feature-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: #FF7A5A;
+  margin-bottom: 6px;
+}
+
+.feature-desc {
+  font-size: 13px;
+  color: #7A8AA0;
+  margin-bottom: 28px;
+  line-height: 1.5;
+}
+
+.bird-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 40px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.bird-center-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.bird-hint {
+  font-size: 12px;
+  color: #4A5A72;
+  text-align: center;
+  letter-spacing: 0.3px;
+}
+
+.bird-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.bird-mood-label {
+  font-size: 12px;
+  color: #7A8AA0;
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* ─── Animations ─── */
+
+@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.35} }
+@keyframes breathe-ring {
+  0%,100%{ box-shadow:0 0 0 0 rgba(34,197,94,.5) }
+  50%{ box-shadow:0 0 0 5px rgba(34,197,94,0) }
+}
+@keyframes float-y { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-7px)} }
+@keyframes toast-in { from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:translateY(0)} }
+
+.u-lift { transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out); }
+.u-lift:hover { transform: translateY(-3px); box-shadow: var(--shadow-pop); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
+}
+
+/* ─── Mascot (CSS starling) ─── */
+.bird-wrap { position:relative; flex:none; display:inline-flex; flex-direction:column; align-items:center; }
+.bird { position:relative; cursor:pointer; }
+.bird--float { animation:float-y 3.6s ease-in-out infinite; }
+.bird__feet { position:absolute; bottom:0; left:0; right:0; height:18%; }
+.bird__feet::before,.bird__feet::after { content:""; position:absolute; bottom:0; width:3%; min-width:2px; height:100%; background:#16243B; }
+.bird__feet::before { left:36%; transform:rotate(8deg); }
+.bird__feet::after  { right:36%; transform:rotate(-8deg); }
+.bird__body { position:absolute; left:6%; right:6%; top:16%; bottom:13%;
+  background:linear-gradient(160deg,#5BA0E0,#4187CF);
+  border-radius:50% 50% 47% 47%/58% 58% 42% 42%; box-shadow:inset -5px -7px 14px rgba(0,0,0,.08);
+  transition:background 0.4s var(--ease-out); }
+.bird__wing { position:absolute; top:48%; width:20%; height:29%; background:#3D7DC4; border-radius:50%; }
+.bird__wing--l { left:4%; transform:rotate(18deg); }
+.bird__wing--r { right:4%; transform:rotate(-18deg); }
+.bird__brow { position:absolute; top:7%; width:40%; height:24%; background:#13203A; z-index:3;
+  transition:transform var(--dur-base) var(--ease-out); }
+.bird__brow--l { left:12%; border-radius:70% 30% 30% 0/100% 100% 30% 0; transform:rotate(-10deg); }
+.bird__brow--r { right:12%; border-radius:30% 70% 0 30%/100% 100% 0 30%; transform:rotate(10deg); }
+.bird__eye { position:absolute; top:32%; width:24%; height:27%; background:#FBF6E9;
+  border-radius:50%; z-index:2; box-shadow:inset 0 -3px 4px rgba(0,0,0,.06);
+  overflow:hidden; transition:transform 0.1s ease-in-out; }
+.bird__eye--l { left:24%; } .bird__eye--r { right:24%; }
+.bird__pupil { position:absolute; left:30%; top:30%; width:36%; height:38%;
+  background:#13203A; border-radius:50%; }
+.bird__beak { position:absolute; top:50%; left:50%; transform:translateX(-50%); width:12%; height:11%;
+  background:var(--color-brand-strong); border-radius:40% 40% 60% 60%; z-index:2;
+  transition:background 0.4s var(--ease-out); }
+
+/* ─── Blink ─── */
+.bird--blink .bird__eye { transform:scaleY(0.06); }
+
+/* ─── Wing flutter + body bounce on click ─── */
+@keyframes bird-bounce { 0%,100%{transform:scale(1)} 30%{transform:scale(1.1)} 65%{transform:scale(0.96)} }
+@keyframes wing-flutter-l { 0%,100%{transform:rotate(18deg)} 35%{transform:rotate(44deg) translateY(-5px)} 65%{transform:rotate(8deg)} }
+@keyframes wing-flutter-r { 0%,100%{transform:rotate(-18deg)} 35%{transform:rotate(-44deg) translateY(-5px)} 65%{transform:rotate(-8deg)} }
+.bird--flutter { animation:bird-bounce 0.45s ease-in-out; }
+.bird--flutter .bird__wing--l { animation:wing-flutter-l 0.45s ease-in-out; }
+.bird--flutter .bird__wing--r { animation:wing-flutter-r 0.45s ease-in-out; }
+
+/* ─── Mood states ─── */
+.bird--happy .bird__brow--l { transform:rotate(-6deg) translateY(-1px); }
+.bird--happy .bird__brow--r { transform:rotate(6deg) translateY(-1px); }
+.bird--happy .bird__body { background:linear-gradient(160deg,#6BB6F4,#4A98E0); }
+.bird--happy .bird__beak { background:#FF8C69; }
+.bird--worried .bird__brow--l { transform:rotate(-16deg) translateX(4px); }
+.bird--worried .bird__brow--r { transform:rotate(16deg) translateX(-4px); }
+.bird--worried .bird__body { background:linear-gradient(160deg,#5295C8,#3A72B8); }
+.bird--excited .bird__brow--l { transform:rotate(-4deg) translateY(-3px); }
+.bird--excited .bird__brow--r { transform:rotate(4deg) translateY(-3px); }
+.bird--excited .bird__body { background:linear-gradient(160deg,#72C0F8,#5AAAE0); }
+.bird--excited .bird__wing--l { transform:rotate(8deg); }
+.bird--excited .bird__wing--r { transform:rotate(-8deg); }
+
+.bird:hover .bird__brow--l { transform:rotate(-18deg) translateY(-2px); }
+.bird:hover .bird__brow--r { transform:rotate(18deg) translateY(-2px); }
+
+/* ─── Speech bubble ─── */
+.bird-bubble {
+  position:absolute; bottom:calc(100% + 10px); left:50%; transform:translateX(-50%);
+  background:var(--surface-card); border:1px solid var(--border-line);
+  border-radius:var(--radius-md); padding:8px 26px 8px 12px;
+  box-shadow:var(--shadow-pop); z-index:20; white-space:nowrap;
+  max-width:240px; white-space:normal;
+  animation:bird-bubble-in 0.18s var(--ease-out);
+}
+.bird-bubble::after {
+  content:""; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+  border:7px solid transparent; border-top-color:var(--surface-card); border-bottom:none; margin-top:-1px;
+}
+.bird-bubble__text { font-size:var(--text-sm); color:var(--text-primary); line-height:1.5; }
+.bird-bubble__close {
+  position:absolute; top:4px; right:4px; background:none; border:none; cursor:pointer;
+  color:var(--text-tertiary); font-size:10px; padding:2px 4px; line-height:1; border-radius:var(--radius-sm);
+  transition:color var(--dur-fast), background var(--dur-fast);
+}
+.bird-bubble__close:hover { color:var(--text-primary); background:var(--surface-hover); }
+@keyframes bird-bubble-in {
+  from { opacity:0; transform:translateX(-50%) translateY(5px); }
+  to   { opacity:1; transform:translateX(-50%) translateY(0); }
+}
+
+/* ─── Bird wrap hover lift ─── */
+.bird-wrap:hover { transform: translateY(-3px); transition: transform 0.2s; }
+
+/* ─── Divider ─── */
+.section-divider {
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+  margin: 4px 0;
+}
+
+/* ─── Fleet card row ─── */
+.fleet-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 16px;
+}
+</style>
+</head>
+<body>
+
+<header class="page-header">
+  <h1 class="page-title">MUR Hub — Mascot Demo</h1>
+  <p class="page-subtitle">5 interactive features</p>
+</header>
+
+<main class="demo-layout">
+
+  <!-- ── Feature 1: Mood States ── -->
+  <section class="feature-card">
+    <div class="feature-label">Feature 1</div>
+    <div class="feature-desc">Mood States — the bird reflects fleet health at a glance</div>
+
+    <div class="bird-row">
+
+      <!-- idle -->
+      <div class="bird-col">
+        <div class="bird-wrap">
+          <div class="bird bird--float" style="width:88px;height:88px;">
+            <div class="bird__feet"></div>
+            <div class="bird__body"></div>
+            <div class="bird__wing bird__wing--l"></div>
+            <div class="bird__wing bird__wing--r"></div>
+            <div class="bird__brow bird__brow--l"></div>
+            <div class="bird__brow bird__brow--r"></div>
+            <div class="bird__eye bird__eye--l"><div class="bird__pupil"></div></div>
+            <div class="bird__eye bird__eye--r"><div class="bird__pupil"></div></div>
+            <div class="bird__beak"></div>
+          </div>
+        </div>
+        <div class="bird-mood-label">idle</div>
+      </div>
+
+      <!-- happy -->
+      <div class="bird-col">
+        <div class="bird-wrap">
+          <div class="bird bird--float bird--happy" style="width:88px;height:88px;">
+            <div class="bird__feet"></div>
+            <div class="bird__body"></div>
+            <div class="bird__wing bird__wing--l"></div>
+            <div class="bird__wing bird__wing--r"></div>
+            <div class="bird__brow bird__brow--l"></div>
+            <div class="bird__brow bird__brow--r"></div>
+            <div class="bird__eye bird__eye--l"><div class="bird__pupil"></div></div>
+            <div class="bird__eye bird__eye--r"><div class="bird__pupil"></div></div>
+            <div class="bird__beak"></div>
+          </div>
+        </div>
+        <div class="bird-mood-label">happy (all running 🎉)</div>
+      </div>
+
+      <!-- worried -->
+      <div class="bird-col">
+        <div class="bird-wrap">
+          <div class="bird bird--float bird--worried" style="width:88px;height:88px;">
+            <div class="bird__feet"></div>
+            <div class="bird__body"></div>
+            <div class="bird__wing bird__wing--l"></div>
+            <div class="bird__wing bird__wing--r"></div>
+            <div class="bird__brow bird__brow--l"></div>
+            <div class="bird__brow bird__brow--r"></div>
+            <div class="bird__eye bird__eye--l"><div class="bird__pupil"></div></div>
+            <div class="bird__eye bird__eye--r"><div class="bird__pupil"></div></div>
+            <div class="bird__beak"></div>
+          </div>
+        </div>
+        <div class="bird-mood-label">worried (all idle)</div>
+      </div>
+
+      <!-- excited -->
+      <div class="bird-col">
+        <div class="bird-wrap">
+          <div class="bird bird--float bird--excited" style="width:88px;height:88px;">
+            <div class="bird__feet"></div>
+            <div class="bird__body"></div>
+            <div class="bird__wing bird__wing--l"></div>
+            <div class="bird__wing bird__wing--r"></div>
+            <div class="bird__brow bird__brow--l"></div>
+            <div class="bird__brow bird__brow--r"></div>
+            <div class="bird__eye bird__eye--l"><div class="bird__pupil"></div></div>
+            <div class="bird__eye bird__eye--r"><div class="bird__pupil"></div></div>
+            <div class="bird__beak"></div>
+          </div>
+        </div>
+        <div class="bird-mood-label">excited (no agents yet)</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── Feature 2: Mouse Tracking + Blink + Click ── -->
+  <section class="feature-card">
+    <div class="feature-label">Feature 2</div>
+    <div class="feature-desc">Mouse Tracking + Blink + Click interaction</div>
+
+    <div class="bird-center-row">
+      <div class="bird-wrap" id="interactive-wrap">
+        <div class="bird bird--float" id="interactive-bird" style="width:120px;height:120px;">
+          <div class="bird__feet"></div>
+          <div class="bird__body"></div>
+          <div class="bird__wing bird__wing--l"></div>
+          <div class="bird__wing bird__wing--r"></div>
+          <div class="bird__brow bird__brow--l"></div>
+          <div class="bird__brow bird__brow--r"></div>
+          <div class="bird__eye bird__eye--l"><div class="bird__pupil" id="pupil-l"></div></div>
+          <div class="bird__eye bird__eye--r"><div class="bird__pupil" id="pupil-r"></div></div>
+          <div class="bird__beak"></div>
+        </div>
+      </div>
+      <div class="bird-hint">Hover to track &nbsp;•&nbsp; Click to chirp &nbsp;•&nbsp; It blinks randomly</div>
+    </div>
+  </section>
+
+  <!-- ── Feature 3: Fleet Speech Bubble ── -->
+  <section class="feature-card">
+    <div class="feature-label">Feature 3</div>
+    <div class="feature-desc">Fleet-aware hover message — persistent speech bubble</div>
+
+    <div class="fleet-row">
+      <div class="bird-col">
+        <div class="bird-wrap" style="margin-top:64px;">
+          <div class="bird-bubble" style="pointer-events:none;">
+            <span class="bird-bubble__text">Your whole flock is flying! 🎉</span>
+          </div>
+          <div class="bird bird--float bird--happy" style="width:80px;height:80px;">
+            <div class="bird__feet"></div>
+            <div class="bird__body"></div>
+            <div class="bird__wing bird__wing--l"></div>
+            <div class="bird__wing bird__wing--r"></div>
+            <div class="bird__brow bird__brow--l"></div>
+            <div class="bird__brow bird__brow--r"></div>
+            <div class="bird__eye bird__eye--l"><div class="bird__pupil"></div></div>
+            <div class="bird__eye bird__eye--r"><div class="bird__pupil"></div></div>
+            <div class="bird__beak"></div>
+          </div>
+        </div>
+        <div class="bird-mood-label">Fleet-aware hover message</div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+(function () {
+  const wrap = document.getElementById('interactive-wrap');
+  const bird = document.getElementById('interactive-bird');
+  const pupilL = document.getElementById('pupil-l');
+  const pupilR = document.getElementById('pupil-r');
+
+  const MAX_PX = 8;
+
+  // ── Mouse tracking ──
+  wrap.addEventListener('mousemove', function (e) {
+    const rect = bird.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const dx = e.clientX - cx;
+    const dy = e.clientY - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const scale = Math.min(dist, MAX_PX * 3) / (MAX_PX * 3);
+    const ox = (dx / dist) * MAX_PX * scale;
+    const oy = (dy / dist) * MAX_PX * scale;
+    const t = 'translate(' + ox.toFixed(1) + 'px,' + oy.toFixed(1) + 'px)';
+    pupilL.style.transform = t;
+    pupilR.style.transform = t;
+  });
+
+  wrap.addEventListener('mouseleave', function () {
+    pupilL.style.transform = '';
+    pupilR.style.transform = '';
+  });
+
+  // ── Blink ──
+  function scheduleBlink() {
+    const delay = 3500 + Math.random() * 3500;
+    setTimeout(function () {
+      bird.classList.add('bird--blink');
+      setTimeout(function () {
+        bird.classList.remove('bird--blink');
+        scheduleBlink();
+      }, 150);
+    }, delay);
+  }
+  scheduleBlink();
+
+  // ── Click: flutter + bubble ──
+  let bubbleTimer = null;
+  let existingBubble = null;
+
+  bird.addEventListener('click', function () {
+    // flutter
+    bird.classList.remove('bird--flutter');
+    void bird.offsetWidth; // reflow to restart animation
+    bird.classList.add('bird--flutter');
+    setTimeout(function () { bird.classList.remove('bird--flutter'); }, 450);
+
+    // bubble
+    if (existingBubble) {
+      existingBubble.remove();
+      existingBubble = null;
+      clearTimeout(bubbleTimer);
+    }
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bird-bubble';
+    bubble.innerHTML =
+      '<span class="bird-bubble__text">Tweet! 🐦</span>' +
+      '<button class="bird-bubble__close" aria-label="Close">✕</button>';
+
+    wrap.appendChild(bubble);
+    existingBubble = bubble;
+
+    bubble.querySelector('.bird-bubble__close').addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      bubble.remove();
+      existingBubble = null;
+      clearTimeout(bubbleTimer);
+    });
+
+    bubbleTimer = setTimeout(function () {
+      if (existingBubble === bubble) {
+        bubble.remove();
+        existingBubble = null;
+      }
+    }, 2500);
+  });
+})();
+</script>
+</body>
+</html>

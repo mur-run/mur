@@ -83,8 +83,22 @@ mod json3_tests {
         ]}"#;
         let cues = parse_json3(json);
         assert_eq!(cues.len(), 2);
-        assert_eq!(cues[0], Cue { start_ms: 0, end_ms: 1200, text: "Hello world".into() });
-        assert_eq!(cues[1], Cue { start_ms: 3000, end_ms: 3800, text: "Next".into() });
+        assert_eq!(
+            cues[0],
+            Cue {
+                start_ms: 0,
+                end_ms: 1200,
+                text: "Hello world".into()
+            }
+        );
+        assert_eq!(
+            cues[1],
+            Cue {
+                start_ms: 3000,
+                end_ms: 3800,
+                text: "Next".into()
+            }
+        );
     }
 
     #[test]
@@ -100,7 +114,11 @@ fn parse_ts(s: &str) -> Option<i64> {
     let (hms, ms) = s.split_once('.').unwrap_or((s.as_str(), "0"));
     let parts: Vec<&str> = hms.split(':').collect();
     let (h, m, sec) = match parts.as_slice() {
-        [h, m, sec] => (h.parse::<i64>().ok()?, m.parse::<i64>().ok()?, sec.parse::<i64>().ok()?),
+        [h, m, sec] => (
+            h.parse::<i64>().ok()?,
+            m.parse::<i64>().ok()?,
+            sec.parse::<i64>().ok()?,
+        ),
         [m, sec] => (0, m.parse::<i64>().ok()?, sec.parse::<i64>().ok()?),
         _ => return None,
     };
@@ -138,7 +156,11 @@ fn parse_cue_blocks(s: &str) -> Vec<Cue> {
         if text.is_empty() {
             continue;
         }
-        out.push(Cue { start_ms, end_ms, text });
+        out.push(Cue {
+            start_ms,
+            end_ms,
+            text,
+        });
     }
     out
 }
@@ -152,8 +174,22 @@ mod subtitle_tests {
         let srt = "1\n00:00:01,000 --> 00:00:04,000\nHello world\n\n2\n00:00:04,000 --> 00:00:06,500\nNext\nline";
         let cues = parse_srt(srt);
         assert_eq!(cues.len(), 2);
-        assert_eq!(cues[0], Cue { start_ms: 1000, end_ms: 4000, text: "Hello world".into() });
-        assert_eq!(cues[1], Cue { start_ms: 4000, end_ms: 6500, text: "Next line".into() });
+        assert_eq!(
+            cues[0],
+            Cue {
+                start_ms: 1000,
+                end_ms: 4000,
+                text: "Hello world".into()
+            }
+        );
+        assert_eq!(
+            cues[1],
+            Cue {
+                start_ms: 4000,
+                end_ms: 6500,
+                text: "Next line".into()
+            }
+        );
     }
 
     #[test]
@@ -161,7 +197,14 @@ mod subtitle_tests {
         let vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHi there";
         let cues = parse_vtt(vtt);
         assert_eq!(cues.len(), 1);
-        assert_eq!(cues[0], Cue { start_ms: 1000, end_ms: 3000, text: "Hi there".into() });
+        assert_eq!(
+            cues[0],
+            Cue {
+                start_ms: 1000,
+                end_ms: 3000,
+                text: "Hi there".into()
+            }
+        );
     }
 
     #[test]
@@ -178,6 +221,8 @@ pub const DEFAULT_CHUNK_OVERLAP_SECS: i64 = 10;
 
 impl Transcript {
     /// Concatenated cue text within ±`span_ms` of `t_ms` (for live "what did he say").
+    // Consumed by Plan B (proactive co-watching) for interjection grounding.
+    #[allow(dead_code)]
     pub fn window(&self, t_ms: i64, span_ms: i64) -> String {
         let lo = t_ms - span_ms;
         let hi = t_ms + span_ms;
@@ -207,7 +252,11 @@ impl Transcript {
                 .collect::<Vec<_>>()
                 .join(" ");
             if !text.is_empty() {
-                out.push(Chunk { start_ms: win_start, end_ms: win_end, text });
+                out.push(Chunk {
+                    start_ms: win_start,
+                    end_ms: win_end,
+                    text,
+                });
             }
             win_start += step_ms;
         }
@@ -235,7 +284,11 @@ impl Transcript {
                 .collect::<Vec<_>>()
                 .join(" ");
             if !text.is_empty() {
-                out.push(Chunk { start_ms: start, end_ms: end.min(self.last_end()), text });
+                out.push(Chunk {
+                    start_ms: start,
+                    end_ms: end.min(self.last_end()),
+                    text,
+                });
             }
         }
         out
@@ -285,11 +338,20 @@ mod chunk_tests {
     use super::*;
 
     fn t(cues: Vec<Cue>, chapters: Vec<Chapter>) -> Transcript {
-        Transcript { source_id: "x".into(), lang: "en".into(), cues, chapters }
+        Transcript {
+            source_id: "x".into(),
+            lang: "en".into(),
+            cues,
+            chapters,
+        }
     }
 
     fn cue(start_ms: i64, text: &str) -> Cue {
-        Cue { start_ms, end_ms: start_ms + 1000, text: text.into() }
+        Cue {
+            start_ms,
+            end_ms: start_ms + 1000,
+            text: text.into(),
+        }
     }
 
     #[test]
@@ -305,15 +367,38 @@ mod chunk_tests {
         let tr = t(vec![cue(0, "one"), cue(55_000, "two")], vec![]);
         let chunks = tr.chunks(60, 10);
         // win [0,60s) has both "one" and "two"; win [50,110s) has "two".
-        assert_eq!(chunks[0], Chunk { start_ms: 0, end_ms: 60_000, text: "one two".into() });
-        assert_eq!(chunks[1], Chunk { start_ms: 50_000, end_ms: 110_000, text: "two".into() });
+        assert_eq!(
+            chunks[0],
+            Chunk {
+                start_ms: 0,
+                end_ms: 60_000,
+                text: "one two".into()
+            }
+        );
+        assert_eq!(
+            chunks[1],
+            Chunk {
+                start_ms: 50_000,
+                end_ms: 110_000,
+                text: "two".into()
+            }
+        );
     }
 
     #[test]
     fn chunks_for_analysis_uses_chapters() {
         let tr = t(
             vec![cue(0, "intro"), cue(30_000, "middle"), cue(90_000, "end")],
-            vec![Chapter { start_ms: 0, title: "A".into() }, Chapter { start_ms: 60_000, title: "B".into() }],
+            vec![
+                Chapter {
+                    start_ms: 0,
+                    title: "A".into(),
+                },
+                Chapter {
+                    start_ms: 60_000,
+                    title: "B".into(),
+                },
+            ],
         );
         let chunks = tr.chunks_for_analysis();
         assert_eq!(chunks.len(), 2);
@@ -391,18 +476,18 @@ fn fetch_youtube(mur_home: &Path, source: &str) -> Result<Transcript, MediaError
     if let Ok(entries) = std::fs::read_dir(&work) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.ends_with(".json3") {
-                if let Ok(body) = std::fs::read_to_string(e.path()) {
-                    cues = parse_json3(&body);
-                    lang = name
-                        .trim_start_matches("sub.")
-                        .trim_end_matches(".json3")
-                        .to_string();
-                }
-            } else if name.ends_with(".info.json") {
-                if let Ok(body) = std::fs::read_to_string(e.path()) {
-                    chapters = parse_info_chapters(&body);
-                }
+            if name.ends_with(".json3")
+                && let Ok(body) = std::fs::read_to_string(e.path())
+            {
+                cues = parse_json3(&body);
+                lang = name
+                    .trim_start_matches("sub.")
+                    .trim_end_matches(".json3")
+                    .to_string();
+            } else if name.ends_with(".info.json")
+                && let Ok(body) = std::fs::read_to_string(e.path())
+            {
+                chapters = parse_info_chapters(&body);
             }
         }
     }
@@ -410,7 +495,12 @@ fn fetch_youtube(mur_home: &Path, source: &str) -> Result<Transcript, MediaError
     if cues.is_empty() {
         return Err(MediaError::NoTranscript);
     }
-    Ok(Transcript { source_id: source.to_string(), lang, cues, chapters })
+    Ok(Transcript {
+        source_id: source.to_string(),
+        lang,
+        cues,
+        chapters,
+    })
 }
 
 /// Extract chapters from a yt-dlp info-json (`chapters: [{start_time, title}]`).
@@ -425,8 +515,15 @@ fn parse_info_chapters(json: &str) -> Vec<Chapter> {
             arr.iter()
                 .filter_map(|ch| {
                     let start = ch.get("start_time").and_then(|s| s.as_f64())?;
-                    let title = ch.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
-                    Some(Chapter { start_ms: (start * 1000.0) as i64, title })
+                    let title = ch
+                        .get("title")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    Some(Chapter {
+                        start_ms: (start * 1000.0) as i64,
+                        title,
+                    })
                 })
                 .collect()
         })
@@ -442,7 +539,11 @@ fn read_local(path: &str) -> Result<Transcript, MediaError> {
     for ext in ["srt", "vtt"] {
         let sidecar = p.with_extension(ext);
         if let Ok(body) = std::fs::read_to_string(&sidecar) {
-            let cues = if ext == "srt" { parse_srt(&body) } else { parse_vtt(&body) };
+            let cues = if ext == "srt" {
+                parse_srt(&body)
+            } else {
+                parse_vtt(&body)
+            };
             if !cues.is_empty() {
                 return Ok(Transcript {
                     source_id: path.to_string(),

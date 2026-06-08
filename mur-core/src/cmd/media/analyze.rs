@@ -72,7 +72,10 @@ mod basics_tests {
 
     #[test]
     fn deep_link_youtube_and_local() {
-        assert_eq!(deep_link("https://youtu.be/abc", 65_000), "https://youtu.be/abc?t=65s");
+        assert_eq!(
+            deep_link("https://youtu.be/abc", 65_000),
+            "https://youtu.be/abc?t=65s"
+        );
         assert_eq!(
             deep_link("https://www.youtube.com/watch?v=abc", 65_000),
             "https://www.youtube.com/watch?v=abc&t=65s"
@@ -112,7 +115,11 @@ pub fn render_markdown(result: &AnalysisResult, source: &str) -> String {
     if !result.key_points.is_empty() {
         out.push_str("### 重點\n");
         for kp in &result.key_points {
-            out.push_str(&format!("- {} （{}）\n", kp.text, deep_link(source, kp.t_ms)));
+            out.push_str(&format!(
+                "- {} （{}）\n",
+                kp.text,
+                deep_link(source, kp.t_ms)
+            ));
         }
         out.push('\n');
     }
@@ -154,7 +161,10 @@ mod render_tests {
     fn render_has_links() {
         let r = AnalysisResult {
             topic: "Topic".into(),
-            key_points: vec![KeyPoint { text: "first".into(), t_ms: 65_000 }],
+            key_points: vec![KeyPoint {
+                text: "first".into(),
+                t_ms: 65_000,
+            }],
             key_moments: vec![],
             conclusion: "done".into(),
         };

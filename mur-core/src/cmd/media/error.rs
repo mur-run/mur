@@ -4,6 +4,9 @@ use std::fmt;
 
 /// All recoverable media failures. `user_message()` is what the agent relays.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// VlcNotFound / VlcHttpDown / SnapshotFailed are constructed only by Plan B (proactive
+// co-watching); keep them in the Plan A foundation without a dead_code warning.
+#[allow(dead_code)]
 pub enum MediaError {
     VlcNotFound,
     VlcHttpDown,

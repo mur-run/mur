@@ -581,7 +581,13 @@ mod media_tool_tests {
     #[test]
     fn media_tools_registered() {
         let names: Vec<_> = all_tools().into_iter().map(|t| t.name).collect();
-        for n in ["vlc_open", "vlc_playback", "vlc_status", "scene_explain", "video_analyze"] {
+        for n in [
+            "vlc_open",
+            "vlc_playback",
+            "vlc_status",
+            "scene_explain",
+            "video_analyze",
+        ] {
             assert!(names.contains(&n.to_string()), "missing {n}");
         }
     }
