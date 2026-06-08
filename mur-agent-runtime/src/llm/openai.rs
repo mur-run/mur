@@ -138,6 +138,82 @@ impl OpenAiClient {
     }
 }
 
+fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
+    let mut result: Vec<serde_json::Value> = Vec::new();
+    for m in msgs {
+        match m {
+            RichMessage::Text { role, content } => {
+                let r = if role == "agent" { "assistant" } else { role.as_str() };
+                result.push(json!({"role": r, "content": content}));
+            }
+            RichMessage::ToolUse { text, calls } => {
+                let tool_calls: Vec<serde_json::Value> = calls
+                    .iter()
+                    .map(|c| {
+                        let args = serde_json::to_string(&c.input).unwrap_or_default();
+                        json!({
+                            "id": c.call_id,
+                            "type": "function",
+                            "function": {"name": c.tool_name, "arguments": args},
+                        })
+                    })
+                    .collect();
+                let mut msg = json!({"role": "assistant", "tool_calls": tool_calls});
+                if let Some(t) = text {
+                    if !t.is_empty() {
+                        msg["content"] = json!(t);
+                    }
+                }
+                result.push(msg);
+            }
+            RichMessage::ToolResults { results } => {
+                for r in results {
+                    result.push(json!({
+                        "role": "tool",
+                        "tool_call_id": r.call_id,
+                        "content": r.content,
+                    }));
+                }
+            }
+        }
+    }
+    result
+}
+
+fn parse_response_body(
+    v: &serde_json::Value,
+) -> Result<(String, Vec<crate::llm::ToolCallResult>, crate::llm::StopReason), LlmError> {
+    use crate::llm::{StopReason, ToolCallResult};
+    let choice = &v["choices"][0];
+    let msg = &choice["message"];
+    let text = msg["content"].as_str().unwrap_or("").to_string();
+
+    let tool_calls: Vec<ToolCallResult> = msg["tool_calls"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|tc| {
+                    let call_id = tc["id"].as_str()?.to_string();
+                    let tool_name = tc["function"]["name"].as_str()?.to_string();
+                    let input: serde_json::Value = tc["function"]["arguments"]
+                        .as_str()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or(serde_json::Value::Object(Default::default()));
+                    Some(ToolCallResult { call_id, tool_name, input })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let stop_reason = match choice["finish_reason"].as_str() {
+        Some("tool_calls") => StopReason::ToolUse,
+        Some("length") => StopReason::MaxTokens,
+        _ => StopReason::EndTurn,
+    };
+
+    Ok((text, tool_calls, stop_reason))
+}
+
 #[async_trait]
 impl LlmClient for OpenAiClient {
     fn model_name(&self) -> &str {
@@ -145,24 +221,25 @@ impl LlmClient for OpenAiClient {
     }
 
     async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let messages: Vec<_> = req
-            .messages
-            .iter()
-            .filter_map(|m| match m {
-                RichMessage::Text { role, content } => {
-                    // OpenAI uses {system,user,assistant}. Mur internally may use "agent".
-                    let role = if role == "agent" { "assistant" } else { role.as_str() };
-                    Some(json!({"role": role, "content": content}))
-                }
-                _ => None,
-            })
-            .collect();
+        let messages = rich_messages_to_openai(&req.messages);
         let mut body = json!({"model": self.model, "messages": messages});
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
         }
         if let Some(m) = req.max_tokens {
             body["max_tokens"] = json!(m);
+        }
+        if !req.tools.is_empty() {
+            body["tools"] = serde_json::json!(
+                req.tools.iter().map(|t| json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    }
+                })).collect::<Vec<_>>()
+            );
         }
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
@@ -202,10 +279,7 @@ impl LlmClient for OpenAiClient {
             return Err(LlmError::Http(format!("status {status}: {msg}")));
         }
 
-        let text = v["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| LlmError::InvalidResponse("missing choices[0].message.content".into()))?
-            .to_string();
+        let (text, tool_calls, stop_reason) = parse_response_body(&v)?;
         let input_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
         let output_tokens = v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
         Ok(LlmResponse {
@@ -213,8 +287,8 @@ impl LlmClient for OpenAiClient {
             input_tokens,
             output_tokens,
             model: self.model.clone(),
-            tool_calls: vec![],
-            stop_reason: StopReason::EndTurn,
+            tool_calls,
+            stop_reason,
         })
     }
 
@@ -223,17 +297,7 @@ impl LlmClient for OpenAiClient {
         req: LlmRequest,
         sink: tokio::sync::mpsc::Sender<super::StreamDelta>,
     ) -> Result<LlmResponse, LlmError> {
-        let messages: Vec<_> = req
-            .messages
-            .iter()
-            .filter_map(|m| match m {
-                RichMessage::Text { role, content } => {
-                    let role = if role == "agent" { "assistant" } else { role.as_str() };
-                    Some(json!({"role": role, "content": content}))
-                }
-                _ => None,
-            })
-            .collect();
+        let messages = rich_messages_to_openai(&req.messages);
         let mut body = json!({
             "model": self.model,
             "messages": messages,
@@ -245,6 +309,18 @@ impl LlmClient for OpenAiClient {
         }
         if let Some(m) = req.max_tokens {
             body["max_tokens"] = json!(m);
+        }
+        if !req.tools.is_empty() {
+            body["tools"] = serde_json::json!(
+                req.tools.iter().map(|t| json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    }
+                })).collect::<Vec<_>>()
+            );
         }
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
@@ -352,5 +428,94 @@ impl LlmClient for OpenAiClient {
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{RichMessage, ToolCallResult, ToolResultEntry};
+    use serde_json::json;
+
+    #[test]
+    fn rich_messages_to_openai_text_only() {
+        let msgs = vec![
+            RichMessage::Text { role: "system".into(), content: "Be helpful".into() },
+            RichMessage::Text { role: "user".into(), content: "hi".into() },
+        ];
+        let result = rich_messages_to_openai(&msgs);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0]["role"], "system");
+        assert_eq!(result[1]["role"], "user");
+    }
+
+    #[test]
+    fn rich_messages_tool_use_and_results() {
+        let msgs = vec![
+            RichMessage::Text { role: "user".into(), content: "run it".into() },
+            RichMessage::ToolUse {
+                text: Some("Running bash".into()),
+                calls: vec![ToolCallResult {
+                    call_id: "call_abc".into(),
+                    tool_name: "bash".into(),
+                    input: json!({"command": "echo hi"}),
+                }],
+            },
+            RichMessage::ToolResults {
+                results: vec![ToolResultEntry {
+                    call_id: "call_abc".into(),
+                    content: "hi\n".into(),
+                    is_error: false,
+                }],
+            },
+        ];
+        let result = rich_messages_to_openai(&msgs);
+        assert_eq!(result.len(), 3);
+        // assistant message with tool_calls
+        let asst = &result[1];
+        assert_eq!(asst["role"], "assistant");
+        let tc = &asst["tool_calls"][0];
+        assert_eq!(tc["id"], "call_abc");
+        assert_eq!(tc["function"]["name"], "bash");
+        // tool result message
+        let tool_msg = &result[2];
+        assert_eq!(tool_msg["role"], "tool");
+        assert_eq!(tool_msg["tool_call_id"], "call_abc");
+    }
+
+    #[test]
+    fn parse_response_body_text_only() {
+        let body = json!({
+            "choices": [{"message": {"content": "Hello", "tool_calls": null}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2}
+        });
+        let (text, tool_calls, stop_reason) = parse_response_body(&body).unwrap();
+        assert_eq!(text, "Hello");
+        assert!(tool_calls.is_empty());
+        assert_eq!(stop_reason, crate::llm::StopReason::EndTurn);
+    }
+
+    #[test]
+    fn parse_response_body_tool_calls() {
+        let args = json!({"command": "echo hi"}).to_string();
+        let body = json!({
+            "choices": [{
+                "message": {
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_abc",
+                        "function": {"name": "bash", "arguments": args}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        });
+        let (text, tool_calls, stop_reason) = parse_response_body(&body).unwrap();
+        assert_eq!(text, "");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].call_id, "call_abc");
+        assert_eq!(tool_calls[0].tool_name, "bash");
+        assert_eq!(stop_reason, crate::llm::StopReason::ToolUse);
     }
 }
