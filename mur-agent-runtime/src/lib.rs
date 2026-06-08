@@ -23,6 +23,7 @@ pub mod idle_scheduler;
 pub mod import;
 pub mod llm;
 pub mod lock_file;
+pub mod mcp;
 pub mod multi_call;
 pub mod multimodal;
 pub mod profile;

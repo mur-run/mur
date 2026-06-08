@@ -252,6 +252,7 @@ fn default_entitlements_custom() -> Entitlements {
             processes: 32,
         },
         llm: Default::default(),
+        tools: vec![],
         fail_closed_on_sandbox_error: true,
     }
 }

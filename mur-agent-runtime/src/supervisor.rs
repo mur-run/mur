@@ -260,8 +260,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let hitl_timeout_secs = profile.inner.hitl.timeout_secs;
-    let (runner, llm_for_companion) = crate::supervisor_runner::build_provider_runner(
+    let (runner, llm_for_companion, mcp_pool) = crate::supervisor_runner::build_provider_runner(
         force_echo,
+        &agent_home,
         &profile,
         runtime_skills.clone(),
         skills_cfg.clone(),
@@ -593,6 +594,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // we just tear down transports and drain telemetry.
     for t in transport_tasks {
         t.abort();
+    }
+    if let Some(pool) = mcp_pool {
+        pool.shutdown().await;
     }
     writer
         .emit(Event::Warning {
