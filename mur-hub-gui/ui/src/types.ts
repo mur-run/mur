@@ -147,6 +147,22 @@ export const ALL_DETAIL_TABS: DetailTab[] = [
   "mobile",
 ];
 
+export interface NotifConfig {
+  enabled: boolean;
+  daily_cap: number;
+  quiet_hours_enabled: boolean;
+  quiet_start: string;
+  quiet_end: string;
+}
+
+export interface NotifPatch {
+  enabled?: boolean;
+  daily_cap?: number;
+  quiet_hours_enabled?: boolean;
+  quiet_start?: string;
+  quiet_end?: string;
+}
+
 export const TAB_LABELS: Record<DetailTab, string> = {
   chat: "Chat",
   persona: "Persona",

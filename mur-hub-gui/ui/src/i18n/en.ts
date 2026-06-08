@@ -98,6 +98,12 @@ export const en = {
   "detail.mcpSummary": "{count} server(s) — see MCP tab for details.",
   "detail.skillsSummary": "{installed} installed + {legacy} legacy — see Skills tab.",
   "detail.permissionsHint": "Permissions are declared at agent creation time. Use mur agent update from the CLI to modify entitlements.",
+  "detail.notifications": "Notifications",
+  "detail.proactiveMessages": "Proactive messages",
+  "detail.dailyCap": "Daily cap",
+  "detail.quietHours": "Quiet hours",
+  "detail.quietFrom": "From",
+  "detail.quietUntil": "Until",
   // ── Header actions ──
   "action.run": "Run",
   "action.stop": "Stop",

@@ -100,6 +100,12 @@ export const zhTW: Table = {
   "detail.mcpSummary": "{count} 個伺服器 — 詳情請見 MCP 分頁。",
   "detail.skillsSummary": "{installed} 個已安裝 + {legacy} 個舊版 — 詳情請見技能分頁。",
   "detail.permissionsHint": "權限於建立 agent 時宣告。請使用 CLI 的 mur agent update 來修改授權。",
+  "detail.notifications": "通知設定",
+  "detail.proactiveMessages": "主動訊息",
+  "detail.dailyCap": "每日上限",
+  "detail.quietHours": "靜音時段",
+  "detail.quietFrom": "從",
+  "detail.quietUntil": "至",
   // ── Header actions ──
   "action.run": "啟動",
   "action.stop": "停止",
