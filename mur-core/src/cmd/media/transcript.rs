@@ -463,10 +463,19 @@ pub fn get(mur_home: &Path, source: &str) -> Result<Transcript, MediaError> {
 fn fetch_youtube(mur_home: &Path, source: &str) -> Result<Transcript, MediaError> {
     let ytdlp = resolve::detect_ytdlp().ok_or(MediaError::YtdlpMissing)?;
     let work = mur_home.join("runtime").join("yt-work");
+    // Start clean so stale captions from a prior (possibly crashed) run can't leak in.
+    let _ = std::fs::remove_dir_all(&work);
     let _ = std::fs::create_dir_all(&work);
     let out_tpl = work.join("sub.%(ext)s");
     let status = Command::new(&ytdlp)
         .args([
+            // -i: a per-language caption failure (e.g. YouTube HTTP 429 on zh-Hant) must
+            // NOT abort the whole run — skip it and keep fetching the other languages.
+            "-i",
+            "--retries",
+            "3",
+            "--retry-sleep",
+            "3",
             "--skip-download",
             "--write-subs",
             "--write-auto-subs",
@@ -481,9 +490,9 @@ fn fetch_youtube(mur_home: &Path, source: &str) -> Result<Transcript, MediaError
         .arg(source)
         .status()
         .map_err(|_| MediaError::SourceUnresolvable)?;
-    if !status.success() {
-        return Err(MediaError::SourceUnresolvable);
-    }
+    // yt-dlp exits non-zero when ANY requested sub-lang fails (e.g. HTTP 429 on zh-Hans)
+    // even though other languages downloaded fine. Don't treat a non-zero exit as fatal —
+    // read whatever captions landed on disk; success is decided by the cues we recover.
     let mut cues = Vec::new();
     let mut lang = "und".to_string();
     let mut chapters = Vec::new();
@@ -493,11 +502,15 @@ fn fetch_youtube(mur_home: &Path, source: &str) -> Result<Transcript, MediaError
             if name.ends_with(".json3")
                 && let Ok(body) = std::fs::read_to_string(e.path())
             {
-                cues = parse_json3(&body);
-                lang = name
-                    .trim_start_matches("sub.")
-                    .trim_end_matches(".json3")
-                    .to_string();
+                // A later/partial file must not clobber cues we already recovered.
+                let parsed = parse_json3(&body);
+                if !parsed.is_empty() {
+                    cues = parsed;
+                    lang = name
+                        .trim_start_matches("sub.")
+                        .trim_end_matches(".json3")
+                        .to_string();
+                }
             } else if name.ends_with(".info.json")
                 && let Ok(body) = std::fs::read_to_string(e.path())
             {
@@ -507,7 +520,12 @@ fn fetch_youtube(mur_home: &Path, source: &str) -> Result<Transcript, MediaError
     }
     let _ = std::fs::remove_dir_all(&work);
     if cues.is_empty() {
-        return Err(MediaError::NoTranscript);
+        // No captions recovered: distinguish "video has none" from "fetch failed".
+        return Err(if status.success() {
+            MediaError::NoTranscript
+        } else {
+            MediaError::SourceUnresolvable
+        });
     }
     Ok(Transcript {
         source_id: source.to_string(),
