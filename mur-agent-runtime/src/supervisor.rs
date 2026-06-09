@@ -192,10 +192,39 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // On platforms without Landlock/SBPL support, returns enforcing=false — B0 still applies.
     let fail_closed = profile.inner.entitlements.fail_closed_on_sandbox_error;
     // Always allow the agent's own local LLM port through the kernel sandbox.
-    let llm_ports: Vec<u16> = crate::supervisor_runner::local_llm_port(&profile.inner, &mur_home)
-        .into_iter()
-        .collect();
-    match crate::sandbox::apply(&profile.inner.entitlements, &agent_home, &llm_ports) {
+    let mut extra_ports: Vec<u16> =
+        crate::supervisor_runner::local_llm_port(&profile.inner, &mur_home)
+            .into_iter()
+            .collect();
+    // Also allow the persisted VLC HTTP port so the proactive co-watching
+    // WatchScheduler can snapshot VLC under the enforced sandbox. The macOS SBPL
+    // (and Landlock) allowlist is port-based, and the VLC port is random-but-sticky
+    // in vlc.json — so without this the scheduler's HTTP to VLC is kernel-denied
+    // and co-watching silently captures nothing. If VLC has never been set up,
+    // vlc.json is absent at seal time; a restart picks the port up once it exists.
+    // The scheduler also persists co-watching state and prunes snapshots under
+    // the shared `~/.mur/runtime` dir (outside agent_home), so allow writing
+    // those specific paths — otherwise consent/last_scene never persist and
+    // snapshots accumulate (B5). watch.json is written via temp+rename, so allow
+    // the `.tmp` sibling too.
+    let mut extra_write_paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(vlc) = mur_common::media::load_runtime(&mur_home) {
+        extra_ports.push(vlc.port);
+        extra_write_paths.push(vlc.snapshot_dir.clone());
+        tracing::info!(
+            vlc_port = vlc.port,
+            "B1 sandbox: allowing VLC HTTP port for co-watching"
+        );
+    }
+    let watch_json = mur_common::media::watch_path(&mur_home);
+    extra_write_paths.push(watch_json.with_extension("json.tmp"));
+    extra_write_paths.push(watch_json);
+    match crate::sandbox::apply(
+        &profile.inner.entitlements,
+        &agent_home,
+        &extra_ports,
+        &extra_write_paths,
+    ) {
         Ok(status) => {
             if !status.enforcing && fail_closed {
                 anyhow::bail!(
