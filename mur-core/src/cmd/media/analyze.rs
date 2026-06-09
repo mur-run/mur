@@ -24,8 +24,37 @@ impl AnalysisMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct KeyPoint {
     pub text: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_seconds_to_ms")]
     pub t_ms: i64,
+}
+
+/// Deserialize a model-provided timestamp into milliseconds.
+///
+/// The reduce prompt feeds the model second-granularity markers (`[t=Ns]`), so the
+/// bundled 2B model returns timestamps in **seconds** — and frequently in loose shapes:
+/// a bare int/float, a numeric string, or a `[start, end]` array. A plain `i64` field
+/// rejected the array/float/string forms, so the whole structured parse failed and fell
+/// back to dumping raw JSON. We accept any of these, take the first numeric value, treat
+/// it as seconds, and store milliseconds so `deep_link` (which divides by 1000) renders
+/// the correct `?t=Ns` deep link instead of collapsing to `t=0`.
+fn de_seconds_to_ms<'de, D>(de: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(de)?;
+    let secs = first_number(&v).unwrap_or(0.0).max(0.0);
+    Ok((secs * 1000.0) as i64)
+}
+
+/// First numeric value reachable in `v`: a number, a numeric string, or the first
+/// numeric element of an array (recursively). `None` for anything else.
+fn first_number(v: &serde_json::Value) -> Option<f64> {
+    match v {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.trim().parse::<f64>().ok(),
+        serde_json::Value::Array(a) => a.iter().find_map(first_number),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -158,6 +187,41 @@ mod render_tests {
     }
 
     #[test]
+    fn t_ms_accepts_seconds_in_loose_shapes() {
+        // Bare integer seconds → milliseconds.
+        let r = parse_analysis(r#"{"key_points":[{"text":"a","t_ms":5}]}"#);
+        assert_eq!(r.key_points[0].t_ms, 5_000);
+        // [start, end] array → first element, as seconds.
+        let r = parse_analysis(r#"{"key_points":[{"text":"a","t_ms":[7,9]}]}"#);
+        assert_eq!(r.key_points[0].t_ms, 7_000);
+        // Numeric string seconds.
+        let r = parse_analysis(r#"{"key_points":[{"text":"a","t_ms":"12"}]}"#);
+        assert_eq!(r.key_points[0].t_ms, 12_000);
+        // Float seconds.
+        let r = parse_analysis(r#"{"key_points":[{"text":"a","t_ms":3.5}]}"#);
+        assert_eq!(r.key_points[0].t_ms, 3_500);
+    }
+
+    #[test]
+    fn t_ms_array_no_longer_breaks_structured_parse() {
+        // Regression: the bundled model emitted t_ms as [start,end]; the old i64 field
+        // rejected it, so the whole structured parse failed and dumped raw JSON.
+        let json = r#"{"topic":"T","key_points":[{"text":"p","t_ms":[0,0]}],"conclusion":"c"}"#;
+        let r = parse_analysis(json);
+        assert_eq!(r.topic, "T");
+        assert_eq!(r.key_points[0].text, "p");
+        assert_eq!(r.conclusion, "c");
+    }
+
+    #[test]
+    fn t_ms_seconds_render_to_correct_deep_link() {
+        // 5 seconds from the model → ?t=5s (not t=0).
+        let r = parse_analysis(r#"{"key_points":[{"text":"p","t_ms":5}]}"#);
+        let md = render_markdown(&r, "https://youtu.be/abc");
+        assert!(md.contains("https://youtu.be/abc?t=5s"), "got: {md}");
+    }
+
+    #[test]
     fn render_has_links() {
         let r = AnalysisResult {
             topic: "Topic".into(),
@@ -191,19 +255,27 @@ fn map_system() -> &'static str {
 fn reduce_system(mode: AnalysisMode) -> &'static str {
     match mode {
         AnalysisMode::Conclusions => {
-            "你是影片分析助手。根據以下各段重點，輸出嚴格 JSON：{\"topic\":..,\"key_points\":[{\"text\":..,\"t_ms\":..}],\"key_moments\":[{\"text\":..,\"t_ms\":..}],\"conclusion\":\"深入的分析與結論\"}。只輸出 JSON，用繁體中文。"
+            "你是影片分析助手。根據以下各段重點，輸出嚴格 JSON：{\"topic\":..,\"key_points\":[{\"text\":..,\"t_ms\":..}],\"key_moments\":[{\"text\":..,\"t_ms\":..}],\"conclusion\":\"深入的分析與結論\"}。t_ms 填該重點的時間，用「秒」的單一整數（例如 12），不要用陣列或區間。只輸出 JSON，用繁體中文。"
         }
         _ => {
-            "你是影片分析助手。根據以下各段重點，輸出嚴格 JSON：{\"topic\":..,\"key_points\":[{\"text\":..,\"t_ms\":..}],\"key_moments\":[{\"text\":..,\"t_ms\":..}],\"conclusion\":\"摘要\"}。只輸出 JSON，用繁體中文。"
+            "你是影片分析助手。根據以下各段重點，輸出嚴格 JSON：{\"topic\":..,\"key_points\":[{\"text\":..,\"t_ms\":..}],\"key_moments\":[{\"text\":..,\"t_ms\":..}],\"conclusion\":\"摘要\"}。t_ms 填該重點的時間，用「秒」的單一整數（例如 12），不要用陣列或區間。只輸出 JSON，用繁體中文。"
         }
     }
 }
 
 /// Build an OpenAI-compatible chat request (text-only, temperature 0 for determinism).
+///
+/// `chat_template_kwargs.enable_thinking=false` disables the bundled Qwen3 model's
+/// "thinking" mode. Reasoning models otherwise spend the entire `max_tokens` budget
+/// emitting chain-of-thought into `message.reasoning` and never populate
+/// `message.content`, which `parse_completion` reads — yielding empty output. The
+/// kwarg is ignored by chat templates that don't reference it, so it is harmless for
+/// non-reasoning models.
 fn chat_request(system: &str, user: &str) -> serde_json::Value {
     json!({
         "model": DEFAULT_BUNDLED_MODEL_ID,
         "temperature": 0,
+        "chat_template_kwargs": { "enable_thinking": false },
         "messages": [
             { "role": "system", "content": system },
             { "role": "user", "content": user }
