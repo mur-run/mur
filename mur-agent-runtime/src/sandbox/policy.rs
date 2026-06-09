@@ -97,6 +97,18 @@ impl SandboxPolicy {
             }
         }
     }
+
+    /// Grant write access to additional paths the runtime owns but that live
+    /// outside `agent_home` — e.g. the shared `~/.mur/runtime` media state
+    /// (`watch.json`, VLC snapshot dir) that the co-watching scheduler must
+    /// persist to and clean up. Idempotent.
+    pub fn allow_extra_write_paths(&mut self, paths: &[PathBuf]) {
+        for p in paths {
+            if !self.fs_write.contains(p) {
+                self.fs_write.push(p.clone());
+            }
+        }
+    }
 }
 
 fn system_exec_paths(home: &Path) -> Vec<PathBuf> {
@@ -278,5 +290,18 @@ mod tests {
         let mut p_unr = SandboxPolicy::from_entitlements(&unr, &PathBuf::from("/tmp/a"));
         p_unr.allow_extra_ports(&[11434]);
         assert_eq!(p_unr.net_allow_ports, None);
+    }
+
+    #[test]
+    fn allow_extra_write_paths_adds_and_dedups() {
+        let ent = minimal_entitlements();
+        let agent_home = PathBuf::from("/tmp/a");
+        let mut policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+        let extra = PathBuf::from("/home/u/.mur/runtime/vlc-snapshots");
+        policy.allow_extra_write_paths(&[extra.clone()]);
+        assert!(policy.fs_write.contains(&extra));
+        // Idempotent — re-adding doesn't duplicate.
+        policy.allow_extra_write_paths(&[extra.clone()]);
+        assert_eq!(policy.fs_write.iter().filter(|p| **p == extra).count(), 1);
     }
 }
