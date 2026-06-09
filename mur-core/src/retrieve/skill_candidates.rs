@@ -40,6 +40,8 @@ impl LoadedSkill {
             | mur_common::skill::types::Category::Note => KindGroup::Knowledge,
             mur_common::skill::types::Category::Workflow => KindGroup::Procedures,
             mur_common::skill::types::Category::Command => KindGroup::Procedures,
+            // Media skills drive the runtime's media tools — procedure-like.
+            mur_common::skill::types::Category::Media => KindGroup::Procedures,
         };
         InjectedItem {
             name: self.manifest.name.clone(),
