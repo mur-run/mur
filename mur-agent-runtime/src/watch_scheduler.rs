@@ -155,7 +155,7 @@ use crate::task_runner::{TaskRunner, TaskSpec};
 use chrono::{Local, Timelike};
 use mur_common::a2a::{Message, MessagePart};
 use mur_common::agent::QuietHours;
-use mur_common::media::{VlcRuntime, load_watch, runtime_path, save_watch};
+use mur_common::media::{VlcRuntime, load_watch, newest_file, runtime_path, save_watch};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -208,22 +208,6 @@ impl WatchScheduler {
 fn vlc_runtime(mur_home: &std::path::Path) -> Option<VlcRuntime> {
     let body = std::fs::read_to_string(runtime_path(mur_home)).ok()?;
     serde_json::from_str(&body).ok()
-}
-
-/// Newest regular file in `dir`, if any.
-fn newest_file(dir: &std::path::Path) -> Option<PathBuf> {
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    for e in std::fs::read_dir(dir).ok()?.flatten() {
-        let p = e.path();
-        if !p.is_file() {
-            continue;
-        }
-        let m = e.metadata().ok()?.modified().ok()?;
-        if best.as_ref().map(|(t, _)| m > *t).unwrap_or(true) {
-            best = Some((m, p));
-        }
-    }
-    best.map(|(_, p)| p)
 }
 
 /// Ask VLC for a snapshot, read the resulting PNG, delete it, and return its bytes.
