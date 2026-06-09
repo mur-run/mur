@@ -8,6 +8,15 @@ use std::time::Duration;
 /// Default macOS VLC binary path.
 const DEFAULT_VLC_PATH: &str = "/Applications/VLC.app/Contents/MacOS/VLC";
 
+/// After `in_play`, VLC autoplays asynchronously: the command's own status response
+/// can still read `stopped` before the item-open state machine reaches `playing`.
+/// Firing the `pl_play` nudge in that window races VLC's open and can leave playback
+/// stopped (flaky, timing-dependent). So when the immediate state is idle we poll the
+/// status a few times — giving in_play's autoplay a chance — and only nudge if it is
+/// *still* idle (the genuine freshly-launched-VLC case the nudge exists for).
+const AUTOPLAY_GRACE_POLLS: u32 = 6;
+const AUTOPLAY_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Locate VLC binary: env override `MUR_VLC_PATH`, else default path.
 pub fn detect_vlc() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("MUR_VLC_PATH") {
@@ -171,12 +180,21 @@ pub async fn open(source: &str) -> Result<VlcStatus> {
     let _ = super::resolve::save_last_source(&home, source);
     let rt = ensure_vlc_running(&home, client).await?;
     let status = send_command(&rt, client, "in_play", &[("input", source)]).await?;
-    // `in_play` enqueues and *should* autoplay, but a freshly-launched VLC can
-    // land in `stopped`. Nudge it into playback ONLY from a genuinely idle state
-    // — not from `paused` (the user paused), `opening`/`buffering` (already
-    // progressing), or `playing` — so we don't fight a transient state or
-    // override an intentional pause. `pl_play` resumes the just-enqueued item.
+    // `in_play` enqueues and *should* autoplay, but its immediate status response can
+    // still read `stopped` before VLC's asynchronous item-open reaches `playing`, and a
+    // freshly-launched VLC can land in `stopped` for real. Nudge ONLY from a genuinely
+    // idle state — not `paused` (user paused), `opening`/`buffering` (already
+    // progressing), or `playing`. To avoid racing the item-open (a premature `pl_play`
+    // can leave playback stopped — flaky and timing-dependent), first give in_play's own
+    // autoplay a brief grace window, polling the status; only nudge if still idle after.
     if matches!(status.state.as_str(), "stopped" | "") {
+        for _ in 0..AUTOPLAY_GRACE_POLLS {
+            tokio::time::sleep(AUTOPLAY_POLL_INTERVAL).await;
+            let s = get_status(&rt, client).await?;
+            if !matches!(s.state.as_str(), "stopped" | "") {
+                return Ok(s); // in_play autoplayed on its own — no nudge needed
+            }
+        }
         return send_command(&rt, client, "pl_play", &[]).await;
     }
     Ok(status)
