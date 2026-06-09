@@ -1,6 +1,7 @@
-//! MLX inference sidecar — spawns the bundled `mlx-server` (frozen mlx-lm,
-//! OpenAI-compatible) on an ephemeral port and publishes its base URL via the
-//! shared file so launchd-managed agents can reach it.
+//! MLX inference sidecar — spawns the bundled `mlx-server` (frozen mlx-vlm,
+//! OpenAI-compatible; serves both text and vision) on an ephemeral port and
+//! publishes its base URL via the shared file so launchd-managed agents can
+//! reach it.
 
 use std::net::TcpListener;
 
