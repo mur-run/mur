@@ -223,7 +223,10 @@ async fn capture_png(rt: &VlcRuntime, client: &reqwest::Client) -> Option<Vec<u8
         .text()
         .await
         .ok()?;
-    if !status.contains("<state>playing</state>") {
+    // Use the shared parser rather than a raw substring match, so pretty-printed
+    // XML (`<state>\n playing\n</state>`) and nested same-named tags are handled
+    // the same way as mur-core's tools.
+    if mur_common::media::parse_status_xml(&status).state != "playing" {
         return None;
     }
     let _ = client
