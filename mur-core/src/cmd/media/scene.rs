@@ -55,9 +55,15 @@ pub const DEFAULT_EXPLAIN_PROMPT: &str =
     "用繁體中文、溫暖簡潔地說明這個畫面正在發生什麼；若有人物或字幕，也一併解讀。";
 
 /// Build an OpenAI-compatible vision chat request body.
+///
+/// `chat_template_kwargs.enable_thinking=false` disables the bundled Qwen3 model's
+/// "thinking" mode so the answer lands in `message.content` rather than being
+/// spent on chain-of-thought in `message.reasoning` (see `analyze::chat_request`).
+/// Ignored by chat templates that don't reference it.
 pub fn build_request(model: &str, prompt: &str, image_data_url: &str) -> Value {
     json!({
         "model": model,
+        "chat_template_kwargs": { "enable_thinking": false },
         "messages": [{
             "role": "user",
             "content": [
