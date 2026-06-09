@@ -174,6 +174,9 @@ fn mode_matches_category(cat: Category, mode: ContentMode) -> bool {
             | (Category::Context, ContentMode::Context)
             | (Category::Meta, ContentMode::Context)
             | (Category::Note, ContentMode::Note)
+            // Media skills carry a `context` body (the when/why prose the agent
+            // reads); there is no dedicated ContentMode::Media.
+            | (Category::Media, ContentMode::Context)
     )
 }
 
@@ -243,6 +246,25 @@ content:
             validate(&m),
             Err(ValidationError::ContentModeMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn media_category_with_context_validates() {
+        // The shipped media skills (video-analyze/scene-explain/vlc-control/
+        // watch-together) declare `category: media` with a `context` body;
+        // validation must accept them so `mur agent skill add` doesn't reject them.
+        let yaml = r#"
+name: video-analyze
+version: 1.0.0
+publisher: human:test
+description: analyze a video
+category: media
+content:
+  abstract: hi
+  context: when and why to use video_analyze
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        validate(&m).expect("media + context should validate");
     }
 
     // ── M6a: mcp_requirements ──
