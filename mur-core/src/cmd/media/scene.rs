@@ -56,14 +56,13 @@ pub const DEFAULT_EXPLAIN_PROMPT: &str =
 
 /// Build an OpenAI-compatible vision chat request body.
 ///
-/// `chat_template_kwargs.enable_thinking=false` disables the bundled Qwen3 model's
-/// "thinking" mode so the answer lands in `message.content` rather than being
-/// spent on chain-of-thought in `message.reasoning` (see `analyze::chat_request`).
-/// Ignored by chat templates that don't reference it.
+/// The bundled Qwen3 reasoning model needs `chat_template_kwargs.enable_thinking=false`
+/// so the answer lands in `message.content`; that rule lives in one place
+/// (`analyze::disable_thinking_for_bundled`) and is gated on the model so non-Qwen
+/// endpoints don't receive an unknown field.
 pub fn build_request(model: &str, prompt: &str, image_data_url: &str) -> Value {
-    json!({
+    let mut body = json!({
         "model": model,
-        "chat_template_kwargs": { "enable_thinking": false },
         "messages": [{
             "role": "user",
             "content": [
@@ -72,7 +71,9 @@ pub fn build_request(model: &str, prompt: &str, image_data_url: &str) -> Value {
             ]
         }],
         "max_tokens": 512
-    })
+    });
+    super::analyze::disable_thinking_for_bundled(&mut body, model);
+    body
 }
 
 /// Encode PNG bytes as a data URL for the image_url field.
