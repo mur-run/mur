@@ -19,14 +19,42 @@ pub fn runtime_path(mur_home: &Path) -> PathBuf {
     mur_home.join("runtime").join("vlc.json")
 }
 
+/// Load the persisted VLC runtime (`vlc.json`), or `None` if absent/unparseable.
+/// Used by the runtime supervisor to allowlist VLC's HTTP port in the kernel
+/// sandbox, and anywhere else that needs the current VLC connection details.
+pub fn load_runtime(mur_home: &Path) -> Option<VlcRuntime> {
+    let raw = std::fs::read_to_string(runtime_path(mur_home)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn runtime_path_under_runtime_dir() {
         let p = runtime_path(Path::new("/tmp/h"));
         assert!(p.ends_with("runtime/vlc.json"));
+    }
+
+    #[test]
+    fn load_runtime_absent_is_none() {
+        let home = TempDir::new().unwrap();
+        assert!(load_runtime(home.path()).is_none());
+    }
+
+    #[test]
+    fn load_runtime_roundtrips_port() {
+        let home = TempDir::new().unwrap();
+        let dir = home.path().join("runtime");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            runtime_path(home.path()),
+            r#"{"port":61886,"password":"pw","snapshot_dir":"/tmp/s"}"#,
+        )
+        .unwrap();
+        assert_eq!(load_runtime(home.path()).unwrap().port, 61886);
     }
 }
 

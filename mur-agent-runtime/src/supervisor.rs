@@ -192,10 +192,24 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // On platforms without Landlock/SBPL support, returns enforcing=false — B0 still applies.
     let fail_closed = profile.inner.entitlements.fail_closed_on_sandbox_error;
     // Always allow the agent's own local LLM port through the kernel sandbox.
-    let llm_ports: Vec<u16> = crate::supervisor_runner::local_llm_port(&profile.inner, &mur_home)
-        .into_iter()
-        .collect();
-    match crate::sandbox::apply(&profile.inner.entitlements, &agent_home, &llm_ports) {
+    let mut extra_ports: Vec<u16> =
+        crate::supervisor_runner::local_llm_port(&profile.inner, &mur_home)
+            .into_iter()
+            .collect();
+    // Also allow the persisted VLC HTTP port so the proactive co-watching
+    // WatchScheduler can snapshot VLC under the enforced sandbox. The macOS SBPL
+    // (and Landlock) allowlist is port-based, and the VLC port is random-but-sticky
+    // in vlc.json — so without this the scheduler's HTTP to VLC is kernel-denied
+    // and co-watching silently captures nothing. If VLC has never been set up,
+    // vlc.json is absent at seal time; a restart picks the port up once it exists.
+    if let Some(vlc) = mur_common::media::load_runtime(&mur_home) {
+        extra_ports.push(vlc.port);
+        tracing::info!(
+            vlc_port = vlc.port,
+            "B1 sandbox: allowing VLC HTTP port for co-watching"
+        );
+    }
+    match crate::sandbox::apply(&profile.inner.entitlements, &agent_home, &extra_ports) {
         Ok(status) => {
             if !status.enforcing && fail_closed {
                 anyhow::bail!(
