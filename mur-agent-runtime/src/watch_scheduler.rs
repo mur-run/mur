@@ -155,7 +155,7 @@ use crate::task_runner::{TaskRunner, TaskSpec};
 use chrono::{Local, Timelike};
 use mur_common::a2a::{Message, MessagePart};
 use mur_common::agent::QuietHours;
-use mur_common::media::{VlcRuntime, load_watch, newest_file, runtime_path, save_watch};
+use mur_common::media::{VlcRuntime, load_runtime, load_watch, newest_file, save_watch};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -202,12 +202,6 @@ impl WatchScheduler {
             run_loop(self, cancel).await;
         })
     }
-}
-
-/// Read VLC runtime config, if present.
-fn vlc_runtime(mur_home: &std::path::Path) -> Option<VlcRuntime> {
-    let body = std::fs::read_to_string(runtime_path(mur_home)).ok()?;
-    serde_json::from_str(&body).ok()
 }
 
 /// Ask VLC for a snapshot, read the resulting PNG, delete it, and return its bytes.
@@ -327,7 +321,7 @@ async fn run_loop(s: WatchScheduler, cancel: CancellationToken) {
         if !session.active {
             continue;
         }
-        let Some(rt) = vlc_runtime(&s.mur_home) else {
+        let Some(rt) = load_runtime(&s.mur_home) else {
             continue;
         };
         let Some(png) = capture_png(&rt, &client).await else {
@@ -383,6 +377,11 @@ async fn run_loop(s: WatchScheduler, cancel: CancellationToken) {
             _ => {}
         }
         fresh.last_scene_phash = hash; // always track the latest frame
-        let _ = save_watch(&s.mur_home, &fresh);
+        if let Err(e) = save_watch(&s.mur_home, &fresh) {
+            // Persisting consent/cooldown/last_scene matters: a silent failure here
+            // makes the scheduler re-ask consent and re-narrate every tick. Surface
+            // it (e.g. a sandbox denial or full disk) rather than swallowing.
+            tracing::warn!(error = %e, "watch: failed to persist co-watching session");
+        }
     }
 }
