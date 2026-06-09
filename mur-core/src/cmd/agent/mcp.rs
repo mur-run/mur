@@ -131,6 +131,7 @@ pub fn cmd_mcp_add(
         description_hash: None,
         publisher,
         installed_at: Some(chrono::Utc::now()),
+        timeout_secs: None,
     });
     // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
     if !profile

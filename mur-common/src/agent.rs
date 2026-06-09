@@ -249,6 +249,12 @@ pub struct McpServerEntry {
     /// rug-pull dialog UX. `None` for older entries. (B0 rule 6 / M9.1)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_at: Option<chrono::DateTime<chrono::Utc>>,
+
+    /// Per-tool-call timeout for this server, in seconds. `None` uses the
+    /// runtime default. Slow tools (e.g. `video_analyze`: transcript fetch
+    /// + local-model map-reduce) need a longer budget than the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u32>,
 }
 
 /// Display-only publisher metadata captured at install time. None of
