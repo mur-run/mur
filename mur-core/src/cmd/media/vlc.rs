@@ -18,14 +18,9 @@ pub fn detect_vlc() -> Option<PathBuf> {
     candidate.exists().then(|| candidate.to_path_buf())
 }
 
-/// Parsed subset of VLC's `requests/status.xml`.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct VlcStatus {
-    pub state: String, // "playing" | "paused" | "stopped"
-    pub time: i64,     // seconds elapsed
-    pub length: i64,   // seconds total
-    pub volume: i64,   // raw VLC volume (256 == 100%)
-}
+// `VlcStatus` + `parse_status_xml` live in `mur-common::media` so the runtime's
+// WatchScheduler (which cannot depend on mur-core) shares the same parser.
+pub use mur_common::media::{VlcStatus, parse_status_xml};
 
 /// Base URL for the VLC HTTP interface.
 pub fn status_url(port: u16) -> String {
@@ -42,66 +37,6 @@ pub fn command_url(port: u16, cmd: &str, extra: &[(&str, &str)]) -> String {
         url.push_str(&urlencoding::encode(v));
     }
     url
-}
-
-/// Parse the subset of VLC's `status.xml` using a proper XML reader.
-/// Missing fields default sensibly.
-pub fn parse_status_xml(xml: &str) -> VlcStatus {
-    use quick_xml::Reader;
-    use quick_xml::events::Event;
-
-    let mut reader = Reader::from_str(xml);
-    let mut state = "stopped".to_string();
-    let mut time = 0i64;
-    let mut length = 0i64;
-    let mut volume = 0i64;
-    let mut buf = Vec::new();
-    let mut in_tag = String::new();
-    // Element depth: <root> is depth 1, so the top-level playback fields' text
-    // sits at depth 2. Gating on this prevents identically-named tags nested
-    // deeper in VLC's <information>/<stats> subtrees from clobbering the real
-    // top-level values.
-    let mut depth = 0i32;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                depth += 1;
-                in_tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-            }
-            // Clear the active tag when it closes. Without this, the pretty-printed
-            // whitespace VLC emits *after* `</state>` arrives as a Text event while
-            // `in_tag` is still "state" and clobbers the value (e.g. state == "\n").
-            Ok(Event::End(_)) => {
-                depth -= 1;
-                in_tag.clear();
-            }
-            // Self-closing element (e.g. `<state/>`): no text to read; just reset
-            // the active tag so a later Text isn't attributed to it.
-            Ok(Event::Empty(_)) => {
-                in_tag.clear();
-            }
-            Ok(Event::Text(ref e)) if depth == 2 => {
-                let text = e.unescape().unwrap_or_default().to_string();
-                match in_tag.as_str() {
-                    "state" => state = text,
-                    "time" => time = text.trim().parse().unwrap_or(0),
-                    "length" => length = text.trim().parse().unwrap_or(0),
-                    "volume" => volume = text.trim().parse().unwrap_or(0),
-                    _ => {}
-                }
-            }
-            Ok(Event::Eof) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-    VlcStatus {
-        state,
-        time,
-        length,
-        volume,
-    }
 }
 
 #[cfg(test)]
@@ -122,48 +57,8 @@ mod tests {
         assert!(u.starts_with("http://127.0.0.1:8080/requests/status.xml?command=in_play&input="));
         assert!(u.contains("https%3A%2F%2Fx%2Fy%3Fa%3Db"));
     }
-
-    #[test]
-    fn parse_status_extracts_fields() {
-        let xml = "<root><volume>256</volume><state>playing</state><time>42</time><length>3600</length></root>";
-        let s = parse_status_xml(xml);
-        assert_eq!(s.state, "playing");
-        assert_eq!(s.time, 42);
-        assert_eq!(s.length, 3600);
-        assert_eq!(s.volume, 256);
-    }
-
-    #[test]
-    fn parse_status_pretty_printed_does_not_clobber_state() {
-        // Real VLC status.xml is indented; the newline after `</state>` must not
-        // overwrite the parsed value (regression: state came back as "\n").
-        let xml = "<root>\n  <volume>256</volume>\n  <state>playing</state>\n  <time>42</time>\n  <length>3600</length>\n</root>\n";
-        let s = parse_status_xml(xml);
-        assert_eq!(s.state, "playing");
-        assert_eq!(s.time, 42);
-        assert_eq!(s.length, 3600);
-        assert_eq!(s.volume, 256);
-    }
-
-    #[test]
-    fn parse_status_ignores_nested_same_named_tags() {
-        // VLC's <information>/<stats> subtree can carry tags named like the
-        // top-level fields; nested occurrences (depth > 2) must NOT clobber the
-        // real top-level values.
-        let xml = "<root>\n\
-            \x20 <state>playing</state>\n\
-            \x20 <length>3600</length>\n\
-            \x20 <information>\n\
-            \x20   <category name=\"meta\">\n\
-            \x20     <length>0</length>\n\
-            \x20     <state>stopped</state>\n\
-            \x20   </category>\n\
-            \x20 </information>\n\
-            </root>";
-        let s = parse_status_xml(xml);
-        assert_eq!(s.state, "playing");
-        assert_eq!(s.length, 3600);
-    }
+    // VlcStatus / parse_status_xml tests live in mur-common::media (where the
+    // parser now lives).
 }
 
 // ── Runtime management ──
