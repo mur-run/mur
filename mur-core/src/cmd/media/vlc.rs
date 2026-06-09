@@ -57,25 +57,37 @@ pub fn parse_status_xml(xml: &str) -> VlcStatus {
     let mut volume = 0i64;
     let mut buf = Vec::new();
     let mut in_tag = String::new();
+    // Element depth: <root> is depth 1, so the top-level playback fields' text
+    // sits at depth 2. Gating on this prevents identically-named tags nested
+    // deeper in VLC's <information>/<stats> subtrees from clobbering the real
+    // top-level values.
+    let mut depth = 0i32;
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
+                depth += 1;
                 in_tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
             }
             // Clear the active tag when it closes. Without this, the pretty-printed
             // whitespace VLC emits *after* `</state>` arrives as a Text event while
             // `in_tag` is still "state" and clobbers the value (e.g. state == "\n").
             Ok(Event::End(_)) => {
+                depth -= 1;
                 in_tag.clear();
             }
-            Ok(Event::Text(ref e)) => {
+            // Self-closing element (e.g. `<state/>`): no text to read; just reset
+            // the active tag so a later Text isn't attributed to it.
+            Ok(Event::Empty(_)) => {
+                in_tag.clear();
+            }
+            Ok(Event::Text(ref e)) if depth == 2 => {
                 let text = e.unescape().unwrap_or_default().to_string();
                 match in_tag.as_str() {
                     "state" => state = text,
-                    "time" => time = text.parse().unwrap_or(0),
-                    "length" => length = text.parse().unwrap_or(0),
-                    "volume" => volume = text.parse().unwrap_or(0),
+                    "time" => time = text.trim().parse().unwrap_or(0),
+                    "length" => length = text.trim().parse().unwrap_or(0),
+                    "volume" => volume = text.trim().parse().unwrap_or(0),
                     _ => {}
                 }
             }
@@ -131,6 +143,26 @@ mod tests {
         assert_eq!(s.time, 42);
         assert_eq!(s.length, 3600);
         assert_eq!(s.volume, 256);
+    }
+
+    #[test]
+    fn parse_status_ignores_nested_same_named_tags() {
+        // VLC's <information>/<stats> subtree can carry tags named like the
+        // top-level fields; nested occurrences (depth > 2) must NOT clobber the
+        // real top-level values.
+        let xml = "<root>\n\
+            \x20 <state>playing</state>\n\
+            \x20 <length>3600</length>\n\
+            \x20 <information>\n\
+            \x20   <category name=\"meta\">\n\
+            \x20     <length>0</length>\n\
+            \x20     <state>stopped</state>\n\
+            \x20   </category>\n\
+            \x20 </information>\n\
+            </root>";
+        let s = parse_status_xml(xml);
+        assert_eq!(s.state, "playing");
+        assert_eq!(s.length, 3600);
     }
 }
 
@@ -244,10 +276,12 @@ pub async fn open(source: &str) -> Result<VlcStatus> {
     let _ = super::resolve::save_last_source(&home, source);
     let rt = ensure_vlc_running(&home, client).await?;
     let status = send_command(&rt, client, "in_play", &[("input", source)]).await?;
-    // `in_play` enqueues and *should* autoplay, but on a freshly-launched VLC it
-    // can land in `stopped`. Nudge it into playback so callers (and especially
-    // `scene_explain`, which snapshots the current frame) have a live frame.
-    if status.state != "playing" {
+    // `in_play` enqueues and *should* autoplay, but a freshly-launched VLC can
+    // land in `stopped`. Nudge it into playback ONLY from a genuinely idle state
+    // — not from `paused` (the user paused), `opening`/`buffering` (already
+    // progressing), or `playing` — so we don't fight a transient state or
+    // override an intentional pause. `pl_play` resumes the just-enqueued item.
+    if matches!(status.state.as_str(), "stopped" | "") {
         return send_command(&rt, client, "pl_play", &[]).await;
     }
     Ok(status)

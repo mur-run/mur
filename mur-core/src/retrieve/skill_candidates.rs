@@ -40,7 +40,12 @@ impl LoadedSkill {
             | mur_common::skill::types::Category::Note => KindGroup::Knowledge,
             mur_common::skill::types::Category::Workflow => KindGroup::Procedures,
             mur_common::skill::types::Category::Command => KindGroup::Procedures,
-            // Media skills drive the runtime's media tools — procedure-like.
+            // `KindGroup` is a *formatting* taxonomy (it only selects the injected
+            // section header + entry formatter), not a domain taxonomy. A media
+            // skill injects as procedural guidance ("to analyze a video, use
+            // video_analyze when…"), so it belongs under Procedures. We deliberately
+            // do NOT add a `KindGroup::Media`: that would push a domain label into a
+            // formatting enum (the same altitude mistake as a media-specific Category).
             mur_common::skill::types::Category::Media => KindGroup::Procedures,
         };
         InjectedItem {
