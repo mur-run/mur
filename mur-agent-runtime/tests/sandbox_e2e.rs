@@ -190,6 +190,81 @@ fn sandbox_write_deny_subprocess_main() {
     }
 }
 
+/// Inverse of the deny test: a directory passed via `extra_write_paths` (the
+/// `~/.mur/runtime` grant for co-watching) must actually permit the temp-file
+/// create + rename that `save_watch` does AND the unlink that snapshot-pruning
+/// does. Under Landlock a per-file grant cannot do this (creating/renaming needs
+/// directory-level MAKE_REG/REFER on the parent); only a directory grant can — so
+/// this guards the #382 follow-up fix. Runs in a subprocess so `restrict_self()`
+/// doesn't lock the test process. On macOS `/tmp` is write-exempt so the ops pass
+/// trivially; the load-bearing assertion is on Linux, where `/tmp` is default-denied
+/// and only the directory grant makes the writes succeed.
+#[test]
+#[cfg(unix)]
+fn sandbox_allows_granted_extra_write_dir() {
+    let exe = std::env::current_exe().unwrap();
+    let status = std::process::Command::new(&exe)
+        .env("MUR_TEST_SANDBOX_WRITE_ALLOW", "1")
+        .env_remove("MUR_AGENT_SKIP_SANDBOX")
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "granted runtime dir must allow temp+rename+unlink under the sandbox"
+    );
+}
+
+/// Subprocess entry point for `sandbox_allows_granted_extra_write_dir`.
+#[cfg(unix)]
+#[ctor::ctor]
+fn sandbox_write_allow_subprocess_main() {
+    if std::env::var_os("MUR_TEST_SANDBOX_WRITE_ALLOW").is_none() {
+        return;
+    }
+    use mur_agent_runtime::sandbox;
+    use mur_common::agent::AgentProfile;
+
+    let profile = AgentProfile::default_for_tests();
+    let agent_home = std::path::PathBuf::from("/tmp/b1_test_allow_home");
+    std::fs::create_dir_all(&agent_home).unwrap();
+
+    // Granted directory standing in for `~/.mur/runtime`. Created before sealing so
+    // the Landlock path-beneath rule sticks; passed via `extra_write_paths`.
+    let runtime_dir = std::path::PathBuf::from("/tmp/b1_test_allow_runtime");
+    std::fs::create_dir_all(&runtime_dir).unwrap();
+
+    if sandbox::apply(
+        &profile.entitlements,
+        &agent_home,
+        &[],
+        std::slice::from_ref(&runtime_dir),
+    )
+    .is_err()
+    {
+        // Sandbox apply failed (e.g., no kernel support) — treat as pass.
+        std::process::exit(0);
+    }
+
+    // Mimic save_watch (temp write + rename) and snapshot prune (unlink) inside the
+    // granted dir — exactly the operations a per-file grant breaks under Landlock.
+    let target = runtime_dir.join("watch.json");
+    let tmp = runtime_dir.join("watch.json.tmp");
+    let snap = runtime_dir.join("snap.png");
+    let ok = std::fs::write(&tmp, b"{}").is_ok()
+        && std::fs::rename(&tmp, &target).is_ok()
+        && std::fs::write(&snap, b"x").is_ok()
+        && std::fs::remove_file(&snap).is_ok();
+    std::fs::remove_file(&target).ok();
+
+    if ok {
+        std::process::exit(0);
+    } else {
+        eprintln!("ERROR: granted runtime dir did NOT allow temp+rename+unlink");
+        std::process::exit(1);
+    }
+}
+
 /// Verify that the Landlock layer compiles and SandboxPolicy paths are all absolute.
 /// Does NOT call restrict_self() to avoid locking the test process.
 #[test]

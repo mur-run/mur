@@ -298,10 +298,10 @@ mod tests {
         let agent_home = PathBuf::from("/tmp/a");
         let mut policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
         let extra = PathBuf::from("/home/u/.mur/runtime/vlc-snapshots");
-        policy.allow_extra_write_paths(&[extra.clone()]);
+        policy.allow_extra_write_paths(std::slice::from_ref(&extra));
         assert!(policy.fs_write.contains(&extra));
         // Idempotent — re-adding doesn't duplicate.
-        policy.allow_extra_write_paths(&[extra.clone()]);
+        policy.allow_extra_write_paths(std::slice::from_ref(&extra));
         assert_eq!(policy.fs_write.iter().filter(|p| **p == extra).count(), 1);
     }
 }

@@ -16,9 +16,17 @@ pub struct VlcRuntime {
     pub snapshot_dir: PathBuf,
 }
 
+/// The shared runtime state directory (`~/.mur/runtime`). Holds `vlc.json`,
+/// `watch.json`, and the VLC snapshot dir — all owned by the runtime and lying
+/// outside any single agent's home, so the sandbox must grant this directory
+/// (not the individual files) for co-watching to work under enforced confinement.
+pub fn runtime_dir(mur_home: &Path) -> PathBuf {
+    mur_home.join("runtime")
+}
+
 /// Path to the persisted VLC runtime config.
 pub fn runtime_path(mur_home: &Path) -> PathBuf {
-    mur_home.join("runtime").join("vlc.json")
+    runtime_dir(mur_home).join("vlc.json")
 }
 
 /// Load the persisted VLC runtime (`vlc.json`), or `None` if absent/unparseable.
@@ -147,6 +155,12 @@ mod tests {
     fn runtime_path_under_runtime_dir() {
         let p = runtime_path(Path::new("/tmp/h"));
         assert!(p.ends_with("runtime/vlc.json"));
+        // vlc.json, watch.json and the dir grant must agree on the same parent.
+        assert_eq!(p.parent().unwrap(), runtime_dir(Path::new("/tmp/h")));
+        assert_eq!(
+            watch_path(Path::new("/tmp/h")).parent().unwrap(),
+            runtime_dir(Path::new("/tmp/h"))
+        );
     }
 
     #[test]
@@ -258,7 +272,7 @@ pub struct WatchSession {
 
 /// Path to the persisted watch session.
 pub fn watch_path(mur_home: &Path) -> PathBuf {
-    mur_home.join("runtime").join("watch.json")
+    runtime_dir(mur_home).join("watch.json")
 }
 
 /// Load the watch session, or a default (all-off) session if absent/unparseable.

@@ -4,6 +4,7 @@
 //! reach it.
 
 use std::net::TcpListener;
+use std::time::Duration;
 
 /// Reserve a free localhost TCP port by binding to :0 and reading the assigned
 /// port. The listener is dropped immediately; a tiny race window exists before
@@ -77,16 +78,26 @@ pub fn start(app: &AppHandle) {
         }
     };
 
-    // Publish base URL for launchd-managed agents (Task 1 helper).
     let mur_home = crate::mur_home_path();
-    if let Err(e) = mur_common::local_llm::write_base_url(&mur_home, &base_url(port)) {
-        warn!("mlx sidecar: failed to write base url: {e}");
-    }
+
+    // The bundled model dir must be valid UTF-8 to pass as a CLI arg. Fail soft
+    // (matching the is_dir() guard above) rather than spawning with `--model ""`,
+    // which would be a silent misconfiguration that's hard to diagnose downstream.
+    let model_arg = match model_dir.to_str() {
+        Some(s) => s.to_string(),
+        None => {
+            warn!(
+                "mlx sidecar: model path is not valid UTF-8 ({}); skipping local inference",
+                model_dir.display()
+            );
+            return;
+        }
+    };
 
     let cmd = app.shell().sidecar("mlx-server").map(|c| {
         c.args([
             "--model",
-            model_dir.to_str().unwrap_or_default(),
+            &model_arg,
             "--host",
             "127.0.0.1",
             "--port",
@@ -103,7 +114,8 @@ pub fn start(app: &AppHandle) {
 
     match cmd.spawn() {
         Ok((mut rx, _child)) => {
-            info!(port, "mlx sidecar spawned");
+            info!(port, "mlx sidecar spawned; waiting for readiness");
+            // Stream the sidecar's stderr to our logs.
             tauri::async_runtime::spawn(async move {
                 while let Some(ev) = rx.recv().await {
                     if let CommandEvent::Stderr(line) = ev {
@@ -111,8 +123,55 @@ pub fn start(app: &AppHandle) {
                     }
                 }
             });
+            // Publish the base URL only once the server actually accepts
+            // connections. uvicorn binds/accepts only AFTER its lifespan startup
+            // (which loads the model) succeeds, so a successful connect is a true
+            // readiness signal — and if the frozen binary crashes during model
+            // load it never accepts, so we never publish a dead URL that agents
+            // would fall against with no fallback.
+            tauri::async_runtime::spawn(async move {
+                if wait_until_ready(port, MLX_READINESS_TIMEOUT).await {
+                    match mur_common::local_llm::write_base_url(&mur_home, &base_url(port)) {
+                        Ok(()) => info!(port, "mlx sidecar ready; base url published"),
+                        Err(e) => warn!("mlx sidecar: failed to write base url: {e}"),
+                    }
+                } else {
+                    warn!(
+                        port,
+                        "mlx sidecar did not accept connections within timeout; \
+                         not publishing base url (agents fall back to echo/cloud)"
+                    );
+                }
+            });
         }
         Err(e) => warn!("mlx sidecar: spawn failed: {e}"),
+    }
+}
+
+/// How long to wait for the sidecar to start accepting connections before
+/// giving up and leaving the base URL unpublished.
+const MLX_READINESS_TIMEOUT: Duration = Duration::from_secs(180);
+/// Interval between readiness probes.
+const MLX_READINESS_POLL: Duration = Duration::from_millis(500);
+
+/// Poll until the sidecar accepts a TCP connection on `port`, or `timeout`
+/// elapses (returns false). uvicorn only begins accepting connections after its
+/// lifespan startup — which loads the model — completes, so a successful connect
+/// doubles as a model-ready signal.
+async fn wait_until_ready(port: u16, timeout: Duration) -> bool {
+    use tokio::net::TcpStream;
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+            .await
+            .is_ok()
+        {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(MLX_READINESS_POLL).await;
     }
 }
 
