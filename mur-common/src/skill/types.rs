@@ -39,6 +39,9 @@ pub enum Category {
     Command,
     Meta,
     Note,
+    /// Media skills (video-analyze, scene-explain, vlc-control, watch-together):
+    /// they drive the runtime's media tools rather than the four-stage pipeline.
+    Media,
 }
 
 /// Where a skill came from. Drives the curation gate: `Llm`-authored skills
@@ -112,6 +115,14 @@ mod tests {
         assert_eq!(yaml.trim(), "note");
         let parsed: Category = serde_yaml_ng::from_str("note").unwrap();
         assert_eq!(parsed, Category::Note);
+    }
+
+    #[test]
+    fn media_category_serialises_lowercase_and_roundtrips() {
+        let yaml = serde_yaml_ng::to_string(&Category::Media).unwrap();
+        assert_eq!(yaml.trim(), "media");
+        let parsed: Category = serde_yaml_ng::from_str("media").unwrap();
+        assert_eq!(parsed, Category::Media);
     }
 
     #[test]
