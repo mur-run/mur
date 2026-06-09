@@ -196,29 +196,38 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         crate::supervisor_runner::local_llm_port(&profile.inner, &mur_home)
             .into_iter()
             .collect();
-    // Also allow the persisted VLC HTTP port so the proactive co-watching
-    // WatchScheduler can snapshot VLC under the enforced sandbox. The macOS SBPL
-    // (and Landlock) allowlist is port-based, and the VLC port is random-but-sticky
-    // in vlc.json — so without this the scheduler's HTTP to VLC is kernel-denied
-    // and co-watching silently captures nothing. If VLC has never been set up,
-    // vlc.json is absent at seal time; a restart picks the port up once it exists.
-    // The scheduler also persists co-watching state and prunes snapshots under
-    // the shared `~/.mur/runtime` dir (outside agent_home), so allow writing
-    // those specific paths — otherwise consent/last_scene never persist and
-    // snapshots accumulate (B5). watch.json is written via temp+rename, so allow
-    // the `.tmp` sibling too.
+    // Also allow the persisted VLC HTTP port + the shared runtime-state directory
+    // so the proactive co-watching WatchScheduler can operate under the enforced
+    // sandbox. Gated on co-watching being set up (vlc.json present): a non-media
+    // agent keeps its narrower sandbox rather than being widened to a shared,
+    // cross-agent state file it never uses. The VLC port (port-based allowlist on
+    // both SBPL and Landlock NetPort) is random-but-sticky in vlc.json, so if VLC
+    // has never been set up vlc.json is absent at seal time and a restart picks it
+    // up once it exists.
+    //
+    // We grant the WHOLE `~/.mur/runtime` directory (a sibling of agent_home), not
+    // the individual files. The scheduler reads vlc.json, prunes snapshots, and
+    // persists watch.json via temp-file + rename. Under Landlock a temp create +
+    // rename needs directory-level rights (MAKE_REG/REFER) on the *parent* that a
+    // per-file grant cannot confer, and path-beneath rules are silently skipped for
+    // paths that don't exist at seal time (watch.json.tmp is transient). Granting
+    // the existing directory is both necessary and sufficient on Landlock and
+    // matches the macOS SBPL subpath grant — so co-watching works on both kernels,
+    // not just macOS. (We create the dir first so the Landlock rule sticks.)
     let mut extra_write_paths: Vec<std::path::PathBuf> = Vec::new();
     if let Some(vlc) = mur_common::media::load_runtime(&mur_home) {
         extra_ports.push(vlc.port);
+        let runtime_dir = mur_common::media::runtime_dir(&mur_home);
+        let _ = std::fs::create_dir_all(&runtime_dir);
+        extra_write_paths.push(runtime_dir);
+        // snapshot_dir normally lives under runtime/, but vlc.json may point it
+        // elsewhere — grant it explicitly so snapshot read/prune works regardless.
         extra_write_paths.push(vlc.snapshot_dir.clone());
         tracing::info!(
             vlc_port = vlc.port,
-            "B1 sandbox: allowing VLC HTTP port for co-watching"
+            "B1 sandbox: allowing VLC HTTP port + runtime dir for co-watching"
         );
     }
-    let watch_json = mur_common::media::watch_path(&mur_home);
-    extra_write_paths.push(watch_json.with_extension("json.tmp"));
-    extra_write_paths.push(watch_json);
     match crate::sandbox::apply(
         &profile.inner.entitlements,
         &agent_home,
