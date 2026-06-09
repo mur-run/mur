@@ -197,6 +197,7 @@ pub fn build_pinned_entry(
         description_hash: Some(description_hash),
         publisher,
         installed_at: Some(chrono::Utc::now()),
+        timeout_secs: None,
     }
 }
 
