@@ -22,13 +22,23 @@ pub fn newest_file(dir: &Path) -> Option<PathBuf> {
     best.map(|(_, p)| p)
 }
 
-/// Like [`newest_file`], but only considers files modified at or after `since`.
-/// Used to require a *freshly captured* snapshot rather than silently falling
-/// back to a stale frame left over from a previous session.
-pub fn newest_file_after(dir: &Path, since: std::time::SystemTime) -> Option<PathBuf> {
-    let path = newest_file(dir)?;
-    let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
-    (mtime >= since).then_some(path)
+/// Like [`newest_file`], but returns `None` when the newest file equals `exclude`
+/// — the snapshot that already existed before a capture was requested. This
+/// requires a *freshly captured* frame rather than silently falling back to a
+/// stale snapshot from a previous session.
+///
+/// VLC names each snapshot uniquely (`vlcsnap-<timestamp>.png`), so "the newest
+/// file is a different path than the pre-capture one" is a reliable freshness
+/// signal that is independent of filesystem mtime granularity. (Comparing a file
+/// mtime against a wall-clock `SystemTime::now()` would spuriously reject genuinely
+/// fresh frames on coarse-mtime volumes — HFS+/exFAT/FAT/network mounts floor mtime
+/// to whole seconds, below a sub-second `now()`.)
+pub fn newest_file_excluding(dir: &Path, exclude: Option<&Path>) -> Option<PathBuf> {
+    let newest = newest_file(dir)?;
+    match exclude {
+        Some(prev) if newest == prev => None,
+        _ => Some(newest),
+    }
 }
 
 #[cfg(test)]
@@ -55,24 +65,40 @@ mod tests {
     }
 
     #[test]
-    fn newest_file_after_rejects_stale_and_accepts_fresh() {
+    fn newest_file_excluding_rejects_stale_and_accepts_fresh() {
         let dir = TempDir::new().unwrap();
-        // A stale snapshot left from "before".
+        // A stale snapshot left from a prior session.
         std::fs::write(dir.path().join("stale.png"), b"old").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        // The capture boundary.
-        let since = std::time::SystemTime::now();
-        // Nothing newer than `since` yet → no fresh frame.
-        assert!(newest_file_after(dir.path(), since).is_none());
-        // A freshly captured snapshot lands after `since`.
+        let baseline = newest_file(dir.path());
+        assert_eq!(
+            baseline.as_deref().unwrap().file_name().unwrap(),
+            "stale.png"
+        );
+        // The newest file is still the baseline → no fresh frame yet.
+        assert!(newest_file_excluding(dir.path(), baseline.as_deref()).is_none());
+        // A freshly captured (uniquely-named) snapshot lands.
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(dir.path().join("fresh.png"), b"new").unwrap();
         assert_eq!(
-            newest_file_after(dir.path(), since)
+            newest_file_excluding(dir.path(), baseline.as_deref())
                 .unwrap()
                 .file_name()
                 .unwrap(),
             "fresh.png"
+        );
+    }
+
+    #[test]
+    fn newest_file_excluding_empty_baseline_accepts_any() {
+        let dir = TempDir::new().unwrap();
+        // No prior snapshot; first capture is always fresh.
+        std::fs::write(dir.path().join("first.png"), b"x").unwrap();
+        assert_eq!(
+            newest_file_excluding(dir.path(), None)
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "first.png"
         );
     }
 }
@@ -169,15 +195,16 @@ pub async fn explain(prompt: Option<&str>) -> Result<String> {
 
     // 1. Ensure VLC is up and take a snapshot.
     let rt = super::vlc::ensure_for_snapshot(client).await?;
-    // Mark the instant before requesting the snapshot so we can require a frame
-    // captured *after* this call — never an older snapshot from a prior session.
-    let since = std::time::SystemTime::now();
+    // Record the pre-capture snapshot so we can require a *newer* (differently
+    // named) frame — never an older snapshot from a prior session. Path-based so
+    // it's robust to filesystem mtime granularity (see `newest_file_excluding`).
+    let baseline = newest_file(&rt.snapshot_dir);
     super::vlc::snapshot_command(&rt, client).await?;
 
     // 2. Read the newest snapshot file (retry briefly for the file to land).
     let mut img_path = None;
     for i in 0..10 {
-        if let Some(p) = newest_file_after(&rt.snapshot_dir, since) {
+        if let Some(p) = newest_file_excluding(&rt.snapshot_dir, baseline.as_deref()) {
             img_path = Some(p);
             break;
         }
@@ -206,7 +233,7 @@ pub async fn explain(prompt: Option<&str>) -> Result<String> {
         Ok(b) => b,
         Err(_) => {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            let retry = newest_file_after(&rt.snapshot_dir, since)
+            let retry = newest_file_excluding(&rt.snapshot_dir, baseline.as_deref())
                 .context("no snapshot (file vanished and no replacement found)")?;
             std::fs::read(&retry).context("read snapshot")?
         }
