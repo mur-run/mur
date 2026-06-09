@@ -42,10 +42,11 @@ pub async fn build_tools(
         .map(|entry| {
             let pool = pool.clone();
             let name = entry.name.clone();
+            let timeout_secs = entry.timeout_secs;
             async move {
                 let sanitized = sanitize_server(&name);
                 match pool.list_tools(&name).await {
-                    Ok(tools) => Some((name, sanitized, tools)),
+                    Ok(tools) => Some((name, sanitized, tools, timeout_secs)),
                     Err(e) => {
                         tracing::warn!(server = %name, "mcp tools/list failed: {e}");
                         None
@@ -58,7 +59,10 @@ pub async fn build_tools(
     let discovered = future::join_all(discovery_futs).await;
 
     for item in discovered.into_iter().flatten() {
-        let (server, sanitized, tools) = item;
+        let (server, sanitized, tools, timeout_secs) = item;
+        let timeout = timeout_secs
+            .map(|s| std::time::Duration::from_secs(s as u64))
+            .unwrap_or(super::mcp::MCP_TOOL_TIMEOUT);
         for t in tools {
             let wname = wire_name(&sanitized, &t.name);
             if resolve_tool_policy(rules, &wname) == ToolPolicy::Deny {
@@ -76,7 +80,7 @@ pub async fn build_tools(
                 tool: t.name.clone(),
                 def,
                 pool: pool.clone(),
-                timeout: super::mcp::MCP_TOOL_TIMEOUT,
+                timeout,
             });
             map.insert(wname, exec);
         }
