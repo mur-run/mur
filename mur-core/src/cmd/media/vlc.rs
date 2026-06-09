@@ -63,6 +63,12 @@ pub fn parse_status_xml(xml: &str) -> VlcStatus {
             Ok(Event::Start(ref e)) => {
                 in_tag = String::from_utf8_lossy(e.name().as_ref()).into_owned();
             }
+            // Clear the active tag when it closes. Without this, the pretty-printed
+            // whitespace VLC emits *after* `</state>` arrives as a Text event while
+            // `in_tag` is still "state" and clobbers the value (e.g. state == "\n").
+            Ok(Event::End(_)) => {
+                in_tag.clear();
+            }
             Ok(Event::Text(ref e)) => {
                 let text = e.unescape().unwrap_or_default().to_string();
                 match in_tag.as_str() {
@@ -108,6 +114,18 @@ mod tests {
     #[test]
     fn parse_status_extracts_fields() {
         let xml = "<root><volume>256</volume><state>playing</state><time>42</time><length>3600</length></root>";
+        let s = parse_status_xml(xml);
+        assert_eq!(s.state, "playing");
+        assert_eq!(s.time, 42);
+        assert_eq!(s.length, 3600);
+        assert_eq!(s.volume, 256);
+    }
+
+    #[test]
+    fn parse_status_pretty_printed_does_not_clobber_state() {
+        // Real VLC status.xml is indented; the newline after `</state>` must not
+        // overwrite the parsed value (regression: state came back as "\n").
+        let xml = "<root>\n  <volume>256</volume>\n  <state>playing</state>\n  <time>42</time>\n  <length>3600</length>\n</root>\n";
         let s = parse_status_xml(xml);
         assert_eq!(s.state, "playing");
         assert_eq!(s.time, 42);
@@ -225,7 +243,14 @@ pub async fn open(source: &str) -> Result<VlcStatus> {
     // VLC's status.xml does not expose a usable source URI. (Spec §4.2.)
     let _ = super::resolve::save_last_source(&home, source);
     let rt = ensure_vlc_running(&home, client).await?;
-    send_command(&rt, client, "in_play", &[("input", source)]).await
+    let status = send_command(&rt, client, "in_play", &[("input", source)]).await?;
+    // `in_play` enqueues and *should* autoplay, but on a freshly-launched VLC it
+    // can land in `stopped`. Nudge it into playback so callers (and especially
+    // `scene_explain`, which snapshots the current frame) have a live frame.
+    if status.state != "playing" {
+        return send_command(&rt, client, "pl_play", &[]).await;
+    }
+    Ok(status)
 }
 
 /// Playback control. `action` ∈ {play, pause, toggle, stop, seek, volume}.
