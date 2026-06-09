@@ -84,6 +84,17 @@ impl McpClient {
         self.stderr.lock().await.take()
     }
 
+    /// Send a JSON-RPC *notification* (no `id`, no response expected).
+    /// Used for the MCP lifecycle `notifications/initialized` handshake step.
+    async fn notify(&self, method: &str, params: Value) -> Result<(), McpError> {
+        let req = json!({"jsonrpc": "2.0", "method": method, "params": params});
+        let line = format!("{req}\n");
+        let mut s = self.stdin.lock().await;
+        s.write_all(line.as_bytes()).await?;
+        s.flush().await?;
+        Ok(())
+    }
+
     async fn request(&self, method: &str, params: Value) -> Result<Value, McpError> {
         let id = {
             let mut g = self.next_id.lock().await;
@@ -124,6 +135,11 @@ impl McpClient {
                 }),
             )
             .await?;
+        // MCP lifecycle step 3: the client MUST send `notifications/initialized`
+        // after the `initialize` response, otherwise spec-compliant servers
+        // reject every subsequent request (`tools/list`, `tools/call`) with
+        // "Not initialized". Universal — required by all MCP servers, not just ours.
+        self.notify("notifications/initialized", json!({})).await?;
         Ok(InitializeInfo {
             server_name: res["serverInfo"]["name"]
                 .as_str()
