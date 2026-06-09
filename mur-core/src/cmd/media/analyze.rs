@@ -24,7 +24,11 @@ impl AnalysisMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct KeyPoint {
     pub text: String,
-    #[serde(default, deserialize_with = "de_seconds_to_ms")]
+    #[serde(
+        default,
+        deserialize_with = "de_seconds_to_ms",
+        serialize_with = "se_ms_to_seconds"
+    )]
     pub t_ms: i64,
 }
 
@@ -37,13 +41,30 @@ pub struct KeyPoint {
 /// back to dumping raw JSON. We accept any of these, take the first numeric value, treat
 /// it as seconds, and store milliseconds so `deep_link` (which divides by 1000) renders
 /// the correct `?t=Ns` deep link instead of collapsing to `t=0`.
+///
+/// Non-finite values (`inf`/`NaN`, e.g. from a string `"inf"` or `1e400`) are rejected
+/// to 0 rather than saturating the `as i64` cast to `i64::MAX`. `se_ms_to_seconds`
+/// keeps serialize symmetric so a round-trip doesn't multiply by 1000 a second time.
 fn de_seconds_to_ms<'de, D>(de: D) -> Result<i64, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let v = serde_json::Value::deserialize(de)?;
-    let secs = first_number(&v).unwrap_or(0.0).max(0.0);
+    let secs = first_number(&v)
+        .filter(|s| s.is_finite())
+        .unwrap_or(0.0)
+        .max(0.0);
     Ok((secs * 1000.0) as i64)
+}
+
+/// Serialize `t_ms` back as integer seconds, the inverse of [`de_seconds_to_ms`],
+/// so a serialize → deserialize round-trip is unit-stable instead of inflating the
+/// value ×1000.
+fn se_ms_to_seconds<S>(t_ms: &i64, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    s.serialize_i64(t_ms / 1000)
 }
 
 /// First numeric value reachable in `v`: a number, a numeric string, or the first
@@ -203,6 +224,43 @@ mod render_tests {
     }
 
     #[test]
+    fn t_ms_non_finite_falls_to_zero_not_saturated() {
+        // "inf"/"1e400"/"NaN" must not saturate the cast to i64::MAX.
+        for bad in ["inf", "1e400", "NaN", "-inf"] {
+            let r = parse_analysis(&format!(
+                r#"{{"key_points":[{{"text":"a","t_ms":"{bad}"}}]}}"#
+            ));
+            assert_eq!(r.key_points[0].t_ms, 0, "input {bad:?}");
+        }
+    }
+
+    #[test]
+    fn t_ms_serialize_deserialize_roundtrip_is_unit_stable() {
+        // Serialize writes seconds; deserialize reads seconds→ms, so 5000ms
+        // round-trips to 5000ms (not 5_000_000).
+        let r = AnalysisResult {
+            key_points: vec![KeyPoint {
+                text: "p".into(),
+                t_ms: 5_000,
+            }],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(parse_analysis(&json).key_points[0].t_ms, 5_000);
+    }
+
+    #[test]
+    fn thinking_kwarg_only_attached_for_bundled_qwen() {
+        let mut q = serde_json::json!({ "model": "x" });
+        disable_thinking_for_bundled(&mut q, "Qwen3.5-2B-MLX-4bit");
+        assert_eq!(q["chat_template_kwargs"]["enable_thinking"], false);
+        // A non-Qwen endpoint must not receive the unknown kwarg.
+        let mut other = serde_json::json!({ "model": "x" });
+        disable_thinking_for_bundled(&mut other, "gpt-4o");
+        assert!(other.get("chat_template_kwargs").is_none());
+    }
+
+    #[test]
     fn t_ms_array_no_longer_breaks_structured_parse() {
         // Regression: the bundled model emitted t_ms as [start,end]; the old i64 field
         // rejected it, so the whole structured parse failed and dumped raw JSON.
@@ -251,37 +309,50 @@ fn map_system() -> &'static str {
     "你是影片分析助手。針對這段字幕，列出 3-5 個重點，每點儘量附上時間（秒）。只回重點，不要客套。"
 }
 
-/// Final "reduce" instruction: emit STRICT JSON matching AnalysisResult.
-fn reduce_system(mode: AnalysisMode) -> &'static str {
-    match mode {
-        AnalysisMode::Conclusions => {
-            "你是影片分析助手。根據以下各段重點，輸出嚴格 JSON：{\"topic\":..,\"key_points\":[{\"text\":..,\"t_ms\":..}],\"key_moments\":[{\"text\":..,\"t_ms\":..}],\"conclusion\":\"深入的分析與結論\"}。t_ms 填該重點的時間，用「秒」的單一整數（例如 12），不要用陣列或區間。只輸出 JSON，用繁體中文。"
-        }
-        _ => {
-            "你是影片分析助手。根據以下各段重點，輸出嚴格 JSON：{\"topic\":..,\"key_points\":[{\"text\":..,\"t_ms\":..}],\"key_moments\":[{\"text\":..,\"t_ms\":..}],\"conclusion\":\"摘要\"}。t_ms 填該重點的時間，用「秒」的單一整數（例如 12），不要用陣列或區間。只輸出 JSON，用繁體中文。"
-        }
+/// Final "reduce" instruction: emit STRICT JSON matching AnalysisResult. Only the
+/// `conclusion` description differs between modes; the rest of the schema/rules are
+/// shared so the two prompts cannot silently drift.
+fn reduce_system(mode: AnalysisMode) -> String {
+    let conclusion = match mode {
+        AnalysisMode::Conclusions => "深入的分析與結論",
+        _ => "摘要",
+    };
+    format!(
+        "你是影片分析助手。根據以下各段重點，輸出嚴格 JSON：{{\"topic\":..,\"key_points\":[{{\"text\":..,\"t_ms\":..}}],\"key_moments\":[{{\"text\":..,\"t_ms\":..}}],\"conclusion\":\"{conclusion}\"}}。t_ms 填該重點的時間，用「秒」的單一整數（例如 12），不要用陣列或區間。只輸出 JSON，用繁體中文。"
+    )
+}
+
+/// Attach `chat_template_kwargs.enable_thinking=false` to `body` IFF `model` is the
+/// bundled Qwen3 reasoning model — it otherwise spends its whole `max_tokens` budget
+/// emitting chain-of-thought into `message.reasoning` and returns empty
+/// `message.content` (which `parse_completion` reads). Gating on the model keeps the
+/// kwarg off requests to other endpoints that might reject an unknown field. Single
+/// source of truth for both the text (`chat_request`) and vision
+/// (`scene::build_request`) request builders.
+pub(super) fn disable_thinking_for_bundled(body: &mut serde_json::Value, model: &str) {
+    if model.to_lowercase().contains("qwen3")
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert(
+            "chat_template_kwargs".into(),
+            json!({ "enable_thinking": false }),
+        );
     }
 }
 
 /// Build an OpenAI-compatible chat request (text-only, temperature 0 for determinism).
-///
-/// `chat_template_kwargs.enable_thinking=false` disables the bundled Qwen3 model's
-/// "thinking" mode. Reasoning models otherwise spend the entire `max_tokens` budget
-/// emitting chain-of-thought into `message.reasoning` and never populate
-/// `message.content`, which `parse_completion` reads — yielding empty output. The
-/// kwarg is ignored by chat templates that don't reference it, so it is harmless for
-/// non-reasoning models.
 fn chat_request(system: &str, user: &str) -> serde_json::Value {
-    json!({
+    let mut body = json!({
         "model": DEFAULT_BUNDLED_MODEL_ID,
         "temperature": 0,
-        "chat_template_kwargs": { "enable_thinking": false },
         "messages": [
             { "role": "system", "content": system },
             { "role": "user", "content": user }
         ],
         "max_tokens": 1024
-    })
+    });
+    disable_thinking_for_bundled(&mut body, DEFAULT_BUNDLED_MODEL_ID);
+    body
 }
 
 async fn call_model(body: serde_json::Value) -> Result<String, MediaError> {
@@ -332,7 +403,7 @@ pub async fn analyze(
     }
 
     // Reduce: produce structured JSON, parse, render.
-    let raw = call_model(chat_request(reduce_system(mode), &summaries)).await?;
+    let raw = call_model(chat_request(&reduce_system(mode), &summaries)).await?;
     let result = parse_analysis(&raw);
     Ok(render_markdown(&result, &source))
 }
