@@ -12,7 +12,10 @@ use crate::llm::ToolDef;
 use crate::mcp::pool::McpPool;
 use crate::protocol::mcp_client::McpClient;
 
-pub const MCP_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+/// Default per-tool-call timeout when an MCP server entry sets no
+/// `timeout_secs`. Override per server via `McpServerEntry.timeout_secs`.
+pub const DEFAULT_MCP_TOOL_TIMEOUT_SECS: u64 = 120;
+pub const MCP_TOOL_TIMEOUT: Duration = Duration::from_secs(DEFAULT_MCP_TOOL_TIMEOUT_SECS);
 
 /// Convert an MCP `tools/call` result to a display string.
 pub fn render_mcp_result(result: &Value) -> String {
