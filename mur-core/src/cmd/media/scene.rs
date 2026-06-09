@@ -2,106 +2,13 @@
 //! multimodal model.
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Return the most recently modified regular file in `dir`, if any.
-pub fn newest_file(dir: &Path) -> Option<PathBuf> {
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    for entry in std::fs::read_dir(dir).ok()? {
-        let entry = entry.ok()?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let mtime = entry.metadata().ok()?.modified().ok()?;
-        if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
-            best = Some((mtime, path));
-        }
-    }
-    best.map(|(_, p)| p)
-}
-
-/// Like [`newest_file`], but returns `None` when the newest file equals `exclude`
-/// — the snapshot that already existed before a capture was requested. This
-/// requires a *freshly captured* frame rather than silently falling back to a
-/// stale snapshot from a previous session.
-///
-/// VLC names each snapshot uniquely (`vlcsnap-<timestamp>.png`), so "the newest
-/// file is a different path than the pre-capture one" is a reliable freshness
-/// signal that is independent of filesystem mtime granularity. (Comparing a file
-/// mtime against a wall-clock `SystemTime::now()` would spuriously reject genuinely
-/// fresh frames on coarse-mtime volumes — HFS+/exFAT/FAT/network mounts floor mtime
-/// to whole seconds, below a sub-second `now()`.)
-pub fn newest_file_excluding(dir: &Path, exclude: Option<&Path>) -> Option<PathBuf> {
-    let newest = newest_file(dir)?;
-    match exclude {
-        Some(prev) if newest == prev => None,
-        _ => Some(newest),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn newest_file_picks_latest() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("a.png"), b"a").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(dir.path().join("b.png"), b"b").unwrap();
-        assert_eq!(
-            newest_file(dir.path()).unwrap().file_name().unwrap(),
-            "b.png"
-        );
-    }
-
-    #[test]
-    fn newest_file_empty_dir_is_none() {
-        let dir = TempDir::new().unwrap();
-        assert!(newest_file(dir.path()).is_none());
-    }
-
-    #[test]
-    fn newest_file_excluding_rejects_stale_and_accepts_fresh() {
-        let dir = TempDir::new().unwrap();
-        // A stale snapshot left from a prior session.
-        std::fs::write(dir.path().join("stale.png"), b"old").unwrap();
-        let baseline = newest_file(dir.path());
-        assert_eq!(
-            baseline.as_deref().unwrap().file_name().unwrap(),
-            "stale.png"
-        );
-        // The newest file is still the baseline → no fresh frame yet.
-        assert!(newest_file_excluding(dir.path(), baseline.as_deref()).is_none());
-        // A freshly captured (uniquely-named) snapshot lands.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(dir.path().join("fresh.png"), b"new").unwrap();
-        assert_eq!(
-            newest_file_excluding(dir.path(), baseline.as_deref())
-                .unwrap()
-                .file_name()
-                .unwrap(),
-            "fresh.png"
-        );
-    }
-
-    #[test]
-    fn newest_file_excluding_empty_baseline_accepts_any() {
-        let dir = TempDir::new().unwrap();
-        // No prior snapshot; first capture is always fresh.
-        std::fs::write(dir.path().join("first.png"), b"x").unwrap();
-        assert_eq!(
-            newest_file_excluding(dir.path(), None)
-                .unwrap()
-                .file_name()
-                .unwrap(),
-            "first.png"
-        );
-    }
-}
+// Snapshot-selection helpers live in `mur-common::media` so the runtime's
+// WatchScheduler (which cannot depend on mur-core) shares them. Their tests
+// live there too.
+use mur_common::media::newest_file;
+use mur_common::media::newest_file_excluding;
 
 // ── VLM vision request / response ──
 
