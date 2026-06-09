@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::companion::clock::SystemClock;
 use crate::hitl::HitlApprovals;
@@ -322,10 +322,28 @@ pub async fn build_provider_runner(
                 }
             }
         }
-        other => {
-            warn!(provider = %other, "no LLM client implemented; falling back to echo");
+        "echo" => {
+            // Intentional fallback: model resolution failed or the agent has no
+            // model configured. Degrade to echo (warned at resolution time).
             (
                 Arc::new(TaskRunner::new_stub_echo()),
+                None,
+                Some(pool.clone()),
+            )
+        }
+        other => {
+            // A real provider was configured but this runtime ships no client for
+            // it (e.g. `deepseek`). Do NOT silently echo — that looks alive but
+            // parrots input. Surface the misconfiguration in the logs AND in every
+            // chat reply so the user sees exactly what to change.
+            let msg = format!(
+                "⚠️ This agent's model provider '{other}' is not supported by the \
+                 MUR runtime (supported: local, ollama, anthropic, openai). \
+                 Update the agent's model to a supported provider in ~/.mur/models.yaml."
+            );
+            error!(provider = %other, "unsupported model provider — replying with misconfiguration notice instead of echo");
+            (
+                Arc::new(TaskRunner::new_stub_misconfigured(msg)),
                 None,
                 Some(pool.clone()),
             )
