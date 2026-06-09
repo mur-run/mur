@@ -39,6 +39,11 @@ pub enum TaskOutcome {
 pub enum RunnerBackend {
     StubEcho,
     StubSlow,
+    /// The agent's configured model provider has no client in this runtime
+    /// (e.g. `deepseek`). Rather than silently echoing input — which looks
+    /// alive but parrots — every turn replies with this misconfiguration
+    /// message so the user sees exactly what to fix.
+    Misconfigured(String),
     Llm(Arc<dyn LlmClient>),
 }
 
@@ -79,6 +84,12 @@ impl TaskRunner {
 
     pub fn new_stub_slow() -> Self {
         Self::with_backend(RunnerBackend::StubSlow)
+    }
+
+    /// Runner that replies to every turn with a misconfiguration notice instead
+    /// of calling a model. Used when the configured provider has no client.
+    pub fn new_stub_misconfigured(message: impl Into<String>) -> Self {
+        Self::with_backend(RunnerBackend::Misconfigured(message.into()))
     }
 
     pub fn with_llm(client: Arc<dyn LlmClient>) -> Self {
@@ -319,6 +330,7 @@ impl TaskRunner {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     Ok(echo_response(&spec.input))
                 }
+                RunnerBackend::Misconfigured(message) => Ok(text_response(message)),
                 RunnerBackend::Llm(client) => {
                     if self.pending_approvals.is_some() {
                         let system = self
@@ -888,6 +900,14 @@ fn echo_response(input: &Message) -> Message {
         parts: vec![MessagePart::Text {
             text: format!("echo: {text}"),
         }],
+    }
+}
+
+/// Build a plain agent reply carrying `text` verbatim (no model call).
+fn text_response(text: &str) -> Message {
+    Message {
+        role: "agent".into(),
+        parts: vec![MessagePart::Text { text: text.into() }],
     }
 }
 
