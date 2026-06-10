@@ -25,6 +25,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 mod apply;
+mod cli;
 mod comm;
 pub mod export;
 mod hub;
@@ -49,6 +50,7 @@ mod stats;
 #[allow(unused_imports)]
 pub use apply::cmd_agent_apply;
 #[allow(unused_imports)]
+pub use cli::cmd_cli;
 pub use comm::{cmd_card, cmd_send};
 #[allow(unused_imports)]
 pub use export::cmd_export;

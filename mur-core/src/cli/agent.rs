@@ -71,6 +71,14 @@ pub enum AgentAction {
         /// Agent name
         name: String,
     },
+    /// Interactive streaming TUI chat with an agent (the agent must be running)
+    Cli {
+        /// Agent name
+        name: String,
+        /// Resume the most recent saved conversation for this agent
+        #[arg(long)]
+        resume: bool,
+    },
     /// Rotate an agent's Ed25519 identity keypair (P0a.6).
     Rekey {
         /// Agent name
