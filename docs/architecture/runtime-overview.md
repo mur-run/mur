@@ -28,7 +28,7 @@ An alternate input to `store/` lives in `mur-core/src/sources/` — `KnowledgeSo
 
 ### `mur agent <subcommand>` — full surface
 
-Subcommands: `create`, `list`, `status`, `stop`, `remove`, `rename`, `send`, `card`, `install-service`, `prompt {show|edit|set}`, `mcp {add|list|remove|rename}`, `skill {add|list|remove|show}`, `perm {show|set-mode|allow-host|deny-host|list-hosts|allow-read|allow-write|deny-path|allow-spawn|deny-spawn|set-limit}`, `secret {set|list|delete}`, `export {--format=pkg|bin|gui}`, `doctor [--format ...]`, `stats`, `logs`. The runtime binary that backs each agent lives in `mur-agent-runtime/`.
+Subcommands: `create`, `list`, `status`, `stop`, `remove`, `rename`, `send`, `card`, `cli [--resume]` (interactive streaming TUI chat with a running agent; non-TTY stdin/stdout falls back to plain streamed text), `install-service`, `prompt {show|edit|set}`, `mcp {add|list|remove|rename}`, `skill {add|list|remove|show}`, `perm {show|set-mode|allow-host|deny-host|list-hosts|allow-read|allow-write|deny-path|allow-spawn|deny-spawn|set-limit}`, `secret {set|list|delete}`, `export {--format=pkg|bin|gui}`, `doctor [--format ...]`, `stats`, `logs`. The runtime binary that backs each agent lives in `mur-agent-runtime/`.
 
 ### `mur agent doctor [--format pkg|bin|gui|all] [--json]`
 
