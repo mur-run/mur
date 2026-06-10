@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useAgents } from "../context/AgentContext";
 import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
@@ -21,12 +21,12 @@ import { CATEGORY_COLORS, CATEGORY_ICONS, avatarInitials, timeGreetingKey } from
 
 const ALL_CATEGORIES = ["research", "automation", "monitor", "notify", "commerce", "custom"];
 
-function showToast(msg: string) {
+function showToast(msg: string, durationMs = 2000) {
   const el = document.createElement("div");
   el.className = "toast";
   el.textContent = msg;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2000);
+  setTimeout(() => el.remove(), durationMs);
 }
 
 // Maps a runtime state to a status pill { className, statusKey } for the new brand.
@@ -88,7 +88,7 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
     if (!outPath) return;
     invoke<string>("export_muragent_file", { name: agent.name, outPath })
       .then(() => showToast(`Exported ${agent.name}.muragent`))
-      .catch((e) => showToast(`Export failed: ${e}`));
+      .catch((e) => showToast(`Export failed: ${e}`, 6000));
   }
 
   function startHold(e: React.MouseEvent) {
@@ -394,19 +394,32 @@ export function DashboardApp() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  // Auto-resize window when detail panel opens/closes
+  // Auto-resize window when the detail panel or conversation surface
+  // opens/closes, so the dashboard keeps a usable width instead of being
+  // squeezed by the side panels. Clamped to the monitor so the window
+  // never grows past the visible screen.
+  const hasConvs = openConvs.length > 0;
   useEffect(() => {
-    const win = getCurrentWindow();
-    const size = selectedAgent
-      ? new LogicalSize(1200, 720)
-      : new LogicalSize(960, 620);
-    win.setSize(size).catch(console.error);
-    if (selectedAgent) {
-      win.setMinSize(new LogicalSize(900, 480)).catch(console.error);
-    } else {
-      win.setMinSize(new LogicalSize(720, 480)).catch(console.error);
-    }
-  }, [selectedAgent]);
+    (async () => {
+      const win = getCurrentWindow();
+      const monitor = await currentMonitor().catch(() => null);
+      const scale = monitor?.scaleFactor ?? 1;
+      const availW = monitor ? monitor.size.width / scale - 16 : 1440;
+      const availH = monitor ? monitor.size.height / scale - 60 : 800;
+      const desiredW = 960 + (selectedAgent ? 240 : 0) + (hasConvs ? 480 : 0);
+      const desiredH = selectedAgent || hasConvs ? 720 : 620;
+      const width = Math.min(desiredW, availW);
+      const height = Math.min(desiredH, availH);
+      win.setSize(new LogicalSize(width, height)).catch(console.error);
+      const minW = Math.min(
+        720 + (selectedAgent ? 180 : 0) + (hasConvs ? 360 : 0),
+        availW,
+      );
+      win
+        .setMinSize(new LogicalSize(minW, Math.min(480, availH)))
+        .catch(console.error);
+    })().catch(console.error);
+  }, [selectedAgent, hasConvs]);
 
   // First-launch check: show banner if not running from /Applications
   useEffect(() => {

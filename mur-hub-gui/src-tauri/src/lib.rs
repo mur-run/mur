@@ -13,6 +13,7 @@ pub mod detail;
 pub mod export_muragent;
 pub mod hitl;
 pub mod import_muragent;
+pub mod mcp_skills;
 pub mod memory;
 pub mod mlx_sidecar;
 pub mod mobile;
@@ -465,6 +466,11 @@ pub fn run() {
             brain_badge::nudge_dismiss,
             detail::get_agent_detail,
             detail::update_agent_detail,
+            detail::list_models,
+            mcp_skills::agent_skill_install,
+            mcp_skills::agent_skill_uninstall,
+            mcp_skills::agent_mcp_add,
+            mcp_skills::agent_mcp_remove,
             mobile::mobile_events_read,
             notif::agent_get_notif_config,
             notif::agent_set_notif_config,

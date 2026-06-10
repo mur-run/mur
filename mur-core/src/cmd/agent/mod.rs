@@ -31,7 +31,7 @@ pub mod export;
 mod hub;
 mod install;
 pub mod lifecycle;
-pub(crate) mod mcp;
+pub mod mcp;
 pub mod model_resolve;
 mod peers;
 mod perm;
@@ -39,7 +39,7 @@ mod prompt;
 mod reconnect;
 mod secret;
 mod service;
-pub(crate) mod skill;
+pub mod skill;
 mod snapshot;
 mod stats;
 

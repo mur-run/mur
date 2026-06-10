@@ -110,8 +110,17 @@ export interface AgentDetail {
   installed_skills: InstalledSkillView[];
   mcp_servers: McpServerView[];
   capabilities: string[];
+  model_ref: string | null;
+  model_provider: string;
+  model_name: string;
   display_name: string;
   agent_name: string;
+}
+
+export interface ModelOption {
+  ref_name: string;
+  provider: string;
+  model: string;
 }
 
 export interface DetailPatch {
@@ -122,6 +131,7 @@ export interface DetailPatch {
   persona_verbosity?: string;
   style_preset?: string;
   behavior_preset?: string;
+  model_ref?: string;
 }
 
 export type DetailTab =

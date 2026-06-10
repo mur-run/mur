@@ -1,0 +1,58 @@
+//! Skills / MCP install & remove — Hub side. Thin wrappers around the
+//! `mur agent skill ...` / `mur agent mcp ...` CLI code paths so the GUI
+//! and CLI share one implementation (validation, binary pinning,
+//! entitlement allow-listing). Each mutation returns the refreshed
+//! `AgentDetail` so the panel re-renders without a second round-trip.
+
+use crate::detail::{AgentDetail, get_agent_detail};
+use mur_core::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_remove};
+use mur_core::cmd::agent::skill::{cmd_skill_add, cmd_skill_remove};
+
+#[tauri::command]
+pub fn agent_skill_install(name: String, source_path: String) -> Result<AgentDetail, String> {
+    cmd_skill_add(&name, &source_path).map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}
+
+#[tauri::command]
+pub fn agent_skill_uninstall(name: String, skill_id: String) -> Result<AgentDetail, String> {
+    cmd_skill_remove(&name, &skill_id).map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}
+
+#[tauri::command]
+pub fn agent_mcp_add(
+    name: String,
+    server_id: String,
+    command: String,
+    args: Vec<String>,
+) -> Result<AgentDetail, String> {
+    let server_id = server_id.trim();
+    let command = command.trim();
+    if server_id.is_empty() {
+        return Err("server id must not be empty".into());
+    }
+    if command.is_empty() {
+        return Err("command must not be empty".into());
+    }
+    // force=true: the GUI itself is the confirmation step (explicit form
+    // submit), so skip the CLI's interactive y/N prompt.
+    cmd_mcp_add(
+        &name,
+        server_id,
+        command,
+        &args,
+        McpAddPin {
+            force: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}
+
+#[tauri::command]
+pub fn agent_mcp_remove(name: String, server_id: String) -> Result<AgentDetail, String> {
+    cmd_mcp_remove(&name, &server_id).map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}

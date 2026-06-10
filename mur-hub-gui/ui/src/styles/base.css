@@ -10,6 +10,8 @@ body {
   text-rendering: optimizeLegibility;
   overflow: hidden;
 }
-button { font-family: inherit; }
+/* WebKit's UA button color is near-black regardless of theme; inherit the
+   themed text color so buttons stay readable in dark mode. */
+button { font-family: inherit; color: inherit; }
 :focus-visible { outline: none; box-shadow: var(--shadow-focus); border-radius: var(--radius-md); }
 ::selection { background: var(--color-brand-soft); }
