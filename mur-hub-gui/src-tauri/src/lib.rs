@@ -331,6 +331,12 @@ pub fn run() {
                         let _ = win_clone.hide();
                     }
                 });
+                // The dashboard is configured `visible: false` and nothing else
+                // shows it on a fresh launch — without this, double-clicking the
+                // app yields only a tray icon and looks broken. There is no
+                // launch-at-login autostart, so every start is user-initiated.
+                let _ = win.show();
+                let _ = win.set_focus();
             }
 
             #[cfg(target_os = "windows")]
@@ -470,14 +476,29 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, _event| {
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Opened { urls } = _event {
-                for url in urls {
-                    if let Ok(path) = url.to_file_path()
-                        && let Some(s) = path.to_str()
-                    {
-                        let _ = _app.emit("open-muragent-file", s.to_string());
+            match _event {
+                tauri::RunEvent::Opened { urls } => {
+                    for url in urls {
+                        if let Ok(path) = url.to_file_path()
+                            && let Some(s) = path.to_str()
+                        {
+                            let _ = _app.emit("open-muragent-file", s.to_string());
+                        }
                     }
                 }
+                // Finder/Dock double-click on a running instance sends Reopen,
+                // not a second process launch, so the single-instance plugin
+                // never fires. Show the dashboard here or the click does nothing.
+                tauri::RunEvent::Reopen {
+                    has_visible_windows: false,
+                    ..
+                } => {
+                    if let Some(win) = _app.get_webview_window("dashboard") {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
+                }
+                _ => {}
             }
         });
 }
