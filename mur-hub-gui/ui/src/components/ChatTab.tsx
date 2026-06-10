@@ -39,6 +39,8 @@ interface ChatDelta {
   agent: string;
   text: string;
   thinking: boolean;
+  /** Turn id the runtime stamps on each delta (empty for older agents). */
+  task_id: string;
 }
 
 interface Props {

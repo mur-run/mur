@@ -51,6 +51,10 @@ pub struct ChatDelta {
     /// True for the model's transient reasoning (shown as a "thinking"
     /// indicator), false for the user-facing answer.
     pub thinking: bool,
+    /// The turn id the runtime stamps on each delta, so the UI can correlate a
+    /// delta to its conversation (empty for agents predating per-connection
+    /// routing).
+    pub task_id: String,
 }
 
 #[derive(Serialize)]
@@ -97,13 +101,14 @@ pub async fn agent_chat_send(
             &home,
             &name,
             params.clone(),
-            |delta, thinking| {
+            |delta, thinking, task_id| {
                 let _ = app.emit(
                     "chat-delta",
                     ChatDelta {
                         agent: agent.clone(),
                         text: delta.to_string(),
                         thinking,
+                        task_id: task_id.to_string(),
                     },
                 );
             },
