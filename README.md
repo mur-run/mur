@@ -22,6 +22,12 @@ you already use, and can be handed to a friend as a single file.
 
 ---
 
+<p align="center">
+  <img src="assets/mur-hub.png" alt="MUR Hub — fleet dashboard with conversation rail, companion status, and desktop-pet style presets" width="92%" />
+  <br/>
+  <sub><b>MUR Hub</b> — your fleet's home: conversation rail, live agent status, desktop-pet style presets. UI in English · 繁體中文 · 简体中文.</sub>
+</p>
+
 ## What is MUR?
 
 Every AI tool you use today is stateless and cloud-tethered: each session starts
@@ -109,6 +115,8 @@ mur agent cli coach                           # streaming TUI chat with tool app
                                               #   --resume continues the last conversation
 ```
 
+<p align="center"><img src="assets/demo.gif" alt="mur agent cli — streaming TUI chat with a local agent" width="92%" /></p>
+
 ### Teach the AI tools you already use
 
 MUR's memory layer works even if you never create an agent — it rides along with
@@ -134,8 +142,6 @@ identity. `mur agent` exposes 40+ subcommands for the full lifecycle — create,
 chat, export, schedule, permissions, telemetry, trash, rollback.
 
 ### 🧠 Learn — and forget — like a teammate
-
-<p align="center"><img src="assets/demo.gif" alt="MUR learning loop demo" width="720" /></p>
 
 ```mermaid
 flowchart LR
