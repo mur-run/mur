@@ -1,6 +1,6 @@
 //! tasks/* handlers.
 
-use crate::protocol::a2a_server::{HandlerError, MethodHandler};
+use crate::protocol::a2a_server::{HandlerError, MethodHandler, RequestContext};
 use crate::task_runner::TaskRunner;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -18,7 +18,11 @@ impl TasksGetHandler {
 
 #[async_trait]
 impl MethodHandler for TasksGetHandler {
-    async fn handle(&self, params: Option<Value>) -> Result<Value, HandlerError> {
+    async fn handle(
+        &self,
+        params: Option<Value>,
+        _ctx: &RequestContext,
+    ) -> Result<Value, HandlerError> {
         let id = params
             .and_then(|p| p.get("id").and_then(|v| v.as_str().map(String::from)))
             .ok_or_else(|| HandlerError::InvalidParams("missing id".into()))?;
@@ -41,7 +45,11 @@ impl TasksCancelHandler {
 
 #[async_trait]
 impl MethodHandler for TasksCancelHandler {
-    async fn handle(&self, params: Option<Value>) -> Result<Value, HandlerError> {
+    async fn handle(
+        &self,
+        params: Option<Value>,
+        _ctx: &RequestContext,
+    ) -> Result<Value, HandlerError> {
         let id = params
             .and_then(|p| p.get("id").and_then(|v| v.as_str().map(String::from)))
             .ok_or_else(|| HandlerError::InvalidParams("missing id".into()))?;
@@ -65,7 +73,11 @@ impl TasksListHandler {
 
 #[async_trait]
 impl MethodHandler for TasksListHandler {
-    async fn handle(&self, _params: Option<Value>) -> Result<Value, HandlerError> {
+    async fn handle(
+        &self,
+        _params: Option<Value>,
+        _ctx: &RequestContext,
+    ) -> Result<Value, HandlerError> {
         // P0a: return empty list; full history comes when we persist TaskRunner state.
         Ok(json!([]))
     }

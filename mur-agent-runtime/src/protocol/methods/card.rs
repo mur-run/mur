@@ -1,7 +1,7 @@
 //! agent/card method — project AgentProfile into an A2A Agent Card.
 
 use crate::profile::Profile;
-use crate::protocol::a2a_server::{HandlerError, MethodHandler};
+use crate::protocol::a2a_server::{HandlerError, MethodHandler, RequestContext};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -18,7 +18,11 @@ impl CardHandler {
 
 #[async_trait]
 impl MethodHandler for CardHandler {
-    async fn handle(&self, _params: Option<Value>) -> Result<Value, HandlerError> {
+    async fn handle(
+        &self,
+        _params: Option<Value>,
+        _ctx: &RequestContext,
+    ) -> Result<Value, HandlerError> {
         let p = &self.profile.inner;
 
         let mut transports: Vec<&str> = vec![];

@@ -22,7 +22,13 @@ fn test_profile() -> Profile {
 async fn card_includes_pubkey_endpoints_deployment() {
     let p = Arc::new(test_profile());
     let handler = CardHandler::new(p);
-    let json = handler.handle(None).await.unwrap();
+    let json = handler
+        .handle(
+            None,
+            &mur_agent_runtime::protocol::a2a_server::RequestContext::none(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(json["pubkey"], "zTESTPUB");
     let eps = json["endpoints"].as_array().unwrap();
@@ -94,7 +100,13 @@ updated_at: "2026-04-25T10:00:00+08:00"
     std::mem::forget(tmp);
 
     let handler = CardHandler::new(Arc::new(profile));
-    let json = handler.handle(None).await.unwrap();
+    let json = handler
+        .handle(
+            None,
+            &mur_agent_runtime::protocol::a2a_server::RequestContext::none(),
+        )
+        .await
+        .unwrap();
     assert_eq!(json["pubkey"], "zNEWKEY");
     assert_eq!(json["previous_pubkey"], "zOLDKEY");
     assert_eq!(json["previous_key_version"], 1);
@@ -162,7 +174,13 @@ updated_at: "2026-04-25T10:00:00+08:00"
     std::mem::forget(tmp);
 
     let handler = CardHandler::new(Arc::new(profile));
-    let json = handler.handle(None).await.unwrap();
+    let json = handler
+        .handle(
+            None,
+            &mur_agent_runtime::protocol::a2a_server::RequestContext::none(),
+        )
+        .await
+        .unwrap();
     assert_eq!(json["pubkey"], "zNEWKEY");
     assert!(
         json.get("previous_pubkey").is_none(),
