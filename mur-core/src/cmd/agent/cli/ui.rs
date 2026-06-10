@@ -122,7 +122,7 @@ fn push_message(lines: &mut Vec<Line<'static>>, m: &ChatMsg, spinner: usize) {
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let (msg, color) = if app.hitl.is_some() {
         (
-            "tool approval needed — [y] approve · [n] deny".to_string(),
+            "tool approval needed — [y] approve · [a] always (session) · [n] deny".to_string(),
             Color::Yellow,
         )
     } else if app.streaming {
@@ -136,15 +136,25 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         };
         (format!("ready{ctx}"), SYSTEM)
     };
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             format!(" {} ", app.agent),
             Style::default().fg(Color::Black).bg(AGENT),
         ),
         Span::raw("  "),
-        Span::styled(msg, Style::default().fg(color)),
-    ]);
-    f.render_widget(Paragraph::new(line), area);
+    ];
+    if app.auto_approve {
+        spans.push(Span::styled(
+            " AUTO ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("  "));
+    }
+    spans.push(Span::styled(msg, Style::default().fg(color)));
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest) {
@@ -173,6 +183,13 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" approve    "),
+        Span::styled(
+            "[a]",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" always allow this tool (session)    "),
         Span::styled(
             "[n]",
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
