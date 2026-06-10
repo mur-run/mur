@@ -67,15 +67,13 @@ fn export_muragent(name: &str, agent_home: &Path, out: &Path) -> Result<()> {
         Ok(id) => id,
         Err(mur_common::identity::IdentityError::NotFound) => {
             let id = AgentIdentity::generate();
-            id.save(agent_home).with_context(|| {
-                format!("mint agent identity in {}", agent_home.display())
-            })?;
+            id.save(agent_home)
+                .with_context(|| format!("mint agent identity in {}", agent_home.display()))?;
             id
         }
         Err(e) => {
-            return Err(e).with_context(|| {
-                format!("load agent identity from {}", agent_home.display())
-            });
+            return Err(e)
+                .with_context(|| format!("load agent identity from {}", agent_home.display()));
         }
     };
 
