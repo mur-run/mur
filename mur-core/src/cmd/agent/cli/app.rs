@@ -467,7 +467,10 @@ mod tests {
         let mut a = app();
         a.push_shell("ls", "foo\nbar");
         a.push_shell("true", "");
-        assert_eq!(a.messages.iter().filter(|m| m.role == Role::Shell).count(), 2);
+        assert_eq!(
+            a.messages.iter().filter(|m| m.role == Role::Shell).count(),
+            2
+        );
         let ctx = a.take_pending_shell().expect("pending blocks");
         assert!(ctx.contains("$ ls\nfoo\nbar"));
         assert!(ctx.contains("$ true"));

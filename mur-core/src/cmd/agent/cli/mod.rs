@@ -525,7 +525,9 @@ fn run_plain(home: &Path, agent: &str, auto: bool) -> Result<()> {
                 if auto {
                     eprintln!("[non-interactive: auto-approving tool-approval request (--auto)]");
                 } else {
-                    eprintln!("[non-interactive: auto-denying tool-approval request (use --auto to allow)]");
+                    eprintln!(
+                        "[non-interactive: auto-denying tool-approval request (use --auto to allow)]"
+                    );
                 }
                 let _ = dial_method(
                     home,

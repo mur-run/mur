@@ -74,10 +74,13 @@ fn push_message(lines: &mut Vec<Line<'static>>, m: &ChatMsg, spinner: usize) {
             lines.push(Line::default());
         }
         Role::System => {
-            lines.push(Line::styled(
-                format!("· {}", m.text),
-                Style::default().fg(SYSTEM).add_modifier(Modifier::ITALIC),
-            ));
+            for (i, l) in m.text.lines().enumerate() {
+                let prefix = if i == 0 { "· " } else { "  " };
+                lines.push(Line::styled(
+                    format!("{prefix}{l}"),
+                    Style::default().fg(SYSTEM).add_modifier(Modifier::ITALIC),
+                ));
+            }
             lines.push(Line::default());
         }
         Role::Shell => {
@@ -90,10 +93,7 @@ fn push_message(lines: &mut Vec<Line<'static>>, m: &ChatMsg, spinner: usize) {
                 ));
             }
             for l in it {
-                lines.push(Line::styled(
-                    l.to_string(),
-                    Style::default().fg(SYSTEM),
-                ));
+                lines.push(Line::styled(l.to_string(), Style::default().fg(SYSTEM)));
             }
             lines.push(Line::default());
         }

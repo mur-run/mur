@@ -46,9 +46,7 @@ fn which_in_well_known_dirs(bin: &str) -> Option<PathBuf> {
         dirs.push(home.join(".local/bin")); // pipx / pip --user
         dirs.push(home.join("bin"));
     }
-    dirs.into_iter()
-        .map(|d| d.join(bin))
-        .find(|c| c.is_file())
+    dirs.into_iter().map(|d| d.join(bin)).find(|c| c.is_file())
 }
 
 /// Heuristic: does this URL host a DRM-protected streaming service we cannot capture?

@@ -73,16 +73,12 @@ pub async fn run_local_shell(cmd: String) -> String {
         .arg(&cmd)
         .kill_on_drop(true)
         .output();
-    let out = match tokio::time::timeout(
-        std::time::Duration::from_secs(SHELL_TIMEOUT_SECS),
-        fut,
-    )
-    .await
-    {
-        Err(_) => return format!("[timed out after {SHELL_TIMEOUT_SECS}s]"),
-        Ok(Err(e)) => return format!("[failed to run: {e}]"),
-        Ok(Ok(out)) => out,
-    };
+    let out =
+        match tokio::time::timeout(std::time::Duration::from_secs(SHELL_TIMEOUT_SECS), fut).await {
+            Err(_) => return format!("[timed out after {SHELL_TIMEOUT_SECS}s]"),
+            Ok(Err(e)) => return format!("[failed to run: {e}]"),
+            Ok(Ok(out)) => out,
+        };
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     let err = String::from_utf8_lossy(&out.stderr);
     if !err.trim().is_empty() {

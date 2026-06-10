@@ -13,7 +13,8 @@ use crate::cmd::agent::{load_profile_for_edit, save_profile};
 
 /// Reminder appended after any profile mutation: the supervisor only reads
 /// the profile at startup.
-pub const RESTART_HINT: &str = "profile updated — restart the agent to apply (mur agent stop <name>, then start it again)";
+pub const RESTART_HINT: &str =
+    "profile updated — restart the agent to apply (mur agent stop <name>, then start it again)";
 
 pub fn mcp_list(agent: &str) -> Result<String> {
     let (_path, profile) = load_profile_for_edit(agent)?;
@@ -54,7 +55,10 @@ pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> 
                 Some(h)
             }
             Err(e) => {
-                notes.push(format!("warning: could not hash {} ({e}); no binary pin", p.display()));
+                notes.push(format!(
+                    "warning: could not hash {} ({e}); no binary pin",
+                    p.display()
+                ));
                 None
             }
         },
@@ -93,7 +97,10 @@ pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> 
     }
     save_profile(&path, &mut profile)?;
 
-    let mut out = format!("added MCP server '{server_id}' ({command} {})", args.join(" "));
+    let mut out = format!(
+        "added MCP server '{server_id}' ({command} {})",
+        args.join(" ")
+    );
     for n in notes {
         out.push_str(&format!("\n  {n}"));
     }
@@ -131,8 +138,7 @@ pub fn skill_remove(agent: &str, query: &str) -> Result<String> {
 /// Usage strings shown for bad arguments.
 pub const MCP_USAGE: &str =
     "usage: /mcp [list] · /mcp add <name> <command> [args…] · /mcp remove <name>";
-pub const SKILL_USAGE: &str =
-    "usage: /skill [list] · /skill add <path> · /skill remove <name>";
+pub const SKILL_USAGE: &str = "usage: /skill [list] · /skill add <path> · /skill remove <name>";
 
 /// Dispatch a parsed `/mcp` invocation.
 pub fn run_mcp(agent: &str, args: &[String]) -> Result<String> {
