@@ -76,6 +76,10 @@ pub enum SlashCmd {
     Sessions,
     /// `/auto [on|off]` — toggle (None) or set session-wide auto-approval.
     Auto(Option<bool>),
+    /// `/mcp [list|add|remove] …` — manage the agent's MCP servers.
+    Mcp(Vec<String>),
+    /// `/skill [list|add|remove] …` — manage the agent's skills.
+    Skill(Vec<String>),
     Quit,
     Unknown(String),
 }
@@ -96,18 +100,22 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
             Some("off") => Some(false),
             _ => None,
         }),
+        "mcp" => SlashCmd::Mcp(words.map(str::to_string).collect()),
+        "skill" | "skills" => SlashCmd::Skill(words.map(str::to_string).collect()),
         "exit" | "quit" | "q" => SlashCmd::Quit,
         other => SlashCmd::Unknown(other.to_string()),
     })
 }
 
 /// The set of slash commands offered by tab-completion / `/help`.
-pub const SLASH_COMMANDS: [&str; 7] = [
+pub const SLASH_COMMANDS: [&str; 9] = [
     "/help",
     "/clear",
     "/card",
     "/sessions",
     "/auto",
+    "/mcp",
+    "/skill",
     "/exit",
     "/quit",
 ];

@@ -7,6 +7,7 @@
 //! [`persist`] (JSONL session log + resume).
 
 mod app;
+mod manage;
 mod markdown;
 mod persist;
 mod stream;
@@ -41,7 +42,7 @@ const SCROLL_STEP: u16 = 5;
 /// Spinner animation cadence.
 const SPINNER_MS: u64 = 90;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /auto [on|off]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 pub async fn cmd_cli(name: &str, resume: bool, auto: bool) -> Result<()> {
@@ -428,7 +429,25 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                 app.push_system("auto-approve OFF — tool calls ask again");
             }
         }
+        SlashCmd::Mcp(args) => run_manage(app, move |agent| manage::run_mcp(&agent, &args)).await,
+        SlashCmd::Skill(args) => {
+            run_manage(app, move |agent| manage::run_skill(&agent, &args)).await
+        }
         SlashCmd::Unknown(c) => app.push_system(format!("unknown command: /{c} — try /help")),
+    }
+}
+
+/// Run a blocking profile-management closure off the event loop and render
+/// its outcome as a system note.
+async fn run_manage<F>(app: &mut App, f: F)
+where
+    F: FnOnce(String) -> Result<String> + Send + 'static,
+{
+    let agent = app.agent.clone();
+    match tokio::task::spawn_blocking(move || f(agent)).await {
+        Ok(Ok(text)) => app.push_system(text),
+        Ok(Err(e)) => app.push_system(format!("error: {e:#}")),
+        Err(e) => app.push_system(format!("task failed: {e}")),
     }
 }
 
