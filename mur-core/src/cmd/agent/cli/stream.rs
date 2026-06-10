@@ -63,13 +63,23 @@ pub const SHELL_MAX_BYTES: usize = 8 * 1024;
 /// Wall-clock limit for a `!command`.
 pub const SHELL_TIMEOUT_SECS: u64 = 30;
 
-/// Run a local `!command` via `$SHELL -c` (fallback `/bin/sh`), merging
-/// stderr into stdout, with a timeout and output cap.
+/// Run a local `!command` through the user's shell (`$SHELL -c`, fallback
+/// `/bin/sh`; `cmd /C` on Windows), merging stderr into stdout, with a
+/// timeout and output cap.
 pub async fn run_local_shell(cmd: String) -> String {
     use tokio::process::Command;
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    #[cfg(unix)]
+    let (shell, flag) = (
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+        "-c",
+    );
+    #[cfg(windows)]
+    let (shell, flag) = (
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".into()),
+        "/C",
+    );
     let fut = Command::new(shell)
-        .arg("-c")
+        .arg(flag)
         .arg(&cmd)
         .kill_on_drop(true)
         .output();
@@ -352,6 +362,8 @@ mod tests {
         assert_eq!(id.as_deref(), Some("t9"));
     }
 
+    // sh-syntax test commands — unix only; Windows goes through `cmd /C`.
+    #[cfg(unix)]
     #[tokio::test]
     async fn run_local_shell_captures_output_and_exit() {
         let out = run_local_shell("echo hi; echo err >&2; exit 3".into()).await;
@@ -360,6 +372,7 @@ mod tests {
         assert!(out.contains("[exit 3]"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn run_local_shell_truncates_huge_output() {
         let out = run_local_shell("yes x | head -c 100000".into()).await;
