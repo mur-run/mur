@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type { AgentEntry } from "../types";
 import {
   ALL_DETAIL_TABS,
@@ -12,6 +12,7 @@ import {
   type AgentDetail,
   type DetailPatch,
   type DetailTab,
+  type ModelOption,
   type NotifConfig,
   type NotifPatch,
 } from "../types";
@@ -43,12 +44,12 @@ interface Props {
 
 // Lightweight toast — appends a bare `.toast` element to <body>, mirrors
 // the feedback pattern in DashboardApp (its showToast is module-local there).
-function showToast(msg: string) {
+function showToast(msg: string, durationMs = 2000) {
   const el = document.createElement("div");
   el.className = "toast";
   el.textContent = msg;
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 2000);
+  setTimeout(() => el.remove(), durationMs);
 }
 
 export function DetailPanel({ agentName, agents, onClose }: Props) {
@@ -85,13 +86,13 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
       defaultPath: `${name}.muragent`,
       filters: [{ name: "MUR Agent", extensions: ["muragent"] }],
     }).catch((e) => {
-      showToast(`Export failed: ${e}`);
+      showToast(`Export failed: ${e}`, 6000);
       return null;
     });
     if (!outPath) return;
     invoke<string>("export_muragent_file", { name, outPath })
       .then(() => showToast(`Exported ${name}.muragent`))
-      .catch((e) => showToast(`Export failed: ${e}`));
+      .catch((e) => showToast(`Export failed: ${e}`, 6000));
   }
 
   function Header({ name }: { name: string }) {
@@ -188,7 +189,10 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
       </div>
       <div className="detail-panel__body">
         {activeTab === "persona" && (
-          <PersonaTab detail={detail} onSaved={handleSaved} />
+          <>
+            <ModelSection detail={detail} onSaved={handleSaved} />
+            <PersonaTab detail={detail} onSaved={handleSaved} />
+          </>
         )}
         {activeTab === "style" && (
           <StyleTab detail={detail} onSaved={handleSaved} />
@@ -196,14 +200,95 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
         {activeTab === "behavior" && (
           <BehaviorTab detail={detail} onSaved={handleSaved} />
         )}
-        {activeTab === "skills" && <SkillsTab detail={detail} />}
-        {activeTab === "mcp" && <McpTab detail={detail} />}
+        {activeTab === "skills" && (
+          <SkillsTab detail={detail} onSaved={handleSaved} />
+        )}
+        {activeTab === "mcp" && <McpTab detail={detail} onSaved={handleSaved} />}
         {activeTab === "permissions" && <PermissionsTab detail={detail} />}
         {activeTab === "inbox" && <CompanionInbox agentName={agentName} />}
         {activeTab === "mobile" && <MobileTab agentName={agentName} />}
         {activeTab === "memory" && <MemoryTab agentName={agentName} />}
       </div>
     </aside>
+  );
+}
+
+// ─── Model Section ────────────────────────────────────────────────────────
+
+function ModelSection({
+  detail,
+  onSaved,
+}: {
+  detail: AgentDetail;
+  onSaved: (d: AgentDetail) => void;
+}) {
+  const { t } = useT();
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke<ModelOption[]>("list_models")
+      .then(setModels)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  async function pick(refName: string) {
+    if (!refName || refName === detail.model_ref) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await invoke<AgentDetail>("update_agent_detail", {
+        name: detail.agent_name,
+        patch: { model_ref: refName } as DetailPatch,
+      });
+      onSaved(updated);
+      setJustSaved(true);
+      setTimeout(() => setJustSaved(false), 4000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Inline (legacy) binding shown as a synthetic option when no ref is set.
+  const inlineLabel = `${detail.model_provider}/${detail.model_name}`;
+
+  return (
+    <div className="tab-form" style={{ marginBottom: 18 }}>
+      <label className="field-label">{t("detail.model")}</label>
+      {models.length === 0 ? (
+        <p className="field-muted" style={{ fontSize: 12 }}>
+          {t("detail.modelEmpty")}
+        </p>
+      ) : (
+        <select
+          className="input"
+          value={detail.model_ref ?? ""}
+          disabled={saving}
+          onChange={(e) => pick(e.target.value)}
+        >
+          {!detail.model_ref && (
+            <option value="" disabled>
+              {t("detail.modelInline", { model: inlineLabel })}
+            </option>
+          )}
+          {models.map((m) => (
+            <option key={m.ref_name} value={m.ref_name}>
+              {m.ref_name} — {m.provider}/{m.model}
+            </option>
+          ))}
+        </select>
+      )}
+      {justSaved && (
+        <p className="field-muted" style={{ fontSize: 12 }}>
+          {t("detail.modelRestartHint")}
+        </p>
+      )}
+      {error && <p className="save-error">{error}</p>}
+    </div>
   );
 }
 
@@ -463,17 +548,21 @@ function StyleTab({
         </div>
       )}
       <button
-        className="toolbar-btn"
+        className={
+          detail.render_status.status === "pending"
+            ? "btn btn--sm btn--primary"
+            : "toolbar-btn"
+        }
         style={{ marginTop: 8 }}
         onClick={triggerRender}
         disabled={rendering || detail.render_status.status === "rendering"}
-        title="Generate the 12 avatar expressions for this agent"
+        title={t("detail.renderTooltip")}
       >
         {rendering || detail.render_status.status === "rendering"
-          ? "Rendering…"
+          ? t("detail.renderBtnRendering")
           : detail.render_status.status === "ready"
-            ? "Re-render avatar"
-            : "Render avatar"}
+            ? t("detail.renderBtnRerender")
+            : t("detail.renderBtnRender")}
       </button>
 
       <label className="field-label" style={{ marginTop: 16 }}>{t("detail.presetGallery")}</label>
@@ -657,32 +746,106 @@ function NotificationsSection({ agentName }: { agentName: string }) {
 
 // ─── Skills Tab ───────────────────────────────────────────────────────────
 
-function SkillsTab({ detail }: { detail: AgentDetail }) {
+function SkillsTab({
+  detail,
+  onSaved,
+}: {
+  detail: AgentDetail;
+  onSaved: (d: AgentDetail) => void;
+}) {
   const { t } = useT();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [justInstalled, setJustInstalled] = useState(false);
+
   const hasInstalled = detail.installed_skills.length > 0;
   const hasLegacy = detail.skills.length > 0;
 
-  if (!hasInstalled && !hasLegacy) {
-    return (
-      <div className="tab-empty">
-        <p>{t("detail.noSkills")}</p>
-        <p className="field-muted" style={{ fontSize: 12 }}>
-          {t("detail.skillInstallHint")}
-        </p>
-      </div>
-    );
+  async function installSkill() {
+    setError(null);
+    const src = await open({
+      multiple: false,
+      filters: [{ name: "MUR Skill", extensions: ["md", "yaml", "yml"] }],
+    }).catch((e) => {
+      setError(String(e));
+      return null;
+    });
+    if (typeof src !== "string" || !src) return;
+    setBusy(true);
+    try {
+      const updated = await invoke<AgentDetail>("agent_skill_install", {
+        name: detail.agent_name,
+        sourcePath: src,
+      });
+      onSaved(updated);
+      setJustInstalled(true);
+      setTimeout(() => setJustInstalled(false), 4000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeSkill(id: string) {
+    setError(null);
+    setBusy(true);
+    try {
+      const updated = await invoke<AgentDetail>("agent_skill_uninstall", {
+        name: detail.agent_name,
+        skillId: id,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <div className="tab-form">
+      <button
+        className="btn btn--sm btn--primary"
+        onClick={installSkill}
+        disabled={busy}
+        style={{ alignSelf: "flex-start" }}
+      >
+        {t("detail.installSkill")}
+      </button>
+      {justInstalled && (
+        <p className="field-muted" style={{ fontSize: 12 }}>
+          {t("detail.skillInstalledHint")}
+        </p>
+      )}
+      {error && <p className="save-error">{error}</p>}
+
+      {!hasInstalled && !hasLegacy && (
+        <div className="tab-empty">
+          <p>{t("detail.noSkills")}</p>
+          <p className="field-muted" style={{ fontSize: 12 }}>
+            {t("detail.skillInstallHint")}
+          </p>
+        </div>
+      )}
+
       {hasInstalled && (
         <>
-          <label className="field-label">
+          <label className="field-label" style={{ marginTop: 12 }}>
             {t("detail.installedSkills", { count: detail.installed_skills.length })}
           </label>
           <ul className="item-list">
             {detail.installed_skills.map((s) => (
               <li key={s.name} className="item-card">
+                <button
+                  className="item-card-remove"
+                  title={t("detail.remove")}
+                  aria-label={t("detail.remove")}
+                  disabled={busy}
+                  onClick={() => removeSkill(s.name)}
+                >
+                  ×
+                </button>
                 <div className="item-card-name">{s.name}</div>
                 {s.version && (
                   <span className="badge-sm">{s.version}</span>
@@ -701,12 +864,21 @@ function SkillsTab({ detail }: { detail: AgentDetail }) {
 
       {hasLegacy && (
         <>
-          <label className="field-label" style={{ marginTop: hasInstalled ? 16 : 0 }}>
+          <label className="field-label" style={{ marginTop: hasInstalled ? 16 : 12 }}>
             {t("detail.legacySkillPaths", { count: detail.skills.length })}
           </label>
           <ul className="item-list">
             {detail.skills.map((s) => (
               <li key={s.path} className="item-card">
+                <button
+                  className="item-card-remove"
+                  title={t("detail.remove")}
+                  aria-label={t("detail.remove")}
+                  disabled={busy}
+                  onClick={() => removeSkill(s.path)}
+                >
+                  ×
+                </button>
                 <code style={{ fontSize: 11 }}>{s.path}</code>
               </li>
             ))}
@@ -719,37 +891,173 @@ function SkillsTab({ detail }: { detail: AgentDetail }) {
 
 // ─── MCP Tab ──────────────────────────────────────────────────────────────
 
-function McpTab({ detail }: { detail: AgentDetail }) {
+function McpTab({
+  detail,
+  onSaved,
+}: {
+  detail: AgentDetail;
+  onSaved: (d: AgentDetail) => void;
+}) {
   const { t } = useT();
-  if (detail.mcp_servers.length === 0) {
-    return (
-      <div className="tab-empty">
-        <p>{t("detail.noMcp")}</p>
-        <p className="field-muted" style={{ fontSize: 12 }}>
-          {t("detail.mcpAddHint")}
-        </p>
-      </div>
-    );
+  const [showForm, setShowForm] = useState(false);
+  const [serverId, setServerId] = useState("");
+  const [command, setCommand] = useState("");
+  const [args, setArgs] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [justAdded, setJustAdded] = useState(false);
+
+  async function browseCommand() {
+    const picked = await open({ multiple: false }).catch(() => null);
+    if (typeof picked === "string" && picked) setCommand(picked);
+  }
+
+  async function addServer() {
+    setError(null);
+    setBusy(true);
+    try {
+      const updated = await invoke<AgentDetail>("agent_mcp_add", {
+        name: detail.agent_name,
+        serverId: serverId.trim(),
+        command: command.trim(),
+        args: args.trim() ? args.trim().split(/\s+/) : [],
+      });
+      onSaved(updated);
+      setShowForm(false);
+      setServerId("");
+      setCommand("");
+      setArgs("");
+      setJustAdded(true);
+      setTimeout(() => setJustAdded(false), 4000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeServer(id: string) {
+    setError(null);
+    setBusy(true);
+    try {
+      const updated = await invoke<AgentDetail>("agent_mcp_remove", {
+        name: detail.agent_name,
+        serverId: id,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <div className="tab-form">
-      <label className="field-label">{t("detail.mcpServersCount", { count: detail.mcp_servers.length })}</label>
-      <ul className="item-list">
-        {detail.mcp_servers.map((m) => (
-          <li key={m.name} className="item-card">
-            <div className="item-card-name">{m.name}</div>
-            <code className="item-card-code">{m.command}</code>
-            {m.args.length > 0 && (
-              <div className="item-card-args">
-                {m.args.map((a, i) => (
-                  <span key={i} className="badge-sm">{a}</span>
-                ))}
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
+      {!showForm && (
+        <button
+          className="btn btn--sm btn--primary"
+          onClick={() => setShowForm(true)}
+          style={{ alignSelf: "flex-start" }}
+        >
+          {t("detail.addMcp")}
+        </button>
+      )}
+      {justAdded && (
+        <p className="field-muted" style={{ fontSize: 12 }}>
+          {t("detail.mcpAddedHint")}
+        </p>
+      )}
+
+      {showForm && (
+        <div className="mcp-add-form">
+          <label className="field-label">{t("detail.mcpId")}</label>
+          <input
+            className="input"
+            value={serverId}
+            placeholder="media"
+            onChange={(e) => setServerId(e.target.value)}
+          />
+          <label className="field-label">{t("detail.mcpCommand")}</label>
+          <div className="mcp-command-row">
+            <input
+              className="input"
+              value={command}
+              placeholder="/usr/local/bin/my-mcp-server"
+              onChange={(e) => setCommand(e.target.value)}
+            />
+            <button className="toolbar-btn" onClick={browseCommand} disabled={busy}>
+              {t("detail.browse")}
+            </button>
+          </div>
+          <label className="field-label">{t("detail.mcpArgs")}</label>
+          <input
+            className="input"
+            value={args}
+            placeholder="--flag value"
+            onChange={(e) => setArgs(e.target.value)}
+          />
+          <div className="mcp-form-actions">
+            <button
+              className="btn btn--sm btn--primary"
+              onClick={addServer}
+              disabled={busy || !serverId.trim() || !command.trim()}
+            >
+              {busy ? t("detail.saving") : t("detail.add")}
+            </button>
+            <button
+              className="btn btn--sm btn--secondary"
+              onClick={() => {
+                setShowForm(false);
+                setError(null);
+              }}
+              disabled={busy}
+            >
+              {t("detail.cancel")}
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="save-error">{error}</p>}
+
+      {detail.mcp_servers.length === 0 ? (
+        <div className="tab-empty">
+          <p>{t("detail.noMcp")}</p>
+          <p className="field-muted" style={{ fontSize: 12 }}>
+            {t("detail.mcpAddHint")}
+          </p>
+        </div>
+      ) : (
+        <>
+          <label className="field-label" style={{ marginTop: 12 }}>
+            {t("detail.mcpServersCount", { count: detail.mcp_servers.length })}
+          </label>
+          <ul className="item-list">
+            {detail.mcp_servers.map((m) => (
+              <li key={m.name} className="item-card">
+                <button
+                  className="item-card-remove"
+                  title={t("detail.remove")}
+                  aria-label={t("detail.remove")}
+                  disabled={busy}
+                  onClick={() => removeServer(m.name)}
+                >
+                  ×
+                </button>
+                <div className="item-card-name">{m.name}</div>
+                <code className="item-card-code">{m.command}</code>
+                {m.args.length > 0 && (
+                  <div className="item-card-args">
+                    {m.args.map((a, i) => (
+                      <span key={i} className="badge-sm">{a}</span>
+                    ))}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }

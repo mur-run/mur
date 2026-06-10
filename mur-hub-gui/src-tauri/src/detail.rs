@@ -25,9 +25,36 @@ pub struct AgentDetail {
     pub mcp_servers: Vec<McpServerView>,
     // Permissions tab
     pub capabilities: Vec<String>,
+    // Model binding (registry ref takes precedence over the inline config)
+    pub model_ref: Option<String>,
+    pub model_provider: String,
+    pub model_name: String,
     // Read-only metadata
     pub display_name: String,
     pub agent_name: String,
+}
+
+/// One selectable entry from `~/.mur/models.yaml` for the model picker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelOptionView {
+    pub ref_name: String,
+    pub provider: String,
+    pub model: String,
+}
+
+#[tauri::command]
+pub fn list_models() -> Result<Vec<ModelOptionView>, String> {
+    let path = mur_common::model::ModelRegistry::default_path().map_err(|e| e.to_string())?;
+    let reg = mur_common::model::ModelRegistry::load_from(&path).map_err(|e| e.to_string())?;
+    Ok(reg
+        .models
+        .into_iter()
+        .map(|(ref_name, entry)| ModelOptionView {
+            ref_name,
+            provider: entry.provider,
+            model: entry.model,
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +104,8 @@ pub struct DetailPatch {
     pub style_preset: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior_preset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_ref: Option<String>,
 }
 
 #[tauri::command]
@@ -130,6 +159,9 @@ pub fn get_agent_detail(name: String) -> Result<AgentDetail, String> {
             })
             .collect(),
         capabilities: profile.capabilities,
+        model_ref: profile.model_ref,
+        model_provider: profile.model.provider,
+        model_name: profile.model.name,
         display_name: profile.display_name,
         agent_name: profile.name,
     })
@@ -169,7 +201,25 @@ pub fn update_agent_detail(name: String, patch: DetailPatch) -> Result<AgentDeta
 
     // Apply style patch
     if let Some(s) = patch.style_preset {
+        if s != profile.appearance.style_preset {
+            // The rendered expressions belong to the old style; flag the
+            // avatar as needing a re-render so the UI doesn't claim "ready".
+            profile.appearance.render_status = mur_common::agent::RenderStatus::Pending;
+        }
         profile.appearance.style_preset = s;
+    }
+
+    // Apply model patch — the ref must exist in the registry so the agent
+    // doesn't end up pointing at a model nobody configured.
+    if let Some(r) = patch.model_ref {
+        let reg_path =
+            mur_common::model::ModelRegistry::default_path().map_err(|e| e.to_string())?;
+        let reg =
+            mur_common::model::ModelRegistry::load_from(&reg_path).map_err(|e| e.to_string())?;
+        if !reg.models.contains_key(&r) {
+            return Err(format!("model ref '{r}' not found in ~/.mur/models.yaml"));
+        }
+        profile.model_ref = Some(r);
     }
 
     // Apply behavior patch

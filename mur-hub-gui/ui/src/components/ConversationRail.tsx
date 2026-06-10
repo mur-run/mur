@@ -18,11 +18,21 @@ export default function ConversationRail() {
         const attn = attention[name] ?? { unread: false, hitl: false };
         const level = attentionLevel(attn);
 
+        // Outer element is a div (not a button) because it contains the
+        // close button — nested <button>s are invalid HTML and break clicks.
         return (
-          <button
+          <div
             key={name}
+            role="button"
+            tabIndex={0}
             className={`conv-item${active === name ? " conv-item--active" : ""}`}
             onClick={() => focusConversation(name)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                focusConversation(name);
+              }
+            }}
             title={display}
           >
             <span className={`conv-status conv-status--${status}`} />
@@ -40,7 +50,7 @@ export default function ConversationRail() {
             >
               ×
             </button>
-          </button>
+          </div>
         );
       })}
     </div>

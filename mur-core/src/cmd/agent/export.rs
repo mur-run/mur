@@ -61,8 +61,23 @@ fn export_muragent(name: &str, agent_home: &Path, out: &Path) -> Result<()> {
     let profile: AgentProfile = serde_yaml_ng::from_str(&profile_yaml)
         .with_context(|| format!("parse {}", profile_path.display()))?;
 
-    let identity = AgentIdentity::load(agent_home)
-        .with_context(|| format!("load agent identity from {}", agent_home.display()))?;
+    // Agents created outside `mur agent create` (e.g. the Hub's seeded
+    // concierge) may not have a keypair yet — mint one so export works.
+    let identity = match AgentIdentity::load(agent_home) {
+        Ok(id) => id,
+        Err(mur_common::identity::IdentityError::NotFound) => {
+            let id = AgentIdentity::generate();
+            id.save(agent_home).with_context(|| {
+                format!("mint agent identity in {}", agent_home.display())
+            })?;
+            id
+        }
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!("load agent identity from {}", agent_home.display())
+            });
+        }
+    };
 
     let mur_version = env!("CARGO_PKG_VERSION");
     let mut manifest = build_manifest_from_profile(&profile, mur_version);
