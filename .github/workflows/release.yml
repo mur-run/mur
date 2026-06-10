@@ -299,7 +299,7 @@ jobs:
 
       - name: Build mur + runtime sidecars
         run: |
-          cargo build --release --target aarch64-apple-darwin -p mur-core -p mur-agent-runtime
+          cargo build --release --locked --target aarch64-apple-darwin -p mur-core -p mur-agent-runtime
           mkdir -p mur-hub-gui/src-tauri/binaries
           cp target/aarch64-apple-darwin/release/mur \
              mur-hub-gui/src-tauri/binaries/mur-aarch64-apple-darwin
