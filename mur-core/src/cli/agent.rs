@@ -78,6 +78,9 @@ pub enum AgentAction {
         /// Resume the most recent saved conversation for this agent
         #[arg(long)]
         resume: bool,
+        /// Auto-approve every tool call for this session (no HITL prompts)
+        #[arg(long)]
+        auto: bool,
     },
     /// Rotate an agent's Ed25519 identity keypair (P0a.6).
     Rekey {

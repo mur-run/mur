@@ -7,6 +7,7 @@
 //! [`persist`] (JSONL session log + resume).
 
 mod app;
+mod manage;
 mod markdown;
 mod persist;
 mod stream;
@@ -41,10 +42,10 @@ const SCROLL_STEP: u16 = 5;
 /// Spinner animation cadence.
 const SPINNER_MS: u64 = 90;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /exit · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
-pub async fn cmd_cli(name: &str, resume: bool) -> Result<()> {
+pub async fn cmd_cli(name: &str, resume: bool, auto: bool) -> Result<()> {
     let home = super::resolve_mur_home()?;
     let agent = canonicalize_agent_name(&home, name);
 
@@ -61,10 +62,10 @@ pub async fn cmd_cli(name: &str, resume: bool) -> Result<()> {
     if !io::stdout().is_terminal() {
         let home2 = home.clone();
         let agent2 = agent.clone();
-        return tokio::task::spawn_blocking(move || run_plain(&home2, &agent2)).await?;
+        return tokio::task::spawn_blocking(move || run_plain(&home2, &agent2, auto)).await?;
     }
 
-    run_tui(home, agent, resume).await
+    run_tui(home, agent, resume, auto).await
 }
 
 // ── TUI mode ────────────────────────────────────────────────────────────────
@@ -93,7 +94,7 @@ impl Drop for TerminalGuard {
     }
 }
 
-async fn run_tui(home: PathBuf, agent: String, resume: bool) -> Result<()> {
+async fn run_tui(home: PathBuf, agent: String, resume: bool, auto: bool) -> Result<()> {
     // Restore the terminal even if a later panic unwinds past the guard.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -112,6 +113,10 @@ async fn run_tui(home: PathBuf, agent: String, resume: bool) -> Result<()> {
         Terminal::new(CrosstermBackend::new(io::stdout())).context("init terminal")?;
 
     let mut app = build_app(&home, &agent, resume)?;
+    if auto {
+        app.auto_approve = true;
+        app.push_system("auto-approve is ON for this session (--auto) — every tool call will be allowed without asking");
+    }
     let result = event_loop(&mut terminal, &mut app).await;
 
     drop(_guard);
@@ -172,7 +177,7 @@ async fn event_loop(
                 Some(Ok(ev)) => handle_event(app, ev, &tx).await,
                 Some(Err(_)) | None => return Ok(()),
             },
-            Some(msg) = rx.recv() => handle_stream(app, msg),
+            Some(msg) = rx.recv() => handle_stream(app, msg, &tx),
             _ = spinner.tick(), if app.streaming => app.tick_spinner(),
         }
     }
@@ -182,17 +187,28 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
     match ev {
         Event::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-            // HITL prompt takes over the keyboard — but Ctrl+C/Ctrl+D must stay
-            // live so the user is never trapped by a stale/unanswerable modal.
+            // HITL prompt owns the decision keys — but Ctrl+C/Ctrl+D must stay
+            // live so the user is never trapped by a stale/unanswerable modal,
+            // and any other key keeps going to the composer so typed text isn't
+            // silently swallowed while the modal is up.
             if app.hitl.is_some() {
                 match key.code {
                     KeyCode::Char('d') if ctrl => request_quit(app, tx),
                     KeyCode::Char('c') if ctrl => decide_hitl(app, tx, false),
                     KeyCode::Char('y') | KeyCode::Char('Y') => decide_hitl(app, tx, true),
+                    KeyCode::Char('a') | KeyCode::Char('A') => {
+                        if let Some(req) = &app.hitl {
+                            app.session_tool_allow.insert(req.tool_name.clone());
+                        }
+                        decide_hitl(app, tx, true);
+                    }
                     KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                         decide_hitl(app, tx, false)
                     }
-                    _ => {}
+                    KeyCode::Enter => {} // no submit while the modal is open
+                    _ => {
+                        app.input.input(key);
+                    }
                 }
                 return;
             }
@@ -213,11 +229,6 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             }
         }
         Event::Paste(text) => {
-            // Don't let a paste leak into the (occluded) composer while the HITL
-            // modal owns the screen.
-            if app.hitl.is_some() {
-                return;
-            }
             app.input.insert_str(text);
         }
         _ => {}
@@ -281,6 +292,10 @@ fn handle_ctrl_c(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// Answer the open HITL prompt, surfacing a dial failure (so a lost decision
 /// isn't reported to the user as success).
 fn decide_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool) {
+    decide_hitl_with_note(app, tx, allow, false);
+}
+
+fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool, auto: bool) {
     if let Some(req) = app.hitl.take() {
         let (h, a) = (app.home.clone(), app.agent.clone());
         let (id, tool) = (req.hitl_id.clone(), req.tool_name.clone());
@@ -294,10 +309,10 @@ fn decide_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bool) {
                     .await;
             }
         });
-        app.push_system(if allow {
-            format!("approved `{}`", req.tool_name)
-        } else {
-            format!("denied `{}`", req.tool_name)
+        app.push_system(match (allow, auto) {
+            (true, true) => format!("auto-approved `{}` (session)", req.tool_name),
+            (true, false) => format!("approved `{}`", req.tool_name),
+            (false, _) => format!("denied `{}`", req.tool_name),
         });
     }
 }
@@ -313,6 +328,20 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         handle_slash(app, cmd, tx).await;
         return;
     }
+    // `!command` — run locally (like Claude Code's bang escape). Allowed while
+    // a turn is generating: it never touches the agent connection.
+    if let Some(cmd) = trimmed.strip_prefix('!').map(str::trim)
+        && !cmd.is_empty()
+    {
+        app.clear_input();
+        app.push_system(format!("running `{cmd}`…"));
+        let (cmd, t) = (cmd.to_string(), tx.clone());
+        tokio::spawn(async move {
+            let output = stream::run_local_shell(cmd.clone()).await;
+            let _ = t.send(StreamMsg::ShellDone { cmd, output }).await;
+        });
+        return;
+    }
     // Reject (but DON'T discard) a message typed while a turn is generating —
     // clearing the input here would silently lose what the user composed.
     if app.streaming {
@@ -322,7 +351,14 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     app.clear_input();
 
     let task_id = app.begin_user_turn(&trimmed);
-    let params = build_params(&trimmed, &task_id, app.context_task_id.as_deref());
+    // Prefix any `!command` output the agent hasn't seen yet, so it has the
+    // same context the user is looking at. The transcript shows only the
+    // user's text; the shell blocks were already rendered when they ran.
+    let outgoing = match app.take_pending_shell() {
+        Some(ctx) => format!("{ctx}\n\n{trimmed}"),
+        None => trimmed.clone(),
+    };
+    let params = build_params(&outgoing, &task_id, app.context_task_id.as_deref());
     spawn_stream(
         app.home.clone(),
         app.agent.clone(),
@@ -379,11 +415,43 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                 Err(e) => app.push_system(format!("card task failed: {e}")),
             }
         }
+        SlashCmd::Auto(set) => {
+            app.auto_approve = set.unwrap_or(!app.auto_approve);
+            if app.auto_approve {
+                app.push_system(
+                    "auto-approve ON — every tool call is allowed without asking (this session only; /auto off to disable)",
+                );
+                // A prompt may already be waiting — resolve it under the new mode.
+                if app.hitl.is_some() {
+                    decide_hitl_with_note(app, tx, true, true);
+                }
+            } else {
+                app.push_system("auto-approve OFF — tool calls ask again");
+            }
+        }
+        SlashCmd::Mcp(args) => run_manage(app, move |agent| manage::run_mcp(&agent, &args)).await,
+        SlashCmd::Skill(args) => {
+            run_manage(app, move |agent| manage::run_skill(&agent, &args)).await
+        }
         SlashCmd::Unknown(c) => app.push_system(format!("unknown command: /{c} — try /help")),
     }
 }
 
-fn handle_stream(app: &mut App, msg: StreamMsg) {
+/// Run a blocking profile-management closure off the event loop and render
+/// its outcome as a system note.
+async fn run_manage<F>(app: &mut App, f: F)
+where
+    F: FnOnce(String) -> Result<String> + Send + 'static,
+{
+    let agent = app.agent.clone();
+    match tokio::task::spawn_blocking(move || f(agent)).await {
+        Ok(Ok(text)) => app.push_system(text),
+        Ok(Err(e)) => app.push_system(format!("error: {e:#}")),
+        Err(e) => app.push_system(format!("task failed: {e}")),
+    }
+}
+
+fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
     // Drop events from a turn that is no longer current (cancelled, cleared, or
     // already finished) so a still-running worker can't splice its tokens/reply
     // into a later turn. `Note` carries no task id and is always shown.
@@ -394,13 +462,22 @@ fn handle_stream(app: &mut App, msg: StreamMsg) {
     }
     match msg {
         StreamMsg::Delta { text, thinking, .. } => app.append_delta(&text, thinking),
-        StreamMsg::Hitl { req, .. } => app.hitl = Some(req),
+        StreamMsg::Hitl { req, .. } => {
+            // Session auto-approval: `/auto`/`--auto` covers every tool; the
+            // modal's [a] key covers a single tool name.
+            let auto = app.auto_approve || app.session_tool_allow.contains(&req.tool_name);
+            app.hitl = Some(req);
+            if auto {
+                decide_hitl_with_note(app, tx, true, true);
+            }
+        }
         StreamMsg::Done { task, .. } => match stream::task_outcome(&task) {
             Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
             Err(cause) => app.fail_turn(&cause),
         },
         StreamMsg::Err { error, .. } => app.fail_turn(&error),
         StreamMsg::Note(text) => app.push_system(text),
+        StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),
     }
 }
 
@@ -408,7 +485,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg) {
 
 /// Pipe-safe fallback: read a line from stdin, stream the reply as plain text to
 /// stdout, repeat. No ANSI, no TUI. Threads conversation context across turns.
-fn run_plain(home: &Path, agent: &str) -> Result<()> {
+fn run_plain(home: &Path, agent: &str, auto: bool) -> Result<()> {
     use std::cell::Cell;
     use std::io::BufRead;
     let stdin = io::stdin();
@@ -436,20 +513,27 @@ fn run_plain(home: &Path, agent: &str) -> Result<()> {
                 }
             },
             |hitl| {
-                // No TTY to prompt on: auto-deny immediately (on a separate
-                // connection) so the turn resolves instead of blocking for the
-                // full HITL timeout, and tell the user on stderr.
+                // No TTY to prompt on: resolve immediately (on a separate
+                // connection) so the turn doesn't block for the full HITL
+                // timeout — allow under --auto, deny otherwise — and tell the
+                // user on stderr.
                 let id = hitl
                     .get("hitl_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string();
-                eprintln!("[non-interactive: auto-denying tool-approval request]");
+                if auto {
+                    eprintln!("[non-interactive: auto-approving tool-approval request (--auto)]");
+                } else {
+                    eprintln!(
+                        "[non-interactive: auto-denying tool-approval request (use --auto to allow)]"
+                    );
+                }
                 let _ = dial_method(
                     home,
                     agent,
                     "tool/hitl_respond",
-                    serde_json::json!({ "hitl_id": id, "allow": false }),
+                    serde_json::json!({ "hitl_id": id, "allow": auto }),
                     DialMode::RequireRunning,
                 );
             },
