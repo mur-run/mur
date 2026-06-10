@@ -130,7 +130,7 @@ jobs:
       # Windows. `--profile ci` (in .config/nextest.toml) sets timeouts +
       # caps heavy-test (lance/qdrant/tantivy) concurrency to avoid OOM on
       # 16 GB Windows runners.
-      - run: cargo nextest run --workspace --profile ci
+      - run: cargo nextest run --workspace --locked --profile ci
 
   clippy:
     name: Clippy
@@ -156,7 +156,7 @@ jobs:
       # `--no-deps` skips clippy on the ~800 dependency crates (linting them
       # serves no purpose since we can't fix them upstream from here). Saves
       # ~50-70s on a 125s job. Real lint coverage on our own code is unchanged.
-      - run: cargo clippy --all --no-deps -- -D warnings
+      - run: cargo clippy --all --no-deps --locked -- -D warnings
 
   fmt:
     name: Format
