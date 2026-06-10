@@ -171,11 +171,16 @@ fn dial_socket(
 /// agent to be up (uses its unix socket); the runtime emits `message/delta`
 /// notifications during generation. Names resolve case-insensitively.
 #[allow(dead_code)] // used by workspace-excluded mur-hub-gui
+/// Stream a `message/send` turn. `on_delta` receives `(text, thinking,
+/// task_id)`, where `task_id` is the turn id the runtime stamps on each
+/// `message/delta` (empty string if the agent predates per-connection routing).
+/// The runtime already routes deltas to this connection only; the id lets a
+/// client defensively drop anything not matching the turn it issued.
 pub fn dial_message_streaming(
     home: &Path,
     agent_name: &str,
     params: Value,
-    mut on_delta: impl FnMut(&str, bool),
+    mut on_delta: impl FnMut(&str, bool, &str),
     mut on_hitl: impl FnMut(Value),
 ) -> Result<Value> {
     let agent_name = &canonicalize_agent_name(home, agent_name);
@@ -221,7 +226,11 @@ pub fn dial_message_streaming(
                         .and_then(|p| p.get("thinking"))
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    on_delta(t, thinking);
+                    let delta_task_id = params
+                        .and_then(|p| p.get("task_id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    on_delta(t, thinking, delta_task_id);
                 }
                 continue;
             }

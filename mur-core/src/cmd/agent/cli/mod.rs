@@ -428,7 +428,7 @@ fn run_plain(home: &Path, agent: &str) -> Result<()> {
             home,
             agent,
             params,
-            |delta, thinking| {
+            |delta, thinking, _task_id| {
                 if !thinking {
                     streamed.set(true);
                     let _ = write!(out, "{delta}");
