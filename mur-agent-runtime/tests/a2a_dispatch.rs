@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use mur_agent_runtime::protocol::a2a_server::{Dispatcher, HandlerError, MethodHandler};
+use mur_agent_runtime::protocol::a2a_server::{
+    Dispatcher, HandlerError, MethodHandler, RequestContext,
+};
 use mur_common::JsonRpcRequest;
 use serde_json::{Value, json};
 
@@ -7,7 +9,11 @@ struct Echo;
 
 #[async_trait]
 impl MethodHandler for Echo {
-    async fn handle(&self, params: Option<Value>) -> Result<Value, HandlerError> {
+    async fn handle(
+        &self,
+        params: Option<Value>,
+        _ctx: &RequestContext,
+    ) -> Result<Value, HandlerError> {
         Ok(params.unwrap_or(json!(null)))
     }
 }
@@ -22,7 +28,7 @@ async fn dispatches_known_method() {
         method: "echo".into(),
         params: Some(json!("hi")),
     };
-    let resp = d.dispatch(req).await.unwrap();
+    let resp = d.dispatch(req, &RequestContext::none()).await.unwrap();
     assert_eq!(resp.result, Some(json!("hi")));
     assert!(resp.error.is_none());
 }
@@ -36,7 +42,7 @@ async fn returns_method_not_found_with_code_neg32601() {
         method: "nope".into(),
         params: None,
     };
-    let resp = d.dispatch(req).await.unwrap();
+    let resp = d.dispatch(req, &RequestContext::none()).await.unwrap();
     assert_eq!(resp.error.as_ref().unwrap().code, -32601);
 }
 
@@ -45,7 +51,11 @@ async fn maps_handler_error_to_custom_code() {
     struct Fails;
     #[async_trait]
     impl MethodHandler for Fails {
-        async fn handle(&self, _p: Option<Value>) -> Result<Value, HandlerError> {
+        async fn handle(
+            &self,
+            _p: Option<Value>,
+            _ctx: &RequestContext,
+        ) -> Result<Value, HandlerError> {
             Err(HandlerError::CommunicationDenied("caller_x".into()))
         }
     }
@@ -57,6 +67,6 @@ async fn maps_handler_error_to_custom_code() {
         method: "x".into(),
         params: None,
     };
-    let resp = d.dispatch(req).await.unwrap();
+    let resp = d.dispatch(req, &RequestContext::none()).await.unwrap();
     assert_eq!(resp.error.as_ref().unwrap().code, -32011);
 }

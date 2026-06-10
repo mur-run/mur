@@ -71,6 +71,11 @@ pub struct TaskRunner {
     hook_cancel: Option<CancellationToken>,
     pending_approvals: Option<HitlApprovals>,
     notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
+    /// Per-turn client notifiers keyed by task id, registered by `message/send`
+    /// so a tool-approval prompt is routed to the connection that issued the
+    /// turn instead of broadcast to every client. Falls back to `notifier`.
+    client_notifiers:
+        Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<serde_json::Value>>>>,
     hitl_timeout_secs: u32,
     max_iterations: u32,
     tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
@@ -115,6 +120,7 @@ impl TaskRunner {
             hook_cancel: None,
             pending_approvals: None,
             notifier: None,
+            client_notifiers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
             max_iterations: 10,
             tools: vec![],
@@ -172,6 +178,24 @@ impl TaskRunner {
     pub fn with_notifier(mut self, tx: tokio::sync::mpsc::Sender<serde_json::Value>) -> Self {
         self.notifier = Some(tx);
         self
+    }
+
+    /// Register the connection sink that should receive this turn's HITL
+    /// approval prompts, keyed by the turn's task id.
+    pub async fn register_client_notifier(
+        &self,
+        task_id: &str,
+        tx: tokio::sync::mpsc::Sender<serde_json::Value>,
+    ) {
+        self.client_notifiers
+            .lock()
+            .await
+            .insert(task_id.to_string(), tx);
+    }
+
+    /// Drop the per-turn HITL sink once the turn completes.
+    pub async fn unregister_client_notifier(&self, task_id: &str) {
+        self.client_notifiers.lock().await.remove(task_id);
     }
 
     pub fn with_hitl_timeout_secs(mut self, secs: u32) -> Self {
@@ -639,7 +663,7 @@ impl TaskRunner {
 
     async fn handle_tool_call(
         &self,
-        _task_id: &str,
+        task_id: &str,
         call: &crate::llm::ToolCallResult,
     ) -> Result<crate::llm::ToolResultEntry, TaskError> {
         use crate::llm::ToolResultEntry;
@@ -694,46 +718,51 @@ impl TaskRunner {
             Err(e) => (format!("tool error: {e}"), true),
         };
 
-        // 3. HITL gate (only after tool execution)
-        let decision = if let (Some(pa), Some(notifier)) = (&self.pending_approvals, &self.notifier)
-        {
-            let hitl_id = uuid::Uuid::now_v7().to_string();
-            let (tx, rx) = tokio::sync::oneshot::channel::<crate::hitl::HitlDecision>();
-            pa.lock().await.insert(hitl_id.clone(), tx);
-            let notification = serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "tool/approval_needed",
-                "params": {
-                    "hitl_id": hitl_id,
-                    "tool_name": call.tool_name,
-                    "tool_input": call.input,
-                    "output": output,
-                    "is_error": is_error,
-                    "timeout_ms": (self.hitl_timeout_secs as u64) * 1000,
-                }
-            });
-            let _ = notifier.send(notification).await;
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(self.hitl_timeout_secs as u64),
-                rx,
-            )
-            .await
-            {
-                Ok(Ok(d)) => d,
-                _ => {
-                    pa.lock().await.remove(&hitl_id);
-                    crate::hitl::HitlDecision {
-                        allow: false,
-                        reason: Some("timed out".into()),
+        // 3. HITL gate (only after tool execution). Route the approval prompt to
+        // the connection that issued this turn (looked up by task id), falling
+        // back to the baked notifier — never broadcast to other clients.
+        let routed = self.client_notifiers.lock().await.get(task_id).cloned();
+        let effective_notifier = routed.as_ref().or(self.notifier.as_ref());
+        let decision =
+            if let (Some(pa), Some(notifier)) = (&self.pending_approvals, effective_notifier) {
+                let hitl_id = uuid::Uuid::now_v7().to_string();
+                let (tx, rx) = tokio::sync::oneshot::channel::<crate::hitl::HitlDecision>();
+                pa.lock().await.insert(hitl_id.clone(), tx);
+                let notification = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "tool/approval_needed",
+                    "params": {
+                        "hitl_id": hitl_id,
+                        "task_id": task_id,
+                        "tool_name": call.tool_name,
+                        "tool_input": call.input,
+                        "output": output,
+                        "is_error": is_error,
+                        "timeout_ms": (self.hitl_timeout_secs as u64) * 1000,
+                    }
+                });
+                let _ = notifier.send(notification).await;
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(self.hitl_timeout_secs as u64),
+                    rx,
+                )
+                .await
+                {
+                    Ok(Ok(d)) => d,
+                    _ => {
+                        pa.lock().await.remove(&hitl_id);
+                        crate::hitl::HitlDecision {
+                            allow: false,
+                            reason: Some("timed out".into()),
+                        }
                     }
                 }
-            }
-        } else {
-            crate::hitl::HitlDecision {
-                allow: true,
-                reason: None,
-            }
-        };
+            } else {
+                crate::hitl::HitlDecision {
+                    allow: true,
+                    reason: None,
+                }
+            };
 
         if !decision.allow {
             let reason_str = decision.reason.as_deref().unwrap_or("denied");

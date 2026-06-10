@@ -11,7 +11,7 @@ use mur_common::skill::{
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-use crate::protocol::a2a_server::{HandlerError, MethodHandler};
+use crate::protocol::a2a_server::{HandlerError, MethodHandler, RequestContext};
 
 pub struct SkillsGetHandler {
     /// Root of the skill store this handler serves from. In M4a this is
@@ -27,7 +27,11 @@ impl SkillsGetHandler {
 
 #[async_trait]
 impl MethodHandler for SkillsGetHandler {
-    async fn handle(&self, params: Option<Value>) -> Result<Value, HandlerError> {
+    async fn handle(
+        &self,
+        params: Option<Value>,
+        _ctx: &RequestContext,
+    ) -> Result<Value, HandlerError> {
         let params = params.ok_or_else(|| HandlerError::InvalidParams("missing params".into()))?;
 
         let skill_name = params
@@ -89,7 +93,10 @@ content:
 
         let handler = SkillsGetHandler::new(dir.path().to_path_buf());
         let result = handler
-            .handle(Some(json!({"skill": "test-skill"})))
+            .handle(
+                Some(json!({"skill": "test-skill"})),
+                &RequestContext::none(),
+            )
             .await
             .unwrap();
 
@@ -103,7 +110,7 @@ content:
         let dir = tempdir().unwrap();
         let handler = SkillsGetHandler::new(dir.path().to_path_buf());
         let err = handler
-            .handle(Some(json!({"skill": "nope"})))
+            .handle(Some(json!({"skill": "nope"})), &RequestContext::none())
             .await
             .unwrap_err();
         assert!(matches!(err, HandlerError::Internal(_)));
@@ -113,7 +120,10 @@ content:
     async fn missing_skill_param_returns_invalid_params() {
         let dir = tempdir().unwrap();
         let handler = SkillsGetHandler::new(dir.path().to_path_buf());
-        let err = handler.handle(Some(json!({}))).await.unwrap_err();
+        let err = handler
+            .handle(Some(json!({})), &RequestContext::none())
+            .await
+            .unwrap_err();
         assert!(matches!(err, HandlerError::InvalidParams(_)));
     }
 
@@ -132,7 +142,7 @@ content:
             "a\\b",
         ] {
             let err = handler
-                .handle(Some(json!({ "skill": bad })))
+                .handle(Some(json!({ "skill": bad })), &RequestContext::none())
                 .await
                 .unwrap_err();
             assert!(

@@ -4,6 +4,33 @@ use async_trait::async_trait;
 use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use tokio::sync::mpsc;
+
+/// Per-request context handed to each handler. Carries the **issuing
+/// connection's** notification sink so streaming handlers (`message/send`) emit
+/// `message/delta` / `tool/approval_needed` to *that* connection only, instead
+/// of a runtime-wide broadcast that would leak one client's tokens to another.
+/// `notifier` is `None` for transports that don't stream per-connection (the
+/// handler then falls back to any baked-in notifier).
+#[derive(Clone, Default)]
+pub struct RequestContext {
+    pub notifier: Option<mpsc::Sender<Value>>,
+}
+
+impl RequestContext {
+    /// A context with no per-connection notifier (single-client / non-streaming
+    /// transports).
+    pub fn none() -> Self {
+        Self { notifier: None }
+    }
+
+    /// A context routing notifications to one connection's sink.
+    pub fn with_notifier(notifier: mpsc::Sender<Value>) -> Self {
+        Self {
+            notifier: Some(notifier),
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum HandlerError {
@@ -45,7 +72,11 @@ impl HandlerError {
 
 #[async_trait]
 pub trait MethodHandler: Send + Sync {
-    async fn handle(&self, params: Option<Value>) -> Result<Value, HandlerError>;
+    async fn handle(
+        &self,
+        params: Option<Value>,
+        ctx: &RequestContext,
+    ) -> Result<Value, HandlerError>;
 }
 
 pub struct Dispatcher {
@@ -69,13 +100,17 @@ impl Dispatcher {
         self.methods.insert(name.to_string(), handler);
     }
 
-    pub async fn dispatch(&self, req: JsonRpcRequest) -> Result<JsonRpcResponse, HandlerError> {
+    pub async fn dispatch(
+        &self,
+        req: JsonRpcRequest,
+        ctx: &RequestContext,
+    ) -> Result<JsonRpcResponse, HandlerError> {
         let id = req.id.clone().unwrap_or(json!(null));
         if req.jsonrpc != "2.0" {
             return Ok(Self::err_response(id, -32600, "jsonrpc must be '2.0'"));
         }
         match self.methods.get(&req.method) {
-            Some(handler) => match handler.handle(req.params).await {
+            Some(handler) => match handler.handle(req.params, ctx).await {
                 Ok(result) => Ok(JsonRpcResponse {
                     jsonrpc: "2.0".into(),
                     id,

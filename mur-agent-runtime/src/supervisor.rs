@@ -387,7 +387,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
                 // Dispatcher::dispatch returns Result<JsonRpcResponse, HandlerError>;
                 // map HandlerError to a JSON-RPC error envelope so the caller
                 // always receives a well-formed response frame.
-                let resp = match d.dispatch(req).await {
+                // TCP is request/reply with no per-connection streaming sink.
+                let resp = match d
+                    .dispatch(req, &crate::protocol::a2a_server::RequestContext::none())
+                    .await
+                {
                     Ok(r) => r,
                     Err(e) => JsonRpcResponse {
                         jsonrpc: "2.0".into(),
@@ -669,6 +673,7 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
     async fn handle(
         &self,
         params: Option<serde_json::Value>,
+        _ctx: &crate::protocol::a2a_server::RequestContext,
     ) -> Result<serde_json::Value, crate::protocol::a2a_server::HandlerError> {
         let p = params.ok_or_else(|| {
             crate::protocol::a2a_server::HandlerError::InvalidParams("missing params".into())
@@ -706,6 +711,7 @@ impl crate::protocol::a2a_server::MethodHandler for HitlTestRequestHandler {
     async fn handle(
         &self,
         params: Option<serde_json::Value>,
+        ctx: &crate::protocol::a2a_server::RequestContext,
     ) -> Result<serde_json::Value, crate::protocol::a2a_server::HandlerError> {
         let p = params.unwrap_or(serde_json::json!({}));
         let tool_name = p["tool_name"].as_str().unwrap_or("bash").to_string();
@@ -728,7 +734,14 @@ impl crate::protocol::a2a_server::MethodHandler for HitlTestRequestHandler {
                 "timeout_ms": timeout_secs * 1000,
             }
         });
-        let _ = self.notifier.send(notification).await;
+        // Route to the issuing connection when present (diagnostic method, but
+        // it must not broadcast to other clients either); fall back otherwise.
+        let _ = ctx
+            .notifier
+            .as_ref()
+            .unwrap_or(&self.notifier)
+            .send(notification)
+            .await;
         Ok(serde_json::json!({"hitl_id": hitl_id}))
     }
 }
@@ -1086,9 +1099,10 @@ mod hitl_tests {
             pending_approvals: pending.clone(),
         };
         let result = handler
-            .handle(Some(
-                json!({"hitl_id": "test-id", "allow": true, "reason": "looks good"}),
-            ))
+            .handle(
+                Some(json!({"hitl_id": "test-id", "allow": true, "reason": "looks good"})),
+                &crate::protocol::a2a_server::RequestContext::none(),
+            )
             .await;
         assert!(result.is_ok());
 
@@ -1108,7 +1122,10 @@ mod hitl_tests {
             pending_approvals: pending.clone(),
         };
         let result = handler
-            .handle(Some(json!({"hitl_id": "test-id", "allow": false})))
+            .handle(
+                Some(json!({"hitl_id": "test-id", "allow": false})),
+                &crate::protocol::a2a_server::RequestContext::none(),
+            )
             .await;
         assert!(result.is_ok());
 
@@ -1125,7 +1142,10 @@ mod hitl_tests {
             pending_approvals: pending.clone(),
         };
         let result = handler
-            .handle(Some(json!({"hitl_id": "no-such-id", "allow": false})))
+            .handle(
+                Some(json!({"hitl_id": "no-such-id", "allow": false})),
+                &crate::protocol::a2a_server::RequestContext::none(),
+            )
             .await;
         assert!(result.is_err());
     }

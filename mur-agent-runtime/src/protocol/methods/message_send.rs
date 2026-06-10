@@ -1,6 +1,6 @@
 //! message/send handler.
 
-use crate::protocol::a2a_server::{HandlerError, MethodHandler};
+use crate::protocol::a2a_server::{HandlerError, MethodHandler, RequestContext};
 use crate::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 use crate::telemetry_writer::Event;
 use async_trait::async_trait;
@@ -8,6 +8,10 @@ use mur_common::a2a::Message;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+/// Buffer of the LLM-token → notification forwarding channel. Bounded; overflow
+/// is lossy (a dropped delta beats stalling generation on a slow client).
+const STREAM_DELTA_CAP: usize = 256;
 
 pub struct MessageSendHandler {
     runner: Arc<TaskRunner>,
@@ -56,7 +60,11 @@ impl MessageSendHandler {
 
 #[async_trait]
 impl MethodHandler for MessageSendHandler {
-    async fn handle(&self, params: Option<Value>) -> Result<Value, HandlerError> {
+    async fn handle(
+        &self,
+        params: Option<Value>,
+        ctx: &RequestContext,
+    ) -> Result<Value, HandlerError> {
         let p = params.ok_or_else(|| HandlerError::InvalidParams("missing params".into()))?;
         let message: Message = serde_json::from_value(p["message"].clone())
             .map_err(|e| HandlerError::InvalidParams(format!("message: {e}")))?;
@@ -73,6 +81,10 @@ impl MethodHandler for MessageSendHandler {
             .get("task_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // Kept for stamping deltas and routing this turn's HITL prompts after
+        // `spec` consumes the originals below.
+        let turn_task_id = task_id.clone();
+        let turn_context_id = context_task_id.clone();
         let spec = TaskSpec {
             input: message,
             context_task_id,
@@ -80,18 +92,39 @@ impl MethodHandler for MessageSendHandler {
         };
 
         self.emit_progress("pending", "llm_reasoning", None).await;
-        let outcome = match &self.notifier {
+        // Prefer the issuing connection's per-request sink (so deltas/HITL reach
+        // ONLY this client); fall back to any baked-in notifier for transports
+        // that don't route per-connection.
+        let stream_notifier = ctx.notifier.clone().or_else(|| self.notifier.clone());
+        let outcome = match stream_notifier {
             Some(notifier) => {
+                // Route this turn's HITL approval prompts back to this same
+                // connection (looked up by task id inside the runner).
+                if let Some(tid) = &turn_task_id {
+                    self.runner
+                        .register_client_notifier(tid, notifier.clone())
+                        .await;
+                }
                 // Forward each LLM token delta to the connected client as a
-                // `message/delta` notification while the reply generates.
-                let (delta_tx, mut delta_rx) = mpsc::channel::<crate::llm::StreamDelta>(256);
-                let notifier = notifier.clone();
+                // `message/delta` notification while the reply generates, stamped
+                // with task_id/context_id so the client can correlate the turn.
+                let (delta_tx, mut delta_rx) =
+                    mpsc::channel::<crate::llm::StreamDelta>(STREAM_DELTA_CAP);
+                let delta_task_id = turn_task_id.clone();
+                let delta_context_id = turn_context_id.clone();
                 let forward = tokio::spawn(async move {
                     while let Some(d) = delta_rx.recv().await {
+                        let mut delta_params = json!({ "text": d.text, "thinking": d.thinking });
+                        if let Some(t) = &delta_task_id {
+                            delta_params["task_id"] = json!(t);
+                        }
+                        if let Some(c) = &delta_context_id {
+                            delta_params["context_id"] = json!(c);
+                        }
                         let note = json!({
                             "jsonrpc": "2.0",
                             "method": "message/delta",
-                            "params": { "text": d.text, "thinking": d.thinking },
+                            "params": delta_params,
                         });
                         if notifier.send(note).await.is_err() {
                             break;
@@ -100,6 +133,9 @@ impl MethodHandler for MessageSendHandler {
                 });
                 let outcome = self.runner.run_sync_streaming(spec, delta_tx).await;
                 let _ = forward.await;
+                if let Some(tid) = &turn_task_id {
+                    self.runner.unregister_client_notifier(tid).await;
+                }
                 outcome
             }
             None => self.runner.run_sync(spec).await,
@@ -134,7 +170,10 @@ mod tests {
     async fn supplied_task_id_flows_into_returned_task() {
         let handler = MessageSendHandler::new(Arc::new(TaskRunner::new_stub_echo()));
         let out = handler
-            .handle(Some(user_params(Some("task-from-client"))))
+            .handle(
+                Some(user_params(Some("task-from-client"))),
+                &RequestContext::none(),
+            )
             .await
             .expect("handle ok");
         assert_eq!(
@@ -147,7 +186,7 @@ mod tests {
     async fn absent_task_id_is_back_compatible() {
         let handler = MessageSendHandler::new(Arc::new(TaskRunner::new_stub_echo()));
         let out = handler
-            .handle(Some(user_params(None)))
+            .handle(Some(user_params(None)), &RequestContext::none())
             .await
             .expect("handle ok");
         // Runner generated its own id (prefixed "task-"), not a client id.

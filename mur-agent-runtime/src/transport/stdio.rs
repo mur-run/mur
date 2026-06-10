@@ -1,6 +1,6 @@
 //! Newline-delimited JSON-RPC 2.0 over stdio.
 
-use crate::protocol::a2a_server::Dispatcher;
+use crate::protocol::a2a_server::{Dispatcher, RequestContext};
 use futures::StreamExt;
 use mur_common::JsonRpcRequest;
 use serde_json::Value;
@@ -55,7 +55,9 @@ where
             Ok(r) => r,
             Err(_) => continue, // silently drop malformed; dispatcher also guards
         };
-        let resp = match dispatcher.dispatch(req).await {
+        // stdio is a single peer; notifications already fan to this one stdout
+        // via the baked notifier, so no per-connection routing is needed.
+        let resp = match dispatcher.dispatch(req, &RequestContext::none()).await {
             Ok(r) => r,
             Err(_) => continue,
         };

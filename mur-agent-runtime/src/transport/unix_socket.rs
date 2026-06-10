@@ -1,7 +1,7 @@
 //! Unix domain socket transport — JSON-RPC 2.0 newline-delimited,
 //! with SO_PEERCRED caller resolution (Task 22 consumes this).
 
-use crate::protocol::a2a_server::Dispatcher;
+use crate::protocol::a2a_server::{Dispatcher, RequestContext};
 use futures::StreamExt;
 use mur_common::JsonRpcRequest;
 use serde_json::Value;
@@ -16,6 +16,12 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 /// this at read time — the internal buffer never exceeds this limit, giving
 /// true allocation-bounded reads. Aligned with `transport::noise::MAX_FRAME_BYTES`.
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Capacity of the notification channels (telemetry broadcast and the
+/// per-connection request-scoped sink). Bounded so a slow client can't grow an
+/// unbounded backlog; overflow is lossy by design (a dropped token delta is
+/// preferable to blocking generation).
+const NOTIFY_CHANNEL_CAP: usize = 256;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PeerInfo {
@@ -39,7 +45,12 @@ pub async fn serve_unix(
         perms.set_mode(0o600);
         std::fs::set_permissions(&path, perms)?;
     }
-    let (bcast_tx, _) = tokio::sync::broadcast::channel::<Value>(256);
+    // Broadcast carries only request-INDEPENDENT notifications (telemetry,
+    // skill-executed, progress) to every connection. Request-SCOPED streaming
+    // (token deltas + HITL prompts) is NOT broadcast — it is routed to the
+    // issuing connection via that connection's own sink (see below), so one
+    // client never receives another client's tokens.
+    let (bcast_tx, _) = tokio::sync::broadcast::channel::<Value>(NOTIFY_CHANNEL_CAP);
     let bcast_forward = bcast_tx.clone();
     tokio::spawn(async move {
         while let Some(n) = notifications.recv().await {
@@ -65,6 +76,25 @@ pub async fn serve_unix(
                     let _ = w.flush().await;
                 }
             });
+
+            // Per-connection sink for request-scoped notifications. Handlers
+            // receive this via `RequestContext` and stream `message/delta` /
+            // `tool/approval_needed` here — delivered ONLY to this socket.
+            let (conn_notif_tx, mut conn_notif_rx) =
+                tokio::sync::mpsc::channel::<Value>(NOTIFY_CHANNEL_CAP);
+            let w_req = write.clone();
+            let req_notif_task = tokio::spawn(async move {
+                while let Some(n) = conn_notif_rx.recv().await {
+                    let line = format!("{n}\n");
+                    let mut w = w_req.lock().await;
+                    if w.write_all(line.as_bytes()).await.is_err() {
+                        break;
+                    }
+                    let _ = w.flush().await;
+                }
+            });
+            let ctx = RequestContext::with_notifier(conn_notif_tx);
+
             let codec = LinesCodec::new_with_max_length(MAX_LINE_BYTES);
             let mut framed = FramedRead::new(read, codec);
             while let Some(result) = framed.next().await {
@@ -83,7 +113,7 @@ pub async fn serve_unix(
                     Ok(r) => r,
                     Err(_) => continue,
                 };
-                let resp = match dispatcher.dispatch(req).await {
+                let resp = match dispatcher.dispatch(req, &ctx).await {
                     Ok(r) => r,
                     Err(_) => continue,
                 };
@@ -99,6 +129,7 @@ pub async fn serve_unix(
             }
             let _ = peer; // passed to auth / communication_policy via request context in Task 22
             notif_task.abort();
+            req_notif_task.abort();
         });
     }
 }
