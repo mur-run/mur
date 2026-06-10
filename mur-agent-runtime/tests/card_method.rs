@@ -6,7 +6,13 @@ use std::sync::Arc;
 async fn card_returns_agent_identity_and_card_fields() {
     let profile = load_test_profile();
     let handler = CardHandler::new(Arc::new(profile));
-    let result = handler.handle(None).await.unwrap();
+    let result = handler
+        .handle(
+            None,
+            &mur_agent_runtime::protocol::a2a_server::RequestContext::none(),
+        )
+        .await
+        .unwrap();
     assert_eq!(result["name"], "agent_a");
     assert_eq!(result["protocolVersion"], "a2a/0.3");
     assert!(
@@ -60,7 +66,13 @@ async fn card_emits_installed_skills_block() {
     std::mem::forget(tmp);
 
     let handler = CardHandler::new(Arc::new(profile));
-    let card = handler.handle(None).await.unwrap();
+    let card = handler
+        .handle(
+            None,
+            &mur_agent_runtime::protocol::a2a_server::RequestContext::none(),
+        )
+        .await
+        .unwrap();
     let entries = card["installed_skills"].as_array().unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["name"], "find-prices");

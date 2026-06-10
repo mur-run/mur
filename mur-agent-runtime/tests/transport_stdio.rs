@@ -12,13 +12,16 @@ async fn serves_dispatch_on_stdio_pipe() {
     let (notif_tx, notif_rx) = mpsc::channel(16);
     let dispatcher = {
         use async_trait::async_trait;
-        use mur_agent_runtime::protocol::a2a_server::{HandlerError, MethodHandler};
+        use mur_agent_runtime::protocol::a2a_server::{
+            HandlerError, MethodHandler, RequestContext,
+        };
         struct Ping;
         #[async_trait]
         impl MethodHandler for Ping {
             async fn handle(
                 &self,
                 _: Option<serde_json::Value>,
+                _ctx: &RequestContext,
             ) -> Result<serde_json::Value, HandlerError> {
                 Ok(json!({"pong": true}))
             }
