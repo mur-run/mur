@@ -93,7 +93,9 @@
   border: 1px solid var(--border-line);
   border-radius: 6px;
   background: var(--surface-card);
+  color: var(--text-primary);
   font-size: 13px;
+  cursor: pointer;
   transition: background 0.1s;
 }
 .toolbar-btn:hover { background: var(--surface-hover); }
@@ -301,6 +303,8 @@
   border-radius: 5px;
   font-size: 12px;
   background: var(--surface-card);
+  color: var(--text-primary);
+  cursor: pointer;
 }
 .grid-card__actions button:hover:not(:disabled) { background: var(--surface-hover); }
 .grid-card__actions button:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -488,8 +492,9 @@
   width: 180px;
   min-width: 140px;
   padding: 8px 4px;
-  border-right: 1px solid var(--color-border, #e5e7eb);
-  background: var(--color-surface, #f9fafb);
+  border-right: 1px solid var(--border-line);
+  border-left: 1px solid var(--border-line);
+  background: var(--surface-secondary);
   overflow-y: auto;
 }
 
@@ -504,16 +509,16 @@
   cursor: pointer;
   text-align: left;
   font-size: 13px;
-  color: var(--color-text, #111);
+  color: var(--text-primary);
   position: relative;
 }
 
 .conv-item:hover {
-  background: var(--color-hover, #f3f4f6);
+  background: var(--surface-hover);
 }
 
 .conv-item--active {
-  background: var(--color-selected, #ede9fe);
+  background: var(--surface-card);
   font-weight: 500;
 }
 
@@ -522,19 +527,19 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--color-idle, #9ca3af);
+  background: var(--status-idle);
 }
 
 .conv-status--running {
-  background: var(--color-running, #22c55e);
+  background: var(--status-running);
 }
 
 .conv-status--idle {
-  background: var(--color-idle, #9ca3af);
+  background: var(--status-idle);
 }
 
 .conv-status--stale {
-  background: var(--color-stale, #f59e0b);
+  background: var(--status-restarting);
 }
 
 .conv-name {
@@ -552,11 +557,11 @@
 }
 
 .conv-badge--unread {
-  background: var(--color-brand, #7c3aed);
+  background: var(--color-brand);
 }
 
 .conv-badge--hitl {
-  background: var(--color-warning, #f59e0b);
+  background: var(--status-restarting);
 }
 
 .conv-close {
@@ -572,17 +577,18 @@
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
-  color: var(--color-muted, #6b7280);
+  color: var(--text-secondary);
   padding: 0;
 }
 
-.conv-item:hover .conv-close {
+.conv-item:hover .conv-close,
+.conv-item--active .conv-close {
   display: flex;
 }
 
 .conv-close:hover {
-  background: var(--color-danger-subtle, #fee2e2);
-  color: var(--color-danger, #ef4444);
+  background: var(--status-failed);
+  color: #fff;
 }
 
 /* ── Conversation Surface ──────────────────────────────────────────────── */
@@ -590,6 +596,10 @@
   display: flex;
   height: 100%;
   min-height: 0;
+  /* Fixed track width so the dashboard's 1fr column keeps its space;
+     the window grows to accommodate this surface when a chat opens. */
+  width: 480px;
+  min-width: 360px;
 }
 
 .conv-panels {
@@ -602,4 +612,46 @@
   flex: 1;
   flex-direction: column;
   min-width: 0;
+}
+
+.conv-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-line);
+  background: var(--surface-card);
+  flex: none;
+}
+
+.conv-panel__title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-panel__close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-secondary);
+  padding: 0;
+}
+
+.conv-panel__close:hover {
+  background: var(--status-failed);
+  color: #fff;
 }
