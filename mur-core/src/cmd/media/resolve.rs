@@ -17,7 +17,7 @@ fn detect_tool(env_key: &str, bin: &str) -> Option<PathBuf> {
         let p = PathBuf::from(p);
         return p.exists().then_some(p);
     }
-    which_on_path(bin)
+    which_on_path(bin).or_else(|| which_in_well_known_dirs(bin))
 }
 
 /// Minimal PATH search (avoids a new `which` crate dependency).
@@ -30,6 +30,23 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Fallback for GUI-launched processes (Hub sidecar, launchd services): their
+/// PATH is the system default and misses package-manager prefixes, so a tool
+/// that works fine from a terminal "disappears" inside the runtime. Probe the
+/// standard install locations directly.
+fn which_in_well_known_dirs(bin: &str) -> Option<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/opt/homebrew/bin"), // Homebrew (Apple Silicon)
+        PathBuf::from("/usr/local/bin"),    // Homebrew (Intel) / manual installs
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        dirs.push(home.join(".local/bin")); // pipx / pip --user
+        dirs.push(home.join("bin"));
+    }
+    dirs.into_iter().map(|d| d.join(bin)).find(|c| c.is_file())
 }
 
 /// Heuristic: does this URL host a DRM-protected streaming service we cannot capture?

@@ -1,5 +1,6 @@
 //! TUI application state and the pure (non-IO) state transitions.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use ratatui::style::{Color, Style};
@@ -21,6 +22,9 @@ pub enum Role {
     Agent,
     /// Local UI notice (slash-command output, errors, hints) — not persisted.
     System,
+    /// A `!command` the user ran locally, plus its output. Persisted, and
+    /// queued so the agent sees it with the next message.
+    Shell,
 }
 
 /// One message in the visible transcript.
@@ -70,6 +74,12 @@ pub enum SlashCmd {
     Clear,
     Card,
     Sessions,
+    /// `/auto [on|off]` — toggle (None) or set session-wide auto-approval.
+    Auto(Option<bool>),
+    /// `/mcp [list|add|remove] …` — manage the agent's MCP servers.
+    Mcp(Vec<String>),
+    /// `/skill [list|add|remove] …` — manage the agent's skills.
+    Skill(Vec<String>),
     Quit,
     Unknown(String),
 }
@@ -78,19 +88,37 @@ pub enum SlashCmd {
 pub fn parse_slash(line: &str) -> Option<SlashCmd> {
     let line = line.trim();
     let rest = line.strip_prefix('/')?;
-    let word = rest.split_whitespace().next().unwrap_or("");
+    let mut words = rest.split_whitespace();
+    let word = words.next().unwrap_or("");
     Some(match word {
         "help" | "h" | "?" => SlashCmd::Help,
         "clear" | "new" => SlashCmd::Clear,
         "card" => SlashCmd::Card,
         "sessions" | "ls" => SlashCmd::Sessions,
+        "auto" => SlashCmd::Auto(match words.next() {
+            Some("on") => Some(true),
+            Some("off") => Some(false),
+            _ => None,
+        }),
+        "mcp" => SlashCmd::Mcp(words.map(str::to_string).collect()),
+        "skill" | "skills" => SlashCmd::Skill(words.map(str::to_string).collect()),
         "exit" | "quit" | "q" => SlashCmd::Quit,
         other => SlashCmd::Unknown(other.to_string()),
     })
 }
 
 /// The set of slash commands offered by tab-completion / `/help`.
-pub const SLASH_COMMANDS: [&str; 6] = ["/help", "/clear", "/card", "/sessions", "/exit", "/quit"];
+pub const SLASH_COMMANDS: [&str; 9] = [
+    "/help",
+    "/clear",
+    "/card",
+    "/sessions",
+    "/auto",
+    "/mcp",
+    "/skill",
+    "/exit",
+    "/quit",
+];
 
 /// All mutable TUI state.
 pub struct App {
@@ -107,6 +135,15 @@ pub struct App {
     pub scroll_back: u16,
     pub spinner: usize,
     pub should_quit: bool,
+    /// Session-wide auto-approval of every tool call (`/auto` or `--auto`).
+    /// Never persisted: a new `mur agent cli` starts back at ask-first.
+    pub auto_approve: bool,
+    /// Tools the user marked "always allow" for THIS session via the HITL
+    /// modal's `[a]` key. Same lifetime rules as `auto_approve`.
+    pub session_tool_allow: HashSet<String>,
+    /// `!command` blocks (command + output) not yet shown to the agent; they
+    /// are prefixed onto the next user message so the agent has the context.
+    pub pending_shell: Vec<String>,
     /// Set once we've warned the user that session writes are failing, so the
     /// warning isn't repeated every turn.
     persist_warned: bool,
@@ -127,8 +164,23 @@ impl App {
             scroll_back: 0,
             spinner: 0,
             should_quit: false,
+            auto_approve: false,
+            session_tool_allow: HashSet::new(),
+            pending_shell: Vec::new(),
             persist_warned: false,
         }
+    }
+
+    /// The in-flight agent bubble, if any. Searched from the back instead of
+    /// only checking `last()`: a system note pushed mid-turn (HITL "approved
+    /// `tool`", a hint, a warning) lands AFTER the streaming bubble, and the
+    /// turn's deltas/finish must still find their message (see #6: approving a
+    /// tool call used to lose the whole reply).
+    fn streaming_agent_mut(&mut self) -> Option<&mut ChatMsg> {
+        self.messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.role == Role::Agent && m.streaming)
     }
 
     /// Append a turn to the session log, surfacing a write failure once.
@@ -179,10 +231,7 @@ impl App {
     }
 
     pub fn append_delta(&mut self, text: &str, thinking: bool) {
-        if let Some(m) = self.messages.last_mut()
-            && m.role == Role::Agent
-            && m.streaming
-        {
+        if let Some(m) = self.streaming_agent_mut() {
             if thinking {
                 m.thinking.push_str(text);
             } else {
@@ -201,10 +250,7 @@ impl App {
     /// phantom line or thread a stale context id.
     pub fn finish_agent_turn(&mut self, reply: String, task_id: Option<String>) {
         let mut body = None;
-        if let Some(m) = self.messages.last_mut()
-            && m.role == Role::Agent
-            && m.streaming
-        {
+        if let Some(m) = self.streaming_agent_mut() {
             if !reply.is_empty() {
                 m.text = reply;
             }
@@ -225,10 +271,7 @@ impl App {
 
     /// Mark a partial (cancelled) turn as finished without persisting a reply.
     pub fn finish_partial(&mut self) {
-        if let Some(m) = self.messages.last_mut()
-            && m.role == Role::Agent
-            && m.streaming
-        {
+        if let Some(m) = self.streaming_agent_mut() {
             m.thinking.clear();
             m.streaming = false;
             if m.text.is_empty() {
@@ -240,8 +283,12 @@ impl App {
     }
 
     pub fn fail_turn(&mut self, err: &str) {
-        if matches!(self.messages.last(), Some(m) if m.role == Role::Agent && m.streaming) {
-            self.messages.pop();
+        if let Some(i) = self
+            .messages
+            .iter()
+            .rposition(|m| m.role == Role::Agent && m.streaming)
+        {
+            self.messages.remove(i);
         }
         self.push_system(format!("error: {err}"));
         self.streaming = false;
@@ -262,11 +309,39 @@ impl App {
 
     /// Load prior turns into the transcript (resume), threading the last agent
     /// task id as context.
+    /// Record a completed `!command` run: show it, persist it, and queue it
+    /// for the agent's next turn.
+    pub fn push_shell(&mut self, cmd: &str, output: &str) {
+        let text = if output.is_empty() {
+            format!("$ {cmd}")
+        } else {
+            format!("$ {cmd}\n{output}")
+        };
+        self.messages.push(ChatMsg::new(Role::Shell, text.clone()));
+        self.persist_turn("shell", &text, None);
+        self.pending_shell.push(text);
+        self.scroll_back = 0;
+    }
+
+    /// Drain queued `!command` blocks into a context prefix for the next
+    /// message, or `None` if there is nothing pending.
+    pub fn take_pending_shell(&mut self) -> Option<String> {
+        if self.pending_shell.is_empty() {
+            return None;
+        }
+        let blocks = self.pending_shell.join("\n\n");
+        self.pending_shell.clear();
+        Some(format!(
+            "[shell commands the user just ran locally in this chat]\n{blocks}\n[end of shell context]"
+        ))
+    }
+
     pub fn load_history(&mut self, turns: Vec<TurnRecord>) {
         let mut last_task = None;
         for t in turns {
             let role = match t.role.as_str() {
                 "agent" => Role::Agent,
+                "shell" => Role::Shell,
                 _ => Role::User,
             };
             if role == Role::Agent {
@@ -385,6 +460,57 @@ mod tests {
         a.begin_user_turn("hi");
         a.finish_agent_turn("**bold**".into(), Some("t1".into()));
         assert!(a.messages.last().unwrap().rendered.is_some());
+    }
+
+    #[test]
+    fn shell_blocks_queue_and_drain_into_prefix() {
+        let mut a = app();
+        a.push_shell("ls", "foo\nbar");
+        a.push_shell("true", "");
+        assert_eq!(
+            a.messages.iter().filter(|m| m.role == Role::Shell).count(),
+            2
+        );
+        let ctx = a.take_pending_shell().expect("pending blocks");
+        assert!(ctx.contains("$ ls\nfoo\nbar"));
+        assert!(ctx.contains("$ true"));
+        assert!(a.take_pending_shell().is_none(), "drained");
+    }
+
+    #[test]
+    fn finish_agent_turn_survives_mid_turn_system_note() {
+        // Regression (#6): a system note pushed while streaming (e.g. HITL
+        // "approved `bash`") lands after the agent bubble; the turn's finish
+        // must still find that bubble instead of silently dropping the reply.
+        let mut a = app();
+        let tid = a.begin_user_turn("run ls");
+        a.append_delta("partial", false);
+        a.push_system("approved `bash`");
+        a.append_delta(" more", false);
+        a.finish_agent_turn("final reply".into(), Some(tid.clone()));
+        let agent = a
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Agent)
+            .expect("agent bubble");
+        assert_eq!(agent.text, "final reply");
+        assert!(!agent.streaming);
+        assert_eq!(a.context_task_id.as_deref(), Some(tid.as_str()));
+        assert!(!a.streaming);
+    }
+
+    #[test]
+    fn fail_turn_drops_displaced_streaming_placeholder() {
+        let mut a = app();
+        a.begin_user_turn("hi");
+        a.push_system("note lands after the placeholder");
+        a.fail_turn("boom");
+        assert!(
+            !a.messages
+                .iter()
+                .any(|m| m.role == Role::Agent && m.streaming)
+        );
+        assert!(!a.streaming);
     }
 
     #[test]
