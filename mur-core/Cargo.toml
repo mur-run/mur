@@ -95,6 +95,16 @@ base64 = "0.22"          # cmd::agent_companion::card::png chara/ccv3 chunk deco
 quick-xml = { workspace = true }
 ulid = { workspace = true }  # cmd::agent_companion::card::import inbox id
 
+# `mur agent cli <name>` — interactive TUI chat. mur-core is the only crate
+# that uses crossterm, so there is no risk of a second crossterm major in the
+# workspace (mur-hub-gui, which also uses ratatui, is workspace-EXCLUDED).
+# Markdown rendering reuses the existing `pulldown-cmark` dep — no new crate.
+# `unstable-rendered-line-info` exposes `Paragraph::line_count`, used to anchor
+# the transcript to the bottom (newest message) accounting for wrapping.
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
+tui-textarea = "0.7"
+
 [features]
 default = ["cli", "server", "sources"]
 cli = ["dialoguer", "console", "clap"]
