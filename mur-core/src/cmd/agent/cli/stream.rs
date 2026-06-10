@@ -124,7 +124,13 @@ pub fn spawn_stream(
             &home,
             &agent,
             params,
-            |delta, thinking| {
+            |delta, thinking, delta_task_id| {
+                // The runtime already routes deltas to this connection only;
+                // defensively drop any whose stamped id isn't this turn's (an
+                // empty id means a pre-routing runtime — accept it).
+                if !delta_task_id.is_empty() && delta_task_id != tid {
+                    return;
+                }
                 let _ = tx.blocking_send(StreamMsg::Delta {
                     task_id: tid.clone(),
                     text: delta.to_string(),
