@@ -22,6 +22,9 @@ pub enum Role {
     Agent,
     /// Local UI notice (slash-command output, errors, hints) — not persisted.
     System,
+    /// A `!command` the user ran locally, plus its output. Persisted, and
+    /// queued so the agent sees it with the next message.
+    Shell,
 }
 
 /// One message in the visible transcript.
@@ -130,6 +133,9 @@ pub struct App {
     /// Tools the user marked "always allow" for THIS session via the HITL
     /// modal's `[a]` key. Same lifetime rules as `auto_approve`.
     pub session_tool_allow: HashSet<String>,
+    /// `!command` blocks (command + output) not yet shown to the agent; they
+    /// are prefixed onto the next user message so the agent has the context.
+    pub pending_shell: Vec<String>,
     /// Set once we've warned the user that session writes are failing, so the
     /// warning isn't repeated every turn.
     persist_warned: bool,
@@ -152,6 +158,7 @@ impl App {
             should_quit: false,
             auto_approve: false,
             session_tool_allow: HashSet::new(),
+            pending_shell: Vec::new(),
             persist_warned: false,
         }
     }
@@ -294,11 +301,39 @@ impl App {
 
     /// Load prior turns into the transcript (resume), threading the last agent
     /// task id as context.
+    /// Record a completed `!command` run: show it, persist it, and queue it
+    /// for the agent's next turn.
+    pub fn push_shell(&mut self, cmd: &str, output: &str) {
+        let text = if output.is_empty() {
+            format!("$ {cmd}")
+        } else {
+            format!("$ {cmd}\n{output}")
+        };
+        self.messages.push(ChatMsg::new(Role::Shell, text.clone()));
+        self.persist_turn("shell", &text, None);
+        self.pending_shell.push(text);
+        self.scroll_back = 0;
+    }
+
+    /// Drain queued `!command` blocks into a context prefix for the next
+    /// message, or `None` if there is nothing pending.
+    pub fn take_pending_shell(&mut self) -> Option<String> {
+        if self.pending_shell.is_empty() {
+            return None;
+        }
+        let blocks = self.pending_shell.join("\n\n");
+        self.pending_shell.clear();
+        Some(format!(
+            "[shell commands the user just ran locally in this chat]\n{blocks}\n[end of shell context]"
+        ))
+    }
+
     pub fn load_history(&mut self, turns: Vec<TurnRecord>) {
         let mut last_task = None;
         for t in turns {
             let role = match t.role.as_str() {
                 "agent" => Role::Agent,
+                "shell" => Role::Shell,
                 _ => Role::User,
             };
             if role == Role::Agent {
@@ -417,6 +452,18 @@ mod tests {
         a.begin_user_turn("hi");
         a.finish_agent_turn("**bold**".into(), Some("t1".into()));
         assert!(a.messages.last().unwrap().rendered.is_some());
+    }
+
+    #[test]
+    fn shell_blocks_queue_and_drain_into_prefix() {
+        let mut a = app();
+        a.push_shell("ls", "foo\nbar");
+        a.push_shell("true", "");
+        assert_eq!(a.messages.iter().filter(|m| m.role == Role::Shell).count(), 2);
+        let ctx = a.take_pending_shell().expect("pending blocks");
+        assert!(ctx.contains("$ ls\nfoo\nbar"));
+        assert!(ctx.contains("$ true"));
+        assert!(a.take_pending_shell().is_none(), "drained");
     }
 
     #[test]

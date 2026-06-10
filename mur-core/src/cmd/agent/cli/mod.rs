@@ -41,7 +41,7 @@ const SCROLL_STEP: u16 = 5;
 /// Spinner animation cadence.
 const SPINNER_MS: u64 = 90;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /auto [on|off]  /exit · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /auto [on|off]  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 pub async fn cmd_cli(name: &str, resume: bool, auto: bool) -> Result<()> {
@@ -327,6 +327,20 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         handle_slash(app, cmd, tx).await;
         return;
     }
+    // `!command` — run locally (like Claude Code's bang escape). Allowed while
+    // a turn is generating: it never touches the agent connection.
+    if let Some(cmd) = trimmed.strip_prefix('!').map(str::trim)
+        && !cmd.is_empty()
+    {
+        app.clear_input();
+        app.push_system(format!("running `{cmd}`…"));
+        let (cmd, t) = (cmd.to_string(), tx.clone());
+        tokio::spawn(async move {
+            let output = stream::run_local_shell(cmd.clone()).await;
+            let _ = t.send(StreamMsg::ShellDone { cmd, output }).await;
+        });
+        return;
+    }
     // Reject (but DON'T discard) a message typed while a turn is generating —
     // clearing the input here would silently lose what the user composed.
     if app.streaming {
@@ -336,7 +350,14 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     app.clear_input();
 
     let task_id = app.begin_user_turn(&trimmed);
-    let params = build_params(&trimmed, &task_id, app.context_task_id.as_deref());
+    // Prefix any `!command` output the agent hasn't seen yet, so it has the
+    // same context the user is looking at. The transcript shows only the
+    // user's text; the shell blocks were already rendered when they ran.
+    let outgoing = match app.take_pending_shell() {
+        Some(ctx) => format!("{ctx}\n\n{trimmed}"),
+        None => trimmed.clone(),
+    };
+    let params = build_params(&outgoing, &task_id, app.context_task_id.as_deref());
     spawn_stream(
         app.home.clone(),
         app.agent.clone(),
@@ -437,6 +458,7 @@ fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<StreamMsg>) {
         },
         StreamMsg::Err { error, .. } => app.fail_turn(&error),
         StreamMsg::Note(text) => app.push_system(text),
+        StreamMsg::ShellDone { cmd, output } => app.push_shell(&cmd, &output),
     }
 }
 

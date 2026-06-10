@@ -41,6 +41,8 @@ pub enum StreamMsg {
     /// An out-of-band notice not tied to a turn (e.g. a failed HITL/cancel
     /// dial). Always shown regardless of the active turn.
     Note(String),
+    /// A local `!command` finished. Turn-independent like `Note`.
+    ShellDone { cmd: String, output: String },
 }
 
 impl StreamMsg {
@@ -51,9 +53,59 @@ impl StreamMsg {
             | StreamMsg::Hitl { task_id, .. }
             | StreamMsg::Done { task_id, .. }
             | StreamMsg::Err { task_id, .. } => Some(task_id),
-            StreamMsg::Note(_) => None,
+            StreamMsg::Note(_) | StreamMsg::ShellDone { .. } => None,
         }
     }
+}
+
+/// Cap on captured `!command` output forwarded to the transcript/agent.
+pub const SHELL_MAX_BYTES: usize = 8 * 1024;
+/// Wall-clock limit for a `!command`.
+pub const SHELL_TIMEOUT_SECS: u64 = 30;
+
+/// Run a local `!command` via `$SHELL -c` (fallback `/bin/sh`), merging
+/// stderr into stdout, with a timeout and output cap.
+pub async fn run_local_shell(cmd: String) -> String {
+    use tokio::process::Command;
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    let fut = Command::new(shell)
+        .arg("-c")
+        .arg(&cmd)
+        .kill_on_drop(true)
+        .output();
+    let out = match tokio::time::timeout(
+        std::time::Duration::from_secs(SHELL_TIMEOUT_SECS),
+        fut,
+    )
+    .await
+    {
+        Err(_) => return format!("[timed out after {SHELL_TIMEOUT_SECS}s]"),
+        Ok(Err(e)) => return format!("[failed to run: {e}]"),
+        Ok(Ok(out)) => out,
+    };
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.trim().is_empty() {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&err);
+    }
+    if !out.status.success() {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&format!("[exit {}]", out.status.code().unwrap_or(-1)));
+    }
+    if text.len() > SHELL_MAX_BYTES {
+        let mut cut = SHELL_MAX_BYTES;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        text.truncate(cut);
+        text.push_str("\n[output truncated]");
+    }
+    text.trim_end().to_string()
 }
 
 /// A human-in-the-loop tool-approval request, parsed from a
@@ -302,6 +354,21 @@ mod tests {
         let (reply, id) = task_outcome(&task).unwrap();
         assert_eq!(reply, "hi");
         assert_eq!(id.as_deref(), Some("t9"));
+    }
+
+    #[tokio::test]
+    async fn run_local_shell_captures_output_and_exit() {
+        let out = run_local_shell("echo hi; echo err >&2; exit 3".into()).await;
+        assert!(out.contains("hi"));
+        assert!(out.contains("err"));
+        assert!(out.contains("[exit 3]"));
+    }
+
+    #[tokio::test]
+    async fn run_local_shell_truncates_huge_output() {
+        let out = run_local_shell("yes x | head -c 100000".into()).await;
+        assert!(out.len() <= SHELL_MAX_BYTES + 64);
+        assert!(out.ends_with("[output truncated]"));
     }
 
     #[test]

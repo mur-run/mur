@@ -80,6 +80,23 @@ fn push_message(lines: &mut Vec<Line<'static>>, m: &ChatMsg, spinner: usize) {
             ));
             lines.push(Line::default());
         }
+        Role::Shell => {
+            // `$ cmd` highlighted, output dim — visually a local terminal block.
+            let mut it = m.text.lines();
+            if let Some(first) = it.next() {
+                lines.push(Line::styled(
+                    first.to_string(),
+                    Style::default().fg(USER).add_modifier(Modifier::BOLD),
+                ));
+            }
+            for l in it {
+                lines.push(Line::styled(
+                    l.to_string(),
+                    Style::default().fg(SYSTEM),
+                ));
+            }
+            lines.push(Line::default());
+        }
         Role::Agent => {
             lines.push(Line::from(Span::styled(
                 "● agent",
