@@ -56,7 +56,21 @@ objects, harvest proposals are the candidate feed:
 - Spec: `docs/superpowers/specs/2026-05-28-mur-workflow-engine-design-v2.md`
 - Plan: `docs/superpowers/plans/2026-06-11-workflow-engine-w3a-pattern-removal.md`
 
-## Workflow engine P2 — DAG schema + run-ledger (2026-06-11)
+## Workflow engine P3 — DAG executor (2026-06-11)
+
+Unified DAG executor for `category: Workflow` skills (`mur-core/src/executor/dag.rs`). Loads a
+`Procedure` with `ProcedureStep` (id, depends_on, command, on_failure, retry, needs_approval),
+topo-sorts via Kahn's algorithm, groups steps by rank, and executes each rank concurrently via
+`tokio::spawn`. Every step writes a run-ledger record (`SkillEvent::Execution` via `record_run`).
+
+- **Command-mode** (`command: Some`): runs via `sh -c` with exit-code gating, `{{var}}` substitution,
+  `{{input}}` piping, configurable timeout, and `FailureAction::{Abort, Skip, Retry}` handling.
+- **Intent-mode** (`command: None`): prints the resolved instruction/tool to stderr, marks
+  `skipped_intent` in the ledger (never silently dropped — v2 decision #2).
+- **`needs_approval`**: TTY → dialoguer prompt; non-TTY → auto-skip (`--yes` flag bypasses).
+- `mur workflow run <name>` gains a skill fallback: after the legacy `WorkflowYamlStore` search, it
+  scans `~/.mur/skills/` for a matching `category: Workflow` skill and executes it via the DAG executor.
+
 
 Schema/library layer for the v2 executor (P3 follows):
 

@@ -176,6 +176,9 @@ pub enum WorkflowAction {
         /// Print workflow as AI prompt instead of executing
         #[arg(long)]
         prompt: bool,
+        /// Auto-approve all `needs_approval` steps
+        #[arg(long)]
+        yes: bool,
     },
     /// Show workflow composition suggestions and pending nudges
     Suggest {
