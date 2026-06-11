@@ -187,6 +187,102 @@ fn tmux_inside_rest(
     split_and_tile(window_id, exe, names, resume, auto)
 }
 
+/// Display label for the spawned tab/window across backends.
+#[allow(dead_code)] // used by Task 5's executor
+const CHAT_LABEL: &str = "mur-chat";
+
+/// Inside zellij: new named tab, then one `zellij run` pane per agent
+/// (panes land in the freshly focused tab).
+#[allow(dead_code)] // used by Task 5's executor
+fn zellij_inside(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<Vec<String>> {
+    let mut cmds = vec![vec![
+        "zellij".into(),
+        "action".into(),
+        "new-tab".into(),
+        "--name".into(),
+        CHAT_LABEL.into(),
+    ]];
+    for name in names {
+        let mut c = vec!["zellij".into(), "run".into(), "--".into()];
+        c.extend(pane_argv(exe, name, resume, auto));
+        cmds.push(c);
+    }
+    cmds
+}
+
+/// KDL string escaping (paths with `"` or `\` are unlikely but cheap to handle).
+#[allow(dead_code)] // used by Task 5's executor
+fn kdl_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', r"\\").replace('"', "\\\""))
+}
+
+/// Outside zellij: generated layout for `zellij --layout-string`.
+#[allow(dead_code)] // used by Task 5's executor
+fn zellij_kdl_layout(exe: &str, names: &[String], resume: bool, auto: bool) -> String {
+    let mut out = String::from("layout {\n    pane split_direction=\"vertical\" {\n");
+    for name in names {
+        let args: Vec<String> = pane_argv(exe, name, resume, auto)[1..]
+            .iter()
+            .map(|a| kdl_quote(a))
+            .collect();
+        out.push_str(&format!(
+            "        pane command={} {{ args {}; }}\n",
+            kdl_quote(exe),
+            args.join(" ")
+        ));
+    }
+    out.push_str("    }\n}\n");
+    out
+}
+
+/// Inside WezTerm: split the current pane once per agent, alternating
+/// right/bottom for a rough grid.
+#[allow(dead_code)] // used by Task 5's executor
+fn wezterm_splits(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<Vec<String>> {
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let dir = if i % 2 == 0 { "--right" } else { "--bottom" };
+            let mut c: Vec<String> = vec![
+                "wezterm".into(),
+                "cli".into(),
+                "split-pane".into(),
+                dir.into(),
+                "--".into(),
+            ];
+            c.extend(pane_argv(exe, name, resume, auto));
+            c
+        })
+        .collect()
+}
+
+/// Inside kitty: one `kitten @ launch` per agent, alternating split axis.
+/// Requires `allow_remote_control` — failure falls back at execution time.
+#[allow(dead_code)] // used by Task 5's executor
+fn kitty_launches(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<Vec<String>> {
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let loc = if i % 2 == 0 {
+                "--location=vsplit"
+            } else {
+                "--location=hsplit"
+            };
+            let mut c: Vec<String> = vec![
+                "kitten".into(),
+                "@".into(),
+                "launch".into(),
+                loc.into(),
+                "--".into(),
+            ];
+            c.extend(pane_argv(exe, name, resume, auto));
+            c
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +425,125 @@ mod tests {
         );
         assert_eq!(rest[1], vec!["tmux", "select-layout", "-t", "@7", "tiled"]);
         assert_eq!(rest.len(), 2);
+    }
+
+    #[test]
+    fn zellij_inside_plan_shape() {
+        let names = vec!["a1".to_string(), "a2".to_string()];
+        let cmds = zellij_inside("/bin/mur", &names, false, true);
+        assert_eq!(
+            cmds[0],
+            vec!["zellij", "action", "new-tab", "--name", "mur-chat"]
+        );
+        assert_eq!(
+            cmds[1],
+            vec![
+                "zellij", "run", "--", "/bin/mur", "agent", "cli", "a1", "--auto"
+            ]
+        );
+        assert_eq!(
+            cmds[2],
+            vec![
+                "zellij", "run", "--", "/bin/mur", "agent", "cli", "a2", "--auto"
+            ]
+        );
+        assert_eq!(cmds.len(), 3);
+    }
+
+    #[test]
+    fn zellij_kdl_layout_quotes_and_lists_all_agents() {
+        let names = vec!["a1".to_string(), "a2".to_string()];
+        let kdl = zellij_kdl_layout("/My Drive/mur", &names, true, false);
+        let expected = concat!(
+            "layout {\n",
+            "    pane split_direction=\"vertical\" {\n",
+            "        pane command=\"/My Drive/mur\" { args \"agent\" \"cli\" \"a1\" \"--resume\"; }\n",
+            "        pane command=\"/My Drive/mur\" { args \"agent\" \"cli\" \"a2\" \"--resume\"; }\n",
+            "    }\n",
+            "}\n",
+        );
+        assert_eq!(kdl, expected);
+    }
+
+    #[test]
+    fn wezterm_plan_alternates_direction() {
+        let names = vec!["a1".to_string(), "a2".to_string(), "a3".to_string()];
+        let cmds = wezterm_splits("/bin/mur", &names, false, false);
+        assert_eq!(
+            cmds[0],
+            vec![
+                "wezterm",
+                "cli",
+                "split-pane",
+                "--right",
+                "--",
+                "/bin/mur",
+                "agent",
+                "cli",
+                "a1"
+            ]
+        );
+        assert_eq!(
+            cmds[1],
+            vec![
+                "wezterm",
+                "cli",
+                "split-pane",
+                "--bottom",
+                "--",
+                "/bin/mur",
+                "agent",
+                "cli",
+                "a2"
+            ]
+        );
+        assert_eq!(
+            cmds[2],
+            vec![
+                "wezterm",
+                "cli",
+                "split-pane",
+                "--right",
+                "--",
+                "/bin/mur",
+                "agent",
+                "cli",
+                "a3"
+            ]
+        );
+    }
+
+    #[test]
+    fn kitty_plan_alternates_location() {
+        let names = vec!["a1".to_string(), "a2".to_string()];
+        let cmds = kitty_launches("/bin/mur", &names, false, false);
+        assert_eq!(
+            cmds[0],
+            vec![
+                "kitten",
+                "@",
+                "launch",
+                "--location=vsplit",
+                "--",
+                "/bin/mur",
+                "agent",
+                "cli",
+                "a1"
+            ]
+        );
+        assert_eq!(
+            cmds[1],
+            vec![
+                "kitten",
+                "@",
+                "launch",
+                "--location=hsplit",
+                "--",
+                "/bin/mur",
+                "agent",
+                "cli",
+                "a2"
+            ]
+        );
     }
 }
