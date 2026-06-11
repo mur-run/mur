@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use mur_common::skill::event_log::{event_log_path, read_events, SkillEvent};
+use mur_common::skill::event_log::{SkillEvent, event_log_path, read_events};
 use mur_common::skill::lifecycle::{
     LifecycleThresholds, calculate_decay, cap_for_provenance, half_life_days, next_state,
     on_promotion, transition_allowed,
@@ -116,20 +116,18 @@ fn classify_reason(proposed: LifecycleState) -> TransitionReason {
 fn consecutive_trailing_workflow_failures(events: &[SkillEvent]) -> u32 {
     let mut count = 0u32;
     for event in events.iter().rev() {
-        match event {
-            SkillEvent::Execution {
-                env_class, outcome, ..
-            } => {
-                if outcome == "success" {
-                    break; // any success resets the streak
-                }
-                if env_class.as_deref() == Some("workflow") {
-                    count += 1;
-                } else {
-                    break; // non-workflow failure resets the streak
-                }
+        if let SkillEvent::Execution {
+            env_class, outcome, ..
+        } = event
+        {
+            if outcome == "success" {
+                break; // any success resets the streak
             }
-            _ => {} // Retrieval / Dismissed / Superseded do not affect the streak
+            if env_class.as_deref() == Some("workflow") {
+                count += 1;
+            } else {
+                break; // non-workflow failure resets the streak
+            }
         }
     }
     count
@@ -195,9 +193,7 @@ pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
         let forced_deprecated = if opts.broken_workflow_streak > 0
             && !matches!(
                 current.lifecycle_state,
-                LifecycleState::Deprecated
-                    | LifecycleState::Archived
-                    | LifecycleState::Destroyed
+                LifecycleState::Deprecated | LifecycleState::Archived | LifecycleState::Destroyed
             ) {
             let events = read_events(&event_log_path(home, &name)).unwrap_or_default();
             let streak = consecutive_trailing_workflow_failures(&events);
@@ -669,13 +665,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
 
-        let mut t = LifecycleThresholds::default();
-        // Patch via a local thresholds; archive_destroy_grace_days is not on
-        // LifecycleThresholds — it's on SweepOptions. We use a custom config
-        // pathway for the "disabled" test. Since SweepOptions.thresholds holds
-        // it, pass a zero-grace period via a future field. For now the disable
-        // path is tested conceptually; the compile-time zero-guard in run_sweep
-        // covers it.
+        let t = LifecycleThresholds::default();
         let _ = t;
 
         let report = run_sweep(

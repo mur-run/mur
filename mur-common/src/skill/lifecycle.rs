@@ -20,9 +20,7 @@ pub fn half_life_days(state: LifecycleState) -> f64 {
         LifecycleState::Emerging => 90.0,
         LifecycleState::Stable => 365.0,
         LifecycleState::Canonical => 730.0,
-        LifecycleState::Deprecated
-        | LifecycleState::Archived
-        | LifecycleState::Destroyed => 365.0,
+        LifecycleState::Deprecated | LifecycleState::Archived | LifecycleState::Destroyed => 365.0,
     }
 }
 
@@ -371,7 +369,10 @@ mod tests {
         let now = Utc::now();
         // Enough successes, age, and rate to reach Canonical (with pin)
         let stats = make_stats(LifecycleState::Draft, 50, 45, 40, 0, 1.0, true);
-        assert_eq!(next_state(&stats, now, &LifecycleThresholds::default()), LifecycleState::Canonical);
+        assert_eq!(
+            next_state(&stats, now, &LifecycleThresholds::default()),
+            LifecycleState::Canonical
+        );
     }
 
     #[test]
@@ -379,7 +380,10 @@ mod tests {
         let now = Utc::now();
         let stats = make_stats(LifecycleState::Draft, 5, 4, 10, 1, 1.0, false);
         // 5 successes ≥ PROMOTE_DRAFT_USES=3, but not enough age for Stable
-        assert_eq!(next_state(&stats, now, &LifecycleThresholds::default()), LifecycleState::Emerging);
+        assert_eq!(
+            next_state(&stats, now, &LifecycleThresholds::default()),
+            LifecycleState::Emerging
+        );
     }
 
     #[test]
@@ -387,7 +391,10 @@ mod tests {
         let now = Utc::now();
         let stats = make_stats(LifecycleState::Emerging, 10, 2, 30, 10, 0.5, false);
         // success_rate = 0.2 < 0.3, usage >= 5
-        assert_eq!(next_state(&stats, now, &LifecycleThresholds::default()), LifecycleState::Deprecated);
+        assert_eq!(
+            next_state(&stats, now, &LifecycleThresholds::default()),
+            LifecycleState::Deprecated
+        );
     }
 
     #[test]

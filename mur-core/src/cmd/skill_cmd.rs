@@ -256,7 +256,11 @@ fn print_metrics(home: &Path, name: &str) -> Result<()> {
     };
 
     let now = chrono::Utc::now();
-    let proposed = next_state(&stats, now, &mur_common::skill::lifecycle::LifecycleThresholds::default());
+    let proposed = next_state(
+        &stats,
+        now,
+        &mur_common::skill::lifecycle::LifecycleThresholds::default(),
+    );
 
     let success_rate = if stats.usage_count == 0 {
         0.0
