@@ -127,8 +127,9 @@ pub fn suggestions_to_variables(suggestions: &[ParameterSuggestion]) -> Vec<Vari
             name,
             var_type: VarType::String,
             required: s.category != DetectedCategory::Port,
-            default_value: Some(s.original_value.clone()),
-            description: s.description.clone(),
+            default: Some(s.original_value.clone()),
+            description: Some(s.description.clone()),
+            choices: vec![],
         });
     }
     vars

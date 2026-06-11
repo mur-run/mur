@@ -9,6 +9,24 @@ use mur_common::skill::{
 use std::fs;
 use std::path::Path;
 
+/// `mur skill schema [--out path]` — emit the JSON Schema of `SkillManifest`
+/// (consumed by the Hub DAG editor for node/edge rendering + per-step forms).
+pub fn cmd_schema(out: Option<&str>) -> Result<()> {
+    let schema = schemars::schema_for!(mur_common::skill::manifest::SkillManifest);
+    let json = serde_json::to_string_pretty(&schema)?;
+    match out {
+        Some(path) => {
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, &json)?;
+            eprintln!("✓ schema written to {path}");
+        }
+        None => println!("{json}"),
+    }
+    Ok(())
+}
+
 pub fn cmd_validate(path: &str, warnings_only: bool) -> Result<()> {
     let m = read_any(path)?;
     if let Err(e) = validate(&m) {

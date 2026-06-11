@@ -12,7 +12,7 @@ use std::str::FromStr;
 
 /// MCP capabilities a skill may declare it requires. Mirrors the six
 /// capabilities defined in mur-commander's `engine/src/mcp/trust.rs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, schemars::JsonSchema)]
 pub enum SkillCapability {
     ReadFile,
     ListTools,
@@ -90,7 +90,7 @@ impl<'de> Deserialize<'de> for SkillCapability {
 
 /// A requirement that one or more MCP tools matching `tool_pattern` be
 /// reachable at runtime, and that they are safe to invoke under `capability`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct McpRequirement {
     /// Glob pattern matching tool names, e.g. `"browser.*"` or
     /// `"filesystem.write.*"`.

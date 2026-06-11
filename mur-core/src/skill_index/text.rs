@@ -124,12 +124,14 @@ mod tests {
                     tool: None,
                     intent: None,
                     tool_hint: None,
+                    ..Default::default()
                 },
                 ProcedureStep {
                     description: "Push to server".into(),
                     tool: Some("rsync".into()),
                     intent: None,
                     tool_hint: None,
+                    ..Default::default()
                 },
             ],
         });

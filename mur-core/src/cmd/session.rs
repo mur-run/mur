@@ -1220,10 +1220,13 @@ async fn export_skill_llm(id: &str, events: &[session::SessionEvent]) -> Result<
             out.push_str(&format!(
                 "  - name: \"{}\"\n    description: \"{}\"\n",
                 var.name,
-                var.description.replace('\"', "\\\""),
+                var.description
+                    .as_deref()
+                    .unwrap_or("")
+                    .replace('\"', "\\\""),
             ));
-            if let Some(ref dv) = var.default_value {
-                out.push_str(&format!("    default_value: \"{}\"\n", dv));
+            if let Some(ref dv) = var.default {
+                out.push_str(&format!("    default: \"{}\"\n", dv));
             }
         }
     }

@@ -323,6 +323,11 @@ impl Inbox {
                 outcome: "success".into(),
                 error: None,
                 step: None,
+                duration_ms: None,
+                exit_code: None,
+                env_class: None,
+                confidence: None,
+                trigger: None,
             },
             SignalKind::SkillExecutionFailure { error } => SkillEvent::Execution {
                 ts: signal.emitted_at,
@@ -330,6 +335,11 @@ impl Inbox {
                 outcome: "failure".into(),
                 error: Some(error.clone()),
                 step: None,
+                duration_ms: None,
+                exit_code: None,
+                env_class: None,
+                confidence: None,
+                trigger: None,
             },
             _ => return Ok(false),
         };

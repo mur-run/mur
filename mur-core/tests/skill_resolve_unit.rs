@@ -8,6 +8,7 @@ fn step(tool: Option<&str>, intent: Option<&str>, hint: Option<&str>) -> Procedu
         tool: tool.map(String::from),
         intent: intent.map(String::from),
         tool_hint: hint.map(String::from),
+        ..Default::default()
     }
 }
 

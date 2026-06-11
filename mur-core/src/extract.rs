@@ -206,8 +206,9 @@ fn detect_variables(msg: Option<&str>, _tools: &[String]) -> Vec<Variable> {
             name: "product_name".to_string(),
             var_type: VarType::String,
             required: true,
-            default_value: Some(subject.clone()),
-            description: "Target product or search term".to_string(),
+            default: Some(subject.clone()),
+            description: Some("Target product or search term".to_string()),
+            choices: vec![],
         });
     }
 
@@ -222,8 +223,9 @@ fn detect_variables(msg: Option<&str>, _tools: &[String]) -> Vec<Variable> {
                 name: "url".to_string(),
                 var_type: VarType::Url,
                 required: true,
-                default_value: Some(w.to_string()),
-                description: "Target URL".to_string(),
+                default: Some(w.to_string()),
+                description: Some("Target URL".to_string()),
+                choices: vec![],
             });
         }
     }
@@ -255,8 +257,9 @@ fn detect_variables(msg: Option<&str>, _tools: &[String]) -> Vec<Variable> {
                 name: "target_site".to_string(),
                 var_type: VarType::String,
                 required: true,
-                default_value: Some(w.to_string()),
-                description: "Website or service to search in".to_string(),
+                default: Some(w.to_string()),
+                description: Some("Website or service to search in".to_string()),
+                choices: vec![],
             });
         }
     }
@@ -272,8 +275,9 @@ fn detect_variables(msg: Option<&str>, _tools: &[String]) -> Vec<Variable> {
                 name: "file_path".to_string(),
                 var_type: VarType::Path,
                 required: true,
-                default_value: Some(w.to_string()),
-                description: "File or directory path".to_string(),
+                default: Some(w.to_string()),
+                description: Some("File or directory path".to_string()),
+                choices: vec![],
             });
         }
     }
@@ -291,8 +295,9 @@ fn detect_variables(msg: Option<&str>, _tools: &[String]) -> Vec<Variable> {
                     name: "count".to_string(),
                     var_type: VarType::Number,
                     required: false,
-                    default_value: Some(w.to_string()),
-                    description: "Number of items to process".to_string(),
+                    default: Some(w.to_string()),
+                    description: Some("Number of items to process".to_string()),
+                    choices: vec![],
                 });
             }
         }
@@ -340,8 +345,9 @@ fn detect_variables(msg: Option<&str>, _tools: &[String]) -> Vec<Variable> {
                     name: "product_name".to_string(),
                     var_type: VarType::String,
                     required: true,
-                    default_value: Some(name),
-                    description: "Target product or search term".to_string(),
+                    default: Some(name),
+                    description: Some("Target product or search term".to_string()),
+                    choices: vec![],
                 });
             }
         }
@@ -370,7 +376,7 @@ fn generate_title(
     // Remove quoted strings (they're variables)
     let mut clean = msg.to_string();
     for qv in variables {
-        if let Some(ref dv) = qv.default_value {
+        if let Some(ref dv) = qv.default {
             clean = clean.replace(&format!("'{}'", dv), "");
             clean = clean.replace(&format!("\"{}\"", dv), "");
             clean = clean.replace(dv, "");
@@ -436,16 +442,16 @@ mod tests {
         );
         assert_eq!(vars.len(), 2);
         assert_eq!(vars[0].name, "product_name");
-        assert_eq!(vars[0].default_value, Some("AirPods Pro 3".to_string()));
+        assert_eq!(vars[0].default, Some("AirPods Pro 3".to_string()));
         assert_eq!(vars[1].name, "target_site");
-        assert_eq!(vars[1].default_value, Some("pchome".to_string()));
+        assert_eq!(vars[1].default, Some("pchome".to_string()));
     }
 
     #[test]
     fn test_detect_variables_smart_quotes() {
         let vars = detect_variables(Some("find \u{2018}AirPods\u{2019} in momo"), &[]);
         assert_eq!(vars.len(), 2);
-        assert_eq!(vars[0].default_value, Some("AirPods".to_string()));
+        assert_eq!(vars[0].default, Some("AirPods".to_string()));
     }
 
     #[test]
@@ -471,7 +477,7 @@ mod tests {
         let vars = detect_variables(Some("find top 5 results for shoes"), &[]);
         assert!(
             vars.iter()
-                .any(|v| v.name == "count" && v.default_value == Some("5".to_string()))
+                .any(|v| v.name == "count" && v.default == Some("5".to_string()))
         );
     }
 
@@ -487,7 +493,7 @@ mod tests {
         let vars = detect_variables(Some("search for prices on Amazon"), &[]);
         assert!(
             vars.iter()
-                .any(|v| v.name == "target_site" && v.default_value == Some("Amazon".to_string()))
+                .any(|v| v.name == "target_site" && v.default == Some("Amazon".to_string()))
         );
     }
 
@@ -497,8 +503,9 @@ mod tests {
             name: "product_name".to_string(),
             var_type: VarType::String,
             required: true,
-            default_value: Some("AirPods Pro 3".to_string()),
-            description: String::new(),
+            default: Some("AirPods Pro 3".to_string()),
+            description: Some(String::new()),
+            choices: vec![],
         }];
         let title = generate_title(
             Some("use agent-browser to find the prices of 'AirPods Pro 3' in pchome"),

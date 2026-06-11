@@ -340,7 +340,7 @@ pub fn format_workflow_entry(workflow: &Workflow, index: usize) -> String {
             .variables
             .iter()
             .map(|v| {
-                let default = v.default_value.as_deref().unwrap_or("?");
+                let default = v.default.as_deref().unwrap_or("?");
                 format!("`{}`={}", v.name, default)
             })
             .collect();

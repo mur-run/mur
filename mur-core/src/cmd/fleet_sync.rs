@@ -689,6 +689,11 @@ mod tests {
             outcome: "success".into(),
             error: None,
             step: None,
+            duration_ms: None,
+            exit_code: None,
+            env_class: None,
+            confidence: None,
+            trigger: None,
         };
 
         // Union the events (simulating merge)

@@ -113,6 +113,7 @@ impl SkillGene {
                     tool: s.tool.clone(),
                     intent: s.intent.clone(),
                     tool_hint: None,
+                    ..Default::default()
                 })
                 .collect(),
         }
@@ -277,6 +278,7 @@ mod tests {
                 tool: Some("browser.go".into()),
                 intent: Some("open_page".into()),
                 tool_hint: None,
+                ..Default::default()
             }],
             vec![Trigger {
                 kind: TriggerKind::Command,
@@ -308,6 +310,7 @@ mod tests {
                 tool: None,
                 intent: Some("i1".into()),
                 tool_hint: None,
+                ..Default::default()
             }],
             vec![],
         );
@@ -318,12 +321,14 @@ mod tests {
                     tool: None,
                     intent: Some("i1".into()),
                     tool_hint: None,
+                    ..Default::default()
                 },
                 ProcedureStep {
                     description: "added".into(),
                     tool: None,
                     intent: Some("i2".into()),
                     tool_hint: None,
+                    ..Default::default()
                 },
             ],
             vec![],
@@ -344,6 +349,7 @@ mod tests {
                 tool: None,
                 intent: None,
                 tool_hint: None,
+                ..Default::default()
             }],
             vec![],
         );
