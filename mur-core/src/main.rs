@@ -117,8 +117,33 @@ async fn async_main() -> Result<()> {
         )
         .with_writer(std::io::stderr)
         .init();
-    let cli = Cli::parse();
+    let cli = parse_cli()?;
     dispatch::run(cli).await
+}
+
+/// Parse argv, honoring the `murmur` symlink: `murmur <names…>` is
+/// rewritten to `mur agent cli <names…>`. `murmur` with no agent name
+/// falls back to the concierge agent, or lists agents and exits.
+fn parse_cli() -> Result<Cli> {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if cli::murmur::is_murmur_invocation(args.first()) {
+        let home = cmd::agent::resolve_mur_home()?;
+        let concierge = home
+            .join("agents")
+            .join("mur")
+            .join("profile.yaml")
+            .is_file();
+        return match cli::murmur::map_args(&args[1..], concierge) {
+            Some(argv) => Ok(Cli::parse_from(argv)),
+            None => {
+                eprintln!("murmur: no agent name given and no concierge agent installed.");
+                eprintln!("Available agents:");
+                let _ = cmd::agent::cmd_list(false);
+                std::process::exit(2);
+            }
+        };
+    }
+    Ok(Cli::parse())
 }
 
 #[cfg(test)]
