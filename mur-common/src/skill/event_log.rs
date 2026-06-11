@@ -165,6 +165,59 @@ pub fn apply_new_events_to_stats(stats: &mut SkillStats, new_events: &[SkillEven
     }
 }
 
+/// Outcome of one workflow/skill run, recorded into the per-skill ledger.
+pub struct RunRecord<'a> {
+    /// true = success
+    pub success: bool,
+    pub duration_ms: Option<u64>,
+    pub exit_code: Option<i32>,
+    /// stderr (or combined output) of the failing step; used to classify
+    /// workflow-vs-environment failure. Ignored on success.
+    pub stderr: Option<&'a str>,
+    /// Step id/description that failed, if any.
+    pub failed_step: Option<String>,
+    /// "manual" | "schedule" | "agent"
+    pub trigger: &'a str,
+    /// Explicit user override of the env classification
+    /// (`mur run --env-class workflow|env`).
+    pub env_class_override: Option<&'a str>,
+}
+
+/// Append one enriched Execution event for a completed run — the run-ledger
+/// write path (workflow-engine v2 P2). Returns the event written.
+pub fn record_run(
+    mur_home: &Path,
+    skill_name: &str,
+    device_id: &str,
+    rec: &RunRecord<'_>,
+) -> Result<SkillEvent> {
+    let (env_class, confidence) = if rec.success {
+        (None, None)
+    } else if let Some(forced) = rec.env_class_override {
+        (Some(forced.to_string()), Some(1.0))
+    } else {
+        let c = crate::skill::env_class::classify_failure(rec.stderr.unwrap_or(""));
+        (Some(c.class.to_string()), Some(c.confidence))
+    };
+
+    let event = SkillEvent::Execution {
+        ts: Utc::now(),
+        device_id: device_id.to_string(),
+        outcome: if rec.success { "success" } else { "failure" }.to_string(),
+        error: (!rec.success)
+            .then(|| rec.stderr.map(|s| s.chars().take(500).collect()))
+            .flatten(),
+        step: rec.failed_step.clone(),
+        duration_ms: rec.duration_ms,
+        exit_code: rec.exit_code,
+        env_class,
+        confidence,
+        trigger: Some(rec.trigger.to_string()),
+    };
+    append_event(&event_log_path(mur_home, skill_name), &event)?;
+    Ok(event)
+}
+
 /// Resolve manifest conflict via Last-Writer-Wins (LWW).
 /// Returns the winning skill and the reason (local_wins, remote_wins, or force_local).
 pub fn resolve_manifest_lww(
@@ -186,6 +239,59 @@ pub fn resolve_manifest_lww(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn record_run_classifies_and_appends() {
+        let tmp = tempdir().unwrap();
+        let ev = record_run(
+            tmp.path(),
+            "deploy-api",
+            "dev-a",
+            &RunRecord {
+                success: false,
+                duration_ms: Some(1200),
+                exit_code: Some(7),
+                stderr: Some("curl: (7) Connection refused"),
+                failed_step: Some("health-check".into()),
+                trigger: "manual",
+                env_class_override: None,
+            },
+        )
+        .unwrap();
+        match &ev {
+            SkillEvent::Execution { env_class, trigger, .. } => {
+                assert_eq!(env_class.as_deref(), Some("env"));
+                assert_eq!(trigger.as_deref(), Some("manual"));
+            }
+            _ => panic!("wrong kind"),
+        }
+        let events = read_events(&event_log_path(tmp.path(), "deploy-api")).unwrap();
+        assert_eq!(events.len(), 1);
+
+        // Success run records no env_class.
+        let ev2 = record_run(
+            tmp.path(),
+            "deploy-api",
+            "dev-a",
+            &RunRecord {
+                success: true,
+                duration_ms: Some(900),
+                exit_code: Some(0),
+                stderr: None,
+                failed_step: None,
+                trigger: "schedule",
+                env_class_override: None,
+            },
+        )
+        .unwrap();
+        match &ev2 {
+            SkillEvent::Execution { env_class, outcome, .. } => {
+                assert!(env_class.is_none());
+                assert_eq!(outcome, "success");
+            }
+            _ => panic!("wrong kind"),
+        }
+    }
 
     #[test]
     fn legacy_execution_line_parses_and_enriched_roundtrips() {
