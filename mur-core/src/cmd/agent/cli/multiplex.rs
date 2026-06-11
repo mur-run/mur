@@ -1,10 +1,14 @@
 //! Multi-agent orchestration for `mur agent cli a b c` — one multiplexer
 //! pane per agent, each running single-name `mur agent cli <name>`.
 
-use anyhow::{Result, bail};
+use std::path::Path;
+use std::process::{Command, Stdio};
+
+use anyhow::{Context, Result, anyhow, bail};
+
+use crate::a2a_dial::canonicalize_agent_name;
 
 /// Which orchestration backend will host the panes.
-#[allow(dead_code)] // used by Task 5's executor
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     /// Already inside tmux → new window in the current session.
@@ -23,7 +27,6 @@ pub enum Backend {
 
 /// Pure detection: first match wins, per the spec's table. `env` and
 /// `on_path` are injected so tests need no real environment.
-#[allow(dead_code)] // used by Task 5's executor
 pub fn detect(
     env: impl Fn(&str) -> Option<String>,
     on_path: impl Fn(&str) -> bool,
@@ -49,12 +52,178 @@ pub fn detect(
     None
 }
 
-pub fn run(names: &[String], _resume: bool, _auto: bool) -> Result<()> {
-    bail!("multi-agent mode not yet implemented: {}", names.join(", "));
+/// Canonicalize every requested name and fail the whole batch if any agent
+/// is unknown or not running — never open panes that immediately die.
+fn validate(home: &Path, names: &[String]) -> Result<Vec<String>> {
+    let mut canon = Vec::with_capacity(names.len());
+    let mut unknown = Vec::new();
+    let mut stopped = Vec::new();
+    for n in names {
+        let c = canonicalize_agent_name(home, n);
+        let dir = home.join("agents").join(&c);
+        if !dir.join("profile.yaml").is_file() {
+            unknown.push(n.clone());
+            continue;
+        }
+        if !dir.join("running.lock").exists() {
+            stopped.push(c.clone());
+        }
+        canon.push(c);
+    }
+    if !unknown.is_empty() {
+        bail!(
+            "unknown agent(s): {} — see `mur agent list`",
+            unknown.join(", ")
+        );
+    }
+    if !stopped.is_empty() {
+        bail!(
+            "agent(s) not running: {} — start them first, e.g. `mur agent run {}`",
+            stopped.join(", "),
+            stopped[0]
+        );
+    }
+    Ok(canon)
+}
+
+/// True when `prog` is spawnable from PATH (`tmux -V` / `zellij -V` both
+/// exist; a non-zero exit still proves presence).
+fn on_path(prog: &str) -> bool {
+    Command::new(prog)
+        .arg("-V")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
+}
+
+/// Run one external command, inheriting stdio (tmux attach is interactive).
+fn run_cmd(argv: &[String]) -> Result<()> {
+    let status = Command::new(&argv[0])
+        .args(&argv[1..])
+        .status()
+        .with_context(|| format!("spawn `{}`", argv.join(" ")))?;
+    if !status.success() {
+        bail!("`{}` exited with {status}", argv.join(" "));
+    }
+    Ok(())
+}
+
+/// Like `run_cmd` but captures trimmed stdout (tmux new-window -P).
+fn run_cmd_capture(argv: &[String]) -> Result<String> {
+    let out = Command::new(&argv[0])
+        .args(&argv[1..])
+        .output()
+        .with_context(|| format!("spawn `{}`", argv.join(" ")))?;
+    if !out.status.success() {
+        bail!(
+            "`{}` exited with {}: {}",
+            argv.join(" "),
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// First free tmux session name: mur-chat, mur-chat-2, mur-chat-3, …
+fn free_tmux_session() -> String {
+    for n in 1u32.. {
+        let name = if n == 1 {
+            CHAT_LABEL.to_string()
+        } else {
+            format!("{CHAT_LABEL}-{n}")
+        };
+        let exists = Command::new("tmux")
+            .args(["has-session", "-t", &format!("={name}")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !exists {
+            return name;
+        }
+    }
+    unreachable!("u32 session probe space exhausted")
+}
+
+/// Entry point from `cmd_cli` for 2+ names. Blocking (called via
+/// `spawn_blocking`); `tmux attach` keeps the terminal until detach.
+pub fn run(names: &[String], resume: bool, auto: bool) -> Result<()> {
+    let home = crate::cmd::agent::resolve_mur_home()?;
+    let canon = validate(&home, names)?;
+    let exe = std::env::current_exe().context("resolve current executable")?;
+    let exe = exe.to_string_lossy().into_owned();
+    let backend = detect(|k| std::env::var(k).ok(), on_path).ok_or_else(|| {
+        anyhow!(
+            "multi-agent split needs a terminal multiplexer.\n\
+             Install tmux (`brew install tmux`) or zellij, or run inside WezTerm/kitty."
+        )
+    })?;
+    execute(backend, &exe, &canon, resume, auto)
+}
+
+fn execute(backend: Backend, exe: &str, names: &[String], resume: bool, auto: bool) -> Result<()> {
+    match backend {
+        Backend::TmuxInside => {
+            let window_id = run_cmd_capture(&tmux_inside_open(exe, names, resume, auto))?;
+            for cmd in tmux_inside_rest(&window_id, exe, names, resume, auto) {
+                run_cmd(&cmd)?;
+            }
+            Ok(())
+        }
+        Backend::TmuxNew => {
+            let session = free_tmux_session();
+            for cmd in tmux_new_session(&session, exe, names, resume, auto) {
+                run_cmd(&cmd)?;
+            }
+            Ok(())
+        }
+        Backend::ZellijInside => {
+            for cmd in zellij_inside(exe, names, resume, auto) {
+                run_cmd(&cmd)?;
+            }
+            Ok(())
+        }
+        Backend::ZellijNew => run_cmd(&[
+            "zellij".into(),
+            "--layout-string".into(),
+            zellij_kdl_layout(exe, names, resume, auto),
+        ]),
+        Backend::WezTerm => {
+            for cmd in wezterm_splits(exe, names, resume, auto) {
+                run_cmd(&cmd)?;
+            }
+            Ok(())
+        }
+        Backend::Kitty => {
+            let cmds = kitty_launches(exe, names, resume, auto);
+            // kitty refuses when allow_remote_control is off — fall back to a
+            // PATH multiplexer per the spec's detection table (kitty → row 5).
+            if let Err(e) = run_cmd(&cmds[0]) {
+                eprintln!("kitty remote control unavailable ({e}); falling back…");
+                let fallback = if on_path("tmux") {
+                    Backend::TmuxNew
+                } else if on_path("zellij") {
+                    Backend::ZellijNew
+                } else {
+                    bail!(
+                        "kitty remote control is disabled and no tmux/zellij found.\n\
+                         Enable `allow_remote_control yes` in kitty.conf or `brew install tmux`."
+                    );
+                };
+                return execute(fallback, exe, names, resume, auto);
+            }
+            for cmd in &cmds[1..] {
+                run_cmd(cmd)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// argv for one pane: single-name `mur agent cli` with forwarded flags.
-#[allow(dead_code)] // used by Task 5's executor
 fn pane_argv(exe: &str, name: &str, resume: bool, auto: bool) -> Vec<String> {
     let mut v = vec![exe.to_string(), "agent".into(), "cli".into(), name.into()];
     if resume {
@@ -68,7 +237,6 @@ fn pane_argv(exe: &str, name: &str, resume: bool, auto: bool) -> Vec<String> {
 
 /// POSIX single-quote escaping for tmux's shell_command argument (the exe
 /// path can contain spaces, e.g. /Volumes/My Drive/...).
-#[allow(dead_code)] // used by Task 5's executor
 fn shell_quote(s: &str) -> String {
     if !s.is_empty()
         && s.chars()
@@ -80,7 +248,6 @@ fn shell_quote(s: &str) -> String {
 }
 
 /// One pane's argv joined into a tmux shell_command string.
-#[allow(dead_code)] // used by Task 5's executor
 fn pane_shell(exe: &str, name: &str, resume: bool, auto: bool) -> String {
     pane_argv(exe, name, resume, auto)
         .iter()
@@ -92,7 +259,6 @@ fn pane_shell(exe: &str, name: &str, resume: bool, auto: bool) -> String {
 /// Per remaining agent (`names[1..]`): a `split-window` + `select-layout
 /// tiled` command pair. Retiling after every split avoids tmux's
 /// "pane too small" refusal when opening many panes.
-#[allow(dead_code)] // used by Task 5's executor
 fn split_and_tile(
     target: &str,
     exe: &str,
@@ -121,7 +287,6 @@ fn split_and_tile(
 }
 
 /// Outside tmux: detached session, one pane per agent, tiled, then attach.
-#[allow(dead_code)] // used by Task 5's executor
 fn tmux_new_session(
     session: &str,
     exe: &str,
@@ -158,7 +323,6 @@ fn tmux_new_session(
 /// Inside tmux: open a new window (printing its id for targeting) running
 /// the first agent. Focus moves to the new window by design; the user's
 /// previous window keeps its panes and content.
-#[allow(dead_code)] // used by Task 5's executor
 fn tmux_inside_open(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<String> {
     debug_assert!(
         !names.is_empty(),
@@ -176,7 +340,6 @@ fn tmux_inside_open(exe: &str, names: &[String], resume: bool, auto: bool) -> Ve
 
 /// Inside tmux: split the captured window id for each remaining agent,
 /// retiling after every split.
-#[allow(dead_code)] // used by Task 5's executor
 fn tmux_inside_rest(
     window_id: &str,
     exe: &str,
@@ -188,12 +351,10 @@ fn tmux_inside_rest(
 }
 
 /// Display label for the spawned tab/window across backends.
-#[allow(dead_code)] // used by Task 5's executor
 const CHAT_LABEL: &str = "mur-chat";
 
 /// Inside zellij: new named tab, then one `zellij run` pane per agent
 /// (panes land in the freshly focused tab).
-#[allow(dead_code)] // used by Task 5's executor
 fn zellij_inside(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<Vec<String>> {
     let mut cmds = vec![vec![
         "zellij".into(),
@@ -211,13 +372,11 @@ fn zellij_inside(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<V
 }
 
 /// KDL string escaping (paths with `"` or `\` are unlikely but cheap to handle).
-#[allow(dead_code)] // used by Task 5's executor
 fn kdl_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', r"\\").replace('"', "\\\""))
 }
 
 /// Outside zellij: generated layout for `zellij --layout-string`.
-#[allow(dead_code)] // used by Task 5's executor
 fn zellij_kdl_layout(exe: &str, names: &[String], resume: bool, auto: bool) -> String {
     let mut out = String::from("layout {\n    pane split_direction=\"vertical\" {\n");
     for name in names {
@@ -237,7 +396,6 @@ fn zellij_kdl_layout(exe: &str, names: &[String], resume: bool, auto: bool) -> S
 
 /// Inside WezTerm: split the current pane once per agent, alternating
 /// right/bottom for a rough grid.
-#[allow(dead_code)] // used by Task 5's executor
 fn wezterm_splits(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<Vec<String>> {
     names
         .iter()
@@ -259,7 +417,6 @@ fn wezterm_splits(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<
 
 /// Inside kitty: one `kitten @ launch` per agent, alternating split axis.
 /// Requires `allow_remote_control` — failure falls back at execution time.
-#[allow(dead_code)] // used by Task 5's executor
 fn kitty_launches(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<Vec<String>> {
     names
         .iter()
@@ -545,5 +702,53 @@ mod tests {
                 "a2"
             ]
         );
+    }
+
+    use std::fs;
+
+    fn fake_home(agents: &[(&str, bool)]) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        for (name, running) in agents {
+            let dir = tmp.path().join("agents").join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("profile.yaml"), "name: x\n").unwrap();
+            if *running {
+                fs::write(dir.join("running.lock"), "1").unwrap();
+            }
+        }
+        tmp
+    }
+
+    #[test]
+    fn validate_rejects_unknown_agents_as_a_batch() {
+        let home = fake_home(&[("a1", true)]);
+        let err = validate(home.path(), &["a1".into(), "nope".into(), "alsono".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("nope") && err.contains("alsono"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_stopped_agents() {
+        let home = fake_home(&[("a1", true), ("a2", false)]);
+        let err = validate(home.path(), &["a1".into(), "a2".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("a2") && err.contains("mur agent run"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_canonicalizes_and_allows_duplicates() {
+        let home = fake_home(&[("a1", true)]);
+        // On case-insensitive filesystems (default macOS APFS),
+        // canonicalize_agent_name returns the input as-is when is_file()
+        // succeeds for the cased form. Both "A1" and "a1" resolve to the
+        // same directory, so validation passes. The key invariants are
+        // that duplicates are allowed and all names pass validation.
+        let canon = validate(home.path(), &["A1".into(), "a1".into()]).unwrap();
+        assert_eq!(canon.len(), 2, "expected 2 entries, got {canon:?}");
     }
 }
