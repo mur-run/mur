@@ -373,6 +373,52 @@ pub(crate) fn remove_recording(id: &str) -> Result<()> {
     remove_recording_in_dir(&recordings_dir(), id)
 }
 
+/// Remove recordings older than `retention_days`, judged by meta `started_at`.
+/// Marked-but-never-harvested sessions are kept regardless of age (the user
+/// declared them important; they leave via harvest or explicit remove).
+/// Returns the number of recordings removed.
+pub fn gc_in_dir(recordings_dir: &std::path::Path, retention_days: u32) -> Result<usize> {
+    if !recordings_dir.exists() {
+        return Ok(0);
+    }
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+    let mut removed = 0usize;
+    for entry in fs::read_dir(recordings_dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        let meta = fs::read_to_string(recordings_dir.join(format!("{}.meta.json", id)))
+            .ok()
+            .and_then(|c| serde_json::from_str::<SessionMeta>(&c).ok());
+        let Some(meta) = meta else { continue }; // metaless files: leave for manual cleanup
+        let Ok(started) = chrono::DateTime::parse_from_rfc3339(&meta.started_at) else {
+            continue;
+        };
+        if started.with_timezone(&chrono::Utc) >= cutoff {
+            continue;
+        }
+        if meta.marked && meta.harvested_at.is_none() {
+            continue;
+        }
+        remove_recording_in_dir(recordings_dir, &id)?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// Set or clear the `marked` flag on a session's meta.
+pub fn update_marked(id: &str, marked: bool) -> Result<SessionMeta> {
+    let mut meta =
+        load_meta(id).ok_or_else(|| anyhow::anyhow!("No meta found for session '{}'", id))?;
+    meta.marked = marked;
+    save_meta(&meta)?;
+    Ok(meta)
+}
+
 /// Check if a recording has been synced to the cloud.
 pub(crate) fn is_recording_synced(id: &str) -> bool {
     recordings_dir().join(format!("{}.synced", id)).exists()
@@ -817,6 +863,48 @@ mod tests {
         assert!(!rec_dir.join(format!("{}.jsonl", id)).exists());
         assert!(!rec_dir.join(format!("{}.meta.json", id)).exists());
         assert!(!rec_dir.join(format!("{}.synced", id)).exists());
+    }
+
+    #[test]
+    fn gc_removes_old_unmarked_keeps_recent_and_marked() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rec_dir = tmp.path().join("recordings");
+        fs::create_dir_all(&rec_dir).unwrap();
+
+        let write = |id: &str, started_days_ago: i64, marked: bool, harvested: bool| {
+            fs::write(rec_dir.join(format!("{}.jsonl", id)), "{}\n").unwrap();
+            let meta = SessionMeta {
+                id: id.to_string(),
+                source: "claude".to_string(),
+                started_at: (chrono::Utc::now() - chrono::Duration::days(started_days_ago))
+                    .to_rfc3339(),
+                stopped_at: None,
+                title: None,
+                tools_used: vec![],
+                user_turns: 0,
+                assistant_turns: 0,
+                marked,
+                gated_at: None,
+                harvested_at: harvested.then(|| chrono::Utc::now().to_rfc3339()),
+            };
+            fs::write(
+                rec_dir.join(format!("{}.meta.json", id)),
+                serde_json::to_string_pretty(&meta).unwrap(),
+            )
+            .unwrap();
+        };
+
+        write("old-plain", 30, false, false); // old, unmarked → removed
+        write("old-marked", 30, true, false); // old but marked, never harvested → kept
+        write("old-marked-done", 30, true, true); // old, marked, harvested → removed
+        write("fresh", 1, false, false); // recent → kept
+
+        let removed = gc_in_dir(&rec_dir, 14).unwrap();
+        assert_eq!(removed, 2);
+        assert!(!rec_dir.join("old-plain.jsonl").exists());
+        assert!(rec_dir.join("old-marked.jsonl").exists());
+        assert!(!rec_dir.join("old-marked-done.jsonl").exists());
+        assert!(rec_dir.join("fresh.jsonl").exists());
     }
 
     #[test]

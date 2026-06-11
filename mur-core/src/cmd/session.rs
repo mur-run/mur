@@ -287,26 +287,77 @@ pub(crate) async fn cmd_session_stop(analyze: bool, _reflect: bool) -> Result<()
     Ok(())
 }
 
-/// `mur in` — start session + inject context
+/// `mur in` — ambient mode: mark the session as important; manual mode: legacy
+/// start-recording + inject context.
 pub(crate) async fn cmd_in(source: &str) -> anyhow::Result<()> {
-    // Start the session
-    let session = crate::session::start(source)?;
-    eprintln!("Session started: {} (source: {})", &session.id[..8], source);
-    eprintln!("  Use `mur session out` to stop and export, or `mur session discard` to discard.");
+    let cfg = crate::store::config::load_config()?;
+    if cfg.session.capture != "ambient" {
+        // Legacy manual mode: identical to the old behavior.
+        let session = crate::session::start(source)?;
+        eprintln!("Session started: {} (source: {})", &session.id[..8], source);
+        eprintln!(
+            "  Use `mur session out` to stop and export, or `mur session discard` to discard."
+        );
 
-    // Inject context (equivalent to `mur context --quiet`)
-    crate::cmd::context::cmd_context(
-        None,
-        false,
-        false,
-        2000,
-        source.to_string(),
-        false,
-        vec![],
-        true,
-    )
-    .await?;
+        // Inject context (equivalent to `mur context --quiet`)
+        crate::cmd::context::cmd_context(
+            None,
+            false,
+            false,
+            2000,
+            source.to_string(),
+            false,
+            vec![],
+            true,
+        )
+        .await?;
+        return Ok(());
+    }
 
+    // Ambient mode: recording is always on — `mur in` marks importance.
+    let session_dir = crate::paths::mur_root(None).join("session");
+    std::fs::create_dir_all(&session_dir)?;
+
+    // Mark the most recent recording if it saw activity in the last 10 minutes;
+    // otherwise leave a marker the next captured event consumes.
+    let recent = crate::session::list_recordings()?.into_iter().find(|r| {
+        r.modified
+            .elapsed()
+            .map(|e| e.as_secs() < 600)
+            .unwrap_or(false)
+    });
+    match recent {
+        Some(r) => {
+            let meta = crate::session::update_marked(&r.id, true)?;
+            eprintln!(
+                "★ Session \"{}\" marked — the harvest gate will not skip it.",
+                meta.title.as_deref().unwrap_or(&r.id[..8.min(r.id.len())])
+            );
+        }
+        None => {
+            std::fs::write(
+                session_dir.join(crate::session::ambient::MARK_NEXT_FILE),
+                "",
+            )?;
+            eprintln!(
+                "★ Next session will be marked. (Recording is always on — see `mur session list`.)"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Retention GC over ambient recordings. Quiet by design — runs detached from
+/// the session-start hook. Harvest scan is appended here in W2.
+pub(crate) fn cmd_session_gc() -> anyhow::Result<()> {
+    let cfg = crate::store::config::load_config()?;
+    let recordings = crate::paths::mur_root(None)
+        .join("session")
+        .join("recordings");
+    let removed = crate::session::gc_in_dir(&recordings, cfg.session.retention_days)?;
+    if removed > 0 {
+        eprintln!("session gc: removed {} expired recording(s)", removed);
+    }
     Ok(())
 }
 
