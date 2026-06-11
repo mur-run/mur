@@ -445,8 +445,7 @@ mod tests {
             timestamp: 1,
             event_type: "tool_call".to_string(),
             tool: Some("Bash".to_string()),
-            content: "export GITHUB_TOKEN=ghp_0123456789abcdefghijklmnopqrstuvwxyz0123"
-                .to_string(),
+            content: "export GITHUB_TOKEN=ghp_0123456789abcdefghijklmnopqrstuvwxyz0123".to_string(),
             ..Default::default()
         };
         let scrubbed = scrub_event(&ev);

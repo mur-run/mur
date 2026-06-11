@@ -50,11 +50,7 @@ pub fn steps_from_events(events: &[SessionEvent]) -> Vec<String> {
             Some("Bash") | Some("shell") => {
                 let cmd = serde_json::from_str::<serde_json::Value>(&e.content)
                     .ok()
-                    .and_then(|v| {
-                        v.get("command")
-                            .and_then(|c| c.as_str())
-                            .map(str::to_owned)
-                    })
+                    .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(str::to_owned))
                     .unwrap_or_else(|| e.content.clone());
                 skeletonize_command(&cmd)
             }

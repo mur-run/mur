@@ -143,12 +143,7 @@ pub fn scan() -> Result<ScanReport> {
             (w.name.clone(), steps)
         })
         .collect();
-    scan_in_dirs(
-        &recordings,
-        &proposal::inbox_dir(),
-        &existing,
-        &cfg.harvest,
-    )
+    scan_in_dirs(&recordings, &proposal::inbox_dir(), &existing, &cfg.harvest)
 }
 
 #[cfg(test)]

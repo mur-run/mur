@@ -1,20 +1,21 @@
 name: mur-in
-version: 0.1.0
+version: 0.2.0
 publisher: human:mur
-description: "Start MUR session recording to capture your workflow for pattern extraction"
+description: "Mark the current session as important so the harvest gate never skips it"
 category: context
 content:
   abstract: |
-    Start session recording with `mur session in`. Captures prompts, responses,
-    tool calls, errors for later pattern extraction.
+    Recording is always on (ambient capture via hooks). Run `mur in` to MARK
+    the current session so the harvest gate never skips it.
   context: |
-    # mur-in — Start Recording
+    # mur-in — Mark this session as important
 
-    Run `mur session in` to start a session and inject context patterns.
+    Recording is always on (ambient capture via hooks). Run `mur in` to MARK
+    the current session so the harvest gate never skips it. You do NOT need to
+    record events manually — do not call `mur session record`.
 
-    Captures user prompts, AI responses, tool calls, errors. Used later
-    by mur-out to extract patterns. When to use: before debugging,
-    exploring new codebases, or any non-trivial task.
+    When to use: before debugging, exploring new codebases, or any non-trivial
+    task you want turned into a reusable workflow.
 tags: [mur, recording, builtin]
 triggers:
   - type: command

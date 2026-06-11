@@ -224,8 +224,7 @@ mod tests {
         capture_in_dir(&sdir, &ev(EventKind::Prompt)).unwrap();
 
         let meta: crate::session::SessionMeta = serde_json::from_str(
-            &std::fs::read_to_string(sdir.join("recordings").join("sess-amb-1.meta.json"))
-                .unwrap(),
+            &std::fs::read_to_string(sdir.join("recordings").join("sess-amb-1.meta.json")).unwrap(),
         )
         .unwrap();
         assert!(meta.marked);

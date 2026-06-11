@@ -401,12 +401,9 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
         if let Ok(config) = crate::store::config::load_config()
             && config.sync.auto
             && config.sync.method != "local"
-            && let Err(e) = super::sync_cmd::device_sync(
-                true,
-                super::sync_cmd::DeviceSyncDirection::Push,
-                None,
-            )
-            .await
+            && let Err(e) =
+                super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push, None)
+                    .await
         {
             eprintln!("  ⚠ Auto-push failed: {}", e);
         }

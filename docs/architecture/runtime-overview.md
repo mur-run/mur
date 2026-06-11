@@ -16,6 +16,21 @@ This document holds detail moved out of `CLAUDE.md` to keep the per-session cont
 - **`migrate/`** — legacy schema migration (rarely needed)
 - **`auth.rs`** — Trust levels for community patterns
 
+## Ambient capture & harvest (2026-06-11)
+
+Hooks write every prompt / post-tool / stop event to
+`~/.mur/session/recordings/<session_id>.jsonl` (config `session.capture:
+ambient|manual|off`; secrets scrubbed at write; `session.retention_days` GC via
+`mur session gc`, spawned from the session-start hook). `mur in` marks the
+current session as important. `mur session gc` also runs the zero-token
+heuristic harvest gate (`harvest.*` config) and writes workflow proposals to
+`~/.mur/inbox/workflow-proposals/`; `mur out` reviews them — accept creates a
+draft workflow with skeleton steps, runnable via `mur run <name>`. The
+session-start hook prints a one-line pending-proposals hint (spec §3.8 tier 1).
+
+- Spec: `docs/superpowers/specs/2026-06-11-mur-ambient-capture-and-harvest-design.md`
+- Modules: `mur-core/src/session/ambient.rs`, `mur-core/src/harvest/`
+
 ## Sources Pipeline (P1.4)
 
 All adapters shipped: Obsidian + Notion + Joplin; `--watch` + `install-schedule`; `format_notes_section` helper ready.

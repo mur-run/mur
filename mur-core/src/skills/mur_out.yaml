@@ -1,17 +1,17 @@
 name: mur-out
-version: 0.1.0
+version: 0.2.0
 publisher: human:mur
-description: "Stop recording and extract learned patterns from the captured mur session"
+description: "Review workflow proposals MUR harvested from recent sessions"
 category: workflow
 content:
   abstract: |
-    Stop session recording and extract patterns. Presents a numbered
-    action menu (analyze, export, sync, skip).
+    Review pending workflow proposals harvested from recent sessions.
+    Accept turns a proposal into a draft workflow runnable via `mur run`.
   procedure:
     steps:
-      - description: Run `mur session out` and show the output to the user.
-      - description: Present the numbered action menu and ask which one the user wants.
-      - description: Run `mur session out --action <choice>` with the user's selection.
+      - description: Run `mur out` and show the output to the user.
+      - description: If proposals are pending, summarize them and ask the user which to accept or skip.
+      - description: For LLM pattern extraction of the most recent session, run `mur out --action analyze`.
 tags: [mur, recording, extraction, builtin]
 triggers:
   - type: command
