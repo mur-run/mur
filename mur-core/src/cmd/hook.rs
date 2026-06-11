@@ -102,6 +102,7 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
     let raw = read_stdin_json();
     let event = parse_event(raw.clone(), EventKind::Prompt, tool);
     let _ = enqueue(&event);
+    let _ = crate::session::ambient::capture(&event);
 
     // Ensure murmurd is running; respawn silently if heartbeat is stale.
     if !crate::daemon::is_daemon_healthy() {
@@ -195,6 +196,8 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
 
     // Emit L2 only on PreToolUse for code-editing tools
     if !is_pre_tool_use(&raw) {
+        // PostToolUse: ambient-capture the executed tool call (input + exit code).
+        let _ = crate::session::ambient::capture(&event);
         return Ok(());
     }
     let tool_called = event.tool_called.as_deref().unwrap_or("");
@@ -255,6 +258,7 @@ pub(crate) async fn cmd_hook_stop(tool: &str) -> Result<()> {
     let raw = read_stdin_json();
     let event = parse_event(raw, EventKind::Stop, tool);
     let _ = enqueue(&event);
+    let _ = crate::session::ambient::capture(&event);
     spawn_background_pipeline();
     Ok(())
 }
@@ -263,6 +267,15 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
     let raw = read_stdin_json();
     let event = parse_event(raw, EventKind::SessionStart, tool);
     let _ = enqueue(&event);
+
+    // Housekeeping: retention GC (+ harvest scan from W2) runs detached so the
+    // hook stays fast.
+    let mur_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
+    let _ = std::process::Command::new(&mur_bin)
+        .args(["session", "gc"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 
     let mur_dir = mur_common::trust::mur_home();
     let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
