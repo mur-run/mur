@@ -56,6 +56,8 @@ if $INSTALL; then
 #  cp "$BINARY" /usr/local/bin/mur
   echo "📥 Installing to /opt/homebrew/bin/mur..."
   sudo cp "$BINARY" /opt/homebrew/bin/mur
+  sudo ln -sfn /opt/homebrew/bin/mur /opt/homebrew/bin/murmur
+  echo "Installed murmur -> /opt/homebrew/bin/mur (symlink)"
 
   MCP_BINARY="$SCRIPT_DIR/target/release/mur-mcp-server"
   if [ -f "$MCP_BINARY" ]; then
