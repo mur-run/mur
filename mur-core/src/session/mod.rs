@@ -23,7 +23,7 @@ pub struct ActiveSession {
 }
 
 /// A single session event appended to the JSONL recording.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionEvent {
     pub timestamp: u64,
     #[serde(rename = "type")]
@@ -31,13 +31,17 @@ pub struct SessionEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
     pub content: String,
+    // ── Layer-1 enrichment (spec §3.1; all Option/default for back-compat) ──
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 fn session_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mur")
-        .join("session")
+    crate::paths::mur_root(None).join("session")
 }
 
 fn recordings_dir() -> PathBuf {
@@ -73,6 +77,16 @@ pub struct SessionMeta {
     pub tools_used: Vec<String>,
     pub user_turns: usize,
     pub assistant_turns: usize,
+    // ── Ambient capture additions (all default for back-compat) ──
+    /// Set by `mur in`: harvest gate passes this session unconditionally.
+    #[serde(default)]
+    pub marked: bool,
+    /// RFC3339 of the last harvest-gate run over this session (prevents re-scan).
+    #[serde(default)]
+    pub gated_at: Option<String>,
+    /// RFC3339 when the user accepted/skipped this session's proposal.
+    #[serde(default)]
+    pub harvested_at: Option<String>,
 }
 
 fn meta_path(id: &str) -> PathBuf {
@@ -161,6 +175,9 @@ pub fn start(source: &str) -> Result<ActiveSession> {
         tools_used: vec![],
         user_turns: 0,
         assistant_turns: 0,
+        marked: false,
+        gated_at: None,
+        harvested_at: None,
     };
     save_meta(&meta)?;
 
@@ -188,6 +205,70 @@ pub fn stop() -> Result<Option<String>> {
     Ok(Some(id))
 }
 
+/// Append one event to `<recordings_dir>/<id>.jsonl`, creating the meta file on
+/// first write. Shared by the legacy active-session path and ambient capture.
+pub(crate) fn record_event_in_dir(
+    recordings_dir: &std::path::Path,
+    id: &str,
+    source: &str,
+    event: &SessionEvent,
+) -> Result<()> {
+    fs::create_dir_all(recordings_dir)?;
+
+    let recording_path = recordings_dir.join(format!("{}.jsonl", id));
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&recording_path)
+        .context("Failed to open recording file")?;
+
+    let mut line = serde_json::to_string(event)?;
+    line.push('\n');
+    file.write_all(line.as_bytes())?;
+
+    // Load-or-create meta, then apply the same turn/tool accounting as before.
+    let meta_path = recordings_dir.join(format!("{}.meta.json", id));
+    let mut meta: SessionMeta = fs::read_to_string(&meta_path)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_else(|| SessionMeta {
+            id: id.to_string(),
+            source: source.to_string(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stopped_at: None,
+            title: None,
+            tools_used: vec![],
+            user_turns: 0,
+            assistant_turns: 0,
+            marked: false,
+            gated_at: None,
+            harvested_at: None,
+        });
+
+    match event.event_type.as_str() {
+        "user" => {
+            meta.user_turns += 1;
+            if meta.title.is_none() {
+                let title: String = event.content.chars().take(80).collect();
+                meta.title = Some(title);
+            }
+        }
+        "assistant" => meta.assistant_turns += 1,
+        "tool_call" => {
+            if let Some(tool_name) = &event.tool {
+                let tools: BTreeSet<String> = meta.tools_used.iter().cloned().collect();
+                if !tools.contains(tool_name) {
+                    meta.tools_used.push(tool_name.clone());
+                }
+            }
+        }
+        _ => {}
+    }
+    let json = serde_json::to_string_pretty(&meta)?;
+    fs::write(&meta_path, json).context("Failed to write session meta")?;
+    Ok(())
+}
+
 /// Record an event to the active session. Returns Ok(false) if no session is active.
 pub fn record(event_type: &str, tool: Option<&str>, content: &str) -> Result<bool> {
     let active = active_path();
@@ -211,45 +292,11 @@ pub fn record(event_type: &str, tool: Option<&str>, content: &str) -> Result<boo
         event_type: event_type.to_string(),
         tool: tool.map(|s| s.to_string()),
         content: content.to_string(),
+        working_dir: None,
+        git_branch: None,
+        exit_code: None,
     };
-
-    let recording_path = recordings_dir().join(format!("{}.jsonl", session.id));
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&recording_path)
-        .context("Failed to open recording file")?;
-
-    let mut line = serde_json::to_string(&event)?;
-    line.push('\n');
-    file.write_all(line.as_bytes())?;
-
-    // Update session meta
-    if let Some(mut meta) = load_meta(&session.id) {
-        match event_type {
-            "user" => {
-                meta.user_turns += 1;
-                if meta.title.is_none() {
-                    let title: String = content.chars().take(80).collect();
-                    meta.title = Some(title);
-                }
-            }
-            "assistant" => {
-                meta.assistant_turns += 1;
-            }
-            "tool_call" => {
-                if let Some(tool_name) = tool {
-                    let tools: BTreeSet<String> = meta.tools_used.iter().cloned().collect();
-                    if !tools.contains(tool_name) {
-                        meta.tools_used.push(tool_name.to_string());
-                    }
-                }
-            }
-            _ => {}
-        }
-        let _ = save_meta(&meta);
-    }
-
+    record_event_in_dir(&recordings_dir(), &session.id, &session.source, &event)?;
     Ok(true)
 }
 
@@ -469,18 +516,21 @@ mod tests {
                 event_type: "user".to_string(),
                 tool: None,
                 content: "hello".to_string(),
+                ..Default::default()
             },
             SessionEvent {
                 timestamp: 2000,
                 event_type: "assistant".to_string(),
                 tool: None,
                 content: "hi".to_string(),
+                ..Default::default()
             },
             SessionEvent {
                 timestamp: 3000,
                 event_type: "tool_call".to_string(),
                 tool: Some("Bash".to_string()),
                 content: "ls".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -516,6 +566,7 @@ mod tests {
             event_type: "user".to_string(),
             tool: None,
             content: "hello world".to_string(),
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&event).unwrap();
@@ -527,6 +578,7 @@ mod tests {
             event_type: "tool_call".to_string(),
             tool: Some("Bash".to_string()),
             content: "ls -la".to_string(),
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&event_with_tool).unwrap();
@@ -551,12 +603,14 @@ mod tests {
                 event_type: "user".to_string(),
                 tool: None,
                 content: "first".to_string(),
+                ..Default::default()
             },
             SessionEvent {
                 timestamp: 2000,
                 event_type: "assistant".to_string(),
                 tool: None,
                 content: "second".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -659,6 +713,9 @@ mod tests {
             tools_used: vec!["Bash".to_string(), "Read".to_string()],
             user_turns: 3,
             assistant_turns: 4,
+            marked: false,
+            gated_at: None,
+            harvested_at: None,
         };
 
         let json = serde_json::to_string_pretty(&meta).unwrap();
@@ -687,6 +744,9 @@ mod tests {
             tools_used: vec![],
             user_turns: 0,
             assistant_turns: 0,
+            marked: false,
+            gated_at: None,
+            harvested_at: None,
         };
 
         // Write and read back
@@ -756,6 +816,46 @@ mod tests {
         assert!(!rec_dir.join(format!("{}.jsonl", id)).exists());
         assert!(!rec_dir.join(format!("{}.meta.json", id)).exists());
         assert!(!rec_dir.join(format!("{}.synced", id)).exists());
+    }
+
+    #[test]
+    fn meta_back_compat_without_new_fields() {
+        // Old meta files (pre-ambient) must keep parsing.
+        let json = r#"{"id":"x","source":"claude","started_at":"2026-01-01T00:00:00Z",
+            "stopped_at":null,"title":null,"tools_used":[],"user_turns":0,"assistant_turns":0}"#;
+        let meta: SessionMeta = serde_json::from_str(json).unwrap();
+        assert!(!meta.marked);
+        assert!(meta.gated_at.is_none());
+        assert!(meta.harvested_at.is_none());
+    }
+
+    #[test]
+    fn record_event_in_dir_appends_and_updates_meta() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rec_dir = tmp.path().join("recordings");
+        fs::create_dir_all(&rec_dir).unwrap();
+
+        let ev = SessionEvent {
+            timestamp: 1000,
+            event_type: "user".to_string(),
+            tool: None,
+            content: "fix the login bug".to_string(),
+            working_dir: Some("/repo".to_string()),
+            git_branch: Some("main".to_string()),
+            exit_code: None,
+        };
+        record_event_in_dir(&rec_dir, "sess-1", "claude", &ev).unwrap();
+        record_event_in_dir(&rec_dir, "sess-1", "claude", &ev).unwrap();
+
+        let content = fs::read_to_string(rec_dir.join("sess-1.jsonl")).unwrap();
+        assert_eq!(content.lines().count(), 2);
+
+        let meta: SessionMeta =
+            serde_json::from_str(&fs::read_to_string(rec_dir.join("sess-1.meta.json")).unwrap())
+                .unwrap();
+        assert_eq!(meta.user_turns, 2);
+        assert_eq!(meta.source, "claude");
+        assert_eq!(meta.title.as_deref(), Some("fix the login bug"));
     }
 
     #[test]

@@ -22,6 +22,9 @@ pub fn scrub_events(events: &[SessionEvent]) -> Vec<SessionEvent> {
             event_type: e.event_type.clone(),
             tool: e.tool.clone(),
             content: scrub_content(&e.content, &e.event_type),
+            working_dir: e.working_dir.clone(),
+            git_branch: e.git_branch.clone(),
+            exit_code: e.exit_code,
         })
         .collect()
 }
@@ -431,12 +434,14 @@ mod tests {
                 event_type: "user".to_string(),
                 tool: None,
                 content: format!("set my key to {}", fake_stripe),
+                ..Default::default()
             },
             SessionEvent {
                 timestamp: 2000,
                 event_type: "tool_result".to_string(),
                 tool: Some("Bash".to_string()),
                 content: "SECRET_KEY=hunter2\nDEBUG=true".to_string(),
+                ..Default::default()
             },
         ];
         let scrubbed = scrub_events(&events);

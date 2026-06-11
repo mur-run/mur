@@ -539,6 +539,7 @@ mod tests {
                 event_type: "user".to_string(),
                 tool: None,
                 content: "a".repeat(200),
+                ..Default::default()
             })
             .collect();
         let transcript = build_transcript(&events);
@@ -554,12 +555,14 @@ mod tests {
                 event_type: "user".to_string(),
                 tool: None,
                 content: "mur session start".to_string(),
+                ..Default::default()
             },
             SessionEvent {
                 timestamp: 2000,
                 event_type: "user".to_string(),
                 tool: None,
                 content: "find AirPods prices".to_string(),
+                ..Default::default()
             },
         ];
         let transcript = build_transcript(&events);
