@@ -89,6 +89,37 @@ fn pane_shell(exe: &str, name: &str, resume: bool, auto: bool) -> String {
         .join(" ")
 }
 
+/// Per remaining agent (`names[1..]`): a `split-window` + `select-layout
+/// tiled` command pair. Retiling after every split avoids tmux's
+/// "pane too small" refusal when opening many panes.
+#[allow(dead_code)] // used by Task 5's executor
+fn split_and_tile(
+    target: &str,
+    exe: &str,
+    names: &[String],
+    resume: bool,
+    auto: bool,
+) -> Vec<Vec<String>> {
+    let mut cmds = Vec::new();
+    for name in &names[1..] {
+        cmds.push(vec![
+            "tmux".into(),
+            "split-window".into(),
+            "-t".into(),
+            target.into(),
+            pane_shell(exe, name, resume, auto),
+        ]);
+        cmds.push(vec![
+            "tmux".into(),
+            "select-layout".into(),
+            "-t".into(),
+            target.into(),
+            "tiled".into(),
+        ]);
+    }
+    cmds
+}
+
 /// Outside tmux: detached session, one pane per agent, tiled, then attach.
 #[allow(dead_code)] // used by Task 5's executor
 fn tmux_new_session(
@@ -98,7 +129,14 @@ fn tmux_new_session(
     resume: bool,
     auto: bool,
 ) -> Vec<Vec<String>> {
-    let target = format!("={session}");
+    debug_assert!(
+        !names.is_empty(),
+        "pane planning requires at least one name"
+    );
+    // Splits target pane 0 explicitly; a bare session target would resolve
+    // to whichever pane tmux considers active. attach-session takes a
+    // session target, not a pane target.
+    let pane_target = format!("={session}:.0");
     let mut cmds = vec![vec![
         "tmux".into(),
         "new-session".into(),
@@ -107,35 +145,25 @@ fn tmux_new_session(
         session.into(),
         pane_shell(exe, &names[0], resume, auto),
     ]];
-    for name in &names[1..] {
-        cmds.push(vec![
-            "tmux".into(),
-            "split-window".into(),
-            "-t".into(),
-            target.clone(),
-            pane_shell(exe, name, resume, auto),
-        ]);
-        cmds.push(vec![
-            "tmux".into(),
-            "select-layout".into(),
-            "-t".into(),
-            target.clone(),
-            "tiled".into(),
-        ]);
-    }
+    cmds.extend(split_and_tile(&pane_target, exe, names, resume, auto));
     cmds.push(vec![
         "tmux".into(),
         "attach-session".into(),
         "-t".into(),
-        target,
+        format!("={session}"),
     ]);
     cmds
 }
 
 /// Inside tmux: open a new window (printing its id for targeting) running
-/// the first agent. The user's current window is untouched.
+/// the first agent. Focus moves to the new window by design; the user's
+/// previous window keeps its panes and content.
 #[allow(dead_code)] // used by Task 5's executor
 fn tmux_inside_open(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<String> {
+    debug_assert!(
+        !names.is_empty(),
+        "pane planning requires at least one name"
+    );
     vec![
         "tmux".into(),
         "new-window".into(),
@@ -156,24 +184,7 @@ fn tmux_inside_rest(
     resume: bool,
     auto: bool,
 ) -> Vec<Vec<String>> {
-    let mut cmds = Vec::new();
-    for name in &names[1..] {
-        cmds.push(vec![
-            "tmux".into(),
-            "split-window".into(),
-            "-t".into(),
-            window_id.into(),
-            pane_shell(exe, name, resume, auto),
-        ]);
-        cmds.push(vec![
-            "tmux".into(),
-            "select-layout".into(),
-            "-t".into(),
-            window_id.into(),
-            "tiled".into(),
-        ]);
-    }
-    cmds
+    split_and_tile(window_id, exe, names, resume, auto)
 }
 
 #[cfg(test)]
@@ -270,13 +281,13 @@ mod tests {
                 "tmux",
                 "split-window",
                 "-t",
-                "=mur-chat",
+                "=mur-chat:.0",
                 "/bin/mur agent cli a2"
             ]
         );
         assert_eq!(
             cmds[2],
-            vec!["tmux", "select-layout", "-t", "=mur-chat", "tiled"]
+            vec!["tmux", "select-layout", "-t", "=mur-chat:.0", "tiled"]
         );
         assert_eq!(
             cmds[3],
@@ -284,13 +295,13 @@ mod tests {
                 "tmux",
                 "split-window",
                 "-t",
-                "=mur-chat",
+                "=mur-chat:.0",
                 "/bin/mur agent cli a3"
             ]
         );
         assert_eq!(
             cmds[4],
-            vec!["tmux", "select-layout", "-t", "=mur-chat", "tiled"]
+            vec!["tmux", "select-layout", "-t", "=mur-chat:.0", "tiled"]
         );
         assert_eq!(cmds[5], vec!["tmux", "attach-session", "-t", "=mur-chat"]);
         assert_eq!(cmds.len(), 6);
