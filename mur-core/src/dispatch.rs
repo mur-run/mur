@@ -284,9 +284,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 path,
                 warnings_only,
             } => cmd::skill_cmd::cmd_validate(&path, warnings_only)?,
-            crate::cli::SkillAction::Schema { out } => {
-                cmd::skill_cmd::cmd_schema(out.as_deref())?
-            }
+            crate::cli::SkillAction::Schema { out } => cmd::skill_cmd::cmd_schema(out.as_deref())?,
             crate::cli::SkillAction::Fmt { path, to, write } => {
                 cmd::skill_cmd::cmd_fmt(&path, to.as_deref(), write)?
             }

@@ -154,7 +154,6 @@ pub enum FailureAction {
     Retry,
 }
 
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct Variable {
     pub name: String,
@@ -165,7 +164,11 @@ pub struct Variable {
     /// String-encoded default. `default_value` accepted for legacy workflow YAML.
     /// Runtime coerces per `var_type` (Number/Bool parsed, Array decoded as
     /// JSON or comma-separated).
-    #[serde(default, alias = "default_value", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "default_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub default: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -343,8 +346,7 @@ needs_approval: true
     #[test]
     fn variable_all_vartypes_parse() {
         for t in ["string", "path", "url", "number", "bool", "array"] {
-            let v: Variable =
-                serde_yaml_ng::from_str(&format!("name: x\ntype: {t}\n")).unwrap();
+            let v: Variable = serde_yaml_ng::from_str(&format!("name: x\ntype: {t}\n")).unwrap();
             assert_eq!(v.var_type.to_string(), t);
         }
     }

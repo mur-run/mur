@@ -259,7 +259,9 @@ mod tests {
         )
         .unwrap();
         match &ev {
-            SkillEvent::Execution { env_class, trigger, .. } => {
+            SkillEvent::Execution {
+                env_class, trigger, ..
+            } => {
                 assert_eq!(env_class.as_deref(), Some("env"));
                 assert_eq!(trigger.as_deref(), Some("manual"));
             }
@@ -285,7 +287,9 @@ mod tests {
         )
         .unwrap();
         match &ev2 {
-            SkillEvent::Execution { env_class, outcome, .. } => {
+            SkillEvent::Execution {
+                env_class, outcome, ..
+            } => {
                 assert!(env_class.is_none());
                 assert_eq!(outcome, "success");
             }
@@ -299,7 +303,11 @@ mod tests {
         let legacy = r#"{"kind":"execution","ts":"2026-05-30T00:00:00Z","device_id":"d","outcome":"success"}"#;
         let ev: SkillEvent = serde_json::from_str(legacy).unwrap();
         match &ev {
-            SkillEvent::Execution { duration_ms, env_class, .. } => {
+            SkillEvent::Execution {
+                duration_ms,
+                env_class,
+                ..
+            } => {
                 assert!(duration_ms.is_none());
                 assert!(env_class.is_none());
             }

@@ -107,8 +107,7 @@ pub struct Step {
     pub timeout_secs: Option<u64>,
 }
 
-pub use crate::skill::manifest::{FailureAction, RetryConfig, Variable, VarType};
-
+pub use crate::skill::manifest::{FailureAction, RetryConfig, VarType, Variable};
 
 /// Notification level for workflow events.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

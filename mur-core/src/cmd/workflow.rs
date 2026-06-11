@@ -196,10 +196,10 @@ pub(crate) fn cmd_workflow_show(name: &str, markdown: bool) -> Result<()> {
                 println!(
                     "- `{}` ({}, {}): {} — default: `{}`",
                     v.name,
-                v.var_type,
-                req,
-                v.description.as_deref().unwrap_or(""),
-                default
+                    v.var_type,
+                    req,
+                    v.description.as_deref().unwrap_or(""),
+                    default
                 );
             }
             println!();

@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Which host(s) may load a skill. See spec §2.3.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum HostId {
     MurAgent,
@@ -47,7 +49,9 @@ pub enum Category {
 /// Where a skill came from. Drives the curation gate: `Llm`-authored skills
 /// cannot auto-promote past `Emerging` until a human curates them
 /// (amendment A1, `2026-05-28-mur-workflow-engine-design-v2.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Provenance {
     /// Hand-authored by a person. Default — no gate.
@@ -69,7 +73,9 @@ pub enum ContentMode {
     Note,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
     Low,
@@ -79,7 +85,9 @@ pub enum Priority {
     Critical,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum TriggerKind {
     Command,
