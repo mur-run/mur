@@ -5,7 +5,8 @@
 //! 2. Contextual heuristics (.env files, PEM blocks, connection strings)
 //! 3. High-entropy string detection (random API keys without known prefixes)
 //!
-//! Only applied before cloud upload — local `.jsonl` files are never modified.
+//! Applied (a) before cloud upload and (b) at write time on the ambient
+//! capture path, so secrets never reach disk in new recordings.
 
 use regex::Regex;
 use std::sync::OnceLock;
@@ -27,6 +28,19 @@ pub fn scrub_events(events: &[SessionEvent]) -> Vec<SessionEvent> {
             exit_code: e.exit_code,
         })
         .collect()
+}
+
+/// Scrub a single event at write time (ambient capture path).
+pub fn scrub_event(e: &SessionEvent) -> SessionEvent {
+    SessionEvent {
+        timestamp: e.timestamp,
+        event_type: e.event_type.clone(),
+        tool: e.tool.clone(),
+        content: scrub_content(&e.content, &e.event_type),
+        working_dir: e.working_dir.clone(),
+        git_branch: e.git_branch.clone(),
+        exit_code: e.exit_code,
+    }
 }
 
 /// Count how many secrets would be redacted (for dry-run / stats).
@@ -423,6 +437,20 @@ mod tests {
         let input = "session_id=a1b2c3d4-e5f6-7890-abcd-ef1234567890";
         let result = scrub_content(input, "tool_result");
         assert!(result.contains("a1b2c3d4-e5f6-7890-abcd-ef1234567890"));
+    }
+
+    #[test]
+    fn scrub_event_redacts_in_place() {
+        let ev = SessionEvent {
+            timestamp: 1,
+            event_type: "tool_call".to_string(),
+            tool: Some("Bash".to_string()),
+            content: "export GITHUB_TOKEN=ghp_0123456789abcdefghijklmnopqrstuvwxyz0123"
+                .to_string(),
+            ..Default::default()
+        };
+        let scrubbed = scrub_event(&ev);
+        assert!(!scrubbed.content.contains("ghp_"));
     }
 
     #[test]
