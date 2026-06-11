@@ -356,6 +356,7 @@ const CHAT_LABEL: &str = "mur-chat";
 /// Inside zellij: new named tab, then one `zellij run` pane per agent
 /// (panes land in the freshly focused tab).
 fn zellij_inside(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<Vec<String>> {
+    debug_assert!(!names.is_empty(), "pane planning requires at least one name");
     let mut cmds = vec![vec![
         "zellij".into(),
         "action".into(),
@@ -378,6 +379,7 @@ fn kdl_quote(s: &str) -> String {
 
 /// Outside zellij: generated layout for `zellij --layout-string`.
 fn zellij_kdl_layout(exe: &str, names: &[String], resume: bool, auto: bool) -> String {
+    debug_assert!(!names.is_empty(), "pane planning requires at least one name");
     let mut out = String::from("layout {\n    pane split_direction=\"vertical\" {\n");
     for name in names {
         let args: Vec<String> = pane_argv(exe, name, resume, auto)[1..]
@@ -397,6 +399,7 @@ fn zellij_kdl_layout(exe: &str, names: &[String], resume: bool, auto: bool) -> S
 /// Inside WezTerm: split the current pane once per agent, alternating
 /// right/bottom for a rough grid.
 fn wezterm_splits(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<Vec<String>> {
+    debug_assert!(!names.is_empty(), "pane planning requires at least one name");
     names
         .iter()
         .enumerate()
@@ -418,6 +421,7 @@ fn wezterm_splits(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<
 /// Inside kitty: one `kitten @ launch` per agent, alternating split axis.
 /// Requires `allow_remote_control` — failure falls back at execution time.
 fn kitty_launches(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<Vec<String>> {
+    debug_assert!(!names.is_empty(), "pane planning requires at least one name");
     names
         .iter()
         .enumerate()
