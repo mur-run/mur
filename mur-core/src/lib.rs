@@ -31,6 +31,7 @@ pub mod executor;
 pub mod extract;
 pub mod extract_llm;
 pub mod federation;
+pub mod harvest;
 pub mod inject;
 pub mod interactive;
 pub mod mobile;
