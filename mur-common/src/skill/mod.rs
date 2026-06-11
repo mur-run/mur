@@ -43,6 +43,7 @@ pub use hash::{
 pub use inventory::McpInventory;
 pub use lifecycle::{
     calculate_decay, half_life_days, next_state, on_promotion, transition_allowed,
+    LifecycleThresholds,
 };
 pub use loader::{LoadedSkill, SkillScope, is_valid_skill_name, load_all};
 pub use lockfile::{LockfileError, SkillLock};

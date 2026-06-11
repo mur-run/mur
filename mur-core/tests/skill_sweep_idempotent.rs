@@ -79,6 +79,7 @@ fn sweep_idempotent() {
             dry_run: false,
             now,
             require_human_curation_before_stable: true,
+            ..SweepOptions::default()
         },
     )
     .unwrap();
@@ -100,6 +101,7 @@ fn sweep_idempotent() {
             dry_run: false,
             now,
             require_human_curation_before_stable: true,
+            ..SweepOptions::default()
         },
     )
     .unwrap();
@@ -114,7 +116,11 @@ fn sweep_idempotent() {
     for name in skill_names {
         let path = SkillStats::path(home, name);
         let loaded = SkillStats::load(&path).unwrap().unwrap();
-        let proposed = mur_common::skill::lifecycle::next_state(&loaded, now);
+        let proposed = mur_common::skill::lifecycle::next_state(
+            &loaded,
+            now,
+            &mur_common::skill::lifecycle::LifecycleThresholds::default(),
+        );
         // After persisting, next_state should agree with the current state
         // (no further transitions needed, since we just applied them)
         if proposed != loaded.lifecycle_state
@@ -154,6 +160,7 @@ fn anchor_reset_on_promotion() {
             dry_run: false,
             now,
             require_human_curation_before_stable: true,
+            ..SweepOptions::default()
         },
     )
     .unwrap();
