@@ -31,6 +31,23 @@ pub enum SkillEvent {
         error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
+        // ── Run-ledger enrichment (workflow-engine v2 P2; all default so
+        //    existing events.jsonl lines keep parsing and fleet-sync's
+        //    dedup_key (ts+kind+device) is unaffected) ──
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        /// "workflow" (the skill is broken) | "env" (network/credentials/…).
+        /// The Broken fast-path (P4) only triggers on "workflow" with
+        /// confidence ≥ threshold.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env_class: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confidence: Option<f64>,
+        /// "manual" | "schedule" | "agent"
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger: Option<String>,
     },
     Dismissed {
         ts: DateTime<Utc>,
@@ -148,6 +165,59 @@ pub fn apply_new_events_to_stats(stats: &mut SkillStats, new_events: &[SkillEven
     }
 }
 
+/// Outcome of one workflow/skill run, recorded into the per-skill ledger.
+pub struct RunRecord<'a> {
+    /// true = success
+    pub success: bool,
+    pub duration_ms: Option<u64>,
+    pub exit_code: Option<i32>,
+    /// stderr (or combined output) of the failing step; used to classify
+    /// workflow-vs-environment failure. Ignored on success.
+    pub stderr: Option<&'a str>,
+    /// Step id/description that failed, if any.
+    pub failed_step: Option<String>,
+    /// "manual" | "schedule" | "agent"
+    pub trigger: &'a str,
+    /// Explicit user override of the env classification
+    /// (`mur run --env-class workflow|env`).
+    pub env_class_override: Option<&'a str>,
+}
+
+/// Append one enriched Execution event for a completed run — the run-ledger
+/// write path (workflow-engine v2 P2). Returns the event written.
+pub fn record_run(
+    mur_home: &Path,
+    skill_name: &str,
+    device_id: &str,
+    rec: &RunRecord<'_>,
+) -> Result<SkillEvent> {
+    let (env_class, confidence) = if rec.success {
+        (None, None)
+    } else if let Some(forced) = rec.env_class_override {
+        (Some(forced.to_string()), Some(1.0))
+    } else {
+        let c = crate::skill::env_class::classify_failure(rec.stderr.unwrap_or(""));
+        (Some(c.class.to_string()), Some(c.confidence))
+    };
+
+    let event = SkillEvent::Execution {
+        ts: Utc::now(),
+        device_id: device_id.to_string(),
+        outcome: if rec.success { "success" } else { "failure" }.to_string(),
+        error: (!rec.success)
+            .then(|| rec.stderr.map(|s| s.chars().take(500).collect()))
+            .flatten(),
+        step: rec.failed_step.clone(),
+        duration_ms: rec.duration_ms,
+        exit_code: rec.exit_code,
+        env_class,
+        confidence,
+        trigger: Some(rec.trigger.to_string()),
+    };
+    append_event(&event_log_path(mur_home, skill_name), &event)?;
+    Ok(event)
+}
+
 /// Resolve manifest conflict via Last-Writer-Wins (LWW).
 /// Returns the winning skill and the reason (local_wins, remote_wins, or force_local).
 pub fn resolve_manifest_lww(
@@ -170,6 +240,100 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[test]
+    fn record_run_classifies_and_appends() {
+        let tmp = tempdir().unwrap();
+        let ev = record_run(
+            tmp.path(),
+            "deploy-api",
+            "dev-a",
+            &RunRecord {
+                success: false,
+                duration_ms: Some(1200),
+                exit_code: Some(7),
+                stderr: Some("curl: (7) Connection refused"),
+                failed_step: Some("health-check".into()),
+                trigger: "manual",
+                env_class_override: None,
+            },
+        )
+        .unwrap();
+        match &ev {
+            SkillEvent::Execution {
+                env_class, trigger, ..
+            } => {
+                assert_eq!(env_class.as_deref(), Some("env"));
+                assert_eq!(trigger.as_deref(), Some("manual"));
+            }
+            _ => panic!("wrong kind"),
+        }
+        let events = read_events(&event_log_path(tmp.path(), "deploy-api")).unwrap();
+        assert_eq!(events.len(), 1);
+
+        // Success run records no env_class.
+        let ev2 = record_run(
+            tmp.path(),
+            "deploy-api",
+            "dev-a",
+            &RunRecord {
+                success: true,
+                duration_ms: Some(900),
+                exit_code: Some(0),
+                stderr: None,
+                failed_step: None,
+                trigger: "schedule",
+                env_class_override: None,
+            },
+        )
+        .unwrap();
+        match &ev2 {
+            SkillEvent::Execution {
+                env_class, outcome, ..
+            } => {
+                assert!(env_class.is_none());
+                assert_eq!(outcome, "success");
+            }
+            _ => panic!("wrong kind"),
+        }
+    }
+
+    #[test]
+    fn legacy_execution_line_parses_and_enriched_roundtrips() {
+        // Pre-P2 line without the run-ledger fields must keep parsing.
+        let legacy = r#"{"kind":"execution","ts":"2026-05-30T00:00:00Z","device_id":"d","outcome":"success"}"#;
+        let ev: SkillEvent = serde_json::from_str(legacy).unwrap();
+        match &ev {
+            SkillEvent::Execution {
+                duration_ms,
+                env_class,
+                ..
+            } => {
+                assert!(duration_ms.is_none());
+                assert!(env_class.is_none());
+            }
+            _ => panic!("wrong kind"),
+        }
+
+        // Enriched event round-trips.
+        let enriched = SkillEvent::Execution {
+            ts: chrono::DateTime::from_timestamp(1_748_000_000, 0).unwrap(),
+            device_id: "d".into(),
+            outcome: "failure".into(),
+            error: Some("boom".into()),
+            step: Some("deploy".into()),
+            duration_ms: Some(8421),
+            exit_code: Some(1),
+            env_class: Some("workflow".into()),
+            confidence: Some(0.6),
+            trigger: Some("manual".into()),
+        };
+        let line = serde_json::to_string(&enriched).unwrap();
+        let back: SkillEvent = serde_json::from_str(&line).unwrap();
+        assert_eq!(back, enriched);
+        // dedup_key shape unchanged (ts+kind+device) — fleet-sync compatible.
+        assert!(enriched.dedup_key().ends_with(":execution:d"));
+    }
+
     fn device() -> String {
         "dev-a".into()
     }
@@ -190,6 +354,11 @@ mod tests {
             outcome: "success".into(),
             error: None,
             step: None,
+            duration_ms: None,
+            exit_code: None,
+            env_class: None,
+            confidence: None,
+            trigger: None,
         }
     }
 
@@ -201,6 +370,11 @@ mod tests {
             outcome: "failure".into(),
             error: Some("oops".into()),
             step: None,
+            duration_ms: None,
+            exit_code: None,
+            env_class: None,
+            confidence: None,
+            trigger: None,
         }
     }
 

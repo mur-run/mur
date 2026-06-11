@@ -121,10 +121,14 @@ fn print_workflow_prompt(w: &mur_common::workflow::Workflow) {
         println!("## Variables\n");
         for v in &w.variables {
             let req = if v.required { "required" } else { "optional" };
-            let default = v.default_value.as_deref().unwrap_or("-");
+            let default = v.default.as_deref().unwrap_or("-");
             println!(
                 "- `{}` ({}, {}): {} — default: `{}`",
-                v.name, v.var_type, req, v.description, default
+                v.name,
+                v.var_type,
+                req,
+                v.description.as_deref().unwrap_or(""),
+                default
             );
         }
         println!();
@@ -188,10 +192,14 @@ pub(crate) fn cmd_workflow_show(name: &str, markdown: bool) -> Result<()> {
             println!("## Variables\n");
             for v in &w.variables {
                 let req = if v.required { "required" } else { "optional" };
-                let default = v.default_value.as_deref().unwrap_or("-");
+                let default = v.default.as_deref().unwrap_or("-");
                 println!(
                     "- `{}` ({}, {}): {} — default: `{}`",
-                    v.name, v.var_type, req, v.description, default
+                    v.name,
+                    v.var_type,
+                    req,
+                    v.description.as_deref().unwrap_or(""),
+                    default
                 );
             }
             println!();
@@ -235,10 +243,14 @@ pub(crate) fn cmd_workflow_show(name: &str, markdown: bool) -> Result<()> {
             println!("\nVariables:");
             for v in &w.variables {
                 let req = if v.required { "required" } else { "optional" };
-                let default = v.default_value.as_deref().unwrap_or("-");
+                let default = v.default.as_deref().unwrap_or("-");
                 println!(
                     "  ${} ({}): {} [{}] default={}",
-                    v.name, v.var_type, v.description, req, default
+                    v.name,
+                    v.var_type,
+                    v.description.as_deref().unwrap_or(""),
+                    req,
+                    default
                 );
             }
         }
