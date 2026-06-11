@@ -133,17 +133,51 @@ pub struct Procedure {
     pub steps: Vec<ProcedureStep>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Variable {
     pub name: String,
-    #[serde(rename = "type")]
-    pub var_type: String,
+    #[serde(rename = "type", default)]
+    pub var_type: VarType,
     #[serde(default)]
     pub required: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<serde_yaml_ng::Value>,
+    /// String-encoded default. `default_value` accepted for legacy workflow YAML.
+    /// Runtime coerces per `var_type` (Number/Bool parsed, Array decoded as
+    /// JSON or comma-separated).
+    #[serde(default, alias = "default_value", skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Allowed values (renders as a dropdown in the Hub DAG editor).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+}
+
+/// Variable types for workflow/skill parameters (v2 resolved decision #3:
+/// ONE `Variable` type lives here; `workflow::Variable` re-exports it).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum VarType {
+    #[default]
+    String,
+    Path,
+    Url,
+    Number,
+    Bool,
+    /// Array of strings (e.g., multiple URLs, multiple product names)
+    Array,
+}
+
+impl std::fmt::Display for VarType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VarType::String => write!(f, "string"),
+            VarType::Path => write!(f, "path"),
+            VarType::Url => write!(f, "url"),
+            VarType::Number => write!(f, "number"),
+            VarType::Bool => write!(f, "bool"),
+            VarType::Array => write!(f, "array"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +236,32 @@ fn default_any_version() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn variable_accepts_legacy_default_value_alias() {
+        // Legacy workflow YAML used `default_value`; the unified type aliases it.
+        let v: Variable = serde_yaml_ng::from_str(
+            "name: app\ntype: string\nrequired: true\ndefault_value: my-api\n",
+        )
+        .unwrap();
+        assert_eq!(v.default.as_deref(), Some("my-api"));
+        assert_eq!(v.var_type, VarType::String);
+
+        // Modern form `default:` parses too, and choices default empty.
+        let v2: Variable =
+            serde_yaml_ng::from_str("name: env\ntype: string\ndefault: prod\n").unwrap();
+        assert_eq!(v2.default.as_deref(), Some("prod"));
+        assert!(v2.choices.is_empty());
+    }
+
+    #[test]
+    fn variable_all_vartypes_parse() {
+        for t in ["string", "path", "url", "number", "bool", "array"] {
+            let v: Variable =
+                serde_yaml_ng::from_str(&format!("name: x\ntype: {t}\n")).unwrap();
+            assert_eq!(v.var_type.to_string(), t);
+        }
+    }
 
     #[test]
     fn full_manifest_roundtrips() {

@@ -128,51 +128,7 @@ pub enum FailureAction {
     Retry,
 }
 
-/// A variable/parameter for a workflow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Variable {
-    /// Variable name
-    pub name: String,
-    /// Type of the variable
-    #[serde(rename = "type", default)]
-    pub var_type: VarType,
-    /// Whether this variable must be provided
-    #[serde(default)]
-    pub required: bool,
-    /// Default value (as string)
-    #[serde(default)]
-    pub default_value: Option<String>,
-    /// Human-readable description
-    #[serde(default)]
-    pub description: String,
-}
-
-/// Variable types for workflow parameters.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum VarType {
-    #[default]
-    String,
-    Path,
-    Url,
-    Number,
-    Bool,
-    /// Array of strings (e.g., multiple URLs, multiple product names)
-    Array,
-}
-
-impl std::fmt::Display for VarType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            VarType::String => write!(f, "string"),
-            VarType::Path => write!(f, "path"),
-            VarType::Url => write!(f, "url"),
-            VarType::Number => write!(f, "number"),
-            VarType::Bool => write!(f, "bool"),
-            VarType::Array => write!(f, "array"),
-        }
-    }
-}
+pub use crate::skill::manifest::{Variable, VarType};
 
 /// Notification level for workflow events.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
