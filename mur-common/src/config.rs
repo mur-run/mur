@@ -1313,6 +1313,12 @@ pub struct SkillsConfig {
     /// let LLM-extracted skills promote on run stats alone.
     #[serde(default = "default_require_human_curation")]
     pub require_human_curation_before_stable: bool,
+
+    /// Lifecycle scoring thresholds (W3b-P4). All fields default to the
+    /// compile-time constants in `mur_common::skill::lifecycle` so existing
+    /// deployments see no behaviour change without an explicit config entry.
+    #[serde(default)]
+    pub lifecycle: SkillLifecycleConfig,
 }
 
 fn default_require_human_curation() -> bool {
@@ -1327,6 +1333,73 @@ impl Default for SkillsConfig {
             priority_order: vec!["agent".into(), "global".into()],
             adaptive: Some(AdaptiveSkillsConfig::default()),
             require_human_curation_before_stable: default_require_human_curation(),
+            lifecycle: SkillLifecycleConfig::default(),
+        }
+    }
+}
+
+/// Per-skill lifecycle scoring thresholds.
+///
+/// Stored under `skill.lifecycle.*` in `~/.mur/config.yaml`.
+/// All fields are optional on disk — missing keys fall back to the
+/// compile-time defaults so a partial config is always valid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillLifecycleConfig {
+    // ── Promotion thresholds (must be exceeded) ──────────────────────────
+    pub promote_draft_uses: u64,
+    pub promote_emerging_uses: u64,
+    pub promote_emerging_success_rate: f64,
+    pub promote_emerging_age_days: i64,
+    pub promote_stable_uses: u64,
+    pub promote_stable_success_rate: f64,
+    pub promote_stable_age_days: i64,
+
+    // ── Demotion thresholds (must drop below) ────────────────────────────
+    pub demote_emerging_uses: u64,
+    pub demote_emerging_success_rate: f64,
+    pub demote_stable_uses: u64,
+    pub demote_stable_success_rate: f64,
+    pub deprecated_success_rate: f64,
+    pub deprecated_no_success_days: i64,
+
+    // ── Auto-archive thresholds ───────────────────────────────────────────
+    pub auto_archive_confidence: f64,
+    pub auto_archive_age_days: i64,
+
+    // ── P4: broken fast-path ─────────────────────────────────────────────
+    /// Number of consecutive `Execution` events with `env_class == "workflow"`
+    /// that immediately triggers a `Deprecated` transition, bypassing the
+    /// normal scoring path. Set to 0 to disable the fast-path.
+    pub broken_workflow_streak: u32,
+
+    // ── P4: archived hard-delete ─────────────────────────────────────────
+    /// Days a skill must remain in `Archived` state before `mur skill sweep`
+    /// transitions it to `Destroyed` and removes its directory from disk.
+    /// Set to 0 to disable hard-delete.
+    pub archive_destroy_grace_days: i64,
+}
+
+impl Default for SkillLifecycleConfig {
+    fn default() -> Self {
+        Self {
+            promote_draft_uses: 3,
+            promote_emerging_uses: 10,
+            promote_emerging_success_rate: 0.6,
+            promote_emerging_age_days: 7,
+            promote_stable_uses: 30,
+            promote_stable_success_rate: 0.8,
+            promote_stable_age_days: 30,
+            demote_emerging_uses: 8,
+            demote_emerging_success_rate: 0.55,
+            demote_stable_uses: 25,
+            demote_stable_success_rate: 0.75,
+            deprecated_success_rate: 0.3,
+            deprecated_no_success_days: 90,
+            auto_archive_confidence: 0.10,
+            auto_archive_age_days: 180,
+            broken_workflow_streak: 3,
+            archive_destroy_grace_days: 30,
         }
     }
 }

@@ -4,6 +4,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 
+use crate::config::SkillLifecycleConfig;
 use crate::skill::stats::{LifecycleState, SkillStats};
 use crate::skill::types::Provenance;
 
@@ -19,7 +20,76 @@ pub fn half_life_days(state: LifecycleState) -> f64 {
         LifecycleState::Emerging => 90.0,
         LifecycleState::Stable => 365.0,
         LifecycleState::Canonical => 730.0,
-        LifecycleState::Deprecated | LifecycleState::Archived => 365.0,
+        LifecycleState::Deprecated | LifecycleState::Archived | LifecycleState::Destroyed => 365.0,
+    }
+}
+
+/// Runtime-immutable lifecycle thresholds, derived from `SkillLifecycleConfig`.
+///
+/// Created once per sweep and threaded through to `next_state`. The `Default`
+/// impl mirrors the compile-time constants below so callers that don't have
+/// access to config (e.g. the doctor's read-only preview) continue to work
+/// without any config file.
+#[derive(Debug, Clone)]
+pub struct LifecycleThresholds {
+    pub promote_draft_uses: u64,
+    pub promote_emerging_uses: u64,
+    pub promote_emerging_success_rate: f64,
+    pub promote_emerging_age_days: i64,
+    pub promote_stable_uses: u64,
+    pub promote_stable_success_rate: f64,
+    pub promote_stable_age_days: i64,
+    pub demote_emerging_uses: u64,
+    pub demote_emerging_success_rate: f64,
+    pub demote_stable_uses: u64,
+    pub demote_stable_success_rate: f64,
+    pub deprecated_success_rate: f64,
+    pub deprecated_no_success_days: i64,
+    pub auto_archive_confidence: f64,
+    pub auto_archive_age_days: i64,
+}
+
+impl Default for LifecycleThresholds {
+    fn default() -> Self {
+        Self {
+            promote_draft_uses: PROMOTE_DRAFT_USES,
+            promote_emerging_uses: PROMOTE_EMERGING_USES,
+            promote_emerging_success_rate: PROMOTE_EMERGING_SUCCESS_RATE,
+            promote_emerging_age_days: PROMOTE_EMERGING_AGE_DAYS,
+            promote_stable_uses: PROMOTE_STABLE_USES,
+            promote_stable_success_rate: PROMOTE_STABLE_SUCCESS_RATE,
+            promote_stable_age_days: PROMOTE_STABLE_AGE_DAYS,
+            demote_emerging_uses: DEMOTE_EMERGING_USES,
+            demote_emerging_success_rate: DEMOTE_EMERGING_SUCCESS_RATE,
+            demote_stable_uses: DEMOTE_STABLE_USES,
+            demote_stable_success_rate: DEMOTE_STABLE_SUCCESS_RATE,
+            deprecated_success_rate: DEPRECATED_SUCCESS_RATE,
+            deprecated_no_success_days: DEPRECATED_NO_SUCCESS_DAYS,
+            auto_archive_confidence: AUTO_ARCHIVE_CONFIDENCE,
+            auto_archive_age_days: AUTO_ARCHIVE_AGE_DAYS,
+        }
+    }
+}
+
+impl From<&SkillLifecycleConfig> for LifecycleThresholds {
+    fn from(c: &SkillLifecycleConfig) -> Self {
+        Self {
+            promote_draft_uses: c.promote_draft_uses,
+            promote_emerging_uses: c.promote_emerging_uses,
+            promote_emerging_success_rate: c.promote_emerging_success_rate,
+            promote_emerging_age_days: c.promote_emerging_age_days,
+            promote_stable_uses: c.promote_stable_uses,
+            promote_stable_success_rate: c.promote_stable_success_rate,
+            promote_stable_age_days: c.promote_stable_age_days,
+            demote_emerging_uses: c.demote_emerging_uses,
+            demote_emerging_success_rate: c.demote_emerging_success_rate,
+            demote_stable_uses: c.demote_stable_uses,
+            demote_stable_success_rate: c.demote_stable_success_rate,
+            deprecated_success_rate: c.deprecated_success_rate,
+            deprecated_no_success_days: c.deprecated_no_success_days,
+            auto_archive_confidence: c.auto_archive_confidence,
+            auto_archive_age_days: c.auto_archive_age_days,
+        }
     }
 }
 
@@ -70,8 +140,21 @@ pub fn calculate_decay(
 ///
 /// Caller (M5b sweep, or M5a doctor preview) decides whether to
 /// persist or merely display the result.
-pub fn next_state(stats: &SkillStats, now: DateTime<Utc>) -> LifecycleState {
+///
+/// Pass `&LifecycleThresholds::default()` when config is not available
+/// (e.g. doctor read-only preview).
+pub fn next_state(
+    stats: &SkillStats,
+    now: DateTime<Utc>,
+    t: &LifecycleThresholds,
+) -> LifecycleState {
     let current = stats.lifecycle_state;
+
+    // Destroyed is terminal — the files are gone; the sweep never calls
+    // next_state for destroyed skills, but guard defensively.
+    if current == LifecycleState::Destroyed {
+        return LifecycleState::Destroyed;
+    }
 
     // Hard archive condition (overrides everything except pinned).
     if !stats.pinned {
@@ -83,7 +166,7 @@ pub fn next_state(stats: &SkillStats, now: DateTime<Utc>) -> LifecycleState {
         );
         if let Some(first_ok) = stats.first_successful_use_at {
             let age_days = (now - first_ok).num_days();
-            if decayed < AUTO_ARCHIVE_CONFIDENCE && age_days > AUTO_ARCHIVE_AGE_DAYS {
+            if decayed < t.auto_archive_confidence && age_days > t.auto_archive_age_days {
                 return LifecycleState::Archived;
             }
         }
@@ -100,27 +183,27 @@ pub fn next_state(stats: &SkillStats, now: DateTime<Utc>) -> LifecycleState {
         .unwrap_or(0);
     let no_success_days = stats
         .last_success_at
-        .map(|t| (now - t).num_days())
+        .map(|ts| (now - ts).num_days())
         .unwrap_or(i64::MAX);
 
     // Deprecation predicate — applies from any non-Archived state.
     if !stats.pinned
         && current != LifecycleState::Archived
-        && (success_rate < DEPRECATED_SUCCESS_RATE && stats.usage_count >= 5
-            || no_success_days > DEPRECATED_NO_SUCCESS_DAYS)
+        && (success_rate < t.deprecated_success_rate && stats.usage_count >= 5
+            || no_success_days > t.deprecated_no_success_days)
     {
         return LifecycleState::Deprecated;
     }
 
     // Promotion ladder. Each rung requires the prior rung's criteria.
     let can_canonical = stats.pinned
-        && stats.success_count >= PROMOTE_STABLE_USES
-        && success_rate >= PROMOTE_STABLE_SUCCESS_RATE
-        && age_days >= PROMOTE_STABLE_AGE_DAYS;
-    let can_stable = stats.success_count >= PROMOTE_EMERGING_USES
-        && success_rate >= PROMOTE_EMERGING_SUCCESS_RATE
-        && age_days >= PROMOTE_EMERGING_AGE_DAYS;
-    let can_emerging = stats.success_count >= PROMOTE_DRAFT_USES;
+        && stats.success_count >= t.promote_stable_uses
+        && success_rate >= t.promote_stable_success_rate
+        && age_days >= t.promote_stable_age_days;
+    let can_stable = stats.success_count >= t.promote_emerging_uses
+        && success_rate >= t.promote_emerging_success_rate
+        && age_days >= t.promote_emerging_age_days;
+    let can_emerging = stats.success_count >= t.promote_draft_uses;
 
     if can_canonical {
         LifecycleState::Canonical
@@ -182,12 +265,13 @@ pub fn transition_allowed(
 
 fn rank(s: LifecycleState) -> u8 {
     match s {
-        LifecycleState::Archived => 0,
-        LifecycleState::Deprecated => 1,
-        LifecycleState::Draft => 2,
-        LifecycleState::Emerging => 3,
-        LifecycleState::Stable => 4,
-        LifecycleState::Canonical => 5,
+        LifecycleState::Destroyed => 0,
+        LifecycleState::Archived => 1,
+        LifecycleState::Deprecated => 2,
+        LifecycleState::Draft => 3,
+        LifecycleState::Emerging => 4,
+        LifecycleState::Stable => 5,
+        LifecycleState::Canonical => 6,
     }
 }
 
@@ -275,8 +359,8 @@ mod tests {
     fn next_state_idempotent() {
         let now = Utc::now();
         let stats = make_stats(LifecycleState::Draft, 1, 1, 1, 0, 1.0, false);
-        let s1 = next_state(&stats, now);
-        let s2 = next_state(&stats, now);
+        let s1 = next_state(&stats, now, &LifecycleThresholds::default());
+        let s2 = next_state(&stats, now, &LifecycleThresholds::default());
         assert_eq!(s1, s2);
     }
 
@@ -285,7 +369,10 @@ mod tests {
         let now = Utc::now();
         // Enough successes, age, and rate to reach Canonical (with pin)
         let stats = make_stats(LifecycleState::Draft, 50, 45, 40, 0, 1.0, true);
-        assert_eq!(next_state(&stats, now), LifecycleState::Canonical);
+        assert_eq!(
+            next_state(&stats, now, &LifecycleThresholds::default()),
+            LifecycleState::Canonical
+        );
     }
 
     #[test]
@@ -293,7 +380,10 @@ mod tests {
         let now = Utc::now();
         let stats = make_stats(LifecycleState::Draft, 5, 4, 10, 1, 1.0, false);
         // 5 successes ≥ PROMOTE_DRAFT_USES=3, but not enough age for Stable
-        assert_eq!(next_state(&stats, now), LifecycleState::Emerging);
+        assert_eq!(
+            next_state(&stats, now, &LifecycleThresholds::default()),
+            LifecycleState::Emerging
+        );
     }
 
     #[test]
@@ -301,7 +391,10 @@ mod tests {
         let now = Utc::now();
         let stats = make_stats(LifecycleState::Emerging, 10, 2, 30, 10, 0.5, false);
         // success_rate = 0.2 < 0.3, usage >= 5
-        assert_eq!(next_state(&stats, now), LifecycleState::Deprecated);
+        assert_eq!(
+            next_state(&stats, now, &LifecycleThresholds::default()),
+            LifecycleState::Deprecated
+        );
     }
 
     #[test]
@@ -321,7 +414,7 @@ mod tests {
             ..make_stats(LifecycleState::Stable, 10, 2, 30, 120, 0.5, true)
         };
         // Pinned: should not deprecate despite terrible metrics
-        let state = next_state(&stats, now_fixed);
+        let state = next_state(&stats, now_fixed, &LifecycleThresholds::default());
         assert_ne!(state, LifecycleState::Deprecated);
     }
 

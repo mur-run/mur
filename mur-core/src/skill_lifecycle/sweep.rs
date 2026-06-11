@@ -4,9 +4,10 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use mur_common::skill::event_log::{SkillEvent, event_log_path, read_events};
 use mur_common::skill::lifecycle::{
-    calculate_decay, cap_for_provenance, half_life_days, next_state, on_promotion,
-    transition_allowed,
+    LifecycleThresholds, calculate_decay, cap_for_provenance, half_life_days, next_state,
+    on_promotion, transition_allowed,
 };
 use mur_common::skill::stats::{LifecycleState, SkillStats};
 use std::path::Path;
@@ -18,6 +19,10 @@ pub enum TransitionReason {
     Demotion,
     AutoArchive,
     Deprecation,
+    /// N consecutive workflow-env failures triggered the broken fast-path.
+    BrokenFastPath,
+    /// Archived grace period expired; skill files deleted from disk.
+    Destroyed,
 }
 
 impl std::fmt::Display for TransitionReason {
@@ -27,6 +32,8 @@ impl std::fmt::Display for TransitionReason {
             TransitionReason::Demotion => write!(f, "demotion"),
             TransitionReason::AutoArchive => write!(f, "auto_archive"),
             TransitionReason::Deprecation => write!(f, "deprecation"),
+            TransitionReason::BrokenFastPath => write!(f, "broken_fast_path"),
+            TransitionReason::Destroyed => write!(f, "destroyed"),
         }
     }
 }
@@ -38,6 +45,16 @@ pub struct SweepOptions {
     /// A1 curation gate. When true, LLM-authored uncurated skills are capped
     /// at `Emerging`. Set by the CLI from `config.skills`.
     pub require_human_curation_before_stable: bool,
+    /// Lifecycle scoring thresholds. Derived from `config.skill.lifecycle`
+    /// at the sweep call-site. Defaults to compile-time constants.
+    pub thresholds: LifecycleThresholds,
+    /// P4-1: Number of consecutive trailing `Execution` events with
+    /// `env_class == "workflow"` that immediately forces a `Deprecated`
+    /// transition. 0 = disabled.
+    pub broken_workflow_streak: u32,
+    /// P4-3: Days a skill must remain in `Archived` state before this sweep
+    /// deletes its directory. 0 = disabled.
+    pub archive_destroy_grace_days: i64,
 }
 
 impl Default for SweepOptions {
@@ -47,6 +64,9 @@ impl Default for SweepOptions {
             dry_run: true,
             now: Utc::now(),
             require_human_curation_before_stable: true,
+            thresholds: LifecycleThresholds::default(),
+            broken_workflow_streak: 3,
+            archive_destroy_grace_days: 30,
         }
     }
 }
@@ -57,6 +77,7 @@ pub struct SweepReport {
     pub transitions: Vec<Transition>,
     pub decayed: usize,
     pub archived: usize,
+    pub destroyed: usize,
 }
 
 #[derive(Debug)]
@@ -69,25 +90,47 @@ pub struct Transition {
 
 fn rank(s: LifecycleState) -> u8 {
     match s {
-        LifecycleState::Archived => 0,
-        LifecycleState::Deprecated => 1,
-        LifecycleState::Draft => 2,
-        LifecycleState::Emerging => 3,
-        LifecycleState::Stable => 4,
-        LifecycleState::Canonical => 5,
+        LifecycleState::Destroyed => 0,
+        LifecycleState::Archived => 1,
+        LifecycleState::Deprecated => 2,
+        LifecycleState::Draft => 3,
+        LifecycleState::Emerging => 4,
+        LifecycleState::Stable => 5,
+        LifecycleState::Canonical => 6,
     }
 }
 
-fn classify_reason(
-    _current: &SkillStats,
-    proposed: LifecycleState,
-    _now: DateTime<Utc>,
-) -> TransitionReason {
+fn classify_reason(proposed: LifecycleState) -> TransitionReason {
     match proposed {
         LifecycleState::Archived => TransitionReason::AutoArchive,
         LifecycleState::Deprecated => TransitionReason::Deprecation,
+        LifecycleState::Destroyed => TransitionReason::Destroyed,
         _ => TransitionReason::Promotion,
     }
+}
+
+/// Count the number of trailing consecutive `Execution` events where
+/// `env_class == "workflow"` and outcome is not "success".
+/// A success event or a non-workflow-failure event resets the streak.
+/// Non-Execution events (Retrieval, Dismissed, etc.) are ignored.
+fn consecutive_trailing_workflow_failures(events: &[SkillEvent]) -> u32 {
+    let mut count = 0u32;
+    for event in events.iter().rev() {
+        if let SkillEvent::Execution {
+            env_class, outcome, ..
+        } = event
+        {
+            if outcome == "success" {
+                break; // any success resets the streak
+            }
+            if env_class.as_deref() == Some("workflow") {
+                count += 1;
+            } else {
+                break; // non-workflow failure resets the streak
+            }
+        }
+    }
+    count
 }
 
 pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
@@ -107,18 +150,76 @@ pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
             None => continue, // no stats yet — nothing to sweep
         };
 
-        // Provenance gate (A1): an LLM-authored, uncurated skill cannot rise
-        // above Emerging. Load the manifest for its provenance; a missing
-        // manifest defaults to Human (no cap), matching `#[serde(default)]`.
-        let provenance = mur_common::skill::local::load_installed(home, &name)
-            .map(|m| m.provenance)
-            .unwrap_or_default();
-        let proposed = cap_for_provenance(
-            next_state(&current, opts.now),
-            provenance,
-            current.curated_at.is_some(),
-            opts.require_human_curation_before_stable,
-        );
+        // ── Destroy pass (P4-3) ───────────────────────────────────────────
+        // Archived skills that have exceeded the grace period are hard-deleted.
+        // This runs before the normal transition check so a Destroyed skill
+        // never goes through the promotion/demotion logic.
+        if current.lifecycle_state == LifecycleState::Archived
+            && opts.archive_destroy_grace_days > 0
+        {
+            let grace = chrono::Duration::days(opts.archive_destroy_grace_days);
+            if opts.now - current.lifecycle_changed_at > grace {
+                report.transitions.push(Transition {
+                    skill_name: name.clone(),
+                    from: LifecycleState::Archived,
+                    to: LifecycleState::Destroyed,
+                    reason: TransitionReason::Destroyed,
+                });
+                report.destroyed += 1;
+
+                if !opts.dry_run {
+                    let skill_dir = home.join("skills").join(&name);
+                    if skill_dir.exists() {
+                        std::fs::remove_dir_all(&skill_dir).map_err(|e| {
+                            anyhow::anyhow!("destroy {name}: remove_dir_all failed: {e}")
+                        })?;
+                    }
+                    tracing::info_span!("mur.skill.state_changed",
+                        skill = %name,
+                        from = ?LifecycleState::Archived,
+                        to = ?LifecycleState::Destroyed,
+                        reason = "destroyed",
+                    )
+                    .in_scope(|| tracing::info!("skill directory deleted"));
+                }
+                continue; // skip normal transition for this skill
+            }
+        }
+
+        // ── Broken fast-path (P4-1) ───────────────────────────────────────
+        // If N consecutive Execution events have env_class == "workflow" and
+        // the skill is not already Deprecated/Archived/Destroyed, immediately
+        // force it to Deprecated without waiting for the slow scoring path.
+        let forced_deprecated = if opts.broken_workflow_streak > 0
+            && !matches!(
+                current.lifecycle_state,
+                LifecycleState::Deprecated | LifecycleState::Archived | LifecycleState::Destroyed
+            ) {
+            let events = read_events(&event_log_path(home, &name)).unwrap_or_default();
+            let streak = consecutive_trailing_workflow_failures(&events);
+            streak >= opts.broken_workflow_streak
+        } else {
+            false
+        };
+
+        // ── Normal scoring path ───────────────────────────────────────────
+        let proposed = if forced_deprecated {
+            LifecycleState::Deprecated
+        } else {
+            // Provenance gate (A1): an LLM-authored, uncurated skill cannot rise
+            // above Emerging. Load the manifest for its provenance; a missing
+            // manifest defaults to Human (no cap), matching `#[serde(default)]`.
+            let provenance = mur_common::skill::local::load_installed(home, &name)
+                .map(|m| m.provenance)
+                .unwrap_or_default();
+            cap_for_provenance(
+                next_state(&current, opts.now, &opts.thresholds),
+                provenance,
+                current.curated_at.is_some(),
+                opts.require_human_curation_before_stable,
+            )
+        };
+
         let decayed_value = calculate_decay(
             current.anchor_confidence,
             current.last_success_at,
@@ -127,11 +228,17 @@ pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
         );
         report.decayed += 1;
 
-        if proposed != current.lifecycle_state
-            && transition_allowed(current.lifecycle_state, proposed, &current, opts.now)
-        {
-            let reason = classify_reason(&current, proposed, opts.now);
+        let reason = if forced_deprecated {
+            TransitionReason::BrokenFastPath
+        } else {
+            classify_reason(proposed)
+        };
 
+        let should_transition = proposed != current.lifecycle_state
+            && (forced_deprecated
+                || transition_allowed(current.lifecycle_state, proposed, &current, opts.now));
+
+        if should_transition {
             report.transitions.push(Transition {
                 skill_name: name.clone(),
                 from: current.lifecycle_state,
@@ -178,6 +285,7 @@ pub fn run_sweep(home: &Path, opts: SweepOptions) -> Result<SweepReport> {
 mod tests {
     use super::*;
     use chrono::Duration;
+    use mur_common::skill::event_log::{append_event, event_log_path};
     use mur_common::skill::stats::SkillStats;
 
     fn write_llm_skill(home: &std::path::Path, name: &str) {
@@ -185,6 +293,15 @@ mod tests {
         std::fs::write(
             home.join("skills").join(name).join("skill.yaml"),
             format!("name: {name}\nversion: \"1\"\npublisher: me\ndescription: d\ncategory: workflow\nprovenance: llm\ncontent:\n  abstract: a\n  command: \"echo hi\"\n"),
+        )
+        .unwrap();
+    }
+
+    fn write_human_skill(home: &std::path::Path, name: &str) {
+        std::fs::create_dir_all(home.join("skills").join(name)).unwrap();
+        std::fs::write(
+            home.join("skills").join(name).join("skill.yaml"),
+            format!("name: {name}\nversion: \"1\"\npublisher: me\ndescription: d\ncategory: workflow\ncontent:\n  abstract: a\n  command: \"echo hi\"\n"),
         )
         .unwrap();
     }
@@ -206,6 +323,44 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
     }
 
+    fn emerging_grade_stats(home: &std::path::Path, name: &str, now: chrono::DateTime<Utc>) {
+        let mut s = SkillStats::new(name, "1", "digest", now - Duration::days(10));
+        s.lifecycle_state = LifecycleState::Emerging;
+        s.usage_count = 5;
+        s.success_count = 4;
+        s.last_used_at = Some(now);
+        s.last_success_at = Some(now - Duration::days(2));
+        s.first_successful_use_at = Some(now - Duration::days(10));
+        s.anchor_confidence = 0.8;
+        s.lifecycle_changed_at = now - Duration::days(48); // well past MIN_DWELL_HOURS
+        let path = SkillStats::path(home, name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
+    }
+
+    fn write_workflow_failure_events(
+        home: &std::path::Path,
+        name: &str,
+        count: usize,
+        now: chrono::DateTime<Utc>,
+    ) {
+        for i in 0..count {
+            let event = SkillEvent::Execution {
+                ts: now - Duration::seconds((count - i) as i64),
+                device_id: "test".into(),
+                outcome: "failure".into(),
+                error: Some("workflow step failed".into()),
+                step: None,
+                duration_ms: None,
+                exit_code: Some(1),
+                env_class: Some("workflow".into()),
+                confidence: Some(0.9),
+                trigger: Some("workflow".into()),
+            };
+            append_event(&event_log_path(home, name), &event).unwrap();
+        }
+    }
+
     #[test]
     fn llm_uncurated_skill_is_capped_at_emerging() {
         let tmp = tempfile::tempdir().unwrap();
@@ -221,6 +376,9 @@ mod tests {
                 dry_run: false,
                 now,
                 require_human_curation_before_stable: true,
+                thresholds: LifecycleThresholds::default(),
+                broken_workflow_streak: 3,
+                archive_destroy_grace_days: 30,
             },
         )
         .unwrap();
@@ -255,12 +413,370 @@ mod tests {
                 dry_run: false,
                 now,
                 require_human_curation_before_stable: true,
+                thresholds: LifecycleThresholds::default(),
+                broken_workflow_streak: 3,
+                archive_destroy_grace_days: 30,
             },
         )
         .unwrap();
 
         let after = SkillStats::load(&path).unwrap().unwrap();
         assert_eq!(after.lifecycle_state, LifecycleState::Stable);
+    }
+
+    // ── P4-1: Broken fast-path tests ─────────────────────────────────────
+
+    #[test]
+    fn broken_fast_path_triggers_after_n_workflow_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let now = Utc::now();
+        write_human_skill(home, "build");
+        emerging_grade_stats(home, "build", now);
+        // 3 consecutive workflow failures.
+        write_workflow_failure_events(home, "build", 3, now);
+
+        let report = run_sweep(
+            home,
+            SweepOptions {
+                filter: Some("build".into()),
+                dry_run: false,
+                now,
+                require_human_curation_before_stable: false,
+                thresholds: LifecycleThresholds::default(), // broken_workflow_streak = 3
+                broken_workflow_streak: 3,
+                archive_destroy_grace_days: 30,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.transitions.len(), 1);
+        assert_eq!(report.transitions[0].to, LifecycleState::Deprecated);
+        assert_eq!(
+            report.transitions[0].reason,
+            TransitionReason::BrokenFastPath
+        );
+        let after = SkillStats::load(&SkillStats::path(home, "build"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.lifecycle_state, LifecycleState::Deprecated);
+    }
+
+    #[test]
+    fn broken_fast_path_does_not_trigger_below_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let now = Utc::now();
+        write_human_skill(home, "build");
+        emerging_grade_stats(home, "build", now);
+        // Only 2 workflow failures — below threshold of 3.
+        write_workflow_failure_events(home, "build", 2, now);
+
+        let report = run_sweep(
+            home,
+            SweepOptions {
+                filter: Some("build".into()),
+                dry_run: false,
+                now,
+                require_human_curation_before_stable: false,
+                thresholds: LifecycleThresholds::default(),
+                broken_workflow_streak: 3,
+                archive_destroy_grace_days: 30,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report
+                .transitions
+                .iter()
+                .all(|t| t.reason != TransitionReason::BrokenFastPath),
+            "should not trigger broken fast-path with only 2 failures"
+        );
+    }
+
+    #[test]
+    fn broken_fast_path_reset_by_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let now = Utc::now();
+        write_human_skill(home, "build");
+        emerging_grade_stats(home, "build", now);
+        // 2 failures, then 1 success, then 2 more failures — no streak of 3.
+        write_workflow_failure_events(home, "build", 2, now - Duration::seconds(10));
+        append_event(
+            &event_log_path(home, "build"),
+            &SkillEvent::Execution {
+                ts: now - Duration::seconds(5),
+                device_id: "test".into(),
+                outcome: "success".into(),
+                error: None,
+                step: None,
+                duration_ms: None,
+                exit_code: Some(0),
+                env_class: Some("workflow".into()),
+                confidence: None,
+                trigger: Some("workflow".into()),
+            },
+        )
+        .unwrap();
+        write_workflow_failure_events(home, "build", 2, now);
+
+        let report = run_sweep(
+            home,
+            SweepOptions {
+                filter: Some("build".into()),
+                dry_run: false,
+                now,
+                require_human_curation_before_stable: false,
+                thresholds: LifecycleThresholds::default(),
+                broken_workflow_streak: 3,
+                archive_destroy_grace_days: 30,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report
+                .transitions
+                .iter()
+                .all(|t| t.reason != TransitionReason::BrokenFastPath),
+            "success in the middle should reset the streak"
+        );
+    }
+
+    #[test]
+    fn broken_fast_path_disabled_when_streak_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let now = Utc::now();
+        write_human_skill(home, "build");
+        emerging_grade_stats(home, "build", now);
+        write_workflow_failure_events(home, "build", 10, now);
+
+        let report = run_sweep(
+            home,
+            SweepOptions {
+                filter: Some("build".into()),
+                dry_run: false,
+                now,
+                require_human_curation_before_stable: false,
+                thresholds: LifecycleThresholds::default(),
+                broken_workflow_streak: 0, // disabled — no fast-path trigger
+                archive_destroy_grace_days: 30,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report
+                .transitions
+                .iter()
+                .all(|t| t.reason != TransitionReason::BrokenFastPath),
+            "broken_workflow_streak=0 must disable the fast-path entirely"
+        );
+    }
+
+    // ── P4-3: Destroyed state tests ───────────────────────────────────────
+
+    #[test]
+    fn archived_skill_destroyed_after_grace_period() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let now = Utc::now();
+        write_human_skill(home, "old-skill");
+
+        // Create archived stats with lifecycle_changed_at > 30 days ago.
+        let mut s = SkillStats::new("old-skill", "1", "digest", now - Duration::days(200));
+        s.lifecycle_state = LifecycleState::Archived;
+        s.lifecycle_changed_at = now - Duration::days(35); // > 30 day grace
+        let path = SkillStats::path(home, "old-skill");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
+
+        let skill_dir = home.join("skills").join("old-skill");
+        assert!(skill_dir.exists());
+
+        let report = run_sweep(
+            home,
+            SweepOptions {
+                filter: Some("old-skill".into()),
+                dry_run: false,
+                now,
+                require_human_curation_before_stable: true,
+                thresholds: LifecycleThresholds::default(), // grace = 30 days
+                broken_workflow_streak: 3,
+                archive_destroy_grace_days: 30,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.destroyed, 1);
+        assert_eq!(report.transitions.len(), 1);
+        assert_eq!(report.transitions[0].to, LifecycleState::Destroyed);
+        assert_eq!(report.transitions[0].reason, TransitionReason::Destroyed);
+        // Directory should be gone.
+        assert!(!skill_dir.exists(), "skill directory must be deleted");
+    }
+
+    #[test]
+    fn archived_skill_not_destroyed_within_grace_period() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let now = Utc::now();
+        write_human_skill(home, "fresh-archive");
+
+        let mut s = SkillStats::new("fresh-archive", "1", "digest", now - Duration::days(200));
+        s.lifecycle_state = LifecycleState::Archived;
+        s.lifecycle_changed_at = now - Duration::days(10); // within 30 day grace
+        let path = SkillStats::path(home, "fresh-archive");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
+
+        let report = run_sweep(
+            home,
+            SweepOptions {
+                filter: Some("fresh-archive".into()),
+                dry_run: false,
+                now,
+                require_human_curation_before_stable: true,
+                thresholds: LifecycleThresholds::default(),
+                broken_workflow_streak: 3,
+                archive_destroy_grace_days: 30,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.destroyed, 0);
+        assert!(home.join("skills").join("fresh-archive").exists());
+    }
+
+    #[test]
+    fn archived_skill_not_destroyed_when_grace_disabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let now = Utc::now();
+        write_human_skill(home, "old-skill");
+
+        let mut s = SkillStats::new("old-skill", "1", "digest", now - Duration::days(200));
+        s.lifecycle_state = LifecycleState::Archived;
+        s.lifecycle_changed_at = now - Duration::days(365);
+        let path = SkillStats::path(home, "old-skill");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
+
+        let t = LifecycleThresholds::default();
+        let _ = t;
+
+        let report = run_sweep(
+            home,
+            SweepOptions {
+                filter: Some("old-skill".into()),
+                dry_run: true, // dry-run so we can check without mutating
+                now,
+                require_human_curation_before_stable: true,
+                thresholds: LifecycleThresholds::default(),
+                broken_workflow_streak: 3,
+                archive_destroy_grace_days: 30,
+            },
+        )
+        .unwrap();
+
+        // In dry-run mode the directory must not be removed regardless.
+        assert!(home.join("skills").join("old-skill").exists());
+        // The transition is still reported.
+        assert_eq!(report.destroyed, 1);
+    }
+
+    // ── Unit tests for helper functions ──────────────────────────────────
+
+    #[test]
+    fn consecutive_workflow_failures_counts_tail() {
+        let now = Utc::now();
+        let events = vec![
+            SkillEvent::Execution {
+                ts: now - Duration::seconds(10),
+                device_id: "d".into(),
+                outcome: "success".into(),
+                error: None,
+                step: None,
+                duration_ms: None,
+                exit_code: Some(0),
+                env_class: Some("workflow".into()),
+                confidence: None,
+                trigger: None,
+            },
+            SkillEvent::Execution {
+                ts: now - Duration::seconds(3),
+                device_id: "d".into(),
+                outcome: "failure".into(),
+                error: None,
+                step: None,
+                duration_ms: None,
+                exit_code: Some(1),
+                env_class: Some("workflow".into()),
+                confidence: None,
+                trigger: None,
+            },
+            SkillEvent::Execution {
+                ts: now - Duration::seconds(2),
+                device_id: "d".into(),
+                outcome: "failure".into(),
+                error: None,
+                step: None,
+                duration_ms: None,
+                exit_code: Some(1),
+                env_class: Some("workflow".into()),
+                confidence: None,
+                trigger: None,
+            },
+        ];
+        assert_eq!(consecutive_trailing_workflow_failures(&events), 2);
+    }
+
+    #[test]
+    fn consecutive_workflow_failures_stops_at_non_workflow() {
+        let now = Utc::now();
+        let events = vec![
+            SkillEvent::Execution {
+                ts: now - Duration::seconds(4),
+                device_id: "d".into(),
+                outcome: "failure".into(),
+                error: None,
+                step: None,
+                duration_ms: None,
+                exit_code: Some(1),
+                env_class: Some("workflow".into()),
+                confidence: None,
+                trigger: None,
+            },
+            SkillEvent::Execution {
+                ts: now - Duration::seconds(3),
+                device_id: "d".into(),
+                outcome: "failure".into(),
+                error: None,
+                step: None,
+                duration_ms: None,
+                exit_code: Some(1),
+                env_class: None, // non-workflow failure breaks streak
+                confidence: None,
+                trigger: None,
+            },
+            SkillEvent::Execution {
+                ts: now - Duration::seconds(2),
+                device_id: "d".into(),
+                outcome: "failure".into(),
+                error: None,
+                step: None,
+                duration_ms: None,
+                exit_code: Some(1),
+                env_class: Some("workflow".into()),
+                confidence: None,
+                trigger: None,
+            },
+        ];
+        // Only the final event forms a streak of 1.
+        assert_eq!(consecutive_trailing_workflow_failures(&events), 1);
     }
 }
 

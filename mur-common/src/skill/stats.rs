@@ -31,6 +31,12 @@ pub enum LifecycleState {
     Canonical,
     Deprecated,
     Archived,
+    /// Terminal state: `mur skill sweep` deleted the skill's on-disk directory
+    /// after the `archive_destroy_grace_days` grace period. The stats file
+    /// itself is removed immediately after this transition is written, so this
+    /// variant is never read back from a live install — it only appears
+    /// transiently in `SweepReport::transitions` and in tracing events.
+    Destroyed,
 }
 
 /// Sidecar stats for an installed skill. **Not part of the signed manifest.**
