@@ -129,7 +129,9 @@ mur init                                      # interactive setup wizard
 mur agent create coach --model llama3.2:3b    # create an agent (default provider: ollama)
 mur agent install-service coach               # run it as a launchd/systemd user service
 mur agent cli coach                           # streaming TUI chat with tool approvals
+mur agent cli dev qa ops                      # three agents, tiled panes (tmux/zellij/WezTerm/kitty)
                                               #   --resume continues the last conversation
+murmur coach                                  # quick form (murmur symlink), identical to mur agent cli coach
 ```
 
 <p align="center"><img src="assets/demo.gif" alt="mur agent cli — streaming TUI chat with a local agent" width="92%" /></p>
