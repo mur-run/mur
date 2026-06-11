@@ -56,6 +56,25 @@ objects, harvest proposals are the candidate feed:
 - Spec: `docs/superpowers/specs/2026-05-28-mur-workflow-engine-design-v2.md`
 - Plan: `docs/superpowers/plans/2026-06-11-workflow-engine-w3a-pattern-removal.md`
 
+## Workflow engine P2 — DAG schema + run-ledger (2026-06-11)
+
+Schema/library layer for the v2 executor (P3 follows):
+
+- `ProcedureStep` gains executable-DAG fields: `id`, `depends_on`, `command`,
+  `on_failure`, `retry`, `timeout_secs`, `needs_approval` (all serde-default;
+  step order derives from the dependency topology, decision #1).
+- ONE `Variable` type in `skill::manifest` (typed `VarType`, string `default`
+  with `default_value` alias, `choices`); `workflow::Variable` re-exports it
+  (decision #3). `FailureAction`/`RetryConfig` moved to `skill::manifest`
+  (decision #6 prerequisite).
+- Run-ledger = enriched `SkillEvent::Execution` in the existing per-skill
+  `events.jsonl` (`duration_ms`, `exit_code`, `env_class`, `confidence`,
+  `trigger`); `record_run()` is the write path; `env_class.rs` classifies
+  workflow-vs-environment failures so a flaky network never marks a workflow
+  Broken. Fleet-sync dedup keys are unchanged.
+- `mur skill schema [--out path]` emits the manifest JSON Schema (Hub DAG
+  editor contract).
+
 ## Sources Pipeline (P1.4)
 
 All adapters shipped: Obsidian + Notion + Joplin; `--watch` + `install-schedule`; `format_notes_section` helper ready.

@@ -11,6 +11,12 @@ pub enum SkillAction {
         #[arg(long)]
         warnings_only: bool,
     },
+    /// Emit the JSON Schema of the skill manifest (for the Hub DAG editor).
+    Schema {
+        /// Write to a file instead of stdout
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Convert between canonical YAML and markdown frontmatter.
     Fmt {
         path: String,

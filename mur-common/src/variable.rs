@@ -241,7 +241,7 @@ pub fn collect_workflow_variables(workflow: &crate::workflow::Workflow) -> Vec<S
 pub fn workflow_defaults_map(workflow: &crate::workflow::Workflow) -> BTreeMap<String, String> {
     let mut defaults = BTreeMap::new();
     for v in &workflow.variables {
-        if let Some(ref dv) = v.default_value {
+        if let Some(ref dv) = v.default {
             defaults.insert(v.name.clone(), dv.clone());
         }
     }

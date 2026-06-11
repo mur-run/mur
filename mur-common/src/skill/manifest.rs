@@ -33,7 +33,7 @@ pub struct Skill {
 
 /// Publisher-authored fields. This is what gets signed and is the unit of
 /// content hashing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SkillManifest {
     pub name: String,
     pub version: String,
@@ -88,7 +88,7 @@ pub struct SkillManifest {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Content {
     /// Layer 2 — injected into the system prompt at session start.
     pub r#abstract: String,
@@ -126,27 +126,86 @@ impl Content {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Procedure {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<Variable>,
     pub steps: Vec<ProcedureStep>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Variable {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub var_type: String,
+/// Commander extension: retry configuration for a workflow step.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RetryConfig {
+    pub max_retries: u32,
     #[serde(default)]
-    pub required: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<serde_yaml_ng::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub backoff_secs: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// What to do when a workflow step fails.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FailureAction {
+    /// Skip this step and continue
+    Skip,
+    /// Abort the entire workflow
+    #[default]
+    Abort,
+    /// Retry the step
+    Retry,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+pub struct Variable {
+    pub name: String,
+    #[serde(rename = "type", default)]
+    pub var_type: VarType,
+    #[serde(default)]
+    pub required: bool,
+    /// String-encoded default. `default_value` accepted for legacy workflow YAML.
+    /// Runtime coerces per `var_type` (Number/Bool parsed, Array decoded as
+    /// JSON or comma-separated).
+    #[serde(
+        default,
+        alias = "default_value",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Allowed values (renders as a dropdown in the Hub DAG editor).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+}
+
+/// Variable types for workflow/skill parameters (v2 resolved decision #3:
+/// ONE `Variable` type lives here; `workflow::Variable` re-exports it).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VarType {
+    #[default]
+    String,
+    Path,
+    Url,
+    Number,
+    Bool,
+    /// Array of strings (e.g., multiple URLs, multiple product names)
+    Array,
+}
+
+impl std::fmt::Display for VarType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VarType::String => write!(f, "string"),
+            VarType::Path => write!(f, "path"),
+            VarType::Url => write!(f, "url"),
+            VarType::Number => write!(f, "number"),
+            VarType::Bool => write!(f, "bool"),
+            VarType::Array => write!(f, "array"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProcedureStep {
     pub description: String,
 
@@ -167,9 +226,42 @@ pub struct ProcedureStep {
     /// `mcp_requirements` match for the intent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_hint: Option<String>,
+
+    // ── Executable-DAG fields (workflow-engine v2 P2; all default so every
+    //    existing skill.yaml parses unchanged) ──
+    /// Stable step id for `depends_on` references. When omitted, executors
+    /// assign the zero-based step index as the id at load time (not serialized).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// Step ids this step depends on. Empty = root step. Step order derives
+    /// from the dependency topology, never from list position (v2 decision #1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+
+    /// Shell command (command-mode step), run via `sh -c` with exit-code
+    /// gating. Intent-mode steps leave this None — in pure CLI runs they are
+    /// printed as instructions and marked skipped in the ledger (decision #2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+
+    #[serde(default)]
+    pub on_failure: FailureAction,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+
+    /// Pause for human approval before running. TTY: prompt and wait.
+    /// Non-TTY: auto-skip and mark `skipped_approval` in the ledger; `--yes`
+    /// auto-approves (v2 decision #5). Wired by the P3 executor.
+    #[serde(default)]
+    pub needs_approval: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Trigger {
     #[serde(rename = "type")]
     pub kind: TriggerKind,
@@ -188,7 +280,7 @@ impl Trigger {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Requirement {
     pub name: String,
     #[serde(default = "default_any_version")]
@@ -202,6 +294,62 @@ fn default_any_version() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn procedure_step_dag_fields_roundtrip() {
+        let yaml = r#"
+description: deploy the app
+command: "fly deploy --app {{app_name}}"
+id: deploy
+depends_on: [build, test]
+on_failure: retry
+retry:
+  max_retries: 2
+  backoff_secs: 5
+timeout_secs: 300
+needs_approval: true
+"#;
+        let step: ProcedureStep = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(step.id.as_deref(), Some("deploy"));
+        assert_eq!(step.depends_on, vec!["build", "test"]);
+        assert_eq!(step.on_failure, FailureAction::Retry);
+        assert_eq!(step.retry.as_ref().unwrap().max_retries, 2);
+        assert_eq!(step.timeout_secs, Some(300));
+        assert!(step.needs_approval);
+
+        // Legacy step without any DAG fields parses with defaults.
+        let legacy: ProcedureStep =
+            serde_yaml_ng::from_str("description: run tests\ntool: Bash\n").unwrap();
+        assert!(legacy.id.is_none());
+        assert!(legacy.depends_on.is_empty());
+        assert_eq!(legacy.on_failure, FailureAction::Abort);
+        assert!(!legacy.needs_approval);
+    }
+
+    #[test]
+    fn variable_accepts_legacy_default_value_alias() {
+        // Legacy workflow YAML used `default_value`; the unified type aliases it.
+        let v: Variable = serde_yaml_ng::from_str(
+            "name: app\ntype: string\nrequired: true\ndefault_value: my-api\n",
+        )
+        .unwrap();
+        assert_eq!(v.default.as_deref(), Some("my-api"));
+        assert_eq!(v.var_type, VarType::String);
+
+        // Modern form `default:` parses too, and choices default empty.
+        let v2: Variable =
+            serde_yaml_ng::from_str("name: env\ntype: string\ndefault: prod\n").unwrap();
+        assert_eq!(v2.default.as_deref(), Some("prod"));
+        assert!(v2.choices.is_empty());
+    }
+
+    #[test]
+    fn variable_all_vartypes_parse() {
+        for t in ["string", "path", "url", "number", "bool", "array"] {
+            let v: Variable = serde_yaml_ng::from_str(&format!("name: x\ntype: {t}\n")).unwrap();
+            assert_eq!(v.var_type.to_string(), t);
+        }
+    }
 
     #[test]
     fn full_manifest_roundtrips() {

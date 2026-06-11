@@ -4,6 +4,7 @@ pub mod aggregator;
 pub mod capability;
 pub mod constraint;
 pub mod credit;
+pub mod env_class;
 pub mod event_log;
 pub mod evolution;
 pub mod gene;

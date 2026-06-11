@@ -377,7 +377,7 @@ fn build_skeleton_summary(extracted: &ExtractedWorkflow) -> String {
                 "  - {} ({}): {}\n",
                 var.name,
                 format!("{:?}", var.var_type).to_lowercase(),
-                var.description
+                var.description.as_deref().unwrap_or("")
             ));
         }
     }
@@ -467,8 +467,9 @@ fn build_workflow_from_llm(
             name: v.name.clone(),
             var_type: VarType::String,
             required: true,
-            default_value: v.default_value.clone(),
-            description: v.description.clone(),
+            default: v.default_value.clone(),
+            description: Some(v.description.clone()),
+            choices: vec![],
         })
         .collect();
 
