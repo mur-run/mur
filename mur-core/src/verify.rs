@@ -764,8 +764,8 @@ mod tests {
 
     #[test]
     fn test_extract_code_refs_fn() {
-        let refs = extract_code_refs("calls `fn score_and_rank_hybrid()` for ranking");
-        assert!(refs.contains(&"fn score_and_rank_hybrid".to_string()));
+        let refs = extract_code_refs("calls `fn score_and_rank_generic()` for ranking");
+        assert!(refs.contains(&"fn score_and_rank_generic".to_string()));
     }
 
     #[test]

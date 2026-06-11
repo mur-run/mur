@@ -124,11 +124,11 @@ pub async fn cmd_search_unified(
 /// source-retrieval section still renders.
 #[cfg(feature = "sources")]
 async fn existing_pattern_search_names(query: &str) -> anyhow::Result<Vec<(String, f64)>> {
-    use crate::{retrieve::scoring::score_and_rank, store::yaml::YamlStore};
+    use crate::{retrieve::scoring::score_and_rank_generic, store::yaml::YamlStore};
 
     let store = YamlStore::default_store()?;
     let patterns = store.list_all()?;
-    let scored = score_and_rank(query, patterns);
+    let scored = score_and_rank_generic(query, patterns);
     let results = scored
         .into_iter()
         .map(|sp| (sp.item.name.clone(), sp.score))

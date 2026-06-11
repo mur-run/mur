@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::federation::snapshot::read_snapshot_ref;
-use crate::retrieve::scoring::score_and_rank_with_config;
+use crate::retrieve::scoring::score_and_rank_generic_with_config;
 use crate::store::yaml::YamlStore;
 
 pub fn cmd_eval_run(suite: &str, format: &str) -> Result<i32> {
@@ -333,7 +333,7 @@ fn run_retrieval_eval(format: &str) -> Result<i32> {
     let mut results: Vec<QueryResult> = Vec::new();
 
     for (query, expected) in &queries {
-        let scored = score_and_rank_with_config(query, patterns.clone(), &config);
+        let scored = score_and_rank_generic_with_config(query, patterns.clone(), &config);
         let rank = scored
             .iter()
             .position(|sp| sp.item.name == *expected)

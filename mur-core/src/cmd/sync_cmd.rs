@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use mur_common::pattern::*;
 
 use crate::capture;
 use crate::inject;
@@ -591,8 +590,7 @@ pub(crate) async fn device_sync(
                     if !quiet {
                         eprintln!("  📤 Git push...");
                     }
-                    let _ =
-                        run_git_in(&mur_dir, &["add", "patterns/", "workflows/", "config.yaml"]);
+                    let _ = run_git_in(&mur_dir, &["add", "skills/", "workflows/", "config.yaml"]);
                     let commit_result =
                         run_git_in(&mur_dir, &["commit", "-m", "mur: auto-sync patterns"]);
                     // Commit may fail if nothing changed — that's fine
@@ -687,38 +685,16 @@ fn apply_cloud_pull_v2(
     response: &mur_common::sync_types::SyncPullResponse,
     mur_dir: &std::path::Path,
 ) -> Result<()> {
-    let patterns_dir = mur_dir.join("patterns");
-    std::fs::create_dir_all(&patterns_dir)?;
-    for p in &response.patterns {
-        let safe_name = sanitize_pattern_name(&p.name);
-        if safe_name.is_empty() {
-            tracing::warn!("Skipping pattern with empty/invalid name: {:?}", p.name);
-            continue;
-        }
-        let path = patterns_dir.join(format!("{}.yaml", safe_name));
-        if !path.starts_with(&patterns_dir) {
-            tracing::warn!("Path traversal detected for pattern: {:?}", p.name);
-            continue;
-        }
-        if p.deleted {
-            let _ = std::fs::remove_file(&path);
-        } else {
-            std::fs::write(&path, &p.content)?;
-        }
+    // Legacy cloud pattern payloads are ignored (workflow-engine v2 P1a removed
+    // the pattern pipeline); skills/workflows sync via their own channels.
+    if !response.patterns.is_empty() {
+        tracing::debug!(
+            "ignoring {} legacy cloud pattern payload(s)",
+            response.patterns.len()
+        );
     }
+    let _ = mur_dir;
     Ok(())
-}
-
-fn sanitize_pattern_name(name: &str) -> String {
-    if name.is_empty() || name.contains("..") || name.contains('\0') {
-        return String::new();
-    }
-    let safe = name.replace(['/', '\\', '.', '~'], "_");
-    if safe.starts_with('-') {
-        String::new()
-    } else {
-        safe
-    }
 }
 
 /// Build change list for cloud push by comparing local patterns dir with
@@ -915,8 +891,7 @@ fn md5_simple(s: &str) -> u64 {
 }
 
 pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str>) -> Result<()> {
-    use crate::retrieve::scoring::score_and_rank;
-    use inject::sync::{default_targets, generate_sync_content, write_sync_file};
+    use inject::sync::{default_targets, generate_sync_content_from_items, write_sync_file};
 
     // ─── Heartbeat: register device activity ──────────────────
     crate::auth::heartbeat();
@@ -929,13 +904,15 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
         eprintln!("  ⚠ Device sync error: {}", e);
     }
 
-    let store = YamlStore::default_store()?;
+    // Skills are the sync content source (workflow-engine v2 P1b).
+    let mur_dir = mur_common::trust::mur_home();
+    let candidates =
+        crate::retrieve::skill_candidates::load_skill_candidates(&mur_dir.join("skills"), &mur_dir)
+            .unwrap_or_default();
 
-    let patterns = store.list_all()?;
-
-    if patterns.is_empty() {
+    if candidates.is_empty() {
         if !quiet {
-            println!("No patterns to sync.");
+            println!("No skills to sync.");
         }
         return Ok(());
     }
@@ -964,60 +941,27 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
             continue;
         }
 
-        let mut scored = score_and_rank(&sync_query, patterns.clone());
+        let scored =
+            crate::retrieve::scoring::score_and_rank_generic(&sync_query, candidates.clone());
 
-        // When project-aware, additionally boost patterns whose applies.projects
-        // or tags.languages match the current project
-        if project_aware {
-            let detected_lang = capture::starter::detect_language_name(&cwd);
-            for sp in &mut scored {
-                let p = &sp.item;
-                // Boost patterns that explicitly list this project
-                if p.applies
-                    .projects
-                    .iter()
-                    .any(|proj| proj == &project_name || proj == "*")
-                {
-                    sp.score *= 1.3;
-                }
-                // Boost patterns matching detected language
-                if let Some(ref lang) = detected_lang {
-                    let lang_lower = lang.to_lowercase();
-                    if p.tags
-                        .languages
-                        .iter()
-                        .any(|l| l.to_lowercase() == lang_lower)
-                        || p.applies
-                            .languages
-                            .iter()
-                            .any(|l| l.to_lowercase() == lang_lower)
-                    {
-                        sp.score *= 1.2;
-                    }
-                }
-            }
-            scored.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-
-        let top: Vec<Pattern> = scored
+        let top: Vec<crate::inject::hook::InjectedItem> = scored
             .into_iter()
+            .filter(|s| {
+                s.item.stats.lifecycle_state != mur_common::skill::stats::LifecycleState::Archived
+            })
             .take(target.max_patterns)
-            .map(|sp| sp.item)
+            .map(|s| s.item.to_injected_item())
             .collect();
 
         if top.is_empty() {
             continue;
         }
 
-        let content = generate_sync_content(&top, &target.format);
+        let content = generate_sync_content_from_items(&top, &target.format);
         write_sync_file(&target_path, &content, &target.format)?;
         if !quiet {
             println!(
-                "  {} — wrote {} patterns to {}",
+                "  {} — wrote {} skills to {}",
                 target.name,
                 top.len(),
                 target_path.display()

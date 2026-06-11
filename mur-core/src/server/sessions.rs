@@ -134,12 +134,9 @@ pub(super) async fn get_session(
             (None, None, None, None, None, None, None)
         };
 
-    // Load fingerprints for this session
-    let fingerprints = crate::capture::emergence::load_fingerprints()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|fp| fp.session_id == id)
-        .collect();
+    // Fingerprint mining was removed (workflow-engine v2 P1a); the field stays
+    // empty for Hub response compatibility.
+    let fingerprints = Vec::new();
 
     Ok(wrap(
         SessionDetail {

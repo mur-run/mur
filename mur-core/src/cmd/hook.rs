@@ -337,17 +337,8 @@ fn spawn_background_pipeline() {
 
     // evolve + emerge are slow; spawn them sequentially-in-background via a detached child
     // Use separate spawn() calls instead of sh -c to avoid path-with-spaces issues
-    let _ = std::process::Command::new(&mur_bin)
-        .arg("evolve")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-
-    let _ = std::process::Command::new(&mur_bin)
-        .arg("emerge")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    // (`mur evolve` / `mur emerge` spawns removed — those subcommands never
+    // existed; the spawns failed silently on every Stop hook. v2 P1a cleanup.)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

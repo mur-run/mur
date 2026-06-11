@@ -224,6 +224,13 @@ pub enum Commands {
     },
     /// Manage shared model registry (~/.mur/models.yaml)
     Model(cmd::model::ModelArgs),
+    /// One-shot data migrations (workflow-engine v2)
+    #[command(hide = true)]
+    Migrate {
+        /// Export ~/.mur/patterns to markdown, then delete patterns + fingerprints
+        #[arg(long)]
+        patterns: bool,
+    },
     /// Verify documentation claims (paths, commands, code refs) against actual codebase
     Verify {
         /// Specific file to verify (default: scan all docs)
