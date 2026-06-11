@@ -51,7 +51,7 @@ pub async fn cmd_cli(names: &[String], resume: bool, auto: bool) -> Result<()> {
         let names = names.to_vec();
         return tokio::task::spawn_blocking(move || multiplex::run(&names, resume, auto)).await?;
     }
-    let name = &names[0];
+    let name = names.first().context("at least one agent name required")?;
     let home = super::resolve_mur_home()?;
     let agent = canonicalize_agent_name(&home, name);
 
