@@ -294,6 +294,21 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
     if !output.is_empty() {
         print!("{output}");
     }
+
+    // §3.8 tier-1: one-line harvest hint (config-gated, zero tokens — counts files only).
+    let hint_enabled = crate::store::config::load_config()
+        .map(|c| c.harvest.session_start_hint)
+        .unwrap_or(true);
+    if hint_enabled
+        && let Ok(pending) =
+            crate::harvest::proposal::pending_in_dir(&crate::harvest::proposal::inbox_dir())
+        && !pending.is_empty()
+    {
+        println!(
+            "📥 {} workflow proposal(s) pending — run `mur out` to review.",
+            pending.len()
+        );
+    }
     Ok(())
 }
 
