@@ -31,6 +31,23 @@ pub enum SkillEvent {
         error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
+        // ── Run-ledger enrichment (workflow-engine v2 P2; all default so
+        //    existing events.jsonl lines keep parsing and fleet-sync's
+        //    dedup_key (ts+kind+device) is unaffected) ──
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        /// "workflow" (the skill is broken) | "env" (network/credentials/…).
+        /// The Broken fast-path (P4) only triggers on "workflow" with
+        /// confidence ≥ threshold.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env_class: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confidence: Option<f64>,
+        /// "manual" | "schedule" | "agent"
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trigger: Option<String>,
     },
     Dismissed {
         ts: DateTime<Utc>,
@@ -170,6 +187,39 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[test]
+    fn legacy_execution_line_parses_and_enriched_roundtrips() {
+        // Pre-P2 line without the run-ledger fields must keep parsing.
+        let legacy = r#"{"kind":"execution","ts":"2026-05-30T00:00:00Z","device_id":"d","outcome":"success"}"#;
+        let ev: SkillEvent = serde_json::from_str(legacy).unwrap();
+        match &ev {
+            SkillEvent::Execution { duration_ms, env_class, .. } => {
+                assert!(duration_ms.is_none());
+                assert!(env_class.is_none());
+            }
+            _ => panic!("wrong kind"),
+        }
+
+        // Enriched event round-trips.
+        let enriched = SkillEvent::Execution {
+            ts: chrono::DateTime::from_timestamp(1_748_000_000, 0).unwrap(),
+            device_id: "d".into(),
+            outcome: "failure".into(),
+            error: Some("boom".into()),
+            step: Some("deploy".into()),
+            duration_ms: Some(8421),
+            exit_code: Some(1),
+            env_class: Some("workflow".into()),
+            confidence: Some(0.6),
+            trigger: Some("manual".into()),
+        };
+        let line = serde_json::to_string(&enriched).unwrap();
+        let back: SkillEvent = serde_json::from_str(&line).unwrap();
+        assert_eq!(back, enriched);
+        // dedup_key shape unchanged (ts+kind+device) — fleet-sync compatible.
+        assert!(enriched.dedup_key().ends_with(":execution:d"));
+    }
+
     fn device() -> String {
         "dev-a".into()
     }
@@ -190,6 +240,11 @@ mod tests {
             outcome: "success".into(),
             error: None,
             step: None,
+            duration_ms: None,
+            exit_code: None,
+            env_class: None,
+            confidence: None,
+            trigger: None,
         }
     }
 
@@ -201,6 +256,11 @@ mod tests {
             outcome: "failure".into(),
             error: Some("oops".into()),
             step: None,
+            duration_ms: None,
+            exit_code: None,
+            env_class: None,
+            confidence: None,
+            trigger: None,
         }
     }
 
