@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MUR Ambient Capture &amp; Harvest — mur in / mur out / Server Workflow 重新設計</title>
+<style>
+  :root {
+    --ink: #1a1d23;
+    --ink-soft: #4b5363;
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --accent: #5b5bd6;
+    --accent-soft: #eceffd;
+    --green: #1a7f4b;  --green-bg: #e8f5ee;
+    --red: #b3362c;    --red-bg: #fbeae8;
+    --amber: #92600a;  --amber-bg: #fdf3df;
+    --blue: #1d5fad;   --blue-bg: #e9f1fb;
+    --line: #e4e7ec;
+    --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "PingFang TC", "Noto Sans TC", -apple-system, "Helvetica Neue", sans-serif;
+    line-height: 1.75; font-size: 16px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 28px 96px; }
+  header.hero {
+    background: linear-gradient(135deg, #23244d 0%, #3c3d8f 55%, #5b5bd6 100%);
+    color: #fff; border-radius: 18px; padding: 44px 44px 38px; margin-bottom: 36px;
+  }
+  header.hero h1 { margin: 0 0 10px; font-size: 30px; line-height: 1.35; letter-spacing: .01em; }
+  header.hero .sub { opacity: .85; font-size: 15px; }
+  header.hero .meta { margin-top: 18px; font-size: 13px; opacity: .75; }
+  header.hero .meta code { background: rgba(255,255,255,.14); padding: 2px 8px; border-radius: 6px; font-family: var(--mono); }
+  .tldr {
+    background: var(--card); border: 1px solid var(--line); border-left: 5px solid var(--accent);
+    border-radius: 12px; padding: 22px 26px; margin-bottom: 34px; font-size: 17px;
+  }
+  .tldr strong { color: var(--accent); }
+  nav.toc {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 22px; margin-bottom: 40px; font-size: 14px;
+    display: flex; flex-wrap: wrap; gap: 6px 18px;
+  }
+  nav.toc a { color: var(--accent); text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+  h2 {
+    font-size: 23px; margin: 52px 0 18px; padding-bottom: 8px;
+    border-bottom: 2px solid var(--line);
+  }
+  h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 10px; font-size: 19px; }
+  h3 { font-size: 18px; margin: 32px 0 12px; }
+  p { margin: 12px 0; }
+  section.card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 28px 32px; margin-bottom: 8px;
+  }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: #3d3d99; padding: 1px 6px; border-radius: 5px; }
+  pre {
+    background: #15171e; color: #d6dae3; border-radius: 10px; padding: 18px 20px;
+    overflow-x: auto; font-size: 13.5px; line-height: 1.65;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14.5px; background: var(--card); }
+  th { background: var(--accent-soft); color: #34357a; text-align: left; padding: 10px 14px; border: 1px solid var(--line); }
+  td { padding: 10px 14px; border: 1px solid var(--line); vertical-align: top; }
+  tr:nth-child(even) td { background: #fafbfd; }
+  ul { padding-left: 24px; }
+  li { margin: 8px 0; }
+  .pill {
+    display: inline-block; font-size: 12px; font-weight: 600; border-radius: 999px;
+    padding: 2px 12px; margin-right: 8px; vertical-align: 2px;
+  }
+  .pill.ok { background: var(--green-bg); color: var(--green); }
+  .pill.warn { background: var(--amber-bg); color: var(--amber); }
+  .pill.bad { background: var(--red-bg); color: var(--red); }
+  .pill.info { background: var(--blue-bg); color: var(--blue); }
+  .diag { border-left: 4px solid var(--red); background: var(--red-bg); border-radius: 8px; padding: 14px 18px; margin: 14px 0; }
+  .diag b { color: var(--red); }
+  .callout { border-left: 4px solid var(--blue); background: var(--blue-bg); border-radius: 8px; padding: 14px 18px; margin: 14px 0; }
+  .swot { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 20px; }
+  .swot .q { border-radius: 14px; padding: 22px 24px; border: 1px solid var(--line); }
+  .swot h3 { margin: 0 0 6px; font-size: 17px; display: flex; align-items: center; gap: 10px; }
+  .swot .tag { font-family: var(--mono); font-size: 22px; font-weight: 800; width: 40px; height: 40px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; }
+  .swot .S { background: var(--green-bg); } .swot .S .tag { background: var(--green); color: #fff; } .swot .S h3 { color: var(--green); }
+  .swot .W { background: var(--amber-bg); } .swot .W .tag { background: var(--amber); color: #fff; } .swot .W h3 { color: var(--amber); }
+  .swot .O { background: var(--blue-bg); } .swot .O .tag { background: var(--blue); color: #fff; } .swot .O h3 { color: var(--blue); }
+  .swot .T { background: var(--red-bg); } .swot .T .tag { background: var(--red); color: #fff; } .swot .T h3 { color: var(--red); }
+  .swot ul { padding-left: 20px; font-size: 14.5px; }
+  .swot li { margin: 9px 0; }
+  .flow {
+    background: #15171e; color: #c8cede; border-radius: 10px; padding: 16px 20px;
+    font-family: var(--mono); font-size: 13.5px; overflow-x: auto; white-space: nowrap;
+  }
+  .flow .hl { color: #8be9a8; }
+  .verdict {
+    background: linear-gradient(135deg, #23244d, #3c3d8f); color: #fff;
+    border-radius: 14px; padding: 26px 30px; margin-top: 30px; font-size: 16px;
+  }
+  .verdict b { color: #ffd479; }
+  footer { margin-top: 56px; font-size: 13px; color: var(--ink-soft); }
+  footer a { color: var(--accent); }
+  @media (max-width: 720px) {
+    .swot { grid-template-columns: 1fr; }
+    header.hero { padding: 30px 24px; }
+    section.card { padding: 22px 20px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>MUR Ambient Capture &amp; Harvest<br><span style="font-size:21px;opacity:.92">「mur in / mur out / Server Workflow」重新設計</span></h1>
+  <div class="sub">永遠在錄、事後收穫 — 把學習子系統的供給端接上燃料管</div>
+  <div class="meta">Status: <code>proposed</code> · Date: <code>2026-06-11</code> · Author: david + Claude Fable 5 · 對應 spec: <code>2026-06-11-mur-ambient-capture-and-harvest-design.md</code></div>
+</header>
+
+<div class="tldr">
+  <strong>TL;DR — 一個翻轉:</strong>今天的 <code>mur in</code>/<code>mur out</code> 是「先按錄影、後求價值」;重新設計把它翻成「<strong>永遠在錄、事後收穫</strong>」。<code>mur in</code> 不再是開關(錄製常駐),<code>mur out</code> 從「停止錄製」變成「審閱收件匣」。這是唯一真正的概念變更,其餘全部疊在已核准的 workflow-engine v2 spec 和現有程式碼上。<br>
+  新的心智模型:<b><code>in</code> = 把注意力放進來(標記),<code>out</code> = 把學到的拿出來(收穫)</b>。
+</div>
+
+<nav class="toc">
+  <a href="#diag">1 現況診斷</a>
+  <a href="#research">2 外部最佳實踐</a>
+  <a href="#design">3 新設計</a>
+  <a href="#phases">4 落地階段</a>
+  <a href="#risks">5 風險</a>
+  <a href="#eco">6 生態影響</a>
+  <a href="#swot">7 SWOT</a>
+  <a href="#sources">來源</a>
+</nav>
+
+<h2 id="diag"><span class="no">1</span>現況診斷 — 為什麼今天的設計救不起來</h2>
+<section class="card">
+  <div class="diag"><b>① 雙重脆弱的錄製鏈。</b><code>mur in</code>(<code>session.rs:291</code>)只寫 <code>active.json</code>;真正的事件寫入靠 AI 代理自己呼叫 <code>mur session record</code>(<code>dispatch.rs:205</code>)。錄到東西需要兩個前提同時成立:使用者<b>事前</b>記得 <code>mur in</code>(前瞻記憶,人類最弱的記憶形式)+ 代理整場乖乖逐事件回報。任一斷掉,session 永遠消失。</div>
+  <div class="diag"><b>② 價值時刻的預設是放棄。</b><code>mur out</code> 互動選單(<code>session.rs:415-419</code>)預設選項是 <b>Skip</b>。即使全做對了,按 Enter 的結果是什麼都不留下。</div>
+  <div class="diag"><b>③ 全域單一 active session。</b>兩個平行 Claude session 會交錯寫進同一份錄製檔,資料直接污染。</div>
+  <div class="diag"><b>④ 最諷刺:ambient 通道早就存在。</b>已安裝的 hooks 在<b>每一次</b> prompt/tool call 都跑 <code>mur hook prompt|tool|stop</code>,事件已以 <code>NormalizedEvent</code>(含 <code>session_id</code>,支援 claude/gemini/cursor/copilot/opencode 五家)寫進 <code>~/.mur/queue/events.jsonl</code>。<b>MUR 已經在 ambient 錄製,只是錄的東西沒餵給學習管線。</b></div>
+  <div class="diag"><b>⑤ v2 spec 已核准但未動工。</b>Workflow = <code>category: Workflow</code> 的 Skill、移除 Pattern、run-ledger、LLM 抽取僅供建議(SkillsBench:LLM 自產 +0.0pp vs 人工 curation +16.2pp)。git log 確認 P1a–P8 都還沒開始。<b>本設計不推翻 v2,而是把 in/out 重新接到它前面</b>,順便解掉 v2 自己的 cold-start 問題。</div>
+  <div class="diag"><b>⑥ Server 端零件比想像中齊。</b><code>/api/v1/workflows</code> CRUD+publish、Commander <code>executions</code> 回報、fleet push/pull 都已存在;Rust 端 per-skill <code>events.jsonl</code> 的 <b>set-union 合併已實作</b>(<code>fleet_sync.rs:261</code>)— 多機 run-ledger 同步其實已被解掉一半。</div>
+</section>
+
+<h2 id="research"><span class="no">2</span>外部最佳實踐(研究結論)</h2>
+<section class="card">
+  <table>
+    <tr><th style="width:30%">來源</th><th>與本設計相關的結論</th></tr>
+    <tr><td><a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">Anthropic — Agent Skills</a></td><td>Skill 以人工撰寫為主、漸進式揭露三層(MUR 已有同構實作);「代理自己寫 skill」明確列為未來式</td></tr>
+    <tr><td><a href="https://docs.devin.ai/product-guides/creating-playbooks">Devin — Playbooks</a></td><td>程序(playbook)是<b>手寫</b>的;自動學的只有事實型 Knowledge — 程序與事實分開治理</td></tr>
+    <tr><td><a href="https://docs.mem0.ai/core-concepts/memory-operations">mem0 — Memory Operations</a></td><td>蒸餾三段式:extract → conflict-resolve(latest-truth-wins)→ store;記憶可視、可改、可刪是信任前提</td></tr>
+    <tr><td>ChatGPT memory / Claude Code auto-memory</td><td><b>沒有任何主流產品要求使用者「先按錄影」</b> — 全部 ambient 擷取 + 事後蒸餾 + 使用者可審</td></tr>
+    <tr><td>Durable execution(Temporal / Inngest / GH Actions)</td><td>server-run workflow 可信的前提:run 是一等公民、HITL 閘門可暫停恢復、版本化、稽核軌跡</td></tr>
+  </table>
+  <div class="callout">業界共識與 v2 修正案 A1(LLM 抽取僅 advisory、晉升需人工 curation)完全一致 — 重新設計沿用此原則。</div>
+</section>
+
+<h2 id="design"><span class="no">3</span>新設計</h2>
+
+<section class="card">
+  <h3>3.1 Capture:錄製常駐(廢除「開始錄製」這個動作)</h3>
+  <ul>
+    <li><code>mur hook prompt|tool|stop</code> 直接寫 <code>~/.mur/session/recordings/&lt;session_id&gt;.jsonl</code>,以 hook 的 <code>session_id</code> 分檔 — 順帶根治平行 session 交錯。<code>active.json</code> 不再是錄製閘門。</li>
+    <li>事件按 v2 Layer 1 增補:<code>exit_code</code>、<code>working_dir</code>、<code>git_branch</code>。</li>
+    <li><code>Stop</code> hook 開始解析 <code>transcript_path</code>(現在完全沒用到),補上 assistant turn 摘要 — 抽取品質的主要來源。</li>
+    <li>寫入時即跑 <code>session/scrub.rs</code>(已存在)去除秘密。</li>
+  </ul>
+<pre><code>session:
+  capture: ambient          # ambient | manual | off(per-project 可覆寫)
+  retention_days: 14        # 到期由 daemon GC
+harvest:
+  auto_gate: true           # session 結束時由 murmurd 跑 gate
+  llm: local-first          # local | cloud | off</code></pre>
+</section>
+
+<section class="card">
+  <h3>3.2 <code>mur out</code> = 收穫(harvest),不再是「停止」</h3>
+<pre><code>$ mur out
+◆ 3 sessions since last harvest (2 worth reviewing)
+
+  1. "fix hub dark-mode contrast"   47 events · 22m · repeatable ✓
+     → proposed workflow: hub-css-fix-verify (5 steps, 1 variable)
+  2. "release v2.22.20"             31 events · 11m · repeatable ✓
+     → proposed workflow: mur-release (4 steps, matches existing 87%)
+       ⚠ near-duplicate of existing `mur-release` — propose merge
+
+  [a]ccept &amp; edit  [s]kip  [d]iff  [q]uit</code></pre>
+  <ul>
+    <li>Session 結束 → murmurd 背景跑 <b>gate</b>(啟發式 + config 閾值,LLM 可選)→ 產生 <b>proposal</b> 放 <code>~/.mur/inbox/workflow-proposals/</code>。</li>
+    <li><code>mur out</code> 審閱收件匣:accept 寫入 draft(<code>provenance: llm</code>,人工編輯後轉 <code>hybrid</code>,永不自動晉升)。<b>預設動作從 Skip 翻成 Review。</b></li>
+    <li>與 companion workflow nudge spec 直接相容:nudge payload 就是同一份 proposal;CLI fallback 即 <code>mur out</code>。</li>
+    <li>mem0 式去重:proposal 先和既有 workflow 比對(向量 + 步驟骨架),相似度高提「合併/升 confidence」而非開新檔。</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h3>3.3 <code>mur in</code> = 標記(保留指令,換掉語意)</h3>
+  <p><code>mur in</code> 不刪(向下相容),變成<b>重點標記</b>:對當前 session 標 <code>marked: true</code>,harvest gate 對 marked session 直接放行。<code>mur out --action analyze|export|skip</code> 維持原行為,腳本不會壞。</p>
+</section>
+
+<section class="card">
+  <h3>3.4 執行與生命週期:照 v2 spec,不重新發明</h3>
+  <p>DAG steps、unified executor、<code>runs.jsonl</code> run-ledger、餵進現有 lifecycle 狀態機、Broken fast-path、<code>mur skill audit</code> — 全部維持 v2 原案(P2–P4、P8)。本設計貢獻它缺的東西:<b>穩定的 session 供給端</b>(ambient capture 直接解掉 cold-start)。</p>
+</section>
+
+<section class="card">
+  <h3>3.5 MUR Server 上的 Workflow 故事</h3>
+  <div class="callout"><b>原則:執行永遠在本地(local-first 是護城河),server 負責四件事 — registry、run 歷史、排程派工、治理稽核。</b>全部疊在現有零件上。</div>
+  <ol>
+    <li><b>Registry(發佈/安裝)</b> — 沿用 <code>/api/v1/workflows</code>;published 物即為 <code>category: Workflow</code> skill 的 YAML,沿用 DSSE 簽章。</li>
+    <li><b>Run 歷史(信任的基礎)</b> — 本地 <code>runs.jsonl</code> 經 fleet sync push(set-union 合併已實作);dashboard 顯示跨機 run 統計;團隊層級 lifecycle:N 個成員 run 成功才升團隊 Stable。</li>
+    <li><b>排程派工(server 不執行,只派工)</b> — server cron 到點 → Commander 簽章派工信封(Ed25519,C7 已用過)→ A2A 送 agent runtime → 本地執行 → <code>POST /api/v1/commander/executions</code> 回報。<code>needs_approval</code> 步驟觸發 Hub HITL(Phase 3 正在開發,時程剛好接上)。</li>
+    <li><b>回饋閉環</b> — 用已凍結的 Signal v1 wire protocol:補實作 mur-daemon 的 <code>POST /v1/signals/batch</code>,遠端 run 證據回灌本地 lifecycle。</li>
+  </ol>
+  <div class="flow">個人 draft → <span class="hl">(人工 curation)</span> → Stable → publish 到 team registry → <span class="hl">(團隊 run 數據)</span> → 團隊 Canonical → Commander 排程派工 + 稽核</div>
+  <p style="margin-top:10px;font-size:14px;color:var(--ink-soft)">每一段都對應一個已存在的子系統。</p>
+</section>
+
+<section class="card">
+  <h3>3.6 隱私與資源</h3>
+  <ul>
+    <li>寫入時 scrub + <code>retention_days</code> GC + per-project <code>capture: off</code> — ambient 的三道安全閥。</li>
+    <li>Gate 預設走啟發式,LLM 只在本地模型可用或明確開 cloud 時介入 — ambient ≠ 燒 token。</li>
+    <li>Hook 延遲:append 一行 JSONL 是 O(1),prompt hook 已是 async — 不影響打字手感。</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h3>3.7 Token 預算與雲端 LLM 成本模型</h3>
+  <div class="callout"><b>「錄」和「算」完全解耦:錄製本身 0 token。</b>Hooks 是純本地 I/O(JSON 解析 + JSONL append),沒有任何逐事件的 LLM 呼叫。Token 只可能在收穫階段產生,且有三道閘門擋在前面。</div>
+  <table>
+    <tr><th>階段</th><th>觸發頻率</th><th>預設成本</th></tr>
+    <tr><td>Capture(hooks 寫檔)</td><td>每個事件</td><td><b>0</b>(純本地 I/O)</td></tr>
+    <tr><td>Gate(值得收穫嗎?)</td><td>每場 session 結束一次</td><td><b>0</b> — 啟發式規則,不是 LLM</td></tr>
+    <tr><td>Extract(產生 proposal)</td><td>只有通過 gate 的 session</td><td>唯一花 token 的地方,受 <code>harvest.llm</code> 控制</td></tr>
+  </table>
+  <p><code>harvest.llm: local-first</code>(預設)只用本地模型;<b>雲端要使用者明確開啟才會碰</b> — 雲端用戶在預設值下 ambient 錄製一毛 token 都不花。單次 Extract 成本與今天的 <code>mur out --action analyze</code> 完全相同;新設計改變的是「頻率」,而頻率被以下三道防線綁死:</p>
+  <ol>
+    <li><b>Lazy extraction(延遲抽取)。</b><code>harvest.llm: cloud</code> 時,session 結束只跑零成本的啟發式 gate,把「候選」(骨架 + metadata,不經 LLM)排進收件匣;昂貴的 Extract 延後到使用者打開 <code>mur out</code> 那一刻才批次執行。沒人看收件匣就一毛不花 — <b>token 花費和使用者的注意力綁定,不和錄製量綁定</b>。</li>
+    <li><b>先去重、再抽取。</b>和既有 workflow / 待審 proposal 的步驟骨架相似度比對在 Extract <b>之前</b>本地完成。已知流程的重複出現永不重抽 — 只升既有條目的 <code>usage_count</code>/confidence(v2 的跨 session 訊號),零 token。只有真正新穎的骨架才會碰到 LLM。</li>
+    <li><b>硬上限。</b>新 config(全部可調,符合 Mandatory Rule #1):</li>
+  </ol>
+<pre><code>harvest:
+  llm: local-first            # local | cloud | off
+  max_llm_calls_per_day: 10   # Extract 額度;gate 永遠免費
+  max_extract_input_tokens: 12000   # 骨架超過即截斷
+  model_tier: cheap           # cheap | default — 抽取結果反正有人工 curation 把關,
+                              # Haiku 級就夠;錯誤在審閱時被抓</code></pre>
+  <p style="margin-top:10px"><code>mur in</code> 標記過的 session 優先消耗每日額度(使用者宣告的重要性優先於啟發式排序)。</p>
+  <p><b>數量級估算</b>(明確開 cloud 的重度用戶):一天 10 場 session、gate 放行 2–3 場、單次 Extract ≈ 5–15k in / ~1k out → 一天 ~30k tokens。Haiku 級 ≈ <b>每月 $1–2</b>;Sonnet 級也只 $4–5/月。餵給 LLM 的永遠不是原始錄製檔 — noise filter + 去字面值骨架化(v2 Layer 2)先跑,Extract 輸入因此有界。</p>
+</section>
+
+<section class="card">
+  <h3>3.8 注意力通道與通知政策</h3>
+  <div class="callout"><b>為什麼需要這一節:</b>本設計在 capture 端消滅了前瞻記憶;如果收件匣是純 pull(要記得跑 <code>mur out</code>),同一個 bug 只是搬到 harvest 端 — 而沒人審的 proposal 一文不值(curation 是價值閘門)。主動 surfacing 是設計的一部分,問題只在通道選擇。注意:companion nudge spec(2026-05-29)已提供大部分機制 — idle 偵測、DND/Focus 檢查、<code>nudge.daily_cap</code>、snooze/dismiss 帳本、CLI fallback。</div>
+  <table>
+    <tr><th>順位</th><th>通道</th><th>理由</th></tr>
+    <tr><td><b>1</b></td><td><b>SessionStart 注入提示</b>(新增,W2 出貨)</td><td>MUR 獨有的注意力面:hook 本來就在 session 開始注入 context,加一行「📥 2 workflow proposals pending — run <code>mur out</code>」。保證被看到、零打擾(task boundary 是中斷成本最低的時刻)、不需 OS 權限、CLI-only 用戶也吃得到</td></tr>
+    <tr><td><b>2</b></td><td><b>Companion 氣泡</b>(照 nudge spec Unit 4,不變)</td><td>idle tick + DND 檢查 + 氣泡上直接三鍵 Save / Not now / No thanks — 比「點通知→進 dashboard」少一次 context switch,且是差異化資產;把主動時刻讓給 OS 通知會稀釋 companion 存在的理由</td></tr>
+    <tr><td><b>3</b></td><td><b>OS 系統通知</b>(只做沉睡用戶 fallback;optional、延後)</td><td>觸發條件:有高信心 proposal <b>且</b> 連續 <code>os_dormant_days</code> 天沒有 mur session(順位 1 沒機會觸發)<b>且</b> Hub 沒在跑(順位 2 沒機會觸發)。是喚回通道,不是日常通道</td></tr>
+  </table>
+  <p><b>順位 3 如果做,的規則:</b></p>
+  <ul>
+    <li><b>Digest,絕不逐則</b>(「MUR 整理了 3 個可重複的工作流程」)。</li>
+    <li><b>Deep link 到審閱頁</b>(Hub 收件匣那一筆或 dashboard inbox view),不是 dashboard 首頁 — 少一步是一步。</li>
+    <li><b>自殺規則(最重要):</b>連續 2 次被忽略(顯示了但沒點)→ 自動停發,退回 <code>mur out</code>/<code>mur doctor</code> 的被動提及。通知疲勞的終局是使用者去 OS 設定永久關掉你 — 那個通道死了就回不來,寧可自己先閉嘴。</li>
+    <li>頻率上限獨立於 <code>nudge.daily_cap</code>(≤1/週);idle + DND 複用 <code>voice/dnd.rs</code>;零 token(內容來自 skeleton candidates — §3.7 的 lazy extraction 在點進來之後才跑)。</li>
+  </ul>
+<pre><code>notify:
+  session_start_hint: true    # 順位 1 — SessionStart 一行提示
+  os_fallback: auto           # auto | off — 順位 3,只打沉睡用戶
+  os_dormant_days: 3
+  os_max_per_week: 1
+  os_self_silence_after: 2    # 連續被忽略 → 停發</code></pre>
+  <p><b>決定:</b>順位 1 在 W2 出貨(約半天,解掉 ~80% 的注意力問題);順位 2 照既有 nudge spec;順位 3 延後到 W2 上線後看數據 — 如果 SessionStart hint 的收件匣開啟率已夠高,順位 3 永遠不用做。</p>
+</section>
+
+<h2 id="phases"><span class="no">4</span>落地階段(每段獨立可出貨、PR-sized)</h2>
+<section class="card">
+  <table>
+    <tr><th>階段</th><th>內容</th><th>主要改動點</th><th>估時</th></tr>
+    <tr><td><b>W1 capture 翻轉</b></td><td>hooks 直寫 per-session recordings + Layer 1 增補 + scrub + retention GC;<code>mur in</code> 轉 marker</td><td><code>cmd/hook.rs</code>、<code>session/mod.rs</code>、<code>inject/event.rs</code></td><td>3–4d</td></tr>
+    <tr><td><b>W2 harvest 收件匣</b></td><td>murmurd gate → proposals;<code>mur out</code> 審閱 UI;近似去重;nudge 接點;§3.7 成本防線(lazy extract、先去重、硬上限);§3.8 順位 1 SessionStart 提示</td><td><code>cmd/session.rs</code>、daemon、<code>create_draft_workflow</code>(已有)</td><td>1wk</td></tr>
+    <tr><td><b>W3 執行+生命週期</b></td><td>= v2 spec P1a/P1b + P2–P4(Pattern 移除、DAG、ledger、lifecycle)</td><td>照 v2 原案</td><td>~3.5wk</td></tr>
+    <tr><td><b>W4 server runs</b></td><td>fleet 同步 run events;dashboard run 歷史;團隊 lifecycle 視圖</td><td><code>fleet_sync.rs</code>(多半已有)、mur-server dashboard</td><td>1wk</td></tr>
+    <tr><td><b>W5 排程派工+HITL</b></td><td>server cron → Commander 簽章派工 → 本地執行回報;<code>/v1/signals/batch</code>;Hub HITL</td><td>mur-daemon、commander handler、Hub</td><td>1.5–2wk</td></tr>
+  </table>
+  <div class="callout"><b>W1+W2 兩週內就能讓使用者「感覺到」產品變了</b>:不用記得任何指令,session 結束後 MUR 主動說「我學到了這個,要留嗎?」— 這就是 payoff moment。</div>
+</section>
+
+<h2 id="risks"><span class="no">5</span>風險</h2>
+<section class="card">
+  <ul>
+    <li><span class="pill bad">最大</span><b>Proposal 噪音:</b>gate 閾值全走 config;連續被 skip 的 proposal 類型降權;寧可漏報不可騷擾。</li>
+    <li><span class="pill warn">觀感</span><b>隱私感受:</b><code>mur init --hooks</code> 時明示告知 + 一行 config 可關;<code>mur session list/show/remove</code> 提供可視性與刪除權。</li>
+    <li><span class="pill info">排序</span><b>W3 依賴:</b>W2 的 accept 先寫現行 <code>Workflow</code> 型別,P7 migration 一併轉 skill — 避免 W2 被 v2 大工程卡住。</li>
+    <li><span class="pill info">協作</span><b>Commander 是閉源另一團隊:</b>W5 派工信封格式比照 Signal v1 先 freeze 再並行開發。</li>
+  </ul>
+</section>
+
+<h2 id="eco"><span class="no">6</span>對 MUR Agent 生態的幫助 — 結構性的,不是加分題</h2>
+<section class="card">
+  <div class="callout"><b>這個設計解的是整個生態最致命的問題:學習子系統沒有供給。</b>160 個 pattern 的 <code>injection_count == 0</code>(v2 親自驗屍)、lifecycle 晉升門檻對單人實際不可達、v2 cold-start 依賴的手動路徑正是餵不進資料的原因。<code>evolve/</code>、<code>retrieve/</code>、skill lifecycle、3-layer injector 這整套引擎現在是<b>空轉的</b>。Ambient capture 等於接上燃料管。</div>
+  <ul>
+    <li><b>Agent 之間的知識流動成立了。</b>收穫出的 workflow skill 走現有 runtime injector 注入所有 agent、走 skill peers/A2A 在 agent 間轉移、走 fleet sync 跨機複製。管道都在,缺的就是入水口。</li>
+    <li><b>Export-to-app 的價值密度。</b>agent 值得送人的理由是它<b>累積的程序性知識</b>。沒有 harvest,匯出的是模板;有 harvest,匯出的是「我調教了三個月的 agent」— 這才有 viral 的理由。</li>
+    <li><b>Commander 拿到可治理的對象。</b>Provenance(session → llm draft → human curated → signed publish → governed dispatch)是完整證據鏈 — 企業買單的正是「這個自動化是哪來的、誰核准的、跑了幾次、何時壞的」。</li>
+    <li><b>變現模型直接受益。</b>Pro 首個付費點是同步「已演化的 fleet」— harvest 正是製造已演化狀態的機器;Team 的 shared registry 也需要 workflow 供給才不是空櫃子。</li>
+    <li><b>Companion 的 retention 時刻。</b>「我注意到你這週用同樣步驟 deploy 了三次,要存起來嗎?」是 companion 少數真正有用的主動發言。</li>
+  </ul>
+  <p style="color:var(--ink-soft)"><b>誠實的反面:</b>它不直接增強 runtime 能力(A2A、sandbox、voice 不受影響),效益全經「內容供給」間接傳導;若 curation UX 失敗、收件匣堆積,雜訊 skill 會讓 agent 劣化到比沒有還差(Library Drift 實證)— 人工 curation 閘門是這個設計的安全帶,不是官僚程序。</p>
+</section>
+
+<h2 id="swot"><span class="no">7</span>SWOT vs 競品</h2>
+<section class="card">
+  <p style="font-size:14px;color:var(--ink-soft)">比較對象:Claude Code(auto-memory/skills)、Devin(playbooks/knowledge)、Cursor(memories)、mem0/Zep/Letta(記憶基礎設施)、Archon(workflow harness)、n8n/Zapier(workflow SaaS)。</p>
+  <div class="swot">
+    <div class="q S">
+      <h3><span class="tag">S</span>Strengths 優勢</h3>
+      <ul>
+        <li><b>唯一打通全鏈:</b>ambient 擷取 → 人工 curation → 可執行 workflow → 證據驅動生命週期 → 跨機同步 → 治理派工,一條鏈在一個 local-first stack。競品各佔一段:mem0 只做事實、Devin playbook 手寫、Claude Code memory 不可執行、n8n 不會從行為學、Archon 要手寫 YAML。</li>
+        <li><b>跨廠商中立:</b>hooks 已接五家工具。廠商彼此不會幫對手聚合資料,這個位置他們結構上進不來。</li>
+        <li><b>Local-first 讓 ambient 正當:</b>「全程錄製」只有資料不出機器才賣得出去;邊際成本 ≈ 0 的免費層,雲端對手撐不起。</li>
+        <li><b>證據驅動退場:</b>run-ledger + outcome-driven retirement 是全行業忽略的環節(Library Drift),MUR 狀態機已寫好,只缺數據。</li>
+        <li><b>上市速度:</b>hooks、skill 子系統、fleet sync、executions API 全部已存在;W1+W2 兩週見效。</li>
+      </ul>
+    </div>
+    <div class="q W">
+      <h3><span class="tag">W</span>Weaknesses 劣勢</h3>
+      <ul>
+        <li><b>價值卡在 curation 紀律。</b>SkillsBench:LLM 自產 +0.0pp、人工 +16.2pp — 使用者不審收件匣,功能客觀上沒價值。收件匣可能變成另一個被忽略的通知堆(頭號產品風險)。</li>
+        <li><b>安裝摩擦 vs 內建功能。</b>要裝 <code>mur</code> + hooks;Claude Code memory 開箱即用。中立性的代價是永遠是「第三方」。</li>
+        <li><b>Hook API 是別人家的地基。</b>五家 schema 都是移動標靶,任一家改版斷一條供給線。</li>
+        <li><b>單人開發頻寬</b> vs W1–W5 面寬;抽取品質依賴本地模型。</li>
+      </ul>
+    </div>
+    <div class="q O">
+      <h3><span class="tag">O</span>Opportunities 機會</h3>
+      <ul>
+        <li><b>「agent 記憶的 Plaid」位置。</b>模型廠商吸收 harness 層,但不會做跨廠商記憶聚合 — 中立記憶層是廠商留下的真空。</li>
+        <li><b>agentskills.io 開放標準:</b>workflow skill 可輸出標準格式,「帶得走的程序記憶」— 互通性是中立玩家最好的武器。</li>
+        <li><b>治理合規需求上升</b>(EU AI Act 等):程序 provenance + 不可竄改稽核,企業願意為「誰教會了我的 agent」付錢。</li>
+        <li><b>本地模型持續變強 = 抽取品質免費上升。</b>設計綁定 local-first,搭硬體/模型曲線便車。</li>
+      </ul>
+    </div>
+    <div class="q T">
+      <h3><span class="tag">T</span>Threats 威脅</h3>
+      <ul>
+        <li><b>最大威脅:Anthropic/OpenAI 原生化。</b>Anthropic 已公開說 agent 自建 skill 是方向;Claude Code 一旦內建 session→skill 抽取,單工具故事被吸收。防線只有三條:跨廠商聚合(他們不會)、本地隱私(他們不願 — 殺 token 營收)、治理深度(他們還沒)。</li>
+        <li><b>「永遠在錄」觀感風險。</b>即使全本地,被誤解一次很難洗白 — 明示同意、一行關閉、可視可刪必須是第一級功能。</li>
+        <li><b>記憶基礎設施公司向程序延伸</b>(mem0/Zep/Letta);廠商 ToS 收緊第三方 hooks 的尾部風險。</li>
+      </ul>
+    </div>
+  </div>
+  <div class="verdict">
+    <b>一句話總結:</b>這個設計把定位 spec 裡寫著「already half-built、product work = polishing」的核心差異化(record-and-mine)真正落地,是生態飛輪的供給端;SWOT 的勝負手不在功能本身,而在 <b>(a)</b> curation UX 能不能讓人願意按 accept、<b>(b)</b> 跨廠商+本地隱私+治理這三條護城河講得夠不夠快 — 因為「單工具內的同款功能」幾乎確定會被模型廠商做掉。
+  </div>
+</section>
+
+<footer id="sources">
+  <b>Sources:</b>
+  <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">Anthropic — Agent Skills engineering</a> ·
+  <a href="https://docs.devin.ai/product-guides/creating-playbooks">Devin — Creating Playbooks</a> ·
+  <a href="https://docs.mem0.ai/core-concepts/memory-operations">mem0 — Memory Operations</a> ·
+  SkillsBench (arXiv 2604.01687) · Library Drift (arXiv 2605.19576) — via v2 spec amendment 2026-05-29
+  <br><br>
+  英文正式版 spec:<code>docs/superpowers/specs/2026-06-11-mur-ambient-capture-and-harvest-design.md</code>
+</footer>
+
+</div>
+</body>
+</html>
