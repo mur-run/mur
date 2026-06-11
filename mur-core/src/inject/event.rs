@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
+    #[default]
     Prompt,
     Tool,
     Stop,
@@ -12,7 +13,7 @@ pub enum EventKind {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NormalizedEvent {
     pub kind: EventKind,
     pub tool_provider: String,
@@ -21,6 +22,16 @@ pub struct NormalizedEvent {
     pub tool_input: Option<Value>,
     pub stop_reason: Option<String>,
     pub session_id: Option<String>,
+    /// Claude Code Stop payloads carry the transcript path; used to recover the
+    /// last assistant message for ambient capture (spec §3.1).
+    #[serde(default)]
+    pub transcript_path: Option<String>,
+    /// PostToolUse result payload (claude); exit_code is extracted from it.
+    #[serde(default)]
+    pub tool_response: Option<Value>,
+    /// Hook-reported working directory.
+    #[serde(default)]
+    pub cwd: Option<String>,
     /// Wall-clock duration of the hook invocation, in milliseconds.
     /// None for events written at entry (before processing completes).
     #[serde(default)]
@@ -63,6 +74,12 @@ fn parse_claude(raw: Value, kind: EventKind) -> NormalizedEvent {
             .get("session_id")
             .and_then(|v| v.as_str())
             .map(str::to_owned),
+        transcript_path: raw
+            .get("transcript_path")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
+        tool_response: raw.get("tool_response").cloned(),
+        cwd: raw.get("cwd").and_then(|v| v.as_str()).map(str::to_owned),
         duration_ms: None,
         is_duration_record: false,
     }
@@ -89,6 +106,9 @@ fn parse_gemini(raw: Value, kind: EventKind) -> NormalizedEvent {
             .get("session_id")
             .and_then(|v| v.as_str())
             .map(str::to_owned),
+        transcript_path: None,
+        tool_response: None,
+        cwd: None,
         duration_ms: None,
         is_duration_record: false,
     }
@@ -113,6 +133,9 @@ fn parse_cursor(raw: Value, kind: EventKind) -> NormalizedEvent {
             .and_then(|v| v.as_str())
             .map(str::to_owned),
         session_id: None, // Cursor hooks do not expose a session identifier
+        transcript_path: None,
+        tool_response: None,
+        cwd: None,
         duration_ms: None,
         is_duration_record: false,
     }
@@ -134,6 +157,9 @@ fn parse_copilot(raw: Value, kind: EventKind) -> NormalizedEvent {
         tool_input,
         stop_reason: None, // Copilot stop events arrive as separate sessionEnd hooks
         session_id: None,  // Copilot does not surface session ID in hook payloads
+        transcript_path: None,
+        tool_response: None,
+        cwd: None,
         duration_ms: None,
         is_duration_record: false,
     }
@@ -159,6 +185,9 @@ fn parse_opencode(raw: Value, kind: EventKind) -> NormalizedEvent {
             .and_then(|s| s.get("id"))
             .and_then(|v| v.as_str())
             .map(str::to_owned),
+        transcript_path: None,
+        tool_response: None,
+        cwd: None,
         duration_ms: None,
         is_duration_record: false,
     }
@@ -168,6 +197,33 @@ fn parse_opencode(raw: Value, kind: EventKind) -> NormalizedEvent {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parse_claude_captures_enrichment_fields() {
+        let raw = json!({
+            "session_id": "s1",
+            "transcript_path": "/tmp/t.jsonl",
+            "cwd": "/repo",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cargo build"},
+            "tool_response": {"stdout": "ok", "exit_code": 0}
+        });
+        let ev = parse_event(raw, EventKind::Tool, "claude");
+        assert_eq!(ev.transcript_path.as_deref(), Some("/tmp/t.jsonl"));
+        assert_eq!(ev.cwd.as_deref(), Some("/repo"));
+        assert_eq!(ev.tool_response.as_ref().unwrap()["exit_code"], 0);
+    }
+
+    #[test]
+    fn old_queue_lines_still_deserialize() {
+        // Queue lines written before this change lack the new fields.
+        let line = r#"{"kind":"tool","tool_provider":"claude","query":null,"tool_called":"Bash",
+            "tool_input":null,"stop_reason":null,"session_id":"s1"}"#;
+        let ev: NormalizedEvent = serde_json::from_str(line).unwrap();
+        assert!(ev.transcript_path.is_none());
+        assert!(ev.tool_response.is_none());
+        assert!(ev.cwd.is_none());
+    }
 
     #[test]
     fn parse_claude_prompt() {
