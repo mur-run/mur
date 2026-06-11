@@ -358,6 +358,11 @@ pub(crate) fn cmd_session_gc() -> anyhow::Result<()> {
     if removed > 0 {
         eprintln!("session gc: removed {} expired recording(s)", removed);
     }
+    if let Ok(report) = crate::harvest::scan()
+        && report.proposed > 0
+    {
+        eprintln!("harvest: {} new workflow proposal(s)", report.proposed);
+    }
     Ok(())
 }
 
