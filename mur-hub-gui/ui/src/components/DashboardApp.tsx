@@ -95,6 +95,7 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
     if (e.button !== 0) return;
     mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
     holdTimer.current = setTimeout(() => {
+      holdTimer.current = null;
       setDragging(true);
       setGhostPos({ x: e.screenX, y: e.screenY });
       cursorOutsideRef.current = false;
@@ -106,6 +107,19 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
       clearTimeout(holdTimer.current);
       holdTimer.current = null;
     }
+  }
+
+  // A natural press-and-drag leaves the card before the hold timer fires; treat
+  // that as entering the drag instead of cancelling, or the pet can never spawn.
+  function leaveCard(e: React.MouseEvent) {
+    if (holdTimer.current && (e.buttons & 1) !== 0) {
+      cancelHold();
+      setDragging(true);
+      setGhostPos({ x: e.screenX, y: e.screenY });
+      cursorOutsideRef.current = false;
+      return;
+    }
+    cancelHold();
   }
 
   useEffect(() => {
@@ -156,7 +170,7 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
         data-agent={agent.name}
         onMouseDown={startHold}
         onMouseUp={cancelHold}
-        onMouseLeave={cancelHold}
+        onMouseLeave={leaveCard}
         onClick={() => setSelected(isSelected ? null : agent.name)}
       >
         <div className="grid-card__head">

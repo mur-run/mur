@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useT } from "../i18n";
 
@@ -22,6 +21,7 @@ interface BubbleState {
 }
 
 const CLICK_MS = 300;
+const DRAG_THRESHOLD_PX = 4;
 
 export function PetApp() {
   const { t } = useT();
@@ -31,7 +31,7 @@ export function PetApp() {
   const [bubble, setBubble] = useState<BubbleState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu>({ visible: false, x: 0, y: 0 });
   const clickTimeRef = useRef<number>(0);
-  const isDraggingRef = useRef(false);
+  const pressRef = useRef<{ x: number; y: number } | null>(null);
 
   // Load expression image whenever expression changes.
   useEffect(() => {
@@ -40,9 +40,11 @@ export function PetApp() {
     });
   }, [agentName, expression]);
 
-  // Listen for expression changes from the backend state machine.
+  // Listen for expression changes from the backend state machine. The listener
+  // must be window-targeted: a global listen() (target Any) would also receive
+  // the events emit_to() sends to every other pet.
   useEffect(() => {
-    const unsub = listen<string>("pet-expression", (ev) => {
+    const unsub = getCurrentWindow().listen<string>("pet-expression", (ev) => {
       setExpression(ev.payload);
     });
     return () => { unsub.then((f) => f()); };
@@ -50,7 +52,7 @@ export function PetApp() {
 
   // Listen for bubble messages from the backend.
   useEffect(() => {
-    const unsub = listen<string>("pet-bubble", (ev) => {
+    const unsub = getCurrentWindow().listen<string>("pet-bubble", (ev) => {
       if (ev.payload) {
         setBubble({ text: ev.payload, dwell_ms: 6000, ack_required: false });
       } else {
@@ -90,20 +92,32 @@ export function PetApp() {
     return () => window.removeEventListener("keydown", onKey);
   }, [bubble]);
 
+  // Click vs drag: a native startDragging() on mousedown would swallow the
+  // mouseup (the window server owns the drag loop), so clicks could never be
+  // detected. Only hand off to the native drag once the cursor actually moves.
   function handleMouseDown(e: React.MouseEvent) {
     if (e.button !== 0) return;
     clickTimeRef.current = Date.now();
-    isDraggingRef.current = false;
-    getCurrentWindow().startDragging().then(() => {
-      isDraggingRef.current = true;
-    }).catch(() => {});
+    pressRef.current = { x: e.screenX, y: e.screenY };
+  }
+
+  function handleMouseMove(e: React.MouseEvent) {
+    const press = pressRef.current;
+    if (!press || (e.buttons & 1) === 0) return;
+    if (
+      Math.abs(e.screenX - press.x) + Math.abs(e.screenY - press.y) >
+      DRAG_THRESHOLD_PX
+    ) {
+      pressRef.current = null;
+      getCurrentWindow().startDragging().catch(() => {});
+    }
   }
 
   function handleMouseUp() {
-    if (!isDraggingRef.current && Date.now() - clickTimeRef.current < CLICK_MS) {
+    if (pressRef.current && Date.now() - clickTimeRef.current < CLICK_MS) {
       invoke("hub_emit_event", { agentName, eventName: "user.click.pet" }).catch(() => {});
     }
-    isDraggingRef.current = false;
+    pressRef.current = null;
   }
 
   function handleContextMenu(e: React.MouseEvent) {
@@ -145,6 +159,7 @@ export function PetApp() {
       <div
         className={`pet-sprite pet-sprite--${expression}`}
         onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
       >
         {imageSrc ? (

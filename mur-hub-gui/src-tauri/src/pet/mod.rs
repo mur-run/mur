@@ -54,14 +54,6 @@ fn valid_agent(agent_name: &str) -> bool {
     mur_common::agent_name::validate_agent_name(agent_name).is_ok()
 }
 
-fn load_position(agent_name: &str) -> Option<PetPosition> {
-    if !valid_agent(agent_name) {
-        return None;
-    }
-    let data = std::fs::read_to_string(pet_position_path(agent_name)).ok()?;
-    serde_json::from_str(&data).ok()
-}
-
 fn save_position(agent_name: &str, pos: &PetPosition) {
     if !valid_agent(agent_name) {
         return;
@@ -167,11 +159,14 @@ pub fn pet_spawn_at(
         pets.remove(&agent_name);
     }
 
-    let pos = load_position(&agent_name).unwrap_or(PetPosition {
+    // The explicit drop point always wins over a previously saved position — a
+    // stale save could point at a display that no longer exists. Persistence is
+    // left to pet_reposition, the single writer.
+    let pos = PetPosition {
         x: screen_x,
         y: screen_y,
         display_id: None,
-    });
+    };
 
     let url_path = format!("index.html#/pet/{}", urlenc(&agent_name));
 
@@ -347,4 +342,45 @@ fn urlenc(s: &str) -> String {
             }
         })
         .collect()
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    /// Pet windows live outside the `dashboard`/`popover` capabilities; without
+    /// their own capability the ACL silently denies `listen()`/`startDragging()`
+    /// and the pet is inert. Guard the capability file so it can't regress.
+    #[test]
+    fn pet_capability_covers_pet_windows() {
+        let text = include_str!("../../capabilities/pet.json");
+        let cap: serde_json::Value = serde_json::from_str(text).unwrap();
+
+        let windows: Vec<&str> = cap["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|w| w.as_str())
+            .collect();
+        assert!(
+            windows.contains(&"pet-*"),
+            "capability must match pet-* windows"
+        );
+
+        let perms: Vec<&str> = cap["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p.as_str())
+            .collect();
+        // Every plugin command PetApp.tsx calls; app-defined commands need no ACL.
+        for perm in [
+            "core:event:allow-listen",
+            "core:event:allow-unlisten",
+            "core:window:allow-outer-position",
+            "core:window:allow-start-dragging",
+        ] {
+            assert!(perms.contains(&perm), "pet windows need {perm}");
+        }
+    }
 }
