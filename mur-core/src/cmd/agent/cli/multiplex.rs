@@ -78,6 +78,12 @@ mod tests {
         // $TMUX beats $WEZTERM_PANE (tmux running inside WezTerm).
         let d = detect(env_of(&["TMUX", "WEZTERM_PANE"]), |_| false);
         assert_eq!(d, Some(Backend::TmuxInside));
+        // $ZELLIJ beats $WEZTERM_PANE (zellij running inside WezTerm).
+        let d = detect(env_of(&["ZELLIJ", "WEZTERM_PANE"]), |_| false);
+        assert_eq!(d, Some(Backend::ZellijInside));
+        // Contract is "present ⇒ inside", not "non-empty ⇒ inside".
+        let d = detect(|_| Some(String::new()), |_| false);
+        assert_eq!(d, Some(Backend::TmuxInside));
     }
 
     #[test]
