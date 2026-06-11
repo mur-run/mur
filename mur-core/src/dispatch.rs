@@ -1051,7 +1051,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
         AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
         AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
-        AgentAction::Cli { name, resume, auto } => cmd::agent::cmd_cli(&name, resume, auto).await?,
+        AgentAction::Cli {
+            names,
+            resume,
+            auto,
+        } => cmd::agent::cmd_cli(&names, resume, auto).await?,
         AgentAction::Pair { name } => cmd::agent_pair::cmd_pair(&name)?,
         AgentAction::Rekey {
             name,
