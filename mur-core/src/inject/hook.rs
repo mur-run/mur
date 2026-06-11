@@ -370,7 +370,7 @@ pub fn format_workflow_entry(workflow: &Workflow, index: usize) -> String {
 }
 
 /// Format scored skills and workflows for injection. Mirrors
-/// `format_unified_injection_with_store` but for the skill corpus.
+/// the removed pattern formatter, but for the skill corpus.
 pub fn format_skills_for_injection(
     skills: &[crate::retrieve::scoring::Scored<crate::retrieve::skill_candidates::LoadedSkill>],
     workflows: &[Workflow],
@@ -408,56 +408,6 @@ pub fn format_skills_for_injection(
         token_count += entry_tokens;
         index += 1;
     }
-    output.trim_end().to_string()
-}
-
-/// Format both patterns and workflows with optional store for diagram resolution.
-pub fn format_unified_injection_with_store(
-    patterns: &[Pattern],
-    workflows: &[Workflow],
-    max_tokens: usize,
-    store: Option<&YamlStore>,
-) -> String {
-    if patterns.is_empty() && workflows.is_empty() {
-        return String::new();
-    }
-
-    // When there are no workflows, delegate to the kind-aware formatter so that
-    // Preference/Behavioral patterns render as bullets and Procedure patterns
-    // render as steps instead of generic numbered entries.
-    if workflows.is_empty() {
-        return format_for_injection_with_store(patterns, max_tokens, store);
-    }
-
-    let mut output = String::from("## Relevant knowledge from your learning history\n\n");
-    let mut token_count = output.len() / 4;
-    let mut index = 1;
-
-    // Patterns first
-    for pattern in patterns {
-        let entry = format_pattern_entry(pattern, index, store);
-        let entry_tokens = entry.len() / 4;
-        if token_count + entry_tokens > max_tokens && index > 1 {
-            break;
-        }
-        output.push_str(&entry);
-        output.push('\n');
-        token_count += entry_tokens;
-        index += 1;
-    }
-
-    // Then workflows — guard with the same budget check
-    for workflow in workflows {
-        let entry = format_workflow_entry(workflow, index);
-        let entry_tokens = entry.len() / 4;
-        if token_count + entry_tokens > max_tokens && index > 1 {
-            break;
-        }
-        output.push_str(&entry);
-        token_count += entry_tokens;
-        index += 1;
-    }
-
     output.trim_end().to_string()
 }
 
@@ -647,74 +597,6 @@ pub fn record_cooccurrence_for_items(items: &[InjectedItem]) {
     }
 }
 
-// ── Pattern-based record functions ────────────────────────────────────
-
-/// Record which patterns were injected to `~/.mur/last_injection.json`.
-///
-/// Called after a successful injection so `mur feedback auto` can later
-/// analyze the session transcript against these patterns.
-pub fn record_injection(query: &str, project: &str, patterns: &[Pattern]) {
-    let records: Vec<InjectedPatternRecord> = patterns
-        .iter()
-        .map(|p| {
-            let full_text = p.content.as_text();
-            let snippet = if full_text.len() > 100 {
-                let end = full_text
-                    .char_indices()
-                    .take_while(|(i, _)| *i <= 100)
-                    .last()
-                    .map(|(i, c)| i + c.len_utf8())
-                    .unwrap_or(full_text.len().min(100));
-                format!("{}...", &full_text[..end])
-            } else {
-                full_text.into_owned()
-            };
-            InjectedPatternRecord {
-                name: p.name.clone(),
-                snippet,
-            }
-        })
-        .collect();
-
-    let record = InjectionRecord {
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        query: query.to_string(),
-        project: project.to_string(),
-        patterns: records,
-    };
-
-    // Best-effort: don't fail injection if recording fails
-    if let Err(e) = write_injection_record(&record) {
-        eprintln!("# Warning: failed to write injection record: {}", e);
-    }
-}
-
-/// Record co-occurrence of injected patterns to `~/.mur/cooccurrence.json`.
-///
-/// Called after a successful injection so the co-occurrence matrix tracks
-/// which patterns appear together in the same session.
-pub fn record_cooccurrence_for_injection(patterns: &[Pattern]) {
-    if patterns.len() < 2 {
-        return;
-    }
-
-    let path = CooccurrenceMatrix::default_path();
-    let mut matrix = match CooccurrenceMatrix::load(&path) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("# Warning: failed to load cooccurrence matrix: {}", e);
-            CooccurrenceMatrix::new()
-        }
-    };
-
-    let names: Vec<String> = patterns.iter().map(|p| p.name.clone()).collect();
-    matrix.record_cooccurrence(&names);
-
-    if let Err(e) = matrix.save(&path) {
-        eprintln!("# Warning: failed to save cooccurrence matrix: {}", e);
-    }
-}
-
 fn format_content(content: &Content) -> String {
     match content {
         Content::DualLayer {
@@ -770,7 +652,7 @@ pub fn format_notes_section(hits: &[crate::store::vector::Hit]) -> String {
 /// are swallowed (returns empty vec) so injection never fails due to sources.
 ///
 /// Wiring into the main inject entry is deferred: the top-level inject
-/// functions (`format_for_injection_with_store`, `format_unified_injection_with_store`)
+/// functions (`format_for_injection_with_store`)
 /// are synchronous, and making them async touches several callers across the
 /// codebase. The recommended approach for a follow-up task is to either:
 ///   (a) make the inject entry async and call this directly, or
@@ -1018,23 +900,6 @@ mod tests {
         assert!(entry.contains("Run tests"));
     }
 
-    #[test]
-    fn test_unified_injection() {
-        let patterns = vec![make_pattern("Use testing", "Use @Test macro")];
-        let workflows = vec![make_workflow("Deploy flow")];
-        let result = format_unified_injection_with_store(&patterns, &workflows, 5000, None);
-        assert!(result.contains("Relevant knowledge"));
-        assert!(result.contains("Use testing"));
-        assert!(result.contains("[Workflow:"));
-        assert!(result.contains("Deploy flow"));
-    }
-
-    #[test]
-    fn test_unified_injection_empty() {
-        let result = format_unified_injection_with_store(&[], &[], 5000, None);
-        assert_eq!(result, "");
-    }
-
     // ─── Phase 3: Diagram attachment injection tests ────────────
 
     #[test]
@@ -1255,40 +1120,5 @@ mod tests {
                 "Procedures header present but no entries — orphaned header"
             );
         }
-    }
-
-    #[test]
-    fn test_unified_injection_uses_kind_formatting_without_workflows() {
-        // Without workflows, format_unified_injection_with_store should delegate
-        // to format_for_injection_with_store and produce kind-grouped output.
-        let mut pref = make_pattern("Always be concise", "One sentence max.");
-        pref.kind = Some(PatternKind::Preference);
-
-        let result = format_unified_injection_with_store(&[pref], &[], 5000, None);
-        // Should use grouped header (not the flat one)
-        assert!(
-            result.contains("Relevant knowledge from your learning history"),
-            "unified injection without workflows should use grouped header"
-        );
-        // Preference should be a bullet point, not a numbered entry
-        assert!(
-            result.contains("- **"),
-            "preference should render as bullet"
-        );
-        assert!(
-            !result.contains("### 1."),
-            "preference should NOT render as numbered entry"
-        );
-    }
-
-    #[test]
-    fn test_unified_injection_with_workflows_still_works() {
-        // With workflows, unified injection uses flat numbered format.
-        let p = make_pattern("Use testing", "Use @Test macro");
-        let wf = make_workflow("Deploy flow");
-        let result = format_unified_injection_with_store(&[p], &[wf], 5000, None);
-        assert!(result.contains("Use testing"));
-        assert!(result.contains("[Workflow:"));
-        assert!(result.contains("Deploy flow"));
     }
 }

@@ -140,10 +140,6 @@ pub struct Scored<T> {
     pub relevance: f64,
 }
 
-/// Backward-compatible alias for existing call sites.
-/// New code should prefer `Scored<T>`.
-pub type ScoredPattern = Scored<Pattern>;
-
 /// Scoring weights (from PLAN.md)
 const W_RELEVANCE: f64 = 0.45;
 const W_RECENCY: f64 = 0.10;
@@ -160,74 +156,6 @@ const MAX_PATTERNS: usize = 5;
 
 /// Default max total tokens (rough: 1 token ≈ 4 chars)
 const MAX_TOKENS: usize = 2000;
-
-/// Score patterns with hybrid search, using config-driven retrieval parameters.
-pub fn score_and_rank_hybrid_with_config(
-    query: &str,
-    candidates: Vec<Pattern>,
-    vector_scores: &std::collections::HashMap<String, f64>,
-    config: &RetrievalConfig,
-) -> Vec<ScoredPattern> {
-    score_and_rank_hybrid_with_scope_and_config(
-        query,
-        candidates,
-        vector_scores,
-        None,
-        None,
-        Some(config),
-    )
-}
-
-/// Score patterns with hybrid search and optional scope context for accurate
-/// preference/procedure boosts.
-pub fn score_and_rank_hybrid_with_scope(
-    query: &str,
-    candidates: Vec<Pattern>,
-    vector_scores: &std::collections::HashMap<String, f64>,
-    scope: Option<&ScopeContext>,
-    project_language: Option<&str>,
-) -> Vec<ScoredPattern> {
-    score_and_rank_hybrid_with_scope_and_config(
-        query,
-        candidates,
-        vector_scores,
-        scope,
-        project_language,
-        None,
-    )
-}
-
-/// Score patterns with hybrid search, scope context, and config-driven parameters.
-pub fn score_and_rank_hybrid_with_scope_and_config(
-    query: &str,
-    candidates: Vec<Pattern>,
-    vector_scores: &std::collections::HashMap<String, f64>,
-    scope: Option<&ScopeContext>,
-    project_language: Option<&str>,
-    config: Option<&RetrievalConfig>,
-) -> Vec<ScoredPattern> {
-    let query_lower = query.to_lowercase();
-    let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-
-    score_and_rank_inner(
-        &query_words,
-        candidates,
-        scope,
-        project_language,
-        config,
-        |words, p| {
-            let kw_relevance = keyword_relevance(words, p);
-            let vec_relevance = vector_scores.get(&p.name).copied().unwrap_or(0.0);
-            vec_relevance * 0.7 + kw_relevance * 0.3
-        },
-    )
-}
-
-/// Score a set of candidate patterns against a query (keyword-only fallback).
-/// Returns scored patterns sorted by score, filtered and budget-limited.
-pub fn score_and_rank(query: &str, candidates: Vec<Pattern>) -> Vec<ScoredPattern> {
-    score_and_rank_with_scope(query, candidates, None, None)
-}
 
 /// Public generic entry point: score and rank any `Vec<T>` where
 /// `T: Retrievable`. Keyword-only relevance, no scope, no project_language,
@@ -247,43 +175,22 @@ pub fn score_and_rank_generic<T: Retrievable>(query: &str, candidates: Vec<T>) -
     )
 }
 
-/// Score with keyword-only relevance, using config-driven retrieval parameters.
-pub fn score_and_rank_with_config(
+/// Generic scoring with config-driven retrieval parameters. Same pipeline as
+/// `score_and_rank_generic`, with explicit `RetrievalConfig`.
+pub fn score_and_rank_generic_with_config<T: Retrievable>(
     query: &str,
-    candidates: Vec<Pattern>,
+    candidates: Vec<T>,
     config: &RetrievalConfig,
-) -> Vec<ScoredPattern> {
-    score_and_rank_with_scope_and_config(query, candidates, None, None, Some(config))
-}
-
-/// Score with keyword-only relevance and optional scope context.
-pub fn score_and_rank_with_scope(
-    query: &str,
-    candidates: Vec<Pattern>,
-    scope: Option<&ScopeContext>,
-    project_language: Option<&str>,
-) -> Vec<ScoredPattern> {
-    score_and_rank_with_scope_and_config(query, candidates, scope, project_language, None)
-}
-
-/// Score with keyword-only relevance, scope context, and config-driven parameters.
-pub fn score_and_rank_with_scope_and_config(
-    query: &str,
-    candidates: Vec<Pattern>,
-    scope: Option<&ScopeContext>,
-    project_language: Option<&str>,
-    config: Option<&RetrievalConfig>,
-) -> Vec<ScoredPattern> {
+) -> Vec<Scored<T>> {
     let query_lower = query.to_lowercase();
     let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-
     score_and_rank_inner(
         &query_words,
         candidates,
-        scope,
-        project_language,
-        config,
-        keyword_relevance,
+        None,
+        None,
+        Some(config),
+        |words, item: &T| keyword_relevance(words, item),
     )
 }
 
@@ -625,7 +532,7 @@ mod tests {
     fn test_basic_scoring() {
         let p1 = make_pattern("swift-testing", "Use @Test macro for Swift testing");
         let p2 = make_pattern("rust-error-handling", "Use anyhow for Rust error handling");
-        let results = score_and_rank("swift testing", vec![p1, p2]);
+        let results = score_and_rank_generic("swift testing", vec![p1, p2]);
         assert!(!results.is_empty());
         assert_eq!(results[0].item.name, "swift-testing");
     }
@@ -634,7 +541,7 @@ mod tests {
     fn test_muted_excluded() {
         let mut p = make_pattern("muted-one", "this is muted");
         p.lifecycle.muted = true;
-        let results = score_and_rank("muted", vec![p]);
+        let results = score_and_rank_generic("muted", vec![p]);
         assert!(results.is_empty());
     }
 
@@ -642,7 +549,7 @@ mod tests {
     fn test_deprecated_excluded() {
         let mut p = make_pattern("old-one", "this is old");
         p.lifecycle.status = LifecycleStatus::Deprecated;
-        let results = score_and_rank("old", vec![p]);
+        let results = score_and_rank_generic("old", vec![p]);
         assert!(results.is_empty());
     }
 
@@ -658,14 +565,14 @@ mod tests {
                 p
             })
             .collect();
-        let results = score_and_rank("topic", patterns);
+        let results = score_and_rank_generic("topic", patterns);
         assert!(results.len() <= MAX_PATTERNS);
     }
 
     #[test]
     fn test_score_floor() {
         let p = make_pattern("unrelated", "completely different content xyz abc");
-        let results = score_and_rank("quantum physics entanglement", vec![p]);
+        let results = score_and_rank_generic("quantum physics entanglement", vec![p]);
         // Should be filtered out by score floor
         assert!(results.is_empty());
     }
@@ -677,8 +584,8 @@ mod tests {
 
         let p_unscoped = make_pattern("unscoped", "swift testing content");
 
-        let r1 = score_and_rank("swift testing", vec![p_scoped]);
-        let r2 = score_and_rank("swift testing", vec![p_unscoped]);
+        let r1 = score_and_rank_generic("swift testing", vec![p_scoped]);
+        let r2 = score_and_rank_generic("swift testing", vec![p_unscoped]);
 
         if !r1.is_empty() && !r2.is_empty() {
             assert!(
@@ -700,7 +607,7 @@ mod tests {
     #[test]
     fn test_empty_query_returns_empty() {
         let p = make_pattern("anything", "some content here");
-        let results = score_and_rank("", vec![p]);
+        let results = score_and_rank_generic("", vec![p]);
         assert!(results.is_empty());
     }
 
@@ -708,7 +615,7 @@ mod tests {
     fn test_name_match_stronger_than_content() {
         let p_name = make_pattern("rust-error", "general programming stuff");
         let p_content = make_pattern("generic-pattern", "rust error handling is important");
-        let results = score_and_rank("rust error", vec![p_name, p_content]);
+        let results = score_and_rank_generic("rust error", vec![p_name, p_content]);
         if results.len() >= 2 {
             assert_eq!(
                 results[0].item.name, "rust-error",
@@ -724,8 +631,8 @@ mod tests {
 
         let p_untagged = make_pattern("pattern-b", "some coding content");
 
-        let r1 = score_and_rank("rust testing", vec![p_tagged]);
-        let r2 = score_and_rank("rust testing", vec![p_untagged]);
+        let r1 = score_and_rank_generic("rust testing", vec![p_tagged]);
+        let r2 = score_and_rank_generic("rust testing", vec![p_untagged]);
 
         if !r1.is_empty() && !r2.is_empty() {
             assert!(
@@ -741,7 +648,7 @@ mod tests {
     fn test_archived_excluded() {
         let mut p = make_pattern("archived-one", "this is archived content");
         p.lifecycle.status = LifecycleStatus::Archived;
-        let results = score_and_rank("archived", vec![p]);
+        let results = score_and_rank_generic("archived", vec![p]);
         assert!(results.is_empty());
     }
 
@@ -783,7 +690,7 @@ mod tests {
                 p
             })
             .collect();
-        let results = score_and_rank("topic", patterns);
+        let results = score_and_rank_generic("topic", patterns);
         // Total token estimate should stay under MAX_TOKENS
         let total_tokens: usize = results
             .iter()
@@ -806,7 +713,7 @@ mod tests {
         p_session.tier = Tier::Session;
         p_session.tags.topics = vec!["rust".into()];
 
-        let results = score_and_rank("rust error", vec![p_session, p_core]);
+        let results = score_and_rank_generic("rust error", vec![p_session, p_core]);
         if results.len() >= 2 {
             // Core should be preferred as tiebreaker
             let first_tier = &results[0].item.tier;
@@ -1080,7 +987,7 @@ mod tests {
 
     #[test]
     fn scored_pattern_is_alias_of_scored_pattern_generic() {
-        fn _accepts_alias(_: ScoredPattern) {}
+        fn _accepts_alias(_: Scored<Pattern>) {}
         fn _accepts_generic(_: Scored<Pattern>) {}
         let p = make_pattern("alpha", "alpha body");
         let s: Scored<Pattern> = Scored {
@@ -1134,7 +1041,7 @@ mod tests {
         let p1 = make_pattern("alpha", "alpha body about deploy");
         let p2 = make_pattern("beta", "beta body about something else");
         let generic = score_and_rank_generic("alpha deploy", vec![p1.clone(), p2.clone()]);
-        let legacy = score_and_rank("alpha deploy", vec![p1, p2]);
+        let legacy = score_and_rank_generic("alpha deploy", vec![p1, p2]);
         assert_eq!(generic.len(), legacy.len());
         for (g, l) in generic.iter().zip(legacy.iter()) {
             assert_eq!(g.item.name, l.item.name);
