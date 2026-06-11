@@ -33,7 +33,7 @@ pub struct Skill {
 
 /// Publisher-authored fields. This is what gets signed and is the unit of
 /// content hashing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SkillManifest {
     pub name: String,
     pub version: String,
@@ -88,7 +88,7 @@ pub struct SkillManifest {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Content {
     /// Layer 2 — injected into the system prompt at session start.
     pub r#abstract: String,
@@ -126,7 +126,7 @@ impl Content {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Procedure {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<Variable>,
@@ -134,7 +134,7 @@ pub struct Procedure {
 }
 
 /// Commander extension: retry configuration for a workflow step.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RetryConfig {
     pub max_retries: u32,
     #[serde(default)]
@@ -142,7 +142,7 @@ pub struct RetryConfig {
 }
 
 /// What to do when a workflow step fails.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum FailureAction {
     /// Skip this step and continue
@@ -155,7 +155,7 @@ pub enum FailureAction {
 }
 
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct Variable {
     pub name: String,
     #[serde(rename = "type", default)]
@@ -176,7 +176,7 @@ pub struct Variable {
 
 /// Variable types for workflow/skill parameters (v2 resolved decision #3:
 /// ONE `Variable` type lives here; `workflow::Variable` re-exports it).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum VarType {
     #[default]
@@ -202,7 +202,7 @@ impl std::fmt::Display for VarType {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProcedureStep {
     pub description: String,
 
@@ -258,7 +258,7 @@ pub struct ProcedureStep {
     pub needs_approval: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Trigger {
     #[serde(rename = "type")]
     pub kind: TriggerKind,
@@ -277,7 +277,7 @@ impl Trigger {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Requirement {
     pub name: String,
     #[serde(default = "default_any_version")]

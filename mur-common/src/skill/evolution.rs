@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const CURRENT_GENERATION: u32 = 0;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EvolutionEvent {
     pub version: String,
     #[serde(default)]
