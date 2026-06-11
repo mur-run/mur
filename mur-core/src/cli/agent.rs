@@ -73,8 +73,9 @@ pub enum AgentAction {
     },
     /// Interactive streaming TUI chat with an agent (the agent must be running)
     Cli {
-        /// Agent name
-        name: String,
+        /// Agent name(s) — more than one opens each chat in its own split pane
+        #[arg(required = true, num_args = 1..)]
+        names: Vec<String>,
         /// Resume the most recent saved conversation for this agent
         #[arg(long)]
         resume: bool,
@@ -718,4 +719,48 @@ pub enum AgentPromptAction {
         #[arg(short = 'f', long = "file")]
         file: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentAction;
+    use crate::cli::{Cli, Commands};
+    use clap::Parser;
+
+    fn parse_cli_action(argv: &[&str]) -> AgentAction {
+        let cli = Cli::try_parse_from(argv).expect("parse argv");
+        match cli.command {
+            Commands::Agent { action } => action,
+            _ => panic!("expected Agent variant"),
+        }
+    }
+
+    #[test]
+    fn agent_cli_accepts_multiple_names() {
+        let AgentAction::Cli {
+            names,
+            resume,
+            auto,
+        } = parse_cli_action(&["mur", "agent", "cli", "a1", "a2", "a3", "--auto"])
+        else {
+            panic!("expected Cli variant");
+        };
+        assert_eq!(names, vec!["a1", "a2", "a3"]);
+        assert!(!resume);
+        assert!(auto);
+    }
+
+    #[test]
+    fn agent_cli_single_name_still_parses() {
+        let AgentAction::Cli { names, .. } = parse_cli_action(&["mur", "agent", "cli", "mur"])
+        else {
+            panic!("expected Cli variant");
+        };
+        assert_eq!(names, vec!["mur"]);
+    }
+
+    #[test]
+    fn agent_cli_requires_at_least_one_name() {
+        assert!(Cli::try_parse_from(["mur", "agent", "cli"]).is_err());
+    }
 }

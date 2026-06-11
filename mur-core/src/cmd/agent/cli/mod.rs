@@ -9,6 +9,7 @@
 mod app;
 mod manage;
 mod markdown;
+mod multiplex;
 mod persist;
 mod stream;
 mod ui;
@@ -45,7 +46,12 @@ const SPINNER_MS: u64 = 90;
 const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
-pub async fn cmd_cli(name: &str, resume: bool, auto: bool) -> Result<()> {
+pub async fn cmd_cli(names: &[String], resume: bool, auto: bool) -> Result<()> {
+    if names.len() > 1 {
+        let names = names.to_vec();
+        return tokio::task::spawn_blocking(move || multiplex::run(&names, resume, auto)).await?;
+    }
+    let name = &names[0];
     let home = super::resolve_mur_home()?;
     let agent = canonicalize_agent_name(&home, name);
 
