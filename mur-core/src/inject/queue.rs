@@ -58,6 +58,9 @@ mod tests {
             tool_input: None,
             stop_reason: None,
             session_id: Some("test_sess".into()),
+            transcript_path: None,
+            tool_response: None,
+            cwd: None,
             duration_ms: None,
             is_duration_record: false,
         }
