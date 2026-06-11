@@ -1,4 +1,9 @@
 /* ── Pet Window ───────────────────────────────────────────────────────── */
+/* The pet webview window is created transparent; without this override the
+   themed body background paints it as an opaque square. */
+body.pet-window {
+  background: transparent;
+}
 .pet-root {
   width: 200px;
   height: 200px;
