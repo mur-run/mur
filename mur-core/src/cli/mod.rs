@@ -3,6 +3,7 @@
 
 pub mod actions;
 pub mod agent;
+pub mod murmur;
 pub mod notes;
 pub mod skill;
 
