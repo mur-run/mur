@@ -4,6 +4,7 @@
 //! State file: `~/.mur/session/active.json`
 //! Recordings: `~/.mur/session/recordings/<session-id>.jsonl`
 
+pub mod ambient;
 pub mod cloud;
 pub mod scrub;
 
