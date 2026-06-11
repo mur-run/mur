@@ -429,6 +429,7 @@ jobs:
             def install
               bin.install "mur"
               bin.install "mur-mcp-server"
+              bin.install_symlink "mur" => "murmur"
             end
 
             test do
