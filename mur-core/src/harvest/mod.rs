@@ -78,6 +78,7 @@ pub fn scan_in_dirs(
         let _ = std::fs::write(&meta_path, serde_json::to_string_pretty(&meta)?);
 
         if !decision.pass {
+            tracing::debug!("harvest gate skipped session {}: {}", id, decision.reason);
             continue;
         }
         let steps = skeleton::steps_from_events(&events);
