@@ -1,11 +1,8 @@
 use anyhow::Result;
-use mur_common::pattern::*;
 
-use crate::capture;
 use crate::context_api;
 use crate::inject;
 use crate::store::workflow_yaml::WorkflowYamlStore;
-use crate::store::yaml::YamlStore;
 
 // ─── Structured return types for MCP consumption ────────────────────
 // Public API consumed by mur-mcp-server crate.
@@ -27,19 +24,16 @@ pub struct ContextPattern {
     pub tier: String,
 }
 
-/// Retrieve contextual patterns for the current project. Returns structured
+/// Retrieve contextual skills for the current project. Returns structured
 /// data suitable for MCP tool responses (no side effects, no printing).
+/// (Pattern retrieval was removed in workflow-engine v2 P1b — skills and
+/// workflows are the knowledge objects; the response shape is unchanged.)
 #[allow(dead_code)]
 pub async fn do_context(
     query: Option<String>,
     compact: bool,
     budget: usize,
 ) -> Result<ContextResult> {
-    use crate::retrieve::scoring::{ScopeContext, score_and_rank_with_scope};
-    use crate::store::embedding::{EmbeddingConfig, embed};
-    use crate::store::vector::LanceDbStore as VectorStore;
-    use std::collections::HashMap;
-
     let cwd = std::env::current_dir()?;
     let project_name = cwd
         .file_name()
@@ -52,72 +46,27 @@ pub async fn do_context(
         None => project_name.clone(),
     };
 
-    let yaml_store = YamlStore::default_store()?;
-    let patterns = yaml_store.list_all()?;
-    let project_language = capture::starter::detect_language(&cwd).map(|l| l.as_str().to_string());
+    let mur_dir = mur_common::trust::mur_home();
+    let candidates = crate::retrieve::skill_candidates::load_skill_candidates(
+        &mur_dir.join("skills"),
+        &mur_dir,
+    )
+    .unwrap_or_default();
 
-    let score_scope = ScopeContext {
-        user: None,
-        platform: None,
-        task: None,
-    };
-
-    // Try hybrid search if LanceDB index exists
-    let index_path = dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("index");
-
-    let results = if index_path.exists() {
-        let cfg = crate::store::config::load_config()?;
-        let config = EmbeddingConfig::from_config(&cfg);
-        match embed(&effective_query, &config).await {
-            Ok(query_embedding) => {
-                let vector_store =
-                    VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
-                let vector_results = vector_store.search(&query_embedding, 20, None).await?;
-                let vector_scores: HashMap<String, f64> = vector_results
-                    .into_iter()
-                    .map(|r| (r.name, r.similarity as f64))
-                    .collect();
-                crate::retrieve::scoring::score_and_rank_hybrid_with_scope(
-                    &effective_query,
-                    patterns,
-                    &vector_scores,
-                    Some(&score_scope),
-                    project_language.as_deref(),
-                )
-            }
-            Err(_) => score_and_rank_with_scope(
-                &effective_query,
-                patterns,
-                Some(&score_scope),
-                project_language.as_deref(),
-            ),
-        }
-    } else {
-        score_and_rank_with_scope(
-            &effective_query,
-            patterns,
-            Some(&score_scope),
-            project_language.as_deref(),
-        )
-    };
-
-    let context_patterns: Vec<ContextPattern> = results
-        .iter()
-        .filter(|sp| sp.item.lifecycle.status != LifecycleStatus::Archived)
-        .map(|sp| {
-            let content = sp.item.description.clone();
-            let tier = format!("{:?}", sp.item.tier).to_lowercase();
-            ContextPattern {
-                name: sp.item.name.clone(),
-                description: sp.item.description.clone(),
-                content,
-                tier,
-            }
-        })
-        .collect();
+    let context_patterns: Vec<ContextPattern> =
+        crate::retrieve::scoring::score_and_rank_generic(&effective_query, candidates)
+            .into_iter()
+            .filter(|s| {
+                s.item.stats.lifecycle_state
+                    != mur_common::skill::stats::LifecycleState::Archived
+            })
+            .map(|s| ContextPattern {
+                name: s.item.manifest.name.clone(),
+                description: s.item.manifest.description.clone(),
+                content: s.item.manifest.description.clone(),
+                tier: format!("{:?}", s.item.stats.lifecycle_state).to_lowercase(),
+            })
+            .collect();
 
     let token_budget = if compact { 800 } else { budget };
     let token_count = context_patterns.len() * 50; // rough estimate
@@ -141,13 +90,6 @@ pub(crate) async fn cmd_context(
     quiet: bool,
 ) -> Result<()> {
     crate::auth::heartbeat();
-    use crate::retrieve::scoring::{
-        ScopeContext, score_and_rank_hybrid_with_scope, score_and_rank_with_scope,
-    };
-    use crate::store::embedding::{EmbeddingConfig, embed};
-    use crate::store::vector::LanceDbStore as VectorStore;
-    use std::collections::HashMap;
-
     // Auto-pull from device sync if configured
     if !quiet
         && let Ok(config) = crate::store::config::load_config()
@@ -180,64 +122,6 @@ pub(crate) async fn cmd_context(
 
     // Auto-detect project context from cwd
     let cwd = std::env::current_dir()?;
-
-    // Auto-detect and generate starter patterns for new projects
-    if !capture::starter::is_known_project(&cwd)? {
-        let starter_store = YamlStore::default_store()?;
-        let existing: std::collections::HashSet<String> =
-            starter_store.list_names()?.into_iter().collect();
-        let starters = capture::starter::generate_starter_patterns(&cwd, &existing)?;
-        if !starters.is_empty() {
-            let lang_name = capture::starter::detect_language_name(&cwd)
-                .unwrap_or_else(|| "unknown".to_string());
-            if !compact && !quiet {
-                eprintln!(
-                    "New project detected: {} ({} starter patterns generated)",
-                    lang_name,
-                    starters.len()
-                );
-            }
-            let generated_names: Vec<String> = starters.iter().map(|p| p.name.clone()).collect();
-            let deps: Vec<String> = starters
-                .iter()
-                .flat_map(|p| {
-                    p.tags
-                        .topics
-                        .iter()
-                        .filter(|t| t.as_str() != "starter")
-                        .cloned()
-                })
-                .collect();
-            for p in &starters {
-                starter_store.save(p)?;
-            }
-            capture::starter::mark_project_known(
-                &cwd,
-                capture::starter::ProjectInfo {
-                    path: cwd.to_string_lossy().to_string(),
-                    language: capture::starter::detect_language(&cwd)
-                        .unwrap_or(capture::starter::Language::Rust),
-                    deps,
-                    generated_at: chrono::Utc::now().to_rfc3339(),
-                    patterns_generated: generated_names,
-                },
-            )?;
-        } else {
-            // No patterns generated but still mark as known to avoid re-scanning
-            if let Some(lang) = capture::starter::detect_language(&cwd) {
-                capture::starter::mark_project_known(
-                    &cwd,
-                    capture::starter::ProjectInfo {
-                        path: cwd.to_string_lossy().to_string(),
-                        language: lang,
-                        deps: vec![],
-                        generated_at: chrono::Utc::now().to_rfc3339(),
-                        patterns_generated: vec![],
-                    },
-                )?;
-            }
-        }
-    }
 
     let project_name = cwd
         .file_name()
@@ -292,117 +176,47 @@ pub(crate) async fn cmd_context(
         }
     };
 
-    let yaml_store = YamlStore::default_store()?;
-    let patterns = yaml_store.list_all()?;
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
-    // Detect project language for language-mismatch scoring penalty
-    let project_language = capture::starter::detect_language(&cwd).map(|l| l.as_str().to_string());
-
-    // Build scope context for accurate preference/procedure scoring boosts.
-    // `source` tells us the calling tool (e.g. "claude-code"), which maps
-    // to `origin.platform` for preference matching.
-    let score_scope = ScopeContext {
-        user: scope.user.clone(),
-        platform: scope.platform.clone().or_else(|| Some(source.clone())),
-        task: scope.task.clone(),
-    };
-
-    // Try hybrid search if LanceDB index exists
-    let index_path = dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("index");
-
-    let results = if index_path.exists() {
-        let cfg = crate::store::config::load_config()?;
-        let config = EmbeddingConfig::from_config(&cfg);
-        match embed(&effective_query, &config).await {
-            Ok(query_embedding) => {
-                let vector_store =
-                    VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
-                let vector_results = vector_store.search(&query_embedding, 20, None).await?;
-                let vector_scores: HashMap<String, f64> = vector_results
-                    .into_iter()
-                    .map(|r| (r.name, r.similarity as f64))
-                    .collect();
-                score_and_rank_hybrid_with_scope(
-                    &effective_query,
-                    patterns,
-                    &vector_scores,
-                    Some(&score_scope),
-                    project_language.as_deref(),
-                )
-            }
-            Err(_) => score_and_rank_with_scope(
-                &effective_query,
-                patterns,
-                Some(&score_scope),
-                project_language.as_deref(),
-            ),
-        }
-    } else {
-        score_and_rank_with_scope(
-            &effective_query,
-            patterns,
-            Some(&score_scope),
-            project_language.as_deref(),
-        )
-    };
-
-    let mut injected_patterns: Vec<Pattern> = Vec::new();
-    for sp in results {
-        let mut p = sp.item;
-        if p.lifecycle.status == LifecycleStatus::Archived {
-            continue;
-        }
-        let now = chrono::Utc::now();
-        p.decay.last_active = Some(now);
-        p.evidence.injection_count += 1;
-        p.lifecycle.last_injected = Some(now);
-        p.updated_at = now;
-        // Track project usage for cross-project learning
-        if !project_name.is_empty() && !p.applies.projects.contains(&project_name) {
-            p.applies.projects.push(project_name.clone());
-        }
-        let _ = yaml_store.save(&p);
-        injected_patterns.push(p);
-    }
+    // Skills are the knowledge objects (workflow-engine v2 P1b); `scope` is
+    // still parsed for CLI compatibility but skills carry no origin scopes.
+    let _ = (&scope, &source);
+    let mur_dir = mur_common::trust::mur_home();
+    let candidates = crate::retrieve::skill_candidates::load_skill_candidates(
+        &mur_dir.join("skills"),
+        &mur_dir,
+    )
+    .unwrap_or_default();
+    let scored: Vec<_> =
+        crate::retrieve::scoring::score_and_rank_generic(&effective_query, candidates)
+            .into_iter()
+            .filter(|s| {
+                s.item.stats.lifecycle_state
+                    != mur_common::skill::stats::LifecycleState::Archived
+            })
+            .collect();
 
     let token_budget = if compact { 800 } else { budget };
 
-    // If JSON output requested, build ContextResponse from the already-scored
-    // injected_patterns (same hybrid pipeline as text path, same project scope).
+    // If JSON output requested, build ContextResponse from the scored skills
+    // (same pipeline as the text path).
     if json_output {
         use context_api::{ContextResponse, ScoredPatternResponse};
-        let response_patterns: Vec<ScoredPatternResponse> = injected_patterns
+        let response_patterns: Vec<ScoredPatternResponse> = scored
             .iter()
-            .map(|p| {
-                let kind_str = match p.effective_kind() {
-                    mur_common::pattern::PatternKind::Technical => "technical",
-                    mur_common::pattern::PatternKind::Preference => "preference",
-                    mur_common::pattern::PatternKind::Fact => "fact",
-                    mur_common::pattern::PatternKind::Procedure => "procedure",
-                    mur_common::pattern::PatternKind::Behavioral => "behavioral",
-                };
-                ScoredPatternResponse {
-                    name: p.name.clone(),
-                    description: p.description.clone(),
-                    score: p.importance, // best proxy available after injection update
-                    kind: kind_str.to_string(),
-                }
+            .map(|s| ScoredPatternResponse {
+                name: s.item.manifest.name.clone(),
+                description: s.item.manifest.description.clone(),
+                score: s.score,
+                kind: format!("{:?}", s.item.manifest.category).to_lowercase(),
             })
             .collect();
-        let formatted = inject::hook::format_unified_injection_with_store(
-            &injected_patterns,
-            &workflows,
-            token_budget,
-            Some(&yaml_store),
-        );
+        let formatted =
+            inject::hook::format_skills_for_injection(&scored, &workflows, token_budget);
         let resp = ContextResponse {
             tokens_used: formatted.len() / 4,
-            injection_ids: injected_patterns.iter().map(|p| p.name.clone()).collect(),
+            injection_ids: scored.iter().map(|s| s.item.manifest.name.clone()).collect(),
             patterns: response_patterns,
             formatted,
         };
@@ -411,23 +225,12 @@ pub(crate) async fn cmd_context(
         return Ok(());
     }
 
-    let output = inject::hook::format_unified_injection_with_store(
-        &injected_patterns,
-        &workflows,
-        token_budget,
-        Some(&yaml_store),
-    );
+    let output = inject::hook::format_skills_for_injection(&scored, &workflows, token_budget);
 
     if !output.is_empty() {
-        inject::hook::record_injection(&effective_query, &project_name, &injected_patterns);
-        inject::hook::record_cooccurrence_for_injection(&injected_patterns);
-
         if write_file {
             // Write to ~/.mur/context.md for file-based tools
-            let context_path = dirs::home_dir()
-                .expect("no home dir")
-                .join(".mur")
-                .join("context.md");
+            let context_path = crate::paths::mur_root(None).join("context.md");
             let file_content = format!(
                 "# MUR Context (auto-generated)\n# Query: {}\n# Updated: {}\n\n{}\n",
                 effective_query,

@@ -599,6 +599,7 @@ const TEMPLATES: &[StarterTemplate] = &[
 
 // ─── Project Tracking ───────────────────────────────────────────────
 
+#[allow(dead_code)] // pattern-pipeline remnant (cmd_context no longer generates starter patterns, v2 P1b); full removal in W3b
 #[derive(Serialize, Deserialize)]
 pub struct ProjectInfo {
     pub path: String,
@@ -608,6 +609,7 @@ pub struct ProjectInfo {
     pub patterns_generated: Vec<String>,
 }
 
+#[allow(dead_code)] // pattern-pipeline remnant (cmd_context no longer generates starter patterns, v2 P1b); full removal in W3b
 fn projects_dir() -> PathBuf {
     dirs::home_dir()
         .expect("no home dir")
@@ -615,6 +617,7 @@ fn projects_dir() -> PathBuf {
         .join("projects")
 }
 
+#[allow(dead_code)] // pattern-pipeline remnant (cmd_context no longer generates starter patterns, v2 P1b); full removal in W3b
 fn project_hash(path: &Path) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -626,12 +629,14 @@ fn project_hash(path: &Path) -> String {
 
 /// Check if a project directory has already been processed.
 /// O(1) — just a file existence check.
+#[allow(dead_code)] // pattern-pipeline remnant (cmd_context no longer generates starter patterns, v2 P1b); full removal in W3b
 pub fn is_known_project(path: &Path) -> Result<bool> {
     let hash = project_hash(path);
     Ok(projects_dir().join(format!("{hash}.json")).exists())
 }
 
 /// Mark a project as known, recording what was generated.
+#[allow(dead_code)] // pattern-pipeline remnant (cmd_context no longer generates starter patterns, v2 P1b); full removal in W3b
 pub fn mark_project_known(path: &Path, info: ProjectInfo) -> Result<()> {
     let dir = projects_dir();
     fs::create_dir_all(&dir).context("Failed to create projects dir")?;
