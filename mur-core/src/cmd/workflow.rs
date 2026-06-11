@@ -5,7 +5,6 @@ use std::io::{self, Write};
 
 use crate::evolve;
 use crate::store::workflow_yaml::WorkflowYamlStore;
-use crate::store::yaml::YamlStore;
 
 /// Run a workflow — output as executable prompt for AI consumption.
 /// Accepts exact name, semantic query, or pipeline expression (w1 | w2 && w3, w4).
@@ -631,9 +630,7 @@ pub(crate) fn cmd_suggest(create: bool, accept: Option<&str>, dismiss: Option<&s
 
     use evolve::cooccurrence::CooccurrenceMatrix;
 
-    let pattern_store = YamlStore::default_store()?;
     let workflow_store = WorkflowYamlStore::default_store()?;
-    let patterns = pattern_store.list_all()?;
     let workflows = workflow_store.list_all()?;
 
     // ─── Part 1: Workflow composition from co-occurrence ─────────────
@@ -649,7 +646,7 @@ pub(crate) fn cmd_suggest(create: bool, accept: Option<&str>, dismiss: Option<&s
 
     // ─── Part 2 (removed): Workflow decomposition into patterns ──────────────
     // Pattern decomposition removed — skills use skill/lifecycle.rs evolve path.
-    let _ = (&patterns, &workflows, create);
+    let _ = (&workflows, create);
 
     // ─── Part 3: Pending nudges ───────────────────────────────────────
 
@@ -743,37 +740,6 @@ pub(crate) fn cmd_suggest_dismiss(id: &str) -> Result<()> {
     ledger.save(&path)?;
     println!("✓ Dismissed nudge {}.", id);
     Ok(())
-}
-
-/// Collect tags from a set of pattern names.
-#[allow(dead_code)]
-pub(crate) fn collect_tags_from_patterns(
-    names: &[String],
-    patterns: &[Pattern],
-) -> mur_common::pattern::Tags {
-    let mut topics: Vec<String> = Vec::new();
-    let mut languages: Vec<String> = Vec::new();
-
-    for name in names {
-        if let Some(p) = patterns.iter().find(|p| &p.name == name) {
-            for t in &p.tags.topics {
-                if !topics.contains(t) {
-                    topics.push(t.clone());
-                }
-            }
-            for l in &p.tags.languages {
-                if !languages.contains(l) {
-                    languages.push(l.clone());
-                }
-            }
-        }
-    }
-
-    mur_common::pattern::Tags {
-        topics,
-        languages,
-        extra: Default::default(),
-    }
 }
 
 // ─── Schedule management (uses ~/.mur/schedules.yaml) ──────────────────────

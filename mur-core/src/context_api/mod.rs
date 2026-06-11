@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::evolve::feedback;
 use crate::inject::hook;
 use crate::retrieve::gate::{Tier as GateTier, evaluate_query};
-use crate::retrieve::scoring::{score_and_rank_hybrid_with_config, score_and_rank_with_config};
+use crate::retrieve::scoring::score_and_rank_generic_with_config;
 use crate::store::config::load_config;
 use crate::store::yaml::YamlStore;
 
@@ -162,12 +162,11 @@ fn retrieve_with_config(
     // Apply scope filtering
     let filtered = apply_scope_filter(all_patterns, &req.scope, &req.source);
 
-    // Score and rank using config-driven retrieval parameters
-    let scored = if let Some(vs) = vector_scores {
-        score_and_rank_hybrid_with_config(&req.query, filtered, vs, &config.retrieval)
-    } else {
-        score_and_rank_with_config(&req.query, filtered, &config.retrieval)
-    };
+    // Score and rank using config-driven retrieval parameters. Vector scores
+    // are no longer merged here — the pattern corpus is transitional (v2 P1b)
+    // and empty after `mur migrate --patterns`.
+    let _ = vector_scores;
+    let scored = score_and_rank_generic_with_config(&req.query, filtered, &config.retrieval);
 
     // Build response patterns and collect for formatting
     let mut response_patterns = Vec::new();

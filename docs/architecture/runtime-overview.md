@@ -31,6 +31,31 @@ session-start hook prints a one-line pending-proposals hint (spec §3.8 tier 1).
 - Spec: `docs/superpowers/specs/2026-06-11-mur-ambient-capture-and-harvest-design.md`
 - Modules: `mur-core/src/session/ambient.rs`, `mur-core/src/harvest/`
 
+## Pattern pipeline removal (workflow-engine v2 P1a+P1b, 2026-06-11)
+
+The legacy Pattern pipeline is removed; skills + workflows are the knowledge
+objects, harvest proposals are the candidate feed:
+
+- `mur migrate --patterns` — one-shot: exports `~/.mur/patterns/*.yaml` to
+  `~/.mur/exported-patterns/*.md`, then deletes `patterns/` and
+  `fingerprints.jsonl`. Run once after upgrading.
+- Removed: `capture/emergence.rs` (fingerprint mining), pattern injection
+  (`format_unified_injection_with_store`, `record_injection`), Pattern-typed
+  scorer wrappers (`ScoredPattern`, `score_and_rank_hybrid*`). The dead
+  `mur evolve` / `mur emerge` / `mur learn` background spawns are gone
+  (those subcommands never existed).
+- Repointed: nudges + `mur skill suggest` source candidates from the harvest
+  inbox (`nudge::HarvestProposalSource`); `mur context` / `do_context` /
+  `context_api::retrieve` score skills via `score_and_rank_generic`;
+  `mur sync` writes Stable skills into tool configs; `mur out --action
+  analyze` and the stop-menu Analyze call `extract_workflow_llm` directly and
+  save a draft workflow.
+- Transitional: `Pattern` keeps its `Retrievable` impl;
+  `context_api::ingest`/`submit_feedback` still write Patterns until the Notes
+  migration. Cloud pattern payloads from older servers are ignored on pull.
+- Spec: `docs/superpowers/specs/2026-05-28-mur-workflow-engine-design-v2.md`
+- Plan: `docs/superpowers/plans/2026-06-11-workflow-engine-w3a-pattern-removal.md`
+
 ## Sources Pipeline (P1.4)
 
 All adapters shipped: Obsidian + Notion + Joplin; `--watch` + `install-schedule`; `format_notes_section` helper ready.
