@@ -7,6 +7,7 @@ use super::agent::resolve_mur_home;
 pub fn cmd_sweep(filter: Option<&str>, dry_run: bool) -> Result<()> {
     let home = resolve_mur_home()?;
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+    let lc = &cfg.skills.lifecycle;
     let report = crate::skill_lifecycle::sweep::run_sweep(
         &home,
         crate::skill_lifecycle::sweep::SweepOptions {
@@ -14,6 +15,9 @@ pub fn cmd_sweep(filter: Option<&str>, dry_run: bool) -> Result<()> {
             dry_run,
             now: chrono::Utc::now(),
             require_human_curation_before_stable: cfg.skills.require_human_curation_before_stable,
+            thresholds: mur_common::skill::lifecycle::LifecycleThresholds::from(lc),
+            broken_workflow_streak: lc.broken_workflow_streak,
+            archive_destroy_grace_days: lc.archive_destroy_grace_days,
         },
     )?;
 
@@ -37,6 +41,9 @@ pub fn cmd_sweep(filter: Option<&str>, dry_run: bool) -> Result<()> {
         report.decayed
     );
     println!("Archived: {}", report.archived);
+    if report.destroyed > 0 {
+        println!("Destroyed: {}", report.destroyed);
+    }
 
     if dry_run {
         println!("(dry-run; no changes written)");

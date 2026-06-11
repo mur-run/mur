@@ -329,12 +329,13 @@ fn select_keeper(a: &CrossAgentSkillView, b: &CrossAgentSkillView) -> (String, S
 
 fn lifecycle_rank(s: LifecycleState) -> u8 {
     match s {
-        LifecycleState::Archived => 0,
-        LifecycleState::Deprecated => 1,
-        LifecycleState::Draft => 2,
-        LifecycleState::Emerging => 3,
-        LifecycleState::Stable => 4,
-        LifecycleState::Canonical => 5,
+        LifecycleState::Destroyed => 0,
+        LifecycleState::Archived => 1,
+        LifecycleState::Deprecated => 2,
+        LifecycleState::Draft => 3,
+        LifecycleState::Emerging => 4,
+        LifecycleState::Stable => 5,
+        LifecycleState::Canonical => 6,
     }
 }
 
