@@ -122,14 +122,15 @@ pub async fn run(cli: Cli) -> Result<()> {
             prompt,
         } => {
             eprintln!("# mur run: use `mur workflow run`");
-            cmd::workflow::cmd_workflow_run(&query, fail_fast, prompt).await?
+            cmd::workflow::cmd_workflow_run(&query, fail_fast, prompt, false).await?
         }
         Commands::Workflow { action } => match action {
             WorkflowAction::Run {
                 query,
                 fail_fast,
                 prompt,
-            } => cmd::workflow::cmd_workflow_run(&query, fail_fast, prompt).await?,
+                yes,
+            } => cmd::workflow::cmd_workflow_run(&query, fail_fast, prompt, yes).await?,
             WorkflowAction::Suggest {
                 create,
                 accept,
