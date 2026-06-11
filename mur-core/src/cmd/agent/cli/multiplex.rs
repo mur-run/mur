@@ -53,6 +53,129 @@ pub fn run(names: &[String], _resume: bool, _auto: bool) -> Result<()> {
     bail!("multi-agent mode not yet implemented: {}", names.join(", "));
 }
 
+/// argv for one pane: single-name `mur agent cli` with forwarded flags.
+#[allow(dead_code)] // used by Task 5's executor
+fn pane_argv(exe: &str, name: &str, resume: bool, auto: bool) -> Vec<String> {
+    let mut v = vec![exe.to_string(), "agent".into(), "cli".into(), name.into()];
+    if resume {
+        v.push("--resume".into());
+    }
+    if auto {
+        v.push("--auto".into());
+    }
+    v
+}
+
+/// POSIX single-quote escaping for tmux's shell_command argument (the exe
+/// path can contain spaces, e.g. /Volumes/My Drive/...).
+#[allow(dead_code)] // used by Task 5's executor
+fn shell_quote(s: &str) -> String {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:".contains(c))
+    {
+        return s.to_string();
+    }
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// One pane's argv joined into a tmux shell_command string.
+#[allow(dead_code)] // used by Task 5's executor
+fn pane_shell(exe: &str, name: &str, resume: bool, auto: bool) -> String {
+    pane_argv(exe, name, resume, auto)
+        .iter()
+        .map(|a| shell_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Outside tmux: detached session, one pane per agent, tiled, then attach.
+#[allow(dead_code)] // used by Task 5's executor
+fn tmux_new_session(
+    session: &str,
+    exe: &str,
+    names: &[String],
+    resume: bool,
+    auto: bool,
+) -> Vec<Vec<String>> {
+    let target = format!("={session}");
+    let mut cmds = vec![vec![
+        "tmux".into(),
+        "new-session".into(),
+        "-d".into(),
+        "-s".into(),
+        session.into(),
+        pane_shell(exe, &names[0], resume, auto),
+    ]];
+    for name in &names[1..] {
+        cmds.push(vec![
+            "tmux".into(),
+            "split-window".into(),
+            "-t".into(),
+            target.clone(),
+            pane_shell(exe, name, resume, auto),
+        ]);
+        cmds.push(vec![
+            "tmux".into(),
+            "select-layout".into(),
+            "-t".into(),
+            target.clone(),
+            "tiled".into(),
+        ]);
+    }
+    cmds.push(vec![
+        "tmux".into(),
+        "attach-session".into(),
+        "-t".into(),
+        target,
+    ]);
+    cmds
+}
+
+/// Inside tmux: open a new window (printing its id for targeting) running
+/// the first agent. The user's current window is untouched.
+#[allow(dead_code)] // used by Task 5's executor
+fn tmux_inside_open(exe: &str, names: &[String], resume: bool, auto: bool) -> Vec<String> {
+    vec![
+        "tmux".into(),
+        "new-window".into(),
+        "-P".into(),
+        "-F".into(),
+        "#{window_id}".into(),
+        pane_shell(exe, &names[0], resume, auto),
+    ]
+}
+
+/// Inside tmux: split the captured window id for each remaining agent,
+/// retiling after every split.
+#[allow(dead_code)] // used by Task 5's executor
+fn tmux_inside_rest(
+    window_id: &str,
+    exe: &str,
+    names: &[String],
+    resume: bool,
+    auto: bool,
+) -> Vec<Vec<String>> {
+    let mut cmds = Vec::new();
+    for name in &names[1..] {
+        cmds.push(vec![
+            "tmux".into(),
+            "split-window".into(),
+            "-t".into(),
+            window_id.into(),
+            pane_shell(exe, name, resume, auto),
+        ]);
+        cmds.push(vec![
+            "tmux".into(),
+            "select-layout".into(),
+            "-t".into(),
+            window_id.into(),
+            "tiled".into(),
+        ]);
+    }
+    cmds
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +217,106 @@ mod tests {
         assert_eq!(d, Some(Backend::ZellijNew));
         let d = detect(env_of(&[]), |_| false);
         assert_eq!(d, None);
+    }
+
+    #[test]
+    fn pane_argv_includes_flags() {
+        let v = pane_argv("/opt/homebrew/bin/mur", "a1", true, true);
+        assert_eq!(
+            v,
+            vec![
+                "/opt/homebrew/bin/mur",
+                "agent",
+                "cli",
+                "a1",
+                "--resume",
+                "--auto"
+            ]
+        );
+        let v = pane_argv("/opt/homebrew/bin/mur", "a1", false, false);
+        assert_eq!(v, vec!["/opt/homebrew/bin/mur", "agent", "cli", "a1"]);
+    }
+
+    #[test]
+    fn shell_quote_handles_spaces_and_single_quotes() {
+        assert_eq!(shell_quote("plain"), "plain");
+        assert_eq!(
+            shell_quote("/Volumes/My Drive/mur"),
+            "'/Volumes/My Drive/mur'"
+        );
+        assert_eq!(shell_quote("it's"), r#"'it'\''s'"#);
+    }
+
+    #[test]
+    fn tmux_new_session_plan_shape() {
+        let names = vec!["a1".to_string(), "a2".to_string(), "a3".to_string()];
+        let cmds = tmux_new_session("mur-chat", "/bin/mur", &names, false, false);
+        assert_eq!(
+            cmds[0],
+            vec![
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                "mur-chat",
+                "/bin/mur agent cli a1"
+            ]
+        );
+        // Each later agent: split + retile (retile after each split avoids
+        // "pane too small" when opening many panes).
+        assert_eq!(
+            cmds[1],
+            vec![
+                "tmux",
+                "split-window",
+                "-t",
+                "=mur-chat",
+                "/bin/mur agent cli a2"
+            ]
+        );
+        assert_eq!(
+            cmds[2],
+            vec!["tmux", "select-layout", "-t", "=mur-chat", "tiled"]
+        );
+        assert_eq!(
+            cmds[3],
+            vec![
+                "tmux",
+                "split-window",
+                "-t",
+                "=mur-chat",
+                "/bin/mur agent cli a3"
+            ]
+        );
+        assert_eq!(
+            cmds[4],
+            vec!["tmux", "select-layout", "-t", "=mur-chat", "tiled"]
+        );
+        assert_eq!(cmds[5], vec!["tmux", "attach-session", "-t", "=mur-chat"]);
+        assert_eq!(cmds.len(), 6);
+    }
+
+    #[test]
+    fn tmux_inside_plan_shape() {
+        let names = vec!["a1".to_string(), "a2".to_string()];
+        let open = tmux_inside_open("/bin/mur", &names, false, false);
+        assert_eq!(
+            open,
+            vec![
+                "tmux",
+                "new-window",
+                "-P",
+                "-F",
+                "#{window_id}",
+                "/bin/mur agent cli a1"
+            ]
+        );
+        let rest = tmux_inside_rest("@7", "/bin/mur", &names, false, false);
+        assert_eq!(
+            rest[0],
+            vec!["tmux", "split-window", "-t", "@7", "/bin/mur agent cli a2"]
+        );
+        assert_eq!(rest[1], vec!["tmux", "select-layout", "-t", "@7", "tiled"]);
+        assert_eq!(rest.len(), 2);
     }
 }
