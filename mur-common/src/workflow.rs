@@ -107,28 +107,8 @@ pub struct Step {
     pub timeout_secs: Option<u64>,
 }
 
-/// Commander extension: retry configuration for a workflow step.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetryConfig {
-    pub max_retries: u32,
-    #[serde(default)]
-    pub backoff_secs: Option<u64>,
-}
+pub use crate::skill::manifest::{FailureAction, RetryConfig, Variable, VarType};
 
-/// What to do when a workflow step fails.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum FailureAction {
-    /// Skip this step and continue
-    Skip,
-    /// Abort the entire workflow
-    #[default]
-    Abort,
-    /// Retry the step
-    Retry,
-}
-
-pub use crate::skill::manifest::{Variable, VarType};
 
 /// Notification level for workflow events.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

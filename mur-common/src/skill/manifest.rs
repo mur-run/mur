@@ -133,6 +133,28 @@ pub struct Procedure {
     pub steps: Vec<ProcedureStep>,
 }
 
+/// Commander extension: retry configuration for a workflow step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryConfig {
+    pub max_retries: u32,
+    #[serde(default)]
+    pub backoff_secs: Option<u64>,
+}
+
+/// What to do when a workflow step fails.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum FailureAction {
+    /// Skip this step and continue
+    Skip,
+    /// Abort the entire workflow
+    #[default]
+    Abort,
+    /// Retry the step
+    Retry,
+}
+
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Variable {
     pub name: String,
