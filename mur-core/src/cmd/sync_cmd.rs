@@ -590,8 +590,7 @@ pub(crate) async fn device_sync(
                     if !quiet {
                         eprintln!("  📤 Git push...");
                     }
-                    let _ =
-                        run_git_in(&mur_dir, &["add", "skills/", "workflows/", "config.yaml"]);
+                    let _ = run_git_in(&mur_dir, &["add", "skills/", "workflows/", "config.yaml"]);
                     let commit_result =
                         run_git_in(&mur_dir, &["commit", "-m", "mur: auto-sync patterns"]);
                     // Commit may fail if nothing changed — that's fine
@@ -907,11 +906,9 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
 
     // Skills are the sync content source (workflow-engine v2 P1b).
     let mur_dir = mur_common::trust::mur_home();
-    let candidates = crate::retrieve::skill_candidates::load_skill_candidates(
-        &mur_dir.join("skills"),
-        &mur_dir,
-    )
-    .unwrap_or_default();
+    let candidates =
+        crate::retrieve::skill_candidates::load_skill_candidates(&mur_dir.join("skills"), &mur_dir)
+            .unwrap_or_default();
 
     if candidates.is_empty() {
         if !quiet {
@@ -944,16 +941,13 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
             continue;
         }
 
-        let scored = crate::retrieve::scoring::score_and_rank_generic(
-            &sync_query,
-            candidates.clone(),
-        );
+        let scored =
+            crate::retrieve::scoring::score_and_rank_generic(&sync_query, candidates.clone());
 
         let top: Vec<crate::inject::hook::InjectedItem> = scored
             .into_iter()
             .filter(|s| {
-                s.item.stats.lifecycle_state
-                    != mur_common::skill::stats::LifecycleState::Archived
+                s.item.stats.lifecycle_state != mur_common::skill::stats::LifecycleState::Archived
             })
             .take(target.max_patterns)
             .map(|s| s.item.to_injected_item())

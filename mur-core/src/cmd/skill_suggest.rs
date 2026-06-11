@@ -22,7 +22,9 @@ pub fn cmd_suggest(home: &Path, opts: SuggestOptions) -> Result<()> {
     candidates.truncate(opts.max_sessions);
 
     if candidates.is_empty() {
-        println!("No pending workflow proposals. (Proposals appear after sessions pass the harvest gate — see `mur out`.)");
+        println!(
+            "No pending workflow proposals. (Proposals appear after sessions pass the harvest gate — see `mur out`.)"
+        );
         return Ok(());
     }
 

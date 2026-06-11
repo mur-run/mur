@@ -72,30 +72,31 @@ capture/ → store/ → retrieve/ → inject/
             evolve/
 ```
 
-- **`capture/`** — Noise filter, significance scoring, emergence detection, feedback extraction
-- **`store/`** — `YamlStore` (source of truth, atomic writes), `LanceDbStore` (vector index, always rebuildable), `WorkflowYamlStore`. Vector store abstracted via `store::vector::VectorStore` (`LanceDbStore` now; `QdrantStore` P1.3).
-- **`retrieve/`** — `score_and_rank_hybrid()` combines vector similarity (0.7) + keyword BM25 (0.3); applies recency / effectiveness / importance / decay / length normalization
-- **`inject/`** — `hook.rs` formats patterns; `sync.rs` writes tool-specific configs (Claude Code hooks, Gemini CLI, etc.)
-- **`evolve/`** — Decay, maturity lifecycle (Draft→Emerging→Stable→Canonical), feedback, co-occurrence, pattern linking, emergence
+- **`capture/`** — Noise filter, significance scoring, feedback extraction. Ambient session capture lives in `session/ambient.rs` (hooks record every event); the harvest gate (`harvest/`) turns idle sessions into workflow proposals.
+- **`store/`** — `YamlStore` (transitional Pattern store), `LanceDbStore` (vector index, always rebuildable), `WorkflowYamlStore`. Vector store abstracted via `store::vector::VectorStore` (`LanceDbStore` now; `QdrantStore` P1.3).
+- **`retrieve/`** — `score_and_rank_generic()` over the `Retrievable` trait (skills + workflows; Pattern transitional); applies recency / effectiveness / importance / decay / length normalization
+- **`inject/`** — `hook.rs` formats skills + workflows for injection; `sync.rs` writes tool-specific configs (Claude Code hooks, Gemini CLI, etc.)
+- **`evolve/`** — Skill lifecycle (Draft→Emerging→Stable→Canonical), feedback, co-occurrence
 
-Sources pipeline: `mur-core/src/sources/` adapters (Obsidian / Notion / Joplin) feed the same retrieve pipeline as patterns. See `docs/architecture/runtime-overview.md`.
+**Pattern removal (workflow-engine v2 P1a/P1b, 2026-06-11):** the legacy Pattern pipeline (emergence/fingerprint mining, pattern decay sweeps, pattern injection) is removed. `mur migrate --patterns` exports `~/.mur/patterns/` to markdown then deletes it. Skills (`category: Workflow` et al.) are the knowledge objects; `context_api::ingest`/`submit_feedback` still write transitional Patterns until the Notes migration (W3b+).
+
+Sources pipeline: `mur-core/src/sources/` adapters (Obsidian / Notion / Joplin) feed the same retrieve pipeline. See `docs/architecture/runtime-overview.md`.
 
 ### Key Data Model
 
-`Pattern` wraps `KnowledgeBase` via `#[serde(flatten)]` — flat YAML, no nested `base:` key. `Pattern::deref()` forwards to `KnowledgeBase`, so `pattern.name` works directly.
+Skills are the primary knowledge object (`mur-common/src/skill/`): `SkillManifest` (name, description, category, content with abstract/context/procedure, triggers, tags) + `SkillStats` (lifecycle state, usage counts). `Workflow` wraps `KnowledgeBase` via `#[serde(flatten)]` and adds `steps`, `variables`, `trigger`, `schedule`.
 
-`KnowledgeBase` fields: `name`, `description`, `content` (dual-layer: `technical` + `principle`), `tier` (session/project/core), `importance`, `confidence`, `tags`, `applies`, `evidence`, `links`, `lifecycle`, `maturity`, `decay`.
-
-Tier half-lives: session=14d, project=90d, core=365d. Scoring floor 0.35. Max patterns/query 5. Max tokens ~2000.
+Tier half-lives: session=14d, project=90d, core=365d. Scoring floor 0.42 (config `retrieval.min_score`). Max items/query 5. Max tokens ~2000.
 
 ### Data Storage (Runtime)
 
 All data at `~/.mur/`:
 
-- `patterns/*.yaml` — source of truth
+- `skills/<name>/skill.yaml` — skills (source of truth)
 - `workflows/*.yaml` — multi-step workflow definitions
-- `session/active.json` — current session state
-- `session/recordings/<id>.jsonl` — append-only event log
+- `inbox/workflow-proposals/*.yaml` — harvest proposals pending review (`mur out`)
+- `session/recordings/<id>.jsonl` — append-only event log (ambient capture)
+- `exported-patterns/*.md` — legacy patterns exported by `mur migrate --patterns`
 - `config.yaml` — user config
 
 LanceDB vector index is always rebuildable via `mur reindex`.

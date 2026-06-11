@@ -599,7 +599,8 @@ const TEMPLATES: &[StarterTemplate] = &[
 
 // ─── Project Tracking ───────────────────────────────────────────────
 
-#[allow(dead_code)] // pattern-pipeline remnant (cmd_context no longer generates starter patterns, v2 P1b); full removal in W3b
+#[allow(dead_code)]
+// pattern-pipeline remnant (cmd_context no longer generates starter patterns, v2 P1b); full removal in W3b
 #[derive(Serialize, Deserialize)]
 pub struct ProjectInfo {
     pub path: String,

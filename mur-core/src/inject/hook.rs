@@ -900,8 +900,6 @@ mod tests {
         assert!(entry.contains("Run tests"));
     }
 
-
-
     // ─── Phase 3: Diagram attachment injection tests ────────────
 
     #[test]
@@ -1123,6 +1121,4 @@ mod tests {
             );
         }
     }
-
-
 }

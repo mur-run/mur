@@ -47,18 +47,15 @@ pub async fn do_context(
     };
 
     let mur_dir = mur_common::trust::mur_home();
-    let candidates = crate::retrieve::skill_candidates::load_skill_candidates(
-        &mur_dir.join("skills"),
-        &mur_dir,
-    )
-    .unwrap_or_default();
+    let candidates =
+        crate::retrieve::skill_candidates::load_skill_candidates(&mur_dir.join("skills"), &mur_dir)
+            .unwrap_or_default();
 
     let context_patterns: Vec<ContextPattern> =
         crate::retrieve::scoring::score_and_rank_generic(&effective_query, candidates)
             .into_iter()
             .filter(|s| {
-                s.item.stats.lifecycle_state
-                    != mur_common::skill::stats::LifecycleState::Archived
+                s.item.stats.lifecycle_state != mur_common::skill::stats::LifecycleState::Archived
             })
             .map(|s| ContextPattern {
                 name: s.item.manifest.name.clone(),
@@ -183,17 +180,14 @@ pub(crate) async fn cmd_context(
     // still parsed for CLI compatibility but skills carry no origin scopes.
     let _ = (&scope, &source);
     let mur_dir = mur_common::trust::mur_home();
-    let candidates = crate::retrieve::skill_candidates::load_skill_candidates(
-        &mur_dir.join("skills"),
-        &mur_dir,
-    )
-    .unwrap_or_default();
+    let candidates =
+        crate::retrieve::skill_candidates::load_skill_candidates(&mur_dir.join("skills"), &mur_dir)
+            .unwrap_or_default();
     let scored: Vec<_> =
         crate::retrieve::scoring::score_and_rank_generic(&effective_query, candidates)
             .into_iter()
             .filter(|s| {
-                s.item.stats.lifecycle_state
-                    != mur_common::skill::stats::LifecycleState::Archived
+                s.item.stats.lifecycle_state != mur_common::skill::stats::LifecycleState::Archived
             })
             .collect();
 
@@ -216,7 +210,10 @@ pub(crate) async fn cmd_context(
             inject::hook::format_skills_for_injection(&scored, &workflows, token_budget);
         let resp = ContextResponse {
             tokens_used: formatted.len() / 4,
-            injection_ids: scored.iter().map(|s| s.item.manifest.name.clone()).collect(),
+            injection_ids: scored
+                .iter()
+                .map(|s| s.item.manifest.name.clone())
+                .collect(),
             patterns: response_patterns,
             formatted,
         };
