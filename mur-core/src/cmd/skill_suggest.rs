@@ -1,92 +1,45 @@
-//! `mur skill suggest` — scan recordings, detect repeat task patterns >=3 times.
+//! `mur skill suggest` — list harvest-proposal candidates worth turning into
+//! skills/workflows. (The emergence/fingerprint miner was removed in
+//! workflow-engine v2 P1a; the ambient-capture harvest gate is the source.)
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::Path;
 
-use crate::capture::emergence::{detect_emergent, extract_fingerprints};
+use crate::nudge::candidate::CandidateSource;
+use crate::nudge::harvest_source::HarvestProposalSource;
 
 pub struct SuggestOptions {
-    /// Max most-recent sessions to scan. Default 20.
+    /// Max most-recent sessions to scan. Default 20. (Kept for CLI compat;
+    /// the proposal inbox is already bounded by the harvest gate.)
     pub max_sessions: usize,
     /// Minimum distinct sessions a pattern must appear in. Default 3.
     pub threshold: usize,
 }
 
 pub fn cmd_suggest(home: &Path, opts: SuggestOptions) -> Result<()> {
-    let recordings_dir = home.join("session").join("recordings");
-    if !recordings_dir.exists() {
-        println!("No session recordings found.");
-        return Ok(());
-    }
-
-    // Collect recent recording paths, sorted by modification time desc.
-    let mut paths: Vec<_> = std::fs::read_dir(&recordings_dir)
-        .context("read recordings dir")?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
-        .collect();
-    paths.sort_by_key(|e| {
-        std::cmp::Reverse(
-            e.metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-        )
-    });
-    paths.truncate(opts.max_sessions);
-
-    if paths.is_empty() {
-        println!("No session recordings found.");
-        return Ok(());
-    }
-
-    // Phase 1: extract fingerprints from each session.
-    let mut all_fingerprints = Vec::new();
-    for entry in &paths {
-        let content = std::fs::read_to_string(entry.path())
-            .with_context(|| format!("read {}", entry.path().display()))?;
-        if content.trim().is_empty() {
-            continue;
-        }
-        let id = entry
-            .path()
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let fps = extract_fingerprints(&content, &id);
-        all_fingerprints.extend(fps);
-    }
-
-    // Phase 2: detect emergent patterns (threshold >=3 sessions by default).
-    let candidates = detect_emergent(&all_fingerprints, opts.threshold);
+    let source = HarvestProposalSource::new(home.join("inbox").join("workflow-proposals"));
+    let mut candidates = source.candidates(opts.threshold)?;
+    candidates.truncate(opts.max_sessions);
 
     if candidates.is_empty() {
-        println!(
-            "No repeat patterns detected across {} sessions (threshold: {}).",
-            paths.len(),
-            opts.threshold,
-        );
+        println!("No pending workflow proposals. (Proposals appear after sessions pass the harvest gate — see `mur out`.)");
         return Ok(());
     }
 
-    // Phase 3: print suggestions.
-    println!(
-        "Found {} repeat pattern(s) across {} sessions:\n",
-        candidates.len(),
-        paths.len(),
-    );
+    println!("Found {} pending workflow proposal(s):\n", candidates.len());
     for (i, c) in candidates.iter().enumerate() {
         println!(
-            "{}. {} ({} sessions)",
+            "{}. {} ({} session{})",
             i + 1,
             c.suggested_name,
-            c.session_count
+            c.session_count,
+            if c.session_count == 1 { "" } else { "s" }
         );
-        println!("   behavior: {}", c.behavior);
-        if !c.keywords.is_empty() {
-            println!("   keywords: {}", c.keywords.join(", "));
+        println!("   title: {}", c.title);
+        if !c.steps_preview.is_empty() {
+            println!("   steps: {}", c.steps_preview.join(" → "));
         }
-        if let Some(first_session) = c.session_ids.first() {
+        if let Some(first_session) = c.evidence_session_ids.first() {
             println!(
                 "   generate: mur skill generate --from-session {}",
                 first_session
@@ -94,5 +47,54 @@ pub fn cmd_suggest(home: &Path, opts: SuggestOptions) -> Result<()> {
         }
         println!();
     }
+    println!("Review and accept with `mur out`.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::harvest::proposal::{Proposal, ProposalStatus, save_in_dir};
+
+    #[test]
+    fn lists_pending_proposals() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let inbox = tmp.path().join("inbox").join("workflow-proposals");
+        save_in_dir(
+            &inbox,
+            &Proposal {
+                id: "s1".into(),
+                title: "Deploy api".into(),
+                suggested_name: "deploy-api".into(),
+                steps: vec!["cargo build".into()],
+                event_count: 5,
+                duration_secs: 60,
+                created_at: "2026-06-11T00:00:00Z".into(),
+                status: ProposalStatus::Pending,
+                similar_to: None,
+            },
+        )
+        .unwrap();
+        cmd_suggest(
+            tmp.path(),
+            SuggestOptions {
+                max_sessions: 20,
+                threshold: 3,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn empty_inbox_is_fine() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        cmd_suggest(
+            tmp.path(),
+            SuggestOptions {
+                max_sessions: 20,
+                threshold: 3,
+            },
+        )
+        .unwrap();
+    }
 }
