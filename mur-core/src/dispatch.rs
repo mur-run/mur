@@ -271,6 +271,13 @@ pub async fn run(cli: Cli) -> Result<()> {
             cmd::server_cmd::cmd_serve(port, open, readonly).await?
         }
         Commands::Model(args) => cmd::model::run(args)?,
+        Commands::Migrate { patterns } => {
+            if patterns {
+                cmd::migrate_patterns::cmd_migrate_patterns()?;
+            } else {
+                eprintln!("Nothing to do. Try: mur migrate --patterns");
+            }
+        }
         Commands::Agent { action } => run_agent(action).await?,
         Commands::Skill { action } => match action {
             crate::cli::SkillAction::Validate {
