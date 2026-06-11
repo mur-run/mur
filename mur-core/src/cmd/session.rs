@@ -3,6 +3,33 @@ use std::collections::BTreeSet;
 
 use crate::session;
 
+/// Analyze a session with the LLM workflow extractor and persist the result as
+/// a draft workflow. Replaces the dead `mur learn extract` spawn (the `learn`
+/// subcommand never existed — workflow-engine v2 P1a cleanup).
+async fn analyze_session_to_draft(id: &str) -> Result<String> {
+    let events = session::read_events(id)?;
+    let extracted = if crate::extract::has_llm_config() {
+        match crate::extract::extract_workflow_llm(id, &events).await {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("  ⚠ LLM extraction failed ({e}); using logic-only extraction.");
+                crate::extract::extract_workflow(id, &events)
+            }
+        }
+    } else {
+        crate::extract::extract_workflow(id, &events)
+    };
+    let store = crate::store::workflow_yaml::WorkflowYamlStore::default_store()?;
+    let name = extracted.workflow.name.clone();
+    if !store.exists(&name) {
+        store.save(&extracted.workflow)?;
+        eprintln!("  ✓ Draft workflow saved: {} (run: mur run {})", name, name);
+    } else {
+        eprintln!("  ✓ Workflow `{}` already exists — left unchanged.", name);
+    }
+    Ok(name)
+}
+
 /// Show the session review URL and auto-open in browser.
 fn open_review_url(session_id: &str) {
     let mut local_running = std::net::TcpStream::connect("127.0.0.1:3847").is_ok();
@@ -189,20 +216,9 @@ pub(crate) async fn cmd_session_stop(_analyze: bool, _reflect: bool) -> Result<(
                         std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
                     match choice {
                         0 => {
-                            // Analyze: run `mur learn extract --file <path> --llm`
-                            if let Some(path_str) = recording_path.to_str() {
-                                let status = std::process::Command::new(&exe)
-                                    .args(["learn", "extract", "--file", path_str, "--llm"])
-                                    .status();
-                                if let Ok(s) = status {
-                                    if !s.success() {
-                                        eprintln!("  ⚠ learn extract exited with {}", s);
-                                    }
-                                } else if let Err(e) = status {
-                                    eprintln!("  ⚠ Failed to run learn extract: {}", e);
-                                }
+                            if let Err(e) = analyze_session_to_draft(&id).await {
+                                eprintln!("  ⚠ Analyze failed: {}", e);
                             }
-
                             open_review_url(&id);
                         }
                         1 => {
@@ -323,25 +339,9 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
     }
 
     // Legacy manual mode: stop the active session first (old `mur out` contract),
-    // keeping fingerprint extraction + auto-push for the stopped session.
+    // keeping auto-push for the stopped session.
     if let Ok(Some(id)) = crate::session::stop() {
         eprintln!("■ Stopped session {}", &id[..8.min(id.len())]);
-
-        let recording_path = crate::paths::mur_root(None)
-            .join("session")
-            .join("recordings")
-            .join(format!("{}.jsonl", &id));
-        if recording_path.exists() {
-            let content = std::fs::read_to_string(&recording_path)?;
-            if !content.trim().is_empty() {
-                use crate::capture::emergence::{extract_fingerprints, save_fingerprints};
-                let fps = extract_fingerprints(&content, &id);
-                if !fps.is_empty() {
-                    save_fingerprints(&fps)?;
-                    eprintln!("Extracted {} fingerprints from session.", fps.len());
-                }
-            }
-        }
 
         if let Ok(config) = crate::store::config::load_config()
             && config.sync.auto
@@ -553,17 +553,8 @@ async fn cmd_out_execute(action: &str, force: bool) -> anyhow::Result<()> {
                         }
                     }
 
-                    if let Some(path_str) = recording_path.to_str() {
-                        let status = std::process::Command::new(&exe)
-                            .args(["learn", "extract", "--file", path_str, "--llm"])
-                            .status();
-                        if let Ok(s) = status {
-                            if !s.success() {
-                                eprintln!("  ⚠ learn extract exited with {}", s);
-                            }
-                        } else if let Err(e) = status {
-                            eprintln!("  ⚠ Failed to run learn extract: {}", e);
-                        }
+                    if let Err(e) = analyze_session_to_draft(&r.id).await {
+                        eprintln!("  ⚠ Analyze failed: {}", e);
                     }
 
                     open_review_url(&r.id);
@@ -950,22 +941,8 @@ pub(crate) async fn cmd_session_export(
         _ => anyhow::bail!("Unknown format '{}'. Use: json, markdown, skill", format),
     };
 
-    if analyze {
-        let recording_path = dirs::home_dir()
-            .expect("no home dir")
-            .join(".mur")
-            .join("session")
-            .join("recordings")
-            .join(format!("{}.jsonl", full_id));
-
-        if recording_path.exists() {
-            let content = std::fs::read_to_string(&recording_path)?;
-            if !content.trim().is_empty() {
-                use crate::capture::emergence::extract_fingerprints;
-                let fps = extract_fingerprints(&content, &full_id);
-                eprintln!("Extracted {} fingerprints from session.", fps.len());
-            }
-        }
+    if analyze && let Err(e) = analyze_session_to_draft(&full_id).await {
+        eprintln!("  ⚠ Analyze failed: {}", e);
     }
 
     if let Some(path) = output {
