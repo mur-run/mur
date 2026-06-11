@@ -8,7 +8,12 @@ use crate::store::workflow_yaml::WorkflowYamlStore;
 
 /// Run a workflow — output as executable prompt for AI consumption.
 /// Accepts exact name, semantic query, or pipeline expression (w1 | w2 && w3, w4).
-pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool, prompt: bool) -> Result<()> {
+pub(crate) async fn cmd_workflow_run(
+    query: &str,
+    fail_fast: bool,
+    prompt: bool,
+    yes: bool,
+) -> Result<()> {
     use crate::store::embedding::{EmbeddingConfig, embed};
     use crate::store::vector::LanceDbStore as VectorStore;
     use mur_common::pipeline::{has_pipeline_syntax, parse_pipeline_expr};
@@ -100,6 +105,58 @@ pub(crate) async fn cmd_workflow_run(query: &str, fail_fast: bool, prompt: bool)
             }
         }
         None => {
+            // Fallback: scan skills directory for a category:Workflow skill.
+            // (This is a new search path; failure here prints the old
+            // "available workflows" message.)
+            let mur_dir = crate::paths::mur_root(None);
+            let skills_dir = mur_dir.join("skills");
+            if skills_dir.exists() {
+                let candidates =
+                    crate::retrieve::skill_candidates::load_skill_candidates(&skills_dir, &mur_dir)
+                        .unwrap_or_default();
+                if let Some(matched) = candidates.iter().find(|s| {
+                    s.manifest.name == query
+                        || s.manifest.name.contains(query)
+                        || query.contains(&s.manifest.name)
+                }) {
+                    if prompt {
+                        eprintln!(
+                            "# {} — {}",
+                            matched.manifest.name, matched.manifest.description
+                        );
+                        return Ok(());
+                    }
+                    // Only execute Workflow-category skills.
+                    if matched.manifest.category == mur_common::skill::types::Category::Workflow {
+                        if let Some(procedure) = &matched.manifest.content.procedure {
+                            let opts = crate::executor::dag::DagExecOptions {
+                                yes,
+                                device_id: "cli".to_string(),
+                                trigger: "manual",
+                                ..Default::default()
+                            };
+                            let output = crate::executor::dag::execute_dag(
+                                &mur_dir,
+                                &matched.manifest.name,
+                                procedure,
+                                &opts,
+                            )
+                            .await?;
+                            if output.exit_code != 0 {
+                                std::process::exit(output.exit_code);
+                            }
+                        } else {
+                            eprintln!(
+                                "Skill `{}` is category:Workflow but has no `content.procedure`",
+                                matched.manifest.name
+                            );
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+
+            // No skill match either.
             eprintln!("No matching workflow found for: {}", query);
             eprintln!("Available workflows:");
             let all = store.list_all()?;
