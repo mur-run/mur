@@ -72,7 +72,7 @@ pub(crate) fn cmd_session_start(source: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_session_stop(analyze: bool, _reflect: bool) -> Result<()> {
+pub(crate) async fn cmd_session_stop(_analyze: bool, _reflect: bool) -> Result<()> {
     match session::stop()? {
         Some(id) => {
             eprintln!("Session stopped: {}", &id[..8]);
@@ -84,90 +84,35 @@ pub(crate) async fn cmd_session_stop(analyze: bool, _reflect: bool) -> Result<()
                 .join("recordings")
                 .join(format!("{}.jsonl", id));
 
-            if analyze && recording_path.exists() {
-                let content = std::fs::read_to_string(&recording_path)?;
-                if !content.trim().is_empty() {
-                    use crate::capture::emergence::{extract_fingerprints, save_fingerprints};
-                    let fps = extract_fingerprints(&content, &id);
-                    if !fps.is_empty() {
-                        save_fingerprints(&fps)?;
-                        eprintln!("Extracted {} fingerprints from session.", fps.len());
-                    }
-                }
-            }
-
-            // M3b.3: quick suggestion scan after session stop.
-            if let Ok(home) = crate::cmd::agent::resolve_mur_home() {
-                let rec_dir = home.join("session").join("recordings");
-                if rec_dir.exists() {
-                    let mut paths: Vec<_> = std::fs::read_dir(&rec_dir)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|e| e.ok())
-                        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
-                        .collect();
-                    paths.sort_by_key(|e| {
-                        std::cmp::Reverse(
-                            e.metadata()
-                                .and_then(|m| m.modified())
-                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-                        )
-                    });
-                    paths.truncate(20);
-
-                    let mut fps = Vec::new();
-                    for entry in &paths {
-                        if let Ok(content) = std::fs::read_to_string(entry.path())
-                            && !content.trim().is_empty()
+            // Nudge hook: surface pending harvest proposals (replaces the
+            // emergence/fingerprint miner — workflow-engine v2 P1a).
+            {
+                use crate::nudge::candidate::CandidateSource;
+                let source = crate::nudge::HarvestProposalSource::default_source();
+                if let Ok(nudge_candidates) = source.candidates(0)
+                    && let Ok(surfaced) = record_nudges_for_candidates(&nudge_candidates)
+                    && !surfaced.is_empty()
+                {
+                    eprintln!(
+                        "💡 Noticed {} repeated workflow(s). Review with `mur suggest`.",
+                        surfaced.len()
+                    );
+                    // Deliver to companion-enabled agents' inboxes.
+                    let ledger_path = crate::nudge::NudgeLedger::default_path();
+                    if let Ok(ledger) = crate::nudge::NudgeLedger::load(&ledger_path) {
+                        let surfaced_cands: Vec<_> = surfaced
+                            .iter()
+                            .filter_map(|id| ledger.get(id).and_then(|r| r.candidate.clone()))
+                            .collect();
+                        if let Ok(n) = crate::nudge::companion::deliver_nudges_to_companions(
+                            &crate::store::yaml::default_mur_dir(),
+                            &surfaced_cands,
+                            "en",
+                        ) && n > 0
                         {
-                            let id = entry
-                                .path()
-                                .file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("unknown")
-                                .to_string();
-                            fps.extend(crate::capture::emergence::extract_fingerprints(
-                                &content, &id,
-                            ));
-                        }
-                    }
-                    let candidates = crate::capture::emergence::detect_emergent(&fps, 3);
-                    if !candidates.is_empty() {
-                        eprintln!(
-                            "{} repeat pattern(s) detected — run `mur skill suggest` to generate skills",
-                            candidates.len(),
-                        );
-                    }
-
-                    // Nudge hook: filter through ledger and surface actionable nudges.
-                    let nudge_candidates: Vec<_> = candidates
-                        .iter()
-                        .map(crate::nudge::WorkflowCandidate::from_emergent)
-                        .collect();
-                    if let Ok(surfaced) = record_nudges_for_candidates(&nudge_candidates)
-                        && !surfaced.is_empty()
-                    {
-                        eprintln!(
-                            "💡 Noticed {} repeated workflow(s). Review with `mur suggest`.",
-                            surfaced.len()
-                        );
-                        // Deliver to companion-enabled agents' inboxes.
-                        let ledger_path = crate::nudge::NudgeLedger::default_path();
-                        if let Ok(ledger) = crate::nudge::NudgeLedger::load(&ledger_path) {
-                            let surfaced_cands: Vec<_> = surfaced
-                                .iter()
-                                .filter_map(|id| ledger.get(id).and_then(|r| r.candidate.clone()))
-                                .collect();
-                            if let Ok(n) = crate::nudge::companion::deliver_nudges_to_companions(
-                                &crate::store::yaml::default_mur_dir(),
-                                &surfaced_cands,
-                                "en",
-                            ) && n > 0
-                            {
-                                eprintln!(
-                                    "  📬 {n} nudge(s) sent to your companion (or run `mur suggest`)."
-                                );
-                            }
+                            eprintln!(
+                                "  📬 {n} nudge(s) sent to your companion (or run `mur suggest`)."
+                            );
                         }
                     }
                 }
