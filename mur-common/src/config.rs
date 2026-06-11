@@ -66,6 +66,13 @@ pub struct Config {
     // --- mobile P4 additions ---
     #[serde(default)]
     pub mobile_relay: MobileRelayConfig,
+
+    // --- Ambient capture & harvest (2026-06-11 spec) ---
+    #[serde(default)]
+    pub session: SessionCfg,
+
+    #[serde(default)]
+    pub harvest: HarvestCfg,
 }
 
 /// Configuration for the mobile relay (P4).
@@ -1421,6 +1428,101 @@ impl Default for NudgeConfig {
     }
 }
 
+// ── Ambient capture & harvest (2026-06-11 spec) ────────────────────
+
+/// Ambient session capture (spec 2026-06-11-mur-ambient-capture-and-harvest §3.1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionCfg {
+    /// "ambient" (hooks always record) | "manual" (legacy `mur session in` gate) | "off"
+    #[serde(default = "default_capture_mode")]
+    pub capture: String,
+    /// Recordings older than this many days are removed by `mur session gc`.
+    #[serde(default = "default_retention_days")]
+    pub retention_days: u32,
+}
+
+impl Default for SessionCfg {
+    fn default() -> Self {
+        Self {
+            capture: default_capture_mode(),
+            retention_days: default_retention_days(),
+        }
+    }
+}
+
+fn default_capture_mode() -> String {
+    "ambient".to_string()
+}
+fn default_retention_days() -> u32 {
+    14
+}
+
+/// Harvest gate + token-budget defenses (spec §3.2, §3.7).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarvestCfg {
+    /// Run the heuristic gate automatically (from `mur session gc` / `mur out`).
+    #[serde(default = "default_harvest_enabled")]
+    pub auto_gate: bool,
+    /// "local-first" | "cloud" | "off" — W1/W2 only persist this; LLM wiring lands with v2 P5a.
+    #[serde(default = "default_harvest_llm")]
+    pub llm: String,
+    /// Gate thresholds — a session must clear at least one of these (see harvest::gate).
+    #[serde(default = "default_min_events")]
+    pub min_events: usize,
+    #[serde(default = "default_min_user_turns")]
+    pub min_user_turns: usize,
+    #[serde(default = "default_min_duration_secs")]
+    pub min_duration_secs: i64,
+    /// A session is considered ended when its last event is older than this.
+    #[serde(default = "default_idle_minutes")]
+    pub idle_minutes: i64,
+    /// §3.7 hard caps (persisted now; enforced when the LLM extract path lands in v2 P5a).
+    #[serde(default = "default_max_llm_calls_per_day")]
+    pub max_llm_calls_per_day: u32,
+    #[serde(default = "default_max_extract_input_tokens")]
+    pub max_extract_input_tokens: usize,
+    /// §3.8 tier-1: one-line pending-proposals hint at SessionStart.
+    #[serde(default = "default_harvest_enabled")]
+    pub session_start_hint: bool,
+    /// Step-skeleton Jaccard similarity at/above which a proposal becomes a merge suggestion.
+    #[serde(default = "default_similarity_merge_threshold")]
+    pub similarity_merge_threshold: f32,
+}
+
+impl Default for HarvestCfg {
+    fn default() -> Self {
+        serde_yaml::from_str("{}").expect("HarvestCfg defaults")
+    }
+}
+
+fn default_harvest_enabled() -> bool {
+    true
+}
+fn default_harvest_llm() -> String {
+    "local-first".to_string()
+}
+fn default_min_events() -> usize {
+    5
+}
+fn default_min_user_turns() -> usize {
+    2
+}
+fn default_min_duration_secs() -> i64 {
+    120
+}
+fn default_idle_minutes() -> i64 {
+    30
+}
+fn default_max_llm_calls_per_day() -> u32 {
+    10
+}
+fn default_max_extract_input_tokens() -> usize {
+    12000
+}
+fn default_similarity_merge_threshold() -> f32 {
+    0.6
+}
+
 // ── M7a: Cross-agent observability ─────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1711,5 +1813,35 @@ mod skills_config_tests {
     fn load_or_default_missing_file_returns_default() {
         let cfg = Config::load_or_default(std::path::Path::new("/nonexistent/config.yaml"));
         assert_eq!(cfg.skills.max_skills_in_prompt, 5);
+    }
+}
+
+#[cfg(test)]
+mod ambient_capture_cfg_tests {
+    use super::*;
+
+    #[test]
+    fn session_and_harvest_defaults() {
+        let cfg: Config = serde_yaml::from_str("{}").unwrap();
+        assert_eq!(cfg.session.capture, "ambient");
+        assert_eq!(cfg.session.retention_days, 14);
+        assert!(cfg.harvest.auto_gate);
+        assert_eq!(cfg.harvest.llm, "local-first");
+        assert_eq!(cfg.harvest.min_events, 5);
+        assert_eq!(cfg.harvest.min_user_turns, 2);
+        assert_eq!(cfg.harvest.min_duration_secs, 120);
+        assert_eq!(cfg.harvest.idle_minutes, 30);
+        assert_eq!(cfg.harvest.max_llm_calls_per_day, 10);
+        assert_eq!(cfg.harvest.max_extract_input_tokens, 12000);
+        assert!(cfg.harvest.session_start_hint);
+        assert!((cfg.harvest.similarity_merge_threshold - 0.6).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn session_capture_override_parses() {
+        let cfg: Config =
+            serde_yaml::from_str("session:\n  capture: off\n  retention_days: 3\n").unwrap();
+        assert_eq!(cfg.session.capture, "off");
+        assert_eq!(cfg.session.retention_days, 3);
     }
 }

@@ -364,6 +364,9 @@ pub enum SessionAction {
         #[arg(long, requires = "all")]
         dry_run: bool,
     },
+    /// Remove recordings past retention and run harvest housekeeping
+    #[command(hide = true)]
+    Gc,
 }
 
 #[derive(Subcommand)]

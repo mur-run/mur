@@ -229,6 +229,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 force,
                 dry_run,
             } => cmd::session::cmd_session_remove(id, all, force, dry_run)?,
+            SessionAction::Gc => cmd::session::cmd_session_gc()?,
         },
         Commands::Dashboard => {
             dashboard::render_dashboard()?;

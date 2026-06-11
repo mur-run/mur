@@ -287,26 +287,82 @@ pub(crate) async fn cmd_session_stop(analyze: bool, _reflect: bool) -> Result<()
     Ok(())
 }
 
-/// `mur in` — start session + inject context
+/// `mur in` — ambient mode: mark the session as important; manual mode: legacy
+/// start-recording + inject context.
 pub(crate) async fn cmd_in(source: &str) -> anyhow::Result<()> {
-    // Start the session
-    let session = crate::session::start(source)?;
-    eprintln!("Session started: {} (source: {})", &session.id[..8], source);
-    eprintln!("  Use `mur session out` to stop and export, or `mur session discard` to discard.");
+    let cfg = crate::store::config::load_config()?;
+    if cfg.session.capture != "ambient" {
+        // Legacy manual mode: identical to the old behavior.
+        let session = crate::session::start(source)?;
+        eprintln!("Session started: {} (source: {})", &session.id[..8], source);
+        eprintln!(
+            "  Use `mur session out` to stop and export, or `mur session discard` to discard."
+        );
 
-    // Inject context (equivalent to `mur context --quiet`)
-    crate::cmd::context::cmd_context(
-        None,
-        false,
-        false,
-        2000,
-        source.to_string(),
-        false,
-        vec![],
-        true,
-    )
-    .await?;
+        // Inject context (equivalent to `mur context --quiet`)
+        crate::cmd::context::cmd_context(
+            None,
+            false,
+            false,
+            2000,
+            source.to_string(),
+            false,
+            vec![],
+            true,
+        )
+        .await?;
+        return Ok(());
+    }
 
+    // Ambient mode: recording is always on — `mur in` marks importance.
+    let session_dir = crate::paths::mur_root(None).join("session");
+    std::fs::create_dir_all(&session_dir)?;
+
+    // Mark the most recent recording if it saw activity in the last 10 minutes;
+    // otherwise leave a marker the next captured event consumes.
+    let recent = crate::session::list_recordings()?.into_iter().find(|r| {
+        r.modified
+            .elapsed()
+            .map(|e| e.as_secs() < 600)
+            .unwrap_or(false)
+    });
+    match recent {
+        Some(r) => {
+            let meta = crate::session::update_marked(&r.id, true)?;
+            eprintln!(
+                "★ Session \"{}\" marked — the harvest gate will not skip it.",
+                meta.title.as_deref().unwrap_or(&r.id[..8.min(r.id.len())])
+            );
+        }
+        None => {
+            std::fs::write(
+                session_dir.join(crate::session::ambient::MARK_NEXT_FILE),
+                "",
+            )?;
+            eprintln!(
+                "★ Next session will be marked. (Recording is always on — see `mur session list`.)"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Retention GC over ambient recordings. Quiet by design — runs detached from
+/// the session-start hook. Harvest scan is appended here in W2.
+pub(crate) fn cmd_session_gc() -> anyhow::Result<()> {
+    let cfg = crate::store::config::load_config()?;
+    let recordings = crate::paths::mur_root(None)
+        .join("session")
+        .join("recordings");
+    let removed = crate::session::gc_in_dir(&recordings, cfg.session.retention_days)?;
+    if removed > 0 {
+        eprintln!("session gc: removed {} expired recording(s)", removed);
+    }
+    if let Ok(report) = crate::harvest::scan()
+        && report.proposed > 0
+    {
+        eprintln!("harvest: {} new workflow proposal(s)", report.proposed);
+    }
     Ok(())
 }
 
@@ -316,160 +372,148 @@ pub(crate) async fn cmd_in(source: &str) -> anyhow::Result<()> {
 /// - Non-TTY mode (LLM): outputs structured text for the LLM to present
 /// - `--action <name>`: directly executes the chosen action (for LLM second call)
 pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result<()> {
-    // If --action is given, we're in the "execute chosen action" phase
+    // Back-compat: explicit action keeps the old behavior verbatim.
     if let Some(action) = action {
         return cmd_out_execute(action, force).await;
     }
 
-    // Stop the session
-    let id = match crate::session::stop()? {
-        Some(id) => id,
-        None => {
-            eprintln!("No active session.");
-            return Ok(());
-        }
-    };
+    // Legacy manual mode: stop the active session first (old `mur out` contract),
+    // keeping fingerprint extraction + auto-push for the stopped session.
+    if let Ok(Some(id)) = crate::session::stop() {
+        eprintln!("■ Stopped session {}", &id[..8.min(id.len())]);
 
-    eprintln!("Session stopped: {}", &id[..8]);
-
-    let recording_path = dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("session")
-        .join("recordings")
-        .join(format!("{}.jsonl", &id));
-
-    // Extract fingerprints
-    if recording_path.exists() {
-        let content = std::fs::read_to_string(&recording_path)?;
-        if !content.trim().is_empty() {
-            use crate::capture::emergence::{extract_fingerprints, save_fingerprints};
-            let fps = extract_fingerprints(&content, &id);
-            if !fps.is_empty() {
-                save_fingerprints(&fps)?;
-                eprintln!("Extracted {} fingerprints from session.", fps.len());
+        let recording_path = crate::paths::mur_root(None)
+            .join("session")
+            .join("recordings")
+            .join(format!("{}.jsonl", &id));
+        if recording_path.exists() {
+            let content = std::fs::read_to_string(&recording_path)?;
+            if !content.trim().is_empty() {
+                use crate::capture::emergence::{extract_fingerprints, save_fingerprints};
+                let fps = extract_fingerprints(&content, &id);
+                if !fps.is_empty() {
+                    save_fingerprints(&fps)?;
+                    eprintln!("Extracted {} fingerprints from session.", fps.len());
+                }
             }
         }
-    }
 
-    // Auto-push to device sync if configured
-    if let Ok(config) = crate::store::config::load_config()
-        && config.sync.auto
-        && config.sync.method != "local"
-        && let Err(e) =
-            super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push, None)
-                .await
-    {
-        eprintln!("  ⚠ Auto-push failed: {}", e);
-    }
-
-    // Session summary
-    let meta = crate::session::load_meta_pub(&id);
-    let event_count = if recording_path.exists() {
-        std::fs::read_to_string(&recording_path)
-            .map(|c| c.lines().filter(|l| !l.trim().is_empty()).count())
-            .unwrap_or(0)
-    } else {
-        0
-    };
-
-    eprintln!();
-    eprintln!("Session summary:");
-    eprintln!("  Events: {}", event_count);
-    if let Some(ref m) = meta {
-        eprintln!(
-            "  Turns:  {} user, {} assistant",
-            m.user_turns, m.assistant_turns
-        );
-        if let (Some(stopped), Ok(start)) = (
-            &m.stopped_at,
-            chrono::DateTime::parse_from_rfc3339(&m.started_at),
-        ) && let Ok(end) = chrono::DateTime::parse_from_rfc3339(stopped)
+        if let Ok(config) = crate::store::config::load_config()
+            && config.sync.auto
+            && config.sync.method != "local"
+            && let Err(e) =
+                super::sync_cmd::device_sync(true, super::sync_cmd::DeviceSyncDirection::Push, None)
+                    .await
         {
-            let secs = end.signed_duration_since(start).num_seconds();
-            if secs >= 3600 {
-                eprintln!(
-                    "  Duration: {}h {}m {}s",
-                    secs / 3600,
-                    (secs % 3600) / 60,
-                    secs % 60
-                );
-            } else if secs >= 60 {
-                eprintln!("  Duration: {}m {}s", secs / 60, secs % 60);
-            } else {
-                eprintln!("  Duration: {}s", secs);
-            }
+            eprintln!("  ⚠ Auto-push failed: {}", e);
         }
+    }
+
+    // Harvest: scan now (synchronous — the user asked), then review.
+    let _ = crate::harvest::scan();
+    let inbox = crate::harvest::proposal::inbox_dir();
+    let pending = crate::harvest::proposal::pending_in_dir(&inbox)?;
+
+    if pending.is_empty() {
+        eprintln!("✓ Nothing to harvest — no pending workflow proposals.");
+        eprintln!("  (Recording is always on; see `mur session list`.)");
+        return Ok(());
     }
 
     let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
-
-    if is_tty {
-        // Interactive TTY menu
-        let items = &[
-            "🔍 Analyze — extract patterns with LLM",
-            "📦 Export — save as markdown",
-            "⏭  Skip",
-        ];
-
-        if let Ok(choice) = dialoguer::Select::new()
-            .with_prompt("What next?")
-            .items(items)
-            .default(2)
-            .interact()
-        {
-            let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
-            match choice {
-                0 => {
-                    // Extract patterns via LLM
-                    let recording_path = dirs::home_dir()
-                        .expect("no home dir")
-                        .join(".mur")
-                        .join("session")
-                        .join("recordings")
-                        .join(format!("{}.jsonl", &id));
-                    if let Some(path_str) = recording_path.to_str() {
-                        let status = std::process::Command::new(&exe)
-                            .args(["learn", "extract", "--file", path_str, "--llm"])
-                            .status();
-                        if let Ok(s) = status {
-                            if !s.success() {
-                                eprintln!("  ⚠ learn extract exited with {}", s);
-                            }
-                        } else if let Err(e) = status {
-                            eprintln!("  ⚠ Failed to run learn extract: {}", e);
-                        }
-                    }
-
-                    open_review_url(&id);
-                }
-                1 => {
-                    let status = std::process::Command::new(&exe)
-                        .args(["session", "export", &id, "--format", "markdown"])
-                        .status();
-                    if let Ok(s) = status
-                        && !s.success()
-                    {
-                        eprintln!("  ⚠ session export exited with {}", s);
-                    } else if let Err(e) = status {
-                        eprintln!("  ⚠ Failed to run session export: {}", e);
-                    }
-                }
-                _ => {} // Skip
-            }
+    if !is_tty {
+        eprintln!("◆ {} pending workflow proposal(s):", pending.len());
+        for p in &pending {
+            eprintln!(
+                "  {}  \"{}\" — {} steps{}",
+                &p.id[..8.min(p.id.len())],
+                p.title,
+                p.steps.len(),
+                p.similar_to
+                    .as_deref()
+                    .map(|s| format!(" (≈ existing `{}`)", s))
+                    .unwrap_or_default()
+            );
         }
-    } else {
-        // Non-TTY: structured output for LLM consumption
-        eprintln!();
-        eprintln!("Available actions:");
-        eprintln!("  1. analyze  — Extract patterns with LLM analysis");
-        eprintln!("  2. export   — Save session as markdown");
-        eprintln!("  3. skip     — Done, no further action");
-        eprintln!();
-        eprintln!("Run: mur out --action <analyze|export|skip>");
+        eprintln!(
+            "Run `mur out` in a terminal to review, or `mur out --action analyze` for LLM analysis."
+        );
+        return Ok(());
     }
 
+    for p in pending {
+        eprintln!();
+        eprintln!(
+            "◆ \"{}\"  ({} events · {}m)",
+            p.title,
+            p.event_count,
+            p.duration_secs / 60
+        );
+        for (i, s) in p.steps.iter().enumerate().take(8) {
+            eprintln!("    {}. {}", i + 1, s);
+        }
+        if p.steps.len() > 8 {
+            eprintln!("    … {} more", p.steps.len() - 8);
+        }
+        if let Some(similar) = &p.similar_to {
+            eprintln!(
+                "  ⚠ near-duplicate of existing `{}` — consider merging instead",
+                similar
+            );
+        }
+
+        let items = &["✓ Accept as draft workflow", "⏭ Skip", "✗ Quit review"];
+        let choice = dialoguer::Select::new()
+            .with_prompt(format!("Save as `{}`?", p.suggested_name))
+            .items(items)
+            .default(0)
+            .interact()
+            .unwrap_or(2);
+        match choice {
+            0 => {
+                crate::cmd::workflow::create_draft_workflow_with_steps(
+                    &p.suggested_name,
+                    &format!("Captured from session {}", &p.id[..8.min(p.id.len())]),
+                    &p.title,
+                    std::slice::from_ref(&p.id),
+                    &p.steps,
+                )?;
+                crate::harvest::proposal::set_status_in_dir(
+                    &inbox,
+                    &p.id,
+                    crate::harvest::proposal::ProposalStatus::Accepted,
+                )?;
+                mark_harvested(&p.id);
+                eprintln!(
+                    "  ✓ Draft saved — edit: ~/.mur/workflows/{}.yaml · run: mur run {}",
+                    p.suggested_name, p.suggested_name
+                );
+            }
+            1 => {
+                crate::harvest::proposal::set_status_in_dir(
+                    &inbox,
+                    &p.id,
+                    crate::harvest::proposal::ProposalStatus::Dismissed,
+                )?;
+                mark_harvested(&p.id);
+            }
+            _ => break,
+        }
+    }
     Ok(())
+}
+
+/// Stamp `harvested_at` so retention GC may reclaim the recording.
+fn mark_harvested(id: &str) {
+    if let Some(mut meta) = crate::session::load_meta_pub(id) {
+        meta.harvested_at = Some(chrono::Utc::now().to_rfc3339());
+        let recordings = crate::paths::mur_root(None)
+            .join("session")
+            .join("recordings");
+        if let Ok(json) = serde_json::to_string_pretty(&meta) {
+            let _ = std::fs::write(recordings.join(format!("{}.meta.json", id)), json);
+        }
+    }
 }
 
 /// Check if a session has enough substance to warrant LLM analysis.

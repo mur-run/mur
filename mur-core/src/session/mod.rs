@@ -4,6 +4,7 @@
 //! State file: `~/.mur/session/active.json`
 //! Recordings: `~/.mur/session/recordings/<session-id>.jsonl`
 
+pub mod ambient;
 pub mod cloud;
 pub mod scrub;
 
@@ -23,7 +24,7 @@ pub struct ActiveSession {
 }
 
 /// A single session event appended to the JSONL recording.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionEvent {
     pub timestamp: u64,
     #[serde(rename = "type")]
@@ -31,13 +32,17 @@ pub struct SessionEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
     pub content: String,
+    // ── Layer-1 enrichment (spec §3.1; all Option/default for back-compat) ──
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 fn session_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mur")
-        .join("session")
+    crate::paths::mur_root(None).join("session")
 }
 
 fn recordings_dir() -> PathBuf {
@@ -73,6 +78,16 @@ pub struct SessionMeta {
     pub tools_used: Vec<String>,
     pub user_turns: usize,
     pub assistant_turns: usize,
+    // ── Ambient capture additions (all default for back-compat) ──
+    /// Set by `mur in`: harvest gate passes this session unconditionally.
+    #[serde(default)]
+    pub marked: bool,
+    /// RFC3339 of the last harvest-gate run over this session (prevents re-scan).
+    #[serde(default)]
+    pub gated_at: Option<String>,
+    /// RFC3339 when the user accepted/skipped this session's proposal.
+    #[serde(default)]
+    pub harvested_at: Option<String>,
 }
 
 fn meta_path(id: &str) -> PathBuf {
@@ -161,6 +176,9 @@ pub fn start(source: &str) -> Result<ActiveSession> {
         tools_used: vec![],
         user_turns: 0,
         assistant_turns: 0,
+        marked: false,
+        gated_at: None,
+        harvested_at: None,
     };
     save_meta(&meta)?;
 
@@ -188,6 +206,70 @@ pub fn stop() -> Result<Option<String>> {
     Ok(Some(id))
 }
 
+/// Append one event to `<recordings_dir>/<id>.jsonl`, creating the meta file on
+/// first write. Shared by the legacy active-session path and ambient capture.
+pub(crate) fn record_event_in_dir(
+    recordings_dir: &std::path::Path,
+    id: &str,
+    source: &str,
+    event: &SessionEvent,
+) -> Result<()> {
+    fs::create_dir_all(recordings_dir)?;
+
+    let recording_path = recordings_dir.join(format!("{}.jsonl", id));
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&recording_path)
+        .context("Failed to open recording file")?;
+
+    let mut line = serde_json::to_string(event)?;
+    line.push('\n');
+    file.write_all(line.as_bytes())?;
+
+    // Load-or-create meta, then apply the same turn/tool accounting as before.
+    let meta_path = recordings_dir.join(format!("{}.meta.json", id));
+    let mut meta: SessionMeta = fs::read_to_string(&meta_path)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_else(|| SessionMeta {
+            id: id.to_string(),
+            source: source.to_string(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stopped_at: None,
+            title: None,
+            tools_used: vec![],
+            user_turns: 0,
+            assistant_turns: 0,
+            marked: false,
+            gated_at: None,
+            harvested_at: None,
+        });
+
+    match event.event_type.as_str() {
+        "user" => {
+            meta.user_turns += 1;
+            if meta.title.is_none() {
+                let title: String = event.content.chars().take(80).collect();
+                meta.title = Some(title);
+            }
+        }
+        "assistant" => meta.assistant_turns += 1,
+        "tool_call" => {
+            if let Some(tool_name) = &event.tool {
+                let tools: BTreeSet<String> = meta.tools_used.iter().cloned().collect();
+                if !tools.contains(tool_name) {
+                    meta.tools_used.push(tool_name.clone());
+                }
+            }
+        }
+        _ => {}
+    }
+    let json = serde_json::to_string_pretty(&meta)?;
+    fs::write(&meta_path, json).context("Failed to write session meta")?;
+    Ok(())
+}
+
 /// Record an event to the active session. Returns Ok(false) if no session is active.
 pub fn record(event_type: &str, tool: Option<&str>, content: &str) -> Result<bool> {
     let active = active_path();
@@ -211,45 +293,11 @@ pub fn record(event_type: &str, tool: Option<&str>, content: &str) -> Result<boo
         event_type: event_type.to_string(),
         tool: tool.map(|s| s.to_string()),
         content: content.to_string(),
+        working_dir: None,
+        git_branch: None,
+        exit_code: None,
     };
-
-    let recording_path = recordings_dir().join(format!("{}.jsonl", session.id));
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&recording_path)
-        .context("Failed to open recording file")?;
-
-    let mut line = serde_json::to_string(&event)?;
-    line.push('\n');
-    file.write_all(line.as_bytes())?;
-
-    // Update session meta
-    if let Some(mut meta) = load_meta(&session.id) {
-        match event_type {
-            "user" => {
-                meta.user_turns += 1;
-                if meta.title.is_none() {
-                    let title: String = content.chars().take(80).collect();
-                    meta.title = Some(title);
-                }
-            }
-            "assistant" => {
-                meta.assistant_turns += 1;
-            }
-            "tool_call" => {
-                if let Some(tool_name) = tool {
-                    let tools: BTreeSet<String> = meta.tools_used.iter().cloned().collect();
-                    if !tools.contains(tool_name) {
-                        meta.tools_used.push(tool_name.to_string());
-                    }
-                }
-            }
-            _ => {}
-        }
-        let _ = save_meta(&meta);
-    }
-
+    record_event_in_dir(&recordings_dir(), &session.id, &session.source, &event)?;
     Ok(true)
 }
 
@@ -323,6 +371,52 @@ fn remove_recording_in_dir(recordings_dir: &std::path::Path, id: &str) -> Result
 /// recordings directory.
 pub(crate) fn remove_recording(id: &str) -> Result<()> {
     remove_recording_in_dir(&recordings_dir(), id)
+}
+
+/// Remove recordings older than `retention_days`, judged by meta `started_at`.
+/// Marked-but-never-harvested sessions are kept regardless of age (the user
+/// declared them important; they leave via harvest or explicit remove).
+/// Returns the number of recordings removed.
+pub fn gc_in_dir(recordings_dir: &std::path::Path, retention_days: u32) -> Result<usize> {
+    if !recordings_dir.exists() {
+        return Ok(0);
+    }
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+    let mut removed = 0usize;
+    for entry in fs::read_dir(recordings_dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        let meta = fs::read_to_string(recordings_dir.join(format!("{}.meta.json", id)))
+            .ok()
+            .and_then(|c| serde_json::from_str::<SessionMeta>(&c).ok());
+        let Some(meta) = meta else { continue }; // metaless files: leave for manual cleanup
+        let Ok(started) = chrono::DateTime::parse_from_rfc3339(&meta.started_at) else {
+            continue;
+        };
+        if started.with_timezone(&chrono::Utc) >= cutoff {
+            continue;
+        }
+        if meta.marked && meta.harvested_at.is_none() {
+            continue;
+        }
+        remove_recording_in_dir(recordings_dir, &id)?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// Set or clear the `marked` flag on a session's meta.
+pub fn update_marked(id: &str, marked: bool) -> Result<SessionMeta> {
+    let mut meta =
+        load_meta(id).ok_or_else(|| anyhow::anyhow!("No meta found for session '{}'", id))?;
+    meta.marked = marked;
+    save_meta(&meta)?;
+    Ok(meta)
 }
 
 /// Check if a recording has been synced to the cloud.
@@ -469,18 +563,21 @@ mod tests {
                 event_type: "user".to_string(),
                 tool: None,
                 content: "hello".to_string(),
+                ..Default::default()
             },
             SessionEvent {
                 timestamp: 2000,
                 event_type: "assistant".to_string(),
                 tool: None,
                 content: "hi".to_string(),
+                ..Default::default()
             },
             SessionEvent {
                 timestamp: 3000,
                 event_type: "tool_call".to_string(),
                 tool: Some("Bash".to_string()),
                 content: "ls".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -516,6 +613,7 @@ mod tests {
             event_type: "user".to_string(),
             tool: None,
             content: "hello world".to_string(),
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&event).unwrap();
@@ -527,6 +625,7 @@ mod tests {
             event_type: "tool_call".to_string(),
             tool: Some("Bash".to_string()),
             content: "ls -la".to_string(),
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&event_with_tool).unwrap();
@@ -551,12 +650,14 @@ mod tests {
                 event_type: "user".to_string(),
                 tool: None,
                 content: "first".to_string(),
+                ..Default::default()
             },
             SessionEvent {
                 timestamp: 2000,
                 event_type: "assistant".to_string(),
                 tool: None,
                 content: "second".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -659,6 +760,9 @@ mod tests {
             tools_used: vec!["Bash".to_string(), "Read".to_string()],
             user_turns: 3,
             assistant_turns: 4,
+            marked: false,
+            gated_at: None,
+            harvested_at: None,
         };
 
         let json = serde_json::to_string_pretty(&meta).unwrap();
@@ -687,6 +791,9 @@ mod tests {
             tools_used: vec![],
             user_turns: 0,
             assistant_turns: 0,
+            marked: false,
+            gated_at: None,
+            harvested_at: None,
         };
 
         // Write and read back
@@ -756,6 +863,88 @@ mod tests {
         assert!(!rec_dir.join(format!("{}.jsonl", id)).exists());
         assert!(!rec_dir.join(format!("{}.meta.json", id)).exists());
         assert!(!rec_dir.join(format!("{}.synced", id)).exists());
+    }
+
+    #[test]
+    fn gc_removes_old_unmarked_keeps_recent_and_marked() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rec_dir = tmp.path().join("recordings");
+        fs::create_dir_all(&rec_dir).unwrap();
+
+        let write = |id: &str, started_days_ago: i64, marked: bool, harvested: bool| {
+            fs::write(rec_dir.join(format!("{}.jsonl", id)), "{}\n").unwrap();
+            let meta = SessionMeta {
+                id: id.to_string(),
+                source: "claude".to_string(),
+                started_at: (chrono::Utc::now() - chrono::Duration::days(started_days_ago))
+                    .to_rfc3339(),
+                stopped_at: None,
+                title: None,
+                tools_used: vec![],
+                user_turns: 0,
+                assistant_turns: 0,
+                marked,
+                gated_at: None,
+                harvested_at: harvested.then(|| chrono::Utc::now().to_rfc3339()),
+            };
+            fs::write(
+                rec_dir.join(format!("{}.meta.json", id)),
+                serde_json::to_string_pretty(&meta).unwrap(),
+            )
+            .unwrap();
+        };
+
+        write("old-plain", 30, false, false); // old, unmarked → removed
+        write("old-marked", 30, true, false); // old but marked, never harvested → kept
+        write("old-marked-done", 30, true, true); // old, marked, harvested → removed
+        write("fresh", 1, false, false); // recent → kept
+
+        let removed = gc_in_dir(&rec_dir, 14).unwrap();
+        assert_eq!(removed, 2);
+        assert!(!rec_dir.join("old-plain.jsonl").exists());
+        assert!(rec_dir.join("old-marked.jsonl").exists());
+        assert!(!rec_dir.join("old-marked-done.jsonl").exists());
+        assert!(rec_dir.join("fresh.jsonl").exists());
+    }
+
+    #[test]
+    fn meta_back_compat_without_new_fields() {
+        // Old meta files (pre-ambient) must keep parsing.
+        let json = r#"{"id":"x","source":"claude","started_at":"2026-01-01T00:00:00Z",
+            "stopped_at":null,"title":null,"tools_used":[],"user_turns":0,"assistant_turns":0}"#;
+        let meta: SessionMeta = serde_json::from_str(json).unwrap();
+        assert!(!meta.marked);
+        assert!(meta.gated_at.is_none());
+        assert!(meta.harvested_at.is_none());
+    }
+
+    #[test]
+    fn record_event_in_dir_appends_and_updates_meta() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rec_dir = tmp.path().join("recordings");
+        fs::create_dir_all(&rec_dir).unwrap();
+
+        let ev = SessionEvent {
+            timestamp: 1000,
+            event_type: "user".to_string(),
+            tool: None,
+            content: "fix the login bug".to_string(),
+            working_dir: Some("/repo".to_string()),
+            git_branch: Some("main".to_string()),
+            exit_code: None,
+        };
+        record_event_in_dir(&rec_dir, "sess-1", "claude", &ev).unwrap();
+        record_event_in_dir(&rec_dir, "sess-1", "claude", &ev).unwrap();
+
+        let content = fs::read_to_string(rec_dir.join("sess-1.jsonl")).unwrap();
+        assert_eq!(content.lines().count(), 2);
+
+        let meta: SessionMeta =
+            serde_json::from_str(&fs::read_to_string(rec_dir.join("sess-1.meta.json")).unwrap())
+                .unwrap();
+        assert_eq!(meta.user_turns, 2);
+        assert_eq!(meta.source, "claude");
+        assert_eq!(meta.title.as_deref(), Some("fix the login bug"));
     }
 
     #[test]

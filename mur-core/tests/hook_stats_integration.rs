@@ -13,6 +13,9 @@ fn make_event(kind: EventKind, tool: Option<&str>, session: Option<&str>) -> Nor
         tool_input: None,
         stop_reason: None,
         session_id: session.map(str::to_owned),
+        transcript_path: None,
+        tool_response: None,
+        cwd: None,
         duration_ms: None,
         is_duration_record: false,
     }

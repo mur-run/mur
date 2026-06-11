@@ -170,6 +170,12 @@ Recurring tool sequences across sessions are mined into **suggested workflows**
 (`mur workflow suggest`) — no drag-and-drop DAG editor, no marketplace; your own
 recorded behavior is the authoring tool.
 
+Capture is **ambient**: once hooks are installed, every session is recorded
+locally (scrubbed at write, retention-GC'd, one line of config to turn off).
+`mur in` just marks the current session as important; `mur out` reviews the
+workflow proposals MUR harvested from your recent sessions — accept one and
+it becomes a draft workflow you can run with `mur run`.
+
 ### 💬 Be everywhere you are
 
 - **MUR Hub** — multi-conversation rail across the fleet, streaming replies,
