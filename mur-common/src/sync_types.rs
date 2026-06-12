@@ -139,11 +139,16 @@ pub struct FleetPullResponse {
 /// - `manifest_yaml`: raw `skill.yaml` (synced via LWW on `content_sha256`).
 /// - `events_jsonl`: raw `events.jsonl` content (set-union merge on conflict).
 /// - `content_sha256`: sha-256 of `manifest_yaml`.
+/// - `stats_json`: serialised `SkillStats` snapshot (server uses for run-history
+///   aggregation without re-parsing the full event log). Optional for backward
+///   compatibility with older clients that do not include it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillFleetPayload {
     pub manifest_yaml: String,
     pub events_jsonl: String,
     pub content_sha256: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stats_json: String,
 }
 
 #[cfg(test)]
@@ -193,6 +198,7 @@ mod fleet_tests {
             manifest_yaml: "name: foo\n".into(),
             events_jsonl: "{\"kind\":\"retrieval\"}\n".into(),
             content_sha256: "abc123".into(),
+            stats_json: String::new(),
         };
         let s = serde_json::to_string(&p).unwrap();
         let back: SkillFleetPayload = serde_json::from_str(&s).unwrap();

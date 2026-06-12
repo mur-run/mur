@@ -140,10 +140,34 @@ pub fn build_fleet_skill_changes(
             continue;
         }
 
+        // When only events grew (yaml unchanged), send the delta so we don't
+        // re-upload the full log on every run. When yaml also changed, send the
+        // full events so the server payload stays self-contained.
+        let events_payload = if hash_match {
+            let prev_tail = stored.map(|m| m.events_tail).unwrap_or(0);
+            events_jsonl
+                .lines()
+                .filter(|l| !l.is_empty())
+                .skip(prev_tail as usize)
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            events_jsonl.clone()
+        };
+
+        // Include the latest stats snapshot so the server can serve run-history
+        // without re-parsing the (potentially partial) events_jsonl.
+        let stats_json = {
+            use mur_common::skill::stats::SkillStats;
+            let stats_path = SkillStats::path(mur_dir, &skill_name);
+            std::fs::read_to_string(stats_path).unwrap_or_default()
+        };
+
         let payload = SkillFleetPayload {
             manifest_yaml,
-            events_jsonl,
+            events_jsonl: events_payload,
             content_sha256: content_hash.clone(),
+            stats_json,
         };
         changes.push(FleetChange {
             action: "upsert".into(),
@@ -655,6 +679,7 @@ mod tests {
                 "{\"kind\":\"retrieval\",\"ts\":\"2026-05-30T00:00:00Z\",\"device_id\":\"d\"}\n"
                     .into(),
             content_sha256: "abc".into(),
+            stats_json: String::new(),
         };
         let ent = FleetEntity {
             logical_id: "foo".into(),
@@ -896,5 +921,127 @@ mod tests {
         assert_eq!(reason, "force_local");
         assert_eq!(winner.manifest.content.context, Some("keep-me".into()));
         assert_eq!(winner.content_sha256, Some("local-hash".into()));
+    }
+
+    // ── Delta push optimisation ────────────────────────────────────────────
+
+    /// When yaml is unchanged, only new events (beyond manifest events_tail)
+    /// should appear in the pushed payload — never a full re-upload.
+    #[test]
+    fn build_fleet_skill_changes_sends_delta_events_when_yaml_unchanged() {
+        use mur_common::sync_types::SkillFleetPayload;
+        use sha2::{Digest, Sha256};
+
+        let dir = tempdir().unwrap();
+        let skill_dir = dir.path().join("skills/my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+
+        let yaml = "name: my-skill\nversion: 1.0.0\n";
+        std::fs::write(skill_dir.join("skill.yaml"), yaml).unwrap();
+
+        let content_hash = {
+            let mut h = Sha256::new();
+            h.update(yaml.as_bytes());
+            format!("{:x}", h.finalize())
+        };
+
+        // Simulate three events already pushed (manifest records tail=3).
+        let all_events = concat!(
+            "{\"kind\":\"retrieval\",\"ts\":\"2026-01-01T00:00:00Z\",\"device_id\":\"d\"}\n",
+            "{\"kind\":\"retrieval\",\"ts\":\"2026-01-02T00:00:00Z\",\"device_id\":\"d\"}\n",
+            "{\"kind\":\"retrieval\",\"ts\":\"2026-01-03T00:00:00Z\",\"device_id\":\"d\"}\n",
+            "{\"kind\":\"retrieval\",\"ts\":\"2026-01-04T00:00:00Z\",\"device_id\":\"d\"}\n",
+            "{\"kind\":\"retrieval\",\"ts\":\"2026-01-05T00:00:00Z\",\"device_id\":\"d\"}\n",
+        );
+        std::fs::write(skill_dir.join("events.jsonl"), all_events).unwrap();
+
+        let mut manifest = FleetManifest::default();
+        manifest.insert(
+            "my-skill".into(),
+            FleetManifestEntry {
+                content_hash: content_hash.clone(),
+                version: 1,
+                events_tail: 3, // 3 events already pushed
+            },
+        );
+
+        let changes = build_fleet_skill_changes(dir.path(), &manifest).unwrap();
+        assert_eq!(changes.len(), 1, "should detect new events");
+
+        let payload: SkillFleetPayload =
+            serde_json::from_str(changes[0].payload.as_ref().unwrap()).unwrap();
+
+        // Only the 2 new events (lines 4 and 5) should be in the delta.
+        let lines: Vec<_> = payload
+            .events_jsonl
+            .lines()
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(lines.len(), 2, "delta should contain only 2 new events");
+        assert!(
+            lines[0].contains("2026-01-04"),
+            "first delta event should be the 4th event"
+        );
+        assert!(
+            lines[1].contains("2026-01-05"),
+            "second delta event should be the 5th event"
+        );
+    }
+
+    /// When yaml changes, the full events log is sent so the server payload
+    /// stays self-contained for any pull receiver.
+    #[test]
+    fn build_fleet_skill_changes_sends_full_events_when_yaml_changed() {
+        use mur_common::sync_types::SkillFleetPayload;
+        use sha2::{Digest, Sha256};
+
+        let dir = tempdir().unwrap();
+        let skill_dir = dir.path().join("skills/my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+
+        let yaml = "name: my-skill\nversion: 2.0.0\n"; // new version
+        std::fs::write(skill_dir.join("skill.yaml"), yaml).unwrap();
+
+        let new_hash = {
+            let mut h = Sha256::new();
+            h.update(yaml.as_bytes());
+            format!("{:x}", h.finalize())
+        };
+
+        let events = concat!(
+            "{\"kind\":\"retrieval\",\"ts\":\"2026-01-01T00:00:00Z\",\"device_id\":\"d\"}\n",
+            "{\"kind\":\"retrieval\",\"ts\":\"2026-01-02T00:00:00Z\",\"device_id\":\"d\"}\n",
+        );
+        std::fs::write(skill_dir.join("events.jsonl"), events).unwrap();
+
+        let mut manifest = FleetManifest::default();
+        manifest.insert(
+            "my-skill".into(),
+            FleetManifestEntry {
+                content_hash: "old-hash-different-from-new".into(),
+                version: 1,
+                events_tail: 1, // 1 event already pushed
+            },
+        );
+        // Sanity: new_hash != old stored hash
+        assert_ne!(new_hash, "old-hash-different-from-new");
+
+        let changes = build_fleet_skill_changes(dir.path(), &manifest).unwrap();
+        assert_eq!(changes.len(), 1);
+
+        let payload: SkillFleetPayload =
+            serde_json::from_str(changes[0].payload.as_ref().unwrap()).unwrap();
+
+        // Full events (both lines) because yaml changed.
+        let lines: Vec<_> = payload
+            .events_jsonl
+            .lines()
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "full events should be sent when yaml changed"
+        );
     }
 }
