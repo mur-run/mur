@@ -155,10 +155,19 @@ pub fn build_fleet_skill_changes(
             events_jsonl.clone()
         };
 
+        // Include the latest stats snapshot so the server can serve run-history
+        // without re-parsing the (potentially partial) events_jsonl.
+        let stats_json = {
+            use mur_common::skill::stats::SkillStats;
+            let stats_path = SkillStats::path(mur_dir, &skill_name);
+            std::fs::read_to_string(stats_path).unwrap_or_default()
+        };
+
         let payload = SkillFleetPayload {
             manifest_yaml,
             events_jsonl: events_payload,
             content_sha256: content_hash.clone(),
+            stats_json,
         };
         changes.push(FleetChange {
             action: "upsert".into(),
@@ -670,6 +679,7 @@ mod tests {
                 "{\"kind\":\"retrieval\",\"ts\":\"2026-05-30T00:00:00Z\",\"device_id\":\"d\"}\n"
                     .into(),
             content_sha256: "abc".into(),
+            stats_json: String::new(),
         };
         let ent = FleetEntity {
             logical_id: "foo".into(),
