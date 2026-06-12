@@ -278,8 +278,8 @@ payloads 40–80%, reversibly — originals stay retrievable by hash.
 **MUR Commander** — the cross-network orchestration, governance, and
 evaluation plane — ships as a separate crate.
 
-On disk, everything lives under `~/.mur/`: agents, skills, notes, workflows, and
-patterns as **human-readable, git-friendly YAML** (the source of truth), plus a
+On disk, everything lives under `~/.mur/`: agents, skills, notes, and workflows
+as **human-readable, git-friendly YAML** (the source of truth), plus a
 LanceDB vector index that is always rebuildable (`mur internals reindex`). No
 opaque database lock-in.
 
