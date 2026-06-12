@@ -17,7 +17,18 @@ fn plist_contents(
     mur_home: &Path,
     stdout_log: &Path,
     stderr_log: &Path,
+    anthropic_base_url: Option<&str>,
 ) -> String {
+    // Optional extra env entry routing the runtime through the cc-proxy bridge
+    // so subscription-OAuth tokens get the Bearer disguise (else an oat token
+    // 401s as `x-api-key`). launchd agents are long-lived, so we inject when the
+    // bridge is configured-on rather than probing reachability at register time.
+    let base_url_entry = match anthropic_base_url {
+        Some(url) => {
+            format!("\n        <key>ANTHROPIC_BASE_URL</key>\n        <string>{url}</string>")
+        }
+        None => String::new(),
+    };
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -39,7 +50,7 @@ fn plist_contents(
     <key>EnvironmentVariables</key>
     <dict>
         <key>MUR_HOME</key>
-        <string>{mur_home}</string>
+        <string>{mur_home}</string>{base_url_entry}
     </dict>
     <key>KeepAlive</key>
     <true/>
@@ -57,6 +68,7 @@ fn plist_contents(
         mur_home = mur_home.display(),
         stdout = stdout_log.display(),
         stderr = stderr_log.display(),
+        base_url_entry = base_url_entry,
     )
 }
 
@@ -91,7 +103,16 @@ pub fn register(
     let stderr_log = log_dir.join("stderr.log");
 
     let _ = display_name; // stored in the plist label, not needed in the body
-    let plist = plist_contents(slug, runtime_binary, mur_home, &stdout_log, &stderr_log);
+    let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
+    let base_url = cfg.cc_proxy.enabled.then(|| cfg.cc_proxy.url.clone());
+    let plist = plist_contents(
+        slug,
+        runtime_binary,
+        mur_home,
+        &stdout_log,
+        &stderr_log,
+        base_url.as_deref(),
+    );
 
     std::fs::write(&plist_path, &plist).context("write launchd plist")?;
 
@@ -200,7 +221,7 @@ mod tests {
         let stdout_log = log_dir.join("stdout.log");
         let stderr_log = log_dir.join("stderr.log");
 
-        let plist = plist_contents("coach", runtime, mur_home, &stdout_log, &stderr_log);
+        let plist = plist_contents("coach", runtime, mur_home, &stdout_log, &stderr_log, None);
 
         assert!(plist.contains("AssociatedBundleIdentifiers"));
         assert!(plist.contains("run.mur.host"));
@@ -221,10 +242,29 @@ mod tests {
             Path::new("/tmp/custom-mur-home"),
             Path::new("/tmp/custom-mur-home/agents/coach/stdout.log"),
             Path::new("/tmp/custom-mur-home/agents/coach/stderr.log"),
+            None,
         );
         assert!(plist.contains("<key>EnvironmentVariables</key>"));
         assert!(plist.contains("<key>MUR_HOME</key>"));
         assert!(plist.contains("<string>/tmp/custom-mur-home</string>"));
+        // No bridge URL passed → no ANTHROPIC_BASE_URL entry.
+        assert!(!plist.contains("ANTHROPIC_BASE_URL"));
+    }
+
+    #[test]
+    fn plist_injects_bridge_base_url_when_present() {
+        let plist = plist_contents(
+            "coach",
+            Path::new("/usr/local/bin/mur-agent-runtime"),
+            Path::new("/tmp/h"),
+            Path::new("/tmp/h/o.log"),
+            Path::new("/tmp/h/e.log"),
+            Some("http://127.0.0.1:8088"),
+        );
+        assert!(plist.contains("<key>ANTHROPIC_BASE_URL</key>"));
+        assert!(plist.contains("<string>http://127.0.0.1:8088</string>"));
+        // Still well-formed: the new entry lives inside the env dict.
+        assert!(plist.contains("<key>MUR_HOME</key>"));
     }
 
     #[test]

@@ -14,6 +14,7 @@ pub mod event_bus;
 pub mod expression;
 pub mod image_gen;
 pub mod ipc;
+pub mod oauth_bridge;
 pub mod render;
 pub mod revocations;
 pub mod sidecar;
