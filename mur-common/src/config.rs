@@ -73,6 +73,49 @@ pub struct Config {
 
     #[serde(default)]
     pub harvest: HarvestCfg,
+
+    // --- OAuth bridge (cc-proxy) routing for subscription tokens ---
+    #[serde(default)]
+    pub cc_proxy: CcProxyConfig,
+}
+
+/// Routing for Anthropic subscription-OAuth (`sk-ant-oat*`) tokens through a
+/// local bridge — cc-proxy — that swaps `x-api-key` for the Bearer +
+/// claude-code betas disguise the upstream requires.
+///
+/// The Hub injects `ANTHROPIC_BASE_URL` pointing at [`url`](Self::url) when it
+/// spawns an agent runtime, but only when [`enabled`](Self::enabled) is set and
+/// the bridge is actually listening; otherwise it leaves the runtime on the
+/// direct `api.anthropic.com` path (where an oat token would 401). A runtime
+/// launched with `ANTHROPIC_BASE_URL` already in its environment is never
+/// overridden.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CcProxyConfig {
+    /// Bridge base URL. Defaults to cc-proxy's default bind.
+    #[serde(default = "default_cc_proxy_url")]
+    pub url: String,
+
+    /// Master switch. When false the Hub never routes runtimes through the
+    /// bridge, regardless of reachability.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_cc_proxy_url() -> String {
+    "http://127.0.0.1:8088".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for CcProxyConfig {
+    fn default() -> Self {
+        Self {
+            url: default_cc_proxy_url(),
+            enabled: true,
+        }
+    }
 }
 
 /// Configuration for the mobile relay (P4).
@@ -1916,5 +1959,34 @@ mod ambient_capture_cfg_tests {
             serde_yaml::from_str("session:\n  capture: off\n  retention_days: 3\n").unwrap();
         assert_eq!(cfg.session.capture, "off");
         assert_eq!(cfg.session.retention_days, 3);
+    }
+}
+
+#[cfg(test)]
+mod cc_proxy_cfg_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_local_cc_proxy_enabled() {
+        let cfg: Config = serde_yaml_ng::from_str("{}").unwrap();
+        assert_eq!(cfg.cc_proxy.url, "http://127.0.0.1:8088");
+        assert!(cfg.cc_proxy.enabled);
+    }
+
+    #[test]
+    fn url_and_enabled_override_parse() {
+        let cfg: Config =
+            serde_yaml_ng::from_str("cc_proxy:\n  url: http://127.0.0.1:9999\n  enabled: false\n")
+                .unwrap();
+        assert_eq!(cfg.cc_proxy.url, "http://127.0.0.1:9999");
+        assert!(!cfg.cc_proxy.enabled);
+    }
+
+    #[test]
+    fn partial_section_keeps_other_default() {
+        // Only `enabled` given → url stays at the default.
+        let cfg: Config = serde_yaml_ng::from_str("cc_proxy:\n  enabled: false\n").unwrap();
+        assert_eq!(cfg.cc_proxy.url, "http://127.0.0.1:8088");
+        assert!(!cfg.cc_proxy.enabled);
     }
 }

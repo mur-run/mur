@@ -229,14 +229,28 @@ fn spawn_runtime(slug: &str, mur_home: &Path) -> Result<Child, String> {
         .open(mur_home.join("agents").join(slug).join("stderr.log"))
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
-    Command::new(&runtime_bin)
-        .arg("--profile")
+    let mut cmd = Command::new(&runtime_bin);
+    cmd.arg("--profile")
         .arg(slug)
         .env("MUR_HOME", mur_home)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(log)
-        .spawn()
+        .stderr(log);
+    // Route subscription-OAuth (`sk-ant-oat*`) traffic through the local
+    // cc-proxy bridge when it's enabled and listening, otherwise leave the
+    // runtime on the direct api.anthropic.com path. Without this a GUI-spawned
+    // runtime (which doesn't inherit the user's shell env) sends an oat token as
+    // `x-api-key` and gets a 401. See `oauth_bridge`.
+    let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
+    if let Some(base_url) = crate::oauth_bridge::resolve_bridge_url(
+        &cfg.cc_proxy,
+        std::env::var("ANTHROPIC_BASE_URL").ok().as_deref(),
+        crate::oauth_bridge::bridge_is_listening,
+    ) {
+        info!(slug, %base_url, "routing agent runtime through cc-proxy bridge");
+        cmd.env("ANTHROPIC_BASE_URL", base_url);
+    }
+    cmd.spawn()
         .map_err(|e| format!("could not start the agent runtime: {e}"))
 }
 
