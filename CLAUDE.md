@@ -99,7 +99,7 @@ All data at `~/.mur/`:
 - `exported-patterns/*.md` — legacy patterns exported by `mur migrate --patterns`
 - `config.yaml` — user config
 
-LanceDB vector index is always rebuildable via `mur reindex`.
+LanceDB vector index is always rebuildable via `mur internals reindex`.
 
 ## CLI Surface (top level)
 

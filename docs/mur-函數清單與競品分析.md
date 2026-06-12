@@ -243,7 +243,7 @@ Text2Mem 不儲存記憶,而是定義**跨後端的操作語言**。這是記憶
 ### 獨到之處
 
 1. **本地優先、YAML 作為真實來源**
-   其他所有工具要不是 SDK+服務、就是不透明的資料庫檔案。`~/.mur/patterns/*.yaml` 可手動編輯、git 友善,LanceDB 索引可透過 `mur reindex` 隨時重建。僅 PKM 工具有同等透明度,但它們不注入到 agent。
+   其他所有工具要不是 SDK+服務、就是不透明的資料庫檔案。`~/.mur/skills/` 與 `workflows/*.yaml` 可手動編輯、git 友善,LanceDB 索引可透過 `mur internals reindex` 隨時重建。僅 PKM 工具有同等透明度,但它們不注入到 agent。
 
 2. **多工具 hook 注入**
    此列表中沒有任何工具能 *同時* 將記憶散播到 Claude Code、Cursor、Gemini CLI、Aider (透過各自原生 hook/設定)。Mem0/Zep/Letta 要求 *你的 agent* 去呼叫他們的 API;Cursor Rules/CLAUDE.md/AGENTS.md 是工具特定靜態檔。mur 是**跨工具 sidecar**。
