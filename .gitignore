@@ -5,6 +5,7 @@ openspec/
 research/
 .augment/
 .claude/
+.serena/
 .github/
 .worktrees/
 .idea/
