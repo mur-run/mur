@@ -416,13 +416,7 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
             .unwrap_or(2);
         match choice {
             0 => {
-                crate::cmd::workflow::create_draft_workflow_with_steps(
-                    &p.suggested_name,
-                    &format!("Captured from session {}", &p.id[..8.min(p.id.len())]),
-                    &p.title,
-                    std::slice::from_ref(&p.id),
-                    &p.steps,
-                )?;
+                let skill_name = accept_proposal_as_skill(&p).await?;
                 crate::harvest::proposal::set_status_in_dir(
                     &inbox,
                     &p.id,
@@ -430,8 +424,8 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
                 )?;
                 mark_harvested(&p.id);
                 eprintln!(
-                    "  ✓ Draft saved — edit: ~/.mur/workflows/{}.yaml · run: mur run {}",
-                    p.suggested_name, p.suggested_name
+                    "  ✓ Skill saved as `{}` — edit: ~/.mur/skills/{}/skill.yaml · run: mur run {}",
+                    skill_name, skill_name, skill_name
                 );
             }
             1 => {
@@ -459,6 +453,115 @@ fn mark_harvested(id: &str) {
             let _ = std::fs::write(recordings.join(format!("{}.meta.json", id)), json);
         }
     }
+}
+
+/// Accept a harvest proposal as a `category: Workflow` skill (P5a).
+///
+/// Runs LLM extraction (fallback: logic-only) and writes
+/// `~/.mur/skills/<name>/skill.yaml` with `provenance: Llm`.
+/// Returns the skill name that was written.
+async fn accept_proposal_as_skill(
+    proposal: &crate::harvest::proposal::Proposal,
+) -> anyhow::Result<String> {
+    use mur_common::skill::{
+        SkillManifest,
+        manifest::{Content, Procedure, ProcedureStep},
+        store::{global_skill_dir, write_to_dir},
+        types::{Category, Priority, Provenance},
+    };
+
+    let id = &proposal.id;
+    let events = session::read_events(id).unwrap_or_default();
+
+    let extracted = if !events.is_empty() && crate::extract::has_llm_config() {
+        match crate::extract::extract_workflow_llm(id, &events).await {
+            Ok(e) => {
+                eprintln!("  ◆ LLM extracted workflow from {} events.", events.len());
+                e
+            }
+            Err(e) => {
+                eprintln!("  ⚠ LLM extraction failed ({e}); using logic-only extraction.");
+                crate::extract::extract_workflow(id, &events)
+            }
+        }
+    } else {
+        crate::extract::extract_workflow(id, &events)
+    };
+
+    let wf = &extracted.workflow;
+    let name = crate::harvest::proposal::suggest_name(&wf.base.name);
+
+    let mur_home = crate::paths::mur_root(None);
+    let skill_dir = global_skill_dir(&mur_home, &name);
+    if skill_dir.join("skill.yaml").exists() {
+        eprintln!("  ✓ Skill `{}` already exists — left unchanged.", name);
+        return Ok(name);
+    }
+
+    // Convert sequential workflow steps to a linear DAG chain.
+    let steps: Vec<ProcedureStep> = wf
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| ProcedureStep {
+            description: s.description.clone(),
+            id: Some(format!("step{i}")),
+            depends_on: if i == 0 {
+                vec![]
+            } else {
+                vec![format!("step{}", i - 1)]
+            },
+            command: s.command.clone(),
+            tool: s.tool.clone(),
+            ..Default::default()
+        })
+        .collect();
+
+    let abstract_text = if wf.trigger.is_empty() {
+        wf.base.description.clone()
+    } else {
+        format!("{}. Trigger: {}", wf.base.description, wf.trigger)
+    };
+
+    let mut tags = vec!["harvested".to_string()];
+    for t in &wf.tools {
+        let t_lower = t.to_lowercase();
+        if !tags.contains(&t_lower) {
+            tags.push(t_lower);
+        }
+    }
+
+    let manifest = SkillManifest {
+        name: name.clone(),
+        version: "1.0.0".to_string(),
+        publisher: "local".to_string(),
+        description: wf.base.description.clone(),
+        category: Category::Workflow,
+        provenance: Provenance::Llm,
+        hosts: vec![],
+        content: Content {
+            r#abstract: abstract_text,
+            procedure: Some(Procedure {
+                variables: wf.variables.clone(),
+                steps,
+            }),
+            context: None,
+            command: None,
+            note: None,
+        },
+        requires: vec![],
+        tags,
+        triggers: vec![],
+        priority: Priority::Normal,
+        evolution_log: vec![],
+        transfer_chain: vec![],
+        mcp_requirements: vec![],
+        updated_at: chrono::Utc::now(),
+    };
+
+    std::fs::create_dir_all(&skill_dir)?;
+    write_to_dir(&skill_dir, &manifest)?;
+    Ok(name)
 }
 
 /// Check if a session has enough substance to warrant LLM analysis.

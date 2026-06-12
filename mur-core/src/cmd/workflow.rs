@@ -1066,90 +1066,10 @@ pub fn create_draft_workflow(
 }
 
 /// Draft workflow with skeleton steps (harvest accept path). Steps containing
-/// `<…>` placeholders are descriptions (the user fills variables on edit);
-/// fully-literal steps double as runnable commands.
-pub fn create_draft_workflow_with_steps_in(
-    store: &crate::store::workflow_yaml::WorkflowYamlStore,
-    name: &str,
-    description: &str,
-    trigger: &str,
-    source_sessions: &[String],
-    steps: &[String],
-) -> anyhow::Result<()> {
-    if store.exists(name) {
-        return Ok(());
-    }
-    let base = KnowledgeBase {
-        name: name.to_string(),
-        description: description.to_string(),
-        content: Content::Plain(trigger.to_string()),
-        maturity: mur_common::knowledge::Maturity::Draft,
-        ..Default::default()
-    };
-    let wf_steps = steps
-        .iter()
-        .enumerate()
-        .map(|(i, s)| mur_common::workflow::Step {
-            order: (i + 1) as u32,
-            description: s.clone(),
-            command: (!s.contains('<') && !s.starts_with("tool:")).then(|| s.clone()),
-            ..Default::default()
-        })
-        .collect();
-    let wf = mur_common::workflow::Workflow {
-        base,
-        steps: wf_steps,
-        variables: vec![],
-        source_sessions: source_sessions.to_vec(),
-        trigger: trigger.to_string(),
-        tools: vec![],
-        published_version: 0,
-        permission: Default::default(),
-        schedule: None,
-        id: None,
-        notify: None,
-        requires: vec![],
-    };
-    store.save(&wf)
-}
-
-/// Convenience over the default store.
-pub fn create_draft_workflow_with_steps(
-    name: &str,
-    description: &str,
-    trigger: &str,
-    source_sessions: &[String],
-    steps: &[String],
-) -> anyhow::Result<()> {
-    let store = crate::store::workflow_yaml::WorkflowYamlStore::default_store()?;
-    create_draft_workflow_with_steps_in(&store, name, description, trigger, source_sessions, steps)
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn create_draft_workflow_with_steps_persists_steps() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store =
-            crate::store::workflow_yaml::WorkflowYamlStore::new(tmp.path().join("workflows"))
-                .unwrap();
-        create_draft_workflow_with_steps_in(
-            &store,
-            "deploy-api",
-            "Captured from session s1",
-            "when deploying the api",
-            &["s1".into()],
-            &["cargo build".into(), "fly deploy --app <STR>".into()],
-        )
-        .unwrap();
-        let wf = store.get("deploy-api").unwrap();
-        assert_eq!(wf.steps.len(), 2);
-        assert_eq!(wf.steps[0].order, 1);
-        assert_eq!(wf.steps[0].command.as_deref(), Some("cargo build"));
-        assert_eq!(wf.steps[1].command, None); // contains a placeholder → description only
-    }
 
     #[test]
     fn create_draft_workflow_persists_draft() {
