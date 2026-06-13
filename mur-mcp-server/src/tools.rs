@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use mur_compress::{CompressConfig, CompressEngine, RetrieveResult};
+use mur_compress::{AutoCfg, CompressConfig, CompressEngine, RetrieveResult};
 use mur_core::cmd::notes_cmd;
 
 /// Build a per-call compression engine rooted at <mur_home>/compress.
@@ -339,8 +339,49 @@ pub fn all_tools() -> Vec<Tool> {
     ]
 }
 
-/// Dispatch a tool call by name. Returns the result as a JSON Value.
+/// Tool names whose outputs must never be auto-compressed.
+const AUTO_COMPRESS_SKIP: &[&str] = &["mur_compress", "mur_retrieve", "mur_compress_stats"];
+
+/// Public entry point: dispatch the tool, then size-gate auto-compress the
+/// result (Surface 1) — the boundary at which the model reads MUR tool output.
 pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
+    let out = dispatch_tool(name, arguments).await?;
+    Ok(maybe_compress_tool_output(name, arguments, out))
+}
+
+/// Apply size-gated auto-compression to a tool result. Unit-testable: takes an
+/// explicit engine + auto config; no env/filesystem beyond the engine.
+fn apply_auto_compress(
+    engine: &CompressEngine,
+    auto: &AutoCfg,
+    name: &str,
+    arguments: &Value,
+    out: Value,
+) -> Value {
+    if !auto.enabled || !auto.mcp || AUTO_COMPRESS_SKIP.contains(&name) {
+        return out;
+    }
+    // args["query"] (when present) makes search-style tools query-aware (BM25-retrievable).
+    let query = arguments.get("query").and_then(|v| v.as_str());
+    match mur_compress::auto_compress_value(engine, &out, query, auto.min_tokens) {
+        Some(replacement) => replacement,
+        None => out,
+    }
+}
+
+/// Build the per-call engine and apply auto-compression. Falls back to the
+/// uncompressed output if the engine can't be built.
+fn maybe_compress_tool_output(name: &str, arguments: &Value, out: Value) -> Value {
+    let engine = match compress_engine() {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    let auto = engine.config().auto.clone();
+    apply_auto_compress(&engine, &auto, name, arguments, out)
+}
+
+/// Dispatch a tool call by name. Returns the result as a JSON Value.
+async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
     match name {
         "mur_notes_search" => {
             let query = arguments
@@ -665,5 +706,93 @@ mod media_tool_tests {
         ] {
             assert!(names.contains(&n.to_string()), "missing {n}");
         }
+    }
+}
+
+#[cfg(test)]
+mod auto_compress_tests {
+    use super::*;
+    use mur_compress::{CompressConfig, CompressEngine};
+    use serde_json::json;
+
+    fn engine() -> (tempfile::TempDir, CompressEngine) {
+        let dir = tempfile::tempdir().unwrap();
+        let eng = CompressEngine::new(dir.path().to_path_buf(), CompressConfig::default()).unwrap();
+        (dir, eng)
+    }
+
+    fn big_search_output() -> Value {
+        let results: Vec<Value> = (0..3000)
+            .map(|i| json!({"file": format!("src/f{i}.rs"), "score": 0.5, "content": format!("fn item_{i}() {{}}")}))
+            .collect();
+        json!({"results": results, "count": 3000})
+    }
+
+    #[test]
+    fn skips_compression_tools() {
+        let (_dir, eng) = engine();
+        let auto = AutoCfg {
+            enabled: true,
+            min_tokens: 1,
+            mcp: true,
+            agent_runtime: true,
+        };
+        let big = big_search_output();
+        let out = apply_auto_compress(&eng, &auto, "mur_compress", &json!({}), big.clone());
+        assert_eq!(out, big, "compression tools must pass through");
+    }
+
+    #[test]
+    fn small_output_unchanged() {
+        let (_dir, eng) = engine();
+        let auto = AutoCfg::default();
+        let small = json!({"results": ["a", "b"], "count": 2});
+        let out = apply_auto_compress(
+            &eng,
+            &auto,
+            "mur_project_search",
+            &json!({"query": "x"}),
+            small.clone(),
+        );
+        assert_eq!(out, small);
+    }
+
+    #[test]
+    fn large_search_output_compressed_with_query() {
+        let (_dir, eng) = engine();
+        let auto = AutoCfg {
+            enabled: true,
+            min_tokens: 50,
+            mcp: true,
+            agent_runtime: true,
+        };
+        let out = apply_auto_compress(
+            &eng,
+            &auto,
+            "mur_project_search",
+            &json!({"query": "item"}),
+            big_search_output(),
+        );
+        assert_eq!(out["count"], json!(3000));
+        assert_eq!(out["results"]["compressed"], json!(true));
+        assert!(out["results"]["hash"].as_str().is_some());
+        assert!(
+            out["results"]["note"]
+                .as_str()
+                .unwrap()
+                .contains("mur_retrieve")
+        );
+    }
+
+    #[test]
+    fn disabled_auto_passes_through() {
+        let (_dir, eng) = engine();
+        let auto = AutoCfg {
+            enabled: false,
+            ..AutoCfg::default()
+        };
+        let big = big_search_output();
+        let out = apply_auto_compress(&eng, &auto, "mur_project_search", &json!({}), big.clone());
+        assert_eq!(out, big);
     }
 }
