@@ -1,3 +1,6 @@
+//! Design inspiration: headroom (https://github.com/chopratejas/headroom, Apache-2.0).
+//! Clean-room reimplementation — no headroom source is copied.
+
 pub mod bm25;
 pub mod ccr;
 pub mod compressors;
