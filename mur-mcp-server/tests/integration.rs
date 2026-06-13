@@ -43,8 +43,7 @@ fn test_initialize_and_list_tools() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
     );
-    // Consume the notification acknowledgment
-    let _ = read_response(&mut stdout);
+    // Notifications receive no response per JSON-RPC, so do not read one.
 
     // List tools
     send_request(
@@ -112,7 +111,7 @@ fn test_tools_list_response_under_token_budget() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
     );
-    let _ = read_response(&mut stdout);
+    // Notifications receive no response per JSON-RPC, so do not read one.
     send_request(
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
@@ -153,7 +152,7 @@ fn lists_project_search_tool() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
     );
-    let _ = read_response(&mut stdout);
+    // Notifications receive no response per JSON-RPC, so do not read one.
 
     send_request(
         &mut stdin,
@@ -199,7 +198,7 @@ fn calls_mur_compress_tool() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
     );
-    let _ = read_response(&mut stdout);
+    // Notifications receive no response per JSON-RPC, so do not read one.
 
     // A long search-style payload that should compress and offload.
     let mut lines = Vec::new();

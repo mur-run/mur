@@ -49,7 +49,9 @@ pub fn render_dashboard() -> Result<()> {
 
     if patterns.is_empty() {
         println!("{BOLD}MUR Dashboard{RESET}");
-        println!("{DIM}No patterns found. Run `mur new` to create one.{RESET}");
+        println!(
+            "{DIM}No patterns yet. They are harvested from your sessions — record one with `mur session in`, then review proposals with `mur session out`.{RESET}"
+        );
         return Ok(());
     }
 

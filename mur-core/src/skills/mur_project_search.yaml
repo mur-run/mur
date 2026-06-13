@@ -26,6 +26,13 @@ content:
     - You need every occurrence (rename, find all callers, dead-code removal).
       Semantic search returns ranked top-k, not all matches — it will miss some.
 
+    ## Scope (important)
+    - By default `mur project search` searches across ALL indexed projects, not
+      just the current directory — top results may come from unrelated repos.
+      To restrict to one project, pass `--project <name>` (and `--limit <n>` to
+      widen/narrow the ranked results). The mur_project_search MCP tool takes the
+      same optional `project` argument.
+
     ## Hard rules (correctness)
     - Code you created or edited this session and have NOT committed/indexed is
       not in the index yet — use grep for it. Semantic results always lag

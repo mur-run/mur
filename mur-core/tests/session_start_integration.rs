@@ -20,7 +20,7 @@ fn l0_output_fits_within_600_token_budget() {
     assert!(out.len() <= 2600, "L0 output too long: {} chars", out.len());
     assert!(out.contains("## mur learning index"));
     assert!(out.contains("project: myproject"));
-    assert!(out.contains("mur recall"));
+    assert!(out.contains("mur skill show"));
 }
 
 #[test]
