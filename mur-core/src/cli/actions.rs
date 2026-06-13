@@ -800,6 +800,9 @@ pub enum ProjectAction {
         limit: usize,
         #[arg(long)]
         json: bool,
+        /// Search across ALL indexed projects (default: only the current directory's project)
+        #[arg(long)]
+        all: bool,
     },
     /// Show indexing status for a project
     Status {
