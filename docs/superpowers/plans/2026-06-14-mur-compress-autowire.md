@@ -292,11 +292,20 @@ git commit -m "feat(compress): add auto-compression facade (AutoCfg, auto_compre
 
 ---
 
+## Design correction (discovered during Task A)
+
+`compressors/json.rs:22` only collapses a **top-level JSON array**; a top-level *object* (e.g. `mur_project_search`'s `{"results":[…],"count":N}`) falls through to minify-only — no offload, ~0 savings. `detect.rs:21` does classify a top-level `[…]` string as `Json`. Therefore feeding a whole object string (original Task B plan) would barely compress the headline use case.
+
+**Correction:** add a shared, shape-aware router `auto_compress_value` to the facade (`mur-compress/src/auto.rs`) and have **both** surfaces use it. It compresses the **largest array-valued field** of an object (as a top-level array, which the JSON compressor offloads), or a whole top-level array, or a string. Tasks B and C below are written against this router. No engine changes.
+
 ## Task B: Surface 1 — MCP output path
 
 **Files:**
+- Modify: `mur-compress/src/auto.rs` (+ re-export in `mur-compress/src/lib.rs`) — add `auto_compress_value`
 - Modify: `mur-mcp-server/src/tools.rs:7,343` (+ new helpers and tests at end of file)
 - Modify: `mur-mcp-server/Cargo.toml` (`[dev-dependencies]`)
+
+> Implemented per the corrected dispatch instructions (router-based). The Step 3 helper calls `mur_compress::auto_compress_value(engine, &out, query, auto.min_tokens)` instead of stringifying the whole output.
 
 - [ ] **Step 1: Add `AutoCfg` to the mur-compress import**
 

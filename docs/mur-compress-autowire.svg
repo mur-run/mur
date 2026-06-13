@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="780" viewBox="0 0 1240 780" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#059669"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#dc2626"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1240" height="780" fill="#f8fafc"/>
+  <rect x="0" y="0" width="1240" height="780" fill="none" stroke="#e2e8f0" stroke-width="2"/>
+
+  <!-- Title -->
+  <text x="32" y="34" font-size="21" font-weight="700" fill="#0f172a">Component view — mur-compress auto-wiring</text>
+  <text x="32" y="55" font-size="13" fill="#475569">Size-gated, reversible compression on the two paths an LLM reads from MUR. On by default; never inflates output.</text>
+
+  <!-- ===================== PANEL A: data flow ===================== -->
+  <text x="32" y="88" font-size="13" font-weight="700" fill="#0f172a">A · Runtime data flow (one tool call)</text>
+  <line x1="32" y1="95" x2="1208" y2="95" stroke="#cbd5e1" stroke-width="1"/>
+
+  <!-- Surface 1 -->
+  <rect x="36" y="120" width="216" height="88" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="48" y="142" font-size="13" font-weight="700" fill="#1e3a8a">Surface 1 · MCP output</text>
+  <text x="48" y="160" font-size="10.5" font-style="italic" fill="#1d4ed8">mur-mcp-server · call_tool()</text>
+  <text x="48" y="180" font-size="11" fill="#1e293b">Wraps every tool result the</text>
+  <text x="48" y="195" font-size="11" fill="#1e293b">Claude Code session reads.</text>
+
+  <!-- Surface 2 -->
+  <rect x="36" y="262" width="216" height="88" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="48" y="284" font-size="13" font-weight="700" fill="#1e3a8a">Surface 2 · agent hook</text>
+  <text x="48" y="302" font-size="10.5" font-style="italic" fill="#1d4ed8">mur-agent-runtime · post_tool_use</text>
+  <text x="48" y="322" font-size="11" fill="#1e293b">Rewrites oversized agent output</text>
+  <text x="48" y="337" font-size="11" fill="#1e293b">via PostToolUsePatch.</text>
+
+  <!-- Router -->
+  <rect x="320" y="170" width="232" height="130" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+  <text x="333" y="192" font-size="13" font-weight="700" fill="#5b21b6">auto_compress_value()</text>
+  <text x="333" y="210" font-size="10.5" font-style="italic" fill="#6d28d9">mur-compress::auto (shared facade)</text>
+  <text x="333" y="230" font-size="11" fill="#1e293b">Routes by JSON shape:</text>
+  <text x="333" y="245" font-size="11" fill="#1e293b">• object → largest array field</text>
+  <text x="333" y="260" font-size="11" fill="#1e293b">• array / string → whole</text>
+  <rect x="333" y="270" width="206" height="22" rx="4" fill="#fff" stroke="#dc2626" stroke-width="1.3" stroke-dasharray="4 3"/>
+  <text x="343" y="285" font-size="10.5" fill="#b91c1c">token gate · skip if &lt; 1500 tok</text>
+
+  <!-- Engine -->
+  <rect x="620" y="170" width="226" height="130" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="2"/>
+  <text x="633" y="192" font-size="13" font-weight="700" fill="#115e59">CompressEngine::compress()</text>
+  <text x="633" y="210" font-size="10.5" font-style="italic" fill="#0f766e">mur-compress · content-type router</text>
+  <text x="633" y="230" font-size="11" fill="#1e293b">detect() → one compressor:</text>
+  <text x="633" y="248" font-size="11" fill="#0f766e" font-weight="600">search · log · diff · json · generic</text>
+  <text x="633" y="270" font-size="11" fill="#1e293b">Reformat, then offload bulk</text>
+  <text x="633" y="285" font-size="11" fill="#1e293b">rows/lines to the store.</text>
+
+  <!-- Worth-it gate (decision) -->
+  <polygon points="945,175 1035,225 945,275 855,225" fill="#fff" stroke="#dc2626" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="945" y="218" font-size="11.5" font-weight="700" fill="#b91c1c" text-anchor="middle">worth-it</text>
+  <text x="945" y="233" font-size="11.5" font-weight="700" fill="#b91c1c" text-anchor="middle">gate</text>
+  <text x="945" y="295" font-size="10" fill="#64748b" text-anchor="middle">≥20% saved &amp; smaller?</text>
+
+  <!-- CCR store -->
+  <rect x="1064" y="120" width="146" height="86" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+  <text x="1076" y="142" font-size="13" font-weight="700" fill="#92400e">CCR store</text>
+  <text x="1076" y="159" font-size="10" font-style="italic" fill="#b45309">~/.mur/compress</text>
+  <text x="1076" y="178" font-size="11" fill="#1e293b">BLAKE3-keyed</text>
+  <text x="1076" y="193" font-size="11" fill="#1e293b">originals (reversible)</text>
+
+  <!-- Envelope output -->
+  <rect x="1064" y="232" width="146" height="74" rx="8" fill="#e2e8f0" stroke="#475569" stroke-width="2"/>
+  <text x="1076" y="253" font-size="11.5" font-weight="700" fill="#334155">{compressed,</text>
+  <text x="1076" y="268" font-size="11.5" font-weight="700" fill="#334155"> hash, note}</text>
+  <text x="1076" y="287" font-size="10.5" fill="#1e293b">model reads sample +</text>
+  <text x="1076" y="300" font-size="10.5" fill="#1e293b">how to retrieve rest</text>
+
+  <!-- Passthrough -->
+  <rect x="855" y="300" width="180" height="56" rx="8" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <text x="867" y="322" font-size="11.5" font-weight="700" fill="#475569">passthrough</text>
+  <text x="867" y="340" font-size="10.5" fill="#1e293b">original returned unchanged</text>
+
+  <!-- Arrows: surfaces -> router -->
+  <path d="M252,164 L318,210" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="258" y="180" font-size="10" fill="#334155">tool result (JSON)</text>
+  <path d="M252,306 L318,262" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="258" y="300" font-size="10" fill="#334155">tool output (JSON)</text>
+
+  <!-- router -> engine -->
+  <path d="M552,235 L616,235" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="556" y="227" font-size="10" fill="#334155">shaped text + query</text>
+
+  <!-- engine -> gate -->
+  <path d="M846,228 L857,226" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- gate -> store (yes) -->
+  <path d="M978,205 L1062,176" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="985" y="183" font-size="10" fill="#15803d" font-weight="600">yes · offload original</text>
+
+  <!-- store -> envelope -->
+  <path d="M1137,206 L1137,230" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="1144" y="223" font-size="10" fill="#334155">hash</text>
+
+  <!-- gate -> passthrough (no) -->
+  <path d="M945,275 L945,298" fill="none" stroke="#dc2626" stroke-width="1.6" marker-end="url(#arrow-red)"/>
+  <text x="952" y="292" font-size="10" fill="#b91c1c" font-weight="600">no</text>
+
+  <!-- retrieve feedback loop (reverse, dashed green) -->
+  <path d="M1100,306 C1100,360 1150,360 1150,250 L1150,208" fill="none" stroke="#059669" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrow-green)"/>
+  <text x="980" y="350" font-size="10" fill="#047857" font-weight="600">mur_retrieve(hash[, query]) → full original (BM25-ranked)</text>
+
+  <!-- Legend (Panel A) -->
+  <rect x="36" y="372" width="1174" height="58" rx="6" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="48" y="390" font-size="11" font-weight="700" fill="#0f172a">Legend</text>
+  <rect x="100" y="382" width="16" height="11" fill="#dbeafe" stroke="#2563eb"/><text x="121" y="391" font-size="10.5" fill="#1e293b">entry surface</text>
+  <rect x="210" y="382" width="16" height="11" fill="#ede9fe" stroke="#7c3aed"/><text x="231" y="391" font-size="10.5" fill="#1e293b">facade router</text>
+  <rect x="325" y="382" width="16" height="11" fill="#ccfbf1" stroke="#0d9488"/><text x="346" y="391" font-size="10.5" fill="#1e293b">engine / compressor</text>
+  <rect x="470" y="382" width="16" height="11" fill="#fef3c7" stroke="#d97706"/><text x="491" y="391" font-size="10.5" fill="#1e293b">CCR store</text>
+  <rect x="560" y="382" width="16" height="11" fill="#fff" stroke="#dc2626" stroke-dasharray="4 3"/><text x="581" y="391" font-size="10.5" fill="#1e293b">gate (drops/keeps)</text>
+  <line x1="700" y1="388" x2="726" y2="388" stroke="#059669" stroke-width="1.6" stroke-dasharray="6 4"/><text x="731" y="391" font-size="10.5" fill="#1e293b">retrieval (reverse)</text>
+  <text x="48" y="416" font-size="10.5" fill="#475569">Glossary:  MCP = Model Context Protocol · CCR = Compressed Content Repository · tok = tokens (cl100k_base) · BM25 = ranked retrieval of offloaded items</text>
+
+  <!-- ===================== PANEL B: savings ===================== -->
+  <text x="32" y="466" font-size="13" font-weight="700" fill="#0f172a">B · Measured savings — <tspan font-family="monospace" font-weight="400">mur compress</tspan> over real + synthetic corpus</text>
+  <text x="32" y="484" font-size="11.5" fill="#475569">Total 2,082,644 → 57,782 tokens = <tspan font-weight="700" fill="#0f766e">97% saved</tspan>, every item byte-for-byte reversible. Engine capability (CLI bypasses the 1500-tok auto gate).</text>
+  <line x1="32" y1="494" x2="1208" y2="494" stroke="#cbd5e1" stroke-width="1"/>
+
+  <!-- axis gridlines: 0..100% mapped x 360..1180 (820px) -->
+  <g stroke="#e2e8f0" stroke-width="1">
+    <line x1="360" y1="506" x2="360" y2="742"/>
+    <line x1="565" y1="506" x2="565" y2="742"/>
+    <line x1="770" y1="506" x2="770" y2="742"/>
+    <line x1="975" y1="506" x2="975" y2="742"/>
+    <line x1="1180" y1="506" x2="1180" y2="742"/>
+  </g>
+  <g font-size="9" fill="#94a3b8" text-anchor="middle">
+    <text x="360" y="752">0%</text><text x="565" y="752">25%</text><text x="770" y="752">50%</text><text x="975" y="752">75%</text><text x="1180" y="752">100%</text>
+  </g>
+
+  <!-- bars: y pitch 32, bar h 18; teal=offloaded, purple=minify-only, gray=passthrough -->
+  <!-- cargo-packages.json 98.9% -> 810.98 -->
+  <text x="44" y="524" font-size="11" fill="#1e293b">cargo-packages.json <tspan fill="#94a3b8">· json array · 1.74M tok</tspan></text>
+  <rect x="360" y="512" width="811" height="16" rx="3" fill="#14b8a6"/><text x="1178" y="524" font-size="10.5" font-weight="700" fill="#0f766e" text-anchor="end">98.9%</text>
+
+  <!-- repetitive.log 99.7% -> 817.5 -->
+  <text x="44" y="556" font-size="11" fill="#1e293b">repetitive.log <tspan fill="#94a3b8">· build log · 135k tok</tspan></text>
+  <rect x="360" y="544" width="817" height="16" rx="3" fill="#14b8a6"/><text x="1172" y="556" font-size="10.5" font-weight="700" fill="#0f766e" text-anchor="end">99.7%</text>
+
+  <!-- huge-array.json 99.6% -> 816.7 -->
+  <text x="44" y="588" font-size="11" fill="#1e293b">huge-array.json <tspan fill="#94a3b8">· json array · 103k tok</tspan></text>
+  <rect x="360" y="576" width="817" height="16" rx="3" fill="#14b8a6"/><text x="1172" y="588" font-size="10.5" font-weight="700" fill="#0f766e" text-anchor="end">99.6%</text>
+
+  <!-- ripgrep-search.txt 99.5% -> 815.9 -->
+  <text x="44" y="620" font-size="11" fill="#1e293b">ripgrep-search.txt <tspan fill="#94a3b8">· search results · 65k tok</tspan></text>
+  <rect x="360" y="608" width="816" height="16" rx="3" fill="#14b8a6"/><text x="1171" y="620" font-size="10.5" font-weight="700" fill="#0f766e" text-anchor="end">99.5%</text>
+
+  <!-- mur-projsearch.json 33.1% -> 271.4 (minify only, no offload) -->
+  <text x="44" y="652" font-size="11" fill="#1e293b">mur-projsearch.json <tspan fill="#94a3b8">· small json obj · 450 tok</tspan></text>
+  <rect x="360" y="640" width="271" height="16" rx="3" fill="#a78bfa"/><text x="639" y="652" font-size="10.5" font-weight="700" fill="#6d28d9" text-anchor="start">33.1% · minify only</text>
+
+  <!-- git-history.diff 0% passthrough -->
+  <text x="44" y="684" font-size="11" fill="#1e293b">git-history.diff <tspan fill="#94a3b8">· git diff · 9.1k tok</tspan></text>
+  <rect x="360" y="672" width="5" height="16" rx="2" fill="#cbd5e1"/><text x="372" y="684" font-size="10.5" fill="#64748b">0% · passthrough (3-line context, nothing to collapse)</text>
+
+  <!-- dense 0% passthrough -->
+  <text x="44" y="716" font-size="11" fill="#1e293b">dense-incompressible.txt <tspan fill="#94a3b8">· random · 28.7k tok</tspan></text>
+  <rect x="360" y="704" width="5" height="16" rx="2" fill="#cbd5e1"/><text x="372" y="716" font-size="10.5" fill="#64748b">0% · passthrough (worth-it gate — never inflates)</text>
+
+  <!-- panel B legend -->
+  <rect x="44" y="724" width="14" height="10" fill="#14b8a6"/><text x="63" y="733" font-size="9.5" fill="#475569">offloaded (reversible)</text>
+  <rect x="190" y="724" width="14" height="10" fill="#a78bfa"/><text x="209" y="733" font-size="9.5" fill="#475569">minify only</text>
+  <rect x="290" y="724" width="14" height="10" fill="#cbd5e1"/><text x="309" y="733" font-size="9.5" fill="#475569">passthrough (0%)</text>
+</svg>
