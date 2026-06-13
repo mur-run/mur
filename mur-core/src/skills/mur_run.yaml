@@ -14,9 +14,10 @@ content:
         required: true
         description: Workflow name or search query
     steps:
-      - description: Run `mur run <name-or-query>` to find and output the workflow
+      - description: "To READ a workflow (find + output it without running anything), use `mur workflow run <name-or-query> --prompt`. WARNING: omitting `--prompt` EXECUTES the workflow's command steps immediately."
       - description: Read the Variables section, use defaults or ask user for required values
-      - description: Follow Steps in order using listed Tools
+      - description: Follow Steps in order using listed Tools — or, to let mur execute them, run `mur workflow run <name> --yes` (auto-approves `needs_approval` steps; `--yes` only works on `mur workflow run`, not the deprecated `mur run` alias)
+      - description: If the query is not an exact workflow name it resolves by semantic/keyword match — confirm the resolved workflow name before executing, especially for deploy/destructive workflows
       - description: Adapt steps as needed — workflows are guides, not rigid scripts
       - description: If recording was active, suggest `mur session stop --analyze`
 tags: [mur, workflow, builtin]

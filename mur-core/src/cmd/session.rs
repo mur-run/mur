@@ -381,7 +381,7 @@ pub(crate) async fn cmd_out(action: Option<&str>, force: bool) -> anyhow::Result
             );
         }
         eprintln!(
-            "Run `mur out` in a terminal to review, or `mur out --action analyze` for LLM analysis."
+            "Run `mur session out` in a terminal to review, or `mur session out --action analyze` for LLM analysis."
         );
         return Ok(());
     }
@@ -626,6 +626,14 @@ fn session_worth_analyzing(
 /// Execute a specific post-session action (called via `mur out --action <name>`)
 async fn cmd_out_execute(action: &str, force: bool) -> anyhow::Result<()> {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mur"));
+
+    // Ensure the active session is stopped first — `mur session out` (no action)
+    // stops it before the menu, and analyze/export operate on the most recent
+    // *stopped* session, so a direct `--action` call must stop it too (idempotent:
+    // a no-op when the prior no-action call already stopped it).
+    if let Ok(Some(id)) = crate::session::stop() {
+        eprintln!("■ Stopped session {}", &id[..8.min(id.len())]);
+    }
 
     match action {
         "analyze" => {

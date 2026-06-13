@@ -305,7 +305,7 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
         && !pending.is_empty()
     {
         println!(
-            "📥 {} workflow proposal(s) pending — run `mur out` to review.",
+            "📥 {} workflow proposal(s) pending — run `mur session out` to review.",
             pending.len()
         );
     }

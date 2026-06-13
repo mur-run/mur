@@ -309,14 +309,18 @@ pub fn do_list() -> Result<Vec<AgentListEntry>> {
     for entry in std::fs::read_dir(&agents_dir)? {
         let entry = entry?;
         if entry.file_type()?.is_dir() {
-            let name = entry.file_name().to_string_lossy().to_string();
             let profile_path = entry.path().join("profile.yaml");
+            // Only real agent directories have a profile.yaml. Without this guard,
+            // non-agent entries under ~/.mur/agents (e.g. the `.git` dir when that
+            // folder is a git repo, or legacy dirs like `Author/` with no
+            // profile.yaml) get listed as phantom agents. Matches the CLI's
+            // `collect_agents` filter so `mur_agent_status` and `mur agent list` agree.
+            if !profile_path.exists() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
             let running = check_running(&entry.path());
-            let transport = if profile_path.exists() {
-                load_transport(&profile_path).unwrap_or_else(|_| "stdio".into())
-            } else {
-                "unknown".into()
-            };
+            let transport = load_transport(&profile_path).unwrap_or_else(|_| "stdio".into());
             entries.push(AgentListEntry {
                 name,
                 running,

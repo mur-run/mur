@@ -512,7 +512,12 @@ pub async fn fleet_sync_cmd(direction: DeviceSyncDirection, force_local: bool) -
     let server_url = crate::auth::server_url();
     let tokens =
         crate::auth::load_tokens().context("not signed in — run `mur auth login` first")?;
-    let plan = crate::auth::fetch_effective_plan(&server_url, &tokens.access_token).await?;
+    let plan = crate::auth::fetch_effective_plan(&server_url, &tokens.access_token)
+        .await
+        .context(
+            "could not verify your plan for fleet sync — your login may have expired; \
+             run `mur auth login` again (fleet sync is a Pro feature)",
+        )?;
     if !crate::auth::plan_allows_fleet(&plan) {
         bail!("fleet sync requires a Pro plan (current: {plan}). Upgrade at https://app.mur.run");
     }

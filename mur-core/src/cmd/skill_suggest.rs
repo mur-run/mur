@@ -23,7 +23,7 @@ pub fn cmd_suggest(home: &Path, opts: SuggestOptions) -> Result<()> {
 
     if candidates.is_empty() {
         println!(
-            "No pending workflow proposals. (Proposals appear after sessions pass the harvest gate — see `mur out`.)"
+            "No pending workflow proposals. (Proposals appear after sessions pass the harvest gate — see `mur session out`.)"
         );
         return Ok(());
     }
@@ -49,7 +49,7 @@ pub fn cmd_suggest(home: &Path, opts: SuggestOptions) -> Result<()> {
         }
         println!();
     }
-    println!("Review and accept with `mur out`.");
+    println!("Review and accept with `mur session out`.");
     Ok(())
 }
 

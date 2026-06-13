@@ -241,7 +241,8 @@ pub enum Commands {
         #[arg(long)]
         all: bool,
     },
-    /// Start session recording and inject context (shorthand for session start + context)
+    /// Mark the current session important (ambient capture), or start recording +
+    /// inject context (legacy manual mode) — depends on `session.capture`.
     #[command(hide = true)]
     In {
         /// Source identifier (e.g. claude-code)

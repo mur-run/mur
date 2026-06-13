@@ -140,9 +140,10 @@ pub enum AgentAction {
     Export {
         /// Agent name
         name: String,
-        /// Output path (e.g. agent.muragent or agent.murpkg)
+        /// Output path (e.g. agent.muragent or agent.murpkg).
+        /// Defaults to `<name>.muragent` (or `.murpkg`) in the current directory.
         #[arg(long, short = 'o')]
-        out: String,
+        out: Option<String>,
         /// Format: "muragent" (default — signed v2 portable) or "pkg" (legacy v1)
         #[arg(long, default_value = "muragent")]
         format: String,

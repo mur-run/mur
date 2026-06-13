@@ -6,12 +6,12 @@ category: workflow
 content:
   abstract: |
     Review pending workflow proposals harvested from recent sessions.
-    Accept turns a proposal into a draft workflow runnable via `mur run`.
+    Accept turns a proposal into a draft workflow runnable via `mur workflow run`.
   procedure:
     steps:
-      - description: Run `mur out` and show the output to the user.
+      - description: Run `mur session out` and show the output to the user (`mur out` is a deprecated alias).
       - description: If proposals are pending, summarize them and ask the user which to accept or skip.
-      - description: For LLM pattern extraction of the most recent session, run `mur out --action analyze`.
+      - description: For LLM pattern extraction of the most recent session, run `mur session out --action analyze`.
 tags: [mur, recording, extraction, builtin]
 triggers:
   - type: command
