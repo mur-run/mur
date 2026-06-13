@@ -10,7 +10,13 @@ use crate::store::workflow_yaml::WorkflowYamlStore;
 /// / skill) rather than an exact name. Prevents a typo or near-miss query from
 /// silently launching the wrong — possibly destructive — workflow. Non-interactive
 /// callers must pass `--yes`; otherwise the run is refused (returns false).
-fn confirm_fuzzy_run(query: &str, resolved: &str, via: &str, score: Option<f32>, yes: bool) -> bool {
+fn confirm_fuzzy_run(
+    query: &str,
+    resolved: &str,
+    via: &str,
+    score: Option<f32>,
+    yes: bool,
+) -> bool {
     if yes {
         return true;
     }
@@ -55,10 +61,9 @@ pub(crate) async fn cmd_workflow_run(
         let expr = parse_pipeline_expr(query)
             .map_err(|e| anyhow::anyhow!("pipeline parse error: {}", e))?;
         let store = WorkflowYamlStore::default_store()?;
-        let executor =
-            crate::executor::pipeline::PipelineExecutor::new(store)
-                .with_fail_fast(fail_fast)
-                .with_yes(yes);
+        let executor = crate::executor::pipeline::PipelineExecutor::new(store)
+            .with_fail_fast(fail_fast)
+            .with_yes(yes);
         let output = executor.execute(&expr, None).await?;
         if output.exit_code != 0 {
             eprintln!(
@@ -76,8 +81,7 @@ pub(crate) async fn cmd_workflow_run(
         if prompt {
             print_workflow_prompt(&w);
         } else {
-            let executor =
-                crate::executor::pipeline::PipelineExecutor::new(store)
+            let executor = crate::executor::pipeline::PipelineExecutor::new(store)
                 .with_fail_fast(fail_fast)
                 .with_yes(yes);
             let expr = mur_common::pipeline::PipelineExpr::Single(w.name.clone());
@@ -121,8 +125,7 @@ pub(crate) async fn cmd_workflow_run(
         let all = store.list_all()?;
         let q = query.to_lowercase();
         if let Some(w) = all.iter().find(|w| {
-            let text =
-                format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
+            let text = format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
             text.contains(&q)
         }) {
             best_name = Some(w.name.clone());
@@ -172,7 +175,13 @@ pub(crate) async fn cmd_workflow_run(
                     }
                     // Confirm before executing a non-exact (fuzzy) skill match.
                     if matched.manifest.name != query
-                        && !confirm_fuzzy_run(query, &matched.manifest.name, "skill match", None, yes)
+                        && !confirm_fuzzy_run(
+                            query,
+                            &matched.manifest.name,
+                            "skill match",
+                            None,
+                            yes,
+                        )
                     {
                         return Ok(());
                     }

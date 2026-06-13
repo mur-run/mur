@@ -1205,7 +1205,11 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             // Default the output path to `<name>.muragent` (or `.murpkg`) when -o/--out
             // is omitted, so the intuitive `mur agent export <name>` succeeds.
             let out = out.unwrap_or_else(|| {
-                let ext = if format == "pkg" { "murpkg" } else { "muragent" };
+                let ext = if format == "pkg" {
+                    "murpkg"
+                } else {
+                    "muragent"
+                };
                 format!("{name}.{ext}")
             });
             cmd::agent::cmd_export(&name, &out, &format)?;

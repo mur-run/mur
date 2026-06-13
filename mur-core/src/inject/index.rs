@@ -153,7 +153,10 @@ mod tests {
             out.contains("Tokio async runtime patterns"),
             "must include descriptions"
         );
-        assert!(out.contains("mur skill show"), "must have skill-show footer");
+        assert!(
+            out.contains("mur skill show"),
+            "must have skill-show footer"
+        );
     }
 
     #[test]

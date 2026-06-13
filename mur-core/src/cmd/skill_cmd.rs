@@ -97,7 +97,9 @@ pub fn cmd_list() -> Result<()> {
         if local::load_installed(&home, name).is_ok() {
             println!("{name:30} [{level:?}]");
         } else {
-            println!("{name:30} [{level:?}]  ⚠ invalid: no readable manifest (run `mur skill remove {name}`)");
+            println!(
+                "{name:30} [{level:?}]  ⚠ invalid: no readable manifest (run `mur skill remove {name}`)"
+            );
         }
     }
     Ok(())
