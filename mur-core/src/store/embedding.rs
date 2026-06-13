@@ -92,10 +92,17 @@ pub async fn embed_batch(texts: &[String], config: &EmbeddingConfig) -> Result<V
 
 // ─── Ollama ──────────────────────────────────────────────────────
 
+/// How long Ollama should keep the embedding model resident after a request.
+/// Without this, Ollama unloads the model after its default idle timeout, so
+/// every `mur project search` after a pause pays a multi-second model-load cost.
+/// Keeping it warm makes repeated searches feel interactive.
+const EMBED_KEEP_ALIVE: &str = "15m";
+
 #[derive(Serialize)]
 struct OllamaEmbedRequest {
     model: String,
     input: String,
+    keep_alive: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +117,7 @@ async fn embed_ollama(text: &str, base_url: &str, model: &str) -> Result<Vec<f32
         .json(&OllamaEmbedRequest {
             model: model.into(),
             input: text.into(),
+            keep_alive: EMBED_KEEP_ALIVE,
         })
         .send()
         .await
@@ -139,6 +147,7 @@ async fn embed_ollama_batch(
         .json(&serde_json::json!({
             "model": model,
             "input": texts,
+            "keep_alive": EMBED_KEEP_ALIVE,
         }))
         .send()
         .await
