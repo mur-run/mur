@@ -18,6 +18,7 @@ pub mod b0;
 pub mod b0_helpers;
 pub mod builder;
 pub mod companion_voice;
+pub mod compress;
 pub mod ledger;
 pub mod telemetry;
 pub mod trash_guard;
@@ -25,6 +26,7 @@ pub mod voice_input;
 
 pub use b0::B0SafetyHook;
 pub use chain::HookChain;
+pub use compress::CompressHook;
 pub use decision::Decision;
 pub use patch::{MessagePatch, PostToolUsePatch, PromptPatch, UntrustedWrapper};
 pub use trash_guard::TrashGuard;
