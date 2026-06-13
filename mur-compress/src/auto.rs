@@ -106,6 +106,58 @@ pub fn retrieval_envelope(outcome: &AutoOutcome, query: Option<&str>) -> Value {
     })
 }
 
+/// Compress a tool-output JSON `value` in place, routing by shape so the engine's
+/// top-level-array / text compressors actually fire (the JSON compressor only
+/// collapses a *top-level* array — see `compressors/json.rs`):
+/// - `String` → compress the string (catches log / diff / search / JSON text).
+/// - `Array`  → compress the whole array (already top-level).
+/// - `Object` → compress its largest array-valued field, splicing a compact
+///   summary back in; scalar fields are left untouched.
+///
+/// Returns `Some(replacement)` iff compression fired, else `None`.
+pub fn auto_compress_value(
+    engine: &CompressEngine,
+    value: &Value,
+    query: Option<&str>,
+    min_tokens: usize,
+) -> Option<Value> {
+    match value {
+        Value::String(s) => {
+            let o = auto_compress(engine, s, query, min_tokens);
+            o.fired.then(|| value_replacement(&o, query))
+        }
+        Value::Array(_) => {
+            let o = auto_compress(engine, &value.to_string(), query, min_tokens);
+            o.fired.then(|| value_replacement(&o, query))
+        }
+        Value::Object(map) => {
+            let key = map
+                .iter()
+                .filter(|(_, v)| v.is_array())
+                .max_by_key(|(_, v)| v.to_string().len())
+                .map(|(k, _)| k.clone())?;
+            let arr_text = map.get(&key).map(|v| v.to_string()).unwrap_or_default();
+            let o = auto_compress(engine, &arr_text, query, min_tokens);
+            if !o.fired {
+                return None;
+            }
+            let mut out = map.clone();
+            out.insert(key, value_replacement(&o, query));
+            Some(Value::Object(out))
+        }
+        _ => None,
+    }
+}
+
+/// Replacement value for a fired outcome: the retrieval envelope when offloaded,
+/// else the densified text.
+fn value_replacement(outcome: &AutoOutcome, query: Option<&str>) -> Value {
+    match outcome.hash {
+        Some(_) => retrieval_envelope(outcome, query),
+        None => Value::String(outcome.text.clone()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +212,34 @@ mod tests {
         assert_eq!(env["compressed"], serde_json::json!(true));
         assert!(env["hash"].as_str().is_some());
         assert!(env["note"].as_str().unwrap().contains("mur_retrieve"));
+    }
+
+    #[test]
+    fn value_object_compresses_largest_array_field() {
+        let (_dir, eng) = engine();
+        let results: Vec<Value> = (0..3000)
+            .map(|i| serde_json::json!({"file": format!("src/f{i}.rs"), "score": 0.5}))
+            .collect();
+        let v = serde_json::json!({"results": results, "count": 3000});
+        let out = auto_compress_value(&eng, &v, Some("f"), 50).expect("should fire");
+        assert_eq!(out["count"], serde_json::json!(3000));
+        assert_eq!(out["results"]["compressed"], serde_json::json!(true));
+        assert!(out["results"]["hash"].as_str().is_some());
+    }
+
+    #[test]
+    fn value_top_level_array_compresses() {
+        let (_dir, eng) = engine();
+        let arr: Vec<Value> = (0..3000).map(|i| serde_json::json!({"id": i})).collect();
+        let out = auto_compress_value(&eng, &Value::Array(arr), None, 50).expect("should fire");
+        assert_eq!(out["compressed"], serde_json::json!(true));
+        assert!(out["hash"].as_str().is_some());
+    }
+
+    #[test]
+    fn value_small_object_returns_none() {
+        let (_dir, eng) = engine();
+        let v = serde_json::json!({"results": ["a", "b"], "count": 2});
+        assert!(auto_compress_value(&eng, &v, None, 1500).is_none());
     }
 }
