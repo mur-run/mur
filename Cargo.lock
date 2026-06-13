@@ -6269,7 +6269,7 @@ checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 
 [[package]]
 name = "mur-agent-launcher"
-version = "2.24.1"
+version = "2.24.2"
 dependencies = [
  "libc",
 ]
@@ -6344,7 +6344,7 @@ dependencies = [
 
 [[package]]
 name = "mur-common"
-version = "2.24.1"
+version = "2.24.2"
 dependencies = [
  "age",
  "anyhow",
@@ -6392,7 +6392,7 @@ dependencies = [
 
 [[package]]
 name = "mur-compress"
-version = "2.24.1"
+version = "2.24.2"
 dependencies = [
  "blake3",
  "flate2",
@@ -6408,7 +6408,7 @@ dependencies = [
 
 [[package]]
 name = "mur-core"
-version = "2.24.1"
+version = "2.24.2"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -6493,7 +6493,7 @@ dependencies = [
 
 [[package]]
 name = "mur-daemon"
-version = "2.24.1"
+version = "2.24.2"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -6520,7 +6520,7 @@ dependencies = [
 
 [[package]]
 name = "mur-gui-core"
-version = "2.24.1"
+version = "2.24.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6542,7 +6542,7 @@ dependencies = [
 
 [[package]]
 name = "mur-mcp-server"
-version = "2.24.1"
+version = "2.24.2"
 dependencies = [
  "anyhow",
  "mur-common",
@@ -6558,7 +6558,7 @@ dependencies = [
 
 [[package]]
 name = "mur-mobile-sdk"
-version = "2.24.1"
+version = "2.24.2"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
