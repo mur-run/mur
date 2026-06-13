@@ -68,16 +68,31 @@ pub async fn do_project_search(
     query: &str,
     project_filter: Option<&str>,
     limit: usize,
+    all: bool,
 ) -> Result<ProjectSearchResult> {
     let cfg = load_config()?;
     let embed_config = EmbeddingConfig::from_config(&cfg);
     let query_embedding = embed(query, &embed_config).await?;
 
     let indexes = discover_all_indexes();
+
+    // Scope resolution: an explicit --project wins; otherwise default to the
+    // current directory's project so results aren't polluted by unrelated repos.
+    // `--all` searches every indexed project (the previous default behavior).
+    let cwd_project = if project_filter.is_none() && !all {
+        std::env::current_dir()
+            .ok()
+            .map(|p| p.canonicalize().unwrap_or(p))
+            .map(|p| project_name_from_path(&p))
+    } else {
+        None
+    };
+    let effective_filter = project_filter.or(cwd_project.as_deref());
+
     let mut all_chunks: Vec<ProjectSearchChunk> = Vec::new();
 
     for discovered in &indexes {
-        if let Some(filter) = project_filter
+        if let Some(filter) = effective_filter
             && discovered.name != *filter
         {
             continue;
@@ -339,14 +354,20 @@ pub async fn cmd_project_search(
     project_filter: Option<String>,
     limit: usize,
     json: bool,
+    all: bool,
 ) -> Result<()> {
-    let result = do_project_search(&query, project_filter.as_deref(), limit).await?;
+    let result = do_project_search(&query, project_filter.as_deref(), limit, all).await?;
 
     if result.chunks.is_empty() {
         if json {
             println!("[]");
+        } else if project_filter.is_none() && !all {
+            // Default scope is the current project; point users at --all.
+            println!(
+                "No matches in the current project. Use `--all` to search every indexed project, or `mur project index` to index this one."
+            );
         } else {
-            println!("No indexed projects found. Run `mur project index` first.");
+            println!("No matches. Run `mur project index` first if the project isn't indexed.");
         }
         return Ok(());
     }
