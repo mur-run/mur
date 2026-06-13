@@ -27,7 +27,7 @@ pub fn format_l0(index: &CapabilityIndex, budget_chars: usize) -> String {
         Some(proj) => format!("## mur learning index (project: {proj})\n"),
         None => "## mur learning index\n".to_owned(),
     };
-    let footer = "\nRun `mur recall <name>` to load full content of any item above.\n";
+    let footer = "\nRun `mur skill show <name>` to load the full content of any item above.\n";
 
     let overhead = header.len() + footer.len();
     let entry_budget = budget_chars.saturating_sub(overhead);
@@ -153,7 +153,7 @@ mod tests {
             out.contains("Tokio async runtime patterns"),
             "must include descriptions"
         );
-        assert!(out.contains("mur recall"), "must have recall footer");
+        assert!(out.contains("mur skill show"), "must have skill-show footer");
     }
 
     #[test]

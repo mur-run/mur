@@ -92,7 +92,13 @@ pub fn cmd_list() -> Result<()> {
     }
     for name in &names {
         let level = local::get_trust_level(&home, name).unwrap_or(TrustLevel::Sandboxed);
-        println!("{name:30} [{level:?}]");
+        // Stay consistent with show/info/audit, which require a loadable manifest:
+        // flag directories that `list` would otherwise present as normal skills.
+        if local::load_installed(&home, name).is_ok() {
+            println!("{name:30} [{level:?}]");
+        } else {
+            println!("{name:30} [{level:?}]  ⚠ invalid: no readable manifest (run `mur skill remove {name}`)");
+        }
     }
     Ok(())
 }

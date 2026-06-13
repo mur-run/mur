@@ -9,11 +9,14 @@ content:
   procedure:
     steps:
       - description: To list agents, run `mur agent list` or use the MCP tool `mur_agent_status` (no args = list all)
-      - description: To create a new agent, run `mur agent create <name>` and follow the wizard
-      - description: To run an agent as a managed launchd/systemd service, run `mur agent install-service <name>`
+      - description: To create a new agent, run `mur agent create <name>`. Interactive prompts appear only when stdin is a TTY; otherwise the defaults (provider ollama) are used, so pass `--provider`/`--model`/`--display-name` to choose them, or `--no-interactive` to accept defaults explicitly.
+      - description: To run an agent as a managed launchd/systemd service, run `mur agent install-service <name>` (add `--dry-run` to preview the unit file without writing it)
       - description: To stop a running agent, run `mur agent stop <name>` (SIGTERM, then SIGKILL after timeout)
       - description: To check agent health, use `mur_agent_status(name="<name>")` or run `mur agent status <name>`
-      - description: To export an agent as a portable .muragent, run `mur agent export <name>`
+      - description: To send a message to a running agent (A2A), run `mur agent send <name> <message>`; to print its agent card, run `mur agent card <name>`
+      - description: To export an agent as a portable .muragent, run `mur agent export <name> --out <name>.muragent` (the `--out`/`-o` path is required)
+      - description: To inspect an exported package (manifest + signature), run `mur agent inspect <path>.muragent`
+      - description: To remove an agent, run `mur agent remove <name>` (add `--purge` to also delete its data directory)
 tags: [mur, agent, builtin]
 triggers:
   - type: command

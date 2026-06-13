@@ -6,6 +6,38 @@ use std::io::{self, Write};
 use crate::evolve;
 use crate::store::workflow_yaml::WorkflowYamlStore;
 
+/// Confirm before executing a workflow resolved by fuzzy match (semantic / keyword
+/// / skill) rather than an exact name. Prevents a typo or near-miss query from
+/// silently launching the wrong — possibly destructive — workflow. Non-interactive
+/// callers must pass `--yes`; otherwise the run is refused (returns false).
+fn confirm_fuzzy_run(query: &str, resolved: &str, via: &str, score: Option<f32>, yes: bool) -> bool {
+    if yes {
+        return true;
+    }
+    let score_str = score
+        .map(|s| format!(", {:.0}% similar", s * 100.0))
+        .unwrap_or_default();
+    eprintln!(
+        "⚠ No workflow named \"{query}\". Closest match (via {via}{score_str}): \"{resolved}\"."
+    );
+    if !std::io::IsTerminal::is_terminal(&io::stdin()) {
+        eprintln!(
+            "Refusing to auto-run a fuzzy-matched workflow non-interactively. \
+             Re-run with the exact name, `--prompt` to inspect, or `--yes` to confirm."
+        );
+        return false;
+    }
+    eprint!("Run \"{resolved}\"? [y/N] ");
+    let _ = io::stderr().flush();
+    let mut line = String::new();
+    let _ = io::stdin().read_line(&mut line);
+    let ok = matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+    if !ok {
+        eprintln!("Aborted.");
+    }
+    ok
+}
+
 /// Run a workflow — output as executable prompt for AI consumption.
 /// Accepts exact name, semantic query, or pipeline expression (w1 | w2 && w3, w4).
 pub(crate) async fn cmd_workflow_run(
@@ -24,7 +56,9 @@ pub(crate) async fn cmd_workflow_run(
             .map_err(|e| anyhow::anyhow!("pipeline parse error: {}", e))?;
         let store = WorkflowYamlStore::default_store()?;
         let executor =
-            crate::executor::pipeline::PipelineExecutor::new(store).with_fail_fast(fail_fast);
+            crate::executor::pipeline::PipelineExecutor::new(store)
+                .with_fail_fast(fail_fast)
+                .with_yes(yes);
         let output = executor.execute(&expr, None).await?;
         if output.exit_code != 0 {
             eprintln!(
@@ -43,7 +77,9 @@ pub(crate) async fn cmd_workflow_run(
             print_workflow_prompt(&w);
         } else {
             let executor =
-                crate::executor::pipeline::PipelineExecutor::new(store).with_fail_fast(fail_fast);
+                crate::executor::pipeline::PipelineExecutor::new(store)
+                .with_fail_fast(fail_fast)
+                .with_yes(yes);
             let expr = mur_common::pipeline::PipelineExpr::Single(w.name.clone());
             let output = executor.execute(&expr, None).await?;
             if output.exit_code != 0 {
@@ -57,6 +93,9 @@ pub(crate) async fn cmd_workflow_run(
     let index_path = crate::paths::mur_root(None).join("index");
 
     let mut best_name: Option<String> = None;
+    // Track HOW we resolved a non-exact match, so we can confirm before executing.
+    let mut match_via = "match";
+    let mut match_score: Option<f32> = None;
 
     if index_path.exists() {
         let cfg = crate::store::config::load_config()?;
@@ -71,6 +110,8 @@ pub(crate) async fn cmd_workflow_run(
                 && r.similarity > 0.6
             {
                 best_name = Some(r.name.clone());
+                match_via = "semantic search";
+                match_score = Some(r.similarity);
             }
         }
     }
@@ -79,14 +120,14 @@ pub(crate) async fn cmd_workflow_run(
     if best_name.is_none() {
         let all = store.list_all()?;
         let q = query.to_lowercase();
-        best_name = all
-            .iter()
-            .find(|w| {
-                let text =
-                    format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
-                text.contains(&q)
-            })
-            .map(|w| w.name.clone());
+        if let Some(w) = all.iter().find(|w| {
+            let text =
+                format!("{} {} {}", w.name, w.description, w.tools.join(" ")).to_lowercase();
+            text.contains(&q)
+        }) {
+            best_name = Some(w.name.clone());
+            match_via = "keyword match";
+        }
     }
 
     match best_name {
@@ -94,9 +135,12 @@ pub(crate) async fn cmd_workflow_run(
             if prompt {
                 let w = store.get(&name)?;
                 print_workflow_prompt(&w);
+            } else if !confirm_fuzzy_run(query, &name, match_via, match_score, yes) {
+                return Ok(());
             } else {
                 let executor = crate::executor::pipeline::PipelineExecutor::new(store)
-                    .with_fail_fast(fail_fast);
+                    .with_fail_fast(fail_fast)
+                    .with_yes(yes);
                 let expr = mur_common::pipeline::PipelineExpr::Single(name);
                 let output = executor.execute(&expr, None).await?;
                 if output.exit_code != 0 {
@@ -124,6 +168,12 @@ pub(crate) async fn cmd_workflow_run(
                             "# {} — {}",
                             matched.manifest.name, matched.manifest.description
                         );
+                        return Ok(());
+                    }
+                    // Confirm before executing a non-exact (fuzzy) skill match.
+                    if matched.manifest.name != query
+                        && !confirm_fuzzy_run(query, &matched.manifest.name, "skill match", None, yes)
+                    {
                         return Ok(());
                     }
                     // Only execute Workflow-category skills.

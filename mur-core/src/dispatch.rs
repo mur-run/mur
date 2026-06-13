@@ -169,7 +169,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                 cmd::reindex::cmd_reindex().await?;
             }
         }
-        Commands::Update { check } => cmd::update::cmd_update(check)?,
+        Commands::Update { check } => {
+            // `update::run` uses `reqwest::blocking`, whose internal runtime panics
+            // when dropped inside this async context. Run it on a blocking thread
+            // (no entered runtime there). Manual installs (InstallSource::Other)
+            // reach the network path, so this must not panic for them.
+            tokio::task::spawn_blocking(move || cmd::update::cmd_update(check))
+                .await
+                .context("update task panicked")??
+        }
         // Deprecated: use `mur workflow suggest`
         Commands::Suggest {
             create,
@@ -1194,6 +1202,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentPermAction::ToolList { name } => cmd::agent::cmd_perm_list_tools(&name)?,
         },
         AgentAction::Export { name, out, format } => {
+            // Default the output path to `<name>.muragent` (or `.murpkg`) when -o/--out
+            // is omitted, so the intuitive `mur agent export <name>` succeeds.
+            let out = out.unwrap_or_else(|| {
+                let ext = if format == "pkg" { "murpkg" } else { "muragent" };
+                format!("{name}.{ext}")
+            });
             cmd::agent::cmd_export(&name, &out, &format)?;
         }
         AgentAction::Install { path, model } => {
