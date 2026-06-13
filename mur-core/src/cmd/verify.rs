@@ -80,6 +80,10 @@ pub(crate) fn cmd_verify(file: Option<&str>, show_all: bool) -> Result<()> {
             "\n  {} stale claim(s) found. Review and update documentation.",
             summary.invalid
         );
+        // Exit non-zero so `mur verify` is usable as a CI / pre-commit gate.
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        std::process::exit(1);
     } else {
         println!("\n  All claims verified. Documentation is up to date.");
     }

@@ -26,6 +26,8 @@ pub struct PipelineExecutor {
     store: WorkflowYamlStore,
     /// When true, cancel remaining parallel branches on first failure.
     fail_fast: bool,
+    /// When true, auto-approve steps marked `needs_approval` (the `--yes` flag).
+    yes: bool,
     /// Cancellation token for cooperative cancellation in fail-fast mode.
     cancel: CancellationToken,
 }
@@ -35,8 +37,15 @@ impl PipelineExecutor {
         Self {
             store,
             fail_fast: false,
+            yes: false,
             cancel: CancellationToken::new(),
         }
+    }
+
+    /// Auto-approve `needs_approval` steps (the `--yes` flag).
+    pub fn with_yes(mut self, yes: bool) -> Self {
+        self.yes = yes;
+        self
     }
 
     pub fn with_fail_fast(mut self, fail_fast: bool) -> Self {
@@ -157,6 +166,32 @@ impl PipelineExecutor {
             if let Some(ref cmd_template) = step.command {
                 // Shell step: substitute {{input}} and execute
                 let cmd = inject_input(cmd_template, input_text);
+
+                // Honor `needs_approval`: gate side-effecting steps unless `--yes`.
+                // (Previously the pipeline executor ran every step unconditionally,
+                // ignoring needs_approval — so `--yes` was a no-op on this path.)
+                if step.needs_approval && !self.yes {
+                    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                        eprint!(
+                            "  Step {} needs approval: {} (`{}`) — run it? [y/N] ",
+                            step.order, description, cmd
+                        );
+                        let _ = std::io::Write::flush(&mut std::io::stderr());
+                        let mut line = String::new();
+                        let _ = std::io::stdin().read_line(&mut line);
+                        if !matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                            eprintln!("  Step {} skipped (not approved)", step.order);
+                            continue;
+                        }
+                    } else {
+                        eprintln!(
+                            "  Step {}: needs_approval — skipped (use `--yes` to auto-approve)",
+                            step.order
+                        );
+                        continue;
+                    }
+                }
+
                 eprintln!("  Step {}: {} (`{}`)", step.order, description, cmd);
 
                 let cmd_fut = tokio::process::Command::new("sh")

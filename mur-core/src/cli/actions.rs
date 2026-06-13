@@ -333,7 +333,10 @@ pub enum SessionAction {
         #[arg(long)]
         all: bool,
     },
-    /// Start session recording and inject context (shorthand for start + context)
+    /// Mark the current session important (ambient capture mode), or start
+    /// recording + inject context (legacy manual mode). Behavior depends on
+    /// `session.capture`: with ambient capture (default) recording is always on,
+    /// so this flags the session so the harvest gate keeps it.
     In {
         /// Source identifier (e.g. claude-code)
         #[arg(long, default_value = "claude-code")]
@@ -727,8 +730,8 @@ pub enum DeployAction {
         /// Follow log output
         #[arg(short, long)]
         follow: bool,
-        /// Path to a docker-compose file
-        #[arg(short, long)]
+        /// Path to a docker-compose file (long form only; `-f` is --follow)
+        #[arg(long)]
         file: Option<String>,
     },
     /// Build or rebuild service images (docker compose build)
