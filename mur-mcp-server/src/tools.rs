@@ -97,13 +97,18 @@ pub fn all_tools() -> Vec<Tool> {
                     }),
                     ("project".into(), ToolParam {
                         param_type: "string".into(),
-                        description: "Project name filter (defaults to searching all indexed projects)".into(),
+                        description: "Project name to search. Defaults to the current working directory's project.".into(),
                         default: None,
                     }),
                     ("limit".into(), ToolParam {
                         param_type: "integer".into(),
                         description: "Max results, 1-10 (default: 5)".into(),
                         default: Some(json!(5)),
+                    }),
+                    ("all".into(), ToolParam {
+                        param_type: "boolean".into(),
+                        description: "Search across ALL indexed projects instead of just the current one (default: false).".into(),
+                        default: Some(json!(false)),
                     }),
                 ])),
                 required: Some(vec!["query".into()]),
@@ -401,8 +406,14 @@ pub async fn call_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(5)
                 .clamp(1, 10) as usize;
+            // Default to the current project (the dir the server runs in); set
+            // `all: true` to search every indexed project.
+            let all = arguments
+                .get("all")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
-            let result = mur_core::cmd::project::do_project_search(query, project, limit)
+            let result = mur_core::cmd::project::do_project_search(query, project, limit, all)
                 .await
                 .map_err(|e| format!("Project search failed: {}", e))?;
 
