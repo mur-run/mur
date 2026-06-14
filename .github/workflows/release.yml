@@ -107,6 +107,20 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: cargo install cross --git https://github.com/cross-rs/cross
 
+      # Exclude the build dirs from Defender real-time scanning — it scans every
+      # .rlib/.o/.exe write and measurably slows the (compile-dominated) Windows
+      # release build. Best-effort; never fail the job over it.
+      - name: Windows Defender exclusions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($p in @("${{ github.workspace }}\target", "$env:USERPROFILE\.cargo")) {
+            Add-MpPreference -ExclusionPath $p -ErrorAction SilentlyContinue
+          }
+          foreach ($e in @("rlib","rmeta","o","exe","pdb")) {
+            Add-MpPreference -ExclusionExtension $e -ErrorAction SilentlyContinue
+          }
+
       - name: Build (native)
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: cargo build --release --locked --target ${{ matrix.target }}
