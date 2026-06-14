@@ -354,6 +354,9 @@ iOS app builds with `mur-mobile-app/build-ios.sh`.
 - **Hub on Windows / Linux**, and an **Android companion** from the same Rust
   mobile core.
 
+Want to teach an agent something new? See
+[Authoring Skills](docs/authoring-skills.md).
+
 Design history lives in [`docs/superpowers/specs/`](docs/superpowers/specs) and
 [`docs/architecture/runtime-overview.md`](docs/architecture/runtime-overview.md).
 
