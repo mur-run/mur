@@ -1,0 +1,52 @@
+name: mur-compress
+version: 0.1.0
+publisher: human:mur
+description: "Read and recover auto-compressed tool outputs, and compress large text on demand. MUR shrinks big tool results automatically; the original is one mur_retrieve away."
+category: context
+hosts: [all]
+content:
+  abstract: |
+    Large tool outputs may arrive auto-compressed as
+    {compressed:true, content, hash, note} — sometimes as a single field
+    (e.g. results). Call mur_retrieve with the hash (and the same query, if any)
+    to get the full original back.
+  context: |
+    # mur-compress — Reading and recovering compressed output
+
+    MUR automatically compresses large tool outputs before you read them
+    (search dumps, logs, diffs, big JSON). Compression is reversible.
+
+    ## When a result is an envelope
+    Look for `"compressed": true`. It may be the whole result, or just one field
+    of it — e.g. mur_project_search returns
+    `{ "results": { "compressed": true, "content": …, "hash": "…", "note": … }, "count": 3000 }`,
+    where only the bulky `results` array was shrunk (scalar fields stay intact).
+    The `content` is a compact sample. To recover the full original:
+    ```
+    mur_retrieve(hash="…")              # full original
+    mur_retrieve(hash="…", query="…")   # BM25-filtered to the most relevant items
+    ```
+    Pass the SAME query you used for the search: retrieval ranks the offloaded
+    items by relevance so you pull back only what you need.
+
+    ## Compress something yourself
+    Before pasting a huge blob you control (a log, a giant JSON):
+    ```
+    mur_compress(content="…", query="optional focus")
+    ```
+    Returns the compressed text plus a hash for later retrieval.
+
+    ## Don't fight the gate
+    Small outputs are never compressed (below the token threshold), so most
+    results are untouched. You only need mur_retrieve when you actually see a
+    `compressed:true` envelope.
+
+    ## Turning it off
+    Configured in ~/.mur/compress.yaml under `auto:` (`enabled`, `min_tokens`,
+    `mcp`, `agent_runtime`). Set `enabled: false` to disable entirely.
+tags: [mur, compress, tokens, retrieve, builtin]
+triggers:
+  - type: keyword
+    pattern: "(compressed:true|mur_retrieve|mur_compress|auto-?compress|token compress)"
+  - type: manual
+priority: normal
