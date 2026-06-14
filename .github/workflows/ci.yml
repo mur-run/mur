@@ -89,6 +89,13 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Scope the cache to the runner image. GitHub image upgrades can
+          # change the bundled MSVC/CMake generator (e.g. VS 17 2022 ->
+          # VS 18 2026); without this, a restored target/ carries a stale
+          # whisper-rs-sys CMakeCache.txt and CMake aborts on generator
+          # mismatch. Keying on ImageVersion forces a fresh build on bump.
+          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
@@ -143,6 +150,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
       - name: Install Linux system deps
         run: |
           sudo apt-get update
@@ -186,6 +195,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: mur-agent-gui/src-tauri
+          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: 'mur-agent-gui/ui/.nvmrc'
@@ -245,6 +255,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: mur-hub-gui/src-tauri
+          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: 'mur-hub-gui/ui/.nvmrc'
@@ -292,6 +303,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
       - name: Install protobuf
         run: brew install protobuf
       - name: Run quick e2e smoke
