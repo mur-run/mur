@@ -15,6 +15,7 @@ import {
   type ModelOption,
   type NotifConfig,
   type NotifPatch,
+  type SkillInstallResult,
 } from "../types";
 import { CompanionInbox } from "./CompanionInbox";
 import { MobileTab } from "./MobileTab";
@@ -756,16 +757,17 @@ function SkillsTab({
   const { t } = useT();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [justInstalled, setJustInstalled] = useState(false);
+  const [installedId, setInstalledId] = useState<string | null>(null);
 
   const hasInstalled = detail.installed_skills.length > 0;
   const hasLegacy = detail.skills.length > 0;
 
   async function installSkill() {
     setError(null);
+    setInstalledId(null);
     const src = await open({
       multiple: false,
-      filters: [{ name: "MUR Skill", extensions: ["md", "yaml", "yml"] }],
+      filters: [{ name: "MUR Skill", extensions: ["yaml", "yml", "md"] }],
     }).catch((e) => {
       setError(String(e));
       return null;
@@ -773,13 +775,16 @@ function SkillsTab({
     if (typeof src !== "string" || !src) return;
     setBusy(true);
     try {
-      const updated = await invoke<AgentDetail>("agent_skill_install", {
+      // Backend returns the refreshed detail AND the id the skill was
+      // registered as — or rejects with a validation error. Surface the
+      // real outcome instead of a blanket "installed" message.
+      const res = await invoke<SkillInstallResult>("agent_skill_install", {
         name: detail.agent_name,
         sourcePath: src,
       });
-      onSaved(updated);
-      setJustInstalled(true);
-      setTimeout(() => setJustInstalled(false), 4000);
+      onSaved(res.detail);
+      setInstalledId(res.installed_id);
+      setTimeout(() => setInstalledId(null), 6000);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -813,9 +818,12 @@ function SkillsTab({
       >
         {t("detail.installSkill")}
       </button>
-      {justInstalled && (
-        <p className="field-muted" style={{ fontSize: 12 }}>
-          {t("detail.skillInstalledHint")}
+      <p className="field-muted" style={{ fontSize: 12 }}>
+        {t("detail.skillInstallFormatHint")}
+      </p>
+      {installedId && (
+        <p className="save-ok" style={{ fontSize: 12 }}>
+          {t("detail.skillInstalledOk", { id: installedId })}
         </p>
       )}
       {error && <p className="save-error">{error}</p>}
@@ -879,7 +887,17 @@ function SkillsTab({
                 >
                   ×
                 </button>
-                <code style={{ fontSize: 11 }}>{s.path}</code>
+                <div>
+                  <code style={{ fontSize: 11 }}>{s.path}</code>
+                  <span className={s.loadable ? "badge-loadable" : "badge-dead"}>
+                    {s.loadable ? t("detail.skillLoadable") : t("detail.skillDead")}
+                  </span>
+                </div>
+                {!s.loadable && (
+                  <div className="item-card-desc field-muted" style={{ fontSize: 11 }}>
+                    {t("detail.skillDeadHint")}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

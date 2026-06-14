@@ -76,6 +76,8 @@ export const BUILTIN_PRESETS: PresetSummary[] = [
 
 export interface SkillView {
   path: string;
+  /** Whether the backing file still parses + validates as a skill manifest. */
+  loadable: boolean;
 }
 
 export interface InstalledSkillView {
@@ -83,6 +85,13 @@ export interface InstalledSkillView {
   version: string;
   description: string;
   category: string;
+}
+
+/** Returned by the `agent_skill_install` command. */
+export interface SkillInstallResult {
+  detail: AgentDetail;
+  /** Canonical id the skill was registered as, e.g. `skills/foo.yaml`. */
+  installed_id: string;
 }
 
 export interface McpServerView {
