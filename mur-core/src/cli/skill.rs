@@ -4,6 +4,34 @@ use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum SkillAction {
+    /// Scaffold a new skill manifest from a template.
+    New {
+        /// Skill name (lowercase-kebab, e.g. `my-skill`).
+        name: String,
+        /// Skill category: context, workflow, command, meta, or note.
+        #[arg(long, default_value = "context")]
+        category: String,
+        /// Write the scaffold under this directory instead of the current dir.
+        #[arg(long)]
+        dir: Option<String>,
+        /// Install into the agent's loadable layout (<MUR_HOME>/agents/<agent>/skills/).
+        #[arg(long)]
+        agent: Option<String>,
+        /// Overwrite an existing skill.yaml.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Open a skill's skill.yaml in $EDITOR, then validate it.
+    Edit {
+        /// Skill name.
+        name: String,
+        /// Resolve under the agent's loadable layout.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Resolve under this directory instead of the current dir.
+        #[arg(long)]
+        dir: Option<String>,
+    },
     /// Run schema validation + full security content scan on a skill file.
     Validate {
         #[arg(default_value = "skill.yaml")]

@@ -395,6 +395,249 @@ pub fn cmd_trust(name: &str, level_str: &str) -> Result<()> {
     Ok(())
 }
 
+/// Options for `mur skill new`.
+pub struct NewOptions {
+    pub name: String,
+    pub category: String,
+    /// Write under this directory instead of the current dir.
+    pub dir: Option<String>,
+    /// Install into the agent's loadable layout under `<MUR_HOME>`.
+    pub agent: Option<String>,
+    pub force: bool,
+}
+
+/// Resolve the per-skill subdirectory (`.../<name>/`) for a given target.
+///
+/// Resolution order (matches `cmd_new` and `cmd_edit`):
+/// * `--agent <a>` → `<MUR_HOME>/agents/<a>/skills/<name>` (the loadable layout)
+/// * `--dir <d>`   → `<d>/<name>`
+/// * neither       → `./<name>` (current dir)
+fn resolve_skill_subdir(
+    name: &str,
+    agent: Option<&str>,
+    dir: Option<&str>,
+) -> Result<std::path::PathBuf> {
+    // Path-safety gate: the name becomes a path component, so reject anything
+    // that could escape the target dir (`..`, `/`, etc). Reused from the loader.
+    if !mur_common::skill::is_valid_skill_name(name) {
+        bail!("invalid skill name {name:?} (expected [A-Za-z0-9_.-], no path separators)");
+    }
+    let base = if let Some(agent) = agent {
+        mur_common::skill::agent_skill_dir(&resolve_mur_home()?, agent)
+    } else if let Some(dir) = dir {
+        std::path::PathBuf::from(dir)
+    } else {
+        std::path::PathBuf::from(".")
+    };
+    Ok(base.join(name))
+}
+
+/// Map a `--category` string to a canonical `Category`, restricted to the
+/// categories that make sense for hand-authoring a `context`-bodied scaffold.
+fn parse_authoring_category(s: &str) -> Result<mur_common::skill::Category> {
+    use mur_common::skill::Category;
+    match s {
+        "context" => Ok(Category::Context),
+        "workflow" => Ok(Category::Workflow),
+        "command" => Ok(Category::Command),
+        "meta" => Ok(Category::Meta),
+        "note" => Ok(Category::Note),
+        other => bail!(
+            "invalid category {other:?} (expected one of: context, workflow, command, meta, note)"
+        ),
+    }
+}
+
+/// Current user for the `publisher: human:<user>` default, falling back to
+/// `you` so the generated manifest is valid even without `$USER`.
+fn current_user() -> String {
+    std::env::var("USER")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "you".to_string())
+}
+
+/// Render the templated `skill.yaml` body. Hand-written (not serde-serialized)
+/// so it can carry inline `#` comments guiding the author through the
+/// abstract-vs-context progressive-disclosure split.
+fn render_skill_template(name: &str, category: mur_common::skill::Category) -> String {
+    use mur_common::skill::Category;
+    let publisher = format!("human:{}", current_user());
+    // The body shape differs per category: context/meta/note carry prose; only
+    // `context`/`meta` use a `context:` block. To keep the scaffold always-valid
+    // and focused on the authoring guidance the task calls for, we template the
+    // `context` body (the common case) and adapt the content block per category.
+    let content_block = match category {
+        Category::Workflow => {
+            "  # `procedure` holds the executable steps for a workflow skill.\n  procedure:\n    steps:\n      - description: TODO describe the first step\n"
+        }
+        Category::Command => {
+            "  # `command` is the shell/command body run for a command skill.\n  command: \"echo TODO: implement this command\"\n"
+        }
+        Category::Note => {
+            "  # `note` is a free-form markdown body (category: note).\n  note: |\n    # TODO: reference notes\n    - jot down durable facts here\n"
+        }
+        // context + meta both use a `context` block scalar.
+        _ => {
+            "  # `context` is the FULL reference body. It is loaded ONLY when a\n  # trigger above fires (progressive disclosure) — so it can be long.\n  # The `|` makes this a LITERAL block scalar: newlines and indentation are\n  # preserved verbatim, so write normal markdown here.\n  context: |\n    # TODO: full reference body for this skill\n    - Replace this with the rules, steps, and details the agent needs\n      once the skill is triggered.\n    - Everything here is hidden until a trigger fires, so be thorough.\n"
+        }
+    };
+    format!(
+        "# Scaffolded by `mur skill new`. Edit the TODOs, then run `mur skill validate`.\n\
+         name: {name}\n\
+         version: 1.0.0\n\
+         publisher: {publisher}\n\
+         # One-line trigger: what it is + WHEN to use it + searchable keywords.\n\
+         description: \"TODO: one-line trigger — what this is and when to use it.\"\n\
+         category: {category}\n\
+         priority: normal\n\
+         tags: [todo]\n\
+         triggers:\n\
+         \x20\x20# Always-on: the abstract below is injected at session start.\n\
+         \x20\x20- type: session_start\n\
+         \x20\x20# Keyword: load the full context when these words appear. Edit the regex.\n\
+         \x20\x20- type: keyword\n\
+         \x20\x20\x20\x20pattern: '(?i)\\b({name}|todo-keyword)\\b'\n\
+         \x20\x20# Command: invoke explicitly with /{name}.\n\
+         \x20\x20- type: command\n\
+         \x20\x20\x20\x20pattern: /{name}\n\
+         content:\n\
+         \x20\x20# `abstract` is ALWAYS-ON: injected into the system prompt every turn.\n\
+         \x20\x20# Keep it to 1-3 tight sentences — it costs tokens on every message.\n\
+         \x20\x20abstract: >\n\
+         \x20\x20\x20\x20TODO: 1-3 sentence always-on summary of this skill.\n\
+         {content_block}",
+        category = category_yaml_value(category),
+    )
+}
+
+/// The lowercase YAML scalar for a category (matches serde's kebab/lowercase
+/// serialization used elsewhere in the manifest).
+fn category_yaml_value(category: mur_common::skill::Category) -> &'static str {
+    use mur_common::skill::Category;
+    match category {
+        Category::Context => "context",
+        Category::Workflow => "workflow",
+        Category::Command => "command",
+        Category::Meta => "meta",
+        Category::Note => "note",
+        Category::Media => "media",
+    }
+}
+
+/// Core scaffold logic for `mur skill new` — returns the written path.
+/// Split out from `cmd_new` so it can be unit-tested without going through CLI
+/// dispatch or touching the real `$MUR_HOME`.
+fn scaffold_skill(opts: NewOptions) -> Result<std::path::PathBuf> {
+    let category = parse_authoring_category(&opts.category)?;
+    let subdir = resolve_skill_subdir(&opts.name, opts.agent.as_deref(), opts.dir.as_deref())?;
+    let target = subdir.join("skill.yaml");
+
+    if target.exists() && !opts.force {
+        bail!(
+            "{} already exists (use --force to overwrite)",
+            target.display()
+        );
+    }
+
+    let body = render_skill_template(&opts.name, category);
+
+    // Fail BEFORE writing if the assembled manifest would not parse/validate.
+    // This catches names that pass the path-safety gate but violate the stricter
+    // manifest rules (e.g. uppercase or `_`, which `validate` rejects).
+    let parsed = parse_canonical(&body).context("template did not parse as a skill manifest")?;
+    validate(&parsed).context("scaffolded manifest failed validation")?;
+
+    fs::create_dir_all(&subdir)
+        .with_context(|| format!("create skill dir {}", subdir.display()))?;
+    fs::write(&target, &body).with_context(|| format!("write {}", target.display()))?;
+    Ok(target)
+}
+
+/// `mur skill new <name>` — scaffold a new skill manifest.
+pub fn cmd_new(opts: NewOptions) -> Result<()> {
+    let name = opts.name.clone();
+    let target = scaffold_skill(opts)?;
+    println!("✓ scaffolded skill '{name}' at {}", target.display());
+    println!(
+        "  edit the TODOs, then: mur skill validate {}",
+        target.display()
+    );
+    Ok(())
+}
+
+/// Outcome of a post-edit validation pass.
+#[derive(Debug)]
+struct EditReport {
+    valid: bool,
+}
+
+/// Core `edit` logic with an injectable editor invocation, so tests can drive
+/// it without a real interactive `$EDITOR`. `open` is called with the resolved
+/// `skill.yaml` path; after it returns, the manifest is re-validated.
+fn run_edit<F>(name: &str, agent: Option<&str>, dir: Option<&str>, open: F) -> Result<EditReport>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    let subdir = resolve_skill_subdir(name, agent, dir)?;
+    let target = subdir.join("skill.yaml");
+    if !target.exists() {
+        bail!(
+            "no skill.yaml at {} — create one first with `mur skill new {name}`",
+            target.display()
+        );
+    }
+
+    open(&target).with_context(|| format!("editing {}", target.display()))?;
+
+    // Re-validate after the editor exits. We report (rather than bail) so the
+    // author sees the result and can re-edit; only I/O/parse failures bubble up.
+    match read_any(target.to_str().unwrap_or_default()) {
+        Ok(m) => match validate(&m) {
+            Ok(()) => {
+                println!("ok: {}", m.name);
+                Ok(EditReport { valid: true })
+            }
+            Err(e) => {
+                eprintln!("validation: {e}");
+                Ok(EditReport { valid: false })
+            }
+        },
+        Err(e) => {
+            eprintln!("parse error: {e}");
+            Ok(EditReport { valid: false })
+        }
+    }
+}
+
+/// `mur skill edit <name>` — open the resolved skill.yaml in `$EDITOR`
+/// (fallback `$VISUAL`, then `vi`), then validate.
+pub fn cmd_edit(name: &str, agent: Option<&str>, dir: Option<&str>) -> Result<()> {
+    let report = run_edit(name, agent, dir, |path| {
+        let editor = std::env::var("EDITOR")
+            .ok()
+            .filter(|e| !e.trim().is_empty())
+            .or_else(|| {
+                std::env::var("VISUAL")
+                    .ok()
+                    .filter(|e| !e.trim().is_empty())
+            })
+            .unwrap_or_else(|| "vi".to_string());
+        let status = std::process::Command::new(&editor)
+            .arg(path)
+            .status()
+            .with_context(|| format!("failed to launch editor {editor:?}"))?;
+        if !status.success() {
+            bail!("editor {editor:?} exited with status {status}");
+        }
+        Ok(())
+    })?;
+    if !report.valid {
+        bail!("skill did not pass validation after edit");
+    }
+    Ok(())
+}
+
 fn read_any(path: &str) -> Result<mur_common::skill::SkillManifest> {
     let text = fs::read_to_string(path).with_context(|| format!("read {path}"))?;
     let p = Path::new(path);
@@ -469,6 +712,184 @@ content:
         fs::write(&p, VALID).unwrap();
         cmd_fmt(p.to_str().unwrap(), Some("md"), true).unwrap();
         assert!(dir.path().join("x.md").exists());
+    }
+
+    // ── `mur skill new` ──
+
+    #[test]
+    fn skill_new_creates_valid_manifest() {
+        let dir = tempdir().unwrap();
+        let written = scaffold_skill(NewOptions {
+            name: "my-skill".into(),
+            category: "context".into(),
+            dir: Some(dir.path().to_str().unwrap().to_string()),
+            agent: None,
+            force: false,
+        })
+        .unwrap();
+
+        // The per-skill subdirectory layout: <dir>/<name>/skill.yaml.
+        let expected = dir.path().join("my-skill").join("skill.yaml");
+        assert_eq!(written, expected);
+        assert!(expected.exists(), "skill.yaml should exist at {expected:?}");
+
+        // The generated file must parse and pass full validation (same path
+        // as `mur skill validate`).
+        let m = read_any(expected.to_str().unwrap()).expect("parse generated skill");
+        validate(&m).expect("generated skill must pass validation");
+        assert_eq!(m.name, "my-skill");
+        assert_eq!(m.version, "1.0.0");
+        assert_eq!(m.category, mur_common::skill::Category::Context);
+    }
+
+    #[test]
+    fn skill_new_workflow_category_validates() {
+        let dir = tempdir().unwrap();
+        let written = scaffold_skill(NewOptions {
+            name: "deploy-app".into(),
+            category: "workflow".into(),
+            dir: Some(dir.path().to_str().unwrap().to_string()),
+            agent: None,
+            force: false,
+        })
+        .unwrap();
+        let m = read_any(written.to_str().unwrap()).expect("parse generated workflow skill");
+        validate(&m).expect("generated workflow skill must pass validation");
+        assert_eq!(m.category, mur_common::skill::Category::Workflow);
+    }
+
+    #[test]
+    fn skill_new_refuses_overwrite_without_force() {
+        let dir = tempdir().unwrap();
+        let opts = || NewOptions {
+            name: "dup-skill".into(),
+            category: "context".into(),
+            dir: Some(dir.path().to_str().unwrap().to_string()),
+            agent: None,
+            force: false,
+        };
+        scaffold_skill(opts()).unwrap();
+        // Second call without --force must error.
+        assert!(scaffold_skill(opts()).is_err());
+        // With --force it succeeds.
+        let mut forced = opts();
+        forced.force = true;
+        scaffold_skill(forced).unwrap();
+    }
+
+    #[test]
+    fn skill_new_rejects_bad_name() {
+        let dir = tempdir().unwrap();
+        for bad in ["Bad-Name", "../evil", "a/b", "has space"] {
+            let res = scaffold_skill(NewOptions {
+                name: bad.into(),
+                category: "context".into(),
+                dir: Some(dir.path().to_str().unwrap().to_string()),
+                agent: None,
+                force: false,
+            });
+            assert!(res.is_err(), "name {bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn skill_new_rejects_bad_category() {
+        let dir = tempdir().unwrap();
+        let res = scaffold_skill(NewOptions {
+            name: "x-skill".into(),
+            category: "bogus".into(),
+            dir: Some(dir.path().to_str().unwrap().to_string()),
+            agent: None,
+            force: false,
+        });
+        assert!(res.is_err());
+    }
+
+    // ── `mur skill edit` ──
+
+    #[test]
+    fn skill_edit_missing_file_errors() {
+        let dir = tempdir().unwrap();
+        let res = run_edit(
+            "nope",
+            None,
+            Some(dir.path().to_str().unwrap()),
+            |_p| Ok(()),
+        );
+        assert!(res.is_err(), "editing a non-existent skill should error");
+    }
+
+    #[test]
+    fn skill_edit_invokes_editor_then_validates() {
+        let dir = tempdir().unwrap();
+        let written = scaffold_skill(NewOptions {
+            name: "edit-me".into(),
+            category: "context".into(),
+            dir: Some(dir.path().to_str().unwrap().to_string()),
+            agent: None,
+            force: false,
+        })
+        .unwrap();
+
+        // Injected "editor" mutates the file (sets the description), then we
+        // assert the post-edit validation pass sees the change.
+        let edited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let edited2 = edited.clone();
+        let report = run_edit(
+            "edit-me",
+            None,
+            Some(dir.path().to_str().unwrap()),
+            move |path| {
+                edited2.store(true, std::sync::atomic::Ordering::SeqCst);
+                let text = fs::read_to_string(path)?;
+                let text = text.replace(
+                    "TODO: one-line trigger",
+                    "Real trigger — does a thing when keyword fires.",
+                );
+                fs::write(path, text)?;
+                Ok(())
+            },
+        )
+        .expect("edit should succeed and validate");
+
+        assert!(edited.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            report.valid,
+            "post-edit manifest should validate: {report:?}"
+        );
+        // Confirm the editor's mutation actually landed on disk.
+        let m = read_any(written.to_str().unwrap()).unwrap();
+        assert!(m.description.starts_with("Real trigger"));
+    }
+
+    #[test]
+    fn skill_edit_reports_invalid_after_edit() {
+        let dir = tempdir().unwrap();
+        scaffold_skill(NewOptions {
+            name: "break-me".into(),
+            category: "context".into(),
+            dir: Some(dir.path().to_str().unwrap().to_string()),
+            agent: None,
+            force: false,
+        })
+        .unwrap();
+
+        // Editor blanks the abstract → validation must fail, but run_edit
+        // returns Ok with a report flagged invalid (it ran validation).
+        let report = run_edit(
+            "break-me",
+            None,
+            Some(dir.path().to_str().unwrap()),
+            |path| {
+                let bad = "name: break-me\nversion: 1.0.0\npublisher: human:you\n\
+                           description: d\ncategory: context\n\
+                           content:\n  abstract: \"\"\n  context: body\n";
+                fs::write(path, bad)?;
+                Ok(())
+            },
+        )
+        .expect("run_edit returns Ok even when manifest is invalid");
+        assert!(!report.valid, "blanked abstract should be reported invalid");
     }
 
     /// A skill with a deliberate multi-sentence abstract validates cleanly (the
