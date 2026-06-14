@@ -8,6 +8,11 @@ build = "build.rs"
 # Bundle an agent profile into the binary at compile time; set
 # MUR_EXPORT_AGENT_DIR=<path> alongside `cargo build --features=embedded-agent`.
 embedded-agent = []
+# Kokoro TTS via ONNX Runtime. Off by default so crates that only use STT /
+# the rest of the runtime (the CLI, the Tauri GUIs via mur-gui-core) don't
+# static-link onnxruntime — which both bloats them and fails to link on older
+# glibc (ubuntu-22.04). Enabled by mur-daemon, which actually synthesizes.
+tts = ["dep:ort", "dep:ndarray"]
 
 [build-dependencies]
 tar = "0.4"
@@ -98,8 +103,13 @@ teloxide = { version = "0.13", default-features = false, features = ["rustls", "
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 # D1 voice — TTS + STT (Tasks 3-8)
 indicatif = "0.17"   # progress bar for download
-ort = { version = "2.0.0-rc.12", features = ["load-dynamic", "ndarray"] }   # ONNX Runtime for Kokoro TTS
-ndarray = "0.17"                                           # tensor arrays for ort
+# ONNX Runtime for Kokoro TTS. Use the default `download-binaries` (static link
+# the ABI-matched prebuilt at build time) rather than `load-dynamic` (runtime
+# dlopen): the static lib can't drift from ort's expected ABI, covers all
+# platforms via upstream prebuilts, and works offline — no runtime voice-pack
+# dylib to provision. See `docs` / memory `project_voice_mobile_runtime_gotchas`.
+ort = { version = "2.0.0-rc.12", features = ["ndarray"], optional = true }
+ndarray = { version = "0.17", optional = true }            # tensor arrays for ort
 espeak-ng = "0.1"                                           # espeak-ng G2P for Kokoro tokenizer (pure Rust, no bindgen)
 whisper-rs = { version = "0.11", features = [] }            # whisper.cpp STT bindings (CPU-only; no metal to keep CI clean)
 cpal = "0.15"                                               # cross-platform audio I/O (mic capture + speaker playback)

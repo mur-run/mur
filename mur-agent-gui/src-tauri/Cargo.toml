@@ -70,7 +70,12 @@ tar = "0.4"
 tempfile = "3"
 
 # ───── voice (D1 / M1) ─────
-ort = { version = "=2.0.0-rc.12", default-features = false, features = ["copy-dylibs", "load-dynamic"] }
+# `api-24` matches ort's default OrtApi level (the EP bindings, e.g. VitisAI,
+# require it). It previously came transitively via mur-agent-runtime's ort
+# defaults; it is now explicit because mur-agent-runtime gates `ort` behind its
+# off-by-default `tts` feature. `load-dynamic` keeps onnxruntime out of the
+# link (no static lib → no glibc-2.38 dependency).
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "copy-dylibs", "load-dynamic", "api-24"] }
 whisper-rs = { version = "0.11", default-features = false }
 cpal = "0.16"
 hound = "3"

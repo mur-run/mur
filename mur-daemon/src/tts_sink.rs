@@ -1,11 +1,13 @@
 //! Lazy Kokoro TTS wrapper for the mobile server.
-//! Returns `None` silently when models are absent (first run) or ONNX Runtime unavailable.
+//!
+//! Returns `None` when models are absent or synthesis fails. Models are a
+//! one-time CLI install (`mur agent voice <name> download`); the daemon never
+//! downloads at runtime (privacy invariant).
 
 use base64::Engine as _;
 use mur_agent_runtime::voice::{
-    download::ensure_model,
     tts::{KOKORO_SAMPLE_RATE, KokoroTts},
-    types::{KOKORO_ONNX_SPEC, KOKORO_VOICES_SPEC, VoiceModelPaths},
+    types::VoiceModelPaths,
 };
 use mur_common::agent::VoiceId;
 use std::path::Path;
@@ -33,22 +35,22 @@ pub fn synthesize(mur_home: &Path, text: &str) -> Option<(String, u32)> {
 
 fn load_tts(mur_home: &Path) -> Option<KokoroTts> {
     let paths = VoiceModelPaths::from_mur_root(mur_home);
-    if !paths.all_present() {
-        let home = mur_home.to_path_buf();
-        std::thread::spawn(move || {
-            let _ = ensure_model(&home, &KOKORO_ONNX_SPEC, |_, _| {});
-            let _ = ensure_model(&home, &KOKORO_VOICES_SPEC, |_, _| {});
-            tracing::info!("mobile: Kokoro models downloaded — restart daemon to enable TTS");
-        });
+    if !paths.kokoro_onnx.exists() || !paths.kokoro_voices.exists() {
+        tracing::info!(
+            "mobile: Kokoro models absent — run `mur agent voice <name> download` to enable TTS"
+        );
         return None;
     }
+
+    // ONNX Runtime is statically linked (ort `download-binaries`), so init can
+    // only succeed or error quickly — no runtime dlopen to hang on.
     match KokoroTts::new(&paths.kokoro_onnx, &paths.kokoro_voices, VoiceId::AfHeart) {
         Ok(t) => {
             tracing::info!("mobile: Kokoro TTS ready");
             Some(t)
         }
         Err(e) => {
-            tracing::warn!(error = %e, "mobile: Kokoro TTS init failed");
+            tracing::warn!(error = %e, "mobile: Kokoro TTS init failed — text-only replies");
             None
         }
     }
