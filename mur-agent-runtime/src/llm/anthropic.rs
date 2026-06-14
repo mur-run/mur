@@ -18,7 +18,14 @@ use mur_common::llm::anthropic_base_url;
 use serde_json::json;
 
 const DEFAULT_VERSION: &str = "2023-06-01";
-const DEFAULT_MAX_TOKENS: u32 = 1024;
+/// Output-token ceiling when a request leaves `max_tokens` unset. This is a
+/// CEILING, not a target — the model only generates what it needs, so cost
+/// rises only when output is genuinely large. Coding agents routinely write
+/// whole source files via large `bash` heredocs; the previous 1024 cap
+/// truncated those responses mid-tool_use, leaving the tool_use `input` JSON
+/// incomplete and the call unparseable. 16384 gives normal file writes room to
+/// complete without truncation.
+const DEFAULT_MAX_TOKENS: u32 = 16384;
 
 /// Total time allowed for a single LLM request (including server think time).
 const LLM_REQUEST_TIMEOUT_SECS: u64 = 60;
