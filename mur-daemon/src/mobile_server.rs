@@ -220,15 +220,39 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                 let home = state.mur_home.clone();
 
                 // STT: whisper.cpp (blocking) → authoritative transcript.
-                let transcript_opt =
+                let outcome =
                     tokio::task::spawn_blocking(move || crate::stt_sink::transcribe(&home, &pcm))
                         .await
-                        .unwrap_or(None);
+                        .unwrap_or(crate::stt_sink::SttOutcome::Empty);
 
-                let transcript_text = match transcript_opt {
-                    Some(t) => t,
-                    None => {
-                        tracing::debug!("mobile: STT returned empty; skipping turn");
+                let transcript_text = match outcome {
+                    crate::stt_sink::SttOutcome::Text(t) => t,
+                    crate::stt_sink::SttOutcome::Empty => {
+                        tracing::debug!("mobile: STT no speech; skipping turn");
+                        continue;
+                    }
+                    crate::stt_sink::SttOutcome::ModelsMissing => {
+                        // Honest feedback instead of a silent drop: tell the user
+                        // how to install the voice model. The phone renders
+                        // `mobile.reply` events as agent chat bubbles.
+                        let hint = format!(
+                            "語音模型尚未安裝。請在 Mac 上執行 `mur agent voice {agent} download`（約 1.4 GB），完成後重啟 daemon 再用語音對話。"
+                        );
+                        tracing::info!("mobile: STT models missing — sent install hint to phone");
+                        mirror(
+                            state.mur_home.as_path(),
+                            &agent,
+                            "mobile.reply",
+                            &json!({ "text": hint }),
+                        );
+                        let _ = send_frame(
+                            &mut socket,
+                            &ServerFrame::Event {
+                                name: "mobile.reply".to_string(),
+                                payload: json!({ "text": hint }),
+                            },
+                        )
+                        .await;
                         continue;
                     }
                 };

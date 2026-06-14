@@ -13,8 +13,10 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use mur_common::agent::VoiceId;
-use ndarray::Array2;
+use ndarray::{Array1, Array2};
 use ort::{session::Session, value::Tensor};
+
+use crate::voice::types::{N_VOICES, STYLE_DIM, STYLE_ROWS, VOICES_BIN_LEN};
 
 // Target: 178 entries matching hexgrad/Kokoro-82M tokenizer_config.json
 // Current: ~80 entries covering common English IPA — good enough for v1
@@ -55,18 +57,20 @@ impl KokoroTokenizer {
 
 // ─── TTS engine ──────────────────────────────────────────────────────────────
 
-/// Loaded Kokoro ONNX session + style matrix.
+/// Loaded Kokoro ONNX session + per-voice style matrices.
 pub struct KokoroTts {
     /// Wrapped in `Mutex` so `synthesize` can take `&self` (required for
     /// `Box<dyn KokoroTtsTrait>` usage); `ort::Session::run` needs `&mut self`.
     session: Mutex<Session>,
-    /// Style matrix: 5 rows × 256 columns (one row per VoiceId).
-    style_matrix: [[f32; 256]; 5],
+    /// Per-voice style tensors: `N_VOICES` voices × `STYLE_ROWS` length-buckets
+    /// × `STYLE_DIM` columns. Indexed `[voice][phoneme_count]` — Kokoro selects
+    /// the style row by the number of phoneme tokens in the utterance.
+    style: Vec<Vec<[f32; STYLE_DIM]>>,
     voice_id: VoiceId,
 }
 
 impl KokoroTts {
-    /// Load the Kokoro ONNX model from `onnx_path` and style matrix from
+    /// Load the Kokoro ONNX model from `onnx_path` and the style matrix from
     /// `voices_path`. Returns an error if either file is missing or corrupt.
     pub fn new(onnx_path: &Path, voices_path: &Path, voice_id: VoiceId) -> Result<Self> {
         let session = Session::builder()
@@ -75,26 +79,31 @@ impl KokoroTts {
             .context("load kokoro onnx")?;
 
         let style_bytes = std::fs::read(voices_path).context("read kokoro-voices.bin")?;
-
-        const STYLE_DIM: usize = 256;
-        const N_VOICES: usize = 5;
         anyhow::ensure!(
-            style_bytes.len() == N_VOICES * STYLE_DIM * 4,
-            "kokoro-voices.bin has unexpected size {} (expected {} bytes)",
+            style_bytes.len() == VOICES_BIN_LEN,
+            "kokoro-voices.bin has unexpected size {} (expected {VOICES_BIN_LEN} bytes)",
             style_bytes.len(),
-            N_VOICES * STYLE_DIM * 4
         );
 
-        let mut style_matrix = [[0f32; STYLE_DIM]; N_VOICES];
-        for (i, chunk) in style_bytes.chunks_exact(4).enumerate() {
-            let row = i / STYLE_DIM;
-            let col = i % STYLE_DIM;
-            style_matrix[row][col] = f32::from_le_bytes(chunk.try_into().unwrap());
+        let floats: Vec<f32> = style_bytes
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        let mut style = Vec::with_capacity(N_VOICES);
+        for v in 0..N_VOICES {
+            let mut rows = Vec::with_capacity(STYLE_ROWS);
+            for r in 0..STYLE_ROWS {
+                let base = (v * STYLE_ROWS + r) * STYLE_DIM;
+                let mut row = [0f32; STYLE_DIM];
+                row.copy_from_slice(&floats[base..base + STYLE_DIM]);
+                rows.push(row);
+            }
+            style.push(rows);
         }
 
         Ok(Self {
             session: Mutex::new(session),
-            style_matrix,
+            style,
             voice_id,
         })
     }
@@ -107,21 +116,46 @@ impl KokoroTts {
             return Ok(vec![]);
         }
 
-        let n = token_ids.len();
-        let tokens_arr = Array2::from_shape_vec((1, n), token_ids).context("build tokens array")?;
+        // Kokoro selects the style row by phoneme count, and the model expects
+        // the token sequence wrapped with a leading/trailing pad (id 0). Clamp
+        // to STYLE_ROWS-2 phonemes so the padded length stays within the model's
+        // positional range (longer replies are truncated — sentence chunking is
+        // a follow-up).
+        let mut phonemes = token_ids;
+        let max_phonemes = STYLE_ROWS - 2;
+        if phonemes.len() > max_phonemes {
+            tracing::warn!(
+                len = phonemes.len(),
+                max = max_phonemes,
+                "TTS input truncated to fit Kokoro positional range"
+            );
+            phonemes.truncate(max_phonemes);
+        }
+        let n = phonemes.len();
+
+        let mut wrapped = Vec::with_capacity(n + 2);
+        wrapped.push(0i64);
+        wrapped.extend_from_slice(&phonemes);
+        wrapped.push(0i64);
+        let tokens_arr =
+            Array2::from_shape_vec((1, n + 2), wrapped).context("build tokens array")?;
         let tokens = Tensor::from_array(tokens_arr).context("build tokens tensor")?;
 
-        let style_row = self.style_matrix[self.voice_id.style_index()].to_vec();
-        let style_arr = Array2::from_shape_vec((1, 256), style_row).context("build style array")?;
+        let style_row = self.style[self.voice_id.style_index()][n].to_vec();
+        let style_arr =
+            Array2::from_shape_vec((1, STYLE_DIM), style_row).context("build style array")?;
         let style = Tensor::from_array(style_arr).context("build style tensor")?;
 
-        let speed_arr = Array2::from_elem((1, 1), 1.0f32);
+        // `speed` is rank-1 `[1]` in the v0.19 export (not `[1,1]`).
+        let speed_arr = Array1::from_elem(1, 1.0f32);
         let speed = Tensor::from_array(speed_arr).context("build speed tensor")?;
 
+        // Input/output names match the onnx-community Kokoro v0.19 export:
+        // inputs `input_ids`/`style`/`speed`, output `waveform`.
         let inputs = ort::inputs![
-            "tokens" => tokens,
-            "style"  => style,
-            "speed"  => speed,
+            "input_ids" => tokens,
+            "style"     => style,
+            "speed"     => speed,
         ];
         // `session_guard` must be declared before `outputs` so it outlives the
         // borrow: `SessionOutputs<'s>` holds a reference into the session.
@@ -131,7 +165,7 @@ impl KokoroTts {
             .map_err(|_| anyhow::anyhow!("TTS session mutex poisoned"))?;
         let outputs = session_guard.run(inputs)?;
 
-        let (_shape, audio_slice) = outputs["audio"]
+        let (_shape, audio_slice) = outputs["waveform"]
             .try_extract_tensor::<f32>()
             .context("extract audio tensor")?;
 

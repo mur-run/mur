@@ -1272,9 +1272,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 cmd::agent_voice::cmd_voice_enable(&name, voice_id.as_deref())?
             }
             VoiceAction::Disable => cmd::agent_voice::cmd_voice_disable(&name)?,
-            VoiceAction::Download => {
-                anyhow::bail!("voice download not yet implemented; will ship in D1 Task 3");
-            }
+            VoiceAction::Download => cmd::agent_voice::cmd_voice_download(&name).await?,
         },
         AgentAction::Schedule { action } => match action {
             AgentScheduleAction::Add {
