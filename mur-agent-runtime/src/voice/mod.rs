@@ -7,7 +7,12 @@
 pub mod audio;
 pub mod download;
 pub mod network_audit;
-pub mod notifier;
 pub mod stt;
-pub mod tts;
 pub mod types;
+
+// Kokoro ONNX TTS + the companion VoiceNotifier that drives it. Only built
+// with the `tts` feature (pulls onnxruntime); see the feature note in Cargo.toml.
+#[cfg(feature = "tts")]
+pub mod notifier;
+#[cfg(feature = "tts")]
+pub mod tts;
