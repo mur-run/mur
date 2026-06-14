@@ -1,7 +1,8 @@
 //! Multi-agent orchestration for `mur agent cli a b c` — one multiplexer
 //! pane per agent, each running single-name `mur agent cli <name>`.
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -155,7 +156,7 @@ pub fn run(names: &[String], resume: bool, auto: bool) -> Result<()> {
     let home = crate::cmd::agent::resolve_mur_home()?;
     let canon = validate(&home, names)?;
     let exe = std::env::current_exe().context("resolve current executable")?;
-    let exe = exe.to_string_lossy().into_owned();
+    let exe = canonical_mur_exe(exe).to_string_lossy().into_owned();
     let backend = detect(|k| std::env::var(k).ok(), on_path).ok_or_else(|| {
         anyhow!(
             "multi-agent split needs a terminal multiplexer.\n\
@@ -163,6 +164,40 @@ pub fn run(names: &[String], resume: bool, auto: bool) -> Result<()> {
         )
     })?;
     execute(backend, &exe, &canon, resume, auto)
+}
+
+/// Normalize the launching binary to the canonical `mur` for pane commands.
+///
+/// Every pane command is built as `<exe> agent cli <name>` (see `pane_argv`),
+/// which is only correct when `<exe>` is the `mur` binary. We may instead be
+/// launched via the `murmur` alias — a symlink to the same binary, BusyBox
+/// convention — in which case `current_exe()` reports the `murmur` path. But
+/// `murmur <args>` already expands to `mur agent cli <args>` (see
+/// `crate::cli::murmur`), so appending `agent cli` would double-dispatch into
+/// `mur agent cli agent cli <name>`, failing with `unknown agent(s): agent,
+/// cli`. That kills the pane process immediately, tmux reaps the now-empty
+/// session, and the trailing `attach-session` reports "no sessions" / exits 1.
+///
+/// Rewrite a `murmur` invocation to its sibling `mur`, preserving directory
+/// and extension. The stem check mirrors `cli::murmur::is_murmur_invocation`,
+/// duplicated here because that module lives in the binary crate only and this
+/// pane-planning code compiles as part of the library crate.
+fn canonical_mur_exe(exe: PathBuf) -> PathBuf {
+    let is_murmur = exe
+        .file_stem()
+        .is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case("murmur"));
+    if !is_murmur {
+        return exe;
+    }
+    let new_name = match exe.extension() {
+        Some(ext) => {
+            let mut s = OsString::from("mur.");
+            s.push(ext);
+            s
+        }
+        None => OsString::from("mur"),
+    };
+    exe.with_file_name(new_name)
 }
 
 fn execute(backend: Backend, exe: &str, names: &[String], resume: bool, auto: bool) -> Result<()> {
@@ -526,6 +561,38 @@ mod tests {
             "'/Volumes/My Drive/mur'"
         );
         assert_eq!(shell_quote("it's"), r#"'it'\''s'"#);
+    }
+
+    #[test]
+    fn murmur_exe_is_normalized_to_mur_sibling() {
+        // Launched via the `murmur` alias, current_exe() reports the murmur
+        // path. Pane commands must use the sibling `mur`, never `murmur agent
+        // cli …`, which double-dispatches to "unknown agent(s): agent, cli"
+        // and tears down the session before attach.
+        assert_eq!(
+            canonical_mur_exe(PathBuf::from("/opt/homebrew/bin/murmur")),
+            PathBuf::from("/opt/homebrew/bin/mur")
+        );
+        // Case-insensitive stem match (mirrors is_murmur_invocation).
+        assert_eq!(
+            canonical_mur_exe(PathBuf::from("/tools/MURMUR")),
+            PathBuf::from("/tools/mur")
+        );
+        // Extension is preserved (Windows `murmur.exe` → `mur.exe`).
+        assert_eq!(
+            canonical_mur_exe(PathBuf::from("/tools/murmur.exe")),
+            PathBuf::from("/tools/mur.exe")
+        );
+        // A plain `mur` path is left untouched.
+        assert_eq!(
+            canonical_mur_exe(PathBuf::from("/usr/local/bin/mur")),
+            PathBuf::from("/usr/local/bin/mur")
+        );
+        // A non-murmur stem that merely contains "mur" is untouched.
+        assert_eq!(
+            canonical_mur_exe(PathBuf::from("/usr/local/bin/murex")),
+            PathBuf::from("/usr/local/bin/murex")
+        );
     }
 
     #[test]
