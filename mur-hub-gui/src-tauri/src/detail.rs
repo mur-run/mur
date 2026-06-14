@@ -69,6 +69,33 @@ pub enum RenderStatusView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillView {
     pub path: String,
+    /// Whether the backing file actually parses + validates as a skill
+    /// manifest (canonical YAML or markdown). Legacy `.md` paths that no
+    /// longer parse are surfaced as `false` so the UI can flag them as dead.
+    pub loadable: bool,
+}
+
+/// Best-effort check that a legacy per-agent skill path points at a file that
+/// the runtime can still load. Resolves `rel_path` under the agent home, then
+/// parses the file by extension and validates the resulting manifest. Any
+/// failure (missing file, unparseable, invalid) yields `false`.
+fn skill_path_is_loadable(agent_home: &std::path::Path, rel_path: &str) -> bool {
+    let file = agent_home.join(rel_path);
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        return false;
+    };
+    let ext = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let parsed = match ext.as_str() {
+        "yaml" | "yml" => mur_common::skill::parse_canonical(&text),
+        "md" | "markdown" => mur_common::skill::parse_markdown(&text)
+            .or_else(|_| mur_common::skill::parse_legacy_markdown(&text)),
+        _ => return false,
+    };
+    matches!(parsed, Ok(ref m) if mur_common::skill::validate(m).is_ok())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,11 +161,17 @@ pub fn get_agent_detail(name: String) -> Result<AgentDetail, String> {
             }
         },
         behavior_preset: format!("{:?}", profile.appearance.behavior_preset).to_lowercase(),
-        skills: profile
-            .skills
-            .into_iter()
-            .map(|path| SkillView { path })
-            .collect(),
+        skills: {
+            let agent_home = mur_home.join("agents").join(&name);
+            profile
+                .skills
+                .into_iter()
+                .map(|path| {
+                    let loadable = skill_path_is_loadable(&agent_home, &path);
+                    SkillView { path, loadable }
+                })
+                .collect()
+        },
         installed_skills: profile
             .installed_skills
             .into_iter()

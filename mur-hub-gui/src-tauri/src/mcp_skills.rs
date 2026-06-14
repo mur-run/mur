@@ -7,11 +7,36 @@
 use crate::detail::{AgentDetail, get_agent_detail};
 use mur_core::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_remove};
 use mur_core::cmd::agent::skill::{cmd_skill_add, cmd_skill_remove};
+use serde::Serialize;
+
+/// Result of a skill install: the refreshed agent detail plus the id under
+/// which the skill was registered, so the UI can report the real outcome
+/// (the installed skill's name) instead of a blanket "installed" message.
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillInstallResult {
+    pub detail: AgentDetail,
+    /// The canonical id the skill was registered as, e.g. `skills/foo.yaml`.
+    pub installed_id: String,
+}
 
 #[tauri::command]
-pub fn agent_skill_install(name: String, source_path: String) -> Result<AgentDetail, String> {
+pub fn agent_skill_install(
+    name: String,
+    source_path: String,
+) -> Result<SkillInstallResult, String> {
     cmd_skill_add(&name, &source_path).map_err(|e| format!("{e:#}"))?;
-    get_agent_detail(name)
+    // Mirror `cmd_skill_add`'s id derivation: the source basename, registered
+    // under `skills/<basename>`. Computed only after a successful add.
+    let installed_id = std::path::Path::new(&source_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|b| format!("skills/{b}"))
+        .unwrap_or_else(|| source_path.clone());
+    let detail = get_agent_detail(name)?;
+    Ok(SkillInstallResult {
+        detail,
+        installed_id,
+    })
 }
 
 #[tauri::command]
