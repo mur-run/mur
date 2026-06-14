@@ -1090,6 +1090,7 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
             "mur-project-search",
             include_str!("../skills/mur_project_search.yaml"),
         ),
+        ("mur-compress", include_str!("../skills/mur_compress.yaml")),
         (
             "mur-session-remove",
             include_str!("../skills/mur_session_remove.yaml"),

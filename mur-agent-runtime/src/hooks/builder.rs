@@ -30,6 +30,16 @@ pub fn build_chain(profile: &AgentProfile, agent_home: &Path, mur_home: &Path) -
         Arc::new(B0SafetyHook::new()),
     ];
 
+    // Auto-compression of oversized tool outputs (Surface 2). Gated by
+    // compress.yaml `auto.enabled` + `auto.agent_runtime`.
+    let ccfg = mur_compress::CompressConfig::load(mur_home);
+    if ccfg.auto.enabled && ccfg.auto.agent_runtime {
+        chain.push(Arc::new(super::compress::CompressHook::new(
+            mur_home.join("compress"),
+            ccfg,
+        )));
+    }
+
     if cfg.ledger {
         chain.push(Arc::new(LedgerHook::new()));
     }

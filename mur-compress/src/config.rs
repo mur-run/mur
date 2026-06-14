@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use crate::auto::AutoCfg;
+
 /// Deep-merge `overlay` onto `base` (user values win; missing keys keep base).
 fn merge_yaml(base: &mut serde_yaml::Value, overlay: serde_yaml::Value) {
     use serde_yaml::Value;
@@ -32,6 +34,8 @@ pub struct CompressConfig {
     pub detect: DetectCfg,
     pub store: StoreCfg,
     pub stats: StatsCfg,
+    #[serde(default)]
+    pub auto: AutoCfg,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +72,7 @@ impl Default for CompressConfig {
             detect: DetectCfg::default(),
             store: StoreCfg::default(),
             stats: StatsCfg::default(),
+            auto: AutoCfg::default(),
         }
     }
 }
