@@ -138,7 +138,7 @@ pub fn skill_remove(agent: &str, query: &str) -> Result<String> {
 /// Usage strings shown for bad arguments.
 pub const MCP_USAGE: &str =
     "usage: /mcp [list] · /mcp add <name> <command> [args…] · /mcp remove <name>";
-pub const SKILL_USAGE: &str = "usage: /skill [list] · /skill add <path> · /skill remove <name>";
+pub const SKILL_USAGE: &str = "usage: /skill [list] · /skill add <path> (validates + installs a .yaml/.md skill into skills/<name>/skill.yaml) · /skill remove <name>";
 
 /// Dispatch a parsed `/mcp` invocation.
 pub fn run_mcp(agent: &str, args: &[String]) -> Result<String> {
