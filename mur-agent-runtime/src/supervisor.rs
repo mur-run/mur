@@ -299,6 +299,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let hitl_timeout_secs = profile.inner.hitl.timeout_secs;
+    let max_iterations = profile.inner.hitl.max_iterations;
+    let max_tokens = profile.inner.hitl.max_tokens;
     let (runner, llm_for_companion, mcp_pool) = crate::supervisor_runner::build_provider_runner(
         force_echo,
         &agent_home,
@@ -311,6 +313,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         Some(pending_approvals.clone()),
         Some(sock_notif_tx.clone()),
         hitl_timeout_secs,
+        max_iterations,
+        max_tokens,
     )
     .await?;
     let dispatcher = Arc::new(build_dispatcher(
