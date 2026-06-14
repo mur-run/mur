@@ -79,6 +79,24 @@ pub(crate) fn local_llm_port(
                     mur_home,
                 ));
             }
+            // Cloud providers routed through a local bridge (e.g. an OAuth proxy
+            // / cc-proxy) via their conventional base-URL env var. Remote
+            // endpoints (https://api.anthropic.com) are not loopback, so
+            // `loopback_port` returns `None` and cloud behaviour is unchanged.
+            "anthropic" => {
+                if let Ok(base) = std::env::var("ANTHROPIC_BASE_URL")
+                    && let Some(p) = loopback_port(&base)
+                {
+                    return Some(p);
+                }
+            }
+            "openai" => {
+                if let Ok(base) = std::env::var("OPENAI_BASE_URL")
+                    && let Some(p) = loopback_port(&base)
+                {
+                    return Some(p);
+                }
+            }
             _ => {}
         }
     }
@@ -503,5 +521,77 @@ mod tests {
             resolve_local_base_url(None, None, Path::new("/nonexistent")),
             LOCAL_LLM_DEFAULT_BASE_URL
         );
+    }
+
+    /// Build a minimal inline-model `AgentProfile` (no `model_ref`, so
+    /// `resolve_model_entry` never touches the registry) for the given provider.
+    fn inline_profile(provider: &str, name: &str) -> mur_common::agent::AgentProfile {
+        const MINIMAL: &str = r#"
+schema: 1
+id: 0192f5a1-28ab-7111-8000-000000000002
+name: agent_a
+display_name: "Agent A"
+version: "0.1.0"
+persona:
+  category: research
+  description: "Minimal test agent"
+  traits: { tone: concise, risk: cautious, verbosity: low }
+sys_prompt_file: "sys_prompt.md"
+model: { provider: ollama, name: "m", params: {} }
+mcp_servers: []
+skills: []
+transport: { stdio: true, socket: { enabled: true, bind: "unix:///tmp/a.sock" } }
+communication: { accepts_from: ["*"], sends_to: [] }
+capabilities: ["a2a.message.send","a2a.tasks"]
+entitlements:
+  network:
+    inbound: { ports: [] }
+    outbound: { mode: restricted, allow_hosts: [], protocols: ["tcp"], resolve_dns: { mode: system } }
+  filesystem: { read: [], write: [], deny: ["~/.ssh"] }
+  processes: { spawn: { mode: allowlist, allowed: [] } }
+  syscalls: { mode: default }
+  limits: { memory_mb: 512, file_descriptors: 1024, processes: 32 }
+notifications: { on_task_complete: [], on_error: [], on_shutdown: [] }
+retry:
+  llm: { max_retries: 3, backoff: exponential, initial_delay_ms: 1000, max_delay_ms: 30000, retry_on: ["rate_limit"] }
+  tool: { max_retries: 1, backoff: fixed, initial_delay_ms: 500 }
+lifecycle: { restart: on_failure, max_restarts: 3, restart_window_secs: 600, stop_timeout_secs: 15, mcp_required: true }
+created_at: "2026-04-22T10:00:00+08:00"
+updated_at: "2026-04-22T10:00:00+08:00"
+"#;
+        let mut p: mur_common::agent::AgentProfile =
+            serde_yaml_ng::from_str(MINIMAL).expect("minimal profile parses");
+        p.model.provider = provider.to_string();
+        p.model.name = name.to_string();
+        p.model_ref = None;
+        p
+    }
+
+    /// A cloud provider routed through a loopback bridge via `ANTHROPIC_BASE_URL`
+    /// must have its local proxy port allowlisted; a remote endpoint must not.
+    /// Env-var mutations make this test order-sensitive, so it owns the variable
+    /// for its full duration and clears it before exercising the negative cases.
+    #[test]
+    fn anthropic_via_local_bridge_grants_loopback_port() {
+        let profile = inline_profile("anthropic", "claude-sonnet-4-6");
+        let mur_home = std::path::Path::new("/nonexistent");
+
+        // Local bridge → port is granted.
+        unsafe {
+            std::env::set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:8088");
+        }
+        assert_eq!(local_llm_port(&profile, mur_home), Some(8088));
+
+        // Remote cloud endpoint → not loopback → no port granted.
+        unsafe {
+            std::env::set_var("ANTHROPIC_BASE_URL", "https://api.anthropic.com");
+        }
+        assert_eq!(local_llm_port(&profile, mur_home), None);
+
+        // Unset → no port granted.
+        unsafe {
+            std::env::remove_var("ANTHROPIC_BASE_URL");
+        }
+        assert_eq!(local_llm_port(&profile, mur_home), None);
     }
 }
