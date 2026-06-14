@@ -3,8 +3,8 @@
 use crate::cmd::agent::resolve_mur_home;
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::skill::{
-    TrustLevel, local, parse_canonical, parse_legacy_markdown, parse_markdown, scan::scan_skill,
-    serialize_canonical, serialize_markdown, validate,
+    TrustLevel, local, parse_canonical, parse_legacy_markdown, parse_markdown,
+    parser::roundtrip_check, scan::scan_skill, serialize_canonical, serialize_markdown, validate,
 };
 use std::fs;
 use std::path::Path;
@@ -45,6 +45,13 @@ pub fn cmd_validate(path: &str, warnings_only: bool) -> Result<()> {
         if !warnings_only {
             bail!("security scan refused the skill");
         }
+    }
+    // Round-trip integrity: surface silent abstract/context corruption that the
+    // markdown↔YAML converter would introduce. This is a warning, not a hard
+    // failure — the canonical YAML is unaffected, but `mur skill fmt` would be.
+    if let Err(detail) = roundtrip_check(&m) {
+        eprintln!("warning: markdown round-trip would alter content (abstract/context)");
+        eprintln!("  {}", detail.replace('\n', "\n  "));
     }
     println!("ok: {}", m.name);
     Ok(())
@@ -462,5 +469,81 @@ content:
         fs::write(&p, VALID).unwrap();
         cmd_fmt(p.to_str().unwrap(), Some("md"), true).unwrap();
         assert!(dir.path().join("x.md").exists());
+    }
+
+    /// A skill with a deliberate multi-sentence abstract validates cleanly (the
+    /// round-trip integrity guard does not fire) now that the converter is
+    /// lossless.
+    #[test]
+    fn validate_passes_roundtrip_for_multisentence_abstract() {
+        let yaml = r#"
+name: rt-clean
+version: 1.0.0
+publisher: human:t
+description: d
+category: context
+content:
+  abstract: |-
+    Sentence one of a deliberate abstract. Sentence two that the old truncation
+    bug would have destroyed.
+  context: |-
+    First paragraph.
+
+    Second paragraph after a blank line.
+"#;
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("rt.yaml");
+        fs::write(&p, yaml).unwrap();
+        // Hard-fails only on validation/security errors; the round-trip guard is
+        // a warning. A clean round-trip means cmd_validate returns Ok.
+        cmd_validate(p.to_str().unwrap(), false).unwrap();
+    }
+
+    /// End-to-end fmt round-trip through disk (yaml→md→yaml) must preserve the
+    /// abstract and context verbatim — the regression this PR fixes.
+    #[test]
+    fn fmt_yaml_md_yaml_roundtrip_preserves_content() {
+        let yaml = r#"
+name: rt-disk
+version: 2.0.1
+publisher: human:t
+description: d
+category: context
+tags: [x, y]
+content:
+  abstract: |-
+    A two-sentence abstract. The second sentence must survive the disk trip.
+  context: |-
+    Body paragraph one.
+
+    ## Heading
+
+    Body paragraph two.
+"#;
+        let dir = tempdir().unwrap();
+        let ypath = dir.path().join("rt.yaml");
+        fs::write(&ypath, yaml).unwrap();
+        let original = read_any(ypath.to_str().unwrap()).unwrap();
+
+        // yaml -> md
+        cmd_fmt(ypath.to_str().unwrap(), Some("md"), true).unwrap();
+        let mpath = dir.path().join("rt.md");
+        assert!(mpath.exists());
+
+        // md -> yaml (write to a fresh sibling so we can re-read it)
+        cmd_fmt(mpath.to_str().unwrap(), Some("yaml"), true).unwrap();
+        let roundtripped = read_any(ypath.to_str().unwrap()).unwrap();
+
+        assert_eq!(
+            roundtripped.content.r#abstract.trim(),
+            original.content.r#abstract.trim(),
+            "abstract must survive yaml→md→yaml on disk"
+        );
+        assert_eq!(
+            roundtripped.content.context.as_deref().map(str::trim_end),
+            original.content.context.as_deref().map(str::trim_end),
+            "context must survive yaml→md→yaml on disk"
+        );
+        assert_eq!(roundtripped.tags, original.tags);
     }
 }
