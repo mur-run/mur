@@ -405,6 +405,36 @@
   margin-top: 4px;
 }
 
+/* ── Save success inline ──────────────────────────────────────────────── */
+.save-ok {
+  color: var(--status-running, #22C55E);
+  font-size: var(--text-xs, 12px);
+  margin-top: 4px;
+}
+
+/* ── Skill load-status badges ─────────────────────────────────────────── */
+.badge-dead {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--status-failed, #EF4444);
+  background: color-mix(in srgb, var(--status-failed, #EF4444) 16%, transparent);
+}
+
+.badge-loadable {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--status-running, #22C55E);
+  background: color-mix(in srgb, var(--status-running, #22C55E) 16%, transparent);
+}
+
 /* ── Mobile mirror tab ──────────────────────────────────────────────────── */
 .mobile-tab {
   display: flex;
