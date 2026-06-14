@@ -117,6 +117,8 @@ pub fn build_runner(
     hitl_timeout_secs: u32,
     tools: Vec<std::sync::Arc<dyn crate::tools::ToolExecutor>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
+    max_iterations: Option<u32>,
+    max_tokens: Option<u64>,
 ) -> Arc<TaskRunner> {
     let mut runner = TaskRunner::with_llm(client)
         .with_system_prompt(base_system_prompt)
@@ -125,6 +127,12 @@ pub fn build_runner(
         .with_hitl_timeout_secs(hitl_timeout_secs)
         .with_tools(tools)
         .with_tools_policy(tools_policy);
+    if let Some(n) = max_iterations {
+        runner = runner.with_max_iterations(n);
+    }
+    if let Some(n) = max_tokens {
+        runner = runner.with_max_token_budget(n);
+    }
     if let (Some(chain), Some(ctx), Some(cancel)) = (hook_chain, hook_ctx, hook_cancel) {
         runner = runner.with_hook_chain(chain, ctx, cancel);
     }
@@ -152,6 +160,8 @@ pub async fn build_provider_runner(
     pending_approvals: Option<HitlApprovals>,
     notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     hitl_timeout_secs: u32,
+    max_iterations: Option<u32>,
+    max_tokens: Option<u64>,
 ) -> anyhow::Result<(
     Arc<TaskRunner>,
     Option<Arc<dyn LlmClient>>,
@@ -229,6 +239,8 @@ pub async fn build_provider_runner(
             hitl_timeout_secs,
             tools.clone(),
             tools_policy.clone(),
+            max_iterations,
+            max_tokens,
         );
         (r, Some(client), Some(pool.clone()))
     };

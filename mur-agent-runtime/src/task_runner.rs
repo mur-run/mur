@@ -78,8 +78,58 @@ pub struct TaskRunner {
         Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<serde_json::Value>>>>,
     hitl_timeout_secs: u32,
     max_iterations: u32,
+    /// Per-task ceiling on cumulative input tokens for the agentic loop. The
+    /// loop snapshots the (per-runner) counter at entry and stops gracefully
+    /// once `current - start >= max_token_budget`.
+    max_token_budget: u64,
     tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
+}
+
+/// Default agentic-loop iteration cap when `HitlConfig.max_iterations` is unset.
+/// A layered set of budgets (token + loop-detection) is the real safety net, so
+/// this can be generous without risking runaway cost.
+const DEFAULT_MAX_ITERATIONS: u32 = 25;
+
+/// Default cumulative-input-token budget per task when `HitlConfig.max_tokens`
+/// is unset. ≈ a few dollars on Sonnet; override per profile to bound spend.
+const DEFAULT_MAX_TOKEN_BUDGET: u64 = 750_000;
+
+/// Rolling-window size for doom-loop detection: the last N tool-call
+/// fingerprints are retained.
+const LOOP_WINDOW: usize = 8;
+
+/// Number of identical tool-call fingerprints within the rolling window that
+/// trips the doom-loop guard.
+const LOOP_REPEAT_THRESHOLD: usize = 3;
+
+/// Why the agentic loop stopped short of a natural end-turn. Carried out of the
+/// loop into the task's `usage` JSON so callers can tell a clean completion from
+/// a budget-truncated one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopStop {
+    MaxIterations,
+    TokenBudget,
+    LoopDetected,
+}
+
+impl LoopStop {
+    fn as_str(self) -> &'static str {
+        match self {
+            LoopStop::MaxIterations => "max_iterations",
+            LoopStop::TokenBudget => "token_budget",
+            LoopStop::LoopDetected => "loop_detected",
+        }
+    }
+}
+
+/// An early, graceful termination of the agentic loop: which budget tripped and
+/// how many iterations had completed. `None` (no `LoopExit`) means the model
+/// ended the turn naturally.
+#[derive(Debug, Clone, Copy)]
+struct LoopExit {
+    reason: LoopStop,
+    iterations: u32,
 }
 
 impl TaskRunner {
@@ -122,7 +172,8 @@ impl TaskRunner {
             notifier: None,
             client_notifiers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
-            max_iterations: 10,
+            max_iterations: DEFAULT_MAX_ITERATIONS,
+            max_token_budget: DEFAULT_MAX_TOKEN_BUDGET,
             tools: vec![],
             tools_policy: vec![],
         }
@@ -205,6 +256,12 @@ impl TaskRunner {
 
     pub fn with_max_iterations(mut self, n: u32) -> Self {
         self.max_iterations = n;
+        self
+    }
+
+    /// Set the per-task cumulative input-token budget for the agentic loop.
+    pub fn with_max_token_budget(mut self, n: u64) -> Self {
+        self.max_token_budget = n;
         self
     }
 
@@ -349,12 +406,12 @@ impl TaskRunner {
 
         let generation = async {
             match &self.backend {
-                RunnerBackend::StubEcho => Ok(echo_response(&spec.input)),
+                RunnerBackend::StubEcho => Ok((echo_response(&spec.input), None)),
                 RunnerBackend::StubSlow => {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    Ok(echo_response(&spec.input))
+                    Ok((echo_response(&spec.input), None))
                 }
-                RunnerBackend::Misconfigured(message) => Ok(text_response(message)),
+                RunnerBackend::Misconfigured(message) => Ok((text_response(message), None)),
                 RunnerBackend::Llm(client) => {
                     if self.pending_approvals.is_some() {
                         let system = self
@@ -364,7 +421,9 @@ impl TaskRunner {
                         self.run_agentic_loop(&id, client.as_ref(), system, &spec.input, sink)
                             .await
                     } else {
-                        self.run_llm(&id, client.as_ref(), &spec.input, sink).await
+                        self.run_llm(&id, client.as_ref(), &spec.input, sink)
+                            .await
+                            .map(|m| (m, None))
                     }
                 }
             }
@@ -374,7 +433,7 @@ impl TaskRunner {
         // future is dropped (Rust async cancellation aborts the in-flight LLM
         // call) and we return a Cancelled task so message/send terminates the
         // stream cleanly.
-        let result: Option<Result<Message, TaskError>> = tokio::select! {
+        let result: Option<Result<(Message, Option<LoopExit>), TaskError>> = tokio::select! {
             r = generation => Some(r),
             _ = &mut rx_cancel => None,
         };
@@ -403,8 +462,18 @@ impl TaskRunner {
             Some(r) => r,
         };
         match result {
-            Ok(reply) => {
+            Ok((reply, stop)) => {
                 self.set_state(&id, TaskState::Completed);
+                // When a budget forced an early, graceful exit, surface the
+                // reason + iteration count in `usage` so callers can tell a
+                // truncated completion from a natural one (the task still
+                // reports Completed — work is preserved, not failed).
+                let usage = stop.map(|exit| {
+                    serde_json::json!({
+                        "stop_reason": exit.reason.as_str(),
+                        "iterations": exit.iterations,
+                    })
+                });
                 TaskOutcome::Completed(Task {
                     id,
                     state: TaskState::Completed,
@@ -412,7 +481,7 @@ impl TaskRunner {
                     created_at: now.clone(),
                     completed_at: Some(now),
                     error: None,
-                    usage: None,
+                    usage,
                 })
             }
             Err(err) => {
@@ -780,6 +849,9 @@ impl TaskRunner {
         })
     }
 
+    /// Run the agentic loop. Returns the final agent message plus an optional
+    /// `LoopStop` describing which budget (if any) forced an early, graceful
+    /// exit. `None` means the model ended the turn naturally.
     async fn run_agentic_loop(
         &self,
         task_id: &str,
@@ -787,7 +859,7 @@ impl TaskRunner {
         system_prompt: String,
         input: &Message,
         _sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
-    ) -> Result<Message, TaskError> {
+    ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
         let tool_defs: Vec<_> = self.tools_for_loop().iter().map(|t| t.def()).collect();
@@ -803,7 +875,36 @@ impl TaskRunner {
             },
         ];
 
-        for _iteration in 0..self.max_iterations {
+        // Snapshot the (per-runner, shared-across-tasks) token counter so the
+        // budget measures THIS task's spend, not the runner's lifetime total.
+        let start_tokens = self
+            .cumulative_input_tokens
+            .load(std::sync::atomic::Ordering::Relaxed);
+        // Rolling window of recent tool-call fingerprints for doom-loop
+        // detection: (tool_name, deterministic hash of canonical args).
+        let mut fingerprints: VecDeque<(String, u64)> = VecDeque::with_capacity(LOOP_WINDOW);
+
+        let mut iteration: u32 = 0;
+        while iteration < self.max_iterations {
+            // Token budget (primary control): stop before spending more once
+            // this task's cumulative input tokens cross the ceiling.
+            let spent = self
+                .cumulative_input_tokens
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .saturating_sub(start_tokens);
+            if spent >= self.max_token_budget {
+                let msg = self
+                    .graceful_exit(client, &history, LoopStop::TokenBudget)
+                    .await;
+                return Ok((
+                    msg,
+                    Some(LoopExit {
+                        reason: LoopStop::TokenBudget,
+                        iterations: iteration,
+                    }),
+                ));
+            }
+
             let req = LlmRequest {
                 messages: history.clone(),
                 temperature: None,
@@ -828,10 +929,38 @@ impl TaskRunner {
             });
 
             if resp.tool_calls.is_empty() || resp.stop_reason == StopReason::EndTurn {
-                return Ok(Message {
-                    role: "agent".into(),
-                    parts: vec![mur_common::a2a::MessagePart::Text { text: resp.text }],
-                });
+                return Ok((
+                    Message {
+                        role: "agent".into(),
+                        parts: vec![mur_common::a2a::MessagePart::Text { text: resp.text }],
+                    },
+                    None,
+                ));
+            }
+
+            // Doom-loop detection (safety layer): fingerprint every tool call
+            // and abort if any single fingerprint repeats `LOOP_REPEAT_THRESHOLD`
+            // times within the rolling window — catches blind identical retries
+            // in ~3 iterations regardless of the iteration cap.
+            for call in &resp.tool_calls {
+                let fp = (call.tool_name.clone(), fingerprint_args(&call.input));
+                fingerprints.push_back(fp.clone());
+                while fingerprints.len() > LOOP_WINDOW {
+                    fingerprints.pop_front();
+                }
+                let repeats = fingerprints.iter().filter(|f| **f == fp).count();
+                if repeats >= LOOP_REPEAT_THRESHOLD {
+                    let msg = self
+                        .graceful_exit(client, &history, LoopStop::LoopDetected)
+                        .await;
+                    return Ok((
+                        msg,
+                        Some(LoopExit {
+                            reason: LoopStop::LoopDetected,
+                            iterations: iteration,
+                        }),
+                    ));
+                }
             }
 
             // Execute tools and collect results
@@ -843,17 +972,94 @@ impl TaskRunner {
                 }
             }
             history.push(RichMessage::ToolResults { results });
+            iteration += 1;
         }
 
-        Err(task_error(
-            "max_iterations",
-            format!(
-                "agentic loop exceeded {} iteration limit",
-                self.max_iterations
-            ),
-            false,
+        let msg = self
+            .graceful_exit(client, &history, LoopStop::MaxIterations)
+            .await;
+        Ok((
+            msg,
+            Some(LoopExit {
+                reason: LoopStop::MaxIterations,
+                iterations: iteration,
+            }),
         ))
     }
+
+    /// One final, tools-DISABLED LLM turn asking the model to summarize what it
+    /// completed, the current build/test state, and the remaining steps. If that
+    /// call fails, fall back to the last assistant text already in `history` so
+    /// accumulated work is never lost.
+    async fn graceful_exit(
+        &self,
+        client: &dyn crate::llm::LlmClient,
+        history: &[crate::llm::RichMessage],
+        reason: LoopStop,
+    ) -> Message {
+        use crate::llm::{LlmRequest, RichMessage};
+
+        let nudge = format!(
+            "You have hit the {} budget for this task. Stop calling tools. \
+             Summarize what you completed, the current build/test state, and the \
+             remaining steps so work can resume later.",
+            reason.as_str()
+        );
+        let mut messages = history.to_vec();
+        messages.push(RichMessage::Text {
+            role: "user".into(),
+            content: nudge,
+        });
+        let req = LlmRequest {
+            messages,
+            temperature: None,
+            max_tokens: None,
+            tools: vec![], // tools disabled: force a textual summary
+        };
+        match client.generate(req).await {
+            Ok(resp) => {
+                self.cumulative_input_tokens
+                    .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
+                Message {
+                    role: "agent".into(),
+                    parts: vec![mur_common::a2a::MessagePart::Text { text: resp.text }],
+                }
+            }
+            Err(_) => {
+                // Never lose work: return the last assistant text from history.
+                let text = last_assistant_text(history)
+                    .unwrap_or_else(|| format!("Stopped: {} budget reached.", reason.as_str()));
+                Message {
+                    role: "agent".into(),
+                    parts: vec![mur_common::a2a::MessagePart::Text { text }],
+                }
+            }
+        }
+    }
+}
+
+/// Deterministic hash of a tool call's arguments. Serializes to canonical JSON
+/// (sorted keys via `serde_json::Value`'s BTreeMap-backed object) before hashing
+/// so logically-identical args always fingerprint the same.
+fn fingerprint_args(args: &serde_json::Value) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let canonical = args.to_string();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Best-effort recovery of the most recent assistant-authored text from the
+/// loop history (the inline reasoning attached to a tool-use turn).
+fn last_assistant_text(history: &[crate::llm::RichMessage]) -> Option<String> {
+    use crate::llm::RichMessage;
+    history.iter().rev().find_map(|m| match m {
+        RichMessage::ToolUse { text: Some(t), .. } if !t.is_empty() => Some(t.clone()),
+        RichMessage::Text { role, content } if role == "agent" || role == "assistant" => {
+            Some(content.clone())
+        }
+        _ => None,
+    })
 }
 
 /// Build a `TaskError` for a failed task outcome.
@@ -1097,6 +1303,18 @@ mod tests {
         }
     }
 
+    /// Like `tool_call_response` but with a caller-specified input-token count,
+    /// for exercising the token budget.
+    fn tool_call_response_tokens(
+        call_id: &str,
+        command: &str,
+        input_tokens: u64,
+    ) -> crate::llm::LlmResponse {
+        let mut r = tool_call_response(call_id, command);
+        r.input_tokens = input_tokens;
+        r
+    }
+
     fn end_turn_response(text: &str) -> crate::llm::LlmResponse {
         crate::llm::LlmResponse {
             text: text.into(),
@@ -1138,12 +1356,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn max_iterations_exceeded_yields_failed() {
+    async fn max_iterations_exceeded_yields_completed_with_summary() {
         use crate::llm::stub::SequenceLlm;
-        // Always returns tool_use — loop never ends naturally
-        let responses: Vec<crate::llm::LlmResponse> = (0..12)
-            .map(|i| tool_call_response(&format!("id-{i}"), "echo loop"))
-            .collect();
+        // Three tool_use turns fill the cap; the fourth call is the graceful,
+        // tools-disabled summary turn. SequenceLlm wraps modulo len, so a
+        // 4-element vector maps loop turns to indices 0,1,2 and the summary
+        // turn to index 3 deterministically.
+        // Distinct commands per turn so the doom-loop guard (identical-call
+        // detection) does NOT fire first — this test must exercise the
+        // iteration cap specifically.
+        let responses: Vec<crate::llm::LlmResponse> = vec![
+            tool_call_response("id-0", "echo step-0"),
+            tool_call_response("id-1", "echo step-1"),
+            tool_call_response("id-2", "echo step-2"),
+            end_turn_response("SUMMARY: completed nothing; build untouched; remaining: all."),
+        ];
         let llm = SequenceLlm::new(responses);
         let (notif_tx, _rx) = tokio::sync::mpsc::channel(16);
         let pa: Arc<
@@ -1169,13 +1396,185 @@ mod tests {
             task_id: None,
         };
         let outcome = runner.run_sync(spec).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed (graceful exit), got {outcome:?}");
+        };
+        // The returned reply carries the summarizing turn's text.
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
         assert!(
-            matches!(outcome, TaskOutcome::Failed(_)),
-            "expected Failed, got {outcome:?}"
+            reply_text.contains("SUMMARY:"),
+            "expected summary in reply, got: {reply_text}"
         );
-        if let TaskOutcome::Failed(task) = outcome {
-            let err = task.error.unwrap();
-            assert!(err.message.contains("iteration"), "got: {}", err.message);
+        // The stop reason is surfaced in usage for callers to inspect.
+        let usage = task.usage.expect("graceful exit must populate usage");
+        assert_eq!(usage["stop_reason"], "max_iterations", "usage={usage}");
+        assert_eq!(usage["iterations"], 3, "usage={usage}");
+    }
+
+    /// Step 3 (token budget): with a tiny `max_tokens` ceiling and an LLM that
+    /// reports input tokens, the loop stops early — before the iteration cap —
+    /// with stop_reason "token_budget", returning a Completed task carrying the
+    /// summary. The budget is checked at loop entry (current - start), so the
+    /// first turn always runs; the second turn trips the ceiling.
+    #[tokio::test]
+    async fn token_budget_exceeded_yields_completed_with_summary() {
+        use crate::llm::stub::SequenceLlm;
+        // idx0: one tool turn reporting 100 input tokens (>budget of 10).
+        // idx1: the graceful, tools-disabled summary turn.
+        let responses: Vec<crate::llm::LlmResponse> = vec![
+            tool_call_response_tokens("id-0", "echo work", 100),
+            end_turn_response("TOKEN SUMMARY: ran one step; build untouched; remaining: rest."),
+        ];
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                // High iteration cap so only the token budget can stop us.
+                .with_max_iterations(50)
+                .with_max_token_budget(10),
+        );
+        let outcome = runner.run_sync(loop_spec("budget")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed (token-budget graceful exit), got {outcome:?}");
+        };
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            reply_text.contains("TOKEN SUMMARY"),
+            "expected summary in reply, got: {reply_text}"
+        );
+        let usage = task.usage.expect("token-budget exit must populate usage");
+        assert_eq!(usage["stop_reason"], "token_budget", "usage={usage}");
+        // Stopped after exactly one completed iteration, far below the cap of 50.
+        assert_eq!(usage["iterations"], 1, "usage={usage}");
+    }
+
+    /// Step 4 (doom-loop detection): an LLM that emits the SAME tool call every
+    /// turn must be aborted after ~3 identical calls with stop_reason
+    /// "loop_detected" — well before the iteration cap (50 here). This catches
+    /// blind identical retries quickly regardless of how high the cap is.
+    #[tokio::test]
+    async fn doom_loop_detected_yields_completed_with_summary() {
+        use crate::llm::stub::SequenceLlm;
+        // Identical args every turn. The 3rd identical fingerprint trips the
+        // guard on iteration index 2; the 4th call is the graceful summary.
+        let responses: Vec<crate::llm::LlmResponse> = vec![
+            tool_call_response("same-0", "echo identical"),
+            tool_call_response("same-1", "echo identical"),
+            tool_call_response("same-2", "echo identical"),
+            end_turn_response("LOOP SUMMARY: stuck retrying; build untouched; need new approach."),
+        ];
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                // High cap so only doom-loop detection can stop us this fast.
+                .with_max_iterations(50),
+        );
+        let outcome = runner.run_sync(loop_spec("doom")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed (doom-loop graceful exit), got {outcome:?}");
+        };
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            reply_text.contains("LOOP SUMMARY"),
+            "expected summary in reply, got: {reply_text}"
+        );
+        let usage = task.usage.expect("doom-loop exit must populate usage");
+        assert_eq!(usage["stop_reason"], "loop_detected", "usage={usage}");
+        // Aborted within ~3 iterations, far below the cap of 50.
+        let iters = usage["iterations"]
+            .as_u64()
+            .expect("iterations is a number");
+        assert!(iters < 5, "expected early abort, got {iters} iterations");
+    }
+
+    /// Test LLM that records how many times `generate` was called and always
+    /// emits a tool_use response (so the agentic loop never ends naturally).
+    struct CountingToolLlm {
+        calls: Arc<AtomicU64>,
+        input_tokens_per_call: u64,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for CountingToolLlm {
+        async fn generate(
+            &self,
+            _req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+            let n = self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(crate::llm::LlmResponse {
+                text: String::new(),
+                input_tokens: self.input_tokens_per_call,
+                output_tokens: 1,
+                model: "counting".into(),
+                tool_calls: vec![crate::llm::ToolCallResult {
+                    call_id: format!("id-{n}"),
+                    tool_name: "bash".into(),
+                    input: serde_json::json!({"command": "echo loop"}),
+                }],
+                stop_reason: crate::llm::StopReason::ToolUse,
+            })
         }
+        fn model_name(&self) -> &str {
+            "counting"
+        }
+    }
+
+    fn loop_spec(text: &str) -> TaskSpec {
+        TaskSpec {
+            input: mur_common::a2a::Message {
+                role: "user".into(),
+                parts: vec![mur_common::a2a::MessagePart::Text { text: text.into() }],
+            },
+            context_task_id: None,
+            task_id: None,
+        }
+    }
+
+    fn empty_pending_approvals() -> HitlApprovals {
+        Arc::new(tokio::sync::Mutex::new(HashMap::new()))
+    }
+
+    /// Step 1 (config wiring): the PRODUCTION wiring function `build_runner`
+    /// must honour a `max_iterations` of 3 — proving `HitlConfig.max_iterations`
+    /// is threaded through, not just the test-only builder. The counting LLM
+    /// emits tool_use every turn, so without the cap the loop would run forever
+    /// (well, until the default). We assert generate() is called at most 3+1
+    /// times (3 loop turns plus one graceful-summary turn).
+    #[tokio::test]
+    async fn build_runner_caps_loop_at_configured_max_iterations() {
+        let calls = Arc::new(AtomicU64::new(0));
+        let client: Arc<dyn crate::llm::LlmClient> = Arc::new(CountingToolLlm {
+            calls: calls.clone(),
+            input_tokens_per_call: 1,
+        });
+        let (notif_tx, _rx) = tokio::sync::mpsc::channel(64);
+        let runner = crate::supervisor_runner::build_runner(
+            client,
+            None,
+            Arc::new(RuntimeSkills::build(vec![])),
+            SkillsConfig::default(),
+            None,
+            None,
+            None,
+            Some(empty_pending_approvals()),
+            Some(notif_tx),
+            1,
+            vec![],
+            vec![],
+            Some(3),
+            None,
+        );
+        let _ = runner.run_sync(loop_spec("loop")).await;
+        let n = calls.load(Ordering::Relaxed);
+        // 3 loop iterations; the graceful summary turn (step 4) adds at most one
+        // more. Before wiring, the default cap (25) lets it run far past this.
+        assert!(
+            n <= 4,
+            "expected the loop capped near 3 iterations, got {n} generate() calls"
+        );
+        assert!(n >= 3, "expected at least 3 iterations, got {n}");
     }
 }
