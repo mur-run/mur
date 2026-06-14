@@ -82,27 +82,33 @@ fn inject_content_from_body(
         if map.contains_key(Value::String("content".into())) {
             return Ok(()); // frontmatter already supplied content
         }
-        let abstract_text = body
-            .lines()
-            .take(3)
-            .collect::<Vec<_>>()
-            .join("\n")
-            .trim()
-            .to_string();
         let mut content = serde_yaml_ng::Mapping::new();
-        content.insert(
-            Value::String("abstract".into()),
-            Value::String(abstract_text),
-        );
 
         if body.contains("## Steps") {
+            // Workflow mode: abstract is the prose before `## Steps`, with the
+            // optional leading `# Title` H1 stripped.
+            let abstract_text = strip_leading_h1(body)
+                .split("## Steps")
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            content.insert(
+                Value::String("abstract".into()),
+                Value::String(abstract_text),
+            );
             let proc = build_procedure_from_steps(body);
             content.insert(Value::String("procedure".into()), proc);
         } else {
+            // Context mode: drop the optional `# Title` H1, take the first
+            // non-empty paragraph as the abstract, and the remainder (trimmed)
+            // as the context body. This is the inverse of `serialize_markdown`.
+            let (abstract_text, context_text) = split_abstract_and_context(body);
             content.insert(
-                Value::String("context".into()),
-                Value::String(body.trim().to_string()),
+                Value::String("abstract".into()),
+                Value::String(abstract_text),
             );
+            content.insert(Value::String("context".into()), Value::String(context_text));
         }
         map.insert(Value::String("content".into()), Value::Mapping(content));
     } else {
@@ -111,6 +117,42 @@ fn inject_content_from_body(
         ));
     }
     Ok(())
+}
+
+/// Drop a single leading `# Title` H1 line (and the blank line that follows it)
+/// from a markdown body, returning the remainder. If there is no leading H1 the
+/// body is returned unchanged.
+fn strip_leading_h1(body: &str) -> &str {
+    let trimmed = body.trim_start_matches(['\n', '\r']);
+    if let Some(rest) = trimmed.strip_prefix("# ") {
+        // Skip to the end of the title line.
+        match rest.find('\n') {
+            Some(nl) => rest[nl + 1..].trim_start_matches(['\n', '\r']),
+            None => "",
+        }
+    } else {
+        trimmed
+    }
+}
+
+/// Split a context-mode markdown body into `(abstract, context)`:
+/// drop an optional leading `# Title` H1, take the first non-empty paragraph as
+/// the abstract, and everything after the blank line that follows it as the
+/// context body. The inverse of the `serialize_markdown` context layout.
+fn split_abstract_and_context(body: &str) -> (String, String) {
+    let rest = strip_leading_h1(body);
+    // The abstract is the first paragraph: text up to the first blank line.
+    match rest.find("\n\n") {
+        Some(idx) => {
+            let abstract_text = rest[..idx].trim().to_string();
+            let context_text = rest[idx + 2..].trim().to_string();
+            (abstract_text, context_text)
+        }
+        None => {
+            // No blank line: the whole remainder is the abstract, no context.
+            (rest.trim().to_string(), String::new())
+        }
+    }
 }
 
 fn build_procedure_from_steps(body: &str) -> serde_yaml_ng::Value {
@@ -156,12 +198,15 @@ pub fn serialize_markdown(m: &SkillManifest) -> Result<String, ParseError> {
     out.push_str("---\n");
     out.push_str(&frontmatter);
     out.push_str("---\n\n");
+    // Single H1 title, then the abstract paragraph, then the body. The abstract
+    // is emitted verbatim (trimmed) followed by a blank line so the parser can
+    // recover it as the first paragraph. Do NOT emit a duplicate H1.
     out.push_str(&format!("# {}\n\n", m.name));
-    out.push_str(&m.content.r#abstract);
+    out.push_str(m.content.r#abstract.trim());
     out.push('\n');
     if let Some(ctx) = &m.content.context {
         out.push('\n');
-        out.push_str(ctx);
+        out.push_str(ctx.trim_end());
         out.push('\n');
     } else if let Some(proc) = &m.content.procedure {
         out.push_str("\n## Steps\n");
@@ -214,6 +259,35 @@ pub fn parse_legacy_markdown(input: &str) -> Result<SkillManifest, ParseError> {
 pub fn yaml_to_markdown(yaml: &str) -> Result<String, ParseError> {
     let m = parse_canonical(yaml)?;
     serialize_markdown(&m)
+}
+
+/// Round-trip integrity guard: serialise the manifest to markdown, parse it
+/// back, and confirm the content survived. Used by `mur skill validate` to make
+/// silent abstract/context corruption visible. Only the `context` content mode
+/// is checked verbatim — procedure/command/note bodies are reconstructed
+/// structurally and compared by mode. Returns `Err(message)` describing the
+/// drift if the round-trip would alter content.
+pub fn roundtrip_check(m: &SkillManifest) -> Result<(), String> {
+    let md = serialize_markdown(m).map_err(|e| format!("serialize_markdown: {e}"))?;
+    let reparsed = parse_markdown(&md).map_err(|e| format!("parse_markdown: {e}"))?;
+
+    if reparsed.content.r#abstract.trim() != m.content.r#abstract.trim() {
+        return Err(format!(
+            "abstract differs after round-trip\n  original:  {:?}\n  roundtrip: {:?}",
+            m.content.r#abstract, reparsed.content.r#abstract
+        ));
+    }
+
+    // Context is stored verbatim; compare trimmed to ignore trailing-newline noise.
+    let orig_ctx = m.content.context.as_deref().map(str::trim_end);
+    let rt_ctx = reparsed.content.context.as_deref().map(str::trim_end);
+    if orig_ctx != rt_ctx {
+        return Err(format!(
+            "context differs after round-trip\n  original:  {orig_ctx:?}\n  roundtrip: {rt_ctx:?}"
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -358,5 +432,140 @@ content:
         assert!(md.contains("# demo-skill"), "should contain heading");
         assert!(md.contains("hello"), "should contain abstract");
         assert!(md.contains("body"), "should contain context body");
+    }
+
+    /// A deliberate multi-sentence abstract plus a multi-paragraph context (with
+    /// a code fence and a `## Heading`) must survive yaml→md→yaml without loss.
+    #[test]
+    fn yaml_md_yaml_roundtrip_preserves_abstract_and_context() {
+        let yaml = r#"
+name: roundtrip-demo
+version: 2.3.1
+publisher: human:alan
+description: A skill exercising lossless round-trip.
+category: context
+tags: [alpha, beta]
+triggers:
+  - type: keyword
+    pattern: roundtrip
+content:
+  abstract: |-
+    This skill does one specific thing. It is described in two full sentences so
+    the truncation bug would be obvious.
+  context: |-
+    First context paragraph with real prose that should survive verbatim.
+
+    ## A Heading
+
+    Some explanation under the heading.
+
+    ```rust
+    fn demo() {
+        println!("code fence must survive");
+    }
+    ```
+
+    Final closing paragraph.
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        let md = serialize_markdown(&m).unwrap();
+        let m2 = parse_markdown(&md).unwrap();
+
+        assert_eq!(
+            m2.content.r#abstract, m.content.r#abstract,
+            "abstract must round-trip exactly"
+        );
+        assert_eq!(
+            m2.content.context, m.content.context,
+            "context must round-trip exactly"
+        );
+        // Other manifest fields survive via frontmatter.
+        assert_eq!(m2.version, m.version);
+        assert_eq!(m2.publisher, m.publisher);
+        assert_eq!(m2.tags, m.tags);
+        assert_eq!(m2.triggers.len(), m.triggers.len());
+        assert_eq!(m2.triggers[0].pattern, m.triggers[0].pattern);
+    }
+
+    /// A hand-authored markdown (title + abstract paragraph + body) parses, then
+    /// serializing and parsing again yields an identical manifest (idempotent).
+    #[test]
+    fn md_yaml_md_roundtrip_stable() {
+        let md = r#"---
+name: handauthored
+version: 1.2.0
+publisher: human:alan
+description: Hand-authored markdown skill.
+category: context
+---
+
+# handauthored
+
+This is the abstract. It spans two sentences on purpose.
+
+This is the first body paragraph.
+
+## Details
+
+More body content here, including a list:
+
+- one
+- two
+"#;
+        let m1 = parse_markdown(md).unwrap();
+        let md2 = serialize_markdown(&m1).unwrap();
+        let m2 = parse_markdown(&md2).unwrap();
+
+        assert_eq!(
+            m1.content.r#abstract, m2.content.r#abstract,
+            "abstract must be stable across md→yaml→md"
+        );
+        assert_eq!(
+            m1.content.context, m2.content.context,
+            "context must be stable across md→yaml→md"
+        );
+        assert_eq!(m1.name, m2.name);
+        assert_eq!(m1.version, m2.version);
+        // The abstract must NOT be the bare H1 title (the old truncation bug).
+        assert_ne!(m1.content.r#abstract.trim(), "# handauthored");
+        assert!(
+            m1.content.r#abstract.contains("This is the abstract."),
+            "abstract should be the first paragraph, got: {:?}",
+            m1.content.r#abstract
+        );
+    }
+
+    #[test]
+    fn roundtrip_check_passes_for_faithful_context_skill() {
+        let m = parse_canonical(SAMPLE).unwrap();
+        assert!(roundtrip_check(&m).is_ok());
+    }
+
+    #[test]
+    fn roundtrip_check_passes_for_multiparagraph_abstract_and_context() {
+        let yaml = r#"
+name: rc-demo
+version: 1.0.0
+publisher: human:test
+description: d
+category: context
+content:
+  abstract: |-
+    Sentence one of the abstract. Sentence two of the abstract.
+  context: |-
+    Para one.
+
+    Para two with a fence:
+
+    ```
+    code
+    ```
+"#;
+        let m = parse_canonical(yaml).unwrap();
+        assert!(
+            roundtrip_check(&m).is_ok(),
+            "expected faithful round-trip, got: {:?}",
+            roundtrip_check(&m)
+        );
     }
 }
