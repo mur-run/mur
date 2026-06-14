@@ -881,8 +881,13 @@ impl TaskRunner {
             .cumulative_input_tokens
             .load(std::sync::atomic::Ordering::Relaxed);
         // Rolling window of recent tool-call fingerprints for doom-loop
-        // detection: (tool_name, deterministic hash of canonical args).
-        let mut fingerprints: VecDeque<(String, u64)> = VecDeque::with_capacity(LOOP_WINDOW);
+        // detection: (tool_name, hash(canonical args), hash(result content)).
+        // Keying on the RESULT too means a command repeated with identical
+        // output (genuinely stuck) trips the guard, while the same command
+        // returning changing output (e.g. `cargo build` between edits) does
+        // NOT — that's progress, not a loop. Requires fingerprinting AFTER
+        // the tool runs, since the result isn't known until then.
+        let mut fingerprints: VecDeque<(String, u64, u64)> = VecDeque::with_capacity(LOOP_WINDOW);
 
         let mut iteration: u32 = 0;
         while iteration < self.max_iterations {
@@ -938,18 +943,38 @@ impl TaskRunner {
                 ));
             }
 
-            // Doom-loop detection (safety layer): fingerprint every tool call
-            // and abort if any single fingerprint repeats `LOOP_REPEAT_THRESHOLD`
-            // times within the rolling window — catches blind identical retries
-            // in ~3 iterations regardless of the iteration cap.
+            // Execute tools and collect results.
+            let mut results = Vec::new();
             for call in &resp.tool_calls {
-                let fp = (call.tool_name.clone(), fingerprint_args(&call.input));
+                match self.handle_tool_call(task_id, call).await {
+                    Ok(entry) => results.push(entry),
+                    Err(e) => return Err(e),
+                }
+            }
+
+            // Doom-loop detection (safety layer): fingerprint every tool call
+            // by (tool, args, RESULT) and abort if any single fingerprint
+            // repeats `LOOP_REPEAT_THRESHOLD` times within the rolling window.
+            // Keying on the result is the crux: "same command + same output,
+            // repeated" = stuck (abort); "same command, changing output" =
+            // making progress (don't abort). Fingerprinting happens here,
+            // AFTER execution, because the result is needed.
+            for (call, entry) in resp.tool_calls.iter().zip(results.iter()) {
+                let fp = (
+                    call.tool_name.clone(),
+                    fingerprint_args(&call.input),
+                    fingerprint_str(&entry.content),
+                );
                 fingerprints.push_back(fp.clone());
                 while fingerprints.len() > LOOP_WINDOW {
                     fingerprints.pop_front();
                 }
                 let repeats = fingerprints.iter().filter(|f| **f == fp).count();
                 if repeats >= LOOP_REPEAT_THRESHOLD {
+                    // Append the results gathered this turn before exiting so
+                    // the dangling tool_use is closed; graceful_exit also
+                    // sanitizes, but keeping history consistent is cheap.
+                    history.push(RichMessage::ToolResults { results });
                     let msg = self
                         .graceful_exit(client, &history, LoopStop::LoopDetected)
                         .await;
@@ -963,14 +988,6 @@ impl TaskRunner {
                 }
             }
 
-            // Execute tools and collect results
-            let mut results = Vec::new();
-            for call in &resp.tool_calls {
-                match self.handle_tool_call(task_id, call).await {
-                    Ok(entry) => results.push(entry),
-                    Err(e) => return Err(e),
-                }
-            }
             history.push(RichMessage::ToolResults { results });
             iteration += 1;
         }
@@ -1005,7 +1022,13 @@ impl TaskRunner {
              remaining steps so work can resume later.",
             reason.as_str()
         );
-        let mut messages = history.to_vec();
+        // When a budget aborts MID-iteration (e.g. the doom-loop guard fires
+        // after the model emitted a tool_use but before its tool_result was
+        // appended), `history` ends with a tool_use that has no matching
+        // tool_result. The Anthropic API rejects such a request with HTTP 400.
+        // Close every dangling tool_use with a synthetic tool_result so the
+        // summary request is well-formed.
+        let mut messages = sanitize_dangling_tool_uses(history, reason);
         messages.push(RichMessage::Text {
             role: "user".into(),
             content: nudge,
@@ -1042,11 +1065,59 @@ impl TaskRunner {
 /// (sorted keys via `serde_json::Value`'s BTreeMap-backed object) before hashing
 /// so logically-identical args always fingerprint the same.
 fn fingerprint_args(args: &serde_json::Value) -> u64 {
+    fingerprint_str(&args.to_string())
+}
+
+/// Deterministic hash of an arbitrary string (used for canonical tool-result
+/// content in the doom-loop fingerprint). `DefaultHasher` is fixed-seed, so the
+/// same input always yields the same value within a build — sufficient for
+/// equality-within-window comparison, no randomness.
+fn fingerprint_str(s: &str) -> u64 {
     use std::hash::{Hash, Hasher};
-    let canonical = args.to_string();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    canonical.hash(&mut hasher);
+    s.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Return a copy of `history` in which every `ToolUse` call is guaranteed to be
+/// followed by a matching `tool_result`. For any `tool_use` id not covered by
+/// the message immediately after its `ToolUse` turn, a synthetic
+/// `ToolResults` entry is inserted right after that turn with content
+/// `"[stopped: <reason>]"`. This keeps the resulting `LlmRequest` well-formed so
+/// the Anthropic API does not reject it with "tool_use ids without tool_result".
+fn sanitize_dangling_tool_uses(
+    history: &[crate::llm::RichMessage],
+    reason: LoopStop,
+) -> Vec<crate::llm::RichMessage> {
+    use crate::llm::{RichMessage, ToolResultEntry};
+
+    let mut out: Vec<RichMessage> = Vec::with_capacity(history.len() + 1);
+    for (i, msg) in history.iter().enumerate() {
+        out.push(msg.clone());
+        if let RichMessage::ToolUse { calls, .. } = msg {
+            // Ids the very next message already answers (the API requires the
+            // tool_result block to come immediately after the tool_use turn).
+            let covered: HashSet<&str> = match history.get(i + 1) {
+                Some(RichMessage::ToolResults { results }) => {
+                    results.iter().map(|r| r.call_id.as_str()).collect()
+                }
+                _ => HashSet::new(),
+            };
+            let missing: Vec<ToolResultEntry> = calls
+                .iter()
+                .filter(|c| !covered.contains(c.call_id.as_str()))
+                .map(|c| ToolResultEntry {
+                    call_id: c.call_id.clone(),
+                    content: format!("[stopped: {}]", reason.as_str()),
+                    is_error: true,
+                })
+                .collect();
+            if !missing.is_empty() {
+                out.push(RichMessage::ToolResults { results: missing });
+            }
+        }
+    }
+    out
 }
 
 /// Best-effort recovery of the most recent assistant-authored text from the
@@ -1456,8 +1527,11 @@ mod tests {
     #[tokio::test]
     async fn doom_loop_detected_yields_completed_with_summary() {
         use crate::llm::stub::SequenceLlm;
-        // Identical args every turn. The 3rd identical fingerprint trips the
-        // guard on iteration index 2; the 4th call is the graceful summary.
+        // Identical args every turn. With no tool registered, every call
+        // resolves to the same "unknown tool" result, so the full
+        // (tool, args, RESULT) fingerprint is identical each turn. The 3rd
+        // identical fingerprint trips the guard on iteration index 2; the 4th
+        // call is the graceful summary.
         let responses: Vec<crate::llm::LlmResponse> = vec![
             tool_call_response("same-0", "echo identical"),
             tool_call_response("same-1", "echo identical"),
@@ -1576,5 +1650,250 @@ mod tests {
             "expected the loop capped near 3 iterations, got {n} generate() calls"
         );
         assert!(n >= 3, "expected at least 3 iterations, got {n}");
+    }
+
+    /// A tool whose output CHANGES on every call even when the args are
+    /// identical — models e.g. `cargo build` returning new diagnostics after
+    /// each intervening edit. Used to prove the doom-loop guard keys on the
+    /// (tool, args, result) triple, not (tool, args) alone.
+    struct VaryingResultTool {
+        calls: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for VaryingResultTool {
+        fn name(&self) -> &str {
+            "build"
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: "build".into(),
+                description: "test build tool".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<String, crate::tools::ToolError> {
+            let n = self.calls.fetch_add(1, Ordering::Relaxed);
+            // Distinct content each call -> distinct result fingerprint.
+            Ok(format!("build output #{n}"))
+        }
+    }
+
+    /// A tool whose output is CONSTANT on every call (same args -> same
+    /// result), modelling a genuinely stuck retry. Trips the doom-loop guard.
+    struct ConstantResultTool;
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for ConstantResultTool {
+        fn name(&self) -> &str {
+            "build"
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: "build".into(),
+                description: "test build tool".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<String, crate::tools::ToolError> {
+            Ok("identical build output".into())
+        }
+    }
+
+    fn build_tool_call_response(call_id: &str) -> crate::llm::LlmResponse {
+        crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: call_id.into(),
+                tool_name: "build".into(),
+                // IDENTICAL args every turn: only the result varies.
+                input: serde_json::json!({}),
+            }],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        }
+    }
+
+    /// Fix #1a — progress is NOT a loop: the SAME tool call (identical args)
+    /// every turn, but whose execution returns a DIFFERENT result each time,
+    /// must NOT trip the doom-loop guard. Under the old (tool, args)-only
+    /// fingerprint this aborts with "loop_detected"; under the (tool, args,
+    /// result) fingerprint it runs to the iteration cap instead.
+    #[tokio::test]
+    async fn varying_tool_results_are_not_a_doom_loop() {
+        use crate::llm::stub::SequenceLlm;
+        // Always emits the same call; the loop only ever stops on a budget.
+        let responses: Vec<crate::llm::LlmResponse> = vec![
+            build_tool_call_response("c-0"),
+            build_tool_call_response("c-1"),
+            build_tool_call_response("c-2"),
+            build_tool_call_response("c-3"),
+            build_tool_call_response("c-4"),
+            build_tool_call_response("c-5"),
+            end_turn_response("ITER SUMMARY: capped by iteration budget."),
+        ];
+        let calls = Arc::new(AtomicU64::new(0));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(VaryingResultTool {
+                    calls: calls.clone(),
+                })])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "build".into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                // Small cap so the test terminates fast; doom-loop must NOT
+                // fire before the cap is reached.
+                .with_max_iterations(5),
+        );
+        let outcome = runner.run_sync(loop_spec("progress")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let usage = task.usage.expect("budget exit must populate usage");
+        assert_ne!(
+            usage["stop_reason"], "loop_detected",
+            "changing results must NOT be a doom loop; usage={usage}"
+        );
+        assert_eq!(
+            usage["stop_reason"], "max_iterations",
+            "expected the iteration cap to be the terminus; usage={usage}"
+        );
+    }
+
+    /// Fix #1b — genuine stuck IS a loop: the SAME tool call AND identical
+    /// result each turn still aborts with stop_reason "loop_detected" within
+    /// ~3 iterations, well below the iteration cap.
+    #[tokio::test]
+    async fn identical_tool_results_still_trip_doom_loop() {
+        use crate::llm::stub::SequenceLlm;
+        let responses: Vec<crate::llm::LlmResponse> = vec![
+            build_tool_call_response("s-0"),
+            build_tool_call_response("s-1"),
+            build_tool_call_response("s-2"),
+            end_turn_response("LOOP SUMMARY: stuck; identical output."),
+        ];
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(ConstantResultTool)])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "build".into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(50),
+        );
+        let outcome = runner.run_sync(loop_spec("stuck")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed (doom-loop graceful exit), got {outcome:?}");
+        };
+        let usage = task.usage.expect("doom-loop exit must populate usage");
+        assert_eq!(usage["stop_reason"], "loop_detected", "usage={usage}");
+        let iters = usage["iterations"]
+            .as_u64()
+            .expect("iterations is a number");
+        assert!(iters < 5, "expected early abort, got {iters} iterations");
+    }
+
+    /// Fix #2 — graceful_exit must sanitize a dangling tool_use before the
+    /// final summary turn. We build a `history` ending in a `ToolUse` whose
+    /// call has NO following `ToolResults` (mid-iteration abort), then run
+    /// `graceful_exit`. A recording LLM captures the request it receives; we
+    /// assert every tool_use call_id in that request has a matching
+    /// tool_result, so the Anthropic API would not 400 on it.
+    #[tokio::test]
+    async fn graceful_exit_sanitizes_dangling_tool_use() {
+        use crate::llm::{RichMessage, ToolCallResult};
+
+        /// Captures the messages of the request passed to it and replies with
+        /// a benign end-turn summary.
+        struct RecordingLlm {
+            seen: Arc<Mutex<Vec<RichMessage>>>,
+        }
+        #[async_trait::async_trait]
+        impl crate::llm::LlmClient for RecordingLlm {
+            async fn generate(
+                &self,
+                req: crate::llm::LlmRequest,
+            ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+                *self.seen.lock().unwrap() = req.messages.clone();
+                Ok(end_turn_response("SUMMARY: done."))
+            }
+            fn model_name(&self) -> &str {
+                "recording"
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let client: Arc<dyn crate::llm::LlmClient> = Arc::new(RecordingLlm { seen: seen.clone() });
+        let runner = TaskRunner::with_llm(client.clone());
+
+        // History ends with a tool_use that has no following tool_result.
+        let history = vec![
+            RichMessage::Text {
+                role: "system".into(),
+                content: "sys".into(),
+            },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "do the thing".into(),
+            },
+            RichMessage::ToolUse {
+                text: Some("calling build".into()),
+                calls: vec![ToolCallResult {
+                    call_id: "dangling-1".into(),
+                    tool_name: "build".into(),
+                    input: serde_json::json!({}),
+                }],
+            },
+        ];
+
+        let msg = runner
+            .graceful_exit(client.as_ref(), &history, LoopStop::LoopDetected)
+            .await;
+        // Summary turn succeeded (not the fallback path).
+        assert_eq!(text_of(&msg), "SUMMARY: done.");
+
+        // Inspect what the LLM actually received: collect every tool_use id and
+        // every tool_result id, then assert no tool_use id is unmatched.
+        let messages = seen.lock().unwrap().clone();
+        let mut use_ids: Vec<String> = Vec::new();
+        let mut result_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for m in &messages {
+            match m {
+                RichMessage::ToolUse { calls, .. } => {
+                    for c in calls {
+                        use_ids.push(c.call_id.clone());
+                    }
+                }
+                RichMessage::ToolResults { results } => {
+                    for r in results {
+                        result_ids.insert(r.call_id.clone());
+                    }
+                }
+                RichMessage::Text { .. } => {}
+            }
+        }
+        assert!(!use_ids.is_empty(), "expected at least one tool_use");
+        for id in &use_ids {
+            assert!(
+                result_ids.contains(id),
+                "tool_use id {id} has no matching tool_result; request would 400. \
+                 result_ids={result_ids:?}"
+            );
+        }
     }
 }
