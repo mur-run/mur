@@ -51,30 +51,57 @@ pub fn cmd_skill_add(name: &str, source: &str) -> Result<()> {
     if !src.exists() {
         bail!("skill source '{source}' not found");
     }
-    let basename = src
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| anyhow!("skill source has no basename"))?;
 
-    // Validate YAML skills before adding
-    if let Some(ext) = src.extension().and_then(|e| e.to_str())
-        && (ext == "yaml" || ext == "yml")
-    {
-        let text = fs::read_to_string(&src)?;
-        let m = mur_common::skill::parse_canonical(&text)?;
-        mur_common::skill::validate(&m).map_err(|e| anyhow!("skill validation failed: {e}"))?;
+    let text = fs::read_to_string(&src)
+        .with_context(|| format!("read skill source '{}'", src.display()))?;
+
+    // Parse the input into a canonical manifest regardless of extension:
+    // `.yaml`/`.yml` via the canonical parser, anything else (`.md`, no ext)
+    // via the markdown-frontmatter parser. A source that does not parse into a
+    // manifest is rejected — we never copy a dead file that the loader would
+    // silently ignore.
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let manifest = if ext == "yaml" || ext == "yml" {
+        mur_common::skill::parse_canonical(&text)
+            .map_err(|e| anyhow!("not a valid skill manifest: {e}. See `mur skill new`."))?
+    } else {
+        mur_common::skill::parse_markdown(&text)
+            .map_err(|e| anyhow!("not a valid skill manifest: {e}. See `mur skill new`."))?
+    };
+
+    // Schema validation + security content scan for ALL inputs.
+    mur_common::skill::validate(&manifest).map_err(|e| anyhow!("skill validation failed: {e}"))?;
+    let report =
+        mur_common::skill::scan::scan_skill(&manifest).map_err(|e| anyhow!("scan skill: {e}"))?;
+
+    // The subdir name equals the manifest name; the loader/validator require a
+    // single safe path component (lowercase-kebab) here.
+    let skill_name = manifest.name.clone();
+    if !mur_common::skill::loader::is_valid_skill_name(&skill_name) {
+        bail!("refusing to install skill with unsafe name {skill_name:?}");
     }
 
     let (path, mut profile) = load_profile_for_edit(name)?;
 
+    // Write into the loadable layout: agents/<agent>/skills/<name>/skill.yaml,
+    // reusing the same canonical writer the runtime loader reads from.
     let agent_home = path.parent().unwrap_or(Path::new(""));
-    let skills_dir = agent_home.join("skills");
-    fs::create_dir_all(&skills_dir).with_context(|| format!("create {}", skills_dir.display()))?;
-    let dest = skills_dir.join(basename);
-    fs::copy(&src, &dest)
-        .with_context(|| format!("copy {} -> {}", src.display(), dest.display()))?;
+    let dest_dir = agent_home.join("skills").join(&skill_name);
+    mur_common::skill::write_to_dir(&dest_dir, &manifest)
+        .map_err(|e| anyhow!("write skill to {}: {e}", dest_dir.display()))?;
 
-    let skill_id = format!("skills/{basename}");
+    if report.has_blocking_findings() {
+        eprintln!("⚠ {skill_name}: security findings — review before trusting");
+        for line in report.human_summary() {
+            eprintln!("    {line}");
+        }
+    }
+
+    let skill_id = format!("skills/{skill_name}");
     if !profile.skills.iter().any(|s| s == &skill_id) {
         profile.skills.push(skill_id);
     }
@@ -89,11 +116,17 @@ pub fn cmd_skill_remove(name: &str, query: &str) -> Result<()> {
     profile.skills.retain(|s| s != &resolved);
     save_profile(&path, &mut profile)?;
 
-    // Delete the backing file if no other skill entry references it.
+    // Delete the backing artifact if no other skill entry references it.
+    // Modern skills are per-skill subdirectories (`skills/<name>/skill.yaml`);
+    // legacy entries may still be a flat file (`skills/<name>.md`).
     let agent_home = resolve_mur_home()?.join("agents").join(name);
-    let file_path = agent_home.join(&resolved);
-    if file_path.exists() && !profile.skills.iter().any(|s| s == &resolved) {
-        let _ = fs::remove_file(&file_path);
+    let backing = agent_home.join(&resolved);
+    if backing.exists() && !profile.skills.iter().any(|s| s == &resolved) {
+        if backing.is_dir() {
+            let _ = fs::remove_dir_all(&backing);
+        } else {
+            let _ = fs::remove_file(&backing);
+        }
     }
     Ok(())
 }
@@ -103,16 +136,27 @@ pub fn cmd_skill_show(name: &str, query: &str) -> Result<()> {
     let resolved = resolve_skill_id(&profile, query)
         .ok_or_else(|| anyhow!("skill '{query}' not registered on '{name}'"))?;
     let agent_home = resolve_mur_home()?.join("agents").join(name);
-    let file_path = agent_home.join(resolved);
-    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let backing = agent_home.join(resolved);
+
+    if backing.is_dir() {
+        // Modern per-skill subdir — read the canonical manifest the loader uses.
+        let m = mur_common::skill::read_from_dir(&backing)
+            .map_err(|e| anyhow!("read skill {}: {e}", backing.display()))?;
+        let out = mur_common::skill::serialize_canonical(&m)?;
+        print!("{out}");
+        return Ok(());
+    }
+
+    // Legacy flat file.
+    let ext = backing.extension().and_then(|e| e.to_str()).unwrap_or("");
     if matches!(ext, "yaml" | "yml") {
-        let text = std::fs::read_to_string(&file_path)?;
+        let text = std::fs::read_to_string(&backing)?;
         let m = mur_common::skill::parse_canonical(&text)?;
         let out = mur_common::skill::serialize_canonical(&m)?;
         print!("{out}");
     } else {
         // Legacy .md — print raw
-        let body = std::fs::read_to_string(&file_path)?;
+        let body = std::fs::read_to_string(&backing)?;
         print!("{body}");
     }
     Ok(())
