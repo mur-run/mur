@@ -289,6 +289,22 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Agent { action } => run_agent(action).await?,
         Commands::Skill { action } => match action {
+            crate::cli::SkillAction::New {
+                name,
+                category,
+                dir,
+                agent,
+                force,
+            } => cmd::skill_cmd::cmd_new(cmd::skill_cmd::NewOptions {
+                name,
+                category,
+                dir,
+                agent,
+                force,
+            })?,
+            crate::cli::SkillAction::Edit { name, agent, dir } => {
+                cmd::skill_cmd::cmd_edit(&name, agent.as_deref(), dir.as_deref())?
+            }
             crate::cli::SkillAction::Validate {
                 path,
                 warnings_only,
