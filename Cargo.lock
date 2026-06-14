@@ -6310,6 +6310,7 @@ dependencies = [
  "libc",
  "mime_guess",
  "mur-common",
+ "mur-compress",
  "ndarray 0.17.2",
  "ort",
  "rand 0.8.6",
