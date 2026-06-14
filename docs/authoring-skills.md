@@ -157,43 +157,46 @@ full body. It is injected **only when a trigger fires** for the current turn:
 
 ## Authoring workflow
 
-1. **Create the subdirectory and `skill.yaml`.**
+> `mur skill new` / `mur skill edit` and the subdirectory-installing `mur agent
+> skill add` require a mur build that includes the skill-authoring tooling.
+
+1. **Scaffold a new skill.**
 
    ```bash
-   mkdir -p ~/.mur/skills/deploy-runbook
-   $EDITOR ~/.mur/skills/deploy-runbook/skill.yaml
+   mur skill new deploy-runbook              # creates deploy-runbook/skill.yaml from a template
+   mur skill new deploy-runbook --agent <agent>   # or scaffold straight into an agent
    ```
 
-   Author the YAML using the example above. `content.context: |` is a literal
-   block scalar — no escaping is needed, just keep the indentation consistent.
+   The template carries the required fields and inline comments explaining the
+   `abstract` (always-on) vs `context` (trigger-loaded) split. `content.context: |`
+   is a literal block scalar — no escaping is needed, just keep the indentation
+   consistent.
 
-2. **Validate it.**
+2. **Edit and validate.**
 
    ```bash
-   mur skill validate ~/.mur/skills/deploy-runbook/skill.yaml
+   mur skill edit deploy-runbook                  # opens $EDITOR, validates on save
+   mur skill validate deploy-runbook/skill.yaml   # or validate explicitly
    ```
 
-   `validate` runs schema checks plus a content security scan. Add
-   `--warnings-only` to print findings without failing.
+   `validate` runs schema checks plus a content security scan, and warns if a
+   markdown round-trip would alter content. Add `--warnings-only` to print
+   findings without failing.
 
-3. **Attach it to an agent** (optional — global skills under
-   `~/.mur/skills/` are already visible to every agent):
+3. **Attach it to an agent** (optional — global skills under `~/.mur/skills/`
+   are already visible to every agent):
 
    ```bash
-   mur agent skill add <agent> ~/.mur/skills/deploy-runbook/skill.yaml
+   mur agent skill add <agent> deploy-runbook/skill.yaml
    ```
 
-   `agent skill add` re-validates `.yaml`/`.yml` sources before installing.
+   `agent skill add` validates the input (`.yaml`/`.yml`, or `.md` which it
+   converts to canonical) and installs it into the loadable per-skill
+   subdirectory `<MUR_HOME>/agents/<agent>/skills/deploy-runbook/skill.yaml`. A
+   file that is not a valid skill manifest is rejected rather than silently
+   stored.
 
-   > **Important:** for the runtime to load an agent-attached skill it must end
-   > up at `<MUR_HOME>/agents/<agent>/skills/<name>/skill.yaml` — i.e. inside a
-   > per-skill subdirectory. Confirm the installed layout with
-   > `ls ~/.mur/agents/<agent>/skills/`, and if needed place the file at
-   > `agents/<agent>/skills/deploy-runbook/skill.yaml` so the subdir loader
-   > picks it up. (See the troubleshooting note below.)
-
-4. **Restart the agent** so it reloads skills from disk, then confirm it is
-   visible:
+4. **Restart the agent** so it reloads skills from disk, then confirm:
 
    ```bash
    mur skill list                 # global skills
