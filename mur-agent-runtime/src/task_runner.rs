@@ -924,6 +924,34 @@ impl TaskRunner {
             self.cumulative_input_tokens
                 .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
 
+            // Truncation guard: a turn that hit the output-token ceiling AND
+            // carries tool_calls was cut off MID-tool_use — the tool_use
+            // `input` JSON is incomplete, so executing it (or appending it to
+            // history and re-looping) just replays a malformed call and trips
+            // the doom-loop guard. Instead of running the broken call, append a
+            // user-role guidance message and continue so the model can recover
+            // with a shorter, well-formed turn. This counts toward the
+            // iteration budget; the iteration cap + doom-loop guard remain the
+            // backstops against a model that truncates forever.
+            if resp.stop_reason == StopReason::MaxTokens && !resp.tool_calls.is_empty() {
+                if !resp.text.is_empty() {
+                    history.push(RichMessage::Text {
+                        role: "assistant".into(),
+                        content: resp.text.clone(),
+                    });
+                }
+                history.push(RichMessage::Text {
+                    role: "user".into(),
+                    content: "Your previous response reached the output token limit \
+                              and was truncated mid tool-call. Produce a shorter \
+                              response, or write large files in smaller pieces \
+                              (append in multiple steps)."
+                        .into(),
+                });
+                iteration += 1;
+                continue;
+            }
+
             history.push(RichMessage::ToolUse {
                 text: if resp.text.is_empty() {
                     None
@@ -1395,6 +1423,108 @@ mod tests {
             tool_calls: vec![],
             stop_reason: crate::llm::StopReason::EndTurn,
         }
+    }
+
+    /// A response truncated mid-tool_use: `stop_reason == MaxTokens` while a
+    /// tool_call is present. The `input` is the empty `{}` that
+    /// `parse_response_body` yields when the assistant turn was cut off before
+    /// the tool_use JSON finished — i.e. the malformed call the loop must NOT
+    /// execute blindly.
+    fn truncated_tool_call_response(call_id: &str) -> crate::llm::LlmResponse {
+        crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: call_id.into(),
+                tool_name: "bash".into(),
+                // Empty input — the hallmark of a truncated tool_use.
+                input: serde_json::json!({}),
+            }],
+            stop_reason: crate::llm::StopReason::MaxTokens,
+        }
+    }
+
+    /// Counting `bash` tool: records how many times it executes so a test can
+    /// assert a (truncated) tool call was NOT run.
+    struct CountingBashTool {
+        calls: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for CountingBashTool {
+        fn name(&self) -> &str {
+            "bash"
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: "bash".into(),
+                description: "test bash tool".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<String, crate::tools::ToolError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok("ran".into())
+        }
+    }
+
+    /// Fix B — truncation is self-correcting, not a silent loop. When a turn
+    /// stops with `MaxTokens` AND carries tool_calls (cut off mid-tool_use),
+    /// the loop must NOT execute the malformed call. Instead it appends a
+    /// truncation-guidance user message and continues, letting the model
+    /// recover with a shorter, well-formed turn.
+    #[tokio::test]
+    async fn truncated_tool_use_injects_guidance_and_recovers() {
+        use crate::llm::stub::SequenceLlm;
+        // Turn 0: truncated mid-tool_use (MaxTokens + a tool_call).
+        // Turn 1: a clean end-turn — the recovery the model produces after the
+        // guidance nudge.
+        let responses: Vec<crate::llm::LlmResponse> = vec![
+            truncated_tool_call_response("trunc-0"),
+            end_turn_response("RECOVERED: produced a shorter response."),
+        ];
+        let calls = Arc::new(AtomicU64::new(0));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(CountingBashTool {
+                    calls: calls.clone(),
+                })])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "bash".into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_max_iterations(50),
+        );
+        let outcome = runner.run_sync(loop_spec("truncate")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed (recovered turn), got {outcome:?}");
+        };
+        // The malformed (truncated) tool call must NOT have been executed.
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "truncated tool_use must not be executed"
+        );
+        // The following well-formed turn proceeds and is the natural terminus —
+        // no budget tripped, so usage is None (natural end_turn).
+        let reply_text = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            reply_text.contains("RECOVERED"),
+            "expected the recovery turn's reply, got: {reply_text}"
+        );
+        assert!(
+            task.usage.is_none(),
+            "natural end_turn after recovery must not populate a budget stop_reason; usage={:?}",
+            task.usage
+        );
     }
 
     #[tokio::test]
