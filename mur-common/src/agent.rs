@@ -907,8 +907,17 @@ pub struct VoiceConfig {
 pub struct HitlConfig {
     #[serde(default = "default_hitl_timeout_secs")]
     pub timeout_secs: u32,
+    /// Hard cap on agentic-loop iterations (one LLM turn + its tool calls).
+    /// `None` falls back to the runner default (25). On exceeding the cap the
+    /// loop exits gracefully with a summary, not a hard error.
     #[serde(default)]
     pub max_iterations: Option<u32>,
+    /// Per-task ceiling on cumulative *input* tokens for the agentic loop. When
+    /// crossed before a turn, the loop stops gracefully with a summary.
+    /// `None` falls back to the runner default (750_000 ≈ a few dollars on
+    /// Sonnet); set a lower value per profile to bound spend tightly.
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
 }
 
 fn default_hitl_timeout_secs() -> u32 {
@@ -920,6 +929,7 @@ impl Default for HitlConfig {
         Self {
             timeout_secs: default_hitl_timeout_secs(),
             max_iterations: None,
+            max_tokens: None,
         }
     }
 }
@@ -938,6 +948,18 @@ mod hitl_tests {
     fn hitl_config_max_iterations_explicit() {
         let cfg: HitlConfig = serde_yaml::from_str("timeout_secs: 60\nmax_iterations: 5").unwrap();
         assert_eq!(cfg.max_iterations, Some(5));
+    }
+
+    #[test]
+    fn hitl_config_default_max_tokens_is_none() {
+        let cfg = HitlConfig::default();
+        assert!(cfg.max_tokens.is_none());
+    }
+
+    #[test]
+    fn hitl_config_max_tokens_explicit() {
+        let cfg: HitlConfig = serde_yaml::from_str("timeout_secs: 60\nmax_tokens: 250000").unwrap();
+        assert_eq!(cfg.max_tokens, Some(250_000));
     }
 }
 
