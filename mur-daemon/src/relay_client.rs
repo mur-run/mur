@@ -193,14 +193,29 @@ async fn handle_frame(
         ClientFrame::AudioStreamEnd => {
             let pcm = std::mem::take(audio_buf);
             let home_c = home.to_path_buf();
-            let transcript_opt =
+            let outcome =
                 tokio::task::spawn_blocking(move || crate::stt_sink::transcribe(&home_c, &pcm))
                     .await
-                    .unwrap_or(None);
+                    .unwrap_or(crate::stt_sink::SttOutcome::Empty);
 
-            let text = match transcript_opt {
-                Some(t) => t,
-                None => return Ok(()),
+            let text = match outcome {
+                crate::stt_sink::SttOutcome::Text(t) => t,
+                crate::stt_sink::SttOutcome::Empty => return Ok(()),
+                crate::stt_sink::SttOutcome::ModelsMissing => {
+                    let agent = canonicalize_agent_name(home, "mur");
+                    let hint = format!(
+                        "語音模型尚未安裝。請在 Mac 上執行 `mur agent voice {agent} download`（約 1.4 GB），完成後重啟 daemon 再用語音對話。"
+                    );
+                    relay_send(
+                        write,
+                        &ServerFrame::Event {
+                            name: "mobile.reply".to_string(),
+                            payload: serde_json::json!({ "text": hint }),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
             };
 
             relay_send(
