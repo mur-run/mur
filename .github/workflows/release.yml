@@ -107,6 +107,20 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: cargo install cross --git https://github.com/cross-rs/cross
 
+      # Exclude the build dirs from Defender real-time scanning — it scans every
+      # .rlib/.o/.exe write and measurably slows the (compile-dominated) Windows
+      # release build. Best-effort; never fail the job over it.
+      - name: Windows Defender exclusions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($p in @("${{ github.workspace }}\target", "$env:USERPROFILE\.cargo")) {
+            Add-MpPreference -ExclusionPath $p -ErrorAction SilentlyContinue
+          }
+          foreach ($e in @("rlib","rmeta","o","exe","pdb")) {
+            Add-MpPreference -ExclusionExtension $e -ErrorAction SilentlyContinue
+          }
+
       - name: Build (native)
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: cargo build --release --locked --target ${{ matrix.target }}
@@ -294,6 +308,17 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      # Caches both the workspace target dir (mur + runtime sidecars) and the
+      # Tauri app's separate target dir (mur-hub-gui/src-tauri/target, the
+      # WebKit/wry dep tree) — the dominant cold-build cost of this job.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            mur-hub-gui/src-tauri -> target
+          key: hub-macos
+
       - name: Install protobuf
         run: brew install protobuf
 
@@ -306,14 +331,34 @@ jobs:
           cp target/aarch64-apple-darwin/release/mur-agent-runtime \
              mur-hub-gui/src-tauri/binaries/mur-agent-runtime-aarch64-apple-darwin
 
+      # Reuse pip wheels across runs so the heavy mlx-vlm + pyinstaller install
+      # doesn't re-download/rebuild every release.
+      - name: Cache pip (mlx-server build)
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/pip
+          key: pip-mlx-server-${{ hashFiles('scripts/build-mlx-server.sh') }}
+          restore-keys: pip-mlx-server-
+
       - name: Build mlx-server sidecar
         run: bash scripts/build-mlx-server.sh aarch64-apple-darwin
+
+      # The bundled model is a multi-GB Hugging Face snapshot. snapshot_download
+      # is idempotent, so a restored cache turns the fetch into a quick verify.
+      - name: Cache bundled model
+        uses: actions/cache@v4
+        with:
+          path: mur-hub-gui/src-tauri/resources/models/default
+          key: bundle-model-Qwen3.5-2B-MLX-4bit
 
       - name: Fetch bundled model
         run: bash scripts/fetch-bundle-model.sh mlx-community/Qwen3.5-2B-MLX-4bit
 
+      # Prebuilt tauri-cli instead of compiling it from source each release.
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
       - name: Install tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
+        run: cargo binstall -y tauri-cli --version "^2"
 
       - name: Import Apple signing certs
         uses: apple-actions/import-codesign-certs@v2
