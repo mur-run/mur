@@ -614,20 +614,25 @@ pub enum AgentPermAction {
 pub enum AgentSkillAction {
     /// List attached skill ids
     List { name: String },
-    /// Copy a skill markdown file into the agent and register it.
-    /// The skill is stored under `skills/<basename>` inside the agent dir.
+    /// Validate a skill and install it into the agent, then register it.
+    /// The source is parsed (`.yaml`/`.yml`, or `.md` which is accepted and
+    /// converted to canonical YAML), schema-validated and security-scanned,
+    /// then written into a per-skill subdir as `skills/<name>/skill.yaml`
+    /// (name taken from the manifest). Sources that aren't valid skill
+    /// manifests are rejected rather than stored as dead files.
     Add {
         name: String,
-        /// Path to a skill .md file. Stored id is `skills/<basename>`.
+        /// Path to a skill source (`.yaml`/`.yml` or `.md`). Stored id is
+        /// `skills/<manifest-name>`.
         source: String,
     },
-    /// Remove a skill entry; deletes the backing file if orphaned.
-    /// `skill_id` may be the full id (`skills/foo.md`), the basename (`foo.md`),
-    /// or the basename without extension (`foo`).
+    /// Remove a skill entry; deletes the backing subdir if orphaned.
+    /// `skill_id` may be the full id (`skills/foo`), the basename (`foo`),
+    /// or the basename without extension.
     Remove { name: String, skill_id: String },
-    /// Print the contents of a skill file.
-    /// `skill_id` may be the full id (`skills/foo.md`), the basename (`foo.md`),
-    /// or the basename without extension (`foo`).
+    /// Print the canonical contents of an installed skill.
+    /// `skill_id` may be the full id (`skills/foo`), the basename (`foo`),
+    /// or the basename without extension.
     Show { name: String, skill_id: String },
 }
 
