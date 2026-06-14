@@ -28,6 +28,7 @@ path = "src/lib.rs"
 
 [dependencies]
 mur-common = { path = "../mur-common" }
+mur-compress = { path = "../mur-compress" }
 tokio = { workspace = true, features = ["net"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

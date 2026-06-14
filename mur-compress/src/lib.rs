@@ -1,3 +1,7 @@
+//! Design inspiration: headroom (https://github.com/chopratejas/headroom, Apache-2.0).
+//! Clean-room reimplementation — no headroom source is copied.
+
+pub mod auto;
 pub mod bm25;
 pub mod ccr;
 pub mod compressors;
@@ -7,6 +11,9 @@ pub mod stats;
 pub mod tokenizer;
 pub mod types;
 
+pub use auto::{
+    AutoCfg, AutoOutcome, auto_compress, auto_compress_value, retrieval_envelope, retrieval_note,
+};
 pub use bm25::bm25_rank;
 pub use ccr::{CcrStore, CompressedEntry};
 pub use config::CompressConfig;
@@ -50,6 +57,16 @@ impl CompressEngine {
             config,
             stats,
         })
+    }
+
+    /// Token count for `content` using the engine's configured tokenizer.
+    pub fn count_tokens(&self, content: &str) -> usize {
+        self.tok.count(content)
+    }
+
+    /// Read-only access to the engine's configuration (e.g. the `auto` gates).
+    pub fn config(&self) -> &CompressConfig {
+        &self.config
     }
 
     fn dispatch(
