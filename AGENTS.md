@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-Operational guidance for Claude Code working in this repository. Detailed runtime / GUI / companion / P0a designs moved to `docs/architecture/runtime-overview.md`.
+Operational guidance for Codex working in this repository. Detailed runtime / GUI / companion / P0a designs moved to `docs/architecture/runtime-overview.md`.
 
 ## Build & Install
 
@@ -56,7 +56,7 @@ MUR is a local-first Agent platform in native Rust. Architecture layers:
 
 - **Agent Runtime** — `mur-agent-runtime` (P0a): per-agent A2A v0.3 supervisor with profile, prompt, MCP servers, skills, entitlements. One BusyBox-style binary, symlinked per agent.
 - **Memory / Learning** — Four-stage pipeline below: patterns, workflows, notes, skills with maturity lifecycle and decay.
-- **Agent Infrastructure** — MCP Server (interactive tools for AI tools mid-conversation), Skills (teach agents when/why to use MUR commands), Action Pipeline (file notification + deletion safety + task queue), Cost Router (governed spawn of claude/codex/agy).
+- **Agent Infrastructure** — MCP Server (interactive tools for AI tools mid-conversation), Skills (teach agents when/why to use MUR commands), Action Pipeline (file notification + deletion safety + task queue), Cost Router (governed spawn of Codex/codex/agy).
 - **Human Interface** — Companion (voice + proactive messaging), Hub GUI (cross-agent desktop app), Slack Bridge.
 - **Governance** — Commander: cross-network orchestration with cryptographic governance and immutable audit.
 
@@ -75,7 +75,7 @@ capture/ → store/ → retrieve/ → inject/
 - **`capture/`** — Noise filter, significance scoring, feedback extraction. Ambient session capture lives in `session/ambient.rs` (hooks record every event); the harvest gate (`harvest/`) turns idle sessions into workflow proposals.
 - **`store/`** — `YamlStore` (transitional Pattern store), `LanceDbStore` (vector index, always rebuildable), `WorkflowYamlStore`. Vector store abstracted via `store::vector::VectorStore` (`LanceDbStore` now; `QdrantStore` P1.3).
 - **`retrieve/`** — `score_and_rank_generic()` over the `Retrievable` trait (skills + workflows; Pattern transitional); applies recency / effectiveness / importance / decay / length normalization
-- **`inject/`** — `hook.rs` formats skills + workflows for injection; `sync.rs` writes tool-specific configs (Claude Code hooks, Gemini CLI, etc.)
+- **`inject/`** — `hook.rs` formats skills + workflows for injection; `sync.rs` writes tool-specific configs (Codex hooks, Gemini CLI, etc.)
 - **`evolve/`** — Skill lifecycle (Draft→Emerging→Stable→Canonical), feedback, co-occurrence
 
 **Pattern removal (workflow-engine v2 P1a/P1b, 2026-06-11):** the legacy Pattern pipeline (emergence/fingerprint mining, pattern decay sweeps, pattern injection) is removed. `mur migrate --patterns` exports `~/.mur/patterns/` to markdown then deletes it. Skills (`category: Workflow` et al.) are the knowledge objects; `context_api::ingest`/`submit_feedback` still write transitional Patterns until the Notes migration (W3b+).
@@ -104,7 +104,7 @@ LanceDB vector index is always rebuildable via `mur internals reindex`.
 ## CLI Surface (top level)
 
 - `mur verify [--file path] [--all]` — scan docs for stale claims (paths, commands, code refs)
-- `mur agent <subcommand>` — manage murmur agents (create / list / status / send / card / cli / export / doctor / prompt / mcp / skill / perm / secret / companion / rekey / schedule). `cli <name>...` opens an interactive streaming TUI chat with a running agent (`--resume` to continue the last conversation); in-session slash commands include `/channels [N]` (list/switch channels) and `/sessions`; multiple names open one multiplexer pane per agent (tmux primary; zellij/WezTerm/kitty auto-detected). The `murmur` symlink is the quick form: `murmur a1 a2 a3` ≡ `mur agent cli a1 a2 a3`; bare `murmur` opens the concierge. Full surface in `docs/architecture/runtime-overview.md`.
+- `mur agent <subcommand>` — manage murmur agents (create / list / status / send / card / cli / export / doctor / prompt / mcp / skill / perm / secret / companion / rekey / schedule). `cli <name>...` opens an interactive streaming TUI chat with a running agent (`--resume` to continue the last conversation); multiple names open one multiplexer pane per agent (tmux primary; zellij/WezTerm/kitty auto-detected). The `murmur` symlink is the quick form: `murmur a1 a2 a3` ≡ `mur agent cli a1 a2 a3`; bare `murmur` opens the concierge. Full surface in `docs/architecture/runtime-overview.md`.
 - `mur model {add|list|show|remove|migrate}` — `~/.mur/models.yaml` provider/model registry. See `docs/superpowers/specs/2026-04-29-model-registry-and-secret-refs-design.md`.
 
 For detailed agent / companion / GUI export / runtime internals, read `docs/architecture/runtime-overview.md` only when the task requires it.
@@ -116,7 +116,6 @@ For detailed agent / companion / GUI export / runtime internals, read `docs/arch
 - YAML writes use temp file + rename for atomicity (`store/yaml.rs`)
 - `tracing` for structured logging; enable with `RUST_LOG=debug`
 - Plans live in `plans/` and `docs/superpowers/plans/`. OpenSpec change specs in `openspec/changes/`.
-- **Unified Channel v3a** (Workflow-over-Channel) is implemented on branch `feat/unified-channel-v2`: the DAG executor emits attributed `StateChange`/`ToolCall`/`ToolResult` events as `ChannelActor::System`; approval-bearing workflows fail-closed with `needs_approval`; `ChannelEvent.sig`/`key_version` reserved for v3d signing. Use `mur workflow run --channel-new <skill>` or `--channel <id>` to attach execution. v3b (HITL pause/resume) and v3c (interactive HITL delegation) are still pending. See `mem:project_unified_channel_pr433`.
 
 ## Release Process
 
@@ -152,7 +151,7 @@ When making changes, check whether these need updating:
 3. **SSH connection.** Use Desktop Commander to ssh, not Bash/SSH.
 4. **Single source file ≤ 800 lines.** When approaching the limit, split into submodules following the same structural pattern as siblings (e.g., `cmd/agent/{create,list,export}.rs`, `server/routes/{patterns,agents}.rs`, `companion/outbox/{step}.rs`). Pure code movement first; behavior changes in a separate PR.
 5. **Read narrowly.** Prefer LSP queries (goToDefinition, findReferences) and `grep`/`Grep` over reading whole large files. When you must read a file, target the relevant range with `offset`/`limit` if you already know the section.
-6. **CLAUDE.md is operational, not a changelog.** Historical milestone descriptions, completed phase notes, and detailed design walkthroughs belong in `docs/architecture/` or `docs/superpowers/specs/`. Keep this file lean so every session starts cheap.
+6. **AGENTS.md is operational, not a changelog.** Historical milestone descriptions, completed phase notes, and detailed design walkthroughs belong in `docs/architecture/` or `docs/superpowers/specs/`. Keep this file lean so every session starts cheap.
 
 7. **Brand name is uppercase "MUR".** Everywhere a user can see it — GUI strings, `display_name`, docs, marketing copy, companion/voice text, notifications — the brand is the three uppercase letters **MUR** (never "Mur" or "MuR"). The ONLY exceptions are the CLI binary/command (`mur`), code identifiers, file paths, internal `name`/directory slugs (e.g. the concierge agent's dir + `name: mur`), and the `~/.mur` home. Use `display_name` for the uppercase user-facing label; keep internal `name` lowercase so it matches the on-disk directory (the runtime spoof check is exact-match).
 
@@ -169,3 +168,94 @@ When making changes, check whether these need updating:
 - Never use subagents for simple tasks
 - Prefer direct implementation
 - Use one-pass execution
+
+<!-- MUR:START - Auto-generated by mur sync. Do not edit this section. -->
+## Learned Patterns
+
+### Run saved workflows with mur. Trigger: /mur-run, 'mur run', 'run workflow', or 'use the workflow'. Searches and executes step-by-step task sequences with variables and tools.
+Run saved workflows by name or semantic query. Handles variable
+substitution, tool assignment, and step-by-step execution.
+
+
+### Read and recover auto-compressed tool outputs, and compress large text on demand. MUR shrinks big tool results automatically; the original is one mur_retrieve away.
+# mur-compress — Reading and recovering compressed output
+
+MUR automatically compresses large tool outputs before you read them
+(search dumps, logs, diffs, big JSON). Compression is reversible.
+
+## When a result is an envelope
+Look for `"compressed": true`. It may be the whole result, or just one field
+of it — e.g. mur_project_search returns
+`{ "results": { "compressed": true, "content": …, "hash": "…", "note": … }, "count": 3000 }`,
+where only the bulky `results` array was shrunk (scalar fields stay intact).
+The `content` is a compact sample. To recover the full original:
+```
+mur_retrieve(hash="…")              # full original
+mur_retrieve(hash="…", query="…")   # BM25-filtered to the most relevant items
+```
+Pass the SAME query you used for the search: retrieval ranks the offloaded
+items by relevance so you pull back only what you need.
+
+## Compress something yourself
+Before pasting a huge blob you control (a log, a giant JSON):
+```
+mur_compress(content="…", query="optional focus")
+```
+Returns the compressed text plus a hash for later retrieval.
+
+## Don't fight the gate
+Small outputs are never compressed (below the token threshold), so most
+results are untouched. You only need mur_retrieve when you actually see a
+`compressed:true` envelope.
+
+## Turning it off
+Configured in ~/.mur/compress.yaml under `auto:` (`enabled`, `min_tokens`,
+`mcp`, `agent_runtime`). Set `enabled: false` to disable entirely.
+
+
+### Manage MUR agent lifecycle: create, run as a service, stop, export.
+Guide through MUR agent lifecycle management.
+
+
+### Review workflow proposals MUR harvested from recent sessions
+Review pending workflow proposals harvested from recent sessions.
+Accept turns a proposal into a draft workflow runnable via `mur workflow run`.
+
+
+### Search project code by meaning. Use for concept/intent queries; use grep for exact strings and exhaustive matches.
+# mur-project-search — Pick the right code search tool
+
+Semantic search (hybrid vector + BM25) answers *intent* questions and is
+usually cheaper than grepping then opening many files. But grep is exact,
+exhaustive, and always reflects the working tree right now. Choose per query:
+
+## Use `mur project search "<query>"` (or mur_project_search MCP tool) when
+- You are looking for a concept or behavior, not a known token:
+  "where is the logic that handles retries", "how does auth work",
+  "which file is responsible for decay scoring".
+
+## Use grep when
+- You know the exact symbol, string, import, or config key.
+- You need every occurrence (rename, find all callers, dead-code removal).
+  Semantic search returns ranked top-k, not all matches — it will miss some.
+
+## Scope (important)
+- By default `mur project search` searches across ALL indexed projects, not
+  just the current directory — top results may come from unrelated repos.
+  To restrict to one project, pass `--project <name>` (and `--limit <n>` to
+  widen/narrow the ranked results). The mur_project_search MCP tool takes the
+  same optional `project` argument.
+
+## Hard rules (correctness)
+- Code you created or edited this session and have NOT committed/indexed is
+  not in the index yet — use grep for it. Semantic results always lag
+  un-committed edits.
+- Before trusting semantic results, check freshness with
+  `mur project status`. If it reports no index or indexing in progress,
+  fall back to grep.
+
+The index is kept fresh automatically by a post-commit hook (installed on
+first `mur project index`). See the mur-project-index skill.
+
+
+<!-- MUR:END -->
