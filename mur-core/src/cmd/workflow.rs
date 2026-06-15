@@ -194,8 +194,7 @@ pub(crate) async fn cmd_workflow_run(
                             // --channel uses an existing one.
                             let channel_id = if channel_new {
                                 let svc = mur_channel::ChannelService::open(&mur_dir)?;
-                                let ch =
-                                    svc.create_for_workflow(&matched.manifest.name)?;
+                                let ch = svc.create_for_workflow(&matched.manifest.name)?;
                                 eprintln!("# channel: {}", ch.id);
                                 Some(ch.id)
                             } else {

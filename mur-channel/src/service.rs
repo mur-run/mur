@@ -151,9 +151,9 @@ impl ChannelService {
             "from": state_str(old_state),
             "to":   state_str(new_state),
         });
-        let ev = self
-            .store
-            .append_event(channel_id, actor, EventKind::StateChange, payload, None)?;
+        let ev =
+            self.store
+                .append_event(channel_id, actor, EventKind::StateChange, payload, None)?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.state = new_state;
             ch.updated_at = ev.ts;
@@ -207,7 +207,10 @@ mod tests {
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("deploy").unwrap();
         assert_eq!(ch.state, ChannelState::Working);
-        assert!(ch.participants.is_empty(), "workflow channel has no agent participant");
+        assert!(
+            ch.participants.is_empty(),
+            "workflow channel has no agent participant"
+        );
         svc.append(
             &ch.id,
             ChannelActor::System,

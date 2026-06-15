@@ -368,10 +368,7 @@ async fn execute_step(
     step_index: usize,
     mur_home: &Path,
 ) -> StepResult {
-    let sid = step
-        .id
-        .clone()
-        .unwrap_or_else(|| step_index.to_string());
+    let sid = step.id.clone().unwrap_or_else(|| step_index.to_string());
 
     if let Some(cid) = opts.channel_id.as_deref() {
         emit_channel(
@@ -818,15 +815,25 @@ mod tests {
 
         let evs = svc.load_events(&ch.id).unwrap();
         let kinds: Vec<_> = evs.iter().map(|e| e.kind).collect();
-        assert_eq!(kinds.first(), Some(&EventKind::StateChange), "first event must be StateChange(Working)");
-        assert_eq!(kinds.last(), Some(&EventKind::StateChange), "last event must be StateChange(Completed)");
+        assert_eq!(
+            kinds.first(),
+            Some(&EventKind::StateChange),
+            "first event must be StateChange(Working)"
+        );
+        assert_eq!(
+            kinds.last(),
+            Some(&EventKind::StateChange),
+            "last event must be StateChange(Completed)"
+        );
         assert_eq!(
             evs.iter().filter(|e| e.kind == EventKind::ToolCall).count(),
             1,
             "one ToolCall per step"
         );
         assert_eq!(
-            evs.iter().filter(|e| e.kind == EventKind::ToolResult).count(),
+            evs.iter()
+                .filter(|e| e.kind == EventKind::ToolResult)
+                .count(),
             1,
             "one ToolResult per step"
         );
@@ -838,7 +845,10 @@ mod tests {
             svc.store().load_manifest(&ch.id).unwrap().state,
             ChannelState::Completed
         );
-        let tr = evs.iter().find(|e| e.kind == EventKind::ToolResult).unwrap();
+        let tr = evs
+            .iter()
+            .find(|e| e.kind == EventKind::ToolResult)
+            .unwrap();
         assert_eq!(tr.payload["exit_code"], 0);
     }
 }

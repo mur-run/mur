@@ -205,7 +205,10 @@ mod tests {
         };
         let line = serde_json::to_string(&ev).unwrap();
         assert!(!line.contains("sig"), "sig must be omitted when None");
-        assert!(!line.contains("key_version"), "key_version must be omitted when None");
+        assert!(
+            !line.contains("key_version"),
+            "key_version must be omitted when None"
+        );
 
         // Old rows without the fields must deserialize cleanly.
         let old = r#"{"seq":0,"ts":"2026-06-16T00:00:00Z","actor":{"kind":"system"},"kind":"note","payload":{}}"#;

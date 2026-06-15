@@ -133,8 +133,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                 channel,
                 channel_new,
             } => {
-                cmd::workflow::cmd_workflow_run(&query, fail_fast, prompt, yes, channel, channel_new)
-                    .await?
+                cmd::workflow::cmd_workflow_run(
+                    &query,
+                    fail_fast,
+                    prompt,
+                    yes,
+                    channel,
+                    channel_new,
+                )
+                .await?
             }
             WorkflowAction::Suggest {
                 create,
