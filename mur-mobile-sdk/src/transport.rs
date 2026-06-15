@@ -29,6 +29,8 @@ pub enum Command {
     AudioStreamEnd,
     /// Close the connection and end the task.
     Disconnect,
+    /// Pull channel data from the daemon.
+    ChannelQuery { op: String, channel_id: Option<String>, since_seq: Option<u64> },
 }
 
 /// Drive one LAN connection to completion.
@@ -180,6 +182,9 @@ async fn run_frame_loop<S, E>(
                                     emit(MobileEvent::AudioChunk { data: bytes, sample_rate, done });
                                 }
                             }
+                            Ok(ServerFrame::ChannelData { op, payload }) => {
+                                emit_channel_data(&emit, &op, payload);
+                            }
                             Err(e) => tracing::warn!("mur-mobile-sdk: bad server frame: {e}"),
                         }
                     }
@@ -215,6 +220,9 @@ async fn run_frame_loop<S, E>(
                                 ClientFrame::AudioChunk { data: encoded }
                             }
                             Command::AudioStreamEnd => ClientFrame::AudioStreamEnd,
+                            Command::ChannelQuery { op, channel_id, since_seq } => {
+                                ClientFrame::ChannelQuery { op, channel_id, since_seq }
+                            }
                             Command::Disconnect => {
                                 let _ = write.close().await;
                                 emit(MobileEvent::Disconnected {
@@ -279,6 +287,78 @@ where
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true),
         }),
+        "channel.updated" => {
+            let channel_id = text("channel_id");
+            if !channel_id.is_empty() {
+                emit(MobileEvent::ChannelUpdate { channel_id });
+            }
+        }
         other => tracing::debug!("mur-mobile-sdk: ignoring event {other}"),
+    }
+}
+
+fn emit_channel_data<E>(emit: &E, op: &str, payload: serde_json::Value)
+where
+    E: Fn(MobileEvent),
+{
+    use crate::{ChannelEventItem, ChannelListItem};
+    match op {
+        "list" => {
+            let channels: Vec<ChannelListItem> = payload
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|v| ChannelListItem {
+                    id: v["id"].as_str().unwrap_or_default().to_string(),
+                    title: v["title"].as_str().unwrap_or_default().to_string(),
+                    state: v["state"].as_str().unwrap_or_default().to_string(),
+                    goal: v["goal"].as_str().unwrap_or_default().to_string(),
+                    updated_at: v["updated_at"].as_str().unwrap_or_default().to_string(),
+                    agents: v["agents"]
+                        .as_array()
+                        .unwrap_or(&vec![])
+                        .iter()
+                        .filter_map(|a| a.as_str().map(|s| s.to_string()))
+                        .collect(),
+                    turns: v["turns"].as_u64().unwrap_or(0) as u32,
+                })
+                .collect();
+            emit(MobileEvent::ChannelList { channels });
+        }
+        "events" => {
+            let channel_id = payload
+                .as_array()
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.get("channel_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let events: Vec<ChannelEventItem> = payload
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|v| {
+                    let actor = v.get("actor");
+                    ChannelEventItem {
+                        seq: v["seq"].as_u64().unwrap_or(0),
+                        ts: v["ts"].as_str().unwrap_or_default().to_string(),
+                        actor_kind: actor
+                            .and_then(|a| a.get("kind").or_else(|| a.get("type")))
+                            .and_then(|k| k.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        actor_name: actor
+                            .and_then(|a| a.get("id").or_else(|| a.get("name")))
+                            .and_then(|k| k.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        kind: v["kind"].as_str().unwrap_or_default().to_string(),
+                        text: v["payload"]["text"].as_str().unwrap_or_default().to_string(),
+                    }
+                })
+                .collect();
+            emit(MobileEvent::ChannelEvents { channel_id, events });
+        }
+        other => tracing::debug!("mur-mobile-sdk: ignoring channel_data op={other}"),
     }
 }
