@@ -4,6 +4,7 @@
 pub mod store;
 pub mod index;
 pub mod service;
+pub mod watch;
 
 pub use store::ChannelStore;
 pub use service::ChannelService;
