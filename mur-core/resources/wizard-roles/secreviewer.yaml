@@ -1,0 +1,11 @@
+id: secreviewer
+display_name: Security Reviewer
+charter: "Reviews code and dependencies for security: threat modeling, secure-code review, supply-chain and secret hygiene, vuln triage."
+risk: medium
+category: security
+skill_topics:
+  - threat-modeling
+  - secure-code-review
+  - dependency-and-supply-chain-security
+  - secrets-and-credential-hygiene
+  - vulnerability-triage-and-disclosure

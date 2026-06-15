@@ -243,6 +243,7 @@ pub fn run() {
         .manage(chat::ChatRegistryState::default())
         .manage(SupervisorState(supervisor))
         .manage(WizardState(Mutex::new(None)))
+        .manage(onboarding::spec::WizardSpecState::default())
         .manage(PetState(Mutex::new(std::collections::HashMap::new())))
         .manage(EventBusState(EventBus::new(256)))
         .manage(BridgeState::default())
@@ -477,6 +478,10 @@ pub fn run() {
             memory::agent_get_memory,
             memory::agent_set_memory,
             memory::agent_reset_sys_prompt,
+            onboarding::spec::wizard_spec_catalog,
+            onboarding::spec::wizard_spec_generate,
+            onboarding::spec::wizard_spec_approve,
+            onboarding::spec::wizard_spec_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

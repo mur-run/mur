@@ -1,0 +1,11 @@
+id: pm
+display_name: PM
+charter: Turns fuzzy intent into problem-first specs, INVEST issues, and prioritized plans.
+risk: low
+category: product
+skill_topics:
+  - product-spec-and-prd-writing
+  - issue-authoring-and-hygiene
+  - prioritization-and-roadmapping
+  - agent-team-orchestration
+  - mur-repo-pm-context
