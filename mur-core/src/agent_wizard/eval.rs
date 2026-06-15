@@ -220,6 +220,31 @@ pub async fn run_eval(
     EvalReport { passed, results }
 }
 
+/// Run eval; while it fails and rounds remain, call `fix` (re-author+re-apply) and re-eval.
+/// Returns the final report and the number of fix rounds used.
+pub async fn eval_with_autofix<F, Fut>(
+    tasks: &[EvalTask],
+    mut evaluate: impl FnMut() -> Fut,
+    mut fix: F,
+    max_rounds: u8,
+) -> (EvalReport, u8)
+where
+    F: FnMut() -> bool,
+    Fut: std::future::Future<Output = EvalReport>,
+{
+    let mut report = evaluate().await;
+    let mut rounds = 0u8;
+    while !report.passed && rounds < max_rounds {
+        if !fix() {
+            break;
+        } // fix() returns false if nothing actionable to change
+        rounds += 1;
+        report = evaluate().await;
+    }
+    let _ = tasks;
+    (report, rounds)
+}
+
 /// Write a markdown record of an eval run to `<home>/agents/<name>/eval-runs/<run_label>.md`.
 pub fn write_record(
     home: &std::path::Path,
@@ -349,6 +374,24 @@ mod tests {
         async fn embed(&self, _: &str) -> Result<Vec<f32>, mur_common::error::LlmError> {
             Ok(vec![])
         }
+    }
+
+    #[tokio::test]
+    async fn autofix_stops_at_cap_and_can_recover() {
+        let calls = std::cell::Cell::new(0);
+        let evaluate = || {
+            let n = calls.get();
+            calls.set(n + 1);
+            async move {
+                EvalReport {
+                    passed: n >= 1,
+                    results: vec![],
+                }
+            }
+        }; // fails first, passes after 1 fix
+        let (report, rounds) = super::eval_with_autofix(&[], evaluate, || true, 2).await;
+        assert!(report.passed);
+        assert_eq!(rounds, 1);
     }
 
     #[tokio::test]

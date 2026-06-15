@@ -155,7 +155,41 @@ pub async fn run_wizard(
         stage: Stage::Create,
         message: "creating agent".into(),
     });
-    apply::apply_draft(&approved)
+    let outcome = apply::apply_draft(&approved)?;
+    if let Some(judge) = &llm {
+        let home = crate::cmd::agent::resolve_mur_home()?;
+        let skill_names = approved
+            .skills
+            .iter()
+            .map(|s| s.name.clone())
+            .collect::<Vec<_>>();
+        let tasks = crate::agent_wizard::eval_tasks::tasks_for(&approved.role, &skill_names);
+        let driver = crate::agent_wizard::eval::DialDriver {
+            home: home.clone(),
+            agent: approved.role.name.clone(),
+        };
+        let report = crate::agent_wizard::eval::run_eval(&driver, judge.as_ref(), &tasks).await;
+        let _ = crate::agent_wizard::eval::write_record(
+            &home,
+            &approved.role.name,
+            "wizard-eval",
+            &report,
+        );
+        hooks.on_progress(&Progress {
+            stage: Stage::Eval,
+            message: format!(
+                "eval {}",
+                if report.passed {
+                    "passed"
+                } else {
+                    "FAILED — see eval-runs"
+                }
+            ),
+        });
+        // Auto-fix (N=2) is operator-gated for now: report only. Full re-author+re-apply loop is
+        // exercised by eval_with_autofix unit tests; wiring real re-apply is the next increment.
+    }
+    Ok(outcome)
 }
 
 #[cfg(test)]
