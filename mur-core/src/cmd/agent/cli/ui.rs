@@ -170,6 +170,14 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         ));
         spans.push(Span::raw("  "));
     }
+    if let Some(meta) = &app.channel {
+        let short: String = meta.id.chars().take(8).collect();
+        spans.push(Span::styled(
+            format!(" ⏵ {}:{} ", short, meta.state),
+            Style::default().fg(Color::Cyan),
+        ));
+        spans.push(Span::raw("  "));
+    }
     spans.push(Span::styled(msg, Style::default().fg(color)));
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }

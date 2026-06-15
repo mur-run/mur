@@ -11,6 +11,7 @@ import { MuragentImportModal } from "./MuragentImportModal";
 import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
+import { WorkView } from "./work/WorkView";
 import { useConversations } from "../conversation/ConversationContext";
 import { Mascot } from "./Mascot";
 import type { MascotMood } from "./Mascot";
@@ -339,6 +340,7 @@ export function DashboardApp() {
   const { open: openConvs } = useConversations();
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [surface, setSurface] = useState<"agents" | "work">("agents");
   const [query, setQuery] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
@@ -576,6 +578,20 @@ export function DashboardApp() {
                 <option value="zh-TW">繁體中文</option>
               </select>
             </label>
+            <div className="surface-toggle">
+              <button
+                className={surface === "agents" ? "is-active" : ""}
+                onClick={() => setSurface("agents")}
+              >
+                {t("work.toggle.agents")}
+              </button>
+              <button
+                className={surface === "work" ? "is-active" : ""}
+                onClick={() => setSurface("work")}
+              >
+                {t("work.toggle.work")}
+              </button>
+            </div>
             <div className="view-toggle">
               <button
                 className={viewMode === "grid" ? "is-active" : ""}
@@ -609,70 +625,76 @@ export function DashboardApp() {
           </div>
         </div>
 
-        <div className="dashboard__hero">
-          <Mascot floating mood={mascotMood} bubble={mascotBubble} />
-          <div>
-            <h3>{t(timeGreetingKey())}</h3>
-            <p>
-              {t("dashboard.flockStatus", {
-                running: runningCount,
-                idle: idleCount,
-              })}
-            </p>
-          </div>
-          <div className="dashboard__stats">
-            <div className="stat">
-              <div className="stat__n stat__n--run">{runningCount}</div>
-              <div className="stat__l">{t("dashboard.stat.running")}</div>
-            </div>
-            <div className="stat">
-              <div className="stat__n">{idleCount}</div>
-              <div className="stat__l">{t("dashboard.stat.idle")}</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="dashboard-content">
-          {visible.length === 0 ? (
-            <div className="empty-state">
-              <Mascot floating size={96} mood="excited" bubble={t("mascot.bubble.excited")} />
-              <h3>{t("dashboard.empty.title")}</h3>
-              <p>{t("dashboard.empty.body")}</p>
-              <button className="btn btn--primary" onClick={() => setWizardOpen(true)}>
-                {t("dashboard.empty.cta")}
-              </button>
-            </div>
-          ) : viewMode === "grid" ? (
-            <div className="agent-grid">
-              {visible.map((a) => (
-                <GridCard
-                  key={a.name}
-                  agent={a}
-                  runtime={runtimeMap.get(a.name)}
-                  isSelected={selectedAgent === a.name}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="agent-list">
-              <div className="agent-list__head">
-                <span>{t("dashboard.col.agent")}</span>
-                <span>{t("dashboard.col.category")}</span>
-                <span>{t("dashboard.col.model")}</span>
-                <span>{t("dashboard.col.status")}</span>
-                <span />
+        {surface === "work" ? (
+          <WorkView agents={agents} />
+        ) : (
+          <>
+            <div className="dashboard__hero">
+              <Mascot floating mood={mascotMood} bubble={mascotBubble} />
+              <div>
+                <h3>{t(timeGreetingKey())}</h3>
+                <p>
+                  {t("dashboard.flockStatus", {
+                    running: runningCount,
+                    idle: idleCount,
+                  })}
+                </p>
               </div>
-              {visible.map((a) => (
-                <ListRow
-                  key={a.name}
-                  agent={a}
-                  runtime={runtimeMap.get(a.name)}
-                  isSelected={selectedAgent === a.name}
-                />
-              ))}
+              <div className="dashboard__stats">
+                <div className="stat">
+                  <div className="stat__n stat__n--run">{runningCount}</div>
+                  <div className="stat__l">{t("dashboard.stat.running")}</div>
+                </div>
+                <div className="stat">
+                  <div className="stat__n">{idleCount}</div>
+                  <div className="stat__l">{t("dashboard.stat.idle")}</div>
+                </div>
+              </div>
             </div>
-          )}
-        </div>
+
+            <div className="dashboard-content">
+              {visible.length === 0 ? (
+                <div className="empty-state">
+                  <Mascot floating size={96} mood="excited" bubble={t("mascot.bubble.excited")} />
+                  <h3>{t("dashboard.empty.title")}</h3>
+                  <p>{t("dashboard.empty.body")}</p>
+                  <button className="btn btn--primary" onClick={() => setWizardOpen(true)}>
+                    {t("dashboard.empty.cta")}
+                  </button>
+                </div>
+              ) : viewMode === "grid" ? (
+                <div className="agent-grid">
+                  {visible.map((a) => (
+                    <GridCard
+                      key={a.name}
+                      agent={a}
+                      runtime={runtimeMap.get(a.name)}
+                      isSelected={selectedAgent === a.name}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="agent-list">
+                  <div className="agent-list__head">
+                    <span>{t("dashboard.col.agent")}</span>
+                    <span>{t("dashboard.col.category")}</span>
+                    <span>{t("dashboard.col.model")}</span>
+                    <span>{t("dashboard.col.status")}</span>
+                    <span />
+                  </div>
+                  {visible.map((a) => (
+                    <ListRow
+                      key={a.name}
+                      agent={a}
+                      runtime={runtimeMap.get(a.name)}
+                      isSelected={selectedAgent === a.name}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Conversation rail — slides in when conversations are open */}

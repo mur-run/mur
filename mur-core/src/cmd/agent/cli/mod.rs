@@ -33,7 +33,7 @@ use ratatui::backend::CrosstermBackend;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use self::app::{App, SlashCmd, parse_slash};
+use self::app::{App, Role, SlashCmd, parse_slash};
 use self::persist::Session;
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
 use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
@@ -45,7 +45,7 @@ const SCROLL_STEP: u16 = 5;
 /// Spinner animation cadence.
 const SPINNER_MS: u64 = 90;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 pub async fn cmd_cli(names: &[String], resume: bool, auto: bool) -> Result<()> {
@@ -142,6 +142,7 @@ fn build_app(home: &Path, agent: &str, resume: bool) -> Result<App> {
                 Session::open_existing(home, agent, &info.id)?,
             );
             app.load_history(turns);
+            app.refresh_channel();
             app.push_system(format!(
                 "resumed conversation ({} turns) — {HELP}",
                 app.messages.len()
@@ -407,6 +408,57 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
             Ok(_) => app.push_system("no saved conversations yet"),
             Err(e) => app.push_system(format!("could not list sessions: {e}")),
         },
+        SlashCmd::Channels(n) => {
+            // Cancel any in-flight stream before we potentially switch channels.
+            if app.streaming {
+                if let Some(tid) = app.current_task_id.clone() {
+                    let _ = cancel_task(app.home.clone(), app.agent.clone(), tid).await;
+                }
+                app.finish_partial();
+            }
+            let recent = match persist::list_recent(&app.home, &app.agent, RECENT_LIMIT) {
+                Ok(r) => r,
+                Err(e) => {
+                    app.push_system(format!("could not list channels: {e}"));
+                    return;
+                }
+            };
+            match n {
+                Some(n) => match recent.get(n.wrapping_sub(1)) {
+                    Some(s) => {
+                        let id = s.id.clone();
+                        match app.switch_channel(&id) {
+                            Ok(()) => app.push_system(format!(
+                                "switched to channel {} ({} turns)",
+                                &id[..id.len().min(8)],
+                                app.messages
+                                    .iter()
+                                    .filter(|m| matches!(m.role, Role::User | Role::Agent))
+                                    .count()
+                            )),
+                            Err(e) => app.push_system(format!("could not switch channel: {e}")),
+                        }
+                    }
+                    None => app.push_system(format!("no channel {n}")),
+                },
+                None => {
+                    if recent.is_empty() {
+                        app.push_system("no channels yet");
+                    } else {
+                        let mut out = String::from("channels (type /channels N to switch):\n");
+                        for (i, s) in recent.iter().enumerate() {
+                            out.push_str(&format!(
+                                "  {} · {} turns · {}\n",
+                                i + 1,
+                                s.turns,
+                                s.preview
+                            ));
+                        }
+                        app.push_system(out.trim_end().to_string());
+                    }
+                }
+            }
+        }
         SlashCmd::Card => {
             let (h, a) = (app.home.clone(), app.agent.clone());
             let res = tokio::task::spawn_blocking(move || {
