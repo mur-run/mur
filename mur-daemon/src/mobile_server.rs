@@ -341,6 +341,14 @@ async fn handle_agent_turn(
         "mobile.reply",
         &json!({ "text": reply_text }),
     );
+    if !reply_text.starts_with("[error]") {
+        mur_core::mobile::persist_mobile_exchange(
+            state.mur_home.as_path(),
+            agent,
+            user_text,
+            &reply_text,
+        );
+    }
     if send_frame(
         socket,
         &ServerFrame::Event {

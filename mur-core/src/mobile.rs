@@ -7,6 +7,8 @@
 //! `docs/superpowers/specs/2026-06-05-mur-voice-mobile-app-design.md`.
 
 use anyhow::{Context, Result};
+use mur_channel::ChannelService;
+use mur_common::channel::{ChannelActor, EventKind};
 use std::net::{IpAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 
@@ -80,4 +82,56 @@ pub fn lan_ip() -> Option<IpAddr> {
 /// and calls `connect_lan`. Token (uuid) and agent slug are URL-safe.
 pub fn pairing_uri(host: &str, port: u16, token: &str, agent: &str) -> String {
     format!("mur-pair://{host}:{port}/?token={token}&agent={agent}")
+}
+
+/// Persist one mobile user→agent exchange into the agent's channel (resolved
+/// once), so phone conversations are durable and shared with the Hub/CLI.
+/// Best-effort: failures are logged, never surfaced to the phone. Mirrors the
+/// Hub's `chat::persist_exchange`. The channel is created on the first exchange.
+pub fn persist_mobile_exchange(
+    home: &std::path::Path,
+    agent: &str,
+    user_text: &str,
+    agent_text: &str,
+) {
+    let res = (|| -> anyhow::Result<()> {
+        let svc = ChannelService::open(home)?;
+        let id = match svc.latest_for_agent(agent)? {
+            Some(id) => id,
+            None => svc.create_for_agent(agent)?.id,
+        };
+        svc.append_message(&id, ChannelActor::local_human(), EventKind::Message, user_text, None)?;
+        svc.append_message(
+            &id,
+            ChannelActor::Agent { id: agent.to_string() },
+            EventKind::Message,
+            agent_text,
+            None,
+        )?;
+        Ok(())
+    })();
+    if let Err(e) = res {
+        tracing::warn!("mobile channel persist failed for {agent}: {e:#}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persist_mobile_exchange_writes_both_turns_to_one_channel() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        persist_mobile_exchange(tmp.path(), "mur", "what's my schedule?", "you have 2 meetings");
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        let id = svc.latest_for_agent("mur").unwrap().expect("channel created");
+        let evs = svc.load_events(&id).unwrap();
+        assert_eq!(evs.len(), 2);
+        assert_eq!(evs[0].payload["text"], "what's my schedule?");
+        assert_eq!(evs[1].payload["text"], "you have 2 meetings");
+        // Second exchange appends to the SAME channel (shared, like the Hub).
+        persist_mobile_exchange(tmp.path(), "mur", "and tomorrow?", "3 meetings");
+        assert_eq!(svc.list(10).unwrap().len(), 1);
+        assert_eq!(svc.load_events(&id).unwrap().len(), 4);
+    }
 }

@@ -273,7 +273,9 @@ async fn agent_turn(
         Err(e) => format!("[error] dial task: {e}"),
     };
 
-    let _ = user_text; // mirrored on Mac via mobile_server.rs; not needed here
+    if !reply_text.starts_with("[error]") {
+        mur_core::mobile::persist_mobile_exchange(home, agent, &user_text, &reply_text);
+    }
     relay_send(
         write,
         &ServerFrame::Event {
