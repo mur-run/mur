@@ -2,5 +2,6 @@
 //! a rebuildable SQLite query index + a file-watcher. Shared by the CLI
 //! (`mur-core`) and the Hub (`mur-hub-gui`).
 pub mod store;
+pub mod index;
 
 pub use store::ChannelStore;
