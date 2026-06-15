@@ -111,14 +111,18 @@ run a tool or read a file this turn, say so and reason from context.\n",
     Ok(md)
 }
 
-/// Remove ```yaml / ``` fences a model may wrap output in.
+/// Remove ```lang / ``` fences a model may wrap output in (any-case language tag).
 fn strip_fences(s: &str) -> String {
     let t = s.trim();
-    let t = t
-        .strip_prefix("```yaml")
-        .or_else(|| t.strip_prefix("```"))
-        .unwrap_or(t);
-    t.trim_end_matches("```").trim().to_string()
+    let Some(inner) = t.strip_prefix("```") else {
+        return t.to_string();
+    };
+    // Drop the opening fence's language tag line (e.g. "yaml", "YAML"), if any.
+    let inner = match inner.split_once('\n') {
+        Some((first, rest)) if first.trim().chars().all(|c| c.is_ascii_alphanumeric()) => rest,
+        _ => inner,
+    };
+    inner.trim_end_matches("```").trim().to_string()
 }
 
 #[cfg(test)]
@@ -160,6 +164,14 @@ category: context\nhosts: [mur-agent]\npriority: normal\ntags: [pm]\n\
 triggers:\n  - type: session_start\n  - type: command\n    pattern: /{name}\n\
 content:\n  abstract: A test abstract.\n  context: |\n    # {name}\n    - Do the thing. *Why: it helps.*\n"
         )
+    }
+
+    #[test]
+    fn strip_fences_handles_any_case_lang_tag_and_no_fence() {
+        assert_eq!(strip_fences("```yaml\nname: x\n```"), "name: x");
+        assert_eq!(strip_fences("```YAML\nname: x\n```"), "name: x");
+        assert_eq!(strip_fences("```\nname: x\n```"), "name: x");
+        assert_eq!(strip_fences("name: x"), "name: x");
     }
 
     #[tokio::test]

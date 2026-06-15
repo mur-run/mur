@@ -631,6 +631,23 @@ git add -A && git commit -m "chore(agent-wizard): fmt + clippy clean for plan 2"
 - **Placeholder scan:** the two "confirm/Note" items (validate error-conversion; `dyn LlmClient` object-safety fallback to generics) are explicit verification steps with the exact grep/fallback, not vague placeholders. The stub marker string "Stub generated" referenced in tests must match Plan 1's `stub_skill_yaml` output — confirm the literal in `stages.rs` and align the assertion if Plan 1 used different words.
 - **Type consistency:** `LlmClient`/`LlmError` from `mur_common`; `ResearchNote`/`SearchProvider`/`NoopSearch` in `research.rs`; `author_skills_llm`/`draft_prompt_llm` in `llm.rs`; `build_wizard_draft`/`run_wizard` async signatures consistent across Tasks 3 & 5; `ChatBackendAdapter`/`build_llm_for_stage` in the shared adapter module.
 
+## Review-captured deferrals (Plan 2 final review, 2026-06-15)
+
+Plan 2 reviewed (APPROVED). Fixed inline: `strip_fences` now handles any-case language tags +
+no-fence input (regression test added). Deferred to Plan 3:
+
+- **Re-validate-after-repair graceful fallback.** `author_one` returns the repaired YAML without
+  re-validating; if still invalid, `run_wizard` `bail!`s (plan-explicit) with a raw `{errs:?}`
+  dump. Plan 3: re-validate the repair and, on failure, fall back to the deterministic stub for
+  that one skill (graceful) and/or surface a readable error — not a hard abort of the whole wizard.
+- **Hardcoded `model_ref: "claude_sonnet"`** (`cmd/agent/wizard.rs`) — CLAUDE.md Rule 1. The agent
+  is created pinned to `claude_sonnet` even when inference uses a different configured model. Plan 3:
+  derive the registry `model_ref` from the resolved model / config (or expose `--model-ref`), with a
+  named default constant. Proper derivation (config model name → matching `models.yaml` ref) is
+  non-trivial, hence deferred.
+- **Surface research failures via `on_progress`** (minor UX): `run_wizard` swallows `SearchProvider`
+  errors with `unwrap_or_default()`; emit a progress warning when a real provider fails.
+
 ## Roadmap note
 
 - **Plan 2b (optional) — concrete search MCP:** implement a `McpSearch` `SearchProvider` that calls a configured search MCP (Tavily default) using MUR's MCP client, two-layer discovery→extract, returning `ResearchNote`s with citations. Until then `NoopSearch` keeps research as pure model-knowledge drafting (spec-compliant graceful behavior).
