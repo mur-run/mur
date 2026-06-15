@@ -415,6 +415,21 @@ pub fn run() {
                 });
             }
 
+            // Watch the shared channel store; emit `channel-updated` so the UI can
+            // live-hydrate. The watcher is managed to stay alive for the app's life.
+            {
+                let handle = app.handle().clone();
+                let home = crate::mur_home_path();
+                match mur_channel::watch::watch_channels(&home, move |channel_id| {
+                    let _ = handle.emit("channel-updated", channel_id);
+                }) {
+                    Ok(watcher) => {
+                        app.manage(std::sync::Mutex::new(Some(watcher)));
+                    }
+                    Err(e) => eprintln!("channel watcher failed to start: {e:#}"),
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -423,6 +438,7 @@ pub fn run() {
             stop_agent,
             chat::agent_chat_send,
             chat::agent_chat_cancel,
+            chat::channel_load,
             hitl::agent_hitl_respond,
             open_dashboard,
             toggle_popover,

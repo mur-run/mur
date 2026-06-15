@@ -5,6 +5,8 @@
 //! back to a one-shot ephemeral dial. Multi-turn context is threaded by passing
 //! the previous turn's task id back as `context.task_id`.
 
+use mur_channel::ChannelService;
+use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_core::a2a_dial::{DialMode, dial_message_streaming, dial_method};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -84,6 +86,13 @@ pub async fn agent_chat_send(
     registry.0.set(&name, &task_id);
     let name_clear = name.clone();
 
+    // Persist the user turn into the agent's channel (best-effort). Done before
+    // `text`/`home`/`name` are moved into the dial closure below; clones of
+    // `home`/`name` are kept to persist the agent turn after the dial returns.
+    persist_turn(&home, &name, "user", &text, Some(&task_id));
+    let persist_home = home.clone();
+    let persist_name = name.clone();
+
     let mut params = json!({
         "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] },
         "task_id": task_id,
@@ -161,6 +170,15 @@ pub async fn agent_chat_send(
     if reply.is_empty() {
         return Err("the agent returned no reply".into());
     }
+    // Persist the agent turn (best-effort). `task_id` here is the response task
+    // id; `reply` is borrowed before both are moved into `ChatReply`.
+    persist_turn(
+        &persist_home,
+        &persist_name,
+        "agent",
+        &reply,
+        Some(&task_id),
+    );
     Ok(ChatReply {
         reply,
         task_id,
@@ -225,6 +243,47 @@ fn extract_text(message: &Value) -> String {
         .unwrap_or_default()
 }
 
+// ─── Channel persistence ───────────────────────────────────────────────────
+
+/// Resolve the channel for an agent (latest, or create one), returning its id.
+fn channel_for_agent(home: &std::path::Path, agent: &str) -> anyhow::Result<String> {
+    let svc = ChannelService::open(home)?;
+    if let Some(id) = svc.latest_for_agent(agent)? {
+        return Ok(id);
+    }
+    Ok(svc.create_for_agent(agent)?.id)
+}
+
+/// Persist one turn into the agent's channel. `role` ∈ {"user","agent"}.
+fn persist_turn(home: &std::path::Path, agent: &str, role: &str, text: &str, task_id: Option<&str>) {
+    let res = (|| -> anyhow::Result<()> {
+        let svc = ChannelService::open(home)?;
+        let id = channel_for_agent(home, agent)?;
+        let actor = match role {
+            "agent" => ChannelActor::Agent {
+                id: agent.to_string(),
+            },
+            _ => ChannelActor::local_human(),
+        };
+        svc.append_message(&id, actor, EventKind::Message, text, task_id)?;
+        Ok(())
+    })();
+    if let Err(e) = res {
+        eprintln!("channel persist failed for {agent}: {e:#}");
+    }
+}
+
+/// Tauri command: load the agent's latest channel events for hydration.
+#[tauri::command]
+pub async fn channel_load(name: String) -> Result<Vec<ChannelEvent>, String> {
+    let home = crate::mur_home_path();
+    let svc = ChannelService::open(&home).map_err(|e| e.to_string())?;
+    let Some(id) = svc.latest_for_agent(&name).map_err(|e| e.to_string())? else {
+        return Ok(vec![]);
+    };
+    svc.load_events(&id).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +303,22 @@ mod tests {
         let reg = ChatRegistry::default();
         // No id registered for "ghost" → cancel must no-op (None lookup).
         assert_eq!(reg.get("ghost"), None);
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn persist_turn_writes_channel_event() {
+        let tmp = TempDir::new().unwrap();
+        persist_turn(tmp.path(), "qa", "user", "hello hub", Some("t-1"));
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let id = svc.latest_for_agent("qa").unwrap().expect("channel");
+        let evs = svc.load_events(&id).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].payload["text"], "hello hub");
     }
 }
