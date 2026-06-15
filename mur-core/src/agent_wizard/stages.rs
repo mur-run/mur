@@ -1,20 +1,11 @@
-//! Stage runner. Deterministic stages run here; LLM/eval stages are trait hooks
-//! (no-op default impl in Plan 1, real impls in Plans 2-3).
+//! Stage runner. Deterministic stages run here; LLM stages are handled in llm.rs (Plan 2+).
 use crate::agent_wizard::catalog::RoleManifest;
 use crate::agent_wizard::draft::*;
 use crate::agent_wizard::entitlements::preset_for;
 
-/// Driver-supplied hooks. Plan 1 uses the no-op defaults (deterministic, no LLM).
+/// Driver-supplied hooks. Synchronous callbacks for progress and the human review gate.
 pub trait WizardHooks {
     fn on_progress(&mut self, _p: &Progress) {}
-    /// Return Some(skills) to override stub skills (LLM author stage, Plan 2).
-    fn author_skills(&mut self, _role: &RoleSpec, _topics: &[String]) -> Option<Vec<SkillDraft>> {
-        None
-    }
-    /// Return Some(markdown) to override the template prompt (LLM stage, Plan 2).
-    fn draft_prompt(&mut self, _role: &RoleSpec) -> Option<String> {
-        None
-    }
     /// The review gate: return the (possibly edited) draft to approve, or None to abort.
     fn review_gate(&mut self, draft: WizardDraft) -> Option<WizardDraft> {
         Some(draft)
@@ -51,9 +42,11 @@ fn stub_skill_yaml(topic: &str, role: &RoleSpec) -> String {
         + "\n"
 }
 
-fn template_prompt(role: &RoleSpec) -> String {
+/// Template-based DoD system prompt for when no LLM is available. Public so `mod.rs` can
+/// use it as the fallback when an LLM `draft_prompt_llm` call fails.
+pub fn template_prompt(role: &RoleSpec) -> String {
     format!(
-        "# {dn} — {charter}\n\nYou are {dn}. Your attached skills are your standard of \"good\".\n\n\
+        "# {dn} \u{2014} {charter}\n\nYou are {dn}. Your attached skills are your standard of \"good\".\n\n\
 ## Operating discipline\nComplete your role's definition of done before claiming a task done.\n\n\
 ## Honesty\nYou must never fabricate command or file output. If you can't run a tool or read a file \
 this turn, say so and reason from context.\n\n## Watching\nNarrate at a high level for a live human.\n",
@@ -62,8 +55,8 @@ this turn, say so and reason from context.\n\n## Watching\nNarrate at a high lev
     )
 }
 
-/// Run deterministic stages 1-5 and assemble the draft. LLM hooks may override
-/// skills/prompt; otherwise stubs/templates are used.
+/// Run deterministic stages 1-5 and assemble the draft using stubs/templates (no LLM).
+/// Used as the fallback path when `llm` is `None` in `build_wizard_draft`.
 pub fn build_draft(
     m: &RoleManifest,
     workspace: &str,
@@ -82,26 +75,21 @@ pub fn build_draft(
         message: format!("role {}", role.name),
     });
 
-    let skills = hooks
-        .author_skills(&role, &m.skill_topics)
-        .unwrap_or_else(|| {
-            m.skill_topics
-                .iter()
-                .map(|t| SkillDraft {
-                    name: t.clone(),
-                    yaml: stub_skill_yaml(t, &role),
-                })
-                .collect()
-        });
+    let skills = m
+        .skill_topics
+        .iter()
+        .map(|t| SkillDraft {
+            name: t.clone(),
+            yaml: stub_skill_yaml(t, &role),
+        })
+        .collect();
     hooks.on_progress(&Progress {
         stage: Stage::AuthorSkills,
-        message: format!("{} skills", skills.len()),
+        message: format!("{} skills", m.skill_topics.len()),
     });
 
     let prompt = PromptDraft {
-        markdown: hooks
-            .draft_prompt(&role)
-            .unwrap_or_else(|| template_prompt(&role)),
+        markdown: template_prompt(&role),
     };
     hooks.on_progress(&Progress {
         stage: Stage::DraftPrompt,

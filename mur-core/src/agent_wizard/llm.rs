@@ -2,8 +2,29 @@
 use crate::agent_wizard::draft::{RoleSpec, SkillDraft};
 use crate::agent_wizard::research::ResearchNote;
 use mur_common::error::LlmError;
-use mur_common::llm::LlmClient;
-use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
+
+/// Object-safe wrapper around `LlmClient`. `LlmClient` uses RPITIT and is therefore
+/// not dyn-compatible (E0038). This thin trait boxes the future so `dyn WizardLlm` works.
+pub trait WizardLlm: Send + Sync {
+    fn complete<'a>(
+        &'a self,
+        prompt: &'a str,
+        system: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String, LlmError>> + Send + 'a>>;
+}
+
+/// Blanket impl: any `LlmClient` is also a `WizardLlm`.
+impl<L: mur_common::llm::LlmClient + Send + Sync> WizardLlm for L {
+    fn complete<'a>(
+        &'a self,
+        p: &'a str,
+        s: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String, LlmError>> + Send + 'a>> {
+        Box::pin(mur_common::llm::LlmClient::complete(self, p, s))
+    }
+}
 
 /// Build the per-skill authoring prompt for one topic.
 fn skill_prompt(role: &RoleSpec, topic: &str, notes: &[ResearchNote]) -> String {
@@ -30,8 +51,8 @@ keyword regex + a /command), and content with `abstract` and `context`. The `con
 }
 
 /// Author one skill per topic via the LLM, validating each; one repair retry on invalid YAML.
-pub async fn author_skills_llm<L: LlmClient>(
-    llm: &Arc<L>,
+pub async fn author_skills_llm(
+    llm: &dyn WizardLlm,
     role: &RoleSpec,
     topics: &[String],
     notes: &[ResearchNote],
@@ -49,7 +70,7 @@ pub async fn author_skills_llm<L: LlmClient>(
 }
 
 /// Call the model, strip stray fences, and validate; on invalid, ask once to fix.
-async fn author_one<L: LlmClient>(llm: &Arc<L>, prompt: &str) -> Result<String, LlmError> {
+async fn author_one(llm: &dyn WizardLlm, prompt: &str) -> Result<String, LlmError> {
     let sys = "You are an expert author of MUR agent skills. Output only valid YAML.";
     let raw = strip_fences(&llm.complete(prompt, Some(sys)).await?);
     let valid = mur_common::skill::parse_canonical(&raw)
@@ -68,10 +89,7 @@ Previous output:\n{raw}"
 
 /// Draft a DoD system prompt for the role via the LLM. The result must carry the
 /// honesty rule; if the model omits it, append it (defense-in-depth, not a silent trust).
-pub async fn draft_prompt_llm<L: LlmClient>(
-    llm: &Arc<L>,
-    role: &RoleSpec,
-) -> Result<String, LlmError> {
+pub async fn draft_prompt_llm(llm: &dyn WizardLlm, role: &RoleSpec) -> Result<String, LlmError> {
     let sys = "You write system prompts for specialized AI agents. Be concise and concrete.";
     let prompt = format!(
         "Write a system prompt (markdown) for an agent named \"{dn}\" whose charter is: {charter}.\n\
@@ -110,7 +128,7 @@ mod tests {
 
     /// A canned LlmClient that returns a fixed valid skill yaml.
     struct MockLlm(String);
-    impl LlmClient for MockLlm {
+    impl mur_common::llm::LlmClient for MockLlm {
         fn complete(
             &self,
             _p: &str,
@@ -147,7 +165,7 @@ content:\n  abstract: A test abstract.\n  context: |\n    # {name}\n    - Do the
     #[tokio::test]
     async fn authors_one_skill_per_topic_and_strips_fences() {
         let fenced = format!("```yaml\n{}\n```", valid_yaml("product-spec"));
-        let llm = Arc::new(MockLlm(fenced));
+        let llm = MockLlm(fenced);
         let skills = author_skills_llm(&llm, &role(), &["product-spec".into()], &[])
             .await
             .unwrap();
@@ -162,7 +180,7 @@ content:\n  abstract: A test abstract.\n  context: |\n    # {name}\n    - Do the
     #[tokio::test]
     async fn drafts_a_prompt_containing_role_and_honesty_rule() {
         let body = "# PM — c\n\n## Honesty\nyou must never fabricate command or file output.\n";
-        let llm = Arc::new(MockLlm(body.to_string()));
+        let llm = MockLlm(body.to_string());
         let md = draft_prompt_llm(&llm, &role()).await.unwrap();
         assert!(md.contains("PM"));
         assert!(md.to_lowercase().contains("never fabricate"));
@@ -171,7 +189,7 @@ content:\n  abstract: A test abstract.\n  context: |\n    # {name}\n    - Do the
     #[tokio::test]
     async fn appends_honesty_rule_when_model_omits_it() {
         let body = "# PM — c\n\nDo the work well.\n";
-        let llm = Arc::new(MockLlm(body.to_string()));
+        let llm = MockLlm(body.to_string());
         let md = draft_prompt_llm(&llm, &role()).await.unwrap();
         assert!(md.to_lowercase().contains("never fabricate"));
     }

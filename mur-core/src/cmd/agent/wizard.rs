@@ -45,7 +45,7 @@ pub fn run(
     role: Option<String>,
     workspace: Option<String>,
     headless: bool,
-    _no_llm: bool,
+    no_llm: bool,
 ) -> anyhow::Result<()> {
     let mur_home = crate::cmd::agent::resolve_mur_home()?;
     let catalog = catalog::load_catalog(&mur_home);
@@ -68,8 +68,33 @@ pub fn run(
             .display()
             .to_string()
     });
+
+    // Build the LLM client if the user hasn't opted out. Task 5 will wire the live
+    // ChatBackendAdapter here; for now, no_llm=true is the only supported path in Plan 2
+    // (the async run_wizard is ready; live backend wiring is Task 5).
+    let llm: Option<std::sync::Arc<dyn crate::agent_wizard::llm::WizardLlm>> = if no_llm {
+        None
+    } else {
+        // Task 5: build_llm_for_stage(&mur_home, None, "agent.wizard")
+        // Until then, fall back to stub path with a warning so `mur agent wizard` still works.
+        eprintln!(
+            "warning: live LLM wiring pending (Task 5); using deterministic stubs. Pass --no-llm to silence."
+        );
+        None
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
     let mut hooks = CliHooks { headless };
-    let outcome = agent_wizard::run_wizard(manifest, &ws, "claude_sonnet", &mut hooks)?;
+    let outcome = rt.block_on(agent_wizard::run_wizard(
+        manifest,
+        &ws,
+        "claude_sonnet",
+        llm,
+        None,
+        &mut hooks,
+    ))?;
     if outcome.created {
         println!("\n✅ Created and started agent '{}'.", outcome.agent_name);
     } else {
