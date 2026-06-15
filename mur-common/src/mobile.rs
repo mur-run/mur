@@ -44,6 +44,16 @@ pub enum ClientFrame {
     /// Phone finished speaking. Mac should run STT on the accumulated audio,
     /// forward to the agent, and stream TTS audio back.
     AudioStreamEnd,
+    /// Pull channel data. `op` ∈ "list" | "events". For "events", `channel_id`
+    /// is required and `since_seq` (inclusive) enables catch-up. Authenticated
+    /// by the paired connection (like the audio frames).
+    ChannelQuery {
+        op: String,
+        #[serde(default)]
+        channel_id: Option<String>,
+        #[serde(default)]
+        since_seq: Option<u64>,
+    },
 }
 
 /// Frames the Mac endpoint sends back to the phone.
@@ -73,4 +83,29 @@ pub enum ServerFrame {
         sample_rate: u32,
         done: bool,
     },
+    /// Response to a `ChannelQuery`. `op` echoes the request; `payload` is a
+    /// JSON array (channel summaries for "list", events for "events").
+    ChannelData { op: String, payload: serde_json::Value },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_query_and_data_frames_round_trip() {
+        let q = ClientFrame::ChannelQuery {
+            op: "events".into(),
+            channel_id: Some("c1".into()),
+            since_seq: Some(3),
+        };
+        let s = serde_json::to_string(&q).unwrap();
+        assert!(s.contains("\"type\":\"channel_query\""));
+        let back: ClientFrame = serde_json::from_str(&s).unwrap();
+        matches!(back, ClientFrame::ChannelQuery { .. });
+
+        let d = ServerFrame::ChannelData { op: "list".into(), payload: serde_json::json!([]) };
+        let s2 = serde_json::to_string(&d).unwrap();
+        assert!(s2.contains("\"type\":\"channel_data\""));
+    }
 }
