@@ -20,6 +20,23 @@ struct DelegationPayload<'a> {
     parent_channel_id: &'a str,
 }
 
+/// Build the canonical `Delegation` event payload (single-sourced schema). Used
+/// by [`ChannelService::append_delegation`] and by writers that want to SIGN the
+/// delegation event via `append_signed` (v3d) without duplicating the shape.
+/// Infallible: serializing a `&str`-only struct cannot fail.
+pub fn delegation_payload(
+    parent_channel_id: &str,
+    target_agent: &str,
+    child_task_id: &str,
+) -> serde_json::Value {
+    serde_json::to_value(DelegationPayload {
+        target_agent,
+        child_task_id,
+        parent_channel_id,
+    })
+    .expect("DelegationPayload serializes")
+}
+
 /// The single API both the CLI and the Hub call. Keeps the log + the index in
 /// sync on every mutation.
 fn state_str(s: ChannelState) -> &'static str {
@@ -199,11 +216,7 @@ impl ChannelService {
         child_task_id: &str,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
-        let payload = serde_json::to_value(DelegationPayload {
-            target_agent,
-            child_task_id,
-            parent_channel_id: channel_id,
-        })?;
+        let payload = delegation_payload(channel_id, target_agent, child_task_id);
         self.append(
             channel_id,
             ChannelActor::System,

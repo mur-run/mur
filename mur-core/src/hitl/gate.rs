@@ -18,6 +18,7 @@ use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, ChannelState, EventKind};
 use mur_common::hitl::{HitlMode, HitlRequest, HitlResponse, RiskTier, default_mode};
 
+use crate::channel_writer::ROUTER_AGENT;
 use crate::hitl::pin::action_hash;
 
 /// What the caller wants to do. `tool_input` must be POST-substitution.
@@ -88,10 +89,15 @@ pub async fn gate(
                 summary: req.summary.clone(),
             };
             // Open, write, drop — never cross an await with the service open.
+            // The router ("mur") signs the events it writes (v3d) so a reader
+            // can verify authority; falls back to unsigned when no identity.
             {
                 let svc = ChannelService::open(mur_home)?;
-                svc.append(
+                crate::channel_writer::append_as_writer(
+                    &svc,
+                    mur_home,
                     channel_id,
+                    ROUTER_AGENT,
                     ChannelActor::System,
                     EventKind::HitlRequest,
                     serde_json::to_value(&request)?,
@@ -114,8 +120,11 @@ pub async fn gate(
                 };
                 {
                     let svc = ChannelService::open(mur_home)?;
-                    svc.append(
+                    crate::channel_writer::append_as_writer(
+                        &svc,
+                        mur_home,
                         channel_id,
+                        ROUTER_AGENT,
                         ChannelActor::System,
                         EventKind::HitlResponse,
                         serde_json::to_value(&resp)?,
@@ -150,15 +159,55 @@ async fn wait_for_response(
     expected_hash: &str,
     timeout: Duration,
 ) -> Result<GateDecision> {
+    // When set, an unsigned (or absent-pubkey) HitlResponse is NOT trusted
+    // (fail-closed). When unset, an unsigned response is still accepted so
+    // pre-v3d channels keep working (migration-safe).
+    let require = std::env::var("MUR_CHANNEL_REQUIRE_SIG").is_ok();
+    let writer_pubkey =
+        mur_channel::sign::resolve_writer_pubkey(&mur_home.join("agents").join(ROUTER_AGENT), None);
     let start = Instant::now();
     loop {
-        // Open, read, drop — then await the sleep.
+        // Open, read, drop — then await the sleep. Verify each candidate's
+        // signature against the router's writer pubkey BEFORE trusting it: a
+        // forged/unsigned-when-required HitlResponse is ignored (filtered out)
+        // so it can never release the gate — the loop keeps waiting.
         let found = {
             let svc = ChannelService::open(mur_home)?;
             let evs = svc.load_events(channel_id)?;
             evs.into_iter().rev().find(|e| {
-                e.kind == EventKind::HitlResponse
-                    && e.payload.get("hitl_id").and_then(|v| v.as_str()) == Some(hitl_id)
+                if e.kind != EventKind::HitlResponse
+                    || e.payload.get("hitl_id").and_then(|v| v.as_str()) != Some(hitl_id)
+                {
+                    return false;
+                }
+                // Resolve the pubkey for THIS event's key_version; fall back to
+                // the head pubkey resolved once above.
+                let pk = mur_channel::sign::resolve_writer_pubkey(
+                    &mur_home.join("agents").join(ROUTER_AGENT),
+                    e.key_version,
+                )
+                .or(writer_pubkey);
+                match pk {
+                    Some(pk) if !mur_channel::sign::verify_one(channel_id, e, &pk, require) => {
+                        tracing::warn!(
+                            channel_id,
+                            hitl_id,
+                            "HitlResponse failed signature verification — ignoring"
+                        );
+                        false
+                    }
+                    // No pubkey to verify against (no router identity on disk):
+                    // only fail-closed when sigs are required.
+                    None if require => {
+                        tracing::warn!(
+                            channel_id,
+                            hitl_id,
+                            "no router pubkey and MUR_CHANNEL_REQUIRE_SIG set — ignoring HitlResponse"
+                        );
+                        false
+                    }
+                    _ => true,
+                }
             })
         };
         if let Some(resp) = found {
@@ -290,5 +339,136 @@ mod tests {
         assert!(!d.allow, "mismatched action_hash must fail-closed");
         assert!(d.reason.contains("drift"));
         let _ = r;
+    }
+
+    use mur_common::identity::AgentIdentity;
+
+    /// Plant a router identity at `<home>/agents/mur/` and return it.
+    fn plant_router_identity(home: &Path) -> AgentIdentity {
+        let agent_home = home.join("agents").join(ROUTER_AGENT);
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let id = AgentIdentity::generate();
+        id.save(&agent_home).unwrap();
+        id
+    }
+
+    fn resp_with_hash(hitl_id: &str, hash: &str) -> HitlResponse {
+        HitlResponse {
+            hitl_id: hitl_id.into(),
+            action_hash: hash.into(),
+            allow: true,
+            reason: "".into(),
+            surface: "cli".into(),
+        }
+    }
+
+    /// A correctly-signed HitlResponse from the router releases the gate.
+    #[tokio::test]
+    async fn router_signed_response_releases() {
+        let tmp = TempDir::new().unwrap();
+        let id = plant_router_identity(tmp.path());
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        let resp = resp_with_hash("h-ok", "EXPECTED");
+        svc.append_signed(
+            &ch.id,
+            &id,
+            0,
+            ChannelActor::System,
+            EventKind::HitlResponse,
+            serde_json::to_value(&resp).unwrap(),
+            None,
+        )
+        .unwrap();
+        drop(svc);
+        let d = wait_for_response(
+            tmp.path(),
+            &ch.id,
+            "h-ok",
+            "EXPECTED",
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert!(
+            d.allow,
+            "router-signed response with matching hash releases"
+        );
+    }
+
+    /// A response signed by a NON-router (attacker) key must NOT release the
+    /// gate — a present-but-invalid signature is always rejected, regardless of
+    /// `MUR_CHANNEL_REQUIRE_SIG`.
+    #[tokio::test]
+    async fn forged_signature_does_not_release() {
+        let tmp = TempDir::new().unwrap();
+        let _router = plant_router_identity(tmp.path());
+        let attacker = AgentIdentity::generate();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        let resp = resp_with_hash("h-forge", "EXPECTED");
+        // Signed by the attacker, not the router → verify_one rejects it.
+        svc.append_signed(
+            &ch.id,
+            &attacker,
+            0,
+            ChannelActor::System,
+            EventKind::HitlResponse,
+            serde_json::to_value(&resp).unwrap(),
+            None,
+        )
+        .unwrap();
+        drop(svc);
+        let d = wait_for_response(
+            tmp.path(),
+            &ch.id,
+            "h-forge",
+            "EXPECTED",
+            std::time::Duration::from_millis(900),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !d.allow,
+            "a forged (wrong-key) signature must never release the gate"
+        );
+        assert!(d.reason.contains("timeout"), "ignored → waits → times out");
+    }
+
+    /// With `MUR_CHANNEL_REQUIRE_SIG` set, an UNSIGNED response is ignored
+    /// (fail-closed) even though `allow:true` — it cannot release the gate.
+    #[tokio::test]
+    async fn unsigned_when_required_does_not_release() {
+        // SAFETY: env is process-global; nextest runs each test in its own
+        // process. Set then clear to avoid leaking into a shared-process runner.
+        unsafe { std::env::set_var("MUR_CHANNEL_REQUIRE_SIG", "1") };
+        let tmp = TempDir::new().unwrap();
+        let _router = plant_router_identity(tmp.path());
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        let resp = resp_with_hash("h-unsigned", "EXPECTED");
+        svc.append(
+            &ch.id,
+            ChannelActor::System,
+            EventKind::HitlResponse,
+            serde_json::to_value(&resp).unwrap(),
+            None,
+        )
+        .unwrap();
+        drop(svc);
+        let d = wait_for_response(
+            tmp.path(),
+            &ch.id,
+            "h-unsigned",
+            "EXPECTED",
+            std::time::Duration::from_millis(900),
+        )
+        .await
+        .unwrap();
+        unsafe { std::env::remove_var("MUR_CHANNEL_REQUIRE_SIG") };
+        assert!(
+            !d.allow,
+            "unsigned response must not release when MUR_CHANNEL_REQUIRE_SIG is set"
+        );
     }
 }
