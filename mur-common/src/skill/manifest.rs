@@ -267,6 +267,11 @@ pub struct ProcedureStep {
     /// Ignored when the executor runs without a channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegate_to: Option<String>,
+
+    /// Risk tier for this step (v3c). When set on a command/delegate step run
+    /// over a channel, the executor gates it via `hitl::gate` per tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<crate::hitl::RiskTier>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
