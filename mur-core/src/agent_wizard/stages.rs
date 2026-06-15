@@ -12,6 +12,12 @@ pub trait WizardHooks {
     }
 }
 
+/// Public wrapper around the private stub generator — used by `build_wizard_draft` when a
+/// single-skill LLM authoring call fails and needs a per-skill deterministic fallback.
+pub fn stub_skill_yaml_public(topic: &str, role: &RoleSpec) -> String {
+    stub_skill_yaml(topic, role)
+}
+
 fn stub_skill_yaml(topic: &str, role: &RoleSpec) -> String {
     let name = &role.name;
     let dn = &role.display_name;

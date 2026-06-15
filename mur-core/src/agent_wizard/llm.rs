@@ -51,6 +51,8 @@ keyword regex + a /command), and content with `abstract` and `context`. The `con
 }
 
 /// Author one skill per topic via the LLM, validating each; one repair retry on invalid YAML.
+/// Kept as a thin convenience loop over [`author_one_skill`] for callers that want batch semantics.
+#[allow(dead_code)]
 pub async fn author_skills_llm(
     llm: &dyn WizardLlm,
     role: &RoleSpec,
@@ -70,21 +72,47 @@ pub async fn author_skills_llm(
 }
 
 /// Call the model, strip stray fences, and validate; on invalid, ask once to fix.
+/// Returns `Err` if the repair attempt is still invalid.
 async fn author_one(llm: &dyn WizardLlm, prompt: &str) -> Result<String, LlmError> {
     let sys = "You are an expert author of MUR agent skills. Output only valid YAML.";
     let raw = strip_fences(&llm.complete(prompt, Some(sys)).await?);
-    let valid = mur_common::skill::parse_canonical(&raw)
-        .map_err(|e| LlmError::Other(e.to_string()))
-        .and_then(|m| mur_common::skill::validate(&m).map_err(|e| LlmError::Other(e.to_string())))
-        .is_ok();
-    if valid {
+    if validate_skill_yaml(&raw).is_ok() {
         return Ok(raw);
     }
     let fix = format!(
         "The YAML you produced was not a valid MUR skill. Fix it and output ONLY corrected YAML.\n\
 Previous output:\n{raw}"
     );
-    Ok(strip_fences(&llm.complete(&fix, Some(sys)).await?))
+    let repaired = strip_fences(&llm.complete(&fix, Some(sys)).await?);
+    validate_skill_yaml(&repaired)?;
+    Ok(repaired)
+}
+
+/// Validate that `yaml` parses and passes the canonical skill schema.
+fn validate_skill_yaml(yaml: &str) -> Result<(), LlmError> {
+    mur_common::skill::parse_canonical(yaml)
+        .map_err(|e| LlmError::Other(e.to_string()))
+        .and_then(|m| mur_common::skill::validate(&m).map_err(|e| LlmError::Other(e.to_string())))
+        .map(|_| ())
+}
+
+/// Author exactly one skill topic via the LLM.
+///
+/// Callers that want per-skill fallback should call this in a loop and fall back
+/// to a stub on `Err` rather than calling [`author_skills_llm`] which aborts all
+/// remaining topics on the first failure.
+pub async fn author_one_skill(
+    llm: &dyn WizardLlm,
+    role: &RoleSpec,
+    topic: &str,
+    notes: &[ResearchNote],
+) -> Result<SkillDraft, LlmError> {
+    let prompt = skill_prompt(role, topic, notes);
+    let yaml = author_one(llm, &prompt).await?;
+    Ok(SkillDraft {
+        name: topic.to_string(),
+        yaml,
+    })
 }
 
 /// Draft a DoD system prompt for the role via the LLM. The result must carry the
@@ -204,5 +232,27 @@ content:\n  abstract: A test abstract.\n  context: |\n    # {name}\n    - Do the
         let llm = MockLlm(body.to_string());
         let md = draft_prompt_llm(&llm, &role()).await.unwrap();
         assert!(md.to_lowercase().contains("never fabricate"));
+    }
+
+    #[tokio::test]
+    async fn author_one_errors_when_repair_still_invalid() {
+        // LLM always returns garbage YAML — both initial and repair attempts fail validation.
+        let llm = MockLlm("not: valid: yaml: !!".to_string());
+        let prompt = skill_prompt(&role(), "bad-topic", &[]);
+        let result = author_one(&llm, &prompt).await;
+        assert!(
+            result.is_err(),
+            "expected Err when repair is still invalid, got Ok"
+        );
+    }
+
+    #[tokio::test]
+    async fn author_one_skill_returns_skill_draft_on_success() {
+        let llm = MockLlm(format!("```yaml\n{}\n```", valid_yaml("my-skill")));
+        let result = author_one_skill(&llm, &role(), "my-skill", &[]).await;
+        assert!(result.is_ok());
+        let skill = result.unwrap();
+        assert_eq!(skill.name, "my-skill");
+        assert!(skill.yaml.starts_with("name: my-skill"));
     }
 }

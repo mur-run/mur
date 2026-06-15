@@ -1,5 +1,9 @@
 //! Agent Wizard engine: builds a specialized agent from a role, with a human
 //! review gate before anything is written. Drivers (CLI, Hub) share this engine.
+
+/// Default model-ref used by the wizard when the caller does not supply `--model-ref`.
+pub const DEFAULT_MODEL_REF: &str = "claude_sonnet";
+
 pub mod apply;
 pub mod catalog;
 pub mod draft;
@@ -14,7 +18,9 @@ use crate::agent_wizard::catalog::RoleManifest;
 use crate::agent_wizard::draft::{PromptDraft, RoleSpec, WizardDraft};
 use crate::agent_wizard::llm::WizardLlm;
 use crate::agent_wizard::research::{ResearchNote, SearchProvider};
-use crate::agent_wizard::stages::{WizardHooks, build_draft, template_prompt};
+use crate::agent_wizard::stages::{
+    WizardHooks, build_draft, stub_skill_yaml_public, template_prompt,
+};
 use std::sync::Arc;
 
 /// Assemble the draft (stages 1-5). Uses the LLM for skills+prompt when present,
@@ -44,18 +50,24 @@ pub async fn build_wizard_draft(
         message: format!("role {}", role.name),
     });
 
-    let skills =
-        match llm::author_skills_llm(llm.as_ref(), &role, &manifest.skill_topics, notes).await {
-            Ok(s) => s,
+    // Author skills one at a time so a single bad topic falls back to a stub without
+    // aborting the rest of the batch.
+    let mut skills = Vec::new();
+    for topic in &manifest.skill_topics {
+        match llm::author_one_skill(llm.as_ref(), &role, topic, notes).await {
+            Ok(s) => skills.push(s),
             Err(e) => {
-                // Graceful: fall back to stubs on LLM failure, flagged via progress.
                 hooks.on_progress(&Progress {
                     stage: Stage::AuthorSkills,
-                    message: format!("LLM failed ({e}); using stubs"),
+                    message: format!("{topic}: LLM invalid ({e}); using stub"),
                 });
-                return build_draft(manifest, workspace, model_ref, hooks);
+                skills.push(crate::agent_wizard::draft::SkillDraft {
+                    name: topic.clone(),
+                    yaml: stub_skill_yaml_public(topic, &role),
+                });
             }
-        };
+        }
+    }
     hooks.on_progress(&Progress {
         stage: Stage::AuthorSkills,
         message: format!("{} skills", skills.len()),
@@ -109,9 +121,16 @@ pub async fn run_wizard(
                 risk: manifest.risk,
                 preset_id: Some(manifest.id.clone()),
             };
-            s.research(&role, &manifest.skill_topics)
-                .await
-                .unwrap_or_default()
+            match s.research(&role, &manifest.skill_topics).await {
+                Ok(n) => n,
+                Err(e) => {
+                    hooks.on_progress(&Progress {
+                        stage: Stage::Research,
+                        message: format!("research failed ({e}); proceeding without notes"),
+                    });
+                    Vec::new()
+                }
+            }
         }
         _ => Vec::new(),
     };
@@ -174,11 +193,28 @@ mod tests {
     }
 
     fn skill_yaml() -> String {
-        "name: product-spec\nversion: 1.0.0\npublisher: human:pm\n\
-description: Spec skill used when writing specs in the repo.\ncategory: context\n\
-hosts: [mur-agent]\npriority: normal\ntags: [pm]\ntriggers:\n  - type: session_start\n\
-  - type: command\n    pattern: /product-spec\ncontent:\n  abstract: A.\n  context: |\n    # x\n    - Do. *Why: y.*\n"
-            .into()
+        // Use concat! to avoid `\` line-continuation stripping the indentation
+        // of the second trigger entry.
+        concat!(
+            "name: product-spec\n",
+            "version: 1.0.0\n",
+            "publisher: human:pm\n",
+            "description: Spec skill used when writing specs in the repo.\n",
+            "category: context\n",
+            "hosts: [mur-agent]\n",
+            "priority: normal\n",
+            "tags: [pm]\n",
+            "triggers:\n",
+            "  - type: session_start\n",
+            "  - type: command\n",
+            "    pattern: /product-spec\n",
+            "content:\n",
+            "  abstract: A.\n",
+            "  context: |\n",
+            "    # x\n",
+            "    - Do. *Why: y.*\n",
+        )
+        .into()
     }
 
     #[tokio::test]

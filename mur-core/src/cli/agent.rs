@@ -332,6 +332,9 @@ pub enum AgentAction {
         /// Skip all LLM stages; use catalog stubs/templates only.
         #[arg(long = "no-llm")]
         no_llm: bool,
+        /// Model-ref to embed in the agent profile (e.g. claude_sonnet, claude_opus).
+        #[arg(long = "model-ref", default_value = crate::agent_wizard::DEFAULT_MODEL_REF)]
+        model_ref: String,
     },
 }
 
