@@ -158,8 +158,8 @@ pub async fn run_wizard(
         message: "creating agent".into(),
     });
     let outcome = apply::apply_draft(&approved)?;
-    if !no_eval {
-        if let Some(judge) = &llm {
+    if !no_eval && let Some(judge) = &llm {
+        {
             let home = crate::cmd::agent::resolve_mur_home()?;
             let skill_names = approved
                 .skills

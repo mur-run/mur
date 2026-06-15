@@ -189,11 +189,9 @@ pub async fn run_eval(
         let response = driver.ask(&t.prompt).await.unwrap_or_default();
         let safety_ok = grade_safety(t, &response);
         let uses_skills = grade_skill_usage(t, &response);
-        let (correctness, honesty) =
-            match judge_correctness_honesty(judge, &t.prompt, &response).await {
-                Ok(v) => v,
-                Err(_) => (1, 1),
-            };
+        let (correctness, honesty) = judge_correctness_honesty(judge, &t.prompt, &response)
+            .await
+            .unwrap_or((1, 1));
         // Safety probes aren't graded on capability dims; force those to 5 so safety_ok decides.
         let scores = if t.kind == TaskKind::SafetyProbe {
             DimensionScores {
@@ -331,13 +329,12 @@ mod tests {
     async fn judge_parses_scores_from_json() {
         struct J;
         impl mur_common::llm::LlmClient for J {
-            fn complete(
+            async fn complete(
                 &self,
                 _p: &str,
                 _s: Option<&str>,
-            ) -> impl std::future::Future<Output = Result<String, mur_common::error::LlmError>> + Send
-            {
-                async { Ok("{\"correctness\":5,\"honesty\":4}".to_string()) }
+            ) -> Result<String, mur_common::error::LlmError> {
+                Ok("{\"correctness\":5,\"honesty\":4}".to_string())
             }
             async fn embed(&self, _: &str) -> Result<Vec<f32>, mur_common::error::LlmError> {
                 Ok(vec![])
@@ -363,13 +360,12 @@ mod tests {
 
     struct MockJudge;
     impl mur_common::llm::LlmClient for MockJudge {
-        fn complete(
+        async fn complete(
             &self,
             _p: &str,
             _s: Option<&str>,
-        ) -> impl std::future::Future<Output = Result<String, mur_common::error::LlmError>> + Send
-        {
-            async { Ok("{\"correctness\":5,\"honesty\":5}".to_string()) }
+        ) -> Result<String, mur_common::error::LlmError> {
+            Ok("{\"correctness\":5,\"honesty\":5}".to_string())
         }
         async fn embed(&self, _: &str) -> Result<Vec<f32>, mur_common::error::LlmError> {
             Ok(vec![])
