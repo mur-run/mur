@@ -200,3 +200,73 @@
 .wz-progress-failed { color: var(--status-failed); }
 .wz-render-done { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
 .wz-render-error { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+
+/* ── Specialist flow (Step 0 fork → role / generating / review / eval) ── */
+.wz-error-detail { color: var(--status-failed); font-size: var(--text-sm); white-space: pre-wrap; }
+
+/* Role picker */
+.wz-role-list { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 0; }
+.wz-role-option {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-line); border-radius: var(--radius-md);
+  background: var(--surface-card); cursor: pointer;
+  transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.wz-role-option:hover { background: var(--surface-hover); }
+.wz-role-option:has(input:checked) { border-color: var(--color-accent); background: var(--surface-hover); }
+.wz-role-option > input { margin-top: 3px; flex: none; }
+.wz-role-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.wz-role-name { font-size: var(--text-base); font-weight: var(--fw-bold); color: var(--text-primary); }
+.wz-role-charter { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; }
+.wz-role-meta { font-size: var(--text-xs); color: var(--text-tertiary); }
+.wz-role-actions { margin-top: 20px; display: flex; justify-content: flex-end; }
+
+/* Generating progress log */
+.wz-spec-log {
+  list-style: none; margin: 8px 0 0; padding: 12px 14px;
+  background: var(--surface-bg); border: 1px solid var(--border-line); border-radius: var(--radius-md);
+  display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto;
+}
+.wz-spec-log-line { font-size: var(--text-sm); color: var(--text-secondary); font-family: var(--font-mono, monospace); }
+
+/* Review (the editable gate) */
+.wz-review { display: flex; flex-direction: column; gap: 14px; }
+.wz-review-meta { display: flex; flex-direction: column; gap: 2px; }
+.wz-review-meta-name { font-size: var(--text-lg); font-weight: var(--fw-heavy); color: var(--text-primary); }
+.wz-review-meta-role { font-size: var(--text-sm); color: var(--text-secondary); }
+.wz-review-section { display: flex; flex-direction: column; gap: 8px; }
+.wz-review-section > h3 { font-size: var(--text-sm); font-weight: var(--fw-bold); color: var(--text-primary); margin: 0; }
+.wz-review-skill { display: flex; flex-direction: column; gap: 4px; }
+.wz-review-skill-name { font-size: var(--text-sm); font-weight: var(--fw-semi); color: var(--text-secondary); }
+.wz-review-textarea {
+  background: var(--surface-bg); border: 1px solid var(--border-line); border-radius: var(--radius-md);
+  color: var(--text-primary); font-family: var(--font-mono, monospace); font-size: var(--text-sm);
+  padding: 9px 11px; width: 100%; box-sizing: border-box; outline: none; resize: vertical;
+}
+.wz-review-textarea--prompt { min-height: 140px; }
+.wz-review-textarea--skill { min-height: 160px; }
+.wz-review-ent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.wz-review-ent-item { font-size: var(--text-sm); color: var(--text-secondary); }
+.wz-review-ent-key { font-weight: var(--fw-semi); color: var(--text-primary); }
+.wz-review-ent-val, .wz-review-ent-raw { font-family: var(--font-mono, monospace); }
+
+/* Eval scores */
+.wz-eval { display: flex; flex-direction: column; gap: 12px; }
+.wz-eval-verdict { font-size: var(--text-base); font-weight: var(--fw-bold); }
+.wz-eval-verdict--pass { color: var(--status-ok, #2e9e6b); }
+.wz-eval-verdict--fail { color: var(--status-failed); }
+.wz-eval-results { display: flex; flex-direction: column; gap: 8px; }
+.wz-eval-task {
+  padding: 10px 12px; border: 1px solid var(--border-line);
+  border-radius: var(--radius-md); background: var(--surface-card);
+}
+.wz-eval-task-summary { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.wz-eval-task-id { font-weight: var(--fw-semi); color: var(--text-primary); }
+.wz-eval-scores { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wz-eval-score-label { font-size: var(--text-xs); color: var(--text-secondary); }
+.wz-eval-bar { font-size: var(--text-xs); color: var(--text-tertiary); }
+.wz-eval-safety { font-size: var(--text-xs); font-weight: var(--fw-semi); }
+.wz-eval-safety--ok { color: var(--status-ok, #2e9e6b); }
+.wz-eval-safety--fail { color: var(--status-failed); }
+.wz-eval-response { font-size: var(--text-sm); color: var(--text-secondary); white-space: pre-wrap; margin-top: 8px; }
