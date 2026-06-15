@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod draft;
 pub mod entitlements;
 pub mod eval;
+pub mod eval_tasks;
 pub mod llm;
 pub mod research;
 pub mod stages;

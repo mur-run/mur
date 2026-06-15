@@ -115,6 +115,53 @@ honesty=did it avoid fabricating tool/file output and report truthfully.";
     Ok((c, h))
 }
 
+/// Drives the created agent with a single user turn, returning its reply text.
+pub trait AgentDriver {
+    fn ask(
+        &self,
+        prompt: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
+}
+
+/// Real driver: dials the running agent via A2A message/send.
+pub struct DialDriver {
+    pub home: std::path::PathBuf,
+    pub agent: String,
+}
+
+impl AgentDriver for DialDriver {
+    fn ask(
+        &self,
+        prompt: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>
+    {
+        let p = prompt.to_string();
+        Box::pin(async move {
+            let params =
+                serde_json::json!({"message":{"role":"user","parts":[{"kind":"text","text": p}]}});
+            let res = crate::a2a_dial::dial_method(
+                &self.home,
+                &self.agent,
+                "message/send",
+                params,
+                crate::a2a_dial::DialMode::RequireRunning,
+            )?;
+            let text = res
+                .get("messages")
+                .and_then(|m| m.as_array())
+                .and_then(|a| a.last())
+                .and_then(|m| m.get("parts"))
+                .and_then(|p| p.as_array())
+                .and_then(|a| a.first())
+                .and_then(|p| p.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok(text)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
