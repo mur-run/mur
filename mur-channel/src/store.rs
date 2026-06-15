@@ -97,6 +97,20 @@ impl ChannelStore {
             .with_context(|| format!("open {}", lock_path.display()))?;
         lock.lock_exclusive().context("lock channel events")?;
 
+        // Dedup: if this idempotency_key already exists in the log, return the
+        // prior event unchanged (exactly-once for crash-reruns; v3c). Done under
+        // the lock so a concurrent writer can't slip a duplicate in between.
+        if let Some(key) = idempotency_key.as_deref() {
+            if let Some(existing) = self
+                .load_events(id)?
+                .into_iter()
+                .find(|e| e.idempotency_key.as_deref() == Some(key))
+            {
+                FileExt::unlock(&lock).ok();
+                return Ok(existing);
+            }
+        }
+
         // Compute next seq from the existing (unlocked) log, held under the lock.
         let next_seq = self.load_events(id)?.last().map(|e| e.seq + 1).unwrap_or(0);
 
@@ -200,6 +214,31 @@ mod tests {
         let all = store.load_events("c1").unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[1].payload["text"], "yo");
+    }
+
+    #[test]
+    fn append_dedups_on_idempotency_key() {
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        store.create(&sample_channel("c1")).unwrap();
+        let e0 = store
+            .append_event("c1", ChannelActor::System, EventKind::ToolResult,
+                serde_json::json!({"x":1}), Some("k1".into()))
+            .unwrap();
+        // Same key again → returns the EXISTING event, does not append a 2nd row.
+        let e0b = store
+            .append_event("c1", ChannelActor::System, EventKind::ToolResult,
+                serde_json::json!({"x":2}), Some("k1".into()))
+            .unwrap();
+        assert_eq!(e0.seq, e0b.seq, "same idempotency_key → same event");
+        assert_eq!(e0b.payload["x"], 1, "first write wins; second is ignored");
+        assert_eq!(store.load_events("c1").unwrap().len(), 1, "no duplicate row");
+        // A None key never dedups.
+        store.append_event("c1", ChannelActor::System, EventKind::Note,
+            serde_json::json!({}), None).unwrap();
+        store.append_event("c1", ChannelActor::System, EventKind::Note,
+            serde_json::json!({}), None).unwrap();
+        assert_eq!(store.load_events("c1").unwrap().len(), 3);
     }
 
     #[test]
