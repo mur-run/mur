@@ -69,7 +69,7 @@ impl ChannelIndex {
     /// Newest-first channel list (the Hub left-rail / CLI "my work" inbox).
     pub fn list(&self, limit: usize) -> Result<Vec<ChannelRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id,title,state,updated_at FROM channels ORDER BY updated_at DESC LIMIT ?1",
+            "SELECT id,title,state,updated_at FROM channels ORDER BY updated_at DESC, rowid DESC LIMIT ?1",
         )?;
         let rows = stmt
             .query_map([limit as i64], |r| {
