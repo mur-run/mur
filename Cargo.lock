@@ -6513,6 +6513,7 @@ dependencies = [
  "hostname",
  "mdns-sd",
  "mur-agent-runtime",
+ "mur-channel",
  "mur-common",
  "mur-core",
  "serde",
