@@ -69,19 +69,24 @@ pub async fn run(
             .to_string()
     });
 
-    // Build the LLM client if the user hasn't opted out. Task 5 will wire the live
-    // ChatBackendAdapter here; for now, no_llm=true is the only supported path in Plan 2
-    // (the async run_wizard is ready; live backend wiring is Task 5).
-    let llm: Option<std::sync::Arc<dyn crate::agent_wizard::llm::WizardLlm>> = if no_llm {
-        None
-    } else {
-        // Task 5: build_llm_for_stage(&mur_home, None, "agent.wizard")
-        // Until then, fall back to stub path with a warning so `mur agent wizard` still works.
-        eprintln!(
-            "warning: live LLM wiring pending (Task 5); using deterministic stubs. Pass --no-llm to silence."
-        );
-        None
-    };
+    // Build the LLM client unless the user opted out with --no-llm.
+    let llm: Option<std::sync::Arc<dyn crate::agent_wizard::llm::WizardLlm>> =
+        if no_llm {
+            None
+        } else {
+            match crate::conversations::backend::adapter::build_chat_adapter(
+                &mur_home,
+                None,
+                "agent.wizard",
+            ) {
+                Ok(a) => Some(std::sync::Arc::new(a)
+                    as std::sync::Arc<dyn crate::agent_wizard::llm::WizardLlm>),
+                Err(e) => {
+                    eprintln!("warning: no usable model ({e}); generating deterministic stubs");
+                    None
+                }
+            }
+        };
 
     let mut hooks = CliHooks { headless };
     let outcome =
