@@ -93,10 +93,10 @@ fn prompt_role_choice(catalog: &[catalog::RoleManifest]) -> anyhow::Result<Strin
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     let s = line.trim();
-    if let Ok(n) = s.parse::<usize>() {
-        if (1..=catalog.len()).contains(&n) {
-            return Ok(catalog[n - 1].id.clone());
-        }
+    if let Ok(n) = s.parse::<usize>()
+        && (1..=catalog.len()).contains(&n)
+    {
+        return Ok(catalog[n - 1].id.clone());
     }
     // Custom role: in Plan 1 (--no-llm), require it to already exist as a manifest.
     anyhow::bail!(
