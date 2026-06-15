@@ -5,6 +5,8 @@
 //! back to a one-shot ephemeral dial. Multi-turn context is threaded by passing
 //! the previous turn's task id back as `context.task_id`.
 
+use mur_channel::ChannelService;
+use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_core::a2a_dial::{DialMode, dial_message_streaming, dial_method};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -84,6 +86,16 @@ pub async fn agent_chat_send(
     registry.0.set(&name, &task_id);
     let name_clear = name.clone();
 
+    // Capture what we need to persist the exchange AFTER a successful reply,
+    // before `text`/`task_id`/`home`/`name` are moved into the dial below. We do
+    // NOT persist the user turn up front: writing both turns together, only on
+    // success, avoids orphaned user messages (on dial error / empty reply) and
+    // duplicate user turns on retry, and pins both halves to one channel.
+    let persist_home = home.clone();
+    let persist_name = name.clone();
+    let persist_user_text = text.clone();
+    let user_task_id = task_id.clone();
+
     let mut params = json!({
         "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] },
         "task_id": task_id,
@@ -161,6 +173,16 @@ pub async fn agent_chat_send(
     if reply.is_empty() {
         return Err("the agent returned no reply".into());
     }
+    // Persist the whole exchange atomically into ONE channel (best-effort).
+    // `task_id` here is the response task id; the user turn keeps its request id.
+    persist_exchange(
+        &persist_home,
+        &persist_name,
+        &persist_user_text,
+        Some(&user_task_id),
+        &reply,
+        Some(&task_id),
+    );
     Ok(ChatReply {
         reply,
         task_id,
@@ -225,6 +247,61 @@ fn extract_text(message: &Value) -> String {
         .unwrap_or_default()
 }
 
+// ─── Channel persistence ───────────────────────────────────────────────────
+
+/// Persist one user→agent exchange into the agent's channel, resolving the
+/// channel ONCE so both halves land together (never split across channels if a
+/// newer channel appears mid-turn). Best-effort: failures are logged, never
+/// surfaced to the chat. The channel is created here on the first real exchange,
+/// so a failed/empty turn writes nothing (no orphaned user message).
+fn persist_exchange(
+    home: &std::path::Path,
+    agent: &str,
+    user_text: &str,
+    user_task_id: Option<&str>,
+    agent_text: &str,
+    agent_task_id: Option<&str>,
+) {
+    let res = (|| -> anyhow::Result<()> {
+        let svc = ChannelService::open(home)?;
+        let id = match svc.latest_for_agent(agent)? {
+            Some(id) => id,
+            None => svc.create_for_agent(agent)?.id,
+        };
+        svc.append_message(
+            &id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            user_text,
+            user_task_id,
+        )?;
+        svc.append_message(
+            &id,
+            ChannelActor::Agent {
+                id: agent.to_string(),
+            },
+            EventKind::Message,
+            agent_text,
+            agent_task_id,
+        )?;
+        Ok(())
+    })();
+    if let Err(e) = res {
+        tracing::warn!("channel persist failed for {agent}: {e:#}");
+    }
+}
+
+/// Tauri command: load the agent's latest channel events for hydration.
+#[tauri::command]
+pub async fn channel_load(name: String) -> Result<Vec<ChannelEvent>, String> {
+    let home = crate::mur_home_path();
+    let svc = ChannelService::open(&home).map_err(|e| e.to_string())?;
+    let Some(id) = svc.latest_for_agent(&name).map_err(|e| e.to_string())? else {
+        return Ok(vec![]);
+    };
+    svc.load_events(&id).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +321,35 @@ mod tests {
         let reg = ChatRegistry::default();
         // No id registered for "ghost" → cancel must no-op (None lookup).
         assert_eq!(reg.get("ghost"), None);
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn persist_exchange_writes_both_turns_to_one_channel() {
+        let tmp = TempDir::new().unwrap();
+        persist_exchange(
+            tmp.path(),
+            "qa",
+            "the question",
+            Some("u-1"),
+            "the answer",
+            Some("a-1"),
+        );
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let id = svc.latest_for_agent("qa").unwrap().expect("channel");
+        let evs = svc.load_events(&id).unwrap();
+        // Both halves landed in the same channel, in order.
+        assert_eq!(evs.len(), 2);
+        assert_eq!(evs[0].payload["text"], "the question");
+        assert_eq!(evs[1].payload["text"], "the answer");
+        // A second exchange appends to the SAME channel, not a new one.
+        persist_exchange(tmp.path(), "qa", "q2", None, "a2", None);
+        assert_eq!(svc.list(10).unwrap().len(), 1);
+        assert_eq!(svc.load_events(&id).unwrap().len(), 4);
     }
 }
