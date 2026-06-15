@@ -11,9 +11,9 @@ fn cli_write_is_visible_to_a_second_reader() {
     let home = tmp.path();
 
     // CLI side writes.
-    let sess = Session::create(home, "qa").unwrap();
+    let mut sess = Session::create(home, "qa").unwrap();
     sess.append("user", "shared message", None).unwrap();
-    let cid = sess.channel_id().to_string();
+    let cid = sess.channel_id().unwrap().to_string();
 
     // Hub side reads the same on-disk store.
     let hub = ChannelService::open(home).unwrap();
@@ -33,7 +33,7 @@ fn cli_write_is_visible_to_a_second_reader() {
 fn index_is_rebuildable_from_logs() {
     let tmp = TempDir::new().unwrap();
     let home = tmp.path();
-    let sess = Session::create(home, "qa").unwrap();
+    let mut sess = Session::create(home, "qa").unwrap();
     sess.append("user", "x", None).unwrap();
 
     // Nuke the index DB.

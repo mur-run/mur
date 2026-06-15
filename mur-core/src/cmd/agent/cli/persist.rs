@@ -26,21 +26,23 @@ pub struct SessionInfo {
     pub turns: usize,
 }
 
-/// A live conversation handle bound to one channel.
+/// A live conversation handle. The backing channel is created lazily on the
+/// first append, so launching the TUI (or `/clear`) and typing nothing leaves no
+/// empty channel on disk — and `--resume` never resurfaces a blank conversation.
 pub struct Session {
     svc: ChannelService,
-    channel_id: String,
+    /// `None` until the first append creates the channel.
+    channel_id: Option<String>,
     agent: String,
 }
 
 impl Session {
-    /// Open a fresh channel for `agent`.
+    /// Prepare a fresh session. No channel is written until the first append.
     pub fn create(home: &Path, agent: &str) -> Result<Self> {
         let svc = ChannelService::open(home)?;
-        let ch = svc.create_for_agent(agent)?;
         Ok(Self {
             svc,
-            channel_id: ch.id,
+            channel_id: None,
             agent: agent.to_string(),
         })
     }
@@ -50,20 +52,21 @@ impl Session {
         let svc = ChannelService::open(home)?;
         Ok(Self {
             svc,
-            channel_id: channel_id.to_string(),
+            channel_id: Some(channel_id.to_string()),
             agent: agent.to_string(),
         })
     }
 
-    // Part of the preserved public surface; consumed by the integration test
-    // (`tests/cli_channel_persist.rs`), so it reads as dead within the bin crate.
+    // Part of the preserved public surface; consumed by the integration tests,
+    // so it reads as dead within the bin crate. `None` before the first append.
     #[allow(dead_code)]
-    pub fn channel_id(&self) -> &str {
-        &self.channel_id
+    pub fn channel_id(&self) -> Option<&str> {
+        self.channel_id.as_deref()
     }
 
-    /// Append one turn. `role` ∈ {"user","agent","shell"}.
-    pub fn append(&self, role: &str, text: &str, task_id: Option<&str>) -> Result<()> {
+    /// Append one turn, creating the channel on first write. `role` ∈
+    /// {"user","agent","shell"}.
+    pub fn append(&mut self, role: &str, text: &str, task_id: Option<&str>) -> Result<()> {
         let (actor, kind) = match role {
             "agent" => (
                 ChannelActor::Agent {
@@ -74,8 +77,15 @@ impl Session {
             "shell" => (ChannelActor::System, EventKind::Note),
             _ => (ChannelActor::local_human(), EventKind::Message),
         };
-        self.svc
-            .append_message(&self.channel_id, actor, kind, text, task_id)?;
+        let id = match &self.channel_id {
+            Some(id) => id.clone(),
+            None => {
+                let ch = self.svc.create_for_agent(&self.agent)?;
+                self.channel_id = Some(ch.id.clone());
+                ch.id
+            }
+        };
+        self.svc.append_message(&id, actor, kind, text, task_id)?;
         Ok(())
     }
 }
@@ -134,6 +144,11 @@ pub fn list_recent(home: &Path, agent: &str, limit: usize) -> Result<Vec<Session
             continue;
         }
         let evs = svc.load_events(&row.id)?;
+        // Skip empty channels (e.g. legacy stubs from before lazy creation) so
+        // `--resume`/`/sessions` never surface a blank conversation.
+        if evs.is_empty() {
+            continue;
+        }
         let preview = evs
             .iter()
             .find(|e| matches!(e.actor, ChannelActor::Human { .. }))
