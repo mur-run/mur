@@ -318,6 +318,21 @@ pub enum AgentAction {
         #[command(subcommand)]
         action: AgentTrashAction,
     },
+    /// Build a specialized agent: role -> drafts -> human review -> create + start.
+    Wizard {
+        /// Role preset id from the catalog, or omit for interactive selection / custom.
+        #[arg(long)]
+        role: Option<String>,
+        /// Path the agent may read/write (defaults to current dir).
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Non-interactive: accept generated drafts without the editor gate (still prints them).
+        #[arg(long)]
+        headless: bool,
+        /// Skip all LLM stages; use catalog stubs/templates only.
+        #[arg(long = "no-llm")]
+        no_llm: bool,
+    },
 }
 
 #[derive(Subcommand)]

@@ -1370,6 +1370,14 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentQueueAction::Cancel { id } => cmd::agent::cmd_queue_cancel(&name, &id)?,
             AgentQueueAction::Retry { id } => cmd::agent::cmd_queue_retry(&name, &id)?,
         },
+        AgentAction::Wizard {
+            role,
+            workspace,
+            headless,
+            no_llm,
+        } => {
+            cmd::agent::wizard::run(role, workspace, headless, no_llm)?;
+        }
     }
     Ok(())
 }
