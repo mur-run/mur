@@ -12,6 +12,8 @@ import { Step6Render } from "./steps/Step6Render";
 import { SpecRole } from "./steps/spec/SpecRole";
 import { SpecGenerating } from "./steps/spec/SpecGenerating";
 import type { SpecDraftDto } from "./steps/spec/SpecGenerating";
+import { SpecReview } from "./steps/spec/SpecReview";
+import { SpecEval } from "./steps/spec/SpecEval";
 import { specReducer, SPEC_FLOW_INITIAL } from "./specFlow";
 
 interface Props {
@@ -38,6 +40,7 @@ export function WizardModal({ isOpen, onClose }: Props) {
   const [specRoleId, setSpecRoleId] = useState<string | null>(null);
   const [specNoLlm, setSpecNoLlm] = useState(false);
   const [specDraft, setSpecDraft] = useState<SpecDraftDto | null>(null);
+  const [specCreatedName, setSpecCreatedName] = useState<string | null>(null);
 
   // Reset the kind-fork state every time the modal opens.
   useEffect(() => {
@@ -46,6 +49,7 @@ export function WizardModal({ isOpen, onClose }: Props) {
       setSpecRoleId(null);
       setSpecNoLlm(false);
       setSpecDraft(null);
+      setSpecCreatedName(null);
     }
   }, [isOpen]);
 
@@ -228,9 +232,27 @@ export function WizardModal({ isOpen, onClose }: Props) {
             />
           )}
 
-          {/* ── Specialist flow — Review + Eval (T6, placeholder until next task) ── */}
-          {(specFlow.step === "review" || specFlow.step === "eval") && specDraft && (
-            <div className="wz-loading">{t("wizard.loading")}</div>
+          {/* ── Specialist flow — Review (T6): editable gate ── */}
+          {specFlow.step === "review" && specDraft && (
+            <SpecReview
+              draft={specDraft}
+              onCreated={(name) => {
+                setSpecCreatedName(name);
+                dispatchSpec({ type: "NEXT" });
+              }}
+            />
+          )}
+
+          {/* ── Specialist flow — Eval (T6): results display ── */}
+          {specFlow.step === "eval" && specCreatedName && (
+            <SpecEval
+              agentName={specCreatedName}
+              onDone={(name) => {
+                setSnapshot(null);
+                setDisplayStep(1);
+                onClose(name);
+              }}
+            />
           )}
         </div>
 
