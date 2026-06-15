@@ -107,6 +107,8 @@ impl ChannelStore {
             kind,
             payload,
             idempotency_key,
+            sig: None,
+            key_version: None,
         };
         let line = serde_json::to_string(&ev).context("serialize event")?;
         let mut data = OpenOptions::new()

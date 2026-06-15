@@ -181,6 +181,12 @@ pub enum WorkflowAction {
         /// Auto-approve all `needs_approval` steps
         #[arg(long)]
         yes: bool,
+        /// Record execution as events on an existing channel ID
+        #[arg(long, value_name = "CHANNEL_ID")]
+        channel: Option<String>,
+        /// Create a new channel and record execution on it
+        #[arg(long, conflicts_with = "channel")]
+        channel_new: bool,
     },
     /// Show workflow composition suggestions and pending nudges
     Suggest {

@@ -15,6 +15,8 @@ use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::Result;
+use mur_channel::ChannelService;
+use mur_common::channel::{ChannelActor, ChannelState};
 use mur_common::pipeline::{PipelineOutput, PipelineStatus, inject_input};
 use mur_common::skill::event_log::{RunRecord, record_run};
 use mur_common::skill::manifest::{FailureAction, Procedure, ProcedureStep};
@@ -34,6 +36,9 @@ pub struct DagExecOptions<'a> {
     pub device_id: String,
     /// Human-readable trigger source: "manual" | "schedule" | "agent".
     pub trigger: &'a str,
+    /// Channel the executor runs OVER — events are appended to
+    /// `~/.mur/channels/<id>/` as the workflow proceeds (v3a).
+    pub channel_id: Option<String>,
 }
 
 impl<'a> Default for DagExecOptions<'a> {
@@ -45,6 +50,7 @@ impl<'a> Default for DagExecOptions<'a> {
             variables: vec![],
             device_id: "cli".to_string(),
             trigger: "manual",
+            channel_id: None,
         }
     }
 }
@@ -167,8 +173,8 @@ struct StepResult {
     success: bool,
 }
 
-/// Run a single step. This is the per-step async block spawned per rank.
-async fn execute_step(
+/// Core step execution: run the command, handle approval, return result.
+async fn execute_step_inner(
     step: &ProcedureStep,
     opts: &DagExecOptions<'_>,
     step_index: usize,
@@ -335,6 +341,70 @@ async fn execute_step(
     }
 }
 
+// ── Channel emit helper ─────────────────────────────────────────────────────
+
+/// Fire-and-forget: open the channel, append one System event, ignore errors.
+fn emit_channel(
+    mur_home: &Path,
+    channel_id: &str,
+    kind: mur_common::channel::EventKind,
+    payload: serde_json::Value,
+) {
+    let _ = mur_channel::ChannelService::open(mur_home).and_then(|svc| {
+        svc.append(
+            channel_id,
+            mur_common::channel::ChannelActor::System,
+            kind,
+            payload,
+            None,
+        )
+    });
+}
+
+/// Per-step entry-point: wraps `execute_step_inner` with channel ToolCall/ToolResult events.
+async fn execute_step(
+    step: &ProcedureStep,
+    opts: &DagExecOptions<'_>,
+    step_index: usize,
+    mur_home: &Path,
+) -> StepResult {
+    let sid = step.id.clone().unwrap_or_else(|| step_index.to_string());
+
+    if let Some(cid) = opts.channel_id.as_deref() {
+        emit_channel(
+            mur_home,
+            cid,
+            mur_common::channel::EventKind::ToolCall,
+            serde_json::json!({
+                "step_id": sid,
+                "description": step.description,
+                "command": step.command,
+                "tool": step.tool,
+            }),
+        );
+    }
+
+    let result = execute_step_inner(step, opts, step_index).await;
+
+    if let Some(cid) = opts.channel_id.as_deref() {
+        let mut excerpt = result.output_text.clone();
+        excerpt.truncate(2048);
+        emit_channel(
+            mur_home,
+            cid,
+            mur_common::channel::EventKind::ToolResult,
+            serde_json::json!({
+                "step_id": sid,
+                "exit_code": result.exit_code,
+                "success": result.success,
+                "output": excerpt,
+            }),
+        );
+    }
+
+    result
+}
+
 // ── Core DAG executor ───────────────────────────────────────────────────────
 
 /// Execute a Procedure (skill workflow) DAG. Uses the `--yes` and `variables`
@@ -351,6 +421,22 @@ pub async fn execute_dag(
     let start = std::time::Instant::now();
 
     let graph = build_dag(&procedure.steps)?;
+
+    // Fail-closed: needs_approval requires a HITL round-trip (v3c). Do not silently skip
+    // approval when running headless over a channel — that would be a policy bypass.
+    if opts.channel_id.is_some() && procedure.steps.iter().any(|s| s.needs_approval) {
+        anyhow::bail!(
+            "needs_approval requires interactive HITL (v3c); cannot run over a channel headlessly. \
+             Remove needs_approval from the workflow or run without --channel."
+        );
+    }
+
+    // Emit start StateChange (Working) if running over a channel.
+    if let Some(cid) = opts.channel_id.as_deref() {
+        let _ = ChannelService::open(mur_home)
+            .and_then(|svc| svc.transition(cid, ChannelState::Working, ChannelActor::System));
+    }
+
     if graph.nodes.is_empty() {
         return Ok(PipelineOutput {
             workflow_id: skill_name.to_string(),
@@ -361,6 +447,19 @@ pub async fn execute_dag(
             duration_ms: 0,
         });
     }
+
+    // Closure for terminal StateChange — call before each PipelineOutput return.
+    let emit_final = |failed: bool| {
+        if let Some(cid) = opts.channel_id.as_deref() {
+            let st = if failed {
+                ChannelState::Failed
+            } else {
+                ChannelState::Completed
+            };
+            let _ = ChannelService::open(mur_home)
+                .and_then(|svc| svc.transition(cid, st, ChannelActor::System));
+        }
+    };
 
     // Group by rank.
     let max_rank = graph.nodes.iter().map(|n| n.rank).max().unwrap_or(0);
@@ -384,6 +483,7 @@ pub async fn execute_dag(
         let opt_vars = opts.variables.clone();
         let opt_dev_id = opts.device_id.clone();
         let opt_trigger = opts.trigger.to_string();
+        let opt_chan_id = opts.channel_id.clone();
         let mut handles = Vec::new();
         for &i in &indices {
             let step = graph.nodes[i].step.clone();
@@ -392,6 +492,8 @@ pub async fn execute_dag(
             let inp = opt_input.clone();
             let vars = opt_vars.clone();
             let tr = opt_trigger.clone();
+            let chan_id = opt_chan_id.clone();
+            let mh = mur_home.to_path_buf();
             handles.push(tokio::task::spawn(async move {
                 let opts_clone = DagExecOptions {
                     yes: opt_yes,
@@ -400,8 +502,9 @@ pub async fn execute_dag(
                     variables: vars,
                     device_id: dev_id,
                     trigger: &tr,
+                    channel_id: chan_id,
                 };
-                execute_step(&step, &opts_clone, i).await
+                execute_step(&step, &opts_clone, i, &mh).await
             }));
         }
 
@@ -467,6 +570,7 @@ pub async fn execute_dag(
                             "  Step {sid} failed (exit {}), aborting workflow",
                             result.exit_code
                         );
+                        emit_final(true);
                         return Ok(PipelineOutput {
                             workflow_id: skill_name.to_string(),
                             status: PipelineStatus::Failed,
@@ -496,7 +600,8 @@ pub async fn execute_dag(
                                 attempt + 1,
                                 max_retries
                             );
-                            let retry_result = execute_step(step, opts, indices[ri]).await;
+                            let retry_result =
+                                execute_step(step, opts, indices[ri], mur_home).await;
                             if retry_result.success {
                                 results[ri] = retry_result;
                                 overall_exit_code = 0;
@@ -504,6 +609,7 @@ pub async fn execute_dag(
                             } else if attempt + 1 == max_retries {
                                 let _retry_code = retry_result.exit_code;
                                 eprintln!("  Step {sid} retry exhausted, aborting workflow");
+                                emit_final(true);
                                 return Ok(PipelineOutput {
                                     workflow_id: skill_name.to_string(),
                                     status: PipelineStatus::Failed,
@@ -527,6 +633,7 @@ pub async fn execute_dag(
         PipelineStatus::Failed
     };
 
+    emit_final(overall_exit_code != 0);
     Ok(PipelineOutput {
         workflow_id: skill_name.to_string(),
         status,
@@ -642,5 +749,106 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(out.exit_code, 0);
+    }
+
+    #[test]
+    fn channel_run_refuses_needs_approval() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proc = Procedure {
+            variables: vec![],
+            steps: vec![ProcedureStep {
+                id: Some("s0".to_string()),
+                command: Some("echo ok".to_string()),
+                description: "needs approval".to_string(),
+                needs_approval: true,
+                ..Default::default()
+            }],
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(execute_dag(
+                tmp.path(),
+                "test",
+                &proc,
+                &DagExecOptions {
+                    channel_id: Some("ch-1".to_string()),
+                    ..DagExecOptions::default()
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("needs_approval"),
+            "expected needs_approval error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn channel_run_emits_attributed_event_trail() {
+        use mur_channel::ChannelService;
+        use mur_common::channel::{ChannelActor, ChannelState, EventKind};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("test-skill").unwrap();
+
+        let proc = Procedure {
+            variables: vec![],
+            steps: vec![ProcedureStep {
+                id: Some("s0".to_string()),
+                command: Some("echo hi".to_string()),
+                description: "echo step".to_string(),
+                ..Default::default()
+            }],
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(execute_dag(
+            tmp.path(),
+            "test-skill",
+            &proc,
+            &DagExecOptions {
+                channel_id: Some(ch.id.clone()),
+                ..DagExecOptions::default()
+            },
+        ))
+        .unwrap();
+
+        let evs = svc.load_events(&ch.id).unwrap();
+        let kinds: Vec<_> = evs.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds.first(),
+            Some(&EventKind::StateChange),
+            "first event must be StateChange(Working)"
+        );
+        assert_eq!(
+            kinds.last(),
+            Some(&EventKind::StateChange),
+            "last event must be StateChange(Completed)"
+        );
+        assert_eq!(
+            evs.iter().filter(|e| e.kind == EventKind::ToolCall).count(),
+            1,
+            "one ToolCall per step"
+        );
+        assert_eq!(
+            evs.iter()
+                .filter(|e| e.kind == EventKind::ToolResult)
+                .count(),
+            1,
+            "one ToolResult per step"
+        );
+        assert!(
+            evs.iter().all(|e| e.actor == ChannelActor::System),
+            "all events must have actor=System"
+        );
+        assert_eq!(
+            svc.store().load_manifest(&ch.id).unwrap().state,
+            ChannelState::Completed
+        );
+        let tr = evs
+            .iter()
+            .find(|e| e.kind == EventKind::ToolResult)
+            .unwrap();
+        assert_eq!(tr.payload["exit_code"], 0);
     }
 }
