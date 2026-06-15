@@ -32,8 +32,8 @@ pub fn migrate_all(mur_home: &Path) -> Result<usize> {
         return Ok(0);
     }
     let mut created = 0;
-    for entry in fs::read_dir(&agents_dir)
-        .with_context(|| format!("read {}", agents_dir.display()))?
+    for entry in
+        fs::read_dir(&agents_dir).with_context(|| format!("read {}", agents_dir.display()))?
     {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -44,8 +44,8 @@ pub fn migrate_all(mur_home: &Path) -> Result<usize> {
         if !sessions.exists() {
             continue;
         }
-        for sess in fs::read_dir(&sessions)
-            .with_context(|| format!("read {}", sessions.display()))?
+        for sess in
+            fs::read_dir(&sessions).with_context(|| format!("read {}", sessions.display()))?
         {
             let sess = sess?;
             let path = sess.path();
@@ -56,8 +56,8 @@ pub fn migrate_all(mur_home: &Path) -> Result<usize> {
             if marker.exists() {
                 continue;
             }
-            let content = fs::read_to_string(&path)
-                .with_context(|| format!("read {}", path.display()))?;
+            let content =
+                fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
             let turns: Vec<LegacyTurn> = content
                 .lines()
                 .filter(|l| !l.trim().is_empty())
@@ -69,7 +69,10 @@ pub fn migrate_all(mur_home: &Path) -> Result<usize> {
             let ch = svc.create_for_agent(&agent)?;
             for t in &turns {
                 let (actor, kind) = match t.role.as_str() {
-                    "agent" => (ChannelActor::Agent { id: agent.clone() }, EventKind::Message),
+                    "agent" => (
+                        ChannelActor::Agent { id: agent.clone() },
+                        EventKind::Message,
+                    ),
                     "shell" => (ChannelActor::System, EventKind::Note),
                     _ => (ChannelActor::local_human(), EventKind::Message),
                 };

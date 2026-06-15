@@ -14,7 +14,9 @@ pub struct ChannelStore {
 
 impl ChannelStore {
     pub fn new(mur_home: &Path) -> Self {
-        Self { root: mur_home.join("channels") }
+        Self {
+            root: mur_home.join("channels"),
+        }
     }
 
     fn channel_dir(&self, id: &str) -> PathBuf {
@@ -30,7 +32,8 @@ impl ChannelStore {
     /// Create the channel directory and write its initial manifest.
     pub fn create(&self, channel: &Channel) -> Result<()> {
         let dir = self.channel_dir(&channel.id);
-        fs::create_dir_all(&dir).with_context(|| format!("create channel dir {}", dir.display()))?;
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("create channel dir {}", dir.display()))?;
         self.save_manifest(channel)
     }
 
@@ -87,11 +90,7 @@ impl ChannelStore {
         file.lock_exclusive().context("lock events file")?;
 
         // Compute next seq from the existing log tail (held under the lock).
-        let next_seq = self
-            .load_events(id)?
-            .last()
-            .map(|e| e.seq + 1)
-            .unwrap_or(0);
+        let next_seq = self.load_events(id)?.last().map(|e| e.seq + 1).unwrap_or(0);
 
         let ev = ChannelEvent {
             seq: next_seq,
@@ -113,7 +112,9 @@ impl ChannelStore {
             return Ok(Vec::new());
         }
         let mut ids = Vec::new();
-        for entry in fs::read_dir(&self.root).with_context(|| format!("read {}", self.root.display()))? {
+        for entry in
+            fs::read_dir(&self.root).with_context(|| format!("read {}", self.root.display()))?
+        {
             let entry = entry?;
             if entry.file_type()?.is_dir()
                 && let Some(name) = entry.file_name().to_str()
@@ -162,10 +163,22 @@ mod tests {
         let store = ChannelStore::new(tmp.path());
         store.create(&sample_channel("c1")).unwrap();
         let e0 = store
-            .append_event("c1", ChannelActor::Human { name: "me".into() }, EventKind::Message, serde_json::json!({"text":"hi"}), None)
+            .append_event(
+                "c1",
+                ChannelActor::Human { name: "me".into() },
+                EventKind::Message,
+                serde_json::json!({"text":"hi"}),
+                None,
+            )
             .unwrap();
         let e1 = store
-            .append_event("c1", ChannelActor::Agent { id: "qa".into() }, EventKind::Message, serde_json::json!({"text":"yo"}), None)
+            .append_event(
+                "c1",
+                ChannelActor::Agent { id: "qa".into() },
+                EventKind::Message,
+                serde_json::json!({"text":"yo"}),
+                None,
+            )
             .unwrap();
         assert_eq!(e0.seq, 0);
         assert_eq!(e1.seq, 1);

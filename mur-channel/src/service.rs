@@ -37,8 +37,18 @@ impl ChannelService {
             state: ChannelState::Working,
             owner: ChannelActor::local_human(),
             participants: vec![
-                Participant { actor: ChannelActor::local_human(), role: ParticipantRole::Owner, joined_at: now },
-                Participant { actor: ChannelActor::Agent { id: agent.to_string() }, role: ParticipantRole::Delegate, joined_at: now },
+                Participant {
+                    actor: ChannelActor::local_human(),
+                    role: ParticipantRole::Owner,
+                    joined_at: now,
+                },
+                Participant {
+                    actor: ChannelActor::Agent {
+                        id: agent.to_string(),
+                    },
+                    role: ParticipantRole::Delegate,
+                    joined_at: now,
+                },
             ],
             created_at: now,
             updated_at: now,
@@ -61,7 +71,9 @@ impl ChannelService {
         if let Some(t) = task_id {
             payload["task_id"] = serde_json::Value::String(t.to_string());
         }
-        let ev = self.store.append_event(channel_id, actor, kind, payload, None)?;
+        let ev = self
+            .store
+            .append_event(channel_id, actor, kind, payload, None)?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
             self.store.save_manifest(&ch)?;
@@ -84,7 +96,10 @@ impl ChannelService {
         // list() is newest-first; load each manifest and match the participant.
         for row in self.index.list(1000)? {
             if let Ok(ch) = self.store.load_manifest(&row.id)
-                && ch.participants.iter().any(|p| matches!(&p.actor, ChannelActor::Agent { id } if id == agent))
+                && ch
+                    .participants
+                    .iter()
+                    .any(|p| matches!(&p.actor, ChannelActor::Agent { id } if id == agent))
             {
                 return Ok(Some(ch.id));
             }
@@ -110,8 +125,22 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_agent("qa").unwrap();
-        svc.append_message(&ch.id, ChannelActor::local_human(), EventKind::Message, "find the bug", Some("t-1")).unwrap();
-        svc.append_message(&ch.id, ChannelActor::Agent { id: "qa".into() }, EventKind::Message, "found it", Some("t-1")).unwrap();
+        svc.append_message(
+            &ch.id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            "find the bug",
+            Some("t-1"),
+        )
+        .unwrap();
+        svc.append_message(
+            &ch.id,
+            ChannelActor::Agent { id: "qa".into() },
+            EventKind::Message,
+            "found it",
+            Some("t-1"),
+        )
+        .unwrap();
 
         let evs = svc.load_events(&ch.id).unwrap();
         assert_eq!(evs.len(), 2);

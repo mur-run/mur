@@ -22,7 +22,10 @@ fn cli_write_is_visible_to_a_second_reader() {
     assert_eq!(evs[0].payload["text"], "shared message");
 
     // And the index lists it for the agent.
-    assert_eq!(hub.latest_for_agent("qa").unwrap().as_deref(), Some(cid.as_str()));
+    assert_eq!(
+        hub.latest_for_agent("qa").unwrap().as_deref(),
+        Some(cid.as_str())
+    );
 }
 
 // Deleting the SQLite index and rebuilding from logs restores the listing.

@@ -109,7 +109,11 @@ fn event_to_turn(ev: &ChannelEvent) -> TurnRecord {
 /// Load a channel's turns for `App::load_history`.
 pub fn load(home: &Path, channel_id: &str, _agent: &str) -> Result<Vec<TurnRecord>> {
     let svc = ChannelService::open(home)?;
-    Ok(svc.load_events(channel_id)?.iter().map(event_to_turn).collect())
+    Ok(svc
+        .load_events(channel_id)?
+        .iter()
+        .map(event_to_turn)
+        .collect())
 }
 
 /// Newest channels that involve `agent`, newest-first.

@@ -31,7 +31,9 @@ pub fn watch_channels(
         }
     })
     .context("create watcher")?;
-    watcher.watch(&root, RecursiveMode::Recursive).context("start watch")?;
+    watcher
+        .watch(&root, RecursiveMode::Recursive)
+        .context("start watch")?;
     Ok(watcher)
 }
 
@@ -53,9 +55,15 @@ mod tests {
         let now = Utc::now();
         store
             .create(&Channel {
-                v: 1, id: "c9".into(), title: "t".into(), goal: Goal::default(),
-                state: ChannelState::Working, owner: ChannelActor::Human { name: "me".into() },
-                participants: vec![], created_at: now, updated_at: now,
+                v: 1,
+                id: "c9".into(),
+                title: "t".into(),
+                goal: Goal::default(),
+                state: ChannelState::Working,
+                owner: ChannelActor::Human { name: "me".into() },
+                participants: vec![],
+                created_at: now,
+                updated_at: now,
             })
             .unwrap();
 
@@ -68,10 +76,18 @@ mod tests {
         // Give the watcher a moment to arm, then append.
         std::thread::sleep(Duration::from_millis(500));
         store
-            .append_event("c9", ChannelActor::Human { name: "me".into() }, EventKind::Message, serde_json::json!({"text":"hi"}), None)
+            .append_event(
+                "c9",
+                ChannelActor::Human { name: "me".into() },
+                EventKind::Message,
+                serde_json::json!({"text":"hi"}),
+                None,
+            )
             .unwrap();
 
-        let got = rx.recv_timeout(Duration::from_secs(5)).expect("callback fired");
+        let got = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("callback fired");
         assert_eq!(got, "c9");
     }
 }

@@ -62,10 +62,6 @@ pub use signal::{
 
 pub use a2a::Message as A2aMessage;
 pub use a2a::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Task, TaskState};
-pub use channel::{
-    CHANNEL_SCHEMA_VERSION, Channel, ChannelActor, ChannelEvent, ChannelState, EventKind, Goal,
-    Participant, ParticipantRole,
-};
 pub use agent::{
     AgentAppearance, AgentProfile, BehaviorPreset, DeploymentConfig, DeploymentType, Entitlements,
     ExecutionMode, FederationConfig, FileTransferConfig, HitlConfig, IdentityConfig, LockFile,
@@ -74,6 +70,10 @@ pub use agent::{
 };
 pub use agent_name::{AgentNameError, MAX_AGENT_NAME_LEN, validate_agent_name};
 pub use bridge::{LlmEntitlement, LlmMode};
+pub use channel::{
+    CHANNEL_SCHEMA_VERSION, Channel, ChannelActor, ChannelEvent, ChannelState, EventKind, Goal,
+    Participant, ParticipantRole,
+};
 pub use identity::{
     AgentIdentity, ChainError, ChainOptions, ChainOutcome, IdentityError, RotationAttestation,
     RotationReason, decode_pubkey, encode_pubkey, verify_chain,
