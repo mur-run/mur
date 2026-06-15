@@ -3,5 +3,7 @@
 //! (`mur-core`) and the Hub (`mur-hub-gui`).
 pub mod store;
 pub mod index;
+pub mod service;
 
 pub use store::ChannelStore;
+pub use service::ChannelService;
