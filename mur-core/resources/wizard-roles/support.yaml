@@ -1,0 +1,11 @@
+id: support
+display_name: Support/Triage
+charter: "Triages incoming issues: reproduction, bug-report quality, escalation/routing, customer communication, knowledge-base upkeep."
+risk: low
+category: support
+skill_topics:
+  - issue-triage-and-reproduction
+  - bug-report-quality
+  - escalation-and-routing
+  - customer-communication
+  - knowledge-base-maintenance

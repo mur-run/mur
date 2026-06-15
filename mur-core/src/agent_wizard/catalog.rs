@@ -61,6 +61,12 @@ fn shipped_manifests() -> Vec<RoleManifest> {
         include_str!("../../resources/wizard-roles/qa.yaml"),
         include_str!("../../resources/wizard-roles/repomanager.yaml"),
         include_str!("../../resources/wizard-roles/rustsmith.yaml"),
+        include_str!("../../resources/wizard-roles/devops.yaml"),
+        include_str!("../../resources/wizard-roles/secreviewer.yaml"),
+        include_str!("../../resources/wizard-roles/techwriter.yaml"),
+        include_str!("../../resources/wizard-roles/dataml.yaml"),
+        include_str!("../../resources/wizard-roles/frontend.yaml"),
+        include_str!("../../resources/wizard-roles/support.yaml"),
     ];
     FILES
         .iter()
@@ -86,6 +92,32 @@ skill_topics: ["product-spec-and-prd-writing", "issue-authoring-and-hygiene"]
         assert_eq!(m.id, "pm");
         assert_eq!(m.skill_topics.len(), 2);
         assert_eq!(m.risk, RiskLevel::Low);
+    }
+
+    #[test]
+    fn all_shipped_manifests_parse_and_are_well_formed() {
+        // filter_map silently drops bad YAML, so assert the FULL count parses + is well-formed.
+        let shipped = shipped_manifests();
+        assert_eq!(shipped.len(), 10, "every shipped role manifest must parse");
+        for m in &shipped {
+            assert!(!m.id.is_empty(), "role missing id");
+            assert!(!m.display_name.is_empty(), "{} missing display_name", m.id);
+            assert!(!m.skill_topics.is_empty(), "{} has no skill_topics", m.id);
+        }
+        // The Plan-5 additions are present.
+        for id in [
+            "devops",
+            "secreviewer",
+            "techwriter",
+            "dataml",
+            "frontend",
+            "support",
+        ] {
+            assert!(
+                shipped.iter().any(|m| m.id == id),
+                "missing shipped role {id}"
+            );
+        }
     }
 
     #[test]

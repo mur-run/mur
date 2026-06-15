@@ -1,0 +1,11 @@
+id: frontend
+display_name: Frontend Engineer
+charter: "Builds accessible, performant UIs: component architecture, a11y, responsive design systems, frontend performance and testing."
+risk: medium
+category: engineering
+skill_topics:
+  - component-architecture
+  - accessibility-a11y
+  - responsive-and-design-systems
+  - frontend-performance
+  - frontend-testing
