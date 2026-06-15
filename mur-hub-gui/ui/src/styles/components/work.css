@@ -1,0 +1,307 @@
+/* ── Work view — 3-pane layout ─────────────────────────────────────────── */
+
+.work-view {
+  display: grid;
+  grid-template-columns: 220px 1fr 220px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.work-view__rail {
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+}
+
+.work-view__feed {
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.work-view__trace {
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+/* ── Channel list ─────────────────────────────────────────────────────── */
+
+.work-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.work-list__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.work-list__item:hover {
+  background: var(--bg-hover, rgba(255,255,255,0.05));
+}
+
+.work-list__item.is-active {
+  background: var(--accent-subtle, rgba(99, 102, 241, 0.12));
+}
+
+.work-list__top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.work-list__title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+
+.work-list__sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+
+.work-list__meta {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.work-list--empty,
+.work-feed--empty {
+  padding: 24px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ── State badges ─────────────────────────────────────────────────────── */
+
+.work-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #fff;
+  background: var(--badge-default, #6b7280);
+}
+
+.work-badge--working {
+  background: #2563eb;
+}
+
+.work-badge--completed {
+  background: #16a34a;
+}
+
+.work-badge--failed,
+.work-badge--rejected {
+  background: #dc2626;
+}
+
+.work-badge--inputRequired,
+.work-badge--input-required {
+  background: #d97706;
+}
+
+.work-badge--submitted,
+.work-badge--stale,
+.work-badge--canceled,
+.work-badge--unknown {
+  background: #6b7280;
+}
+
+/* ── Event feed ───────────────────────────────────────────────────────── */
+
+.work-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.work-event {
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.work-event--user {
+  background: var(--accent-subtle, rgba(99, 102, 241, 0.10));
+  align-self: flex-end;
+  max-width: 80%;
+}
+
+.work-event--agent {
+  background: var(--bg-card, rgba(255,255,255,0.04));
+  align-self: flex-start;
+  max-width: 80%;
+}
+
+.work-event--system {
+  font-style: italic;
+  color: var(--text-muted);
+  align-self: center;
+}
+
+.work-event--note {
+  background: var(--bg-note, rgba(234, 179, 8, 0.08));
+  border-left: 3px solid #ca8a04;
+}
+
+.work-event--state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: center;
+  padding: 3px 6px;
+}
+
+.work-event--card {
+  background: var(--bg-card, rgba(255,255,255,0.04));
+  border: 1px solid var(--border);
+}
+
+.work-event__author {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+
+.work-event__ts {
+  opacity: 0.7;
+}
+
+.work-event__body {
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.work-event__body--note {
+  font-style: italic;
+}
+
+.work-event__state-pill {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.work-event__card-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+/* ── Trace (right pane) ───────────────────────────────────────────────── */
+
+.work-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.work-trace__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.work-trace__label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.work-trace__goal {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.work-trace__empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.work-trace__ac {
+  margin: 4px 0 0 14px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.work-trace__plist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.work-trace__prole {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.work-trace__pname {
+  flex: 1;
+  color: var(--text-primary);
+}
+
+.work-trace__prole-badge {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Surface toggle ───────────────────────────────────────────────────── */
+
+.surface-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-toggle, rgba(0,0,0,0.15));
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.surface-toggle button {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.surface-toggle button.is-active {
+  background: var(--bg-card, rgba(255,255,255,0.08));
+  color: var(--text-primary);
+}
