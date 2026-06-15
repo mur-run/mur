@@ -335,6 +335,9 @@ pub enum AgentAction {
         /// Model-ref to embed in the agent profile (e.g. claude_sonnet, claude_opus).
         #[arg(long = "model-ref", default_value = crate::agent_wizard::DEFAULT_MODEL_REF)]
         model_ref: String,
+        /// Skip the eval stage even when an LLM is present.
+        #[arg(long = "no-eval")]
+        no_eval: bool,
     },
 }
 

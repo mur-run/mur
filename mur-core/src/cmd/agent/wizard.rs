@@ -47,6 +47,7 @@ pub async fn run(
     headless: bool,
     no_llm: bool,
     model_ref: String,
+    no_eval: bool,
 ) -> anyhow::Result<()> {
     let mur_home = crate::cmd::agent::resolve_mur_home()?;
     let catalog = catalog::load_catalog(&mur_home);
@@ -96,7 +97,8 @@ pub async fn run(
     );
     let mut hooks = CliHooks { headless };
     let outcome =
-        agent_wizard::run_wizard(manifest, &ws, &model_ref, llm, search, &mut hooks).await?;
+        agent_wizard::run_wizard(manifest, &ws, &model_ref, llm, search, no_eval, &mut hooks)
+            .await?;
     if outcome.created {
         println!("\n✅ Created and started agent '{}'.", outcome.agent_name);
     } else {
