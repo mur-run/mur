@@ -479,6 +479,7 @@ pub fn run() {
             memory::agent_set_memory,
             memory::agent_reset_sys_prompt,
             onboarding::spec::wizard_spec_catalog,
+            onboarding::spec::wizard_spec_generate,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
