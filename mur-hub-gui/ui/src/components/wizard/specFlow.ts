@@ -78,7 +78,9 @@ export function specReducer(
         case "review":
           return { ...state, step: "generating" };
         case "eval":
-          return { ...state, step: "review" };
+          // Terminal: the agent is already created and the draft consumed —
+          // going BACK to re-approve a consumed draft would error. No-op.
+          return state;
         default:
           return state;
       }

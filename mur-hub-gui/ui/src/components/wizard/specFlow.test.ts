@@ -63,9 +63,9 @@ describe("BACK transitions", () => {
     expect(next).toEqual(s("generating", "specialist"));
   });
 
-  it("BACK from 'eval' → 'review'", () => {
+  it("BACK from 'eval' is a no-op (terminal: agent created, draft consumed)", () => {
     const next = specReducer(s("eval", "specialist"), { type: "BACK" });
-    expect(next).toEqual(s("review", "specialist"));
+    expect(next).toEqual(s("eval", "specialist"));
   });
 });
 

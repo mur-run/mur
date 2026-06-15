@@ -79,9 +79,12 @@ export function WizardModal({ isOpen, onClose }: Props) {
   }, [isOpen]);
 
   function handleClose() {
-    // Only cancel the backend wizard session if one was started (companion path).
+    // Cancel whichever backend session was started so no stale state lingers.
     if (specFlow.step === "companion") {
       invoke("wizard_cancel").catch(() => {});
+    } else if (specFlow.step !== "kind") {
+      // Specialist/both path: clear any in-progress draft held in WizardSpecState.
+      invoke("wizard_spec_cancel").catch(() => {});
     }
     setSnapshot(null);
     setDisplayStep(1);

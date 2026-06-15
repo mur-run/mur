@@ -199,7 +199,7 @@ export const zhTW: Table = {
   "wizard.kind.specialist": "專業助手",
   "wizard.kind.specialist.hint": "以角色範本為基礎的任務導向 agent",
   "wizard.kind.both": "兩者兼具",
-  "wizard.kind.both.hint": "帶有陪伴寵物的專業助手 agent",
+  "wizard.kind.both.hint": "先建立專業技能，之後可再加上陪伴外觀",
   "wizard.loading": "載入中…",
   "wizard.close": "關閉",
   "wizard.back": "上一步",

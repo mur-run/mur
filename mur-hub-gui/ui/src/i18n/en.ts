@@ -197,7 +197,7 @@ export const en = {
   "wizard.kind.specialist": "Specialist",
   "wizard.kind.specialist.hint": "A task-focused agent built from a role template",
   "wizard.kind.both": "Both",
-  "wizard.kind.both.hint": "A specialist agent with a companion pet",
+  "wizard.kind.both.hint": "Specialist skills now; companion appearance can be added afterward",
   "wizard.loading": "Loading…",
   "wizard.close": "Close",
   "wizard.back": "Back",
