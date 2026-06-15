@@ -426,7 +426,7 @@ pub fn run() {
                     Ok(watcher) => {
                         app.manage(std::sync::Mutex::new(Some(watcher)));
                     }
-                    Err(e) => eprintln!("channel watcher failed to start: {e:#}"),
+                    Err(e) => tracing::warn!("channel watcher failed to start: {e:#}"),
                 }
             }
 

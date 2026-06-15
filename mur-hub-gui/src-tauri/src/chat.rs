@@ -245,31 +245,23 @@ fn extract_text(message: &Value) -> String {
 
 // ─── Channel persistence ───────────────────────────────────────────────────
 
-/// Resolve the channel for an agent (latest, or create one), returning its id.
-fn channel_for_agent(home: &std::path::Path, agent: &str) -> anyhow::Result<String> {
-    let svc = ChannelService::open(home)?;
-    if let Some(id) = svc.latest_for_agent(agent)? {
-        return Ok(id);
-    }
-    Ok(svc.create_for_agent(agent)?.id)
-}
-
 /// Persist one turn into the agent's channel. `role` ∈ {"user","agent"}.
 fn persist_turn(home: &std::path::Path, agent: &str, role: &str, text: &str, task_id: Option<&str>) {
     let res = (|| -> anyhow::Result<()> {
         let svc = ChannelService::open(home)?;
-        let id = channel_for_agent(home, agent)?;
+        let id = match svc.latest_for_agent(agent)? {
+            Some(id) => id,
+            None => svc.create_for_agent(agent)?.id,
+        };
         let actor = match role {
-            "agent" => ChannelActor::Agent {
-                id: agent.to_string(),
-            },
+            "agent" => ChannelActor::Agent { id: agent.to_string() },
             _ => ChannelActor::local_human(),
         };
         svc.append_message(&id, actor, EventKind::Message, text, task_id)?;
         Ok(())
     })();
     if let Err(e) = res {
-        eprintln!("channel persist failed for {agent}: {e:#}");
+        tracing::warn!("channel persist failed for {agent}: {e:#}");
     }
 }
 
