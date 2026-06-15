@@ -10,7 +10,10 @@
 //! Bump it ONLY when:
 //!   1. A required field is renamed or removed, OR
 //!   2. A field's semantic meaning changes, OR
-//!   3. A new `EventKind` variant cannot be safely ignored by older readers.
+//!   3. A new `EventKind` variant carries semantics that older readers must not
+//!      silently skip (readers skip unknown/unparseable lines for robustness, so
+//!      bump only when a silent skip would corrupt state rather than merely omit
+//!      optional data).
 //!
 //! Adding a new optional field with `#[serde(default)]` does NOT require a bump.
 //!

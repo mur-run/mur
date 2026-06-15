@@ -52,10 +52,11 @@ impl ChannelStore {
 
     pub fn load_events(&self, id: &str) -> Result<Vec<ChannelEvent>> {
         let path = self.events_path(id);
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let content = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+        };
         Ok(content
             .lines()
             .filter(|l| !l.trim().is_empty())
@@ -87,8 +88,7 @@ impl ChannelStore {
 
         // Compute next seq from the existing log tail (held under the lock).
         let next_seq = self
-            .load_events(id)
-            .unwrap_or_default()
+            .load_events(id)?
             .last()
             .map(|e| e.seq + 1)
             .unwrap_or(0);
@@ -183,5 +183,19 @@ mod tests {
         let mut ids = store.list_ids().unwrap();
         ids.sort();
         assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn save_manifest_overwrites_existing() {
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        let mut ch = sample_channel("c1");
+        store.create(&ch).unwrap();
+        ch.state = ChannelState::Completed;
+        ch.title = "updated".into();
+        store.save_manifest(&ch).unwrap();
+        let got = store.load_manifest("c1").unwrap();
+        assert_eq!(got.state, ChannelState::Completed);
+        assert_eq!(got.title, "updated");
     }
 }
