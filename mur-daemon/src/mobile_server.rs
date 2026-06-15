@@ -214,6 +214,20 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                 }
             }
 
+            ClientFrame::ChannelQuery { op, channel_id, since_seq } => {
+                let home = state.mur_home.clone();
+                let payload = mur_core::mobile::channel_query(&home, &op, channel_id, since_seq)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(error = %e, "mobile: channel_query failed");
+                        serde_json::Value::Array(vec![])
+                    });
+                let _ = send_frame(
+                    &mut socket,
+                    &ServerFrame::ChannelData { op: op.clone(), payload },
+                )
+                .await;
+            }
+
             ClientFrame::AudioStreamEnd => {
                 tracing::debug!(bytes = audio_buf.len(), "mobile: audio stream end → STT");
                 let pcm = std::mem::take(&mut audio_buf);
