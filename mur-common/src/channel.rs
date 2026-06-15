@@ -143,6 +143,13 @@ pub struct ChannelEvent {
     pub payload: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+    /// RESERVED — `None` until per-event Ed25519 signing (v3d).
+    /// Sign-input: canonical `seq||ts||actor||kind||payload` bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
+    /// RESERVED — key version for the signing key (v3d).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_version: Option<u32>,
 }
 
 #[cfg(test)]
@@ -164,6 +171,8 @@ mod tests {
             kind: EventKind::Message,
             payload: serde_json::json!({ "text": "hello", "task_id": "t-1" }),
             idempotency_key: None,
+            sig: None,
+            key_version: None,
         };
         let line = serde_json::to_string(&ev).unwrap();
         let back: ChannelEvent = serde_json::from_str(&line).unwrap();
@@ -179,5 +188,29 @@ mod tests {
         assert_eq!(j, "{\"kind\":\"system\"}");
         let back: ChannelActor = serde_json::from_str(&j).unwrap();
         assert_eq!(back, ChannelActor::System);
+    }
+
+    #[test]
+    fn event_omits_sig_fields_when_absent_and_reads_old_rows() {
+        // New events with sig=None must omit the field from JSON (no schema churn).
+        let ev = ChannelEvent {
+            seq: 0,
+            ts: Utc::now(),
+            actor: ChannelActor::System,
+            kind: EventKind::Note,
+            payload: serde_json::json!({}),
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+        };
+        let line = serde_json::to_string(&ev).unwrap();
+        assert!(!line.contains("sig"), "sig must be omitted when None");
+        assert!(!line.contains("key_version"), "key_version must be omitted when None");
+
+        // Old rows without the fields must deserialize cleanly.
+        let old = r#"{"seq":0,"ts":"2026-06-16T00:00:00Z","actor":{"kind":"system"},"kind":"note","payload":{}}"#;
+        let back: ChannelEvent = serde_json::from_str(old).unwrap();
+        assert_eq!(back.sig, None);
+        assert_eq!(back.key_version, None);
     }
 }
