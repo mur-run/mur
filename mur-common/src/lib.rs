@@ -6,6 +6,7 @@ pub mod agent_name;
 pub mod bridge;
 pub mod bundle;
 pub mod canonical;
+pub mod channel;
 pub mod companion;
 pub mod config;
 pub mod conversation;
@@ -61,6 +62,10 @@ pub use signal::{
 
 pub use a2a::Message as A2aMessage;
 pub use a2a::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Task, TaskState};
+pub use channel::{
+    CHANNEL_SCHEMA_VERSION, Channel, ChannelActor, ChannelEvent, ChannelState, EventKind, Goal,
+    Participant, ParticipantRole,
+};
 pub use agent::{
     AgentAppearance, AgentProfile, BehaviorPreset, DeploymentConfig, DeploymentType, Entitlements,
     ExecutionMode, FederationConfig, FileTransferConfig, HitlConfig, IdentityConfig, LockFile,
