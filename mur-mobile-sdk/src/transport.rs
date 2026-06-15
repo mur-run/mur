@@ -30,7 +30,11 @@ pub enum Command {
     /// Close the connection and end the task.
     Disconnect,
     /// Pull channel data from the daemon.
-    ChannelQuery { op: String, channel_id: Option<String>, since_seq: Option<u64> },
+    ChannelQuery {
+        op: String,
+        channel_id: Option<String>,
+        since_seq: Option<u64>,
+    },
 }
 
 /// Drive one LAN connection to completion.
@@ -353,7 +357,10 @@ where
                             .unwrap_or_default()
                             .to_string(),
                         kind: v["kind"].as_str().unwrap_or_default().to_string(),
-                        text: v["payload"]["text"].as_str().unwrap_or_default().to_string(),
+                        text: v["payload"]["text"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
                     }
                 })
                 .collect();

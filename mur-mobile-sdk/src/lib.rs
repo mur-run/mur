@@ -107,7 +107,10 @@ pub enum MobileEvent {
     /// Response to `list_channels()`. Arrives async; update the channel list UI.
     ChannelList { channels: Vec<ChannelListItem> },
     /// Response to `fetch_channel_events()`. Arrives async.
-    ChannelEvents { channel_id: String, events: Vec<ChannelEventItem> },
+    ChannelEvents {
+        channel_id: String,
+        events: Vec<ChannelEventItem>,
+    },
     /// The daemon notified us that a channel was updated (live-push).
     ChannelUpdate { channel_id: String },
 }

@@ -85,7 +85,10 @@ pub enum ServerFrame {
     },
     /// Response to a `ChannelQuery`. `op` echoes the request; `payload` is a
     /// JSON array (channel summaries for "list", events for "events").
-    ChannelData { op: String, payload: serde_json::Value },
+    ChannelData {
+        op: String,
+        payload: serde_json::Value,
+    },
 }
 
 #[cfg(test)]
@@ -104,7 +107,10 @@ mod tests {
         let back: ClientFrame = serde_json::from_str(&s).unwrap();
         matches!(back, ClientFrame::ChannelQuery { .. });
 
-        let d = ServerFrame::ChannelData { op: "list".into(), payload: serde_json::json!([]) };
+        let d = ServerFrame::ChannelData {
+            op: "list".into(),
+            payload: serde_json::json!([]),
+        };
         let s2 = serde_json::to_string(&d).unwrap();
         assert!(s2.contains("\"type\":\"channel_data\""));
     }

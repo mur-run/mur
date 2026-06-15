@@ -164,10 +164,18 @@ pub fn persist_mobile_exchange(
             Some(id) => id,
             None => svc.create_for_agent(agent)?.id,
         };
-        svc.append_message(&id, ChannelActor::local_human(), EventKind::Message, user_text, None)?;
         svc.append_message(
             &id,
-            ChannelActor::Agent { id: agent.to_string() },
+            ChannelActor::local_human(),
+            EventKind::Message,
+            user_text,
+            None,
+        )?;
+        svc.append_message(
+            &id,
+            ChannelActor::Agent {
+                id: agent.to_string(),
+            },
             EventKind::Message,
             agent_text,
             None,
@@ -204,9 +212,17 @@ mod tests {
     #[test]
     fn persist_mobile_exchange_writes_both_turns_to_one_channel() {
         let tmp = tempfile::TempDir::new().unwrap();
-        persist_mobile_exchange(tmp.path(), "mur", "what's my schedule?", "you have 2 meetings");
+        persist_mobile_exchange(
+            tmp.path(),
+            "mur",
+            "what's my schedule?",
+            "you have 2 meetings",
+        );
         let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-        let id = svc.latest_for_agent("mur").unwrap().expect("channel created");
+        let id = svc
+            .latest_for_agent("mur")
+            .unwrap()
+            .expect("channel created");
         let evs = svc.load_events(&id).unwrap();
         assert_eq!(evs.len(), 2);
         assert_eq!(evs[0].payload["text"], "what's my schedule?");

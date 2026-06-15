@@ -252,7 +252,11 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                 }
             }
 
-            ClientFrame::ChannelQuery { op, channel_id, since_seq } => {
+            ClientFrame::ChannelQuery {
+                op,
+                channel_id,
+                since_seq,
+            } => {
                 let home = state.mur_home.clone();
                 let payload = mur_core::mobile::channel_query(&home, &op, channel_id, since_seq)
                     .unwrap_or_else(|e| {
@@ -261,7 +265,10 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                     });
                 let _ = send_frame(
                     &mut socket,
-                    &ServerFrame::ChannelData { op: op.clone(), payload },
+                    &ServerFrame::ChannelData {
+                        op: op.clone(),
+                        payload,
+                    },
                 )
                 .await;
             }
