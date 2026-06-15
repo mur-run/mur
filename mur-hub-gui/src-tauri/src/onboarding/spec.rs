@@ -217,6 +217,144 @@ pub async fn wizard_spec_generate(
     Ok(dto)
 }
 
+/// Apply an approved (and optionally user-edited) draft and optionally run eval.
+///
+/// 1. Takes the stored `WizardDraft` from `WizardSpecState` (clears it).
+/// 2. Overlays any edits the user made in the review panel (prompt + skill YAMLs).
+/// 3. Validates the skill drafts.
+/// 4. Emits a `wizard-spec-progress` Create event.
+/// 5. Calls `apply_draft` to write the agent to disk and start it.
+/// 6. If `run_eval` is `true`, builds a judge adapter + eval tasks + `DialDriver`
+///    and runs `run_eval`; emits the `EvalReport` as a `wizard-spec-eval` event.
+/// 7. Always returns the created agent name (even if eval is degraded / skipped).
+#[tauri::command]
+pub async fn wizard_spec_approve(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WizardSpecState>,
+    edited: SpecDraftDto,
+    run_eval: bool,
+) -> Result<String, String> {
+    use mur_core::agent_wizard::Stage;
+    use mur_core::agent_wizard::apply::{apply_draft, validate_drafts};
+    use mur_core::agent_wizard::draft::Progress;
+    use tauri::Emitter;
+
+    // 1. Take the stored draft (clears state — no double-apply).
+    let mut draft = state
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .take()
+        .ok_or_else(|| "no wizard session in progress".to_string())?;
+
+    // 2. Overlay user edits from the frontend review panel.
+    draft.prompt.markdown = edited.prompt_markdown;
+    for edited_skill in &edited.skills {
+        if let Some(s) = draft
+            .skills
+            .iter_mut()
+            .find(|s| s.name == edited_skill.name)
+        {
+            s.yaml = edited_skill.yaml.clone();
+        }
+    }
+
+    // 3. Validate skill drafts (validation errors are non-fatal: we warn but continue).
+    let errs = validate_drafts(&draft);
+    if !errs.is_empty() {
+        tracing::warn!("wizard_spec_approve: skill validation warnings: {errs:?}");
+    }
+
+    // 4. Emit Create progress.
+    let _ = app.emit(
+        "wizard-spec-progress",
+        Progress {
+            stage: Stage::Create,
+            message: "creating agent".into(),
+        },
+    );
+
+    // 5. Apply draft to disk and start the agent.
+    let outcome = apply_draft(&draft).map_err(|e| e.to_string())?;
+    let agent_name = outcome.agent_name.clone();
+
+    // 6. Optional eval (best-effort — never blocks agent creation).
+    //
+    // `run_eval` takes `&dyn AgentDriver`, which is not `Sync`, so
+    // `&dyn AgentDriver` is not `Send`.  Tauri commands require `Send` futures.
+    // Workaround: run the eval in a `std::thread` with its own single-threaded
+    // Tokio runtime so the non-Send future never needs to cross a thread
+    // boundary from the caller's perspective.  We fire-and-forget (the thread
+    // sends results back via Tauri events).
+    if run_eval {
+        let home = crate::mur_home_path();
+        let skill_names: Vec<String> = draft.skills.iter().map(|s| s.name.clone()).collect();
+        let tasks = mur_core::agent_wizard::eval_tasks::tasks_for(&draft.role, &skill_names);
+        let agent_name_eval = agent_name.clone();
+        let app_eval = app.clone();
+        let home_eval = home.clone();
+
+        std::thread::spawn(move || {
+            use mur_core::agent_wizard::eval::{DialDriver, EvalReport, run_eval, write_record};
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("eval tokio rt");
+
+            rt.block_on(async move {
+                let driver = DialDriver {
+                    home: home_eval.clone(),
+                    agent: agent_name_eval.clone(),
+                };
+
+                // Build judge; degrade gracefully if unavailable.
+                let report = match mur_core::conversations::backend::adapter::build_chat_adapter(
+                    &home_eval,
+                    None,
+                    "agent-wizard",
+                ) {
+                    Ok(adapter) => run_eval(&driver, &adapter, &tasks).await,
+                    Err(e) => {
+                        tracing::warn!(
+                            "wizard_spec_approve: no judge adapter ({e}); skipping eval"
+                        );
+                        EvalReport {
+                            passed: false,
+                            results: vec![],
+                        }
+                    }
+                };
+
+                // Persist record (best-effort).
+                let _ = write_record(&home_eval, &agent_name_eval, "wizard-eval", &report);
+
+                let _ = app_eval.emit("wizard-spec-eval", &report);
+                let _ = app_eval.emit(
+                    "wizard-spec-progress",
+                    Progress {
+                        stage: Stage::Eval,
+                        message: if report.passed {
+                            "eval passed".into()
+                        } else {
+                            "eval FAILED — see eval-runs".into()
+                        },
+                    },
+                );
+            });
+        });
+    }
+
+    Ok(agent_name)
+}
+
+/// Cancel the in-progress spec wizard session, discarding the stored draft.
+#[tauri::command]
+pub fn wizard_spec_cancel(state: tauri::State<'_, WizardSpecState>) -> Result<(), String> {
+    *state.0.lock().map_err(|e| e.to_string())? = None;
+    Ok(())
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

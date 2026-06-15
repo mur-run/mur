@@ -480,6 +480,8 @@ pub fn run() {
             memory::agent_reset_sys_prompt,
             onboarding::spec::wizard_spec_catalog,
             onboarding::spec::wizard_spec_generate,
+            onboarding::spec::wizard_spec_approve,
+            onboarding::spec::wizard_spec_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
