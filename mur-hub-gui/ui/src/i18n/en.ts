@@ -190,6 +190,14 @@ export const en = {
   "popover.empty.cta": "Create your first agent",
   "popover.empty.bubble": "Let's build your flock! 🐦",
   // ── Wizard ──
+  // Step 0 — Kind fork (Plan 4)
+  "wizard.kind.title": "What kind of agent do you want?",
+  "wizard.kind.companion": "Companion",
+  "wizard.kind.companion.hint": "A pet that lives on your desktop and learns from you",
+  "wizard.kind.specialist": "Specialist",
+  "wizard.kind.specialist.hint": "A task-focused agent built from a role template",
+  "wizard.kind.both": "Both",
+  "wizard.kind.both.hint": "A specialist agent with a companion pet",
   "wizard.loading": "Loading…",
   "wizard.close": "Close",
   "wizard.back": "Back",

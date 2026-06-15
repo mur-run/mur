@@ -192,6 +192,14 @@ export const zhTW: Table = {
   "popover.empty.cta": "＋ 建立第一隻 Agent",
   "popover.empty.bubble": "快來建立你的鳥群！🐦",
   // ── Wizard ──
+  // Step 0 — Kind fork (Plan 4)
+  "wizard.kind.title": "你想建立哪種 agent？",
+  "wizard.kind.companion": "陪伴寵物",
+  "wizard.kind.companion.hint": "住在桌面上、從你身上學習的寵物",
+  "wizard.kind.specialist": "專業助手",
+  "wizard.kind.specialist.hint": "以角色範本為基礎的任務導向 agent",
+  "wizard.kind.both": "兩者兼具",
+  "wizard.kind.both.hint": "帶有陪伴寵物的專業助手 agent",
   "wizard.loading": "載入中…",
   "wizard.close": "關閉",
   "wizard.back": "上一步",
