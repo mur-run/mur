@@ -34,6 +34,9 @@ pub struct DagExecOptions<'a> {
     pub device_id: String,
     /// Human-readable trigger source: "manual" | "schedule" | "agent".
     pub trigger: &'a str,
+    /// Channel the executor runs OVER — events are appended to
+    /// `~/.mur/channels/<id>/` as the workflow proceeds (v3a).
+    pub channel_id: Option<String>,
 }
 
 impl<'a> Default for DagExecOptions<'a> {
@@ -45,6 +48,7 @@ impl<'a> Default for DagExecOptions<'a> {
             variables: vec![],
             device_id: "cli".to_string(),
             trigger: "manual",
+            channel_id: None,
         }
     }
 }
@@ -351,6 +355,16 @@ pub async fn execute_dag(
     let start = std::time::Instant::now();
 
     let graph = build_dag(&procedure.steps)?;
+
+    // Fail-closed: needs_approval requires a HITL round-trip (v3c). Do not silently skip
+    // approval when running headless over a channel — that would be a policy bypass.
+    if opts.channel_id.is_some() && procedure.steps.iter().any(|s| s.needs_approval) {
+        anyhow::bail!(
+            "needs_approval requires interactive HITL (v3c); cannot run over a channel headlessly. \
+             Remove needs_approval from the workflow or run without --channel."
+        );
+    }
+
     if graph.nodes.is_empty() {
         return Ok(PipelineOutput {
             workflow_id: skill_name.to_string(),
@@ -400,6 +414,7 @@ pub async fn execute_dag(
                     variables: vars,
                     device_id: dev_id,
                     trigger: &tr,
+                    channel_id: None,
                 };
                 execute_step(&step, &opts_clone, i).await
             }));
@@ -642,5 +657,36 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(out.exit_code, 0);
+    }
+
+    #[test]
+    fn channel_run_refuses_needs_approval() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proc = Procedure {
+            variables: vec![],
+            steps: vec![ProcedureStep {
+                id: Some("s0".to_string()),
+                command: Some("echo ok".to_string()),
+                description: "needs approval".to_string(),
+                needs_approval: true,
+                ..Default::default()
+            }],
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(execute_dag(
+                tmp.path(),
+                "test",
+                &proc,
+                &DagExecOptions {
+                    channel_id: Some("ch-1".to_string()),
+                    ..DagExecOptions::default()
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("needs_approval"),
+            "expected needs_approval error, got: {err}"
+        );
     }
 }
