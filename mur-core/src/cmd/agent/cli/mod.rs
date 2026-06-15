@@ -10,7 +10,7 @@ mod app;
 mod manage;
 mod markdown;
 mod multiplex;
-mod persist;
+pub mod persist;
 mod stream;
 mod ui;
 
@@ -38,6 +38,8 @@ use self::persist::Session;
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
 use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
 
+/// How many recent conversations `/sessions` lists.
+const RECENT_LIMIT: usize = 10;
 /// How many transcript lines PageUp/PageDown scroll.
 const SCROLL_STEP: u16 = 5;
 /// Spinner animation cadence.
@@ -133,11 +135,11 @@ async fn run_tui(home: PathBuf, agent: String, resume: bool, auto: bool) -> Resu
 fn build_app(home: &Path, agent: &str, resume: bool) -> Result<App> {
     if resume {
         if let Some(info) = persist::latest(home, agent)? {
-            let turns = persist::load(&info.path)?;
+            let turns = persist::load(home, &info.id, agent)?;
             let mut app = App::new(
                 home.to_path_buf(),
                 agent.to_string(),
-                Session::from_path(info.path),
+                Session::open_existing(home, agent, &info.id)?,
             );
             app.load_history(turns);
             app.push_system(format!(
@@ -388,7 +390,7 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
             }
         }
         SlashCmd::Sessions => {
-            match persist::list_recent(&app.home, &app.agent, persist::RECENT_LIMIT) {
+            match persist::list_recent(&app.home, &app.agent, RECENT_LIMIT) {
                 Ok(list) if !list.is_empty() => {
                     let mut out = String::from(
                         "recent conversations (resume the latest with `mur agent cli --resume`):\n",
