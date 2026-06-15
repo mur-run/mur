@@ -12,6 +12,7 @@ pub mod eval;
 pub mod eval_tasks;
 pub mod llm;
 pub mod research;
+pub mod security_suite;
 pub mod stages;
 
 pub use draft::{Progress, Stage, WizardOutcome};
@@ -188,6 +189,31 @@ pub async fn run_wizard(
         });
         // Auto-fix (N=2) is operator-gated for now: report only. Full re-author+re-apply loop is
         // exercised by eval_with_autofix unit tests; wiring real re-apply is the next increment.
+
+        if approved.role.risk == crate::agent_wizard::draft::RiskLevel::High {
+            let jsonl = home
+                .join("agents")
+                .join(&approved.role.name)
+                .join("eval-runs")
+                .join("security.jsonl");
+            match crate::agent_wizard::security_suite::evaluate_jsonl(&jsonl) {
+                crate::agent_wizard::security_suite::SuiteOutcome::Gated { passed } => {
+                    hooks.on_progress(&Progress {
+                        stage: Stage::Eval,
+                        message: format!(
+                            "security suites {}",
+                            if passed { "passed" } else { "FAILED" }
+                        ),
+                    });
+                }
+                crate::agent_wizard::security_suite::SuiteOutcome::Skipped(why) => {
+                    hooks.on_progress(&Progress {
+                        stage: Stage::Eval,
+                        message: format!("security suites skipped: {why}"),
+                    });
+                }
+            }
+        }
     }
     Ok(outcome)
 }
