@@ -246,7 +246,13 @@ fn extract_text(message: &Value) -> String {
 // ─── Channel persistence ───────────────────────────────────────────────────
 
 /// Persist one turn into the agent's channel. `role` ∈ {"user","agent"}.
-fn persist_turn(home: &std::path::Path, agent: &str, role: &str, text: &str, task_id: Option<&str>) {
+fn persist_turn(
+    home: &std::path::Path,
+    agent: &str,
+    role: &str,
+    text: &str,
+    task_id: Option<&str>,
+) {
     let res = (|| -> anyhow::Result<()> {
         let svc = ChannelService::open(home)?;
         let id = match svc.latest_for_agent(agent)? {
@@ -254,7 +260,9 @@ fn persist_turn(home: &std::path::Path, agent: &str, role: &str, text: &str, tas
             None => svc.create_for_agent(agent)?.id,
         };
         let actor = match role {
-            "agent" => ChannelActor::Agent { id: agent.to_string() },
+            "agent" => ChannelActor::Agent {
+                id: agent.to_string(),
+            },
             _ => ChannelActor::local_human(),
         };
         svc.append_message(&id, actor, EventKind::Message, text, task_id)?;
