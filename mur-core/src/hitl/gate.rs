@@ -97,7 +97,11 @@ pub async fn gate(
                     serde_json::to_value(&request)?,
                     None,
                 )?;
-                svc.transition(channel_id, ChannelState::InputRequired, ChannelActor::System)?;
+                svc.transition(
+                    channel_id,
+                    ChannelState::InputRequired,
+                    ChannelActor::System,
+                )?;
             }
 
             let decision = if yes {
@@ -118,7 +122,11 @@ pub async fn gate(
                         None,
                     )?;
                 }
-                GateDecision { allow: true, reason: "auto-approved (--yes)".into(), action_hash: hash.clone() }
+                GateDecision {
+                    allow: true,
+                    reason: "auto-approved (--yes)".into(),
+                    action_hash: hash.clone(),
+                }
             } else {
                 wait_for_response(mur_home, channel_id, &hitl_id, &hash, timeout).await?
             };
@@ -154,7 +162,11 @@ async fn wait_for_response(
             })
         };
         if let Some(resp) = found {
-            let echoed = resp.payload.get("action_hash").and_then(|v| v.as_str()).unwrap_or("");
+            let echoed = resp
+                .payload
+                .get("action_hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if echoed != expected_hash {
                 return Ok(GateDecision {
                     allow: false,
@@ -162,10 +174,18 @@ async fn wait_for_response(
                     action_hash: expected_hash.to_string(),
                 });
             }
-            let allow = resp.payload.get("allow").and_then(|v| v.as_bool()).unwrap_or(false);
+            let allow = resp
+                .payload
+                .get("allow")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             return Ok(GateDecision {
                 allow,
-                reason: if allow { "approved".into() } else { "denied".into() },
+                reason: if allow {
+                    "approved".into()
+                } else {
+                    "denied".into()
+                },
                 action_hash: expected_hash.to_string(),
             });
         }
@@ -201,7 +221,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
-        let d = gate(tmp.path(), &ch.id, &req(RiskTier::Read), false, None).await.unwrap();
+        let d = gate(tmp.path(), &ch.id, &req(RiskTier::Read), false, None)
+            .await
+            .unwrap();
         assert!(d.allow);
     }
 
@@ -211,13 +233,24 @@ mod tests {
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
         let r = req(RiskTier::Destructive);
-        let hash = action_hash(&r.tool_name, &r.tool_input, &ch.id, &r.step_or_call_id, &r.agent_id);
+        let hash = action_hash(
+            &r.tool_name,
+            &r.tool_input,
+            &ch.id,
+            &r.step_or_call_id,
+            &r.agent_id,
+        );
         let d = gate(tmp.path(), &ch.id, &r, true, None).await.unwrap();
         assert!(d.allow, "--yes auto-approves a high tier");
         assert_eq!(d.action_hash, hash);
         // Check the trail via a fresh open.
         let svc2 = ChannelService::open(tmp.path()).unwrap();
-        let kinds: Vec<_> = svc2.load_events(&ch.id).unwrap().iter().map(|e| e.kind).collect();
+        let kinds: Vec<_> = svc2
+            .load_events(&ch.id)
+            .unwrap()
+            .iter()
+            .map(|e| e.kind)
+            .collect();
         assert!(kinds.contains(&EventKind::HitlRequest));
         assert!(kinds.contains(&EventKind::HitlResponse));
     }
@@ -235,12 +268,25 @@ mod tests {
             reason: "".into(),
             surface: "cli".into(),
         };
-        svc.append(&ch.id, ChannelActor::System, EventKind::HitlResponse,
-            serde_json::to_value(&resp).unwrap(), None).unwrap();
+        svc.append(
+            &ch.id,
+            ChannelActor::System,
+            EventKind::HitlResponse,
+            serde_json::to_value(&resp).unwrap(),
+            None,
+        )
+        .unwrap();
         // Drop svc before waiting (don't hold across await).
         drop(svc);
-        let d = wait_for_response(tmp.path(), &ch.id, "h-x", "EXPECTED", std::time::Duration::from_secs(1))
-            .await.unwrap();
+        let d = wait_for_response(
+            tmp.path(),
+            &ch.id,
+            "h-x",
+            "EXPECTED",
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
         assert!(!d.allow, "mismatched action_hash must fail-closed");
         assert!(d.reason.contains("drift"));
         let _ = r;

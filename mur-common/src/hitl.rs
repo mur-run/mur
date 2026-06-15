@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 
 /// How risky an action is. `Ord` is severity order: `Read` < … < `Privileged`.
 /// Tier is resolved most-restrictive-wins and is NEVER LLM-asserted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum RiskTier {
     Read,

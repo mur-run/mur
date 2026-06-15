@@ -173,7 +173,12 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
         },
         Commands::Channel { action } => match action {
-            ChannelAction::Approve { channel_id, hitl_id, deny, reason } => {
+            ChannelAction::Approve {
+                channel_id,
+                hitl_id,
+                deny,
+                reason,
+            } => {
                 cmd::channel::approve(&channel_id, &hitl_id, deny, reason)?;
             }
         },

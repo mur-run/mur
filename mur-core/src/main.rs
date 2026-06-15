@@ -32,12 +32,12 @@ mod action_pipeline;
 mod discovery;
 mod evolve;
 mod executor;
-mod hitl;
 mod extract;
 mod extract_llm;
 #[allow(dead_code)]
 mod federation;
 mod harvest;
+mod hitl;
 mod inject;
 mod interactive;
 #[allow(dead_code, unused_imports)]
