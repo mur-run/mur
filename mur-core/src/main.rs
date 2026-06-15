@@ -32,6 +32,7 @@ mod action_pipeline;
 mod discovery;
 mod evolve;
 mod executor;
+mod hitl;
 mod extract;
 mod extract_llm;
 #[allow(dead_code)]

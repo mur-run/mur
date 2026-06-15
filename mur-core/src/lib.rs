@@ -29,6 +29,7 @@ pub mod dashboard;
 pub mod discovery;
 pub mod evolve;
 pub mod executor;
+pub mod hitl;
 pub mod extract;
 pub mod extract_llm;
 pub mod federation;
