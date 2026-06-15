@@ -385,23 +385,22 @@ async fn execute_step(
     // ── Resume cursor (v3c): skip steps whose ToolResult is already recorded ──
     if let Some(cid) = opts.channel_id.as_deref() {
         let result_key = idem_key(cid, &opts.run_id, &sid, "result");
-        if let Ok(svc) = ChannelService::open(mur_home) {
-            if let Ok(evs) = svc.load_events(cid) {
-                if evs.iter().any(|e| {
-                    e.kind == mur_common::channel::EventKind::ToolResult
-                        && e.idempotency_key.as_deref() == Some(result_key.as_str())
-                        && e.payload.get("success").and_then(|v| v.as_bool()) == Some(true)
-                }) {
-                    eprintln!("  Step {sid}: already completed (resume) — skipping");
-                    return StepResult {
-                        exit_code: 0,
-                        output_text: String::new(),
-                        duration_ms: 0,
-                        failed_step: None,
-                        success: true,
-                    };
-                }
-            }
+        if let Ok(svc) = ChannelService::open(mur_home)
+            && let Ok(evs) = svc.load_events(cid)
+            && evs.iter().any(|e| {
+                e.kind == mur_common::channel::EventKind::ToolResult
+                    && e.idempotency_key.as_deref() == Some(result_key.as_str())
+                    && e.payload.get("success").and_then(|v| v.as_bool()) == Some(true)
+            })
+        {
+            eprintln!("  Step {sid}: already completed (resume) — skipping");
+            return StepResult {
+                exit_code: 0,
+                output_text: String::new(),
+                duration_ms: 0,
+                failed_step: None,
+                success: true,
+            };
         }
     }
 
@@ -523,7 +522,11 @@ async fn execute_step(
         });
         let req = crate::hitl::gate::ActionRequest {
             tier,
-            tool_name: step.command.clone().map(|_| "sh".into()).unwrap_or_else(|| "intent".into()),
+            tool_name: step
+                .command
+                .clone()
+                .map(|_| "sh".into())
+                .unwrap_or_else(|| "intent".into()),
             tool_input: input.clone(),
             step_or_call_id: sid.clone(),
             agent_id: "mur".into(),
@@ -577,7 +580,9 @@ async fn execute_step(
             false
         };
         if !approved {
-            eprintln!("  Step {sid}: needs_approval, skipped (yields true) — use `--yes` to auto-approve");
+            eprintln!(
+                "  Step {sid}: needs_approval, skipped (yields true) — use `--yes` to auto-approve"
+            );
             return StepResult {
                 exit_code: 0,
                 output_text: String::new(),
@@ -1016,7 +1021,10 @@ mod tests {
 
         let proc = Procedure {
             variables: vec![],
-            steps: vec![step("s0", &[], Some("echo zero")), step("s1", &["s0"], Some("echo one"))],
+            steps: vec![
+                step("s0", &[], Some("echo zero")),
+                step("s1", &["s0"], Some("echo one")),
+            ],
         };
         let opts = DagExecOptions {
             channel_id: Some(ch.id.clone()),
@@ -1024,14 +1032,24 @@ mod tests {
             yes: true,
             ..Default::default()
         };
-        execute_dag(tmp.path(), "resume-wf", &proc, &opts).await.unwrap();
+        execute_dag(tmp.path(), "resume-wf", &proc, &opts)
+            .await
+            .unwrap();
         let after_first = svc.load_events(&ch.id).unwrap().len();
 
-        execute_dag(tmp.path(), "resume-wf", &proc, &opts).await.unwrap();
+        execute_dag(tmp.path(), "resume-wf", &proc, &opts)
+            .await
+            .unwrap();
         let tr_after_second = svc
-            .load_events(&ch.id).unwrap()
-            .iter().filter(|e| e.kind == EventKind::ToolResult).count();
-        assert_eq!(tr_after_second, 2, "rerun did not duplicate completed-step results");
+            .load_events(&ch.id)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == EventKind::ToolResult)
+            .count();
+        assert_eq!(
+            tr_after_second, 2,
+            "rerun did not duplicate completed-step results"
+        );
         let _ = after_first;
     }
 
@@ -1046,17 +1064,30 @@ mod tests {
         let ch = svc.create_for_workflow("gated-wf").unwrap();
         let mut s = step("s0", &[], Some("echo done"));
         s.risk = Some(RiskTier::Destructive);
-        let proc = Procedure { variables: vec![], steps: vec![s] };
+        let proc = Procedure {
+            variables: vec![],
+            steps: vec![s],
+        };
         let opts = DagExecOptions {
             channel_id: Some(ch.id.clone()),
             run_id: "run-1".into(),
             yes: true,
             ..Default::default()
         };
-        let out = execute_dag(tmp.path(), "gated-wf", &proc, &opts).await.unwrap();
+        let out = execute_dag(tmp.path(), "gated-wf", &proc, &opts)
+            .await
+            .unwrap();
         assert_eq!(out.exit_code, 0);
-        let kinds: Vec<_> = svc.load_events(&ch.id).unwrap().iter().map(|e| e.kind).collect();
-        assert!(kinds.contains(&EventKind::HitlRequest), "high-risk step raised a gate");
+        let kinds: Vec<_> = svc
+            .load_events(&ch.id)
+            .unwrap()
+            .iter()
+            .map(|e| e.kind)
+            .collect();
+        assert!(
+            kinds.contains(&EventKind::HitlRequest),
+            "high-risk step raised a gate"
+        );
     }
 
     #[test]
