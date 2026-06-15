@@ -17,10 +17,10 @@ use std::process::Stdio;
 use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, ChannelState};
-use sha2::{Digest, Sha256};
 use mur_common::pipeline::{PipelineOutput, PipelineStatus, inject_input};
 use mur_common::skill::event_log::{RunRecord, record_run};
 use mur_common::skill::manifest::{FailureAction, Procedure, ProcedureStep};
+use sha2::{Digest, Sha256};
 use tokio::time::{Duration, sleep, timeout as tokio_timeout};
 
 /// Options for a single DAG execution.
@@ -422,7 +422,10 @@ async fn execute_step(
         let reply_key = idem_key(cid, &opts.run_id, &sid, "reply");
 
         // Sub-goal text: explicit intent, else the step description.
-        let goal_text = step.intent.clone().unwrap_or_else(|| step.description.clone());
+        let goal_text = step
+            .intent
+            .clone()
+            .unwrap_or_else(|| step.description.clone());
 
         // Record the delegation up front (System actor, deterministic key).
         if let Ok(svc) = ChannelService::open(mur_home) {
@@ -464,7 +467,9 @@ async fn execute_step(
                 if let Ok(svc) = ChannelService::open(mur_home) {
                     let _ = svc.append(
                         cid,
-                        ChannelActor::Agent { id: canonical.clone() },
+                        ChannelActor::Agent {
+                            id: canonical.clone(),
+                        },
                         mur_common::channel::EventKind::Message,
                         serde_json::json!({
                             "text": reply,
@@ -479,7 +484,11 @@ async fn execute_step(
                     exit_code: if empty { 1 } else { 0 },
                     output_text: reply,
                     duration_ms: start.elapsed().as_millis() as u64,
-                    failed_step: if empty { Some(step.description.clone()) } else { None },
+                    failed_step: if empty {
+                        Some(step.description.clone())
+                    } else {
+                        None
+                    },
                     success: !empty,
                 }
             }
@@ -511,20 +520,18 @@ async fn execute_step(
     // Guard ToolCall against spurious emit on delegation steps (belt+suspenders
     // in case delegate_to is set but channel_id is None — the branch above
     // handles the channel case; this ensures local runs stay clean too).
-    if let Some(cid) = opts.channel_id.as_deref() {
-        if step.delegate_to.is_none() {
-            emit_channel(
-                mur_home,
-                cid,
-                mur_common::channel::EventKind::ToolCall,
-                serde_json::json!({
-                    "step_id": sid,
-                    "description": step.description,
-                    "command": step.command,
-                    "tool": step.tool,
-                }),
-            );
-        }
+    if let (Some(cid), true) = (opts.channel_id.as_deref(), step.delegate_to.is_none()) {
+        emit_channel(
+            mur_home,
+            cid,
+            mur_common::channel::EventKind::ToolCall,
+            serde_json::json!({
+                "step_id": sid,
+                "description": step.description,
+                "command": step.command,
+                "tool": step.tool,
+            }),
+        );
     }
 
     let result = execute_step_inner(step, opts, step_index).await;
