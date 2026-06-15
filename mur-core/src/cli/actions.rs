@@ -162,6 +162,8 @@ pub enum InternalsAction {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// One-shot: import legacy cli-sessions into Channels.
+    MigrateChannels,
 }
 
 #[derive(Subcommand)]

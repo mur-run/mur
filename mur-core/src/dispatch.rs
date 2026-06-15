@@ -980,6 +980,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             InternalsAction::Git { layer, args } => {
                 cmd::internals::cmd_internals_git(&layer, &args)?
             }
+            InternalsAction::MigrateChannels => {
+                let home = crate::paths::mur_root(None);
+                let n = cmd::agent::channel_import::migrate_all(&home)?;
+                println!("✅ imported {n} CLI session(s) into channels");
+            }
         },
         // Deprecated: use `mur skill eval`
         Commands::Eval { action } => {

@@ -9,6 +9,7 @@ members = [
     "mur-agent-launcher",
     "mur-mcp-server",
     "mur-compress",
+    "mur-channel",
     "mur-mobile-sdk",
     # "mur-commander",  # separate crate — v0.2.0 released
 ]
@@ -57,6 +58,8 @@ seahash = "4"
 whatlang = "0.16"
 ulid = { version = "1", features = ["serde"] }
 fs2 = "0.4"
+notify = "6"
+rusqlite = { version = "0.32", features = ["bundled"] }
 chrono-tz = "0.8"
 insta = { version = "1", features = ["yaml"] }
 sled = "0.34"

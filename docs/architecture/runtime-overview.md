@@ -31,6 +31,16 @@ session-start hook prints a one-line pending-proposals hint (spec §3.8 tier 1).
 - Spec: `docs/superpowers/specs/2026-06-11-mur-ambient-capture-and-harvest-design.md`
 - Modules: `mur-core/src/session/ambient.rs`, `mur-core/src/harvest/`
 
+## Channels (unified work object, 2026-06-15)
+
+`~/.mur/channels/<id>/` holds one Channel each:
+- `events.jsonl` — append-only event stream (source of truth).
+- `channel.yaml` — manifest cache (goal/state/participants), recomputable from the log.
+
+`~/.mur/index/channels.db` is a rebuildable SQLite read-model (channel list / "my
+work" inbox). Rebuild with `mur internals reindex`. Import legacy CLI transcripts
+with `mur internals migrate-channels`. Spec: `docs/superpowers/specs/2026-06-15-unified-channel-design.md`.
+
 ## Pattern pipeline removal (workflow-engine v2 P1a+P1b, 2026-06-11)
 
 The legacy Pattern pipeline is removed; skills + workflows are the knowledge

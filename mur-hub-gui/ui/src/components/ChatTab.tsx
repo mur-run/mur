@@ -43,6 +43,47 @@ interface ChatDelta {
   task_id: string;
 }
 
+/** One persisted line from the shared channel store (`channel_load`). Mirrors
+ *  `mur_common::channel::ChannelEvent` over serde. `actor` is internally
+ *  tagged on `kind` (kebab-case): `{kind:"human",name}` / `{kind:"agent",id}` /
+ *  `{kind:"system"}`. The event `kind` is also kebab-case ("message", "note",
+ *  "tool-call", …) and `payload` is free-form JSON. */
+interface ChannelEvent {
+  seq: number;
+  ts: string;
+  actor:
+    | { kind: "human"; name?: string }
+    | { kind: "agent"; id?: string }
+    | { kind: "system" };
+  kind: string;
+  payload: { text?: string; task_id?: string };
+  idempotency_key?: string | null;
+}
+
+/** Map persisted channel events to the committed message list. We only render
+ *  `message` events; non-message kinds (notes, tool calls, state changes …) are
+ *  not displayed here. System-actor messages are skipped — this view has no
+ *  system role and rendering them as the agent would mislabel them. */
+function channelEventsToMessages(events: ChannelEvent[]): ChatMsg[] {
+  const out: ChatMsg[] = [];
+  for (const ev of events) {
+    if (ev.kind !== "message") continue;
+    const text = ev.payload?.text ?? "";
+    switch (ev.actor.kind) {
+      case "agent":
+        out.push({ role: "agent", text });
+        break;
+      case "human":
+        out.push({ role: "user", text });
+        break;
+      case "system":
+        // No system role in this view — skip rather than mislabel.
+        break;
+    }
+  }
+  return out;
+}
+
 interface Props {
   agentName: string;
   displayName: string;
@@ -66,16 +107,27 @@ export function ChatTab({ agentName, displayName }: Props) {
   // Set when Stop fired this turn, so the resolving send() doesn't append a
   // second (full or empty) agent bubble after we already committed the partial.
   const stoppedRef = useRef(false);
+  // Mirrors `busy` so the `channel-updated` listener can read the live in-flight
+  // state without re-subscribing (a stale closure would skip the guard).
+  const busyRef = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
   const thinkRef = useRef<HTMLDivElement>(null);
+
+  // Keep the busy mirror in sync for the channel-updated listener's guard.
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
 
   // Keep the reasoning box scrolled to the latest line (vertical flow).
   useEffect(() => {
     if (thinkRef.current) thinkRef.current.scrollTop = thinkRef.current.scrollHeight;
   }, [thinking]);
 
-  // Fresh conversation when the selected agent changes.
+  // Fresh conversation when the selected agent changes, then hydrate the
+  // committed history from the shared channel store and keep it live-updated.
   useEffect(() => {
+    let alive = true;
+
     setMessages([]);
     setHitlRequests([]);
     setStreaming(null);
@@ -83,6 +135,36 @@ export function ChatTab({ agentName, displayName }: Props) {
     streamingRef.current = "";
     thinkingRef.current = "";
     taskIdRef.current = null;
+
+    // Load prior history so conversations survive a Hub restart. The in-flight
+    // streamed reply is separate transient state (`streaming`), so replacing the
+    // whole list here never duplicates the live bubble.
+    async function hydrate() {
+      try {
+        const events = await invoke<ChannelEvent[]>("channel_load", {
+          name: agentName,
+        });
+        if (!alive) return;
+        setMessages(channelEventsToMessages(events));
+      } catch {
+        // Best-effort: a missing/unreadable channel just leaves history empty.
+      }
+    }
+    void hydrate();
+
+    // Re-hydrate when any surface (CLI, another window) appends to this agent's
+    // channel — UNLESS we're mid-stream locally, in which case the local path
+    // already shows the reply and a re-hydrate would clobber the in-flight
+    // bubble. The next mount / channel-updated reconciles afterward.
+    const unChannel = listen<string>("channel-updated", () => {
+      if (busyRef.current) return;
+      void hydrate();
+    });
+
+    return () => {
+      alive = false;
+      void unChannel.then((f) => f());
+    };
   }, [agentName]);
 
   // Subscribe to token deltas for this agent.

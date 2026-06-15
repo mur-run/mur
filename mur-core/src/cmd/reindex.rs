@@ -7,6 +7,15 @@ pub(crate) async fn cmd_reindex() -> Result<()> {
     use crate::store::embedding::{EmbeddingConfig, embed_batch};
     use crate::store::vector::LanceDbStore as VectorStore;
 
+    // Rebuild the Channel SQLite read-model from the event-log manifests.
+    {
+        let home = crate::paths::mur_root(None);
+        let store = mur_channel::ChannelStore::new(&home);
+        let index = mur_channel::index::ChannelIndex::open(&home)?;
+        let n = index.rebuild_from(&store)?;
+        println!("✅ rebuilt channel index: {n} channel(s)");
+    }
+
     let pattern_store = YamlStore::default_store()?;
     let patterns = pattern_store.list_all()?;
     let workflow_store = WorkflowYamlStore::default_store()?;

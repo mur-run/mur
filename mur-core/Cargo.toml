@@ -22,6 +22,7 @@ path = "src/main.rs"
 mur-common = { path = "../mur-common", version = "2.16" }
 mur-compress = { path = "../mur-compress" }
 mur-agent-runtime = { path = "../mur-agent-runtime" }  # for cmd::agent::cmd_export
+mur-channel = { path = "../mur-channel" }
 tar = "0.4"           # cmd::agent_export_gui template-mode identity stripping
 flate2 = "1"          # gzip wrapper for the same
 zip = { version = "2", default-features = false, features = ["deflate"] }

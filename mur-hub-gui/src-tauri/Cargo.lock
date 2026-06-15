@@ -6539,6 +6539,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mur-channel"
+version = "2.24.5"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fs2",
+ "mur-common",
+ "notify",
+ "rusqlite",
+ "serde_json",
+ "serde_yaml",
+ "uuid",
+]
+
+[[package]]
 name = "mur-common"
 version = "2.24.5"
 dependencies = [
@@ -6637,6 +6652,7 @@ dependencies = [
  "libc",
  "mime_guess",
  "mur-agent-runtime",
+ "mur-channel",
  "mur-common",
  "mur-compress",
  "notify",
@@ -6709,6 +6725,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
+ "mur-channel",
  "mur-common",
  "mur-core",
  "mur-gui-core",
