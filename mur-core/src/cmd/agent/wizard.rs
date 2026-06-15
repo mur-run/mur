@@ -41,7 +41,7 @@ impl WizardHooks for CliHooks {
     }
 }
 
-pub fn run(
+pub async fn run(
     role: Option<String>,
     workspace: Option<String>,
     headless: bool,
@@ -83,18 +83,9 @@ pub fn run(
         None
     };
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
     let mut hooks = CliHooks { headless };
-    let outcome = rt.block_on(agent_wizard::run_wizard(
-        manifest,
-        &ws,
-        "claude_sonnet",
-        llm,
-        None,
-        &mut hooks,
-    ))?;
+    let outcome =
+        agent_wizard::run_wizard(manifest, &ws, "claude_sonnet", llm, None, &mut hooks).await?;
     if outcome.created {
         println!("\n✅ Created and started agent '{}'.", outcome.agent_name);
     } else {

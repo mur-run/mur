@@ -1376,7 +1376,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             headless,
             no_llm,
         } => {
-            cmd::agent::wizard::run(role, workspace, headless, no_llm)?;
+            cmd::agent::wizard::run(role, workspace, headless, no_llm).await?;
         }
     }
     Ok(())
