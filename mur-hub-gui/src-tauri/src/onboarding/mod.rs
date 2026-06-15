@@ -1,4 +1,5 @@
 pub mod first_launch;
+pub mod spec;
 pub use first_launch::{check_first_launch, mark_first_launch_done};
 
 use mur_common::agent::{AgentAppearance, BehaviorPreset, RenderStatus};
