@@ -125,7 +125,7 @@ pub fn list_channels(home: &Path) -> anyhow::Result<Vec<ChannelSummary>> {
 /// All events for one channel (the feed).
 pub fn events_for(home: &Path, id: &str) -> anyhow::Result<Vec<ChannelEvent>> {
     let svc = ChannelService::open(home)?;
-    Ok(svc.load_events(id)?)
+    svc.load_events(id)
 }
 
 /// One channel manifest (the trace pane: goal / participants / state).
