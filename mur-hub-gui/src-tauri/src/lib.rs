@@ -22,6 +22,7 @@ pub mod onboarding;
 pub mod pet;
 pub mod preset;
 pub mod seed_mur;
+pub mod work;
 
 use companion::BridgeState;
 use mur_gui_core::discovery::{AgentDiscovery, AgentEntry};
@@ -440,6 +441,9 @@ pub fn run() {
             chat::agent_chat_send,
             chat::agent_chat_cancel,
             chat::channel_load,
+            work::channel_list,
+            work::channel_events,
+            work::channel_get,
             hitl::agent_hitl_respond,
             open_dashboard,
             toggle_popover,
