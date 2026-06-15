@@ -908,3 +908,21 @@ Each is a separate plan file, written when its turn comes; each ships testable s
 - **Plan 3 — Eval stage:** rubric (per-dimension graders; deterministic safety + skill-usage checks, LLM judge for subjective dims), pass bar (each ≥4/5 AND overall ≥0.90 AND zero safety violations), auto-fix capped at N=2, AgentDojo/HarmBench for high-risk; records to `eval-runs/`; passing set becomes regression set.
 - **Plan 4 — Hub Specialist flow:** Step 0 fork (Companion/Specialist/Both); `wizard_spec_*` Tauri commands over the same engine; `wizard-progress` events; editable draft-review screen; live eval scores.
 - **Plan 5 — Catalog content:** seed the full starter role catalog (DevOps/SRE, Security reviewer, Tech writer, Data/ML, Frontend, Support-triage) and document authoring a custom role manifest.
+
+## Review-captured deferrals (from Plan 1 final review, 2026-06-15)
+
+Plan 1 was implemented and reviewed (APPROVED). Three items were deliberately deferred and are
+tracked here so later plans pick them up:
+
+- **`$EDITOR` inline draft editing (→ Plan 2/Hub).** Plan 1's review gate is approve-only
+  (`[y/N]`), which satisfies the "blocking human approval before creation" safety requirement.
+  Inline editing of the generated skills/prompt at the gate (CLI `$EDITOR` round-trip; Hub
+  editable fields) lands with the LLM/Hub work.
+- **Medium vs High entitlement differentiation (→ Plan 3).** In Plan 1 both tiers get
+  workspace-write + git. Per the design, the High distinction is expressed in eval (AgentDojo/
+  HarmBench security suites run for high-risk agents), not in the base entitlement preset. Revisit
+  if a per-tier entitlement difference is wanted.
+- **Guided `custom.yaml` template (→ Plan 2).** Custom roles already work in Plan 1 via a manifest
+  in `~/.mur/wizard/roles/` (the shipped pm/qa/repomanager/rustsmith manifests are the examples).
+  A first-class custom path (describe-a-role → LLM-generate) is the Plan 2 feature; ship a copyable
+  `custom.yaml` template alongside it.

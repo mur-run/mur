@@ -116,4 +116,28 @@ mod tests {
         assert_eq!(errs.len(), 1);
         assert_eq!(errs[0].0, "bad");
     }
+
+    /// Regression guard: the deterministic stub skills produced by `build_draft`
+    /// must themselves pass the skill validator, or the wizard would abort before
+    /// the review gate on its own generated output.
+    #[test]
+    fn stub_generated_drafts_pass_validation() {
+        use crate::agent_wizard::catalog::RoleManifest;
+        use crate::agent_wizard::stages::{WizardHooks, build_draft};
+
+        struct NoHooks;
+        impl WizardHooks for NoHooks {}
+
+        let m = RoleManifest {
+            id: "pm".into(),
+            display_name: "PM".into(),
+            charter: "Turns intent into buildable, testable work.".into(),
+            risk: RiskLevel::Low,
+            skill_topics: vec!["product-spec-and-prd-writing".into()],
+            category: "product".into(),
+        };
+        let draft = build_draft(&m, "/repo", "claude_sonnet", &mut NoHooks);
+        let errs = validate_drafts(&draft);
+        assert!(errs.is_empty(), "stub skills must pass the validator, got: {errs:?}");
+    }
 }
