@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Borders};
 use tui_textarea::TextArea;
 
 use super::markdown;
-use super::persist::{Session, TurnRecord};
+use super::persist::{ChannelMeta, Session, TurnRecord};
 use super::stream::HitlRequest;
 
 /// Spinner frames shown while the agent is generating.
@@ -74,6 +74,8 @@ pub enum SlashCmd {
     Clear,
     Card,
     Sessions,
+    /// `/channels [N]` — list channels or switch to channel N.
+    Channels(Option<usize>),
     /// `/auto [on|off]` — toggle (None) or set session-wide auto-approval.
     Auto(Option<bool>),
     /// `/mcp [list|add|remove] …` — manage the agent's MCP servers.
@@ -95,6 +97,9 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "clear" | "new" => SlashCmd::Clear,
         "card" => SlashCmd::Card,
         "sessions" | "ls" => SlashCmd::Sessions,
+        "channels" | "chan" => SlashCmd::Channels(
+            words.next().and_then(|s| s.parse::<usize>().ok()),
+        ),
         "auto" => SlashCmd::Auto(match words.next() {
             Some("on") => Some(true),
             Some("off") => Some(false),
@@ -108,11 +113,12 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
 }
 
 /// The set of slash commands offered by tab-completion / `/help`.
-pub const SLASH_COMMANDS: [&str; 9] = [
+pub const SLASH_COMMANDS: [&str; 10] = [
     "/help",
     "/clear",
     "/card",
     "/sessions",
+    "/channels",
     "/auto",
     "/mcp",
     "/skill",
@@ -131,6 +137,9 @@ pub struct App {
     pub streaming: bool,
     pub hitl: Option<HitlRequest>,
     pub session: Session,
+    /// Cached live-channel id + state for status bar. Refreshed after each
+    /// persisted turn on resume/switch. `None` until first append.
+    pub channel: Option<ChannelMeta>,
     /// Lines scrolled up from the bottom (0 = pinned to newest).
     pub scroll_back: u16,
     pub spinner: usize,
@@ -161,6 +170,7 @@ impl App {
             streaming: false,
             hitl: None,
             session,
+            channel: None,
             scroll_back: 0,
             spinner: 0,
             should_quit: false,
@@ -185,12 +195,20 @@ impl App {
 
     /// Append a turn to the session log, surfacing a write failure once.
     fn persist_turn(&mut self, role: &str, text: &str, task_id: Option<&str>) {
-        if let Err(e) = self.session.append(role, text, task_id)
-            && !self.persist_warned
-        {
-            self.persist_warned = true;
-            self.push_system(format!("warning: session is not being saved: {e}"));
+        match self.session.append(role, text, task_id) {
+            Ok(()) => self.channel = self.session.current(),
+            Err(e) => {
+                if !self.persist_warned {
+                    self.persist_warned = true;
+                    self.push_system(format!("warning: session is not being saved: {e}"));
+                }
+            }
         }
+    }
+
+    /// Re-read live channel meta into the status-bar cache.
+    pub fn refresh_channel(&mut self) {
+        self.channel = self.session.current();
     }
 
     /// Current input text (joined multiline).
@@ -299,12 +317,30 @@ impl App {
     /// in-flight turn must already have been cancelled by the caller.
     pub fn start_new_session(&mut self, session: Session) {
         self.session = session;
+        self.channel = None;
         self.messages.clear();
         self.context_task_id = None;
         self.current_task_id = None;
         self.streaming = false;
         self.hitl = None;
         self.push_system("started a new conversation");
+    }
+
+    /// Switch live conversation to a channel by id: reopen its session, clear
+    /// the transcript, rehydrate its turns, and refresh the status bar.
+    pub fn switch_channel(&mut self, channel_id: &str) -> anyhow::Result<()> {
+        let session = Session::open_existing(&self.home, &self.agent, channel_id)?;
+        let turns = super::persist::load(&self.home, channel_id, &self.agent)?;
+        self.session = session;
+        self.channel = None;
+        self.messages.clear();
+        self.context_task_id = None;
+        self.current_task_id = None;
+        self.streaming = false;
+        self.hitl = None;
+        self.load_history(turns);
+        self.refresh_channel();
+        Ok(())
     }
 
     /// Load prior turns into the transcript (resume), threading the last agent
@@ -382,6 +418,12 @@ mod tests {
 
     fn app() -> App {
         let home = tempdir().unwrap();
+        let session = Session::create(home.path(), "a").unwrap();
+        App::new(home.path().to_path_buf(), "a".into(), session)
+    }
+
+    /// Helper that borrows an existing TempDir so the directory survives the test.
+    fn app_at(home: &tempfile::TempDir) -> App {
         let session = Session::create(home.path(), "a").unwrap();
         App::new(home.path().to_path_buf(), "a".into(), session)
     }
@@ -532,5 +574,35 @@ mod tests {
         a.start_new_session(s);
         assert!(a.context_task_id.is_none());
         assert_eq!(a.messages.last().unwrap().role, Role::System);
+    }
+
+    #[test]
+    fn parse_slash_channels() {
+        assert_eq!(parse_slash("/channels"), Some(SlashCmd::Channels(None)));
+        assert_eq!(parse_slash("/channels 2"), Some(SlashCmd::Channels(Some(2))));
+        assert_eq!(parse_slash("/chan"), Some(SlashCmd::Channels(None)));
+        assert_eq!(parse_slash("/channels x"), Some(SlashCmd::Channels(None)));
+    }
+
+    #[test]
+    fn switch_channel_loads_history_and_caches_meta() {
+        let home = tempdir().unwrap();
+        let mut a = app_at(&home);
+        a.begin_user_turn("first question");
+        a.finish_agent_turn("first answer".into(), Some("t1".into()));
+        let first_id = a.channel.as_ref().expect("channel after turn").id.clone();
+
+        // Start a new (second) session — channel should be cleared.
+        let s = Session::create(&a.home, &a.agent).unwrap();
+        a.start_new_session(s);
+        assert!(a.channel.is_none(), "channel cleared after new session");
+
+        // Switch back to the first channel.
+        a.switch_channel(&first_id).unwrap();
+        assert_eq!(a.channel.as_ref().unwrap().id, first_id);
+        assert!(
+            a.messages.iter().any(|m| m.text == "first question"),
+            "history rehydrated after switch"
+        );
     }
 }

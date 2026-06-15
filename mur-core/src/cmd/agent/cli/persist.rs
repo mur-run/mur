@@ -18,6 +18,14 @@ pub struct TurnRecord {
     pub task_id: Option<String>,
 }
 
+/// Live-channel id + state for the CLI status bar.
+#[derive(Debug, Clone)]
+pub struct ChannelMeta {
+    pub id: String,
+    /// kebab-case `ChannelState` string (e.g. "working").
+    pub state: String,
+}
+
 /// Listing entry; `id` is the channel id (was the session file stem).
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
@@ -62,6 +70,18 @@ impl Session {
     #[allow(dead_code)]
     pub fn channel_id(&self) -> Option<&str> {
         self.channel_id.as_deref()
+    }
+
+    /// Read the live channel's id + state for the status bar.
+    /// Returns `None` until the first `append` creates the channel.
+    pub fn current(&self) -> Option<ChannelMeta> {
+        let id = self.channel_id.clone()?;
+        let ch = self.svc.store().load_manifest(&id).ok()?;
+        let state = serde_json::to_string(&ch.state)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
+        Some(ChannelMeta { id, state })
     }
 
     /// Append one turn, creating the channel on first write. `role` ∈
@@ -171,4 +191,23 @@ pub fn list_recent(home: &Path, agent: &str, limit: usize) -> Result<Vec<Session
 
 pub fn latest(home: &Path, agent: &str) -> Result<Option<SessionInfo>> {
     Ok(list_recent(home, agent, 1)?.into_iter().next())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn current_is_none_until_first_append_then_some() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = Session::create(tmp.path(), "qa").unwrap();
+        assert!(s.current().is_none(), "no channel before first append");
+        s.append("user", "hi", None).unwrap();
+        let meta = s.current().expect("channel exists after first append");
+        assert!(!meta.id.is_empty());
+        assert!(!meta.state.is_empty());
+        // state must not contain JSON quotes — must be bare kebab
+        assert!(!meta.state.contains('"'));
+    }
 }
