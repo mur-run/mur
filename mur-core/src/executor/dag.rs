@@ -17,6 +17,7 @@ use std::process::Stdio;
 use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, ChannelState};
+use sha2::{Digest, Sha256};
 use mur_common::pipeline::{PipelineOutput, PipelineStatus, inject_input};
 use mur_common::skill::event_log::{RunRecord, record_run};
 use mur_common::skill::manifest::{FailureAction, Procedure, ProcedureStep};
@@ -39,6 +40,10 @@ pub struct DagExecOptions<'a> {
     /// Channel the executor runs OVER — events are appended to
     /// `~/.mur/channels/<id>/` as the workflow proceeds (v3a).
     pub channel_id: Option<String>,
+    /// Stable id for this logical run. Used to derive deterministic
+    /// `idempotency_key`s for channel events. v3b sets keys; v3c enforces dedup,
+    /// at which point a crash-rerun MUST reuse the same `run_id`. Empty = none.
+    pub run_id: String,
 }
 
 impl<'a> Default for DagExecOptions<'a> {
@@ -51,8 +56,46 @@ impl<'a> Default for DagExecOptions<'a> {
             device_id: "cli".to_string(),
             trigger: "manual",
             channel_id: None,
+            run_id: String::new(),
         }
     }
+}
+
+/// Deterministic idempotency key for a channel event: stable across a
+/// crash-rerun of the same logical run, distinct per (channel, run, step, role).
+fn idem_key(channel_id: &str, run_id: &str, step_id: &str, suffix: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(format!("{channel_id}|{run_id}|{step_id}|{suffix}").as_bytes());
+    format!("{:x}", h.finalize())
+}
+
+/// Build the `message/send` params for a delegated sub-goal.
+fn build_delegate_params(text: &str, child_task_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] },
+        "task_id": child_task_id,
+    })
+}
+
+/// Extract the specialist's reply: the last `role=="agent"` message's joined
+/// text parts. Mirrors the Hub's `extract_text` over `task["messages"]`.
+fn extract_agent_reply(task: &serde_json::Value) -> String {
+    task.get("messages")
+        .and_then(|m| m.as_array())
+        .and_then(|msgs| {
+            msgs.iter()
+                .rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("agent"))
+        })
+        .and_then(|m| m.get("parts").and_then(|p| p.as_array()))
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
 }
 
 // ── Graph types ─────────────────────────────────────────────────────────────
@@ -503,6 +546,7 @@ pub async fn execute_dag(
                     device_id: dev_id,
                     trigger: &tr,
                     channel_id: chan_id,
+                    run_id: String::new(),
                 };
                 execute_step(&step, &opts_clone, i, &mh).await
             }));
@@ -659,6 +703,39 @@ mod tests {
             description: format!("step {id}"),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn idem_key_is_deterministic_and_distinct() {
+        let a = idem_key("chan", "run", "s0", "delegate");
+        let b = idem_key("chan", "run", "s0", "delegate");
+        let c = idem_key("chan", "run", "s0", "reply");
+        assert_eq!(a, b, "same inputs → same key (crash-rerun stable)");
+        assert_ne!(a, c, "different suffix → different key");
+        assert_eq!(a.len(), 64, "sha256 hex");
+    }
+
+    #[test]
+    fn build_delegate_params_threads_text_and_task_id() {
+        let p = build_delegate_params("find the bug", "child-1");
+        assert_eq!(p["task_id"], "child-1");
+        assert_eq!(p["message"]["role"], "user");
+        assert_eq!(p["message"]["parts"][0]["text"], "find the bug");
+    }
+
+    #[test]
+    fn extract_agent_reply_takes_last_agent_message() {
+        let task = serde_json::json!({
+            "id": "t1",
+            "messages": [
+                {"role":"user","parts":[{"kind":"text","text":"q"}]},
+                {"role":"agent","parts":[{"kind":"text","text":"partial "},{"kind":"text","text":"answer"}]}
+            ]
+        });
+        assert_eq!(extract_agent_reply(&task), "partial answer");
+        // No agent message → empty.
+        let empty = serde_json::json!({ "messages": [{"role":"user","parts":[]}] });
+        assert_eq!(extract_agent_reply(&empty), "");
     }
 
     #[test]
