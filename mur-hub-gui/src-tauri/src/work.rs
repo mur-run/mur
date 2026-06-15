@@ -201,8 +201,14 @@ mod tests {
         let svc = ChannelService::open(tmp.path()).unwrap();
         // One real channel with a turn…
         let a = svc.create_for_agent("qa").unwrap();
-        svc.append_message(&a.id, ChannelActor::local_human(), EventKind::Message, "hi", None)
-            .unwrap();
+        svc.append_message(
+            &a.id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            "hi",
+            None,
+        )
+        .unwrap();
         // …and one empty stub that must be filtered out of the rail.
         let _empty = svc.create_for_agent("ghost").unwrap();
 

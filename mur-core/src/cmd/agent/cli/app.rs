@@ -97,9 +97,9 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "clear" | "new" => SlashCmd::Clear,
         "card" => SlashCmd::Card,
         "sessions" | "ls" => SlashCmd::Sessions,
-        "channels" | "chan" => SlashCmd::Channels(
-            words.next().and_then(|s| s.parse::<usize>().ok()),
-        ),
+        "channels" | "chan" => {
+            SlashCmd::Channels(words.next().and_then(|s| s.parse::<usize>().ok()))
+        }
         "auto" => SlashCmd::Auto(match words.next() {
             Some("on") => Some(true),
             Some("off") => Some(false),
@@ -579,7 +579,10 @@ mod tests {
     #[test]
     fn parse_slash_channels() {
         assert_eq!(parse_slash("/channels"), Some(SlashCmd::Channels(None)));
-        assert_eq!(parse_slash("/channels 2"), Some(SlashCmd::Channels(Some(2))));
+        assert_eq!(
+            parse_slash("/channels 2"),
+            Some(SlashCmd::Channels(Some(2)))
+        );
         assert_eq!(parse_slash("/chan"), Some(SlashCmd::Channels(None)));
         assert_eq!(parse_slash("/channels x"), Some(SlashCmd::Channels(None)));
     }
