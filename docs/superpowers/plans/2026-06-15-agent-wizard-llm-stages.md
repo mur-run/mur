@@ -276,6 +276,34 @@ git commit -m "feat(agent-wizard): LLM prompt drafting stage (draft_prompt_llm) 
 
 ---
 
+## ⚠ Design correction (applied during execution): LlmClient is not dyn-compatible
+
+`mur_common::llm::LlmClient` uses RPITIT, so `Arc<dyn LlmClient>` / `&dyn LlmClient` fail with **E0038**.
+Tasks 1–2 therefore implemented `author_skills_llm`/`draft_prompt_llm` as **generic** `<L: LlmClient>`.
+For the *optional* LLM in `run_wizard` (`Option<Arc<dyn …>>`), Task 3 introduces an **object-safe
+wrapper** and switches the wizard to it:
+
+```rust
+// in llm.rs
+use std::{pin::Pin, future::Future, sync::Arc};
+use mur_common::error::LlmError;
+pub trait WizardLlm: Send + Sync {
+    fn complete<'a>(&'a self, prompt: &'a str, system: Option<&'a str>)
+        -> Pin<Box<dyn Future<Output = Result<String, LlmError>> + Send + 'a>>;
+}
+impl<L: mur_common::llm::LlmClient + Send + Sync> WizardLlm for L {
+    fn complete<'a>(&'a self, p: &'a str, s: Option<&'a str>)
+        -> Pin<Box<dyn Future<Output = Result<String, LlmError>> + Send + 'a>> {
+        Box::pin(mur_common::llm::LlmClient::complete(self, p, s))
+    }
+}
+```
+
+Then: `author_skills_llm`/`author_one`/`draft_prompt_llm` take `llm: &dyn WizardLlm` (call
+`llm.complete(...)`), Task 1/2 tests call them with `&MockLlm(...)` (coerces via the blanket impl),
+and `build_wizard_draft`/`run_wizard` take `Option<Arc<dyn WizardLlm>>`. Everywhere the plan below
+says `dyn LlmClient`, read `dyn WizardLlm`. See memory `gotcha_llmclient_not_dyn_compatible`.
+
 ## Task 3: Async `run_wizard` with LLM-or-fallback
 
 **Files:**
