@@ -12,6 +12,19 @@ use crate::store::ChannelStore;
 
 /// The single API both the CLI and the Hub call. Keeps the log + the index in
 /// sync on every mutation.
+fn state_str(s: ChannelState) -> &'static str {
+    match s {
+        ChannelState::Submitted => "submitted",
+        ChannelState::Working => "working",
+        ChannelState::InputRequired => "input-required",
+        ChannelState::Completed => "completed",
+        ChannelState::Failed => "failed",
+        ChannelState::Canceled => "canceled",
+        ChannelState::Rejected => "rejected",
+        ChannelState::Stale => "stale",
+    }
+}
+
 pub struct ChannelService {
     store: ChannelStore,
     index: ChannelIndex,
@@ -82,6 +95,74 @@ impl ChannelService {
         Ok(ev)
     }
 
+    /// Create a channel that records a workflow execution. No agent participant;
+    /// the DAG executor acts as `ChannelActor::System`.
+    pub fn create_for_workflow(&self, skill_name: &str) -> Result<Channel> {
+        let now = Utc::now();
+        let ch = Channel {
+            v: CHANNEL_SCHEMA_VERSION,
+            id: uuid::Uuid::now_v7().to_string(),
+            title: format!("workflow: {skill_name}"),
+            goal: Goal::default(),
+            state: ChannelState::Working,
+            owner: ChannelActor::local_human(),
+            participants: vec![],
+            created_at: now,
+            updated_at: now,
+        };
+        self.store.create(&ch)?;
+        self.index.upsert(&ch)?;
+        Ok(ch)
+    }
+
+    /// Append an event with an arbitrary payload, bumping `updated_at` + index.
+    pub fn append(
+        &self,
+        channel_id: &str,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+    ) -> Result<ChannelEvent> {
+        let ev = self
+            .store
+            .append_event(channel_id, actor, kind, payload, idempotency_key)?;
+        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
+            ch.updated_at = ev.ts;
+            self.store.save_manifest(&ch)?;
+            self.index.upsert(&ch)?;
+        }
+        Ok(ev)
+    }
+
+    /// Emit a `StateChange` event and persist the new state on the manifest.
+    pub fn transition(
+        &self,
+        channel_id: &str,
+        new_state: ChannelState,
+        actor: ChannelActor,
+    ) -> Result<ChannelEvent> {
+        let old_state = self
+            .store
+            .load_manifest(channel_id)
+            .map(|ch| ch.state)
+            .unwrap_or(ChannelState::Working);
+        let payload = serde_json::json!({
+            "from": state_str(old_state),
+            "to":   state_str(new_state),
+        });
+        let ev = self
+            .store
+            .append_event(channel_id, actor, EventKind::StateChange, payload, None)?;
+        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
+            ch.state = new_state;
+            ch.updated_at = ev.ts;
+            self.store.save_manifest(&ch)?;
+            self.index.upsert(&ch)?;
+        }
+        Ok(ev)
+    }
+
     pub fn load_events(&self, channel_id: &str) -> Result<Vec<ChannelEvent>> {
         self.store.load_events(channel_id)
     }
@@ -119,6 +200,33 @@ impl ChannelService {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn append_structured_and_transition() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("deploy").unwrap();
+        assert_eq!(ch.state, ChannelState::Working);
+        assert!(ch.participants.is_empty(), "workflow channel has no agent participant");
+        svc.append(
+            &ch.id,
+            ChannelActor::System,
+            EventKind::ToolCall,
+            serde_json::json!({ "step_id": "s0", "command": "echo hi" }),
+            None,
+        )
+        .unwrap();
+        let ev = svc
+            .transition(&ch.id, ChannelState::Completed, ChannelActor::System)
+            .unwrap();
+        assert_eq!(ev.kind, EventKind::StateChange);
+        assert_eq!(ev.payload["from"], "working");
+        assert_eq!(ev.payload["to"], "completed");
+        assert_eq!(
+            svc.store().load_manifest(&ch.id).unwrap().state,
+            ChannelState::Completed
+        );
+    }
 
     #[test]
     fn create_append_resume_roundtrip() {
