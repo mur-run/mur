@@ -78,8 +78,12 @@ The runner executes ordered stages; LLM stages are skippable and emit progress:
 1. **Define role** — `name`, `display_name`, one-sentence charter, **risk level**. Risk drives
    HITL defaults, the entitlement preset, and whether security suites run in eval.
 2. **Research** *(LLM, optional)* — the configured model drafts the 4–6 skill topics from the role
-   description + its knowledge; if a web-search tool/MCP is wired into the runtime, augment with
-   live research + citations. Skipped (clearly flagged) when no model.
+   description + its knowledge. If a **search MCP server** is wired into the runtime, augment with
+   live research using the 2026 two-layer pattern: an LLM-native search API for discovery →
+   crawl-and-extract for clean source text → grounded skills with citations. **Provider-agnostic**
+   (Tavily / Exa / Brave / Firecrawl all ship MCP servers; no hardcoded provider — default
+   documented reference is Tavily for its citation-first design). Skipped (clearly flagged) when no
+   model or no search MCP.
 3. **Author skills** *(LLM, optional)* — generate 4–6 `skill.yaml` drafts (imperative rules each
    with a *why*, trigger-rich descriptions); validate each with `mur skill validate`.
 4. **DoD system prompt** *(LLM, optional)* — persona + operating-discipline gate + HITL rules +
@@ -92,12 +96,18 @@ The runner executes ordered stages; LLM stages are skippable and emit progress:
    Hub: a review screen with editable sections + an Approve button.
 7. **Create + attach + start** — only after approval: `agent create` (set `model_ref`), write
    `sys_prompt.md`, apply entitlements, `skill add` each skill, `install-service` + start.
-8. **Eval** *(LLM, optional)* — generate ~3 role tasks, drive the new agent via `mur agent send`,
-   LLM-judge each on a rubric (in-role correctness / uses-its-skills / honesty / safety) + a
-   forbidden-action safety probe. **On a miss, auto-revise the offending skill/prompt and re-run
-   (up to N rounds)**; for high-risk agents also run the existing `mur agent eval` security suites
-   (AgentDojo / HarmBench). Stream scores; surface anything still failing to the human. Records
-   land in `~/.mur/agents/<name>/eval-runs/`.
+8. **Eval** *(LLM, optional)* — generate ~3 role tasks (kept lean to avoid eval-overfitting) and
+   drive the new agent via `mur agent send`. Score with **per-dimension graders**, not one
+   monolithic judge: *safety* (forbidden-action probe) and *uses-its-skills* are **deterministic
+   checks**; *in-role correctness* and *honesty* use an LLM judge. **Pass bar: every rubric
+   dimension ≥ 4/5 AND overall ≥ 0.90 AND zero safety violations** (safety is a hard,
+   non-negotiable gate). **On a miss, auto-revise the offending skill/prompt and re-run — capped at
+   N = 2 rounds** (the empirical self-correction sweet spot; beyond ~2 rounds gains diminish and
+   risk regressing correct output). For high-risk agents also run the existing `mur agent eval`
+   security suites (AgentDojo / HarmBench). Stream scores; after the cap, **never claim success** —
+   surface remaining failures to the human and offer keep/discard. The passing task set becomes the
+   agent's **regression set** (guarded near 100% thereafter). Records land in
+   `~/.mur/agents/<name>/eval-runs/`.
 
 ### Role model — custom-first + extensible catalog
 
@@ -180,9 +190,20 @@ dir before approval.
    draft-review screen.
 6. Seed the starter role catalog; keep `specialized-agent-builder` skill as the guide.
 
+## Resolved decisions (researched 2026-06-15)
+
+- **Eval auto-fix rounds: N = 2.** Reflexion / Self-Refine evidence shows gains concentrate in the
+  first 1–2 self-correction rounds; beyond ~2 the cost/latency rises and already-correct output can
+  regress. Cap at 2.
+- **Pass bar: every rubric dimension ≥ 4/5 AND overall ≥ 0.90 AND zero safety violations.** Mirrors
+  the literature's "deterministic = pass AND judge > 0.90" pattern; raised from the initial 0.8 to
+  0.9. Per-dimension graders; deterministic checks for safety + skill-usage; LLM judge only for
+  subjective dimensions. Suite kept lean (~3 tasks) and reused as the agent's regression set.
+- **Research search source: provider-agnostic search MCP, two-layer (discovery → extract).**
+  Wired in phase 3; default documented reference Tavily; no hardcoded provider; graceful skip when
+  no search MCP is present.
+
 ## Open questions
 
-- Exact `N` for eval auto-fix rounds (proposed default: 2) and the score bar (proposed: every
-  task ≥ 4/5 + zero safety violations) — confirm during planning.
-- Which web-search capability (MCP server?) the runtime exposes for the optional research
-  augmentation — to be identified in phase 3; absence is handled by graceful skip.
+- None blocking. Concrete search-MCP provider selection is a phase-3 configuration choice, not a
+  design blocker (graceful skip covers its absence).
