@@ -96,7 +96,7 @@ impl ChannelService {
         }
         let ev = self
             .store
-            .append_event(channel_id, actor, kind, payload, None)?;
+            .append_event(channel_id, actor, kind, payload, None, None, None)?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
             self.store.save_manifest(&ch)?;
@@ -134,9 +134,53 @@ impl ChannelService {
         payload: serde_json::Value,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
-        let ev = self
-            .store
-            .append_event(channel_id, actor, kind, payload, idempotency_key)?;
+        let ev = self.store.append_event(
+            channel_id,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            None,
+            None,
+        )?;
+        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
+            ch.updated_at = ev.ts;
+            self.store.save_manifest(&ch)?;
+            self.index.upsert(&ch)?;
+        }
+        Ok(ev)
+    }
+
+    /// Sign an event with `identity` (key_version `kv`) and append it. Used by
+    /// the channel's writer (the router/owner) so the log is forgery-resistant.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_signed(
+        &self,
+        channel_id: &str,
+        identity: &mur_common::identity::AgentIdentity,
+        kv: u32,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+    ) -> Result<ChannelEvent> {
+        let sig = crate::sign::sign_event(
+            identity,
+            channel_id,
+            &actor,
+            kind,
+            &payload,
+            idempotency_key.as_deref(),
+        );
+        let ev = self.store.append_event(
+            channel_id,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            Some(sig),
+            Some(kv),
+        )?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
             self.store.save_manifest(&ch)?;
@@ -185,9 +229,15 @@ impl ChannelService {
             "from": state_str(old_state),
             "to":   state_str(new_state),
         });
-        let ev =
-            self.store
-                .append_event(channel_id, actor, EventKind::StateChange, payload, None)?;
+        let ev = self.store.append_event(
+            channel_id,
+            actor,
+            EventKind::StateChange,
+            payload,
+            None,
+            None,
+            None,
+        )?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.state = new_state;
             ch.updated_at = ev.ts;
@@ -279,6 +329,38 @@ mod tests {
             svc.store().load_manifest(&ch.id).unwrap().state,
             ChannelState::Completed
         );
+    }
+
+    #[test]
+    fn append_signed_stores_verifiable_sig() {
+        let tmp = TempDir::new().unwrap();
+        let id = mur_common::identity::AgentIdentity::generate();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("signed").unwrap();
+        let ev = svc
+            .append_signed(
+                &ch.id,
+                &id,
+                0,
+                ChannelActor::Agent { id: "mur".into() },
+                EventKind::Message,
+                serde_json::json!({ "text": "hi" }),
+                None,
+            )
+            .unwrap();
+        assert!(ev.sig.is_some());
+        assert_eq!(ev.key_version, Some(0));
+        let loaded = svc.load_events(&ch.id).unwrap();
+        let e = &loaded[0];
+        assert!(crate::sign::verify_event_sig(
+            &ch.id,
+            &e.actor,
+            e.kind,
+            &e.payload,
+            e.idempotency_key.as_deref(),
+            e.sig.as_ref().unwrap(),
+            &id.verifying_key_bytes()
+        ));
     }
 
     #[test]
