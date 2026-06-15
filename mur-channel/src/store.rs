@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -89,8 +89,21 @@ impl ChannelStore {
             .with_context(|| format!("open {}", path.display()))?;
         file.lock_exclusive().context("lock events file")?;
 
-        // Compute next seq from the existing log tail (held under the lock).
-        let next_seq = self.load_events(id)?.last().map(|e| e.seq + 1).unwrap_or(0);
+        // Compute next seq by reading the existing log via the SAME locked handle.
+        // Do NOT re-open the file here: on Windows file locks are mandatory (not
+        // advisory like flock on macOS/Linux), so opening a second handle to read
+        // a file we already hold an exclusive lock on fails with a lock violation.
+        let mut existing = String::new();
+        file.seek(SeekFrom::Start(0)).context("seek events file")?;
+        file.read_to_string(&mut existing)
+            .with_context(|| format!("read {}", path.display()))?;
+        let next_seq = existing
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str::<ChannelEvent>(l).ok())
+            .next_back()
+            .map(|e| e.seq + 1)
+            .unwrap_or(0);
 
         let ev = ChannelEvent {
             seq: next_seq,

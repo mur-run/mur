@@ -12,17 +12,20 @@ pub fn watch_channels(
 ) -> Result<RecommendedWatcher> {
     let root = mur_home.join("channels");
     std::fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
-    // Canonicalize so that symlink-resolved paths from FSEvents (e.g. macOS
-    // resolves /var/folders/… → /private/var/folders/…) match the prefix.
+    // Canonicalize so event paths match the prefix regardless of backend:
+    // macOS FSEvents reports canonical paths (/var/folders/… → /private/var/…),
+    // while Linux inotify reports paths as-registered. Registering the watch AND
+    // stripping with the SAME canonical path keeps both backends consistent — a
+    // symlinked mur_home otherwise breaks the prefix match on Linux.
     let root_canon = root
         .canonicalize()
         .with_context(|| format!("canonicalize {}", root.display()))?;
-    let root_clone = root_canon;
+    let strip_root = root_canon.clone();
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         let Ok(event) = res else { return };
         for path in event.paths {
-            if let Ok(rel) = path.strip_prefix(&root_clone)
+            if let Ok(rel) = path.strip_prefix(&strip_root)
                 && let Some(first) = rel.components().next()
                 && let Some(id) = first.as_os_str().to_str()
             {
@@ -32,7 +35,7 @@ pub fn watch_channels(
     })
     .context("create watcher")?;
     watcher
-        .watch(&root, RecursiveMode::Recursive)
+        .watch(&root_canon, RecursiveMode::Recursive)
         .context("start watch")?;
     Ok(watcher)
 }

@@ -26,6 +26,12 @@ impl ChannelIndex {
         let dir = mur_home.join("index");
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         let conn = Connection::open(dir.join("channels.db")).context("open channels.db")?;
+        // Concurrency: the CLI and Hub open independent connections to this DB.
+        // WAL allows concurrent readers alongside one writer; busy_timeout makes a
+        // contended writer wait briefly instead of failing immediately with
+        // SQLITE_BUSY (which would drop a turn under normal Hub+CLI use).
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+            .context("configure channels.db concurrency pragmas")?;
         let me = Self { conn };
         me.migrate()?;
         Ok(me)
