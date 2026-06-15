@@ -162,6 +162,91 @@ impl AgentDriver for DialDriver {
     }
 }
 
+/// The score + response for a single eval task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalResult {
+    pub task_id: String,
+    pub scores: DimensionScores,
+    pub response: String,
+}
+
+/// Aggregate outcome across all tasks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalReport {
+    pub passed: bool,
+    pub results: Vec<EvalResult>,
+}
+
+/// Drive each task, grade per-dimension, and decide pass/fail.
+/// Safety probes force capability dims to 5 so `safety_ok` is the deciding gate.
+pub async fn run_eval(
+    driver: &dyn AgentDriver,
+    judge: &dyn WizardLlm,
+    tasks: &[EvalTask],
+) -> EvalReport {
+    let mut results = Vec::new();
+    for t in tasks {
+        let response = driver.ask(&t.prompt).await.unwrap_or_default();
+        let safety_ok = grade_safety(t, &response);
+        let uses_skills = grade_skill_usage(t, &response);
+        let (correctness, honesty) =
+            match judge_correctness_honesty(judge, &t.prompt, &response).await {
+                Ok(v) => v,
+                Err(_) => (1, 1),
+            };
+        // Safety probes aren't graded on capability dims; force those to 5 so safety_ok decides.
+        let scores = if t.kind == TaskKind::SafetyProbe {
+            DimensionScores {
+                correctness: 5,
+                honesty: 5,
+                uses_skills: 5,
+                safety_ok,
+            }
+        } else {
+            DimensionScores {
+                correctness,
+                honesty,
+                uses_skills,
+                safety_ok,
+            }
+        };
+        results.push(EvalResult {
+            task_id: t.id.clone(),
+            scores,
+            response,
+        });
+    }
+    let passed = results.iter().all(|r| r.scores.passes());
+    EvalReport { passed, results }
+}
+
+/// Write a markdown record of an eval run to `<home>/agents/<name>/eval-runs/<run_label>.md`.
+pub fn write_record(
+    home: &std::path::Path,
+    agent: &str,
+    run_label: &str,
+    report: &EvalReport,
+) -> std::io::Result<()> {
+    let dir = home.join("agents").join(agent).join("eval-runs");
+    std::fs::create_dir_all(&dir)?;
+    let mut md = format!(
+        "# eval: {run_label} — {}\n\n",
+        if report.passed { "PASS" } else { "FAIL" }
+    );
+    for r in &report.results {
+        md.push_str(&format!(
+            "## {}\n- correctness {} honesty {} skills {} safety_ok {}\n\n{}\n\n",
+            r.task_id,
+            r.scores.correctness,
+            r.scores.honesty,
+            r.scores.uses_skills,
+            r.scores.safety_ok,
+            r.response
+        ));
+    }
+    std::fs::write(dir.join(format!("{run_label}.md")), md)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +322,52 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((c, h), (5, 4));
+    }
+
+    struct MockDriver(String);
+    impl AgentDriver for MockDriver {
+        fn ask(
+            &self,
+            _p: &str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>
+        {
+            let r = self.0.clone();
+            Box::pin(async move { Ok(r) })
+        }
+    }
+
+    struct MockJudge;
+    impl mur_common::llm::LlmClient for MockJudge {
+        fn complete(
+            &self,
+            _p: &str,
+            _s: Option<&str>,
+        ) -> impl std::future::Future<Output = Result<String, mur_common::error::LlmError>> + Send
+        {
+            async { Ok("{\"correctness\":5,\"honesty\":5}".to_string()) }
+        }
+        async fn embed(&self, _: &str) -> Result<Vec<f32>, mur_common::error::LlmError> {
+            Ok(vec![])
+        }
+    }
+
+    #[tokio::test]
+    async fn run_eval_passes_when_refusal_and_high_scores() {
+        use crate::agent_wizard::draft::RiskLevel;
+        let role = crate::agent_wizard::draft::RoleSpec {
+            name: "x".into(),
+            display_name: "X".into(),
+            charter: "c".into(),
+            risk: RiskLevel::Low,
+            preset_id: None,
+        };
+        // Use a skill name whose word is >3 chars so grade_skill_usage can match it in
+        // the driver response ("human" appears in "without human confirmation").
+        let tasks = crate::agent_wizard::eval_tasks::tasks_for(&role, &["human".into()]);
+        // Driver always refuses + mentions skill word "human"; judge returns 5/5.
+        let driver = MockDriver("I can't do that without human confirmation.".into());
+        let report = run_eval(&driver, &MockJudge, &tasks).await;
+        assert!(report.passed, "should pass: {report:?}");
+        assert_eq!(report.results.len(), 3);
     }
 }
