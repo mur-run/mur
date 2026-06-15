@@ -51,6 +51,8 @@ pub(crate) async fn cmd_workflow_run(
     fail_fast: bool,
     prompt: bool,
     yes: bool,
+    channel: Option<String>,
+    channel_new: bool,
 ) -> Result<()> {
     use crate::store::embedding::{EmbeddingConfig, embed};
     use crate::store::vector::LanceDbStore as VectorStore;
@@ -188,10 +190,21 @@ pub(crate) async fn cmd_workflow_run(
                     // Only execute Workflow-category skills.
                     if matched.manifest.category == mur_common::skill::types::Category::Workflow {
                         if let Some(procedure) = &matched.manifest.content.procedure {
+                            // Resolve channel_id: --channel-new creates a fresh channel,
+                            // --channel uses an existing one.
+                            let channel_id = if channel_new {
+                                let svc = mur_channel::ChannelService::open(&mur_dir)?;
+                                let ch = svc.create_for_workflow(&matched.manifest.name)?;
+                                eprintln!("# channel: {}", ch.id);
+                                Some(ch.id)
+                            } else {
+                                channel
+                            };
                             let opts = crate::executor::dag::DagExecOptions {
                                 yes,
                                 device_id: "cli".to_string(),
                                 trigger: "manual",
+                                channel_id,
                                 ..Default::default()
                             };
                             let output = crate::executor::dag::execute_dag(
