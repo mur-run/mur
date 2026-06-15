@@ -66,6 +66,33 @@ Previous output:\n{raw}"
     Ok(strip_fences(&llm.complete(&fix, Some(sys)).await?))
 }
 
+/// Draft a DoD system prompt for the role via the LLM. The result must carry the
+/// honesty rule; if the model omits it, append it (defense-in-depth, not a silent trust).
+pub async fn draft_prompt_llm<L: LlmClient>(
+    llm: &Arc<L>,
+    role: &RoleSpec,
+) -> Result<String, LlmError> {
+    let sys = "You write system prompts for specialized AI agents. Be concise and concrete.";
+    let prompt = format!(
+        "Write a system prompt (markdown) for an agent named \"{dn}\" whose charter is: {charter}.\n\
+Include: a persona line; an operating-discipline / definition-of-done gate the agent must satisfy \
+before claiming a task done; HITL rules (irreversible actions need explicit human confirmation); \
+an honesty rule stating it must never fabricate command or file output; and a short 'narrate for a \
+watching human' line. Risk level: {risk:?}.",
+        dn = role.display_name,
+        charter = role.charter,
+        risk = role.risk,
+    );
+    let mut md = llm.complete(&prompt, Some(sys)).await?;
+    if !md.to_lowercase().contains("never fabricate") {
+        md.push_str(
+            "\n\n## Honesty\nYou must never fabricate command or file output. If you can't \
+run a tool or read a file this turn, say so and reason from context.\n",
+        );
+    }
+    Ok(md)
+}
+
 /// Remove ```yaml / ``` fences a model may wrap output in.
 fn strip_fences(s: &str) -> String {
     let t = s.trim();
@@ -130,5 +157,22 @@ content:\n  abstract: A test abstract.\n  context: |\n    # {name}\n    - Do the
         // and it's valid:
         let m = mur_common::skill::parse_canonical(&skills[0].yaml).unwrap();
         assert!(mur_common::skill::validate(&m).is_ok());
+    }
+
+    #[tokio::test]
+    async fn drafts_a_prompt_containing_role_and_honesty_rule() {
+        let body = "# PM — c\n\n## Honesty\nyou must never fabricate command or file output.\n";
+        let llm = Arc::new(MockLlm(body.to_string()));
+        let md = draft_prompt_llm(&llm, &role()).await.unwrap();
+        assert!(md.contains("PM"));
+        assert!(md.to_lowercase().contains("never fabricate"));
+    }
+
+    #[tokio::test]
+    async fn appends_honesty_rule_when_model_omits_it() {
+        let body = "# PM — c\n\nDo the work well.\n";
+        let llm = Arc::new(MockLlm(body.to_string()));
+        let md = draft_prompt_llm(&llm, &role()).await.unwrap();
+        assert!(md.to_lowercase().contains("never fabricate"));
     }
 }
