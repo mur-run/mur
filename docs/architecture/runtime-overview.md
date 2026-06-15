@@ -33,8 +33,6 @@ session-start hook prints a one-line pending-proposals hint (spec §3.8 tier 1).
 
 ## Channels (unified work object, 2026-06-15)
 
-### Channels (unified work object)
-
 `~/.mur/channels/<id>/` holds one Channel each:
 - `events.jsonl` — append-only event stream (source of truth).
 - `channel.yaml` — manifest cache (goal/state/participants), recomputable from the log.
