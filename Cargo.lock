@@ -6334,6 +6334,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mur-channel"
+version = "2.24.5"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fs2",
+ "mur-common",
+ "notify",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "mur-common"
 version = "2.24.5"
 dependencies = [
