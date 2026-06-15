@@ -36,10 +36,13 @@ fn index_is_rebuildable_from_logs() {
     let mut sess = Session::create(home, "qa").unwrap();
     sess.append("user", "x", None).unwrap();
 
-    // Nuke the index DB.
-    std::fs::remove_file(home.join("index/channels.db")).unwrap();
+    // Close the session's open SQLite connection before deleting the index.
+    // On Windows an open file cannot be removed (sharing violation); dropping
+    // also clears the WAL side-files. Remove the whole index dir to fully nuke it.
+    drop(sess);
+    std::fs::remove_dir_all(home.join("index")).unwrap();
 
-    // Rebuild from the store and confirm the listing returns.
+    // Rebuild from the on-disk logs and confirm the listing returns.
     let store = mur_channel::ChannelStore::new(home);
     let index = mur_channel::index::ChannelIndex::open(home).unwrap();
     let n = index.rebuild_from(&store).unwrap();
