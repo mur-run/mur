@@ -88,9 +88,14 @@ pub async fn run(
             }
         };
 
+    // Default search provider is a no-op (pure model-knowledge drafting); a real
+    // search-MCP provider can be slotted here later (Plan 2b) without other changes.
+    let search: Option<std::sync::Arc<dyn crate::agent_wizard::research::SearchProvider>> = Some(
+        std::sync::Arc::new(crate::agent_wizard::research::NoopSearch),
+    );
     let mut hooks = CliHooks { headless };
     let outcome =
-        agent_wizard::run_wizard(manifest, &ws, "claude_sonnet", llm, None, &mut hooks).await?;
+        agent_wizard::run_wizard(manifest, &ws, "claude_sonnet", llm, search, &mut hooks).await?;
     if outcome.created {
         println!("\n✅ Created and started agent '{}'.", outcome.agent_name);
     } else {

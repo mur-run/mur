@@ -86,17 +86,36 @@ pub async fn build_wizard_draft(
     }
 }
 
-/// Full entry: build draft -> validate -> gate -> apply.
-/// `search` is reserved for Task 4's `SearchProvider` wiring; pass `None` for now.
+/// Full entry: research (optional) -> build draft -> validate -> gate -> apply.
 pub async fn run_wizard(
     manifest: &RoleManifest,
     workspace: &str,
     model_ref: &str,
     llm: Option<Arc<dyn WizardLlm>>,
-    _search: Option<Arc<dyn SearchProvider>>,
+    search: Option<Arc<dyn SearchProvider>>,
     hooks: &mut impl WizardHooks,
 ) -> anyhow::Result<WizardOutcome> {
-    let draft = build_wizard_draft(manifest, workspace, model_ref, &llm, &[], hooks).await;
+    // Research only makes sense when we have an LLM to ground; skip for the stub path.
+    let notes: Vec<ResearchNote> = match (&llm, &search) {
+        (Some(_), Some(s)) => {
+            hooks.on_progress(&Progress {
+                stage: Stage::Research,
+                message: "researching".into(),
+            });
+            let role = RoleSpec {
+                name: manifest.id.clone(),
+                display_name: manifest.display_name.clone(),
+                charter: manifest.charter.clone(),
+                risk: manifest.risk,
+                preset_id: Some(manifest.id.clone()),
+            };
+            s.research(&role, &manifest.skill_topics)
+                .await
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    };
+    let draft = build_wizard_draft(manifest, workspace, model_ref, &llm, &notes, hooks).await;
     let errs = apply::validate_drafts(&draft);
     if !errs.is_empty() {
         anyhow::bail!("skill validation failed: {errs:?}");
