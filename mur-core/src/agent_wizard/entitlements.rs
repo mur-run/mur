@@ -30,7 +30,13 @@ pub fn preset_for(role: &RoleSpec, workspace: &str) -> EntitlementPlan {
 mod tests {
     use super::*;
     fn role(risk: RiskLevel) -> RoleSpec {
-        RoleSpec { name: "x".into(), display_name: "X".into(), charter: "c".into(), risk, preset_id: None }
+        RoleSpec {
+            name: "x".into(),
+            display_name: "X".into(),
+            charter: "c".into(),
+            risk,
+            preset_id: None,
+        }
     }
 
     #[test]
@@ -45,7 +51,10 @@ mod tests {
     #[test]
     fn low_risk_has_no_write_by_default() {
         let p = preset_for(&role(RiskLevel::Low), "/repo");
-        assert!(p.allow_write.is_empty(), "low-risk agents are read-only by default");
+        assert!(
+            p.allow_write.is_empty(),
+            "low-risk agents are read-only by default"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! CLI driver for `mur agent wizard`: terminal prompts, progress printing, review gate.
-use crate::agent_wizard::{self, catalog, stages::WizardHooks, Progress};
 use crate::agent_wizard::draft::WizardDraft;
+use crate::agent_wizard::{self, Progress, catalog, stages::WizardHooks};
 
 struct CliHooks {
     headless: bool,
@@ -54,16 +54,13 @@ pub fn run(
         Some(r) => r,
         None => prompt_role_choice(&catalog)?,
     };
-    let manifest = catalog
-        .iter()
-        .find(|m| m.id == role_id)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "unknown role '{}'. Known: {:?}",
-                role_id,
-                catalog.iter().map(|m| &m.id).collect::<Vec<_>>()
-            )
-        })?;
+    let manifest = catalog.iter().find(|m| m.id == role_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown role '{}'. Known: {:?}",
+            role_id,
+            catalog.iter().map(|m| &m.id).collect::<Vec<_>>()
+        )
+    })?;
 
     let ws = workspace.unwrap_or_else(|| {
         std::env::current_dir()

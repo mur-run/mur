@@ -138,6 +138,9 @@ mod tests {
         };
         let draft = build_draft(&m, "/repo", "claude_sonnet", &mut NoHooks);
         let errs = validate_drafts(&draft);
-        assert!(errs.is_empty(), "stub skills must pass the validator, got: {errs:?}");
+        assert!(
+            errs.is_empty(),
+            "stub skills must pass the validator, got: {errs:?}"
+        );
     }
 }

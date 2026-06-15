@@ -8,11 +8,17 @@ use crate::agent_wizard::entitlements::preset_for;
 pub trait WizardHooks {
     fn on_progress(&mut self, _p: &Progress) {}
     /// Return Some(skills) to override stub skills (LLM author stage, Plan 2).
-    fn author_skills(&mut self, _role: &RoleSpec, _topics: &[String]) -> Option<Vec<SkillDraft>> { None }
+    fn author_skills(&mut self, _role: &RoleSpec, _topics: &[String]) -> Option<Vec<SkillDraft>> {
+        None
+    }
     /// Return Some(markdown) to override the template prompt (LLM stage, Plan 2).
-    fn draft_prompt(&mut self, _role: &RoleSpec) -> Option<String> { None }
+    fn draft_prompt(&mut self, _role: &RoleSpec) -> Option<String> {
+        None
+    }
     /// The review gate: return the (possibly edited) draft to approve, or None to abort.
-    fn review_gate(&mut self, draft: WizardDraft) -> Option<WizardDraft> { Some(draft) }
+    fn review_gate(&mut self, draft: WizardDraft) -> Option<WizardDraft> {
+        Some(draft)
+    }
 }
 
 fn stub_skill_yaml(topic: &str, role: &RoleSpec) -> String {
@@ -51,7 +57,8 @@ fn template_prompt(role: &RoleSpec) -> String {
 ## Operating discipline\nComplete your role's definition of done before claiming a task done.\n\n\
 ## Honesty\nYou must never fabricate command or file output. If you can't run a tool or read a file \
 this turn, say so and reason from context.\n\n## Watching\nNarrate at a high level for a live human.\n",
-        dn = role.display_name, charter = role.charter,
+        dn = role.display_name,
+        charter = role.charter,
     )
 }
 
@@ -70,20 +77,50 @@ pub fn build_draft(
         risk: m.risk,
         preset_id: Some(m.id.clone()),
     };
-    hooks.on_progress(&Progress { stage: Stage::DefineRole, message: format!("role {}", role.name) });
-
-    let skills = hooks.author_skills(&role, &m.skill_topics).unwrap_or_else(|| {
-        m.skill_topics.iter().map(|t| SkillDraft { name: t.clone(), yaml: stub_skill_yaml(t, &role) }).collect()
+    hooks.on_progress(&Progress {
+        stage: Stage::DefineRole,
+        message: format!("role {}", role.name),
     });
-    hooks.on_progress(&Progress { stage: Stage::AuthorSkills, message: format!("{} skills", skills.len()) });
 
-    let prompt = PromptDraft { markdown: hooks.draft_prompt(&role).unwrap_or_else(|| template_prompt(&role)) };
-    hooks.on_progress(&Progress { stage: Stage::DraftPrompt, message: "prompt drafted".into() });
+    let skills = hooks
+        .author_skills(&role, &m.skill_topics)
+        .unwrap_or_else(|| {
+            m.skill_topics
+                .iter()
+                .map(|t| SkillDraft {
+                    name: t.clone(),
+                    yaml: stub_skill_yaml(t, &role),
+                })
+                .collect()
+        });
+    hooks.on_progress(&Progress {
+        stage: Stage::AuthorSkills,
+        message: format!("{} skills", skills.len()),
+    });
+
+    let prompt = PromptDraft {
+        markdown: hooks
+            .draft_prompt(&role)
+            .unwrap_or_else(|| template_prompt(&role)),
+    };
+    hooks.on_progress(&Progress {
+        stage: Stage::DraftPrompt,
+        message: "prompt drafted".into(),
+    });
 
     let entitlements = preset_for(&role, workspace);
-    hooks.on_progress(&Progress { stage: Stage::Entitlements, message: "entitlements scoped".into() });
+    hooks.on_progress(&Progress {
+        stage: Stage::Entitlements,
+        message: "entitlements scoped".into(),
+    });
 
-    WizardDraft { role, skills, prompt, entitlements, model_ref: model_ref.to_string() }
+    WizardDraft {
+        role,
+        skills,
+        prompt,
+        entitlements,
+        model_ref: model_ref.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -94,8 +131,11 @@ mod tests {
 
     fn manifest() -> RoleManifest {
         RoleManifest {
-            id: "pm".into(), display_name: "PM".into(), charter: "c".into(),
-            risk: RiskLevel::Low, category: "product".into(),
+            id: "pm".into(),
+            display_name: "PM".into(),
+            charter: "c".into(),
+            risk: RiskLevel::Low,
+            category: "product".into(),
             skill_topics: vec!["product-spec-and-prd-writing".into()],
         }
     }
@@ -105,7 +145,11 @@ mod tests {
         let draft = build_draft(&manifest(), "/repo", "claude_sonnet", &mut NoopHooks);
         assert_eq!(draft.role.name, "pm");
         assert_eq!(draft.skills.len(), 1);
-        assert!(draft.skills[0].yaml.contains("name: product-spec-and-prd-writing"));
+        assert!(
+            draft.skills[0]
+                .yaml
+                .contains("name: product-spec-and-prd-writing")
+        );
         assert!(draft.prompt.markdown.contains("never fabricate"));
         assert_eq!(draft.model_ref, "claude_sonnet");
     }
