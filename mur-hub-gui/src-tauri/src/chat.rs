@@ -86,12 +86,15 @@ pub async fn agent_chat_send(
     registry.0.set(&name, &task_id);
     let name_clear = name.clone();
 
-    // Persist the user turn into the agent's channel (best-effort). Done before
-    // `text`/`home`/`name` are moved into the dial closure below; clones of
-    // `home`/`name` are kept to persist the agent turn after the dial returns.
-    persist_turn(&home, &name, "user", &text, Some(&task_id));
+    // Capture what we need to persist the exchange AFTER a successful reply,
+    // before `text`/`task_id`/`home`/`name` are moved into the dial below. We do
+    // NOT persist the user turn up front: writing both turns together, only on
+    // success, avoids orphaned user messages (on dial error / empty reply) and
+    // duplicate user turns on retry, and pins both halves to one channel.
     let persist_home = home.clone();
     let persist_name = name.clone();
+    let persist_user_text = text.clone();
+    let user_task_id = task_id.clone();
 
     let mut params = json!({
         "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] },
@@ -170,12 +173,13 @@ pub async fn agent_chat_send(
     if reply.is_empty() {
         return Err("the agent returned no reply".into());
     }
-    // Persist the agent turn (best-effort). `task_id` here is the response task
-    // id; `reply` is borrowed before both are moved into `ChatReply`.
-    persist_turn(
+    // Persist the whole exchange atomically into ONE channel (best-effort).
+    // `task_id` here is the response task id; the user turn keeps its request id.
+    persist_exchange(
         &persist_home,
         &persist_name,
-        "agent",
+        &persist_user_text,
+        Some(&user_task_id),
         &reply,
         Some(&task_id),
     );
@@ -245,13 +249,18 @@ fn extract_text(message: &Value) -> String {
 
 // ─── Channel persistence ───────────────────────────────────────────────────
 
-/// Persist one turn into the agent's channel. `role` ∈ {"user","agent"}.
-fn persist_turn(
+/// Persist one user→agent exchange into the agent's channel, resolving the
+/// channel ONCE so both halves land together (never split across channels if a
+/// newer channel appears mid-turn). Best-effort: failures are logged, never
+/// surfaced to the chat. The channel is created here on the first real exchange,
+/// so a failed/empty turn writes nothing (no orphaned user message).
+fn persist_exchange(
     home: &std::path::Path,
     agent: &str,
-    role: &str,
-    text: &str,
-    task_id: Option<&str>,
+    user_text: &str,
+    user_task_id: Option<&str>,
+    agent_text: &str,
+    agent_task_id: Option<&str>,
 ) {
     let res = (|| -> anyhow::Result<()> {
         let svc = ChannelService::open(home)?;
@@ -259,13 +268,22 @@ fn persist_turn(
             Some(id) => id,
             None => svc.create_for_agent(agent)?.id,
         };
-        let actor = match role {
-            "agent" => ChannelActor::Agent {
+        svc.append_message(
+            &id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            user_text,
+            user_task_id,
+        )?;
+        svc.append_message(
+            &id,
+            ChannelActor::Agent {
                 id: agent.to_string(),
             },
-            _ => ChannelActor::local_human(),
-        };
-        svc.append_message(&id, actor, EventKind::Message, text, task_id)?;
+            EventKind::Message,
+            agent_text,
+            agent_task_id,
+        )?;
         Ok(())
     })();
     if let Err(e) = res {
@@ -312,13 +330,26 @@ mod channel_tests {
     use tempfile::TempDir;
 
     #[test]
-    fn persist_turn_writes_channel_event() {
+    fn persist_exchange_writes_both_turns_to_one_channel() {
         let tmp = TempDir::new().unwrap();
-        persist_turn(tmp.path(), "qa", "user", "hello hub", Some("t-1"));
+        persist_exchange(
+            tmp.path(),
+            "qa",
+            "the question",
+            Some("u-1"),
+            "the answer",
+            Some("a-1"),
+        );
         let svc = ChannelService::open(tmp.path()).unwrap();
         let id = svc.latest_for_agent("qa").unwrap().expect("channel");
         let evs = svc.load_events(&id).unwrap();
-        assert_eq!(evs.len(), 1);
-        assert_eq!(evs[0].payload["text"], "hello hub");
+        // Both halves landed in the same channel, in order.
+        assert_eq!(evs.len(), 2);
+        assert_eq!(evs[0].payload["text"], "the question");
+        assert_eq!(evs[1].payload["text"], "the answer");
+        // A second exchange appends to the SAME channel, not a new one.
+        persist_exchange(tmp.path(), "qa", "q2", None, "a2", None);
+        assert_eq!(svc.list(10).unwrap().len(), 1);
+        assert_eq!(svc.load_events(&id).unwrap().len(), 4);
     }
 }
