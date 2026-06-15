@@ -1,12 +1,40 @@
-//! Unified Channel — the single durable work object shared across surfaces.
-//! Pure types only (no I/O); store logic lives in the `mur-channel` crate.
+//! Pure Channel types — no I/O; store logic lives in the `mur-channel` crate.
+//!
+//! Durable on-disk formats:
+//!   - `~/.mur/channels/<id>/events.jsonl` — append-only event log
+//!   - `~/.mur/channels/<id>/channel.yaml` — manifest (cached view of log state)
+//!
+//! # Schema versioning
+//!
+//! [`CHANNEL_SCHEMA_VERSION`] guards both the event log rows and the manifest.
+//! Bump it ONLY when:
+//!   1. A required field is renamed or removed, OR
+//!   2. A field's semantic meaning changes, OR
+//!   3. A new `EventKind` variant cannot be safely ignored by older readers.
+//!
+//! Adding a new optional field with `#[serde(default)]` does NOT require a bump.
+//!
+//! ## Backward reads
+//! The event log must always remain fold-able from the beginning. When adding new
+//! optional fields, annotate them with `#[serde(default)]` so older rows written
+//! before the field existed still deserialize cleanly. Manifests follow the same
+//! rule: older `channel.yaml` files must load without error.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Schema version for the manifest + event log; breaking changes bump this.
 pub const CHANNEL_SCHEMA_VERSION: u32 = 1;
 
-/// A2A v0.3 lifecycle, serialized on the wire as kebab-case (`input-required`).
+/// A2A v0.3 lifecycle vocabulary, serialized on the wire as kebab-case
+/// (`input-required`, `canceled`, etc.).
+///
+/// ## Spelling note
+/// `Canceled` (→ `"canceled"`) intentionally follows the A2A v0.3 spec spelling
+/// and is a DISTINCT type from [`crate::a2a::TaskState`], which spells the
+/// equivalent variant `Cancelled` (two l's). The two enums are bridged by an
+/// explicit boundary mapping — not string equality — so the spelling difference
+/// is deliberate, not a bug.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChannelState {
@@ -17,6 +45,8 @@ pub enum ChannelState {
     Failed,
     Canceled,
     Rejected,
+    /// MUR extension (not in A2A v0.3): the channel has had no activity for an
+    /// extended period and was system-marked stale.
     Stale,
 }
 
@@ -42,6 +72,7 @@ impl ChannelActor {
     }
 }
 
+/// The role a participant plays within a channel's lifecycle.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ParticipantRole {
@@ -58,6 +89,7 @@ pub struct Participant {
     pub joined_at: DateTime<Utc>,
 }
 
+/// The intent a channel is working toward, with optional acceptance criteria.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Goal {
     #[serde(default)]
@@ -135,5 +167,14 @@ mod tests {
         assert_eq!(back.seq, 3);
         assert_eq!(back.actor, ChannelActor::Agent { id: "qa".into() });
         assert_eq!(back.payload["text"], "hello");
+    }
+
+    #[test]
+    fn system_actor_round_trips() {
+        let a = ChannelActor::System;
+        let j = serde_json::to_string(&a).unwrap();
+        assert_eq!(j, "{\"kind\":\"system\"}");
+        let back: ChannelActor = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, ChannelActor::System);
     }
 }
