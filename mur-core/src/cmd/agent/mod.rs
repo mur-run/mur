@@ -25,6 +25,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 mod apply;
+pub mod channel_import;
 mod cli;
 mod comm;
 pub mod export;
