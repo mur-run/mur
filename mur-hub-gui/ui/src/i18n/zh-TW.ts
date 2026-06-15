@@ -320,4 +320,15 @@ export const zhTW: Table = {
   "hitl.denyReason": "理由",
   "hitl.reasonPlaceholder": "為什麼要拒絕？（選填）",
   "hitl.confirmDeny": "確認拒絕",
+  // ── Specialist wizard — Role picker (T5) ──
+  "wizard.role.title": "選擇角色範本",
+  "wizard.role.hint": "選擇最能描述你 agent 用途的角色，MUR 將根據它生成技能與系統提示詞。",
+  "wizard.role.risk": "風險",
+  "wizard.role.category": "分類",
+  "wizard.role.generate": "✨ 生成 agent",
+  // ── Specialist wizard — Generating step (T5) ──
+  "wizard.generating.title": "正在生成你的 agent…",
+  "wizard.generating.hint": "MUR 正根據所選角色起草技能與系統提示詞，這需要幾秒鐘。",
+  "wizard.generating.starting": "開始生成…",
+  "wizard.generating.error": "生成失敗",
 };

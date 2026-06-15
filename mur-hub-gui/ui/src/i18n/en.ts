@@ -318,4 +318,15 @@ export const en = {
   "hitl.denyReason": "Reason",
   "hitl.reasonPlaceholder": "Why are you denying this? (optional)",
   "hitl.confirmDeny": "Confirm Deny",
+  // ── Specialist wizard — Role picker (T5) ──
+  "wizard.role.title": "Choose a role template",
+  "wizard.role.hint": "Select the role that best describes your agent's purpose. MUR will generate skills and a system prompt tailored to it.",
+  "wizard.role.risk": "Risk",
+  "wizard.role.category": "Category",
+  "wizard.role.generate": "✨ Generate agent",
+  // ── Specialist wizard — Generating step (T5) ──
+  "wizard.generating.title": "Generating your agent…",
+  "wizard.generating.hint": "MUR is drafting skills and a system prompt based on the selected role. This takes a few seconds.",
+  "wizard.generating.starting": "Starting generation…",
+  "wizard.generating.error": "Generation failed",
 } as const;

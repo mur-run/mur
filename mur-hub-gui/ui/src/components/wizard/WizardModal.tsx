@@ -9,6 +9,9 @@ import { Step3Style } from "./steps/Step3Style";
 import { Step4Behavior } from "./steps/Step4Behavior";
 import { Step5Photo } from "./steps/Step5Photo";
 import { Step6Render } from "./steps/Step6Render";
+import { SpecRole } from "./steps/spec/SpecRole";
+import { SpecGenerating } from "./steps/spec/SpecGenerating";
+import type { SpecDraftDto } from "./steps/spec/SpecGenerating";
 import { specReducer, SPEC_FLOW_INITIAL } from "./specFlow";
 
 interface Props {
@@ -31,11 +34,18 @@ export function WizardModal({ isOpen, onClose }: Props) {
   const [displayStep, setDisplayStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [specFlow, dispatchSpec] = useReducer(specReducer, SPEC_FLOW_INITIAL);
+  // Specialist flow state
+  const [specRoleId, setSpecRoleId] = useState<string | null>(null);
+  const [specNoLlm, setSpecNoLlm] = useState(false);
+  const [specDraft, setSpecDraft] = useState<SpecDraftDto | null>(null);
 
   // Reset the kind-fork state every time the modal opens.
   useEffect(() => {
     if (isOpen) {
       dispatchSpec({ type: "RESET" });
+      setSpecRoleId(null);
+      setSpecNoLlm(false);
+      setSpecDraft(null);
     }
   }, [isOpen]);
 
@@ -195,11 +205,31 @@ export function WizardModal({ isOpen, onClose }: Props) {
             )
           )}
 
-          {/* ── Specialist flow steps (T5–T6, rendered by future step components) ── */}
-          {(specFlow.step === "role" ||
-            specFlow.step === "generating" ||
-            specFlow.step === "review" ||
-            specFlow.step === "eval") && (
+          {/* ── Specialist flow — Role picker (T5) ── */}
+          {specFlow.step === "role" && (
+            <SpecRole
+              onStart={(roleId, noLlm) => {
+                setSpecRoleId(roleId);
+                setSpecNoLlm(noLlm);
+                dispatchSpec({ type: "NEXT" });
+              }}
+            />
+          )}
+
+          {/* ── Specialist flow — Generating (T5) ── */}
+          {specFlow.step === "generating" && specRoleId && (
+            <SpecGenerating
+              roleId={specRoleId}
+              noLlm={specNoLlm}
+              onDraft={(draft) => {
+                setSpecDraft(draft);
+                dispatchSpec({ type: "NEXT" });
+              }}
+            />
+          )}
+
+          {/* ── Specialist flow — Review + Eval (T6, placeholder until next task) ── */}
+          {(specFlow.step === "review" || specFlow.step === "eval") && specDraft && (
             <div className="wz-loading">{t("wizard.loading")}</div>
           )}
         </div>
