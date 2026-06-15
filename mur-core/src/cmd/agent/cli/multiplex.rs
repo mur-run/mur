@@ -322,6 +322,39 @@ fn split_and_tile(
     cmds
 }
 
+/// Persistent status-bar hint shown in sessions we create, so a user who
+/// doesn't know tmux can discover how to move between agent panes. The
+/// default prefix is Ctrl-b (we set no `~/.tmux.conf` override on the
+/// session), so the keys named here are the ones actually bound.
+const MUR_TMUX_HINT: &str = " MUR · click a pane to type · Ctrl-b ←/→ switch · Ctrl-b d detach ";
+
+/// Make a session we created navigable without prior tmux knowledge:
+/// `mouse on` gives click-to-focus, and the status bar carries the hint.
+/// Scoped to the named session (`-t`) so the user's global tmux config and
+/// any other sessions are untouched.
+///
+/// `session_target` must be the trailing-colon form (`=name:`): unlike
+/// session-target commands (`attach-session`, `has-session`), `set-option`
+/// rejects a bare `=name` ("no such session") and only resolves the exact
+/// name through the window-target parser that the `:` selects.
+fn tmux_session_setup(session_target: &str) -> Vec<Vec<String>> {
+    let opt = |key: &str, val: &str| {
+        vec![
+            "tmux".into(),
+            "set-option".into(),
+            "-t".into(),
+            session_target.to_string(),
+            key.into(),
+            val.into(),
+        ]
+    };
+    vec![
+        opt("mouse", "on"),
+        opt("status-right-length", "120"),
+        opt("status-right", MUR_TMUX_HINT),
+    ]
+}
+
 /// Outside tmux: detached session, one pane per agent, tiled, then attach.
 fn tmux_new_session(
     session: &str,
@@ -337,6 +370,7 @@ fn tmux_new_session(
     // Splits target pane 0 explicitly; a bare session target would resolve
     // to whichever pane tmux considers active. attach-session takes a
     // session target, not a pane target.
+    let session_target = format!("={session}");
     let pane_target = format!("={session}:.0");
     let mut cmds = vec![vec![
         "tmux".into(),
@@ -346,12 +380,16 @@ fn tmux_new_session(
         session.into(),
         pane_shell(exe, &names[0], resume, auto),
     ]];
+    // Click-to-focus + navigation hint before the panes exist, so the
+    // session is usable the moment `attach-session` hands over the terminal.
+    // `set-option` needs the `=name:` window-target form (see fn docs).
+    cmds.extend(tmux_session_setup(&format!("={session}:")));
     cmds.extend(split_and_tile(&pane_target, exe, names, resume, auto));
     cmds.push(vec![
         "tmux".into(),
         "attach-session".into(),
         "-t".into(),
-        format!("={session}"),
+        session_target,
     ]);
     cmds
 }
@@ -610,10 +648,40 @@ mod tests {
                 "/bin/mur agent cli a1"
             ]
         );
+        // Session setup runs before any split so the session is navigable
+        // (click-to-focus + hint) the moment attach hands over the terminal.
+        // `=mur-chat:` (trailing colon) is required for `set-option`; the bare
+        // `=mur-chat` form attach-session uses is rejected here by tmux.
+        assert_eq!(
+            cmds[1],
+            vec!["tmux", "set-option", "-t", "=mur-chat:", "mouse", "on"]
+        );
+        assert_eq!(
+            cmds[2],
+            vec![
+                "tmux",
+                "set-option",
+                "-t",
+                "=mur-chat:",
+                "status-right-length",
+                "120"
+            ]
+        );
+        assert_eq!(
+            cmds[3],
+            vec![
+                "tmux",
+                "set-option",
+                "-t",
+                "=mur-chat:",
+                "status-right",
+                MUR_TMUX_HINT
+            ]
+        );
         // Each later agent: split + retile (retile after each split avoids
         // "pane too small" when opening many panes).
         assert_eq!(
-            cmds[1],
+            cmds[4],
             vec![
                 "tmux",
                 "split-window",
@@ -623,11 +691,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            cmds[2],
+            cmds[5],
             vec!["tmux", "select-layout", "-t", "=mur-chat:.0", "tiled"]
         );
         assert_eq!(
-            cmds[3],
+            cmds[6],
             vec![
                 "tmux",
                 "split-window",
@@ -637,11 +705,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            cmds[4],
+            cmds[7],
             vec!["tmux", "select-layout", "-t", "=mur-chat:.0", "tiled"]
         );
-        assert_eq!(cmds[5], vec!["tmux", "attach-session", "-t", "=mur-chat"]);
-        assert_eq!(cmds.len(), 6);
+        assert_eq!(cmds[8], vec!["tmux", "attach-session", "-t", "=mur-chat"]);
+        assert_eq!(cmds.len(), 9);
     }
 
     #[test]
