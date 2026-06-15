@@ -1,8 +1,6 @@
 //! `mur skill generate --from-session <id>` orchestrator.
 
 use anyhow::{Context, Result, anyhow, bail};
-use mur_common::config::Config;
-use mur_common::error::LlmError;
 use mur_common::llm::LlmClient;
 use mur_common::skill::{
     SkillManifest, TrustLevel, content_sha256, global_skill_dir, scan::scan_skill,
@@ -12,7 +10,7 @@ use mur_common::trust::skills::{SkillTrustStore, TrustEntry};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::conversations::backend::ChatBackend;
+use crate::conversations::backend::adapter::build_chat_adapter;
 
 pub struct GenerateOptions {
     pub session_id: String,
@@ -20,46 +18,6 @@ pub struct GenerateOptions {
     pub model_override: Option<String>,
     pub dry_run: bool,
     pub max_parallel: usize,
-}
-
-/// Thin adapter: wraps a ChatBackend to satisfy the LlmClient trait.
-struct ChatBackendAdapter {
-    backend: Arc<dyn ChatBackend>,
-    model: String,
-}
-
-impl LlmClient for ChatBackendAdapter {
-    fn complete(
-        &self,
-        prompt: &str,
-        system: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<String, LlmError>> + Send {
-        let model = self.model.clone();
-        let user = prompt.to_string();
-        let sys = system.map(|s| s.to_string());
-        let backend = self.backend.clone();
-        async move {
-            let req = crate::conversations::backend::ChatRequest {
-                model: &model,
-                system: sys.as_deref(),
-                user: &user,
-                max_tokens: 4096,
-                temperature: Some(0.3),
-                stop: vec![],
-                cache_system: false,
-                cache_user_prefix: None,
-            };
-            backend
-                .generate(req)
-                .await
-                .map(|r| r.text)
-                .map_err(|e| LlmError::Other(e.to_string()))
-        }
-    }
-
-    async fn embed(&self, _text: &str) -> Result<Vec<f32>, LlmError> {
-        Ok(vec![])
-    }
 }
 
 pub async fn cmd_generate<L: LlmClient + 'static>(
@@ -167,24 +125,15 @@ pub async fn cmd_generate<L: LlmClient + 'static>(
 
 pub async fn cmd_generate_cli(opts: GenerateOptions) -> Result<()> {
     let home = crate::cmd::agent::resolve_mur_home()?;
-    let cfg = Config::load_or_default(&home.join("config.yaml"));
-    let mut backend_cfg = cfg.conversations.ask.synthesize_backend();
-    if let Some(ref model) = opts.model_override {
-        backend_cfg.model = model.clone();
-    }
-    if !mur_common::llm::is_reasoning_model(&backend_cfg.model) {
+    let adapter = build_chat_adapter(&home, opts.model_override.as_deref(), "skill.generate")
+        .context("build llm")?;
+    if !mur_common::llm::is_reasoning_model(&adapter.model) {
         eprintln!(
             "warning: model '{}' is not a reasoning-class model — Error Analyst quality may suffer",
-            backend_cfg.model
+            adapter.model
         );
     }
-    let backend: Arc<dyn ChatBackend> =
-        crate::conversations::backend::factory::build_for_stage(&backend_cfg, "skill.generate")
-            .context("build llm")?;
-    let llm = Arc::new(ChatBackendAdapter {
-        backend,
-        model: backend_cfg.model.clone(),
-    });
+    let llm = Arc::new(adapter);
     cmd_generate(&home, llm, opts).await?;
     Ok(())
 }

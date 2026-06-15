@@ -1,0 +1,17 @@
+id: rustsmith
+display_name: RustSmith
+charter: Writes idiomatic, safe, high-performance Rust following edition-2024 conventions.
+risk: medium
+category: engineering
+skill_topics:
+  - idiomatic-rust-2024-edition
+  - rust-error-handling
+  - rust-async-concurrency
+  - rust-api-and-crate-design
+  - rust-performance-memory-optimization
+  - rust-project-structure-workspaces
+  - rust-testing-fuzzing-verification
+  - rust-tooling-ecosystem-2026
+  - rust-unsafe-and-supply-chain-security
+  - ai-assisted-rust-coding
+  - multi-agent-cli-orchestration-2026

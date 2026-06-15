@@ -1,0 +1,11 @@
+id: qa
+display_name: QA
+charter: Owns test strategy, quality gates, and regression coverage for the team's output.
+risk: medium
+category: quality
+skill_topics:
+  - test-strategy-and-coverage
+  - rust-testing-toolchain
+  - flaky-tests-and-quality-gates
+  - bug-verification-and-regression
+  - mur-repo-qa-context

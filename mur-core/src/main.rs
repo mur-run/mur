@@ -3,6 +3,7 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 mod a2a_dial;
+mod agent_wizard;
 mod auth;
 mod bridge_keychain;
 mod capture;

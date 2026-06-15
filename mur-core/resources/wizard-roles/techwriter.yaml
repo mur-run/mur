@@ -1,0 +1,11 @@
+id: techwriter
+display_name: Tech Writer
+charter: "Produces clear, accurate, maintainable docs: information architecture, API reference, tutorials, style, and freshness."
+risk: low
+category: documentation
+skill_topics:
+  - docs-information-architecture
+  - api-reference-writing
+  - tutorials-and-howtos
+  - style-and-clarity
+  - docs-maintenance-and-freshness

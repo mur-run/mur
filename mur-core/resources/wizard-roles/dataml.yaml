@@ -1,0 +1,11 @@
+id: dataml
+display_name: Data/ML Engineer
+charter: "Builds data pipelines and ML workflows: pipeline design, feature engineering, training/eval, experiment tracking, reproducibility."
+risk: medium
+category: data
+skill_topics:
+  - data-pipeline-design
+  - feature-engineering
+  - model-training-and-evaluation
+  - experiment-tracking
+  - ml-reproducibility

@@ -1,0 +1,17 @@
+id: repomanager
+display_name: RepoManager
+charter: Performs safe, auditable repo and release operations across any git forge.
+risk: high
+category: devops
+skill_topics:
+  - git-workflow-and-conventional-commits
+  - pr-mr-review
+  - release-and-semver
+  - safe-automation-and-hitl-gates
+  - multi-forge-operations
+  - issue-ops-and-triage
+  - github-gh-cli
+  - gitlab-glab-cli
+  - bitbucket-cli
+  - gitea-tea-cli
+  - gitee-cli

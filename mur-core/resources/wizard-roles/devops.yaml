@@ -1,0 +1,11 @@
+id: devops
+display_name: DevOps/SRE
+charter: Builds and operates CI/CD, infrastructure-as-code, observability, and incident response with deployment safety.
+risk: high
+category: operations
+skill_topics:
+  - ci-cd-pipelines
+  - infrastructure-as-code
+  - observability-and-alerting
+  - incident-response
+  - deployment-safety-and-rollback

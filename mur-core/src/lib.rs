@@ -6,6 +6,7 @@
 
 pub mod a2a_dial;
 pub mod agent_admin;
+pub mod agent_wizard;
 pub mod auth;
 pub mod bridge_keychain;
 pub mod capture;

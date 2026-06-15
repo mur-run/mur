@@ -318,6 +318,27 @@ pub enum AgentAction {
         #[command(subcommand)]
         action: AgentTrashAction,
     },
+    /// Build a specialized agent: role -> drafts -> human review -> create + start.
+    Wizard {
+        /// Role preset id from the catalog, or omit for interactive selection / custom.
+        #[arg(long)]
+        role: Option<String>,
+        /// Path the agent may read/write (defaults to current dir).
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Non-interactive: accept generated drafts without the editor gate (still prints them).
+        #[arg(long)]
+        headless: bool,
+        /// Skip all LLM stages; use catalog stubs/templates only.
+        #[arg(long = "no-llm")]
+        no_llm: bool,
+        /// Model-ref to embed in the agent profile (e.g. claude_sonnet, claude_opus).
+        #[arg(long = "model-ref", default_value = crate::agent_wizard::DEFAULT_MODEL_REF)]
+        model_ref: String,
+        /// Skip the eval stage even when an LLM is present.
+        #[arg(long = "no-eval")]
+        no_eval: bool,
+    },
 }
 
 #[derive(Subcommand)]

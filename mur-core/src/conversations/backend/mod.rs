@@ -1,6 +1,7 @@
 //! ChatBackend trait and supporting types. See spec
 //! `docs/superpowers/specs/2026-05-01-cloud-llm-backend-design.md` §4.
 
+pub mod adapter;
 pub mod anthropic;
 pub mod factory;
 pub mod gemini;

@@ -89,6 +89,7 @@ pub use snapshot::{cmd_snapshot_pull, cmd_snapshot_show};
 pub use stats::{cmd_logs, cmd_stats};
 mod pending;
 mod queue_cmd;
+pub mod wizard;
 #[allow(unused_imports)]
 pub use pending::{cmd_pending_act, cmd_pending_list};
 mod trash;
