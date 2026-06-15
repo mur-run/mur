@@ -216,8 +216,8 @@ pub async fn run_wizard(
                     }
                 }
             }
-        } // if let Some(judge)
-    } // if !no_eval
+        } // end eval scope
+    } // if !no_eval && let Some(judge)
     Ok(outcome)
 }
 

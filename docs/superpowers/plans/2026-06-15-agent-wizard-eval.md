@@ -670,6 +670,21 @@ git add -A && git commit -m "feat(agent-wizard): --no-eval flag; gate green for 
 - **Placeholder scan:** Task 6's "report-only wiring + real mutation in a follow-up increment" is an explicit, justified scope decision (the loop logic is unit-proven; on-disk re-apply+restart is the risky part), not a vague TODO — captured in the roadmap. No "TBD"/"handle errors"-style gaps.
 - **Type consistency:** `EvalTask`/`TaskKind`/`DimensionScores`/`EvalResult`/`EvalReport`/`AgentDriver`/`DialDriver`/`run_eval`/`judge_correctness_honesty`/`eval_tasks::tasks_for`/`security_suite::evaluate_jsonl`/`DEFAULT_MODEL_REF` are consistent across tasks; `DimensionScores::passes` is the single source of the pass bar.
 
+## Review-captured follow-ups (Plan 3 final review, 2026-06-15)
+
+Plan 3 reviewed (APPROVED). Fixed inline: added a documented `(4,4,4)` pass-bar test (the bar is
+intentionally strict — each≥4 AND overall≥0.90 means mean≥4.5); fixed misleading brace comments in
+`run_wizard`. Tracked for a follow-up increment:
+
+- **`grade_skill_usage` `len>3` filter** (eval.rs) penalizes short skill-name segments (`pm`, `api`,
+  `ci`) — they never score >2, so capability tasks would fail `uses_skills>=4` for roles with short
+  skill names. The shipped catalog uses long names so it doesn't bite today; lower to `>=2` (or
+  smarter matching) when short-named roles appear.
+- **Test-code `"claude_sonnet"` literals** (apply.rs/mod.rs/stages.rs `#[cfg(test)]`) should use
+  `DEFAULT_MODEL_REF` so a rename propagates.
+- **`let _ = tasks` in `eval_with_autofix`** — rename to `_tasks` or use it once the real
+  re-author+re-apply loop lands (the deferred auto-fix increment below).
+
 ## Roadmap note
 
 - **Real auto-fix mutation (Plan 3 follow-up / 3b):** turn the report-only eval into a live loop — on failure, re-author the lowest-scoring skill or the prompt via `llm.rs`, re-`apply` the single artifact, restart the agent, and re-`run_eval`, capped at N=2 (the `eval_with_autofix` helper is already in place + unit-proven). Requires verifying agent restart timing and dial readiness.
