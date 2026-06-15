@@ -6339,7 +6339,9 @@ version = "2.24.5"
 dependencies = [
  "anyhow",
  "chrono",
+ "ed25519-dalek",
  "fs2",
+ "multibase",
  "mur-common",
  "notify",
  "rusqlite",
