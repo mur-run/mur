@@ -413,18 +413,118 @@ async fn execute_step(
 ) -> StepResult {
     let sid = step.id.clone().unwrap_or_else(|| step_index.to_string());
 
-    if let Some(cid) = opts.channel_id.as_deref() {
-        emit_channel(
+    // ── Delegation (v3b): dial a specialist over A2A, attribute the reply ──
+    if let (Some(target), Some(cid)) = (step.delegate_to.as_deref(), opts.channel_id.as_deref()) {
+        let start = std::time::Instant::now();
+        let canonical = crate::a2a_dial::canonicalize_agent_name(mur_home, target);
+        let child_task_id = format!("ct-{}", uuid::Uuid::now_v7());
+        let deleg_key = idem_key(cid, &opts.run_id, &sid, "delegate");
+        let reply_key = idem_key(cid, &opts.run_id, &sid, "reply");
+
+        // Sub-goal text: explicit intent, else the step description.
+        let goal_text = step.intent.clone().unwrap_or_else(|| step.description.clone());
+
+        // Record the delegation up front (System actor, deterministic key).
+        if let Ok(svc) = ChannelService::open(mur_home) {
+            let _ = svc.append_delegation(cid, &canonical, &child_task_id, Some(deleg_key));
+        }
+        eprintln!("  Step {sid}: delegate → {canonical}: {goal_text}");
+
+        let params = build_delegate_params(&goal_text, &child_task_id);
+        // RequireRunning is enforced by dial_message_streaming (it bails if the
+        // target has no running.lock). We surface a specialist HITL as a mirror
+        // event only — interactive relay is v3c.
+        let home_for_hitl = mur_home.to_path_buf();
+        let cid_for_hitl = cid.to_string();
+        let dial = crate::a2a_dial::dial_message_streaming(
             mur_home,
-            cid,
-            mur_common::channel::EventKind::ToolCall,
-            serde_json::json!({
-                "step_id": sid,
-                "description": step.description,
-                "command": step.command,
-                "tool": step.tool,
-            }),
+            &canonical,
+            params,
+            |_t, _thinking, _tid| { /* deltas buffered into the final snapshot */ },
+            |hitl_params| {
+                // Mirror the specialist's approval request into the channel for
+                // visibility. v3c adds the interactive resolution path.
+                if let Ok(svc) = ChannelService::open(&home_for_hitl) {
+                    let _ = svc.append(
+                        &cid_for_hitl,
+                        ChannelActor::System,
+                        mur_common::channel::EventKind::HitlRequest,
+                        serde_json::json!({ "mirror": true, "from": "delegate", "params": hitl_params }),
+                        None,
+                    );
+                }
+            },
         );
+
+        let result = match dial {
+            Ok(task) => {
+                let reply = extract_agent_reply(&task);
+                // Attribute the reply to the dialed agent; store the raw task
+                // snapshot alongside so attribution is auditable, not just asserted.
+                if let Ok(svc) = ChannelService::open(mur_home) {
+                    let _ = svc.append(
+                        cid,
+                        ChannelActor::Agent { id: canonical.clone() },
+                        mur_common::channel::EventKind::Message,
+                        serde_json::json!({
+                            "text": reply,
+                            "task_id": child_task_id,
+                            "source_task": task,
+                        }),
+                        Some(reply_key),
+                    );
+                }
+                let empty = reply.trim().is_empty();
+                StepResult {
+                    exit_code: if empty { 1 } else { 0 },
+                    output_text: reply,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    failed_step: if empty { Some(step.description.clone()) } else { None },
+                    success: !empty,
+                }
+            }
+            Err(e) => {
+                // Nothing partial is attributed; record a failure Note + fail the
+                // step so the DAG's on_failure (Abort/Skip/Retry) decides.
+                if let Ok(svc) = ChannelService::open(mur_home) {
+                    let _ = svc.append(
+                        cid,
+                        ChannelActor::System,
+                        mur_common::channel::EventKind::Note,
+                        serde_json::json!({ "text": format!("delegate to {canonical} failed: {e:#}") }),
+                        None,
+                    );
+                }
+                eprintln!("  Step {sid}: delegate to {canonical} failed: {e:#}");
+                StepResult {
+                    exit_code: 1,
+                    output_text: format!("delegate failed: {e}"),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    failed_step: Some(step.description.clone()),
+                    success: false,
+                }
+            }
+        };
+        return result;
+    }
+
+    // Guard ToolCall against spurious emit on delegation steps (belt+suspenders
+    // in case delegate_to is set but channel_id is None — the branch above
+    // handles the channel case; this ensures local runs stay clean too).
+    if let Some(cid) = opts.channel_id.as_deref() {
+        if step.delegate_to.is_none() {
+            emit_channel(
+                mur_home,
+                cid,
+                mur_common::channel::EventKind::ToolCall,
+                serde_json::json!({
+                    "step_id": sid,
+                    "description": step.description,
+                    "command": step.command,
+                    "tool": step.tool,
+                }),
+            );
+        }
     }
 
     let result = execute_step_inner(step, opts, step_index).await;
@@ -693,7 +793,7 @@ pub async fn execute_dag(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mur_common::skill::manifest::{FailureAction, ProcedureStep, RetryConfig};
+    use mur_common::skill::manifest::ProcedureStep;
 
     fn step(id: &str, deps: &[&str], cmd: Option<&str>) -> ProcedureStep {
         ProcedureStep {
