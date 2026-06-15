@@ -8,6 +8,7 @@ pub mod apply;
 pub mod catalog;
 pub mod draft;
 pub mod entitlements;
+pub mod eval;
 pub mod llm;
 pub mod research;
 pub mod stages;
