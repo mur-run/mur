@@ -224,38 +224,6 @@ async fn execute_step_inner(
 ) -> StepResult {
     let start = std::time::Instant::now();
 
-    // ── needs_approval ──
-    if step.needs_approval {
-        let approved = if opts.yes {
-            true
-        } else if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-            dialoguer::Confirm::new()
-                .with_prompt(format!(
-                    "Step {}: «{}» — run?",
-                    step.id.as_deref().unwrap_or(&step_index.to_string()),
-                    step.description
-                ))
-                .default(true)
-                .interact()
-                .unwrap_or(false)
-        } else {
-            false
-        };
-        if !approved {
-            eprintln!(
-                "  Step {}: needs_approval, skipped (yields true) — use `--yes` to auto-approve",
-                step.id.as_deref().unwrap_or(&step_index.to_string())
-            );
-            return StepResult {
-                exit_code: 0,
-                output_text: String::new(),
-                duration_ms: start.elapsed().as_millis() as u64,
-                failed_step: None,
-                success: true,
-            };
-        }
-    }
-
     // ── Command-mode ──
     if let Some(cmd_template) = &step.command {
         // Variable substitution: {{var_name}} → value
@@ -411,7 +379,31 @@ async fn execute_step(
     step_index: usize,
     mur_home: &Path,
 ) -> StepResult {
+    let start = std::time::Instant::now();
     let sid = step.id.clone().unwrap_or_else(|| step_index.to_string());
+
+    // ── Resume cursor (v3c): skip steps whose ToolResult is already recorded ──
+    if let Some(cid) = opts.channel_id.as_deref() {
+        let result_key = idem_key(cid, &opts.run_id, &sid, "result");
+        if let Ok(svc) = ChannelService::open(mur_home) {
+            if let Ok(evs) = svc.load_events(cid) {
+                if evs.iter().any(|e| {
+                    e.kind == mur_common::channel::EventKind::ToolResult
+                        && e.idempotency_key.as_deref() == Some(result_key.as_str())
+                        && e.payload.get("success").and_then(|v| v.as_bool()) == Some(true)
+                }) {
+                    eprintln!("  Step {sid}: already completed (resume) — skipping");
+                    return StepResult {
+                        exit_code: 0,
+                        output_text: String::new(),
+                        duration_ms: 0,
+                        failed_step: None,
+                        success: true,
+                    };
+                }
+            }
+        }
+    }
 
     // ── Delegation (v3b): dial a specialist over A2A, attribute the reply ──
     if let (Some(target), Some(cid)) = (step.delegate_to.as_deref(), opts.channel_id.as_deref()) {
@@ -517,6 +509,85 @@ async fn execute_step(
         return result;
     }
 
+    // ── Risk-tiered HITL gate (v3c) ──
+    let tier = step.risk.or(if step.needs_approval {
+        Some(mur_common::hitl::RiskTier::Destructive)
+    } else {
+        None
+    });
+    if let (Some(tier), Some(cid)) = (tier, opts.channel_id.as_deref()) {
+        let input = serde_json::json!({
+            "command": step.command,
+            "intent": step.intent,
+            "description": step.description,
+        });
+        let req = crate::hitl::gate::ActionRequest {
+            tier,
+            tool_name: step.command.clone().map(|_| "sh".into()).unwrap_or_else(|| "intent".into()),
+            tool_input: input.clone(),
+            step_or_call_id: sid.clone(),
+            agent_id: "mur".into(),
+            summary: step.description.clone(),
+        };
+        let decision = crate::hitl::gate::gate(mur_home, cid, &req, opts.yes, None)
+            .await
+            .unwrap_or(crate::hitl::gate::GateDecision {
+                allow: false,
+                reason: "gate error".into(),
+                action_hash: String::new(),
+            });
+        if !decision.allow {
+            eprintln!("  Step {sid}: gate denied ({})", decision.reason);
+            return StepResult {
+                exit_code: 1,
+                output_text: format!("hitl: {}", decision.reason),
+                duration_ms: start.elapsed().as_millis() as u64,
+                failed_step: Some(step.description.clone()),
+                success: false,
+            };
+        }
+        // Re-verify the pin at the execute boundary (fail-closed on drift).
+        let now_hash = crate::hitl::pin::action_hash("sh", &input, cid, &sid, "mur");
+        if !decision.action_hash.is_empty() && now_hash != decision.action_hash {
+            eprintln!("  Step {sid}: hitl_drift at execute boundary — refusing");
+            return StepResult {
+                exit_code: 1,
+                output_text: "hitl_drift".into(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                failed_step: Some(step.description.clone()),
+                success: false,
+            };
+        }
+    } else if step.needs_approval {
+        // No channel: legacy TTY/--yes approval (unchanged behavior).
+        let approved = if opts.yes {
+            true
+        } else if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            #[cfg(feature = "cli")]
+            {
+                dialoguer::Confirm::new()
+                    .with_prompt(format!("Step {sid}: «{}» — run?", step.description))
+                    .default(true)
+                    .interact()
+                    .unwrap_or(false)
+            }
+            #[cfg(not(feature = "cli"))]
+            false
+        } else {
+            false
+        };
+        if !approved {
+            eprintln!("  Step {sid}: needs_approval, skipped (yields true) — use `--yes` to auto-approve");
+            return StepResult {
+                exit_code: 0,
+                output_text: String::new(),
+                duration_ms: 0,
+                failed_step: None,
+                success: true,
+            };
+        }
+    }
+
     // Guard ToolCall against spurious emit on delegation steps (belt+suspenders
     // in case delegate_to is set but channel_id is None — the branch above
     // handles the channel case; this ensures local runs stay clean too).
@@ -539,17 +610,22 @@ async fn execute_step(
     if let Some(cid) = opts.channel_id.as_deref() {
         let mut excerpt = result.output_text.clone();
         excerpt.truncate(2048);
-        emit_channel(
-            mur_home,
-            cid,
-            mur_common::channel::EventKind::ToolResult,
-            serde_json::json!({
-                "step_id": sid,
-                "exit_code": result.exit_code,
-                "success": result.success,
-                "output": excerpt,
-            }),
-        );
+        // Use the deterministic idem_key so the resume cursor can match this row.
+        let result_key = idem_key(cid, &opts.run_id, &sid, "result");
+        let _ = ChannelService::open(mur_home).and_then(|svc| {
+            svc.append(
+                cid,
+                mur_common::channel::ChannelActor::System,
+                mur_common::channel::EventKind::ToolResult,
+                serde_json::json!({
+                    "step_id": sid,
+                    "exit_code": result.exit_code,
+                    "success": result.success,
+                    "output": excerpt,
+                }),
+                Some(result_key),
+            )
+        });
     }
 
     result
@@ -571,15 +647,6 @@ pub async fn execute_dag(
     let start = std::time::Instant::now();
 
     let graph = build_dag(&procedure.steps)?;
-
-    // Fail-closed: needs_approval requires a HITL round-trip (v3c). Do not silently skip
-    // approval when running headless over a channel — that would be a policy bypass.
-    if opts.channel_id.is_some() && procedure.steps.iter().any(|s| s.needs_approval) {
-        anyhow::bail!(
-            "needs_approval requires interactive HITL (v3c); cannot run over a channel headlessly. \
-             Remove needs_approval from the workflow or run without --channel."
-        );
-    }
 
     // Emit start StateChange (Working) if running over a channel.
     if let Some(cid) = opts.channel_id.as_deref() {
@@ -935,35 +1002,61 @@ mod tests {
         assert_eq!(out.exit_code, 0);
     }
 
-    #[test]
-    fn channel_run_refuses_needs_approval() {
+    // channel_run_refuses_needs_approval removed: v3c gates via hitl::gate instead
+    // of refusing. See high_risk_step_gates_and_runs_when_preapproved below.
+
+    #[tokio::test]
+    async fn resume_skips_a_step_already_completed() {
+        use mur_channel::ChannelService;
+        use mur_common::channel::EventKind;
+
         let tmp = tempfile::TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("resume-wf").unwrap();
+
         let proc = Procedure {
             variables: vec![],
-            steps: vec![ProcedureStep {
-                id: Some("s0".to_string()),
-                command: Some("echo ok".to_string()),
-                description: "needs approval".to_string(),
-                needs_approval: true,
-                ..Default::default()
-            }],
+            steps: vec![step("s0", &[], Some("echo zero")), step("s1", &["s0"], Some("echo one"))],
         };
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let err = rt
-            .block_on(execute_dag(
-                tmp.path(),
-                "test",
-                &proc,
-                &DagExecOptions {
-                    channel_id: Some("ch-1".to_string()),
-                    ..DagExecOptions::default()
-                },
-            ))
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("needs_approval"),
-            "expected needs_approval error, got: {err}"
-        );
+        let opts = DagExecOptions {
+            channel_id: Some(ch.id.clone()),
+            run_id: "run-1".into(),
+            yes: true,
+            ..Default::default()
+        };
+        execute_dag(tmp.path(), "resume-wf", &proc, &opts).await.unwrap();
+        let after_first = svc.load_events(&ch.id).unwrap().len();
+
+        execute_dag(tmp.path(), "resume-wf", &proc, &opts).await.unwrap();
+        let tr_after_second = svc
+            .load_events(&ch.id).unwrap()
+            .iter().filter(|e| e.kind == EventKind::ToolResult).count();
+        assert_eq!(tr_after_second, 2, "rerun did not duplicate completed-step results");
+        let _ = after_first;
+    }
+
+    #[tokio::test]
+    async fn high_risk_step_gates_and_runs_when_preapproved() {
+        use mur_channel::ChannelService;
+        use mur_common::channel::EventKind;
+        use mur_common::hitl::RiskTier;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("gated-wf").unwrap();
+        let mut s = step("s0", &[], Some("echo done"));
+        s.risk = Some(RiskTier::Destructive);
+        let proc = Procedure { variables: vec![], steps: vec![s] };
+        let opts = DagExecOptions {
+            channel_id: Some(ch.id.clone()),
+            run_id: "run-1".into(),
+            yes: true,
+            ..Default::default()
+        };
+        let out = execute_dag(tmp.path(), "gated-wf", &proc, &opts).await.unwrap();
+        assert_eq!(out.exit_code, 0);
+        let kinds: Vec<_> = svc.load_events(&ch.id).unwrap().iter().map(|e| e.kind).collect();
+        assert!(kinds.contains(&EventKind::HitlRequest), "high-risk step raised a gate");
     }
 
     #[test]

@@ -3,7 +3,14 @@
 //! Hub/iOS UI), and returns the decision. The channel pair is a MIRROR — single
 //! trusted writer per the v3 trust-model invariant; per-event signing (authority
 //! for headless approval) is v3d.
+//!
+//! Design note: `gate()` takes `mur_home: &Path` (not `&ChannelService`) so that
+//! `ChannelService` (which wraps a `RefCell<Connection>` and is therefore `!Sync`)
+//! is opened and dropped within each synchronous section, never held across an
+//! `.await` point. This keeps the future `Send` so it can run inside
+//! `tokio::task::spawn`.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -37,8 +44,11 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Gate an action. `yes` auto-approves Ask-tier actions (records an `auto`
 /// HitlResponse for the audit trail). Read tier returns `allow` immediately.
+///
+/// Takes `mur_home: &Path` rather than `&ChannelService` so `ChannelService` is
+/// never held across `.await` — keeping the returned future `Send`.
 pub async fn gate(
-    svc: &ChannelService,
+    mur_home: &Path,
     channel_id: &str,
     req: &ActionRequest,
     yes: bool,
@@ -77,17 +87,20 @@ pub async fn gate(
                 timeout_ms: timeout.as_millis() as u64,
                 summary: req.summary.clone(),
             };
-            svc.append(
-                channel_id,
-                ChannelActor::System,
-                EventKind::HitlRequest,
-                serde_json::to_value(&request)?,
-                None,
-            )?;
-            svc.transition(channel_id, ChannelState::InputRequired, ChannelActor::System)?;
+            // Open, write, drop — never cross an await with the service open.
+            {
+                let svc = ChannelService::open(mur_home)?;
+                svc.append(
+                    channel_id,
+                    ChannelActor::System,
+                    EventKind::HitlRequest,
+                    serde_json::to_value(&request)?,
+                    None,
+                )?;
+                svc.transition(channel_id, ChannelState::InputRequired, ChannelActor::System)?;
+            }
 
             let decision = if yes {
-                // Auto-approve: record the response so the trail is complete.
                 let resp = HitlResponse {
                     hitl_id: hitl_id.clone(),
                     action_hash: hash.clone(),
@@ -95,29 +108,35 @@ pub async fn gate(
                     reason: "--yes".into(),
                     surface: "auto".into(),
                 };
-                svc.append(
-                    channel_id,
-                    ChannelActor::System,
-                    EventKind::HitlResponse,
-                    serde_json::to_value(&resp)?,
-                    None,
-                )?;
+                {
+                    let svc = ChannelService::open(mur_home)?;
+                    svc.append(
+                        channel_id,
+                        ChannelActor::System,
+                        EventKind::HitlResponse,
+                        serde_json::to_value(&resp)?,
+                        None,
+                    )?;
+                }
                 GateDecision { allow: true, reason: "auto-approved (--yes)".into(), action_hash: hash.clone() }
             } else {
-                wait_for_response(svc, channel_id, &hitl_id, &hash, timeout).await?
+                wait_for_response(mur_home, channel_id, &hitl_id, &hash, timeout).await?
             };
 
-            // Return the channel to Working regardless of the verdict.
-            svc.transition(channel_id, ChannelState::Working, ChannelActor::System)?;
+            {
+                let svc = ChannelService::open(mur_home)?;
+                svc.transition(channel_id, ChannelState::Working, ChannelActor::System)?;
+            }
             Ok(decision)
         }
     }
 }
 
-/// Poll the log for a HitlResponse matching `hitl_id`. On drift (the response
-/// echoes a different `action_hash`) or timeout, deny (fail-closed).
+/// Poll the log for a HitlResponse matching `hitl_id`. Opens the service fresh
+/// on each poll so we never hold `ChannelService` across an `.await` point.
+/// On drift or timeout, deny (fail-closed).
 async fn wait_for_response(
-    svc: &ChannelService,
+    mur_home: &Path,
     channel_id: &str,
     hitl_id: &str,
     expected_hash: &str,
@@ -125,11 +144,16 @@ async fn wait_for_response(
 ) -> Result<GateDecision> {
     let start = Instant::now();
     loop {
-        let evs = svc.load_events(channel_id)?;
-        if let Some(resp) = evs.iter().rev().find(|e| {
-            e.kind == EventKind::HitlResponse
-                && e.payload.get("hitl_id").and_then(|v| v.as_str()) == Some(hitl_id)
-        }) {
+        // Open, read, drop — then await the sleep.
+        let found = {
+            let svc = ChannelService::open(mur_home)?;
+            let evs = svc.load_events(channel_id)?;
+            evs.into_iter().rev().find(|e| {
+                e.kind == EventKind::HitlResponse
+                    && e.payload.get("hitl_id").and_then(|v| v.as_str()) == Some(hitl_id)
+            })
+        };
+        if let Some(resp) = found {
             let echoed = resp.payload.get("action_hash").and_then(|v| v.as_str()).unwrap_or("");
             if echoed != expected_hash {
                 return Ok(GateDecision {
@@ -177,7 +201,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
-        let d = gate(&svc, &ch.id, &req(RiskTier::Read), false, None).await.unwrap();
+        let d = gate(tmp.path(), &ch.id, &req(RiskTier::Read), false, None).await.unwrap();
         assert!(d.allow);
     }
 
@@ -188,10 +212,12 @@ mod tests {
         let ch = svc.create_for_workflow("g").unwrap();
         let r = req(RiskTier::Destructive);
         let hash = action_hash(&r.tool_name, &r.tool_input, &ch.id, &r.step_or_call_id, &r.agent_id);
-        let d = gate(&svc, &ch.id, &r, true, None).await.unwrap();
+        let d = gate(tmp.path(), &ch.id, &r, true, None).await.unwrap();
         assert!(d.allow, "--yes auto-approves a high tier");
         assert_eq!(d.action_hash, hash);
-        let kinds: Vec<_> = svc.load_events(&ch.id).unwrap().iter().map(|e| e.kind).collect();
+        // Check the trail via a fresh open.
+        let svc2 = ChannelService::open(tmp.path()).unwrap();
+        let kinds: Vec<_> = svc2.load_events(&ch.id).unwrap().iter().map(|e| e.kind).collect();
         assert!(kinds.contains(&EventKind::HitlRequest));
         assert!(kinds.contains(&EventKind::HitlResponse));
     }
@@ -211,7 +237,9 @@ mod tests {
         };
         svc.append(&ch.id, ChannelActor::System, EventKind::HitlResponse,
             serde_json::to_value(&resp).unwrap(), None).unwrap();
-        let d = wait_for_response(&svc, &ch.id, "h-x", "EXPECTED", std::time::Duration::from_secs(1))
+        // Drop svc before waiting (don't hold across await).
+        drop(svc);
+        let d = wait_for_response(tmp.path(), &ch.id, "h-x", "EXPECTED", std::time::Duration::from_secs(1))
             .await.unwrap();
         assert!(!d.allow, "mismatched action_hash must fail-closed");
         assert!(d.reason.contains("drift"));
