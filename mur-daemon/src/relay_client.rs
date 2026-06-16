@@ -298,21 +298,16 @@ async fn handle_frame(
         }
 
         ClientFrame::Resume { pubkey, agent } => {
-            // Steady-state reconnect by paired key. Issue a fresh per-connection
-            // challenge nonce; the matching ResumeProof must sign exactly it.
-            if mur_core::mobile::is_device_paired(home, &pubkey) {
+            // Steady-state reconnect by paired key. In-flight guard: ignore a
+            // duplicate Resume while one is already pending, so an unauthenticated
+            // peer can't amplify work (nonce mint + Challenge send) by spamming
+            // Resume. Issue the challenge UNCONDITIONALLY (no is_device_paired
+            // branch here) so we don't leak which pubkeys are enrolled —
+            // resume_proof_ok gates pairing + signature at the proof step.
+            if pending_resume.is_none() {
                 let nonce = mur_core::mobile::new_challenge_nonce();
                 *pending_resume = Some((pubkey, agent, nonce.clone()));
                 relay_send(write, &ServerFrame::Challenge { nonce }).await?;
-            } else {
-                *pending_resume = None;
-                relay_send(
-                    write,
-                    &ServerFrame::Rejected {
-                        reason: "unknown device — pair first".to_string(),
-                    },
-                )
-                .await?;
             }
         }
 

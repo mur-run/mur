@@ -159,11 +159,12 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
             }
             Ok(ClientFrame::Resume { pubkey, agent }) => {
                 // Steady-state reconnect by paired key — no enrollment token.
+                // Issue the challenge UNCONDITIONALLY (don't branch on
+                // is_device_paired here): a paired-membership check at this point
+                // would leak which device pubkeys are enrolled. resume_proof_ok
+                // below requires both pairing AND a valid signature, so an unpaired
+                // key fails identically to a paired key with a bad proof.
                 let home = &state.mur_home;
-                if !mur_core::mobile::is_device_paired(home, &pubkey) {
-                    let _ = send_frame(&mut socket, &reject("unknown device — pair first")).await;
-                    return;
-                }
                 // Challenge-response: issue a fresh per-connection nonce; the phone
                 // must sign exactly it to prove it holds the paired key (replay-safe).
                 let nonce = mur_core::mobile::new_challenge_nonce();
@@ -816,6 +817,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn resume_rejects_an_unpaired_device() {
+        // The daemon issues a Challenge unconditionally (so it doesn't leak which
+        // pubkeys are paired); an unpaired device can sign the nonce but still
+        // fails resume_proof_ok (not in paired.json) → Rejected at the proof step.
         let (addr, _tmp) = start_server().await;
         let id = AgentIdentity::generate();
         let mut ws = connect(addr).await;
@@ -827,9 +831,15 @@ mod tests {
             },
         )
         .await;
+        let nonce = match recv_server(&mut ws).await {
+            ServerFrame::Challenge { nonce } => nonce,
+            other => panic!("expected Challenge (no membership oracle), got {other:?}"),
+        };
+        let proof = sign_payload(nonce.as_bytes().to_vec(), &id, 1);
+        send_frame(&mut ws, &ClientFrame::ResumeProof { envelope: proof }).await;
         assert!(
             matches!(recv_server(&mut ws).await, ServerFrame::Rejected { .. }),
-            "a device not in paired.json cannot resume"
+            "a device not in paired.json cannot resume even with a valid signature"
         );
     }
 

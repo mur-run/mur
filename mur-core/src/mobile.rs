@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn resume_proof_ok_binds_to_the_issued_nonce_and_paired_key() {
-        use mur_common::identity::AgentIdentity;
+        use mur_common::identity::{AgentIdentity, encode_pubkey};
         let tmp = tempfile::TempDir::new().unwrap();
         let home = tmp.path();
         let id = AgentIdentity::generate();
