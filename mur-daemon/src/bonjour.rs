@@ -1,22 +1,24 @@
 //! Advertise the mobile WebSocket endpoint via mDNS/Bonjour so iOS devices
-//! on the same LAN can discover it without scanning a QR code.
+//! on the same LAN can DISCOVER it (find where the Mac is). Discovery only —
+//! the TXT record carries NO secret: a pairing token would otherwise be
+//! continuously multicast to every device on the LAN (RFC 8882/8386). The
+//! enrollment token travels out-of-band in the QR/URI instead.
 //!
 //! Service type: `_mur._tcp`
-//! TXT record:   `port=<n>  token=<pair-token>  agent=mur`
+//! TXT record:   `port=<n>  agent=mur  v=2`   (no token)
 
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use std::collections::HashMap;
 
-pub fn advertise(port: u16, pair_token: &str) {
-    let token = pair_token.to_string();
+pub fn advertise(port: u16) {
     std::thread::spawn(move || {
-        if let Err(e) = run(port, &token) {
+        if let Err(e) = run(port) {
             tracing::warn!(error = %e, "bonjour: advertisement failed (non-fatal)");
         }
     });
 }
 
-fn run(port: u16, pair_token: &str) -> anyhow::Result<()> {
+fn run(port: u16) -> anyhow::Result<()> {
     let mdns = ServiceDaemon::new()?;
 
     let hostname = hostname::get()
@@ -25,10 +27,11 @@ fn run(port: u16, pair_token: &str) -> anyhow::Result<()> {
         .unwrap_or_else(|| "mur-host".to_string());
     let instance = format!("MUR on {hostname}");
 
+    // Discovery-only TXT: no secret. `v=2` signals the token left the TXT (the
+    // app must obtain the enrollment code from the QR, not the broadcast).
     let mut properties = HashMap::new();
-    properties.insert("token".to_string(), pair_token.to_string());
     properties.insert("agent".to_string(), "mur".to_string());
-    properties.insert("v".to_string(), "1".to_string());
+    properties.insert("v".to_string(), "2".to_string());
 
     let service = ServiceInfo::new(
         "_mur._tcp.local.",

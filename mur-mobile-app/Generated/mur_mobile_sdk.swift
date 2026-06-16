@@ -596,10 +596,32 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
     func endAudioStream() 
     
     /**
+     * Enroll a NEW device over LAN with the proto-2 PROOF handshake: the `token`
+     * (from the QR) is never transmitted — the phone proves it via HMAC. `wid`
+     * and `daemon_id` also come from the QR; `daemon_id` is verified against the
+     * daemon's challenge to defeat a LAN MITM.
+     */
+    func enrollLan(host: String, port: UInt16, token: String, wid: String, daemonId: String) 
+    
+    /**
+     * Enroll a NEW device over relay with the proto-2 PROOF handshake (one-shot;
+     * switch to `resume_relay` afterward). The `token` is never transmitted.
+     */
+    func enrollRelay(relayWsUrl: String, jwt: String, token: String, wid: String, daemonId: String) 
+    
+    /**
      * Request events for a specific channel, optionally from `since_seq`
      * (inclusive). Response arrives as [`MobileEvent::ChannelEvents`].
      */
     func fetchChannelEvents(channelId: String, sinceSeq: UInt64?) 
+    
+    /**
+     * Respond to a HITL gate (v4c). The approval rides a SIGNED envelope (method
+     * `channel/hitl_respond`) so the daemon verifies the phone's Ed25519 signature
+     * before writing the v3d-signed `HitlResponse` that releases the gate — the
+     * approval is never trusted from an unsigned frame.
+     */
+    func hitlRespond(channelId: String, hitlId: String, allow: Bool, reason: String) 
     
     /**
      * Request the full channel list. The response arrives as
@@ -614,15 +636,30 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
     func publicKey()  -> String
     
     /**
+     * Reconnect over LAN by paired KEY — no token — for a device already paired
+     * (the steady-state path after enrollment). Sends a `Resume` and answers the
+     * daemon's challenge with a signed proof.
+     */
+    func resumeLan(host: String, port: UInt16) 
+    
+    /**
+     * Reconnect over relay by paired KEY — no token — for a device already
+     * paired. Reconnect loop sends a `Resume` and answers the daemon's challenge
+     * with a signed proof.
+     */
+    func resumeRelay(relayWsUrl: String, jwt: String) 
+    
+    /**
      * Send one chunk of raw f32 LE PCM (16 kHz mono) to the Mac.
      */
     func sendAudioFrame(data: Data) 
     
     /**
      * Send a user turn as text. The reply arrives as a [`MobileEvent::Reply`]
-     * (and a mirrored transcript) via the listener.
+     * (and a mirrored transcript) via the listener. `channel_id` (v4c) drops the
+     * turn into a specific channel; `None` uses the agent's latest/new channel.
      */
-    func sendText(text: String) 
+    func sendText(text: String, channelId: String?) 
     
     /**
      * Register (or replace) the event listener.
@@ -765,6 +802,40 @@ open func endAudioStream()  {try! rustCall() {
 }
     
     /**
+     * Enroll a NEW device over LAN with the proto-2 PROOF handshake: the `token`
+     * (from the QR) is never transmitted — the phone proves it via HMAC. `wid`
+     * and `daemon_id` also come from the QR; `daemon_id` is verified against the
+     * daemon's challenge to defeat a LAN MITM.
+     */
+open func enrollLan(host: String, port: UInt16, token: String, wid: String, daemonId: String)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_enroll_lan(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(host),
+        FfiConverterUInt16.lower(port),
+        FfiConverterString.lower(token),
+        FfiConverterString.lower(wid),
+        FfiConverterString.lower(daemonId),$0
+    )
+}
+}
+    
+    /**
+     * Enroll a NEW device over relay with the proto-2 PROOF handshake (one-shot;
+     * switch to `resume_relay` afterward). The `token` is never transmitted.
+     */
+open func enrollRelay(relayWsUrl: String, jwt: String, token: String, wid: String, daemonId: String)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_enroll_relay(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(relayWsUrl),
+        FfiConverterString.lower(jwt),
+        FfiConverterString.lower(token),
+        FfiConverterString.lower(wid),
+        FfiConverterString.lower(daemonId),$0
+    )
+}
+}
+    
+    /**
      * Request events for a specific channel, optionally from `since_seq`
      * (inclusive). Response arrives as [`MobileEvent::ChannelEvents`].
      */
@@ -773,6 +844,23 @@ open func fetchChannelEvents(channelId: String, sinceSeq: UInt64?)  {try! rustCa
             self.uniffiCloneHandle(),
         FfiConverterString.lower(channelId),
         FfiConverterOptionUInt64.lower(sinceSeq),$0
+    )
+}
+}
+    
+    /**
+     * Respond to a HITL gate (v4c). The approval rides a SIGNED envelope (method
+     * `channel/hitl_respond`) so the daemon verifies the phone's Ed25519 signature
+     * before writing the v3d-signed `HitlResponse` that releases the gate — the
+     * approval is never trusted from an unsigned frame.
+     */
+open func hitlRespond(channelId: String, hitlId: String, allow: Bool, reason: String)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_hitl_respond(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(channelId),
+        FfiConverterString.lower(hitlId),
+        FfiConverterBool.lower(allow),
+        FfiConverterString.lower(reason),$0
     )
 }
 }
@@ -801,6 +889,34 @@ open func publicKey() -> String  {
 }
     
     /**
+     * Reconnect over LAN by paired KEY — no token — for a device already paired
+     * (the steady-state path after enrollment). Sends a `Resume` and answers the
+     * daemon's challenge with a signed proof.
+     */
+open func resumeLan(host: String, port: UInt16)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_resume_lan(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(host),
+        FfiConverterUInt16.lower(port),$0
+    )
+}
+}
+    
+    /**
+     * Reconnect over relay by paired KEY — no token — for a device already
+     * paired. Reconnect loop sends a `Resume` and answers the daemon's challenge
+     * with a signed proof.
+     */
+open func resumeRelay(relayWsUrl: String, jwt: String)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_resume_relay(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(relayWsUrl),
+        FfiConverterString.lower(jwt),$0
+    )
+}
+}
+    
+    /**
      * Send one chunk of raw f32 LE PCM (16 kHz mono) to the Mac.
      */
 open func sendAudioFrame(data: Data)  {try! rustCall() {
@@ -813,12 +929,14 @@ open func sendAudioFrame(data: Data)  {try! rustCall() {
     
     /**
      * Send a user turn as text. The reply arrives as a [`MobileEvent::Reply`]
-     * (and a mirrored transcript) via the listener.
+     * (and a mirrored transcript) via the listener. `channel_id` (v4c) drops the
+     * turn into a specific channel; `None` uses the agent's latest/new channel.
      */
-open func sendText(text: String)  {try! rustCall() {
+open func sendText(text: String, channelId: String?)  {try! rustCall() {
     uniffi_mur_mobile_sdk_fn_method_mobileclient_send_text(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(text),$0
+        FfiConverterString.lower(text),
+        FfiConverterOptionString.lower(channelId),$0
     )
 }
 }
@@ -892,16 +1010,26 @@ public struct ChannelEventItem: Equatable, Hashable {
     public var actorName: String
     public var kind: String
     public var text: String
+    /**
+     * Set on `HitlRequest` events so the phone can respond to the gate (v4c);
+     * empty for every other event kind.
+     */
+    public var hitlId: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(seq: UInt64, ts: String, actorKind: String, actorName: String, kind: String, text: String) {
+    public init(seq: UInt64, ts: String, actorKind: String, actorName: String, kind: String, text: String, 
+        /**
+         * Set on `HitlRequest` events so the phone can respond to the gate (v4c);
+         * empty for every other event kind.
+         */hitlId: String) {
         self.seq = seq
         self.ts = ts
         self.actorKind = actorKind
         self.actorName = actorName
         self.kind = kind
         self.text = text
+        self.hitlId = hitlId
     }
 
     
@@ -925,7 +1053,8 @@ public struct FfiConverterTypeChannelEventItem: FfiConverterRustBuffer {
                 actorKind: FfiConverterString.read(from: &buf), 
                 actorName: FfiConverterString.read(from: &buf), 
                 kind: FfiConverterString.read(from: &buf), 
-                text: FfiConverterString.read(from: &buf)
+                text: FfiConverterString.read(from: &buf), 
+                hitlId: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -936,6 +1065,7 @@ public struct FfiConverterTypeChannelEventItem: FfiConverterRustBuffer {
         FfiConverterString.write(value.actorName, into: &buf)
         FfiConverterString.write(value.kind, into: &buf)
         FfiConverterString.write(value.text, into: &buf)
+        FfiConverterString.write(value.hitlId, into: &buf)
     }
 }
 
@@ -1705,7 +1835,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_end_audio_stream() != 16986) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_enroll_lan() != 40749) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_enroll_relay() != 25086) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_fetch_channel_events() != 13622) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_hitl_respond() != 8113) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_list_channels() != 8292) {
@@ -1714,10 +1853,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_public_key() != 61081) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_resume_lan() != 45709) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_resume_relay() != 17443) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_send_audio_frame() != 33293) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_send_text() != 38827) {
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_send_text() != 769) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_set_listener() != 63630) {

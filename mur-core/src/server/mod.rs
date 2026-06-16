@@ -258,6 +258,11 @@ pub fn build_router_with_auth(state: AppState, auth_token: Option<Arc<str>>) -> 
         .route("/api/v1/rates", get(get_rates))
         .route("/api/v1/rates/{currency}", get(get_rate))
         .route("/api/v1/mobile/pair-uri", get(mobile::get_pair_uri))
+        .route("/api/v1/mobile/devices", get(mobile::list_devices))
+        .route(
+            "/api/v1/mobile/devices/{fingerprint}",
+            delete(mobile::unpair_device),
+        )
         // WebSocket for real-time events
         .route("/api/v1/ws", get(ws_handler))
         // Agents (Phase 4 read-only routes)

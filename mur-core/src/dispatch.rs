@@ -1111,6 +1111,8 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             auto,
         } => cmd::agent::cmd_cli(&names, resume, auto).await?,
         AgentAction::Pair { name } => cmd::agent_pair::cmd_pair(&name)?,
+        AgentAction::Devices => cmd::agent_pair::cmd_devices()?,
+        AgentAction::Unpair { fingerprint } => cmd::agent_pair::cmd_unpair(&fingerprint)?,
         AgentAction::Rekey {
             name,
             reason,
