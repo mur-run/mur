@@ -35,13 +35,6 @@ pub enum Command {
         channel_id: Option<String>,
         since_seq: Option<u64>,
     },
-    /// Respond to a HITL gate (v4c).
-    HitlRespond {
-        channel_id: String,
-        hitl_id: String,
-        allow: bool,
-        reason: String,
-    },
 }
 
 /// Drive one LAN connection to completion.
@@ -233,9 +226,6 @@ async fn run_frame_loop<S, E>(
                             Command::AudioStreamEnd => ClientFrame::AudioStreamEnd,
                             Command::ChannelQuery { op, channel_id, since_seq } => {
                                 ClientFrame::ChannelQuery { op, channel_id, since_seq }
-                            }
-                            Command::HitlRespond { channel_id, hitl_id, allow, reason } => {
-                                ClientFrame::HitlRespond { channel_id, hitl_id, allow, reason }
                             }
                             Command::Disconnect => {
                                 let _ = write.close().await;

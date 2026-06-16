@@ -305,15 +305,21 @@ impl MobileClient {
         });
     }
 
-    /// Respond to a HITL gate (v4c). The daemon writes a v3d-signed `HitlResponse`
-    /// on this paired phone's behalf, releasing the waiting gate.
+    /// Respond to a HITL gate (v4c). The approval rides a SIGNED envelope (method
+    /// `channel/hitl_respond`) so the daemon verifies the phone's Ed25519 signature
+    /// before writing the v3d-signed `HitlResponse` that releases the gate — the
+    /// approval is never trusted from an unsigned frame.
     pub fn hitl_respond(&self, channel_id: String, hitl_id: String, allow: bool, reason: String) {
-        self.send_cmd(Command::HitlRespond {
-            channel_id,
-            hitl_id,
-            allow,
-            reason,
-        });
+        let envelope = match self.sign_hitl_respond(&channel_id, &hitl_id, allow, &reason) {
+            Ok(env) => env,
+            Err(e) => {
+                self.emit(MobileEvent::Error {
+                    message: format!("sign: {e}"),
+                });
+                return;
+            }
+        };
+        self.send_cmd(Command::Send(envelope));
     }
 }
 
@@ -370,6 +376,46 @@ impl MobileClient {
         // The envelope is signed over these exact bytes; the Mac verifies the
         // stored payload without re-serializing, so no separate canonicalizer
         // is needed for parity.
+        let payload = serde_json::to_vec(&req)?;
+        Ok(sign_payload(payload, &self.identity, PHONE_KEY_VERSION))
+    }
+
+    /// Build a `channel/hitl_respond` request and sign it into an envelope (v4c).
+    /// The daemon verifies this signature before releasing the gate, so the
+    /// approval is only ever trusted when it provably came from this phone's key.
+    fn sign_hitl_respond(
+        &self,
+        channel_id: &str,
+        hitl_id: &str,
+        allow: bool,
+        reason: &str,
+    ) -> Result<mur_common::bridge::envelope::SignedEnvelope, serde_json::Error> {
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "agent".to_string(),
+            serde_json::Value::String(self.default_agent.clone()),
+        );
+        params.insert(
+            "channel_id".to_string(),
+            serde_json::Value::String(channel_id.to_string()),
+        );
+        params.insert(
+            "hitl_id".to_string(),
+            serde_json::Value::String(hitl_id.to_string()),
+        );
+        params.insert("allow".to_string(), serde_json::Value::Bool(allow));
+        params.insert(
+            "reason".to_string(),
+            serde_json::Value::String(reason.to_string()),
+        );
+
+        let id = self.id_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(serde_json::Value::from(id)),
+            method: mur_common::mobile::HITL_RESPOND_METHOD.to_string(),
+            params: Some(serde_json::Value::Object(params)),
+        };
         let payload = serde_json::to_vec(&req)?;
         Ok(sign_payload(payload, &self.identity, PHONE_KEY_VERSION))
     }

@@ -20,6 +20,12 @@ use serde::{Deserialize, Serialize};
 /// WebSocket path the daemon's mobile endpoint serves.
 pub const MOBILE_WS_PATH: &str = "/api/v1/mobile/ws";
 
+/// A2A method (carried inside a signed [`ClientFrame::Envelope`]) by which the
+/// phone authoritatively responds to a HITL gate (v4c). It rides the signed
+/// envelope path — NOT a plain frame — so the daemon verifies the phone's
+/// Ed25519 signature before writing the gate-releasing `HitlResponse`.
+pub const HITL_RESPOND_METHOD: &str = "channel/hitl_respond";
+
 /// Frames the phone sends to the Mac endpoint.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -53,15 +59,6 @@ pub enum ClientFrame {
         channel_id: Option<String>,
         #[serde(default)]
         since_seq: Option<u64>,
-    },
-    /// Respond to a HITL gate (v4c). The daemon writes a v3d-signed `HitlResponse`
-    /// into `channel_id` on this paired phone's behalf, releasing the waiting gate.
-    HitlRespond {
-        channel_id: String,
-        hitl_id: String,
-        allow: bool,
-        #[serde(default)]
-        reason: String,
     },
 }
 

@@ -225,10 +225,16 @@ pub fn respond_hitl(
             .iter()
             .rev()
             .filter(|e| e.kind == EventKind::HitlRequest)
+            // Match the request by `hitl_id` INSIDE find_map: a channel can hold
+            // several stacked HitlRequest events (one serviced, one pending; or two
+            // concurrent v3b delegations), and `.rev()` visits the newest first. A
+            // trailing `.filter()` on the collapsed Option would only test that one
+            // newest request and drop a valid approval for any older gate.
             .find_map(|e| {
-                serde_json::from_value::<mur_common::hitl::HitlRequest>(e.payload.clone()).ok()
+                serde_json::from_value::<mur_common::hitl::HitlRequest>(e.payload.clone())
+                    .ok()
+                    .filter(|r| r.hitl_id == hitl_id)
             })
-            .filter(|r| r.hitl_id == hitl_id)
             .ok_or_else(|| anyhow::anyhow!("no pending HitlRequest {hitl_id} in {channel_id}"))?;
         let resp = mur_common::hitl::HitlResponse {
             hitl_id: request.hitl_id,
@@ -252,6 +258,30 @@ pub fn respond_hitl(
     if let Err(e) = res {
         tracing::warn!("mobile hitl respond failed for {channel_id}: {e:#}");
     }
+}
+
+/// Dispatch a signed `channel/hitl_respond` A2A request (v4c). The daemon calls
+/// this ONLY after it has verified the envelope's Ed25519 signature, so the
+/// approval is authentic. Extracts `{channel_id, hitl_id, allow, reason}` from the
+/// request params, writes the v3d-signed `HitlResponse`, and returns
+/// `(channel_id, hitl_id)` for the caller's ack — `None` if params are malformed
+/// (missing channel_id/hitl_id), in which case nothing is written.
+pub fn respond_hitl_from_params(
+    home: &std::path::Path,
+    params: &serde_json::Value,
+) -> Option<(String, String)> {
+    let channel_id = params.get("channel_id")?.as_str()?.to_string();
+    let hitl_id = params.get("hitl_id")?.as_str()?.to_string();
+    let allow = params
+        .get("allow")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let reason = params
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    respond_hitl(home, &channel_id, &hitl_id, allow, reason);
+    Some((channel_id, hitl_id))
 }
 
 #[cfg(test)]
@@ -368,6 +398,90 @@ mod tests {
                 .count(),
             1,
             "unknown hitl_id writes nothing"
+        );
+    }
+
+    #[test]
+    fn respond_hitl_resolves_an_older_stacked_gate_not_just_the_newest() {
+        // A channel can hold several HitlRequest events; the phone may approve any
+        // of them. respond_hitl must echo the action_hash of the TARGETED hitl_id,
+        // not whichever request is newest.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        for (hid, ah) in [("h1", "AH1"), ("h2", "AH2")] {
+            svc.append(
+                &ch.id,
+                ChannelActor::System,
+                EventKind::HitlRequest,
+                serde_json::json!({
+                    "hitl_id": hid, "action_hash": ah, "tier": "destructive",
+                    "tool_name": "bash", "tool_input": {}, "step_or_call_id": "s0",
+                    "agent_id": "mur", "timeout_ms": 300000u64, "summary": "x"
+                }),
+                None,
+            )
+            .unwrap();
+        }
+        // Approve the OLDER gate (h1) while h2 is the newest request.
+        respond_hitl(tmp.path(), &ch.id, "h1", true, "ok");
+        let resp = svc
+            .load_events(&ch.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == EventKind::HitlResponse)
+            .expect("HitlResponse written for the older gate");
+        assert_eq!(resp.payload["hitl_id"], "h1");
+        assert_eq!(
+            resp.payload["action_hash"], "AH1",
+            "echoes h1's hash, not h2's"
+        );
+    }
+
+    #[test]
+    fn respond_hitl_from_params_dispatches_a_well_formed_request() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        svc.append(
+            &ch.id,
+            ChannelActor::System,
+            EventKind::HitlRequest,
+            serde_json::json!({
+                "hitl_id": "h1", "action_hash": "AH", "tier": "destructive",
+                "tool_name": "bash", "tool_input": {}, "step_or_call_id": "s0",
+                "agent_id": "mur", "timeout_ms": 300000u64, "summary": "x"
+            }),
+            None,
+        )
+        .unwrap();
+
+        let params = serde_json::json!({
+            "channel_id": ch.id, "hitl_id": "h1", "allow": true, "reason": "ok"
+        });
+        let out = respond_hitl_from_params(tmp.path(), &params);
+        assert_eq!(out, Some((ch.id.clone(), "h1".to_string())));
+        assert_eq!(
+            svc.load_events(&ch.id)
+                .unwrap()
+                .iter()
+                .filter(|e| e.kind == EventKind::HitlResponse)
+                .count(),
+            1,
+            "a well-formed dispatch writes exactly one HitlResponse"
+        );
+
+        // Malformed params (missing hitl_id) → None, nothing written.
+        let bad = serde_json::json!({ "channel_id": ch.id, "allow": true });
+        assert_eq!(respond_hitl_from_params(tmp.path(), &bad), None);
+        assert_eq!(
+            svc.load_events(&ch.id)
+                .unwrap()
+                .iter()
+                .filter(|e| e.kind == EventKind::HitlResponse)
+                .count(),
+            1,
+            "malformed params write nothing"
         );
     }
 }

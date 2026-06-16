@@ -231,12 +231,32 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                     }
                 };
 
-                let user_text = extract_user_text(req.params.as_ref());
                 let method = req.method.clone();
                 let params = req.params.clone().unwrap_or(Value::Null);
-                if !handle_agent_turn(&mut socket, &state, &agent, &user_text, method, params).await
-                {
-                    break;
+                // v4c: an authoritative HITL approval rides THIS signed envelope
+                // (verified just above), so the gate-releasing write only fires for
+                // a frame we proved came from the paired device — never unsigned.
+                if method == mur_common::mobile::HITL_RESPOND_METHOD {
+                    if let Some((channel_id, hitl_id)) = mur_core::mobile::respond_hitl_from_params(
+                        state.mur_home.as_path(),
+                        &params,
+                    ) {
+                        let _ = send_frame(
+                            &mut socket,
+                            &ServerFrame::Event {
+                                name: "hitl.ack".to_string(),
+                                payload: json!({ "hitl_id": hitl_id, "channel_id": channel_id }),
+                            },
+                        )
+                        .await;
+                    }
+                } else {
+                    let user_text = extract_user_text(req.params.as_ref());
+                    if !handle_agent_turn(&mut socket, &state, &agent, &user_text, method, params)
+                        .await
+                    {
+                        break;
+                    }
                 }
             }
 
@@ -268,31 +288,6 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                     &ServerFrame::ChannelData {
                         op: op.clone(),
                         payload,
-                    },
-                )
-                .await;
-            }
-
-            ClientFrame::HitlRespond {
-                channel_id,
-                hitl_id,
-                allow,
-                reason,
-            } => {
-                // The connection is already paired-authenticated, so the local
-                // writer records the v3d-signed HitlResponse the gate awaits (v4c).
-                mur_core::mobile::respond_hitl(
-                    state.mur_home.as_path(),
-                    &channel_id,
-                    &hitl_id,
-                    allow,
-                    &reason,
-                );
-                let _ = send_frame(
-                    &mut socket,
-                    &ServerFrame::Event {
-                        name: "hitl.ack".to_string(),
-                        payload: json!({ "hitl_id": hitl_id, "channel_id": channel_id }),
                     },
                 )
                 .await;

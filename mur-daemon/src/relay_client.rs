@@ -173,11 +173,29 @@ async fn handle_frame(
                         return Ok(());
                     }
                 };
-            let user_text = extract_user_text(req.params.as_ref());
-            let agent = extract_agent(req.params.as_ref(), home);
             let method = req.method.clone();
             let params = req.params.clone().unwrap_or(Value::Null);
-            agent_turn(home, write, &agent, &user_text, method, params).await?;
+            // v4c: an authoritative HITL approval rides THIS signed envelope
+            // (verified just above), so the gate-releasing write only fires for a
+            // signature-checked frame — never an unsigned one.
+            if method == mur_common::mobile::HITL_RESPOND_METHOD {
+                if let Some((channel_id, hitl_id)) =
+                    mur_core::mobile::respond_hitl_from_params(home, &params)
+                {
+                    relay_send(
+                        write,
+                        &ServerFrame::Event {
+                            name: "hitl.ack".to_string(),
+                            payload: serde_json::json!({ "hitl_id": hitl_id, "channel_id": channel_id }),
+                        },
+                    )
+                    .await?;
+                }
+            } else {
+                let user_text = extract_user_text(req.params.as_ref());
+                let agent = extract_agent(req.params.as_ref(), home);
+                agent_turn(home, write, &agent, &user_text, method, params).await?;
+            }
         }
 
         ClientFrame::AudioStreamStart { .. } => {
@@ -205,23 +223,6 @@ async fn handle_frame(
                 &ServerFrame::ChannelData {
                     op: op.clone(),
                     payload,
-                },
-            )
-            .await?;
-        }
-
-        ClientFrame::HitlRespond {
-            channel_id,
-            hitl_id,
-            allow,
-            reason,
-        } => {
-            mur_core::mobile::respond_hitl(home, &channel_id, &hitl_id, allow, &reason);
-            relay_send(
-                write,
-                &ServerFrame::Event {
-                    name: "hitl.ack".to_string(),
-                    payload: serde_json::json!({ "hitl_id": hitl_id, "channel_id": channel_id }),
                 },
             )
             .await?;

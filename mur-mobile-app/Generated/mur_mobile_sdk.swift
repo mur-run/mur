@@ -602,8 +602,10 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
     func fetchChannelEvents(channelId: String, sinceSeq: UInt64?) 
     
     /**
-     * Respond to a HITL gate (v4c). The daemon writes a v3d-signed `HitlResponse`
-     * on this paired phone's behalf, releasing the waiting gate.
+     * Respond to a HITL gate (v4c). The approval rides a SIGNED envelope (method
+     * `channel/hitl_respond`) so the daemon verifies the phone's Ed25519 signature
+     * before writing the v3d-signed `HitlResponse` that releases the gate — the
+     * approval is never trusted from an unsigned frame.
      */
     func hitlRespond(channelId: String, hitlId: String, allow: Bool, reason: String) 
     
@@ -785,8 +787,10 @@ open func fetchChannelEvents(channelId: String, sinceSeq: UInt64?)  {try! rustCa
 }
     
     /**
-     * Respond to a HITL gate (v4c). The daemon writes a v3d-signed `HitlResponse`
-     * on this paired phone's behalf, releasing the waiting gate.
+     * Respond to a HITL gate (v4c). The approval rides a SIGNED envelope (method
+     * `channel/hitl_respond`) so the daemon verifies the phone's Ed25519 signature
+     * before writing the v3d-signed `HitlResponse` that releases the gate — the
+     * approval is never trusted from an unsigned frame.
      */
 open func hitlRespond(channelId: String, hitlId: String, allow: Bool, reason: String)  {try! rustCall() {
     uniffi_mur_mobile_sdk_fn_method_mobileclient_hitl_respond(
@@ -1744,7 +1748,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_fetch_channel_events() != 13622) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_hitl_respond() != 5144) {
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_hitl_respond() != 8113) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_list_channels() != 8292) {
