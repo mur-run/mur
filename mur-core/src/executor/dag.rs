@@ -20,6 +20,7 @@ use mur_common::channel::{ChannelActor, ChannelState};
 use mur_common::pipeline::{PipelineOutput, PipelineStatus, inject_input};
 use mur_common::skill::event_log::{RunRecord, record_run};
 use mur_common::skill::manifest::{FailureAction, Procedure, ProcedureStep};
+use sha2::{Digest, Sha256};
 use tokio::time::{Duration, sleep, timeout as tokio_timeout};
 
 /// Options for a single DAG execution.
@@ -39,6 +40,10 @@ pub struct DagExecOptions<'a> {
     /// Channel the executor runs OVER — events are appended to
     /// `~/.mur/channels/<id>/` as the workflow proceeds (v3a).
     pub channel_id: Option<String>,
+    /// Stable id for this logical run. Used to derive deterministic
+    /// `idempotency_key`s for channel events. v3b sets keys; v3c enforces dedup,
+    /// at which point a crash-rerun MUST reuse the same `run_id`. Empty = none.
+    pub run_id: String,
 }
 
 impl<'a> Default for DagExecOptions<'a> {
@@ -51,8 +56,46 @@ impl<'a> Default for DagExecOptions<'a> {
             device_id: "cli".to_string(),
             trigger: "manual",
             channel_id: None,
+            run_id: String::new(),
         }
     }
+}
+
+/// Deterministic idempotency key for a channel event: stable across a
+/// crash-rerun of the same logical run, distinct per (channel, run, step, role).
+fn idem_key(channel_id: &str, run_id: &str, step_id: &str, suffix: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(format!("{channel_id}|{run_id}|{step_id}|{suffix}").as_bytes());
+    format!("{:x}", h.finalize())
+}
+
+/// Build the `message/send` params for a delegated sub-goal.
+fn build_delegate_params(text: &str, child_task_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] },
+        "task_id": child_task_id,
+    })
+}
+
+/// Extract the specialist's reply: the last `role=="agent"` message's joined
+/// text parts. Mirrors the Hub's `extract_text` over `task["messages"]`.
+fn extract_agent_reply(task: &serde_json::Value) -> String {
+    task.get("messages")
+        .and_then(|m| m.as_array())
+        .and_then(|msgs| {
+            msgs.iter()
+                .rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("agent"))
+        })
+        .and_then(|m| m.get("parts").and_then(|p| p.as_array()))
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
 }
 
 // ── Graph types ─────────────────────────────────────────────────────────────
@@ -180,38 +223,6 @@ async fn execute_step_inner(
     step_index: usize,
 ) -> StepResult {
     let start = std::time::Instant::now();
-
-    // ── needs_approval ──
-    if step.needs_approval {
-        let approved = if opts.yes {
-            true
-        } else if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-            dialoguer::Confirm::new()
-                .with_prompt(format!(
-                    "Step {}: «{}» — run?",
-                    step.id.as_deref().unwrap_or(&step_index.to_string()),
-                    step.description
-                ))
-                .default(true)
-                .interact()
-                .unwrap_or(false)
-        } else {
-            false
-        };
-        if !approved {
-            eprintln!(
-                "  Step {}: needs_approval, skipped (yields true) — use `--yes` to auto-approve",
-                step.id.as_deref().unwrap_or(&step_index.to_string())
-            );
-            return StepResult {
-                exit_code: 0,
-                output_text: String::new(),
-                duration_ms: start.elapsed().as_millis() as u64,
-                failed_step: None,
-                success: true,
-            };
-        }
-    }
 
     // ── Command-mode ──
     if let Some(cmd_template) = &step.command {
@@ -368,9 +379,224 @@ async fn execute_step(
     step_index: usize,
     mur_home: &Path,
 ) -> StepResult {
+    let start = std::time::Instant::now();
     let sid = step.id.clone().unwrap_or_else(|| step_index.to_string());
 
+    // ── Resume cursor (v3c): skip steps whose ToolResult is already recorded ──
     if let Some(cid) = opts.channel_id.as_deref() {
+        let result_key = idem_key(cid, &opts.run_id, &sid, "result");
+        if let Ok(svc) = ChannelService::open(mur_home)
+            && let Ok(evs) = svc.load_events(cid)
+            && evs.iter().any(|e| {
+                e.kind == mur_common::channel::EventKind::ToolResult
+                    && e.idempotency_key.as_deref() == Some(result_key.as_str())
+                    && e.payload.get("success").and_then(|v| v.as_bool()) == Some(true)
+            })
+        {
+            eprintln!("  Step {sid}: already completed (resume) — skipping");
+            return StepResult {
+                exit_code: 0,
+                output_text: String::new(),
+                duration_ms: 0,
+                failed_step: None,
+                success: true,
+            };
+        }
+    }
+
+    // ── Delegation (v3b): dial a specialist over A2A, attribute the reply ──
+    if let (Some(target), Some(cid)) = (step.delegate_to.as_deref(), opts.channel_id.as_deref()) {
+        let start = std::time::Instant::now();
+        let canonical = crate::a2a_dial::canonicalize_agent_name(mur_home, target);
+        let child_task_id = format!("ct-{}", uuid::Uuid::now_v7());
+        let deleg_key = idem_key(cid, &opts.run_id, &sid, "delegate");
+        let reply_key = idem_key(cid, &opts.run_id, &sid, "reply");
+
+        // Sub-goal text: explicit intent, else the step description.
+        let goal_text = step
+            .intent
+            .clone()
+            .unwrap_or_else(|| step.description.clone());
+
+        // Record the delegation up front (System actor, deterministic key).
+        if let Ok(svc) = ChannelService::open(mur_home) {
+            let _ = svc.append_delegation(cid, &canonical, &child_task_id, Some(deleg_key));
+        }
+        eprintln!("  Step {sid}: delegate → {canonical}: {goal_text}");
+
+        let params = build_delegate_params(&goal_text, &child_task_id);
+        // RequireRunning is enforced by dial_message_streaming (it bails if the
+        // target has no running.lock). We surface a specialist HITL as a mirror
+        // event only — interactive relay is v3c.
+        let home_for_hitl = mur_home.to_path_buf();
+        let cid_for_hitl = cid.to_string();
+        let dial = crate::a2a_dial::dial_message_streaming(
+            mur_home,
+            &canonical,
+            params,
+            |_t, _thinking, _tid| { /* deltas buffered into the final snapshot */ },
+            |hitl_params| {
+                // Mirror the specialist's approval request into the channel for
+                // visibility. v3c adds the interactive resolution path.
+                if let Ok(svc) = ChannelService::open(&home_for_hitl) {
+                    let _ = svc.append(
+                        &cid_for_hitl,
+                        ChannelActor::System,
+                        mur_common::channel::EventKind::HitlRequest,
+                        serde_json::json!({ "mirror": true, "from": "delegate", "params": hitl_params }),
+                        None,
+                    );
+                }
+            },
+        );
+
+        let result = match dial {
+            Ok(task) => {
+                let reply = extract_agent_reply(&task);
+                // Attribute the reply to the dialed agent; store the raw task
+                // snapshot alongside so attribution is auditable, not just asserted.
+                if let Ok(svc) = ChannelService::open(mur_home) {
+                    let _ = svc.append(
+                        cid,
+                        ChannelActor::Agent {
+                            id: canonical.clone(),
+                        },
+                        mur_common::channel::EventKind::Message,
+                        serde_json::json!({
+                            "text": reply,
+                            "task_id": child_task_id,
+                            "source_task": task,
+                        }),
+                        Some(reply_key),
+                    );
+                }
+                let empty = reply.trim().is_empty();
+                StepResult {
+                    exit_code: if empty { 1 } else { 0 },
+                    output_text: reply,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    failed_step: if empty {
+                        Some(step.description.clone())
+                    } else {
+                        None
+                    },
+                    success: !empty,
+                }
+            }
+            Err(e) => {
+                // Nothing partial is attributed; record a failure Note + fail the
+                // step so the DAG's on_failure (Abort/Skip/Retry) decides.
+                if let Ok(svc) = ChannelService::open(mur_home) {
+                    let _ = svc.append(
+                        cid,
+                        ChannelActor::System,
+                        mur_common::channel::EventKind::Note,
+                        serde_json::json!({ "text": format!("delegate to {canonical} failed: {e:#}") }),
+                        None,
+                    );
+                }
+                eprintln!("  Step {sid}: delegate to {canonical} failed: {e:#}");
+                StepResult {
+                    exit_code: 1,
+                    output_text: format!("delegate failed: {e}"),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    failed_step: Some(step.description.clone()),
+                    success: false,
+                }
+            }
+        };
+        return result;
+    }
+
+    // ── Risk-tiered HITL gate (v3c) ──
+    let tier = step.risk.or(if step.needs_approval {
+        Some(mur_common::hitl::RiskTier::Destructive)
+    } else {
+        None
+    });
+    if let (Some(tier), Some(cid)) = (tier, opts.channel_id.as_deref()) {
+        let input = serde_json::json!({
+            "command": step.command,
+            "intent": step.intent,
+            "description": step.description,
+        });
+        let req = crate::hitl::gate::ActionRequest {
+            tier,
+            tool_name: step
+                .command
+                .clone()
+                .map(|_| "sh".into())
+                .unwrap_or_else(|| "intent".into()),
+            tool_input: input.clone(),
+            step_or_call_id: sid.clone(),
+            agent_id: "mur".into(),
+            summary: step.description.clone(),
+        };
+        let decision = crate::hitl::gate::gate(mur_home, cid, &req, opts.yes, None)
+            .await
+            .unwrap_or(crate::hitl::gate::GateDecision {
+                allow: false,
+                reason: "gate error".into(),
+                action_hash: String::new(),
+            });
+        if !decision.allow {
+            eprintln!("  Step {sid}: gate denied ({})", decision.reason);
+            return StepResult {
+                exit_code: 1,
+                output_text: format!("hitl: {}", decision.reason),
+                duration_ms: start.elapsed().as_millis() as u64,
+                failed_step: Some(step.description.clone()),
+                success: false,
+            };
+        }
+        // Re-verify the pin at the execute boundary (fail-closed on drift).
+        let now_hash = crate::hitl::pin::action_hash("sh", &input, cid, &sid, "mur");
+        if !decision.action_hash.is_empty() && now_hash != decision.action_hash {
+            eprintln!("  Step {sid}: hitl_drift at execute boundary — refusing");
+            return StepResult {
+                exit_code: 1,
+                output_text: "hitl_drift".into(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                failed_step: Some(step.description.clone()),
+                success: false,
+            };
+        }
+    } else if step.needs_approval {
+        // No channel: legacy TTY/--yes approval (unchanged behavior).
+        let approved = if opts.yes {
+            true
+        } else if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            #[cfg(feature = "cli")]
+            {
+                dialoguer::Confirm::new()
+                    .with_prompt(format!("Step {sid}: «{}» — run?", step.description))
+                    .default(true)
+                    .interact()
+                    .unwrap_or(false)
+            }
+            #[cfg(not(feature = "cli"))]
+            false
+        } else {
+            false
+        };
+        if !approved {
+            eprintln!(
+                "  Step {sid}: needs_approval, skipped (yields true) — use `--yes` to auto-approve"
+            );
+            return StepResult {
+                exit_code: 0,
+                output_text: String::new(),
+                duration_ms: 0,
+                failed_step: None,
+                success: true,
+            };
+        }
+    }
+
+    // Guard ToolCall against spurious emit on delegation steps (belt+suspenders
+    // in case delegate_to is set but channel_id is None — the branch above
+    // handles the channel case; this ensures local runs stay clean too).
+    if let (Some(cid), true) = (opts.channel_id.as_deref(), step.delegate_to.is_none()) {
         emit_channel(
             mur_home,
             cid,
@@ -389,17 +615,22 @@ async fn execute_step(
     if let Some(cid) = opts.channel_id.as_deref() {
         let mut excerpt = result.output_text.clone();
         excerpt.truncate(2048);
-        emit_channel(
-            mur_home,
-            cid,
-            mur_common::channel::EventKind::ToolResult,
-            serde_json::json!({
-                "step_id": sid,
-                "exit_code": result.exit_code,
-                "success": result.success,
-                "output": excerpt,
-            }),
-        );
+        // Use the deterministic idem_key so the resume cursor can match this row.
+        let result_key = idem_key(cid, &opts.run_id, &sid, "result");
+        let _ = ChannelService::open(mur_home).and_then(|svc| {
+            svc.append(
+                cid,
+                mur_common::channel::ChannelActor::System,
+                mur_common::channel::EventKind::ToolResult,
+                serde_json::json!({
+                    "step_id": sid,
+                    "exit_code": result.exit_code,
+                    "success": result.success,
+                    "output": excerpt,
+                }),
+                Some(result_key),
+            )
+        });
     }
 
     result
@@ -421,15 +652,6 @@ pub async fn execute_dag(
     let start = std::time::Instant::now();
 
     let graph = build_dag(&procedure.steps)?;
-
-    // Fail-closed: needs_approval requires a HITL round-trip (v3c). Do not silently skip
-    // approval when running headless over a channel — that would be a policy bypass.
-    if opts.channel_id.is_some() && procedure.steps.iter().any(|s| s.needs_approval) {
-        anyhow::bail!(
-            "needs_approval requires interactive HITL (v3c); cannot run over a channel headlessly. \
-             Remove needs_approval from the workflow or run without --channel."
-        );
-    }
 
     // Emit start StateChange (Working) if running over a channel.
     if let Some(cid) = opts.channel_id.as_deref() {
@@ -503,6 +725,7 @@ pub async fn execute_dag(
                     device_id: dev_id,
                     trigger: &tr,
                     channel_id: chan_id,
+                    run_id: String::new(),
                 };
                 execute_step(&step, &opts_clone, i, &mh).await
             }));
@@ -649,7 +872,7 @@ pub async fn execute_dag(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mur_common::skill::manifest::{FailureAction, ProcedureStep, RetryConfig};
+    use mur_common::skill::manifest::ProcedureStep;
 
     fn step(id: &str, deps: &[&str], cmd: Option<&str>) -> ProcedureStep {
         ProcedureStep {
@@ -659,6 +882,39 @@ mod tests {
             description: format!("step {id}"),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn idem_key_is_deterministic_and_distinct() {
+        let a = idem_key("chan", "run", "s0", "delegate");
+        let b = idem_key("chan", "run", "s0", "delegate");
+        let c = idem_key("chan", "run", "s0", "reply");
+        assert_eq!(a, b, "same inputs → same key (crash-rerun stable)");
+        assert_ne!(a, c, "different suffix → different key");
+        assert_eq!(a.len(), 64, "sha256 hex");
+    }
+
+    #[test]
+    fn build_delegate_params_threads_text_and_task_id() {
+        let p = build_delegate_params("find the bug", "child-1");
+        assert_eq!(p["task_id"], "child-1");
+        assert_eq!(p["message"]["role"], "user");
+        assert_eq!(p["message"]["parts"][0]["text"], "find the bug");
+    }
+
+    #[test]
+    fn extract_agent_reply_takes_last_agent_message() {
+        let task = serde_json::json!({
+            "id": "t1",
+            "messages": [
+                {"role":"user","parts":[{"kind":"text","text":"q"}]},
+                {"role":"agent","parts":[{"kind":"text","text":"partial "},{"kind":"text","text":"answer"}]}
+            ]
+        });
+        assert_eq!(extract_agent_reply(&task), "partial answer");
+        // No agent message → empty.
+        let empty = serde_json::json!({ "messages": [{"role":"user","parts":[]}] });
+        assert_eq!(extract_agent_reply(&empty), "");
     }
 
     #[test]
@@ -751,34 +1007,86 @@ mod tests {
         assert_eq!(out.exit_code, 0);
     }
 
-    #[test]
-    fn channel_run_refuses_needs_approval() {
+    // channel_run_refuses_needs_approval removed: v3c gates via hitl::gate instead
+    // of refusing. See high_risk_step_gates_and_runs_when_preapproved below.
+
+    #[tokio::test]
+    async fn resume_skips_a_step_already_completed() {
+        use mur_channel::ChannelService;
+        use mur_common::channel::EventKind;
+
         let tmp = tempfile::TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("resume-wf").unwrap();
+
         let proc = Procedure {
             variables: vec![],
-            steps: vec![ProcedureStep {
-                id: Some("s0".to_string()),
-                command: Some("echo ok".to_string()),
-                description: "needs approval".to_string(),
-                needs_approval: true,
-                ..Default::default()
-            }],
+            steps: vec![
+                step("s0", &[], Some("echo zero")),
+                step("s1", &["s0"], Some("echo one")),
+            ],
         };
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let err = rt
-            .block_on(execute_dag(
-                tmp.path(),
-                "test",
-                &proc,
-                &DagExecOptions {
-                    channel_id: Some("ch-1".to_string()),
-                    ..DagExecOptions::default()
-                },
-            ))
-            .unwrap_err();
+        let opts = DagExecOptions {
+            channel_id: Some(ch.id.clone()),
+            run_id: "run-1".into(),
+            yes: true,
+            ..Default::default()
+        };
+        execute_dag(tmp.path(), "resume-wf", &proc, &opts)
+            .await
+            .unwrap();
+        let after_first = svc.load_events(&ch.id).unwrap().len();
+
+        execute_dag(tmp.path(), "resume-wf", &proc, &opts)
+            .await
+            .unwrap();
+        let tr_after_second = svc
+            .load_events(&ch.id)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == EventKind::ToolResult)
+            .count();
+        assert_eq!(
+            tr_after_second, 2,
+            "rerun did not duplicate completed-step results"
+        );
+        let _ = after_first;
+    }
+
+    #[tokio::test]
+    async fn high_risk_step_gates_and_runs_when_preapproved() {
+        use mur_channel::ChannelService;
+        use mur_common::channel::EventKind;
+        use mur_common::hitl::RiskTier;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("gated-wf").unwrap();
+        let mut s = step("s0", &[], Some("echo done"));
+        s.risk = Some(RiskTier::Destructive);
+        let proc = Procedure {
+            variables: vec![],
+            steps: vec![s],
+        };
+        let opts = DagExecOptions {
+            channel_id: Some(ch.id.clone()),
+            run_id: "run-1".into(),
+            yes: true,
+            ..Default::default()
+        };
+        let out = execute_dag(tmp.path(), "gated-wf", &proc, &opts)
+            .await
+            .unwrap();
+        assert_eq!(out.exit_code, 0);
+        let kinds: Vec<_> = svc
+            .load_events(&ch.id)
+            .unwrap()
+            .iter()
+            .map(|e| e.kind)
+            .collect();
         assert!(
-            err.to_string().contains("needs_approval"),
-            "expected needs_approval error, got: {err}"
+            kinds.contains(&EventKind::HitlRequest),
+            "high-risk step raised a gate"
         );
     }
 

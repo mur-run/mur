@@ -116,7 +116,13 @@ For detailed agent / companion / GUI export / runtime internals, read `docs/arch
 - YAML writes use temp file + rename for atomicity (`store/yaml.rs`)
 - `tracing` for structured logging; enable with `RUST_LOG=debug`
 - Plans live in `plans/` and `docs/superpowers/plans/`. OpenSpec change specs in `openspec/changes/`.
-- **Unified Channel v3a** (Workflow-over-Channel) is implemented on branch `feat/unified-channel-v2`: the DAG executor emits attributed `StateChange`/`ToolCall`/`ToolResult` events as `ChannelActor::System`; approval-bearing workflows fail-closed with `needs_approval`; `ChannelEvent.sig`/`key_version` reserved for v3d signing. Use `mur workflow run --channel-new <skill>` or `--channel <id>` to attach execution. v3b (HITL pause/resume) and v3c (interactive HITL delegation) are still pending. See `mem:project_unified_channel_pr433`.
+- **Unified Channel v3a–v3c** implemented on branch `feat/unified-channel-v3b`:
+  - v3a: DAG executor emits attributed `StateChange`/`ToolCall`/`ToolResult` events as `ChannelActor::System`.
+  - v3b: Deterministic `idem_key`, `run_id` per workflow run.
+  - v3c: Risk-tiered, SHA-256-pinned HITL gate (`mur-common/src/hitl.rs`; `mur-core/src/hitl/`). Steps with `risk: write` or higher pause before execution, write a `HitlRequest` channel event, and wait for `mur channel approve <channel_id> <hitl_id>` (or `--deny`). The executor re-verifies the hash at the execute boundary (fail-closed on drift). `append_event` is dedup-aware (idempotency key under exclusive lock). Crashed runs resume via a `ToolResult` cursor check.
+  - `CHANNEL_SCHEMA_VERSION = 2` (v2: `HitlResponse` events carry approval authority).
+  - Use `mur workflow run --channel-new <skill>` or `--channel <id>` to attach execution; `mur channel approve <channel_id> <hitl_id> [--deny] [--reason <msg>]` to act on HITL gates.
+  - v3d (signing: `ChannelEvent.sig`/`key_version`) still pending. See `mem:project_unified_channel_pr433`.
 
 ## Release Process
 
