@@ -15,6 +15,7 @@ serde_yaml_ng = "0.10"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+sys-locale = "0.3"                  # read the OS locale to pass STT language down to spawned agents
 async-trait = "0.1"
 image = "0.25"
 reqwest = { workspace = true }
