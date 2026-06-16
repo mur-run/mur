@@ -210,6 +210,23 @@ async fn handle_frame(
             .await?;
         }
 
+        ClientFrame::HitlRespond {
+            channel_id,
+            hitl_id,
+            allow,
+            reason,
+        } => {
+            mur_core::mobile::respond_hitl(home, &channel_id, &hitl_id, allow, &reason);
+            relay_send(
+                write,
+                &ServerFrame::Event {
+                    name: "hitl.ack".to_string(),
+                    payload: serde_json::json!({ "hitl_id": hitl_id, "channel_id": channel_id }),
+                },
+            )
+            .await?;
+        }
+
         ClientFrame::AudioStreamEnd => {
             let pcm = std::mem::take(audio_buf);
             let home_c = home.to_path_buf();

@@ -301,6 +301,17 @@ impl MobileClient {
             since_seq,
         });
     }
+
+    /// Respond to a HITL gate (v4c). The daemon writes a v3d-signed `HitlResponse`
+    /// on this paired phone's behalf, releasing the waiting gate.
+    pub fn hitl_respond(&self, channel_id: String, hitl_id: String, allow: bool, reason: String) {
+        self.send_cmd(Command::HitlRespond {
+            channel_id,
+            hitl_id,
+            allow,
+            reason,
+        });
+    }
 }
 
 impl MobileClient {

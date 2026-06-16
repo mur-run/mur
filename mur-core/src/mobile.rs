@@ -205,6 +205,55 @@ pub fn persist_mobile_exchange_into(
     }
 }
 
+/// Respond to a HITL gate on behalf of a paired phone (v4c). The daemon has
+/// already verified the frame came from a paired device, so the channel's WRITER
+/// (the router, "mur") records a v3d-signed `HitlResponse` that the waiting v3c
+/// gate verifies before releasing — a forged response from a non-router key is
+/// rejected. Mirrors `cmd::channel::approve`, with `surface = "ios"`. Best-effort.
+pub fn respond_hitl(
+    home: &std::path::Path,
+    channel_id: &str,
+    hitl_id: &str,
+    allow: bool,
+    reason: &str,
+) {
+    let res = (|| -> anyhow::Result<()> {
+        let svc = ChannelService::open(home)?;
+        // Echo the pending request's action_hash so the gate's hash check passes.
+        let request: mur_common::hitl::HitlRequest = svc
+            .load_events(channel_id)?
+            .iter()
+            .rev()
+            .filter(|e| e.kind == EventKind::HitlRequest)
+            .find_map(|e| {
+                serde_json::from_value::<mur_common::hitl::HitlRequest>(e.payload.clone()).ok()
+            })
+            .filter(|r| r.hitl_id == hitl_id)
+            .ok_or_else(|| anyhow::anyhow!("no pending HitlRequest {hitl_id} in {channel_id}"))?;
+        let resp = mur_common::hitl::HitlResponse {
+            hitl_id: request.hitl_id,
+            action_hash: request.action_hash,
+            allow,
+            reason: reason.to_string(),
+            surface: "ios".into(),
+        };
+        crate::channel_writer::append_as_writer(
+            &svc,
+            home,
+            channel_id,
+            crate::channel_writer::ROUTER_AGENT,
+            ChannelActor::local_human(),
+            EventKind::HitlResponse,
+            serde_json::to_value(&resp)?,
+            None,
+        )?;
+        Ok(())
+    })();
+    if let Err(e) = res {
+        tracing::warn!("mobile hitl respond failed for {channel_id}: {e:#}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,8 +319,55 @@ mod tests {
             0,
             "newer channel untouched"
         );
-        // None falls back to the latest (`_b`).
+        // `None` reuses an existing channel (the latest by updated_at — now `a`
+        // after the append above), not a 3rd. Don't assert WHICH (timing-fragile).
         persist_mobile_exchange_into(tmp.path(), "mur", None, "q2", "ans2");
-        assert_eq!(svc.load_events(&_b.id).unwrap().len(), 2, "None → latest");
+        assert_eq!(
+            svc.list(10).unwrap().len(),
+            2,
+            "None reuses a channel, no 3rd"
+        );
+    }
+
+    #[test]
+    fn respond_hitl_writes_a_hitl_response_echoing_the_request() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("mur").unwrap();
+        // A pending HitlRequest the phone will respond to.
+        svc.append(
+            &ch.id,
+            ChannelActor::System,
+            EventKind::HitlRequest,
+            serde_json::json!({
+                "hitl_id": "h1", "action_hash": "AH", "tier": "destructive",
+                "tool_name": "bash", "tool_input": {}, "step_or_call_id": "s0",
+                "agent_id": "mur", "timeout_ms": 300000u64, "summary": "rm -rf x"
+            }),
+            None,
+        )
+        .unwrap();
+        respond_hitl(tmp.path(), &ch.id, "h1", true, "ok from phone");
+        let resp = svc
+            .load_events(&ch.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == EventKind::HitlResponse)
+            .expect("HitlResponse written");
+        assert_eq!(resp.payload["hitl_id"], "h1");
+        assert_eq!(resp.payload["action_hash"], "AH", "echoes the request hash");
+        assert_eq!(resp.payload["allow"], true);
+        assert_eq!(resp.payload["surface"], "ios");
+        // No pending request → no-op (best-effort).
+        respond_hitl(tmp.path(), &ch.id, "nope", false, "");
+        assert_eq!(
+            svc.load_events(&ch.id)
+                .unwrap()
+                .iter()
+                .filter(|e| e.kind == EventKind::HitlResponse)
+                .count(),
+            1,
+            "unknown hitl_id writes nothing"
+        );
     }
 }

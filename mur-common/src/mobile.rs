@@ -54,6 +54,15 @@ pub enum ClientFrame {
         #[serde(default)]
         since_seq: Option<u64>,
     },
+    /// Respond to a HITL gate (v4c). The daemon writes a v3d-signed `HitlResponse`
+    /// into `channel_id` on this paired phone's behalf, releasing the waiting gate.
+    HitlRespond {
+        channel_id: String,
+        hitl_id: String,
+        allow: bool,
+        #[serde(default)]
+        reason: String,
+    },
 }
 
 /// Frames the Mac endpoint sends back to the phone.

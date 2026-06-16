@@ -273,6 +273,31 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                 .await;
             }
 
+            ClientFrame::HitlRespond {
+                channel_id,
+                hitl_id,
+                allow,
+                reason,
+            } => {
+                // The connection is already paired-authenticated, so the local
+                // writer records the v3d-signed HitlResponse the gate awaits (v4c).
+                mur_core::mobile::respond_hitl(
+                    state.mur_home.as_path(),
+                    &channel_id,
+                    &hitl_id,
+                    allow,
+                    &reason,
+                );
+                let _ = send_frame(
+                    &mut socket,
+                    &ServerFrame::Event {
+                        name: "hitl.ack".to_string(),
+                        payload: json!({ "hitl_id": hitl_id, "channel_id": channel_id }),
+                    },
+                )
+                .await;
+            }
+
             ClientFrame::AudioStreamEnd => {
                 tracing::debug!(bytes = audio_buf.len(), "mobile: audio stream end → STT");
                 let pcm = std::mem::take(&mut audio_buf);
