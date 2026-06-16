@@ -157,6 +157,44 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                 let agent = resolve_agent(&state.mur_home, &agent);
                 (pubkey, agent)
             }
+            Ok(ClientFrame::Resume { pubkey, agent }) => {
+                // Steady-state reconnect by paired key — no enrollment token.
+                let home = &state.mur_home;
+                if !mur_core::mobile::is_device_paired(home, &pubkey) {
+                    let _ = send_frame(&mut socket, &reject("unknown device — pair first")).await;
+                    return;
+                }
+                // Challenge-response: issue a fresh per-connection nonce; the phone
+                // must sign exactly it to prove it holds the paired key (replay-safe).
+                let nonce = mur_core::mobile::new_challenge_nonce();
+                if send_frame(
+                    &mut socket,
+                    &ServerFrame::Challenge {
+                        nonce: nonce.clone(),
+                    },
+                )
+                .await
+                .is_err()
+                {
+                    return;
+                }
+                match recv_text(&mut socket).await {
+                    Some(t) => match serde_json::from_str::<ClientFrame>(&t) {
+                        Ok(ClientFrame::ResumeProof { envelope })
+                            if mur_core::mobile::resume_proof_ok(
+                                home, &pubkey, &nonce, &envelope,
+                            ) =>
+                        {
+                            (pubkey, resolve_agent(&state.mur_home, &agent))
+                        }
+                        _ => {
+                            let _ = send_frame(&mut socket, &reject("bad resume proof")).await;
+                            return;
+                        }
+                    },
+                    None => return,
+                }
+            }
             _ => {
                 let _ = send_frame(&mut socket, &reject("expected hello")).await;
                 return;
@@ -210,8 +248,10 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
         };
 
         match frame {
-            ClientFrame::Hello { .. } => {
-                // Duplicate hello after pairing — ignore silently.
+            ClientFrame::Hello { .. }
+            | ClientFrame::Resume { .. }
+            | ClientFrame::ResumeProof { .. } => {
+                // Handshake frames after pairing — ignore silently.
             }
 
             ClientFrame::Envelope { envelope } => {
@@ -742,6 +782,54 @@ mod tests {
         assert!(
             matches!(recv_server(&mut ws).await, ServerFrame::Paired { .. }),
             "already-paired device resumes by key without a window"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resume_reconnects_a_paired_device_via_challenge() {
+        let (addr, tmp) = start_server().await;
+        let id = AgentIdentity::generate();
+        let pk = encode_pubkey(&id.verifying_key());
+        mur_core::mobile::add_paired_device(tmp.path(), &pk).unwrap();
+
+        let mut ws = connect(addr).await;
+        send_frame(
+            &mut ws,
+            &ClientFrame::Resume {
+                pubkey: pk.clone(),
+                agent: "mur".to_string(),
+            },
+        )
+        .await;
+        let nonce = match recv_server(&mut ws).await {
+            ServerFrame::Challenge { nonce } => nonce,
+            other => panic!("expected Challenge, got {other:?}"),
+        };
+        // Sign exactly the issued nonce → proof accepted, session resumes by key.
+        let proof = sign_payload(nonce.as_bytes().to_vec(), &id, 1);
+        send_frame(&mut ws, &ClientFrame::ResumeProof { envelope: proof }).await;
+        assert!(
+            matches!(recv_server(&mut ws).await, ServerFrame::Paired { .. }),
+            "valid resume proof reconnects the paired device"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resume_rejects_an_unpaired_device() {
+        let (addr, _tmp) = start_server().await;
+        let id = AgentIdentity::generate();
+        let mut ws = connect(addr).await;
+        send_frame(
+            &mut ws,
+            &ClientFrame::Resume {
+                pubkey: encode_pubkey(&id.verifying_key()),
+                agent: "mur".to_string(),
+            },
+        )
+        .await;
+        assert!(
+            matches!(recv_server(&mut ws).await, ServerFrame::Rejected { .. }),
+            "a device not in paired.json cannot resume"
         );
     }
 

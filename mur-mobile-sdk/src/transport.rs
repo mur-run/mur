@@ -11,11 +11,16 @@
 
 use futures_util::{SinkExt, StreamExt};
 use mur_common::bridge::envelope::SignedEnvelope;
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::MobileEvent;
 use mur_common::mobile::{ClientFrame, ServerFrame};
+
+/// Signs a Resume challenge nonce into a proof envelope. Set only when the first
+/// frame is a `Resume` (reconnect by paired key); `None` for enrollment (`Hello`).
+pub type ResumeSigner = Arc<dyn Fn(&str) -> SignedEnvelope + Send + Sync>;
 
 /// Commands the client pushes to the live transport task.
 pub enum Command {
@@ -46,6 +51,7 @@ pub async fn run_lan<E>(
     port: u16,
     path: String,
     hello: ClientFrame,
+    resume_signer: Option<ResumeSigner>,
     cmd_rx: UnboundedReceiver<Command>,
     emit: E,
 ) where
@@ -66,7 +72,7 @@ pub async fn run_lan<E>(
             return;
         }
     };
-    run_frame_loop(stream, hello, cmd_rx, emit, "lan").await;
+    run_frame_loop(stream, hello, resume_signer, cmd_rx, emit, "lan").await;
 }
 
 /// Drive one relay connection to completion.
@@ -77,6 +83,7 @@ pub async fn run_relay<E>(
     relay_url: String,
     jwt: String,
     hello: ClientFrame,
+    resume_signer: Option<ResumeSigner>,
     cmd_rx: UnboundedReceiver<Command>,
     emit: E,
 ) where
@@ -114,7 +121,7 @@ pub async fn run_relay<E>(
                 return;
             }
         };
-    run_frame_loop(stream, hello, cmd_rx, emit, "relay").await;
+    run_frame_loop(stream, hello, resume_signer, cmd_rx, emit, "relay").await;
 }
 
 /// Shared frame loop used by both `run_lan` and `run_relay` once the
@@ -122,6 +129,7 @@ pub async fn run_relay<E>(
 async fn run_frame_loop<S, E>(
     stream: tokio_tungstenite::WebSocketStream<S>,
     hello: ClientFrame,
+    resume_signer: Option<ResumeSigner>,
     mut cmd_rx: UnboundedReceiver<Command>,
     emit: E,
     _transport: &'static str,
@@ -169,6 +177,28 @@ async fn run_frame_loop<S, E>(
                                 emit(MobileEvent::Error { message: format!("rejected: {reason}") });
                                 emit(MobileEvent::Disconnected { reason });
                                 break;
+                            }
+                            Ok(ServerFrame::Challenge { nonce }) => {
+                                // Reconnect challenge: sign the daemon's nonce and
+                                // answer with a ResumeProof. Only valid when resuming.
+                                match &resume_signer {
+                                    Some(sign) => {
+                                        let proof = ClientFrame::ResumeProof { envelope: sign(&nonce) };
+                                        match serde_json::to_string(&proof) {
+                                            Ok(t) => {
+                                                if let Err(e) = write.send(Message::Text(t.into())).await {
+                                                    emit(MobileEvent::Error { message: format!("send resume proof: {e}") });
+                                                    emit(MobileEvent::Disconnected { reason: "send resume proof".to_string() });
+                                                    break;
+                                                }
+                                            }
+                                            Err(e) => emit(MobileEvent::Error { message: format!("encode resume proof: {e}") }),
+                                        }
+                                    }
+                                    None => emit(MobileEvent::Error {
+                                        message: "unexpected challenge (not resuming)".to_string(),
+                                    }),
+                                }
                             }
                             Ok(ServerFrame::Event { name, payload }) => {
                                 emit_event(&emit, &name, payload);

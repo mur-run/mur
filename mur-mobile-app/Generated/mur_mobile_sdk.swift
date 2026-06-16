@@ -622,6 +622,20 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
     func publicKey()  -> String
     
     /**
+     * Reconnect over LAN by paired KEY — no token — for a device already paired
+     * (the steady-state path after `connect_lan` has enrolled once). Sends a
+     * `Resume` and answers the daemon's challenge with a signed proof.
+     */
+    func resumeLan(host: String, port: UInt16) 
+    
+    /**
+     * Reconnect over relay by paired KEY — no token — for a device already
+     * paired. Reconnect loop sends a `Resume` and answers the daemon's challenge
+     * with a signed proof.
+     */
+    func resumeRelay(relayWsUrl: String, jwt: String) 
+    
+    /**
      * Send one chunk of raw f32 LE PCM (16 kHz mono) to the Mac.
      */
     func sendAudioFrame(data: Data) 
@@ -824,6 +838,34 @@ open func publicKey() -> String  {
             self.uniffiCloneHandle(),$0
     )
 })
+}
+    
+    /**
+     * Reconnect over LAN by paired KEY — no token — for a device already paired
+     * (the steady-state path after `connect_lan` has enrolled once). Sends a
+     * `Resume` and answers the daemon's challenge with a signed proof.
+     */
+open func resumeLan(host: String, port: UInt16)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_resume_lan(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(host),
+        FfiConverterUInt16.lower(port),$0
+    )
+}
+}
+    
+    /**
+     * Reconnect over relay by paired KEY — no token — for a device already
+     * paired. Reconnect loop sends a `Resume` and answers the daemon's challenge
+     * with a signed proof.
+     */
+open func resumeRelay(relayWsUrl: String, jwt: String)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_resume_relay(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(relayWsUrl),
+        FfiConverterString.lower(jwt),$0
+    )
+}
 }
     
     /**
@@ -1755,6 +1797,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_public_key() != 61081) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_resume_lan() != 18542) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_resume_relay() != 17443) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_send_audio_frame() != 33293) {

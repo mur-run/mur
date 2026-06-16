@@ -104,6 +104,8 @@ async fn run_once(
     // token) completes the handshake. Until then, no application frame is
     // processed — mirrors the LAN server, which gates the whole connection.
     let mut paired_pubkey: Option<String> = None;
+    // Pending Resume challenge for this connection: (pubkey, agent, nonce).
+    let mut pending_resume: Option<(String, String, String)> = None;
     // Live channel-update feed for this connection.
     let mut chan_rx = chan_tx.subscribe();
 
@@ -175,6 +177,7 @@ async fn run_once(
                             &mut audio_buf,
                             &mut paired_pubkey,
                             enroll_lock,
+                            &mut pending_resume,
                         )
                         .await
                         {
@@ -200,7 +203,13 @@ type WsWrite = futures_util::stream::SplitSink<
 /// completed token handshake. Pure + unit-tested so a refactor cannot silently
 /// reopen the no-Hello voice/ChannelQuery bypass.
 fn frame_allowed_before_dispatch(frame: &ClientFrame, paired: &Option<String>) -> bool {
-    matches!(frame, ClientFrame::Hello { .. }) || paired.is_some()
+    // Hello (enroll) and the Resume challenge-response (reconnect auth) are the
+    // ways a connection BECOMES paired, so they're allowed pre-pairing; every
+    // other frame waits until the connection is paired.
+    matches!(
+        frame,
+        ClientFrame::Hello { .. } | ClientFrame::Resume { .. } | ClientFrame::ResumeProof { .. }
+    ) || paired.is_some()
 }
 
 /// Whether a relay envelope is authorized for THIS connection: its key must equal
@@ -216,6 +225,7 @@ fn relay_envelope_authorized(
         && mur_core::mobile::paired_envelope_ok(home, envelope)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_frame(
     home: &Path,
     write: &mut WsWrite,
@@ -223,6 +233,9 @@ async fn handle_frame(
     audio_buf: &mut Vec<u8>,
     paired: &mut Option<String>,
     enroll_lock: &tokio::sync::Mutex<()>,
+    // Pending Resume challenge for THIS connection: (pubkey, agent, nonce). Set
+    // when a `Resume` arrives, consumed by the matching `ResumeProof`.
+    pending_resume: &mut Option<(String, String, String)>,
 ) -> Result<()> {
     use base64::Engine as _;
 
@@ -283,6 +296,44 @@ async fn handle_frame(
                 .await?;
             }
         }
+
+        ClientFrame::Resume { pubkey, agent } => {
+            // Steady-state reconnect by paired key. Issue a fresh per-connection
+            // challenge nonce; the matching ResumeProof must sign exactly it.
+            if mur_core::mobile::is_device_paired(home, &pubkey) {
+                let nonce = mur_core::mobile::new_challenge_nonce();
+                *pending_resume = Some((pubkey, agent, nonce.clone()));
+                relay_send(write, &ServerFrame::Challenge { nonce }).await?;
+            } else {
+                *pending_resume = None;
+                relay_send(
+                    write,
+                    &ServerFrame::Rejected {
+                        reason: "unknown device — pair first".to_string(),
+                    },
+                )
+                .await?;
+            }
+        }
+
+        ClientFrame::ResumeProof { envelope } => match pending_resume.take() {
+            Some((pubkey, agent, nonce))
+                if mur_core::mobile::resume_proof_ok(home, &pubkey, &nonce, &envelope) =>
+            {
+                *paired = Some(pubkey);
+                let canonical = canonicalize_agent_name(home, &agent);
+                relay_send(write, &ServerFrame::Paired { agent: canonical }).await?;
+            }
+            _ => {
+                relay_send(
+                    write,
+                    &ServerFrame::Rejected {
+                        reason: "bad resume proof".to_string(),
+                    },
+                )
+                .await?;
+            }
+        },
 
         ClientFrame::Envelope { envelope } => {
             // Pinned to the device that paired THIS connection: the envelope's key

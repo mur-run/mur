@@ -120,6 +120,24 @@ pub fn paired_envelope_ok(home: &Path, envelope: &SignedEnvelope) -> bool {
     is_device_paired(home, pubkey) && verify_envelope_with_pubkey(envelope, pubkey).is_ok()
 }
 
+/// A fresh, unguessable challenge nonce for a Resume handshake (122-bit UUID).
+/// Minted per connection so a captured `ResumeProof` cannot be replayed.
+pub fn new_challenge_nonce() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// Verify a `Resume` challenge-response (steady-state reconnect auth). The proof
+/// envelope must be signed by `pubkey`, carry EXACTLY the daemon-issued `nonce`
+/// as its payload, and `pubkey` must be a paired device. The per-connection
+/// nonce defeats replay; pairing membership is file-backed (shared by both
+/// transports).
+pub fn resume_proof_ok(home: &Path, pubkey: &str, nonce: &str, envelope: &SignedEnvelope) -> bool {
+    envelope.bridge_pubkey_multibase == pubkey
+        && envelope.payload == nonce.as_bytes()
+        && is_device_paired(home, pubkey)
+        && verify_envelope_with_pubkey(envelope, pubkey).is_ok()
+}
+
 // ── Pairing window (enrollment) ──────────────────────────────────────────────
 //
 // Enrolling a NEW device requires an on-demand, single-use, short-TTL window —
@@ -811,6 +829,48 @@ mod tests {
         assert!(
             !paired_envelope_ok(home, &other_env),
             "a different (unpaired) device is rejected"
+        );
+    }
+
+    #[test]
+    fn resume_proof_ok_binds_to_the_issued_nonce_and_paired_key() {
+        use mur_common::identity::AgentIdentity;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let id = AgentIdentity::generate();
+        let pk = encode_pubkey(&id.verifying_key());
+        add_paired_device(home, &pk).unwrap();
+
+        let nonce = new_challenge_nonce();
+        let proof = mur_common::bridge::envelope::sign_payload(nonce.as_bytes().to_vec(), &id, 1);
+
+        // Correct device + signature over the exact issued nonce → accepted.
+        assert!(
+            resume_proof_ok(home, &pk, &nonce, &proof),
+            "valid resume proof"
+        );
+
+        // A proof over a DIFFERENT nonce is rejected (replay/another connection).
+        let other_nonce = new_challenge_nonce();
+        assert!(
+            !resume_proof_ok(home, &pk, &other_nonce, &proof),
+            "proof must sign the daemon-issued nonce"
+        );
+
+        // An unpaired device cannot resume even with a valid signature.
+        let stranger = AgentIdentity::generate();
+        let spk = encode_pubkey(&stranger.verifying_key());
+        let sproof =
+            mur_common::bridge::envelope::sign_payload(nonce.as_bytes().to_vec(), &stranger, 1);
+        assert!(
+            !resume_proof_ok(home, &spk, &nonce, &sproof),
+            "unpaired device cannot resume"
+        );
+
+        // A proof whose envelope key != the claimed pubkey is rejected.
+        assert!(
+            !resume_proof_ok(home, &pk, &nonce, &sproof),
+            "envelope key must match the claimed pubkey"
         );
     }
 }

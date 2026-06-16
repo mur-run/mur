@@ -37,6 +37,15 @@ use transport::Command;
 /// First-generation keys are version 1; rotation (P4+) increments it.
 const PHONE_KEY_VERSION: u32 = 1;
 
+/// Build a closure that signs a Resume challenge nonce with `identity` (a free
+/// function so `uniffi::export` doesn't try to treat the `Arc<dyn Fn>` as an FFI
+/// type).
+fn build_resume_signer(identity: AgentIdentity) -> transport::ResumeSigner {
+    std::sync::Arc::new(move |nonce: &str| {
+        sign_payload(nonce.as_bytes().to_vec(), &identity, PHONE_KEY_VERSION)
+    })
+}
+
 /// Subdirectory under the app home where the phone's identity is stored.
 const IDENTITY_SUBDIR: &str = "mobile";
 
@@ -191,6 +200,31 @@ impl MobileClient {
             port,
             mur_common::mobile::MOBILE_WS_PATH.to_string(),
             hello,
+            None, // enrollment (Hello), not a resume
+            rx,
+            emit,
+        ));
+    }
+
+    /// Reconnect over LAN by paired KEY — no token — for a device already paired
+    /// (the steady-state path after `connect_lan` has enrolled once). Sends a
+    /// `Resume` and answers the daemon's challenge with a signed proof.
+    pub fn resume_lan(&self, host: String, port: u16) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Ok(mut guard) = self.cmd_tx.lock() {
+            *guard = Some(tx);
+        }
+        let resume = mur_common::mobile::ClientFrame::Resume {
+            pubkey: self.public_key(),
+            agent: self.default_agent.clone(),
+        };
+        let emit = self.make_emitter();
+        self.rt.spawn(transport::run_lan(
+            host,
+            port,
+            mur_common::mobile::MOBILE_WS_PATH.to_string(),
+            resume,
+            Some(build_resume_signer(self.identity.clone())),
             rx,
             emit,
         ));
@@ -234,9 +268,63 @@ impl MobileClient {
                     agent: default_agent.clone(),
                 };
                 let emit = make_emit();
-                transport::run_relay(relay_ws_url.clone(), jwt.clone(), hello, rx, emit).await;
+                transport::run_relay(relay_ws_url.clone(), jwt.clone(), hello, None, rx, emit)
+                    .await;
 
                 // Brief pause then reconnect.
+                let emit2 = make_emit();
+                emit2(MobileEvent::Disconnected {
+                    reason: format!("relay disconnected; retry in {}s", delay.as_secs()),
+                });
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(std::time::Duration::from_secs(60));
+            }
+        });
+    }
+
+    /// Reconnect over relay by paired KEY — no token — for a device already
+    /// paired. Reconnect loop sends a `Resume` and answers the daemon's challenge
+    /// with a signed proof.
+    pub fn resume_relay(&self, relay_ws_url: String, jwt: String) {
+        let cmd_tx_slot = self.cmd_tx.clone();
+        let listener = self.listener.clone();
+        let pubkey = self.public_key();
+        let default_agent = self.default_agent.clone();
+        let signer = build_resume_signer(self.identity.clone());
+
+        let make_emit = move || {
+            let listener = listener.clone();
+            move |event: MobileEvent| {
+                if let Ok(guard) = listener.lock()
+                    && let Some(l) = guard.as_ref()
+                {
+                    l.on_event(event);
+                }
+            }
+        };
+
+        self.rt.spawn(async move {
+            let mut delay = std::time::Duration::from_secs(2);
+            loop {
+                let (tx, rx) = mpsc::unbounded_channel();
+                if let Ok(mut guard) = cmd_tx_slot.lock() {
+                    *guard = Some(tx);
+                }
+                let resume = mur_common::mobile::ClientFrame::Resume {
+                    pubkey: pubkey.clone(),
+                    agent: default_agent.clone(),
+                };
+                let emit = make_emit();
+                transport::run_relay(
+                    relay_ws_url.clone(),
+                    jwt.clone(),
+                    resume,
+                    Some(signer.clone()),
+                    rx,
+                    emit,
+                )
+                .await;
+
                 let emit2 = make_emit();
                 emit2(MobileEvent::Disconnected {
                     reason: format!("relay disconnected; retry in {}s", delay.as_secs()),

@@ -39,6 +39,16 @@ pub enum ClientFrame {
         token: String,
         agent: String,
     },
+    /// Reconnect by paired KEY, no enrollment token (the steady-state auth). The
+    /// phone announces its `pubkey`; the daemon replies [`ServerFrame::Challenge`]
+    /// with a fresh per-connection nonce, which the phone signs back in a
+    /// [`ClientFrame::ResumeProof`]. Distinct from `Hello` so single-use
+    /// enrollment windows never gate reconnects.
+    Resume { pubkey: String, agent: String },
+    /// Proof for a `Resume`: a [`SignedEnvelope`] whose `payload` is exactly the
+    /// challenge nonce bytes, signed by the device key. The daemon-issued nonce
+    /// makes a captured proof non-replayable on a new connection.
+    ResumeProof { envelope: SignedEnvelope },
     /// A signed A2A request destined for the agent (text-only path).
     Envelope { envelope: SignedEnvelope },
     /// Phone begins a voice utterance. The Mac clears its audio accumulator and
@@ -70,6 +80,10 @@ pub enum ServerFrame {
     Paired { agent: String },
     /// The handshake or a later frame was rejected.
     Rejected { reason: String },
+    /// Challenge issued in reply to a [`ClientFrame::Resume`]: a fresh
+    /// per-connection nonce the phone must sign (in a `ResumeProof`) to prove it
+    /// holds the paired device key.
+    Challenge { nonce: String },
     /// An asynchronous event mirrored to the phone. `name` is dot-namespaced
     /// (`mobile.transcript`, `mobile.reply`, …) to match the Hub `EventBus`
     /// names used for desktop mirroring.
