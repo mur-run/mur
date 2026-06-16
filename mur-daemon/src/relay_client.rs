@@ -70,6 +70,10 @@ async fn run_once(mur_home: &Path, relay_url: &str, api_key: &str) -> Result<()>
 
     // Per-connection audio accumulator for voice streaming over relay.
     let mut audio_buf: Vec<u8> = Vec::new();
+    // Per-connection pairing state: `None` until a valid `Hello` (correct pair
+    // token) completes the handshake. Until then, no application frame is
+    // processed — mirrors the LAN server, which gates the whole connection.
+    let mut paired_pubkey: Option<String> = None;
 
     loop {
         tokio::select! {
@@ -115,8 +119,14 @@ async fn run_once(mur_home: &Path, relay_url: &str, api_key: &str) -> Result<()>
                                 continue;
                             }
                         };
-                        if let Err(e) =
-                            handle_frame(mur_home, &mut write, frame, &mut audio_buf).await
+                        if let Err(e) = handle_frame(
+                            mur_home,
+                            &mut write,
+                            frame,
+                            &mut audio_buf,
+                            &mut paired_pubkey,
+                        )
+                        .await
                         {
                             tracing::warn!(error = %e, "mobile relay: frame handling error");
                         }
@@ -139,27 +149,66 @@ async fn handle_frame(
     write: &mut WsWrite,
     frame: ClientFrame,
     audio_buf: &mut Vec<u8>,
+    paired: &mut Option<String>,
 ) -> Result<()> {
     use base64::Engine as _;
-    use mur_common::bridge::envelope::verify_envelope_with_pubkey;
+
+    // Connection-level gate: the relay has no per-frame transport auth, so — like
+    // the LAN server, which runs the Hello handshake before its application loop —
+    // ONLY a `Hello` may be processed before this connection is paired. Every other
+    // frame (envelope, channel query, voice) is an authoritative read/write and
+    // must wait for a completed token handshake on THIS connection.
+    if !matches!(frame, ClientFrame::Hello { .. }) && paired.is_none() {
+        relay_send(
+            write,
+            &ServerFrame::Rejected {
+                reason: "not paired".to_string(),
+            },
+        )
+        .await?;
+        return Ok(());
+    }
 
     match frame {
         ClientFrame::Hello {
-            pubkey: _,
-            token: _,
+            pubkey,
+            token,
             agent,
         } => {
-            let canonical = canonicalize_agent_name(home, &agent);
-            relay_send(write, &ServerFrame::Paired { agent: canonical }).await?;
+            // Token-gate the relay handshake exactly like the LAN server, pin the
+            // device key (shared paired-device store), and mark THIS connection
+            // paired so later frames are authorized against this device.
+            match mur_core::mobile::read_pair_token(home) {
+                Some(t) if t == token => {
+                    if let Err(e) = mur_core::mobile::add_paired_device(home, &pubkey) {
+                        tracing::warn!(error = %e, "mobile relay: persist paired failed");
+                    }
+                    *paired = Some(pubkey);
+                    let canonical = canonicalize_agent_name(home, &agent);
+                    relay_send(write, &ServerFrame::Paired { agent: canonical }).await?;
+                }
+                _ => {
+                    relay_send(
+                        write,
+                        &ServerFrame::Rejected {
+                            reason: "invalid pairing token".to_string(),
+                        },
+                    )
+                    .await?;
+                }
+            }
         }
 
         ClientFrame::Envelope { envelope } => {
-            let pubkey = envelope.bridge_pubkey_multibase.clone();
-            if verify_envelope_with_pubkey(&envelope, &pubkey).is_err() {
+            // Pinned to the device that paired THIS connection: the envelope's key
+            // must equal it AND its signature must verify against a paired device.
+            // (Mirrors the LAN server's bridge_pubkey == pubkey && is_paired && verify.)
+            let key_matches = paired.as_deref() == Some(envelope.bridge_pubkey_multibase.as_str());
+            if !key_matches || !mur_core::mobile::paired_envelope_ok(home, &envelope) {
                 relay_send(
                     write,
                     &ServerFrame::Rejected {
-                        reason: "bad signature".to_string(),
+                        reason: "unauthorized".to_string(),
                     },
                 )
                 .await?;

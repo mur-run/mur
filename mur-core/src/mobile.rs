@@ -8,7 +8,9 @@
 
 use anyhow::{Context, Result};
 use mur_channel::ChannelService;
+use mur_common::bridge::envelope::{SignedEnvelope, verify_envelope_with_pubkey};
 use mur_common::channel::{ChannelActor, EventKind};
+use std::collections::HashSet;
 use std::net::{IpAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 
@@ -45,6 +47,67 @@ pub fn pair_token_path(home: &Path) -> PathBuf {
 /// Path to the paired-device store under `<home>/mobile/paired.json`.
 pub fn paired_devices_path(home: &Path) -> PathBuf {
     home.join(PAIRED_DEVICES_FILE)
+}
+
+/// Read the persisted pairing token WITHOUT creating one — the read-only
+/// counterpart to [`ensure_pair_token`]. Returns `None` if no token file exists
+/// (so no device could ever have paired). Used by the relay transport, which
+/// must token-gate its handshake just like the LAN server does.
+pub fn read_pair_token(home: &Path) -> Option<String> {
+    std::fs::read_to_string(pair_token_path(home))
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+/// Load the set of paired device pubkeys (multibase) from `paired.json`. The
+/// store is shared by both transports — a device paired over LAN is recognized
+/// over relay and vice versa — so authoritative writes are gated identically.
+pub fn load_paired_devices(home: &Path) -> HashSet<String> {
+    std::fs::read_to_string(paired_devices_path(home))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_default()
+}
+
+/// Persist the paired-device set as pretty JSON (atomic-enough for this tiny,
+/// low-churn file). Creates `<home>/mobile/` if missing.
+pub fn persist_paired_devices(home: &Path, devices: &[String]) -> Result<()> {
+    let path = paired_devices_path(home);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(devices)?)
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+/// Whether `pubkey` is a paired device.
+pub fn is_device_paired(home: &Path, pubkey: &str) -> bool {
+    load_paired_devices(home).contains(pubkey)
+}
+
+/// Record `pubkey` as a paired device (idempotent). Called only after the
+/// one-time pair token has been verified, on either transport.
+pub fn add_paired_device(home: &Path, pubkey: &str) -> Result<()> {
+    let mut set = load_paired_devices(home);
+    if set.insert(pubkey.to_string()) {
+        let all: Vec<String> = set.into_iter().collect();
+        persist_paired_devices(home, &all)?;
+        tracing::info!(pubkey = %pubkey, "mobile: paired new device");
+    }
+    Ok(())
+}
+
+/// Authorize a signed envelope from the phone: its declared pubkey must be a
+/// PAIRED device AND the Ed25519 signature must verify against that same key.
+/// This is the per-frame gate the relay transport applies before any write —
+/// pinning the envelope to a device that completed the token handshake, instead
+/// of trusting any self-consistent signature.
+pub fn paired_envelope_ok(home: &Path, envelope: &SignedEnvelope) -> bool {
+    let pubkey = &envelope.bridge_pubkey_multibase;
+    is_device_paired(home, pubkey) && verify_envelope_with_pubkey(envelope, pubkey).is_ok()
 }
 
 /// Read the pairing token, generating and persisting one (mode 0600) on first
@@ -482,6 +545,49 @@ mod tests {
                 .count(),
             1,
             "malformed params write nothing"
+        );
+    }
+
+    #[test]
+    fn read_pair_token_round_trips_and_is_absent_by_default() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert_eq!(read_pair_token(tmp.path()), None, "no token before pairing");
+        let t = ensure_pair_token(tmp.path()).unwrap();
+        assert_eq!(read_pair_token(tmp.path()).as_deref(), Some(t.as_str()));
+    }
+
+    #[test]
+    fn paired_envelope_ok_requires_a_paired_device_and_intact_signature() {
+        use mur_common::identity::AgentIdentity;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let id = AgentIdentity::generate();
+        let env = mur_common::bridge::envelope::sign_payload(b"{}".to_vec(), &id, 1);
+        let pk = env.bridge_pubkey_multibase.clone();
+
+        // Valid signature but the device has never paired → rejected. This is the
+        // crux of the relay fix: self-consistent signing is not enough.
+        assert!(!paired_envelope_ok(home, &env), "unpaired device rejected");
+
+        // After the token handshake records the device → accepted.
+        add_paired_device(home, &pk).unwrap();
+        assert!(is_device_paired(home, &pk));
+        assert!(paired_envelope_ok(home, &env), "paired + signed accepted");
+
+        // Tampered payload (signature no longer matches) → rejected even when paired.
+        let mut tampered = env.clone();
+        tampered.payload = br#"{"x":1}"#.to_vec();
+        assert!(
+            !paired_envelope_ok(home, &tampered),
+            "paired but broken signature rejected"
+        );
+
+        // A different device's key is not paired → rejected.
+        let other = AgentIdentity::generate();
+        let other_env = mur_common::bridge::envelope::sign_payload(b"{}".to_vec(), &other, 1);
+        assert!(
+            !paired_envelope_ok(home, &other_env),
+            "a different (unpaired) device is rejected"
         );
     }
 }

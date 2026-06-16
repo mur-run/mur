@@ -46,7 +46,6 @@ struct MobileState {
     mur_home: PathBuf,
     pair_token: String,
     paired: Arc<Mutex<HashSet<String>>>,
-    paired_path: PathBuf,
     /// Broadcast channel used to push `channel.updated` events to all
     /// connected phones while they're online.
     chan_tx: tokio::sync::broadcast::Sender<String>,
@@ -66,7 +65,9 @@ impl MobileState {
             changed = set.insert(pubkey.to_string());
             if changed {
                 let all: Vec<String> = set.iter().cloned().collect();
-                if let Err(e) = persist_paired(&self.paired_path, &all) {
+                // Shared store with the relay transport (mur-core), so a device
+                // paired here is recognized over relay and vice versa.
+                if let Err(e) = mur_core::mobile::persist_paired_devices(&self.mur_home, &all) {
                     tracing::warn!(error = %e, "mobile: persist paired devices failed");
                 }
             }
@@ -93,8 +94,7 @@ async fn run_server(mur_home: PathBuf, pair_token: String) -> Result<()> {
         .parse()
         .with_context(|| format!("parse mobile bind {bind}:{port}"))?;
 
-    let paired_path = mur_core::mobile::paired_devices_path(&mur_home);
-    let paired = load_paired(&paired_path);
+    let paired = mur_core::mobile::load_paired_devices(&mur_home);
 
     let (chan_tx, _chan_rx) = tokio::sync::broadcast::channel::<String>(256);
     {
@@ -114,7 +114,6 @@ async fn run_server(mur_home: PathBuf, pair_token: String) -> Result<()> {
         mur_home,
         pair_token,
         paired: Arc::new(Mutex::new(paired)),
-        paired_path,
         chan_tx,
     };
 
@@ -572,22 +571,6 @@ fn mirror(home: &Path, agent: &str, name: &str, payload: &Value) {
     }
 }
 
-fn load_paired(path: &Path) -> HashSet<String> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
-        .map(|v| v.into_iter().collect())
-        .unwrap_or_default()
-}
-
-fn persist_paired(path: &Path, devices: &[String]) -> Result<()> {
-    if let Some(p) = path.parent() {
-        std::fs::create_dir_all(p)?;
-    }
-    std::fs::write(path, serde_json::to_string_pretty(devices)?)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,7 +595,6 @@ mod tests {
             mur_home: home.clone(),
             pair_token: token.to_string(),
             paired: Arc::new(Mutex::new(HashSet::new())),
-            paired_path: mur_core::mobile::paired_devices_path(&home),
             chan_tx,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
