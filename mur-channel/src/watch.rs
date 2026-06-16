@@ -85,6 +85,8 @@ mod tests {
                 EventKind::Message,
                 serde_json::json!({"text":"hi"}),
                 None,
+                None,
+                None,
             )
             .unwrap();
 
