@@ -68,3 +68,37 @@ func actorLabel(actorKind: String, actorName: String) -> String {
     default:       return "system"
     }
 }
+
+// MARK: - @mention (client-side scoping hint, v4c)
+//
+// `@name` is advisory to the concierge orchestrator — never authoritative to a
+// worker and never opens a phone→specialist socket. These pure helpers drive the
+// detail-bar autocomplete; the literal "@name …" text is delivered to the
+// concierge channel, which (v3b) decides whether to honor it.
+
+/// Parse a trailing "@partial" token from the draft for autocomplete. Returns
+/// the partial (without "@") if the cursor is in a mention token, else nil.
+func mentionToken(in draft: String) -> String? {
+    guard let at = draft.lastIndex(of: "@") else { return nil }
+    let after = draft[draft.index(after: at)...]
+    // A mention token has no whitespace after the "@".
+    return after.contains(where: { $0.isWhitespace }) ? nil : String(after)
+}
+
+/// Autocomplete candidates for a partial @mention: channel participants first,
+/// then other known agents, filtered by prefix, deduped.
+func mentionCandidates(partial: String, participants: [String], knownAgents: [String]) -> [String] {
+    let p = partial.lowercased()
+    var seen = Set<String>()
+    var out: [String] = []
+    for name in participants + knownAgents where name.lowercased().hasPrefix(p) {
+        if seen.insert(name).inserted { out.append(name) }
+    }
+    return out
+}
+
+/// Replace the trailing "@partial" with "@chosen " in the draft.
+func applyMention(_ draft: String, choosing name: String) -> String {
+    guard let at = draft.lastIndex(of: "@") else { return draft }
+    return String(draft[..<at]) + "@" + name + " "
+}
