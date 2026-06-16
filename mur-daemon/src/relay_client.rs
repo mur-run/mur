@@ -317,14 +317,18 @@ async fn handle_frame(
         } => {
             // Enrollment step 1 (proto≥2): issue the challenge UNCONDITIONALLY
             // (don't leak whether the wid is live); verify at the proof step.
-            if proto < 2 {
-                relay_send(
-                    write,
-                    &ServerFrame::Rejected {
-                        reason: "unsupported pairing protocol".to_string(),
-                    },
-                )
-                .await?;
+            // In-flight guard (like Resume): ignore a duplicate HelloInit while a
+            // challenge is pending, so a peer can't amplify work by spamming it.
+            if proto < 2 || pending_enroll.is_some() {
+                if proto < 2 {
+                    relay_send(
+                        write,
+                        &ServerFrame::Rejected {
+                            reason: "unsupported pairing protocol".to_string(),
+                        },
+                    )
+                    .await?;
+                }
                 return Ok(());
             }
             let canonical = canonicalize_agent_name(home, &agent);

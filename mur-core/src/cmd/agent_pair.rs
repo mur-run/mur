@@ -3,9 +3,10 @@
 //! Also `mur agent devices` / `mur agent unpair <fingerprint>` to manage the
 //! paired phones.
 //!
-//! The window is minted into `<home>/mobile/pair-window.json` (token HASH only),
-//! the same file the daemon's `mobile_server` claims at enrollment, so the QR
-//! always matches what is actually served — and the secret expires + is single-use.
+//! The window is minted into `<home>/mobile/pair-window.json` (0600), the same
+//! file the daemon's `mobile_server` claims at enrollment, so the QR always
+//! matches what is actually served — and the secret expires + is single-use. The
+//! phone proves possession of the token via HMAC; the token is never transmitted.
 
 use anyhow::Result;
 use qrcode::QrCode;
@@ -16,24 +17,26 @@ use crate::mobile;
 
 pub fn cmd_pair(name: &str) -> Result<()> {
     let home = resolve_mur_home()?;
-    // Mint a fresh single-use enrollment window. Only the token's hash is written
-    // to disk (0600); the plaintext token below rides the QR out-of-band and is
-    // valid once, for a short TTL.
+    // Canonicalize FIRST so the QR's agent + did match what the daemon binds into
+    // the proof transcript (the daemon canonicalizes too); otherwise a non-canonical
+    // name (alias/casing) would make every proof fail.
+    let name = crate::a2a_dial::canonicalize_agent_name(&home, name);
     // `did` (the agent's Ed25519 identity) is bound into the QR so the phone can
     // authenticate the daemon during the proof handshake. Required — without it
-    // the phone cannot verify which daemon it reached on the TLS-less LAN.
-    let did = mobile::daemon_id(&home, name).ok_or_else(|| {
+    // the phone cannot verify which daemon it reached on the TLS-less LAN. The
+    // single-use token rides the QR out-of-band; it is never transmitted (HMAC proof).
+    let did = mobile::daemon_id(&home, &name).ok_or_else(|| {
         anyhow::anyhow!(
             "agent \"{name}\" has no identity yet — start it once (e.g. `mur agent run {name}`) before pairing"
         )
     })?;
-    let (window_id, token) = mobile::mint_pair_window(&home, name)?;
+    let (window_id, token) = mobile::mint_pair_window(&home, &name)?;
     let ttl = mobile::pair_window_ttl_secs();
     let port = mobile::mobile_port();
     let host = mobile::lan_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "127.0.0.1".to_string());
-    let uri = mobile::pairing_uri(&host, port, &window_id, &token, &did, name);
+    let uri = mobile::pairing_uri(&host, port, &window_id, &token, &did, &name);
 
     let code = QrCode::new(uri.as_bytes())?;
     let qr = code.render::<unicode::Dense1x2>().quiet_zone(true).build();

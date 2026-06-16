@@ -152,8 +152,9 @@ fn pair_window_path(home: &Path) -> PathBuf {
     home.join(PAIR_WINDOW_FILE)
 }
 
-/// Hex SHA-256 of `s`. The window file stores the token's hash, so even a 0600
-/// read does not yield a usable enrollment secret.
+/// Hex SHA-256 of `s`. Used for the short device fingerprint shown by
+/// `mur agent devices` (the window stores the plaintext token, not a hash, since
+/// the daemon must recompute the HMAC proof against it).
 fn sha256_hex(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
@@ -209,8 +210,10 @@ fn now_unix() -> u64 {
 
 /// Open a fresh pairing window: mint a 122-bit token + window id, persist them +
 /// a TTL (mode 0600), and return `(window_id, token)`. Replaces any prior window
-/// (one active window at a time). The token is returned for OOB delivery
-/// (QR/URI) — it is never TRANSMITTED on the wire (the phone proves it via HMAC).
+/// (one active window per home — concurrent `mur agent pair` for two agents
+/// collapses to the last; fail-closed, an enroller for a clobbered wid is simply
+/// rejected). The token is returned for OOB delivery (QR/URI) — it is never
+/// TRANSMITTED on the wire (the phone proves it via HMAC).
 pub fn mint_pair_window(home: &Path, agent: &str) -> Result<(String, String)> {
     let token = uuid::Uuid::new_v4().to_string();
     let window_id = uuid::Uuid::new_v4().to_string();
@@ -225,13 +228,27 @@ pub fn mint_pair_window(home: &Path, agent: &str) -> Result<(String, String)> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, serde_json::to_string_pretty(&wf)?)
-        .with_context(|| format!("write {}", path.display()))?;
+    let body = serde_json::to_string_pretty(&wf)?;
+    // Create with 0600 ATOMICALLY (mode applies at creation) so the plaintext
+    // token is never world-readable for even an instant — no write-then-chmod
+    // TOCTOU. The trailing set_permissions re-tightens any pre-existing file.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .with_context(|| format!("open {}", path.display()))?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        f.write_all(body.as_bytes())
+            .with_context(|| format!("write {}", path.display()))?;
     }
+    #[cfg(not(unix))]
+    std::fs::write(&path, &body).with_context(|| format!("write {}", path.display()))?;
     Ok((window_id, token))
 }
 
