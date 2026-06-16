@@ -279,6 +279,13 @@ final class AppModel {
 
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
+        // A 0 Hz / 0-channel input format (mic permission not yet granted, or the
+        // session not ready) would make installTap / AVAudioConverter throw
+        // 'IsFormatSampleRateAndChannelCountValid'. Bail gracefully, never crash.
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            print("[MurVoice] capture: skipped — invalid input format \(format.sampleRate)Hz/\(format.channelCount)ch")
+            return
+        }
 
         recognitionTask = recognizer?.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor [weak self] in
@@ -359,12 +366,14 @@ final class AppModel {
         let bytes = ttsBuffer
         ttsBuffer = Data()
         let sr = ttsSampleRate
-        guard !bytes.isEmpty else { return }
+        // Guard empty audio and an invalid (0 Hz) source rate — a 0 sample rate
+        // makes AVAudioFormat fail validation (the force-unwrap would trap).
+        guard !bytes.isEmpty, sr > 0 else { return }
 
-        // f32 LE PCM → AVAudioPCMBuffer at 24 kHz mono
-        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(sr), channels: 1, interleaved: false)!
+        // f32 LE PCM → AVAudioPCMBuffer at the source rate, mono.
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(sr), channels: 1, interleaved: false) else { return }
         let frameCount = AVAudioFrameCount(bytes.count / 4)
-        guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
+        guard frameCount > 0, let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
         buf.frameLength = frameCount
         bytes.withUnsafeBytes { ptr in
             if let f32 = ptr.baseAddress?.assumingMemoryBound(to: Float.self),
@@ -373,8 +382,26 @@ final class AppModel {
             }
         }
 
+        // Activate a playback audio session BEFORE touching the output node.
+        // Without an active route the output node reports a 0 Hz / 0-channel
+        // format, and AVAudioEngine.connect(_:to:format:) then throws
+        // 'IsFormatSampleRateAndChannelCountValid(format)' → SIGABRT.
+        let ttsSession = AVAudioSession.sharedInstance()
+        do {
+            try ttsSession.setCategory(.playback, mode: .default, options: [.duckOthers])
+            try ttsSession.setActive(true)
+        } catch {
+            print("[MurVoice] tts: audio session activate failed: \(error)")
+            return
+        }
+
         ttsEngine.attach(ttsPlayerNode)
         let outputFormat = ttsEngine.outputNode.inputFormat(forBus: 0)
+        // Defensive: never hand an invalid (0 Hz / 0-channel) format to the graph.
+        guard outputFormat.sampleRate > 0, outputFormat.channelCount > 0 else {
+            print("[MurVoice] tts: skipped — invalid output format \(outputFormat.sampleRate)Hz/\(outputFormat.channelCount)ch")
+            return
+        }
         ttsEngine.connect(ttsPlayerNode, to: ttsEngine.outputNode, format: outputFormat)
 
         do {

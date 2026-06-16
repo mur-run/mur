@@ -137,14 +137,14 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.name }}.tar.gz mur mur-mcp-server
+          tar czf ../../../${{ matrix.name }}.tar.gz mur mur-mcp-server murmurd
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/mur.exe,target/${{ matrix.target }}/release/mur-mcp-server.exe -DestinationPath ${{ matrix.name }}.zip
+          Compress-Archive -Path target/${{ matrix.target }}/release/mur.exe,target/${{ matrix.target }}/release/mur-mcp-server.exe,target/${{ matrix.target }}/release/murmurd.exe -DestinationPath ${{ matrix.name }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -191,8 +191,10 @@ jobs:
           mkdir -p pkg-root/usr/local/share/doc/mur
           cp dist/mur pkg-root/usr/local/bin/mur
           cp dist/mur-mcp-server pkg-root/usr/local/bin/mur-mcp-server
+          cp dist/murmurd pkg-root/usr/local/bin/murmurd
           chmod +x pkg-root/usr/local/bin/mur
           chmod +x pkg-root/usr/local/bin/mur-mcp-server
+          chmod +x pkg-root/usr/local/bin/murmurd
           cp LICENSE pkg-root/usr/local/share/doc/mur/LICENSE
           mkdir -p scripts-pkg
           cat > scripts-pkg/postinstall <<'EOF'
@@ -208,9 +210,11 @@ jobs:
           codesign --force --options runtime --timestamp \
             --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
             pkg-root/usr/local/bin/mur \
-            pkg-root/usr/local/bin/mur-mcp-server
+            pkg-root/usr/local/bin/mur-mcp-server \
+            pkg-root/usr/local/bin/murmurd
           codesign --verify --verbose pkg-root/usr/local/bin/mur \
-            pkg-root/usr/local/bin/mur-mcp-server
+            pkg-root/usr/local/bin/mur-mcp-server \
+            pkg-root/usr/local/bin/murmurd
         env:
           APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -474,6 +478,7 @@ jobs:
             def install
               bin.install "mur"
               bin.install "mur-mcp-server"
+              bin.install "murmurd"
               bin.install_symlink "mur" => "murmur"
             end
 
