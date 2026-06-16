@@ -24,8 +24,11 @@ struct PairUriResponse {
     uri: String,
     host: String,
     port: u16,
+    window_id: String,
     token: String,
     agent: String,
+    /// Seconds until this single-use window expires.
+    expires_in: u64,
 }
 
 pub(super) async fn get_pair_uri(
@@ -40,18 +43,24 @@ pub(super) async fn get_pair_uri(
         })?
         .to_path_buf();
 
-    let token = crate::mobile::ensure_pair_token(&home).map_err(AppError::Internal)?;
+    // Mint a fresh single-use enrollment window (writes only the token hash to a
+    // 0600 file); the plaintext token rides the QR/URI this auth-gated endpoint
+    // returns — never to mDNS, never to disk.
+    let (window_id, token) =
+        crate::mobile::mint_pair_window(&home, &q.agent).map_err(AppError::Internal)?;
     let port = crate::mobile::mobile_port();
     let host = crate::mobile::lan_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "127.0.0.1".to_string());
-    let uri = crate::mobile::pairing_uri(&host, port, &token, &q.agent);
+    let uri = crate::mobile::pairing_uri(&host, port, &window_id, &token, &q.agent);
 
     Ok(Json(PairUriResponse {
         uri,
         host,
         port,
+        window_id,
         token,
         agent: q.agent,
+        expires_in: crate::mobile::pair_window_ttl_secs(),
     }))
 }

@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use mur_channel::ChannelService;
 use mur_common::bridge::envelope::{SignedEnvelope, verify_envelope_with_pubkey};
 use mur_common::channel::{ChannelActor, EventKind};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::net::{IpAddr, UdpSocket};
 use std::path::{Path, PathBuf};
@@ -23,8 +24,33 @@ pub const DEFAULT_MOBILE_BIND: &str = "0.0.0.0";
 /// Agent the phone talks to when none is named (the concierge).
 pub const DEFAULT_MOBILE_AGENT: &str = "mur";
 
-const PAIR_TOKEN_FILE: &str = "mobile/pair-token";
 const PAIRED_DEVICES_FILE: &str = "mobile/paired.json";
+const PAIR_WINDOW_FILE: &str = "mobile/pair-window.json";
+
+/// Default pairing-window lifetime. Pairing is a same-room, human-present
+/// ceremony, so the window only needs to outlive "open app, grant camera +
+/// local-network permission, aim, scan" — 120s matches Matter/HomeKit/Signal
+/// in-person norms while keeping a screenshotted QR useless ~2 min later.
+pub const DEFAULT_PAIR_WINDOW_TTL_SECS: u64 = 120;
+/// Hard cap on the configurable window TTL (`MUR_PAIR_WINDOW_TTL`).
+const MAX_PAIR_WINDOW_TTL_SECS: u64 = 300;
+/// How often the daemon sweeps an unclaimed, expired window off disk. Bounds how
+/// long a lapsed window lingers — so a wall-clock rollback can't revive a stale
+/// window (there is nothing left to read). Expiry uses the wall clock, so this
+/// sweep is the practical bound on that narrow rollback case; a local attacker
+/// who can both set the clock back AND already holds the out-of-band token is
+/// outside the threat model (the token alone authorizes enrollment).
+pub const PAIR_WINDOW_SWEEP_SECS: u64 = 30;
+
+/// Effective pairing-window TTL in seconds, honouring `MUR_PAIR_WINDOW_TTL`
+/// (clamped to [`MAX_PAIR_WINDOW_TTL_SECS`]).
+pub fn pair_window_ttl_secs() -> u64 {
+    std::env::var("MUR_PAIR_WINDOW_TTL")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_PAIR_WINDOW_TTL_SECS)
+        .min(MAX_PAIR_WINDOW_TTL_SECS)
+}
 
 /// Effective mobile port, honouring the `MUR_MOBILE_PORT` override.
 pub fn mobile_port() -> u16 {
@@ -39,25 +65,9 @@ pub fn mobile_bind() -> String {
     std::env::var("MUR_MOBILE_BIND").unwrap_or_else(|_| DEFAULT_MOBILE_BIND.to_string())
 }
 
-/// Path to the one-time pairing token under `<home>/mobile/pair-token`.
-pub fn pair_token_path(home: &Path) -> PathBuf {
-    home.join(PAIR_TOKEN_FILE)
-}
-
 /// Path to the paired-device store under `<home>/mobile/paired.json`.
 pub fn paired_devices_path(home: &Path) -> PathBuf {
     home.join(PAIRED_DEVICES_FILE)
-}
-
-/// Read the persisted pairing token WITHOUT creating one — the read-only
-/// counterpart to [`ensure_pair_token`]. Returns `None` if no token file exists
-/// (so no device could ever have paired). Used by the relay transport, which
-/// must token-gate its handshake just like the LAN server does.
-pub fn read_pair_token(home: &Path) -> Option<String> {
-    std::fs::read_to_string(pair_token_path(home))
-        .ok()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
 }
 
 /// Load the set of paired device pubkeys (multibase) from `paired.json`. The
@@ -110,26 +120,154 @@ pub fn paired_envelope_ok(home: &Path, envelope: &SignedEnvelope) -> bool {
     is_device_paired(home, pubkey) && verify_envelope_with_pubkey(envelope, pubkey).is_ok()
 }
 
-/// Read the pairing token, generating and persisting one (mode 0600) on first
-/// use. Both the daemon and the `pair` CLI call this so they agree.
-pub fn ensure_pair_token(home: &Path) -> Result<String> {
-    let path = pair_token_path(home);
+// ── Pairing window (enrollment) ──────────────────────────────────────────────
+//
+// Enrolling a NEW device requires an on-demand, single-use, short-TTL window —
+// there is no persistent pairing secret. `mur agent pair` / the Hub mints one
+// (writing only the token HASH + a TTL to a 0600 file); the daemon claims it
+// once at Hello time and burns it. The plaintext token travels out-of-band in
+// the QR/URI only — never to disk, never to mDNS. Already-paired devices never
+// need a window again (they authenticate by their key in `paired.json`).
+
+fn pair_window_path(home: &Path) -> PathBuf {
+    home.join(PAIR_WINDOW_FILE)
+}
+
+/// Hex SHA-256 of `s`. The window file stores the token's hash, so even a 0600
+/// read does not yield a usable enrollment secret.
+fn sha256_hex(s: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(s.as_bytes());
+    hex::encode(h.finalize())
+}
+
+/// Constant-time equality for equal-length byte slices (avoids leaking how many
+/// leading bytes of a token hash matched).
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PairWindowFile {
+    window_id: String,
+    token_hash: String,
+    agent: String,
+    /// Unix-epoch seconds after which the window is dead.
+    expires_at: u64,
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Open a fresh pairing window: mint a 122-bit token, persist only its hash + a
+/// TTL (mode 0600), and return `(window_id, token)`. Replaces any prior window
+/// (one active window at a time). The plaintext token is returned for OOB
+/// delivery (QR/URI) and is never written to disk.
+pub fn mint_pair_window(home: &Path, agent: &str) -> Result<(String, String)> {
+    let token = uuid::Uuid::new_v4().to_string();
+    let window_id = uuid::Uuid::new_v4().to_string();
+    let wf = PairWindowFile {
+        window_id: window_id.clone(),
+        token_hash: sha256_hex(&token),
+        agent: agent.to_string(),
+        expires_at: now_unix() + pair_window_ttl_secs(),
+    };
+    let path = pair_window_path(home);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    if path.exists() {
-        let token =
-            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        return Ok(token.trim().to_owned());
-    }
-    let token = uuid::Uuid::new_v4().to_string();
-    std::fs::write(&path, &token).with_context(|| format!("write {}", path.display()))?;
+    std::fs::write(&path, serde_json::to_string_pretty(&wf)?)
+        .with_context(|| format!("write {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
-    Ok(token)
+    Ok((window_id, token))
+}
+
+/// Atomically CLAIM the open pairing window with `token`: succeeds at most once.
+/// On a hash match against a non-expired window it deletes the window file
+/// (single-use burn) and returns true; otherwise false (and sweeps an expired
+/// window). The caller MUST hold the cross-transport enrollment lock so
+/// read+burn is atomic, then record the device via [`add_paired_device`].
+pub fn try_consume_pair_window(home: &Path, token: &str) -> bool {
+    let path = pair_window_path(home);
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let Ok(wf) = serde_json::from_str::<PairWindowFile>(&raw) else {
+        return false;
+    };
+    if now_unix() >= wf.expires_at {
+        let _ = std::fs::remove_file(&path); // sweep expired
+        return false;
+    }
+    if !ct_eq(wf.token_hash.as_bytes(), sha256_hex(token).as_bytes()) {
+        return false;
+    }
+    let _ = std::fs::remove_file(&path); // burn: single-use
+    true
+}
+
+/// Delete the pairing-window file if it has expired. Cheap to call on a timer
+/// (every [`PAIR_WINDOW_SWEEP_SECS`]) so an unclaimed window does not linger past
+/// its TTL — bounding any wall-clock-rollback revival to one sweep interval.
+pub fn sweep_expired_pair_window(home: &Path) {
+    let path = pair_window_path(home);
+    if let Ok(raw) = std::fs::read_to_string(&path)
+        && let Ok(wf) = serde_json::from_str::<PairWindowFile>(&raw)
+        && now_unix() >= wf.expires_at
+    {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// A short, stable, display fingerprint for a paired device pubkey (first 12 hex
+/// of its SHA-256). Used by `mur agent devices` / `unpair`.
+pub fn device_fingerprint(pubkey: &str) -> String {
+    sha256_hex(pubkey)[..12].to_string()
+}
+
+/// All paired devices as `(pubkey, fingerprint)`, sorted by fingerprint.
+pub fn list_paired_devices(home: &Path) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = load_paired_devices(home)
+        .into_iter()
+        .map(|pk| {
+            let fp = device_fingerprint(&pk);
+            (pk, fp)
+        })
+        .collect();
+    out.sort_by(|a, b| a.1.cmp(&b.1));
+    out
+}
+
+/// Remove a paired device matching `frag` (its full pubkey or fingerprint
+/// prefix). Returns the removed pubkey, or `None` if nothing matched.
+pub fn remove_paired_device(home: &Path, frag: &str) -> Result<Option<String>> {
+    let set = load_paired_devices(home);
+    let Some(pubkey) = set
+        .iter()
+        .find(|pk| *pk == frag || device_fingerprint(pk).starts_with(frag))
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let remaining: Vec<String> = set.into_iter().filter(|pk| pk != &pubkey).collect();
+    persist_paired_devices(home, &remaining)?;
+    tracing::info!(fingerprint = %device_fingerprint(&pubkey), "mobile: unpaired device");
+    Ok(Some(pubkey))
 }
 
 /// Best-effort primary LAN IP of this host. No traffic is sent — we open a UDP
@@ -142,9 +280,10 @@ pub fn lan_ip() -> Option<IpAddr> {
 }
 
 /// Build the pairing URI encoded into the QR. The phone parses host/port/token
-/// and calls `connect_lan`. Token (uuid) and agent slug are URL-safe.
-pub fn pairing_uri(host: &str, port: u16, token: &str, agent: &str) -> String {
-    format!("mur-pair://{host}:{port}/?token={token}&agent={agent}")
+/// and calls `connect_lan`. `window_id` (`wid`) scopes the token to one window;
+/// older apps that ignore `wid` still work. Token (uuid) + slug are URL-safe.
+pub fn pairing_uri(host: &str, port: u16, window_id: &str, token: &str, agent: &str) -> String {
+    format!("mur-pair://{host}:{port}/?wid={window_id}&token={token}&agent={agent}")
 }
 
 /// Max channels returned to the phone (v4 scale is small).
@@ -549,11 +688,95 @@ mod tests {
     }
 
     #[test]
-    fn read_pair_token_round_trips_and_is_absent_by_default() {
+    fn pair_window_is_single_use_and_rejects_wrong_token() {
         let tmp = tempfile::TempDir::new().unwrap();
-        assert_eq!(read_pair_token(tmp.path()), None, "no token before pairing");
-        let t = ensure_pair_token(tmp.path()).unwrap();
-        assert_eq!(read_pair_token(tmp.path()).as_deref(), Some(t.as_str()));
+        let home = tmp.path();
+        // No window → nothing can be consumed.
+        assert!(!try_consume_pair_window(home, "anything"), "no window yet");
+
+        let (_wid, token) = mint_pair_window(home, "mur").unwrap();
+        // The plaintext token is NOT on disk (only its hash).
+        let raw = std::fs::read_to_string(pair_window_path(home)).unwrap();
+        assert!(
+            !raw.contains(&token),
+            "window file must store only the token hash"
+        );
+
+        // Wrong token never consumes the window.
+        assert!(
+            !try_consume_pair_window(home, "wrong"),
+            "wrong token rejected"
+        );
+        assert!(
+            pair_window_path(home).exists(),
+            "rejected attempt leaves the window"
+        );
+
+        // Correct token consumes exactly once (single-use burn).
+        assert!(
+            try_consume_pair_window(home, &token),
+            "correct token consumes"
+        );
+        assert!(!pair_window_path(home).exists(), "window burned after use");
+        assert!(!try_consume_pair_window(home, &token), "cannot be reused");
+    }
+
+    #[test]
+    fn pair_window_expires() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let (_wid, token) = mint_pair_window(home, "mur").unwrap();
+        // Force expiry by rewriting the file with a past `expires_at`.
+        let mut wf: PairWindowFile =
+            serde_json::from_str(&std::fs::read_to_string(pair_window_path(home)).unwrap())
+                .unwrap();
+        wf.expires_at = 1; // 1970
+        std::fs::write(pair_window_path(home), serde_json::to_string(&wf).unwrap()).unwrap();
+        assert!(
+            !try_consume_pair_window(home, &token),
+            "expired window rejected"
+        );
+        assert!(!pair_window_path(home).exists(), "expired window swept");
+    }
+
+    #[test]
+    fn sweep_removes_only_expired_windows() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        // A live window survives the sweep.
+        mint_pair_window(home, "mur").unwrap();
+        sweep_expired_pair_window(home);
+        assert!(pair_window_path(home).exists(), "live window kept");
+        // An expired window is removed by the sweep (so a clock rollback finds
+        // nothing to revive).
+        let mut wf: PairWindowFile =
+            serde_json::from_str(&std::fs::read_to_string(pair_window_path(home)).unwrap())
+                .unwrap();
+        wf.expires_at = 1;
+        std::fs::write(pair_window_path(home), serde_json::to_string(&wf).unwrap()).unwrap();
+        sweep_expired_pair_window(home);
+        assert!(!pair_window_path(home).exists(), "expired window swept");
+    }
+
+    #[test]
+    fn list_and_remove_paired_devices_by_fingerprint() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        add_paired_device(home, "zKEY_AAA").unwrap();
+        add_paired_device(home, "zKEY_BBB").unwrap();
+        let devices = list_paired_devices(home);
+        assert_eq!(devices.len(), 2);
+        let (pk, fp) = devices[0].clone();
+        // Remove by fingerprint prefix.
+        let removed = remove_paired_device(home, &fp[..6]).unwrap();
+        assert_eq!(removed.as_deref(), Some(pk.as_str()));
+        assert!(
+            !is_device_paired(home, &pk),
+            "removed device no longer paired"
+        );
+        assert_eq!(list_paired_devices(home).len(), 1);
+        // Non-matching fragment removes nothing.
+        assert_eq!(remove_paired_device(home, "deadbeef").unwrap(), None);
     }
 
     #[test]

@@ -27,7 +27,12 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const RELAY_WS_PATH: &str = "/api/v1/relay/ws";
 
 /// Spawn the relay mobile client task; runs forever (reconnects on drop).
-pub fn spawn(mur_home: PathBuf, relay_url: String, api_key: String) {
+pub fn spawn(
+    mur_home: PathBuf,
+    relay_url: String,
+    api_key: String,
+    enroll_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+) {
     tokio::spawn(async move {
         // One channel watcher for the whole relay task (mirrors the LAN server):
         // filesystem changes under <home>/channels/ fan out via this broadcast so
@@ -50,7 +55,7 @@ pub fn spawn(mur_home: PathBuf, relay_url: String, api_key: String) {
 
         let mut delay = Duration::from_secs(1);
         loop {
-            match run_once(&mur_home, &relay_url, &api_key, &chan_tx).await {
+            match run_once(&mur_home, &relay_url, &api_key, &chan_tx, &enroll_lock).await {
                 Ok(()) => {
                     tracing::info!("mobile relay: clean disconnect");
                     delay = Duration::from_secs(1);
@@ -70,6 +75,7 @@ async fn run_once(
     relay_url: &str,
     api_key: &str,
     chan_tx: &tokio::sync::broadcast::Sender<String>,
+    enroll_lock: &tokio::sync::Mutex<()>,
 ) -> Result<()> {
     let ws_url = format!("{}{RELAY_WS_PATH}", relay_url.trim_end_matches('/'));
 
@@ -168,6 +174,7 @@ async fn run_once(
                             frame,
                             &mut audio_buf,
                             &mut paired_pubkey,
+                            enroll_lock,
                         )
                         .await
                         {
@@ -215,6 +222,7 @@ async fn handle_frame(
     frame: ClientFrame,
     audio_buf: &mut Vec<u8>,
     paired: &mut Option<String>,
+    enroll_lock: &tokio::sync::Mutex<()>,
 ) -> Result<()> {
     use base64::Engine as _;
 
@@ -240,27 +248,39 @@ async fn handle_frame(
             token,
             agent,
         } => {
-            // Token-gate the relay handshake exactly like the LAN server, pin the
-            // device key (shared paired-device store), and mark THIS connection
-            // paired so later frames are authorized against this device.
-            match mur_core::mobile::read_pair_token(home) {
-                Some(t) if t == token => {
+            // Same enrollment model as the LAN server. An already-paired device
+            // resumes by key (transitional: the shipped app re-sends Hello{token});
+            // a new device must atomically claim a single-use window. Either way,
+            // mark THIS connection paired so later frames are authorized.
+            let ok = if mur_core::mobile::is_device_paired(home, &pubkey) {
+                true
+            } else {
+                let _guard = enroll_lock.lock().await;
+                if mur_core::mobile::try_consume_pair_window(home, &token) {
                     if let Err(e) = mur_core::mobile::add_paired_device(home, &pubkey) {
                         tracing::warn!(error = %e, "mobile relay: persist paired failed");
                     }
-                    *paired = Some(pubkey);
-                    let canonical = canonicalize_agent_name(home, &agent);
-                    relay_send(write, &ServerFrame::Paired { agent: canonical }).await?;
+                    tracing::info!(
+                        fingerprint = %mur_core::mobile::device_fingerprint(&pubkey),
+                        "mobile: paired new device (relay)"
+                    );
+                    true
+                } else {
+                    false
                 }
-                _ => {
-                    relay_send(
-                        write,
-                        &ServerFrame::Rejected {
-                            reason: "invalid pairing token".to_string(),
-                        },
-                    )
-                    .await?;
-                }
+            };
+            if ok {
+                *paired = Some(pubkey);
+                let canonical = canonicalize_agent_name(home, &agent);
+                relay_send(write, &ServerFrame::Paired { agent: canonical }).await?;
+            } else {
+                relay_send(
+                    write,
+                    &ServerFrame::Rejected {
+                        reason: "no active pairing window — run `mur agent pair`".to_string(),
+                    },
+                )
+                .await?;
             }
         }
 
