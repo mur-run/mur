@@ -30,6 +30,7 @@ final class AppModel {
         let actorName: String
         let kind: String        // "message" | "state-change" | …
         let text: String
+        let hitlId: String      // set on HitlRequest events (v4c), else ""
     }
 
     private(set) var mascot: MascotState = .offline
@@ -44,6 +45,9 @@ final class AppModel {
 
     private var client: MobileClient?
     private var bridge: EventBridge?
+    /// LAN endpoint of an in-progress pairing, persisted once `.connected` fires
+    /// so the next launch can `resumeIfPaired`.
+    private var pendingPair: (host: String, port: UInt16)?
 
     // TTS playback
     private var ttsEngine = AVAudioEngine()
@@ -137,6 +141,10 @@ final class AppModel {
                     ud.removeObject(forKey: "debugSendMessage")
                 }
             }
+        } else {
+            // Production launch: if a device was previously paired, reconnect by
+            // key (no token needed) over the remembered LAN endpoint.
+            resumeIfPaired()
         }
     }
 
@@ -144,6 +152,38 @@ final class AppModel {
         print("[MurVoice] connect host=\(host) port=\(port)")
         start()
         client?.connectLan(host: host, port: port, pairToken: token)
+    }
+
+    /// Pair from a scanned QR. A v=2 QR (`wid`+`did`) enrolls via the HMAC proof
+    /// handshake — the token is never transmitted; an older QR falls back to the
+    /// legacy bearer path. On success the LAN endpoint is remembered so the next
+    /// launch reconnects by key (`resumeIfPaired`).
+    func pair(_ info: PairingInfo) {
+        start()
+        pendingPair = (info.host, info.port)
+        if let wid = info.wid, let did = info.did {
+            print("[MurVoice] enroll (proof) host=\(info.host) port=\(info.port)")
+            client?.enrollLan(
+                host: info.host, port: info.port, token: info.token, wid: wid, daemonId: did)
+        } else {
+            print("[MurVoice] pair (legacy) host=\(info.host) port=\(info.port)")
+            client?.connectLan(host: info.host, port: info.port, pairToken: info.token)
+        }
+    }
+
+    /// Reconnect a previously-paired device by KEY (no token) — e.g. on launch.
+    /// Uses the persisted LAN endpoint; the phone's identity (already on disk) is
+    /// what authenticates, so no pairing window is needed.
+    func resumeIfPaired() {
+        let ud = UserDefaults.standard
+        guard ud.bool(forKey: "isPaired"), let host = ud.string(forKey: "pairedHost") else {
+            return
+        }
+        let stored = UInt16(ud.integer(forKey: "pairedPort"))
+        let port = stored == 0 ? 9430 : stored
+        print("[MurVoice] resume host=\(host) port=\(port)")
+        start()
+        client?.resumeLan(host: host, port: port)
     }
 
     /// Connect via mur-server relay (for use away from home Wi-Fi).
@@ -391,7 +431,41 @@ final class AppModel {
         print("[MurVoice] send: \(text)")
         transcript.append(.init(role: "user", text: text))
         mascot = .thinking
-        client?.sendText(text: text)
+        client?.sendText(text: text, channelId: nil)
+    }
+
+    // MARK: Channel participation (v4c)
+
+    /// Drop a turn into a SPECIFIC channel (a Hub/CLI-originated one, not just
+    /// the concierge). The daemon persists into it and dials its router agent.
+    func sendToChannel(_ text: String, channelId: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        print("[MurVoice] sendToChannel \(channelId): \(t)")
+        client?.sendText(text: t, channelId: channelId)
+    }
+
+    /// Authoritatively release a HITL gate from the phone (v4c). The daemon
+    /// verifies the paired frame, then writes a v3d-signed HitlResponse the gate
+    /// is waiting on. `reason` is a short human note for the audit log.
+    func respondHitl(channelId: String, hitlId: String, allow: Bool) {
+        guard !hitlId.isEmpty else { return }
+        client?.hitlRespond(channelId: channelId, hitlId: hitlId, allow: allow,
+                            reason: allow ? "approved on phone" : "denied on phone")
+    }
+
+    /// Participants (agents) of the open channel — the first @mention source.
+    var detailParticipants: [String] {
+        channels.first(where: { $0.id == detailChannelId })?.agents ?? []
+    }
+
+    /// Every agent seen locally across channels — the @mention fallback pool.
+    var mentionableAgents: [String] {
+        var set: [String] = []
+        for c in channels {
+            for a in c.agents where !set.contains(a) { set.append(a) }
+        }
+        return set
     }
 
     private func handle(_ event: MobileEvent) {
@@ -401,6 +475,15 @@ final class AppModel {
         case let .connected(_, agent):
             connectedAgent = agent
             mascot = .idle
+            // Remember the endpoint of a just-completed pairing so the next launch
+            // reconnects by key via resumeIfPaired().
+            if let (h, p) = pendingPair {
+                let ud = UserDefaults.standard
+                ud.set(h, forKey: "pairedHost")
+                ud.set(Int(p), forKey: "pairedPort")
+                ud.set(true, forKey: "isPaired")
+                pendingPair = nil
+            }
             client?.listChannels()
         case .disconnected:
             connectedAgent = nil
@@ -437,7 +520,8 @@ final class AppModel {
             guard channelId == detailChannelId else { break }
             detailEvents = events.map {
                 ChannelEventVM(seq: $0.seq, ts: $0.ts, actorKind: $0.actorKind,
-                               actorName: $0.actorName, kind: $0.kind, text: $0.text)
+                               actorName: $0.actorName, kind: $0.kind, text: $0.text,
+                               hitlId: $0.hitlId)
             }
         case let .channelUpdate(channelId):
             client?.listChannels()
