@@ -245,9 +245,10 @@ impl MobileClient {
     }
 
     /// Send a user turn as text. The reply arrives as a [`MobileEvent::Reply`]
-    /// (and a mirrored transcript) via the listener.
-    pub fn send_text(&self, text: String) {
-        let envelope = match self.sign_agent_send(&text) {
+    /// (and a mirrored transcript) via the listener. `channel_id` (v4c) drops the
+    /// turn into a specific channel; `None` uses the agent's latest/new channel.
+    pub fn send_text(&self, text: String, channel_id: Option<String>) {
+        let envelope = match self.sign_agent_send(&text, channel_id.as_deref()) {
             Ok(env) => env,
             Err(e) => {
                 self.emit(MobileEvent::Error {
@@ -321,6 +322,7 @@ impl MobileClient {
     fn sign_agent_send(
         &self,
         text: &str,
+        channel_id: Option<&str>,
     ) -> Result<mur_common::bridge::envelope::SignedEnvelope, serde_json::Error> {
         let msg = A2aMessage {
             role: "user".to_string(),
@@ -334,6 +336,14 @@ impl MobileClient {
             serde_json::Value::String(self.default_agent.clone()),
         );
         params.insert("message".to_string(), serde_json::to_value(&msg)?);
+        // v4c: drop this turn into an explicit channel (else the daemon resolves
+        // the agent's latest/new channel).
+        if let Some(cid) = channel_id {
+            params.insert(
+                "channel_id".to_string(),
+                serde_json::Value::String(cid.to_string()),
+            );
+        }
 
         let id = self.id_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let req = JsonRpcRequest {

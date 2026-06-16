@@ -158,11 +158,29 @@ pub fn persist_mobile_exchange(
     user_text: &str,
     agent_text: &str,
 ) {
+    persist_mobile_exchange_into(home, agent, None, user_text, agent_text)
+}
+
+/// Like [`persist_mobile_exchange`] but lands the turn in an EXPLICIT
+/// `channel_id` when given (v4c: the phone "drops into" a specific channel — a
+/// Hub/CLI-originated one, or a non-latest one), else the agent's latest/new
+/// channel. Chat turns stay unsigned `append_message` (mobile chat is not a
+/// gate-authority path; the signed path is HITL respond, see `respond_hitl`).
+pub fn persist_mobile_exchange_into(
+    home: &std::path::Path,
+    agent: &str,
+    channel_id: Option<&str>,
+    user_text: &str,
+    agent_text: &str,
+) {
     let res = (|| -> anyhow::Result<()> {
         let svc = ChannelService::open(home)?;
-        let id = match svc.latest_for_agent(agent)? {
-            Some(id) => id,
-            None => svc.create_for_agent(agent)?.id,
+        let id = match channel_id {
+            Some(id) => id.to_string(),
+            None => match svc.latest_for_agent(agent)? {
+                Some(id) => id,
+                None => svc.create_for_agent(agent)?.id,
+            },
         };
         svc.append_message(
             &id,
@@ -231,5 +249,29 @@ mod tests {
         persist_mobile_exchange(tmp.path(), "mur", "and tomorrow?", "3 meetings");
         assert_eq!(svc.list(10).unwrap().len(), 1);
         assert_eq!(svc.load_events(&id).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn persist_into_explicit_channel_targets_it() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        let a = svc.create_for_agent("mur").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let _b = svc.create_for_agent("mur").unwrap(); // newer = latest_for_agent
+        // An explicit channel_id lands the turn in `a`, NOT the newer `_b`.
+        persist_mobile_exchange_into(tmp.path(), "mur", Some(&a.id), "q", "ans");
+        assert_eq!(
+            svc.load_events(&a.id).unwrap().len(),
+            2,
+            "explicit id targeted"
+        );
+        assert_eq!(
+            svc.load_events(&_b.id).unwrap().len(),
+            0,
+            "newer channel untouched"
+        );
+        // None falls back to the latest (`_b`).
+        persist_mobile_exchange_into(tmp.path(), "mur", None, "q2", "ans2");
+        assert_eq!(svc.load_events(&_b.id).unwrap().len(), 2, "None → latest");
     }
 }

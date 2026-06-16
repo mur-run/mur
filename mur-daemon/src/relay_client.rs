@@ -280,6 +280,12 @@ async fn agent_turn(
     method: String,
     params: Value,
 ) -> Result<()> {
+    // v4c: capture the explicit target channel before `params` is moved.
+    let channel_id = params
+        .get("channel_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
     let home_c = home.to_path_buf();
     let agent_c = agent.to_string();
     let dialed = tokio::task::spawn_blocking(move || {
@@ -294,7 +300,13 @@ async fn agent_turn(
     };
 
     if !reply_text.starts_with("[error]") {
-        mur_core::mobile::persist_mobile_exchange(home, agent, user_text, &reply_text);
+        mur_core::mobile::persist_mobile_exchange_into(
+            home,
+            agent,
+            channel_id.as_deref(),
+            user_text,
+            &reply_text,
+        );
     }
     relay_send(
         write,

@@ -381,6 +381,13 @@ async fn handle_agent_turn(
         }),
     );
 
+    // v4c: capture the explicit target channel before `params` is moved into the
+    // dial; `None` lets the persist resolve the agent's latest/new channel.
+    let channel_id = params
+        .get("channel_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
     let home = state.mur_home.clone();
     let agent_c = agent.to_string();
     let dialed = tokio::task::spawn_blocking(move || {
@@ -401,9 +408,10 @@ async fn handle_agent_turn(
         &json!({ "text": reply_text }),
     );
     if !reply_text.starts_with("[error]") {
-        mur_core::mobile::persist_mobile_exchange(
+        mur_core::mobile::persist_mobile_exchange_into(
             state.mur_home.as_path(),
             agent,
+            channel_id.as_deref(),
             user_text,
             &reply_text,
         );
