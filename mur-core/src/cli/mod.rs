@@ -103,6 +103,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: WorkflowAction,
     },
+    /// Interact with a channel (HITL approval, etc.)
+    Channel {
+        #[command(subcommand)]
+        action: ChannelAction,
+    },
     /// Rebuild index from YAML files
     #[command(hide = true)]
     Reindex {

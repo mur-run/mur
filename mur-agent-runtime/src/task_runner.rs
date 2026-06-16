@@ -1497,6 +1497,7 @@ mod tests {
                 .with_tools_policy(vec![mur_common::agent::ToolRule {
                     pattern: "bash".into(),
                     policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
                 }])
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -1879,6 +1880,7 @@ mod tests {
                 .with_tools_policy(vec![mur_common::agent::ToolRule {
                     pattern: "build".into(),
                     policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
                 }])
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -1920,6 +1922,7 @@ mod tests {
                 .with_tools_policy(vec![mur_common::agent::ToolRule {
                     pattern: "build".into(),
                     policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
                 }])
                 .with_pending_approvals(empty_pending_approvals())
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
