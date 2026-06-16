@@ -129,6 +129,7 @@ For detailed agent / companion / GUI export / runtime internals, read `docs/arch
   - Both daemon paths (`mobile_server.rs`, `relay_client.rs`) handle `ChannelQuery` by calling `mur-core::mobile::channel_query`.
   - `mur-mobile-sdk`: `ChannelListItem`, `ChannelEventItem` UniFFI records; `MobileEvent::ChannelList/ChannelEvents/ChannelUpdate`; `MobileClient::list_channels()` and `fetch_channel_events(id, since_seq)`.
   - Live-push: daemon spawns a `watch_channels` watcher; broadcasts `channel.updated` events to all connected phones via `tokio::sync::broadcast`; SDK translates to `MobileEvent::ChannelUpdate`.
+  - v3d-2: Adds the `channel/delegate` A2A method — a delegated specialist runs its turn and **signs+writes its own** reply (`Agent{self}`) into the shared channel; the concierge dials `channel/delegate` instead of `message/send` and no longer mediates/signs the specialist's reply. Verify-on-fold is now **per-actor** (each event verified against its actor's `<mur_home>/agents/<id>` key) via `mur-core::channel_verify`.
 
 ## Release Process
 
