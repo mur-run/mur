@@ -47,6 +47,9 @@ struct MobileState {
     pair_token: String,
     paired: Arc<Mutex<HashSet<String>>>,
     paired_path: PathBuf,
+    /// Broadcast channel used to push `channel.updated` events to all
+    /// connected phones while they're online.
+    chan_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 impl MobileState {
@@ -92,11 +95,27 @@ async fn run_server(mur_home: PathBuf, pair_token: String) -> Result<()> {
 
     let paired_path = mur_core::mobile::paired_devices_path(&mur_home);
     let paired = load_paired(&paired_path);
+
+    let (chan_tx, _chan_rx) = tokio::sync::broadcast::channel::<String>(256);
+    {
+        let tx = chan_tx.clone();
+        let home = mur_home.clone();
+        std::thread::spawn(move || {
+            match mur_channel::watch::watch_channels(&home, move |channel_id| {
+                let _ = tx.send(channel_id);
+            }) {
+                Ok(w) => std::mem::forget(w),
+                Err(e) => tracing::warn!("mobile channel watcher failed: {e:#}"),
+            }
+        });
+    }
+
     let state = MobileState {
         mur_home,
         pair_token,
         paired: Arc::new(Mutex::new(paired)),
         paired_path,
+        chan_tx,
     };
 
     let app = router(state);
@@ -159,8 +178,27 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
     // 2. Application loop. Audio stream state is per-connection (one utterance
     //    at a time; a new AudioStreamStart resets the accumulator).
     let mut audio_buf: Vec<u8> = Vec::new();
+    let mut chan_rx = state.chan_tx.subscribe();
 
-    while let Some(txt) = recv_text(&mut socket).await {
+    loop {
+        let txt = tokio::select! {
+            txt = recv_text(&mut socket) => {
+                match txt {
+                    Some(t) => t,
+                    None => break,
+                }
+            }
+            Ok(channel_id) = chan_rx.recv() => {
+                let _ = send_frame(
+                    &mut socket,
+                    &ServerFrame::Event {
+                        name: "channel.updated".into(),
+                        payload: serde_json::json!({ "channel_id": channel_id }),
+                    },
+                ).await;
+                continue;
+            }
+        };
         let frame = match serde_json::from_str::<ClientFrame>(&txt) {
             Ok(f) => f,
             Err(e) => {
@@ -212,6 +250,27 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                     Ok(bytes) => audio_buf.extend_from_slice(&bytes),
                     Err(e) => tracing::warn!(error = %e, "mobile: bad audio chunk base64"),
                 }
+            }
+
+            ClientFrame::ChannelQuery {
+                op,
+                channel_id,
+                since_seq,
+            } => {
+                let home = state.mur_home.clone();
+                let payload = mur_core::mobile::channel_query(&home, &op, channel_id, since_seq)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(error = %e, "mobile: channel_query failed");
+                        serde_json::Value::Array(vec![])
+                    });
+                let _ = send_frame(
+                    &mut socket,
+                    &ServerFrame::ChannelData {
+                        op: op.clone(),
+                        payload,
+                    },
+                )
+                .await;
             }
 
             ClientFrame::AudioStreamEnd => {
@@ -341,6 +400,14 @@ async fn handle_agent_turn(
         "mobile.reply",
         &json!({ "text": reply_text }),
     );
+    if !reply_text.starts_with("[error]") {
+        mur_core::mobile::persist_mobile_exchange(
+            state.mur_home.as_path(),
+            agent,
+            user_text,
+            &reply_text,
+        );
+    }
     if send_frame(
         socket,
         &ServerFrame::Event {
@@ -512,11 +579,13 @@ mod tests {
     async fn start_server(token: &str) -> (SocketAddr, TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().to_path_buf();
+        let (chan_tx, _) = tokio::sync::broadcast::channel(8);
         let state = MobileState {
             mur_home: home.clone(),
             pair_token: token.to_string(),
             paired: Arc::new(Mutex::new(HashSet::new())),
             paired_path: mur_core::mobile::paired_devices_path(&home),
+            chan_tx,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

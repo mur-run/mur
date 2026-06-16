@@ -54,6 +54,29 @@ pub struct MobileConfig {
     pub relay_base_url: Option<String>,
 }
 
+/// A channel summary row returned by `list_channels`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ChannelListItem {
+    pub id: String,
+    pub title: String,
+    pub state: String,
+    pub goal: String,
+    pub updated_at: String,
+    pub agents: Vec<String>,
+    pub turns: u32,
+}
+
+/// A single channel event returned by `fetch_channel_events`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ChannelEventItem {
+    pub seq: u64,
+    pub ts: String,
+    pub actor_kind: String,
+    pub actor_name: String,
+    pub kind: String,
+    pub text: String,
+}
+
 /// Events pushed to the foreign listener. The connection lifecycle and the
 /// conversation both flow through this single stream.
 #[derive(Debug, Clone, uniffi::Enum)]
@@ -81,6 +104,15 @@ pub enum MobileEvent {
         sample_rate: u32,
         done: bool,
     },
+    /// Response to `list_channels()`. Arrives async; update the channel list UI.
+    ChannelList { channels: Vec<ChannelListItem> },
+    /// Response to `fetch_channel_events()`. Arrives async.
+    ChannelEvents {
+        channel_id: String,
+        events: Vec<ChannelEventItem>,
+    },
+    /// The daemon notified us that a channel was updated (live-push).
+    ChannelUpdate { channel_id: String },
 }
 
 /// Foreign-implemented sink for [`MobileEvent`]s. Swift/Kotlin provide this.
@@ -247,6 +279,26 @@ impl MobileClient {
     /// Tear down the current connection.
     pub fn disconnect(&self) {
         self.send_cmd(Command::Disconnect);
+    }
+
+    /// Request the full channel list. The response arrives as
+    /// [`MobileEvent::ChannelList`] via the listener.
+    pub fn list_channels(&self) {
+        self.send_cmd(Command::ChannelQuery {
+            op: "list".into(),
+            channel_id: None,
+            since_seq: None,
+        });
+    }
+
+    /// Request events for a specific channel, optionally from `since_seq`
+    /// (inclusive). Response arrives as [`MobileEvent::ChannelEvents`].
+    pub fn fetch_channel_events(&self, channel_id: String, since_seq: Option<u64>) {
+        self.send_cmd(Command::ChannelQuery {
+            op: "events".into(),
+            channel_id: Some(channel_id),
+            since_seq,
+        });
     }
 }
 
