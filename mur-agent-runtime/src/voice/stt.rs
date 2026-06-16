@@ -90,18 +90,43 @@ impl WhisperStt {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        // Language selection. The bundled model (large-v3-turbo) is multilingual,
-        // so default to auto-detection (`None`) — Whisper detects the spoken
-        // language and transcribes in it (Chinese stays Chinese, etc.). Forcing a
-        // single language here is what previously coerced all speech to English.
-        // `MUR_STT_LANGUAGE` overrides: a code like "zh"/"en" pins that language;
-        // unset / empty / "auto" means auto-detect.
-        let stt_lang_env = std::env::var("MUR_STT_LANGUAGE").ok();
-        let stt_lang: Option<&str> = stt_lang_env
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"));
-        params.set_language(stt_lang);
+        // Language + script follow the DEVICE locale, never a hard-coded value.
+        // Precedence: `MUR_STT_LANGUAGE` override > the OS locale (sys-locale).
+        // A tag like "zh-Hant-TW" maps to Whisper language "zh"; for Traditional
+        // locales (script "Hant" or region TW/HK/MO) we also seed a Traditional
+        // `initial_prompt` so the decoder emits 繁體 rather than 简体 (Whisper's
+        // "zh" defaults to Simplified). Empty / "auto" => auto-detect.
+        let locale = std::env::var("MUR_STT_LANGUAGE")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(sys_locale::get_locale)
+            .filter(|s| !s.eq_ignore_ascii_case("auto"));
+
+        let lang: Option<String> = locale.as_deref().and_then(|l| {
+            l.split(['-', '_'])
+                .next()
+                .map(|s| s.to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+        });
+        let want_traditional = lang.as_deref() == Some("zh")
+            && locale
+                .as_deref()
+                .map(|l| {
+                    let lc = l.to_ascii_lowercase();
+                    lc.contains("hant")
+                        || ["tw", "hk", "mo"]
+                            .iter()
+                            .any(|r| lc.contains(&format!("-{r}")) || lc.contains(&format!("_{r}")))
+                })
+                .unwrap_or(false);
+
+        params.set_language(lang.as_deref());
+        if want_traditional {
+            // Seed Traditional characters so the decoder doesn't fall back to 简体.
+            params.set_initial_prompt("以下是繁體中文的內容。");
+        }
+        tracing::info!(?locale, ?lang, want_traditional, "STT language resolved");
 
         state.full(params, samples).context("whisper inference")?;
 
