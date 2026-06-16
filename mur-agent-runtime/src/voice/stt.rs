@@ -90,8 +90,18 @@ impl WhisperStt {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        // TODO(i18n): derive from agent locale config rather than hard-coding English
-        params.set_language(Some("en"));
+        // Language selection. The bundled model (large-v3-turbo) is multilingual,
+        // so default to auto-detection (`None`) — Whisper detects the spoken
+        // language and transcribes in it (Chinese stays Chinese, etc.). Forcing a
+        // single language here is what previously coerced all speech to English.
+        // `MUR_STT_LANGUAGE` overrides: a code like "zh"/"en" pins that language;
+        // unset / empty / "auto" means auto-detect.
+        let stt_lang_env = std::env::var("MUR_STT_LANGUAGE").ok();
+        let stt_lang: Option<&str> = stt_lang_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"));
+        params.set_language(stt_lang);
 
         state.full(params, samples).context("whisper inference")?;
 
