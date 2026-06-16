@@ -1,5 +1,6 @@
 //! A2A method handlers.
 pub mod card;
+pub mod channel_delegate;
 pub mod message_send;
 pub mod skills;
 pub mod tasks;

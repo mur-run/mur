@@ -173,14 +173,15 @@ async fn wait_for_response(
     // (fail-closed). When false, an unsigned response is still accepted so
     // pre-v3d channels keep working (migration-safe). This fn reads no global
     // config itself, so it is race-free under multi-threaded `cargo test`.
-    let writer_pubkey =
-        mur_channel::sign::resolve_writer_pubkey(&mur_home.join("agents").join(ROUTER_AGENT), None);
     let start = Instant::now();
     loop {
-        // Open, read, drop — then await the sleep. Verify each candidate's
-        // signature against the router's writer pubkey BEFORE trusting it: a
-        // forged/unsigned-when-required HitlResponse is ignored (filtered out)
-        // so it can never release the gate — the loop keeps waiting.
+        // Open, read, drop — then await the sleep. Verify each candidate per
+        // its OWN actor's key (v3d-2): `crate::channel_verify::verify_event`
+        // resolves the signing pubkey from the event's actor (Agent{id} → that
+        // agent's home; System/Human → the router), so a delegated specialist's
+        // self-signed reply verifies against ITS key — not a single writer's.
+        // A forged/unsigned-when-required HitlResponse fails verification, is
+        // filtered out, and can never release the gate — the loop keeps waiting.
         let found = {
             let svc = ChannelService::open(mur_home)?;
             let evs = svc.load_events(channel_id)?;
@@ -190,34 +191,15 @@ async fn wait_for_response(
                 {
                     return false;
                 }
-                // Resolve the pubkey for THIS event's key_version; fall back to
-                // the head pubkey resolved once above.
-                let pk = mur_channel::sign::resolve_writer_pubkey(
-                    &mur_home.join("agents").join(ROUTER_AGENT),
-                    e.key_version,
-                )
-                .or(writer_pubkey);
-                match pk {
-                    Some(pk) if !mur_channel::sign::verify_one(channel_id, e, &pk, require) => {
-                        tracing::warn!(
-                            channel_id,
-                            hitl_id,
-                            "HitlResponse failed signature verification — ignoring"
-                        );
-                        false
-                    }
-                    // No pubkey to verify against (no router identity on disk):
-                    // only fail-closed when sigs are required.
-                    None if require => {
-                        tracing::warn!(
-                            channel_id,
-                            hitl_id,
-                            "no router pubkey and MUR_CHANNEL_REQUIRE_SIG set — ignoring HitlResponse"
-                        );
-                        false
-                    }
-                    _ => true,
+                if !crate::channel_verify::verify_event(mur_home, channel_id, e, require) {
+                    tracing::warn!(
+                        channel_id,
+                        hitl_id,
+                        "HitlResponse failed per-actor signature verification — ignoring"
+                    );
+                    return false;
                 }
+                true
             })
         };
         if let Some(resp) = found {

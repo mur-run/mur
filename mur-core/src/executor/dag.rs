@@ -69,11 +69,21 @@ fn idem_key(channel_id: &str, run_id: &str, step_id: &str, suffix: &str) -> Stri
     format!("{:x}", h.finalize())
 }
 
-/// Build the `message/send` params for a delegated sub-goal.
-fn build_delegate_params(text: &str, child_task_id: &str) -> serde_json::Value {
+/// Build the `channel/delegate` params for a delegated sub-goal (v3d-2).
+///
+/// `idempotency_key` is the deterministic `reply_key`: the specialist signs its
+/// own reply Message with it so re-dials fold instead of duplicating.
+fn build_channel_delegate_params(
+    text: &str,
+    channel_id: &str,
+    child_task_id: &str,
+    idempotency_key: &str,
+) -> serde_json::Value {
     serde_json::json!({
         "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] },
+        "channel_id": channel_id,
         "task_id": child_task_id,
+        "idempotency_key": idempotency_key,
     })
 }
 
@@ -410,7 +420,8 @@ async fn execute_step(
         }
     }
 
-    // ── Delegation (v3b): dial a specialist over A2A, attribute the reply ──
+    // ── Delegation (v3d-2): dial a specialist via `channel/delegate`; the
+    // specialist runs the turn AND writes+signs its own reply Message ──
     if let (Some(target), Some(cid)) = (step.delegate_to.as_deref(), opts.channel_id.as_deref()) {
         let start = std::time::Instant::now();
         let canonical = crate::a2a_dial::canonicalize_agent_name(mur_home, target);
@@ -441,58 +452,30 @@ async fn execute_step(
         }
         eprintln!("  Step {sid}: delegate → {canonical}: {goal_text}");
 
-        let params = build_delegate_params(&goal_text, &child_task_id);
-        // RequireRunning is enforced by dial_message_streaming (it bails if the
-        // target has no running.lock). We surface a specialist HITL as a mirror
-        // event only — interactive relay is v3c.
-        let home_for_hitl = mur_home.to_path_buf();
-        let cid_for_hitl = cid.to_string();
-        let dial = crate::a2a_dial::dial_message_streaming(
+        // v3d-2 (A2 "peer-writes-own"): delegate via the runtime's
+        // `channel/delegate` method. The specialist runs the turn AND appends
+        // its OWN signed `Agent{self}` reply Message to the channel, signed with
+        // the deterministic `reply_key` as idempotency key. We no longer append
+        // the reply on the router's behalf.
+        //
+        // NOTE: `dial_method` is non-streaming, so the v3c streaming HITL relay
+        // (the on_hitl mirror closure) is intentionally dropped here. If the
+        // specialist gates, it appends its own HitlRequest mirror; a lost
+        // *interactive* streaming relay is acceptable for v3d-2 (FLAGGED).
+        let params = build_channel_delegate_params(&goal_text, cid, &child_task_id, &reply_key);
+        let dial = crate::a2a_dial::dial_method(
             mur_home,
             &canonical,
+            "channel/delegate",
             params,
-            |_t, _thinking, _tid| { /* deltas buffered into the final snapshot */ },
-            |hitl_params| {
-                // Mirror the specialist's approval request into the channel for
-                // visibility. v3c adds the interactive resolution path.
-                if let Ok(svc) = ChannelService::open(&home_for_hitl) {
-                    let _ = crate::channel_writer::append_as_writer(
-                        &svc,
-                        &home_for_hitl,
-                        &cid_for_hitl,
-                        ROUTER_AGENT,
-                        ChannelActor::System,
-                        mur_common::channel::EventKind::HitlRequest,
-                        serde_json::json!({ "mirror": true, "from": "delegate", "params": hitl_params }),
-                        None,
-                    );
-                }
-            },
+            crate::a2a_dial::DialMode::RequireRunning,
         );
 
         let result = match dial {
             Ok(task) => {
+                // Reply text is extracted ONLY to fill StepResult.output_text —
+                // the specialist already wrote+signed the reply Message itself.
                 let reply = extract_agent_reply(&task);
-                // Attribute the reply to the dialed agent; store the raw task
-                // snapshot alongside so attribution is auditable, not just asserted.
-                if let Ok(svc) = ChannelService::open(mur_home) {
-                    let _ = crate::channel_writer::append_as_writer(
-                        &svc,
-                        mur_home,
-                        cid,
-                        ROUTER_AGENT,
-                        ChannelActor::Agent {
-                            id: canonical.clone(),
-                        },
-                        mur_common::channel::EventKind::Message,
-                        serde_json::json!({
-                            "text": reply,
-                            "task_id": child_task_id,
-                            "source_task": task,
-                        }),
-                        Some(reply_key),
-                    );
-                }
                 let empty = reply.trim().is_empty();
                 StepResult {
                     exit_code: if empty { 1 } else { 0 },
@@ -924,9 +907,14 @@ mod tests {
     }
 
     #[test]
-    fn build_delegate_params_threads_text_and_task_id() {
-        let p = build_delegate_params("find the bug", "child-1");
+    fn channel_delegate_params_thread_goal_channel_task_and_idem_key() {
+        // v3d-2: the concierge delegates via `channel/delegate`, threading the
+        // channel id + the deterministic reply_key (as idempotency_key) so the
+        // specialist signs its OWN reply Message and re-dials fold.
+        let p = build_channel_delegate_params("find the bug", "chan-1", "child-1", "rk-deadbeef");
+        assert_eq!(p["channel_id"], "chan-1");
         assert_eq!(p["task_id"], "child-1");
+        assert_eq!(p["idempotency_key"], "rk-deadbeef");
         assert_eq!(p["message"]["role"], "user");
         assert_eq!(p["message"]["parts"][0]["text"], "find the bug");
     }

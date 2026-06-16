@@ -323,6 +323,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         &mur_home,
         sock_notif_tx.clone(),
         pending_approvals,
+        &identity,
+        &profile.inner.name,
+        profile.inner.identity.key_version,
     ));
 
     // 7. Transports
@@ -750,18 +753,34 @@ impl crate::protocol::a2a_server::MethodHandler for HitlTestRequestHandler {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_dispatcher(
     profile: &Arc<Profile>,
     runner: &Arc<TaskRunner>,
     mur_home: &Path,
     notifier: tokio::sync::mpsc::Sender<serde_json::Value>,
     pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>>,
+    identity: &Arc<AgentIdentity>,
+    agent_name: &str,
+    key_version: u32,
 ) -> Dispatcher {
     let mut d = Dispatcher::new();
     d.register("agent/card", Box::new(CardHandler::new(profile.clone())));
     d.register(
         "message/send",
         Box::new(MessageSendHandler::new(runner.clone()).with_streaming(notifier.clone())),
+    );
+    d.register(
+        "channel/delegate",
+        Box::new(
+            crate::protocol::methods::channel_delegate::ChannelDelegateHandler::new(
+                runner.clone(),
+                identity.clone(),
+                agent_name.to_string(),
+                key_version,
+                mur_home.to_path_buf(),
+            ),
+        ),
     );
     d.register("tasks/get", Box::new(TasksGetHandler::new(runner.clone())));
     d.register(

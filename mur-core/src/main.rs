@@ -7,6 +7,7 @@ mod agent_wizard;
 mod auth;
 mod bridge_keychain;
 mod capture;
+mod channel_verify;
 mod channel_writer;
 mod codebase;
 // `--format card` is a D4 milestone; M2.7 only ships the schema + helper
