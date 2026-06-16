@@ -77,6 +77,13 @@ pub async fn gate(
         HitlMode::Ask => {
             let hitl_id = format!("hitl-{}", uuid::Uuid::now_v7());
             let timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
+            // Resolve signature-enforcement ONCE here (not deep in the poll
+            // loop) so `wait_for_response` is pure w.r.t. config and tests never
+            // race on a process-global env var. Only explicit truthy values
+            // enable enforcement: `=0` / `=false` must NOT turn it on.
+            let require_sig = std::env::var("MUR_CHANNEL_REQUIRE_SIG")
+                .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
+                .unwrap_or(false);
             let request = HitlRequest {
                 hitl_id: hitl_id.clone(),
                 action_hash: hash.clone(),
@@ -137,7 +144,8 @@ pub async fn gate(
                     action_hash: hash.clone(),
                 }
             } else {
-                wait_for_response(mur_home, channel_id, &hitl_id, &hash, timeout).await?
+                wait_for_response(mur_home, channel_id, &hitl_id, &hash, require_sig, timeout)
+                    .await?
             };
 
             {
@@ -157,12 +165,14 @@ async fn wait_for_response(
     channel_id: &str,
     hitl_id: &str,
     expected_hash: &str,
+    require: bool,
     timeout: Duration,
 ) -> Result<GateDecision> {
-    // When set, an unsigned (or absent-pubkey) HitlResponse is NOT trusted
-    // (fail-closed). When unset, an unsigned response is still accepted so
-    // pre-v3d channels keep working (migration-safe).
-    let require = std::env::var("MUR_CHANNEL_REQUIRE_SIG").is_ok();
+    // `require` (resolved once by the caller from `MUR_CHANNEL_REQUIRE_SIG`):
+    // when true, an unsigned (or absent-pubkey) HitlResponse is NOT trusted
+    // (fail-closed). When false, an unsigned response is still accepted so
+    // pre-v3d channels keep working (migration-safe). This fn reads no global
+    // config itself, so it is race-free under multi-threaded `cargo test`.
     let writer_pubkey =
         mur_channel::sign::resolve_writer_pubkey(&mur_home.join("agents").join(ROUTER_AGENT), None);
     let start = Instant::now();
@@ -332,6 +342,7 @@ mod tests {
             &ch.id,
             "h-x",
             "EXPECTED",
+            false,
             std::time::Duration::from_secs(1),
         )
         .await
@@ -386,6 +397,7 @@ mod tests {
             &ch.id,
             "h-ok",
             "EXPECTED",
+            false,
             std::time::Duration::from_secs(1),
         )
         .await
@@ -424,6 +436,7 @@ mod tests {
             &ch.id,
             "h-forge",
             "EXPECTED",
+            false,
             std::time::Duration::from_millis(900),
         )
         .await
@@ -435,13 +448,12 @@ mod tests {
         assert!(d.reason.contains("timeout"), "ignored → waits → times out");
     }
 
-    /// With `MUR_CHANNEL_REQUIRE_SIG` set, an UNSIGNED response is ignored
-    /// (fail-closed) even though `allow:true` — it cannot release the gate.
+    /// With signature enforcement on (`require = true`), an UNSIGNED response is
+    /// ignored (fail-closed) even though `allow:true` — it cannot release the
+    /// gate. Passing `require` as a parameter keeps this test free of any
+    /// process-global env mutation, so it never races sibling tests.
     #[tokio::test]
     async fn unsigned_when_required_does_not_release() {
-        // SAFETY: env is process-global; nextest runs each test in its own
-        // process. Set then clear to avoid leaking into a shared-process runner.
-        unsafe { std::env::set_var("MUR_CHANNEL_REQUIRE_SIG", "1") };
         let tmp = TempDir::new().unwrap();
         let _router = plant_router_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
@@ -461,14 +473,14 @@ mod tests {
             &ch.id,
             "h-unsigned",
             "EXPECTED",
+            true,
             std::time::Duration::from_millis(900),
         )
         .await
         .unwrap();
-        unsafe { std::env::remove_var("MUR_CHANNEL_REQUIRE_SIG") };
         assert!(
             !d.allow,
-            "unsigned response must not release when MUR_CHANNEL_REQUIRE_SIG is set"
+            "unsigned response must not release when signatures are required"
         );
     }
 }

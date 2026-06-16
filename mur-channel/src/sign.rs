@@ -4,6 +4,12 @@
 //! restamps `ts` under the append lock), so the caller can sign BEFORE append.
 //! Verify-on-fold recomputes this input and checks `sig` against the writer's
 //! pubkey at `key_version` (resolved via the rotation chain).
+//!
+//! Enforcement scope (v3d-1): verification is enforced ONLY at the HITL gate
+//! (`mur-core::hitl::gate` via [`verify_one`]); `load_events` does NOT verify on
+//! every read. [`verify_log`] is the provided read-path verify-on-fold
+//! primitive, but wiring it into `load_events` needs a per-channel
+//! writer-resolution policy and is deferred to v3d-2.
 
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::identity::AgentIdentity;
@@ -130,9 +136,14 @@ pub fn resolve_writer_pubkey(agent_home: &Path, key_version: Option<u32>) -> Opt
     decode_pubkey(txt.trim()).ok()
 }
 
-/// Verify-on-fold: filter a log to the events that pass verification against the
-/// channel's writer. Forged (bad-sig) events are dropped + logged; unsigned
-/// events pass only when `!require_sig`.
+/// Verify-on-fold primitive: filter a log to the events that pass verification
+/// against the channel's writer. Forged (bad-sig) events are dropped + logged;
+/// unsigned events pass only when `!require_sig`.
+///
+/// NOTE (v3d-1): this is NOT yet wired into `load_events` — v3d-1 enforces
+/// verification only at the HITL gate (via [`verify_one`]). Wiring this into the
+/// read path requires a per-channel writer-resolution policy and is deferred to
+/// v3d-2. It is exercised by this module's unit test, so it is not dead code.
 pub fn verify_log(
     channel_id: &str,
     events: Vec<ChannelEvent>,
