@@ -14,7 +14,7 @@ struct MurVoiceApp: App {
         }
     }
 
-    /// Handles `mur://pair?host=HOST&port=PORT&token=TOKEN&agent=AGENT`
+    /// Handles `mur://pair?host=HOST&port=PORT&token=TOKEN&agent=AGENT[&wid=…&did=…]`
     private func handleURL(_ url: URL) {
         print("[MurVoice] handleURL: \(url.absoluteString)")
         guard url.scheme == "mur",
@@ -26,6 +26,15 @@ struct MurVoiceApp: App {
         })
         guard let host = q["host"], let portStr = q["port"],
               let port = UInt16(portStr), let token = q["token"] else { return }
-        model.connect(host: host, port: port, token: token)
+        // Reconstruct a mur-pair:// URI so wid/did (when present) flow through the
+        // proof handshake; PairingInfo falls back to legacy when they're absent.
+        var uri = "mur-pair://\(host):\(port)/?token=\(token)&agent=\(q["agent"] ?? "mur")"
+        if let wid = q["wid"] { uri += "&wid=\(wid)" }
+        if let did = q["did"] { uri += "&did=\(did)" }
+        if let info = PairingInfo(uri: uri) {
+            model.pair(info)
+        } else {
+            model.connect(host: host, port: port, token: token)
+        }
     }
 }
