@@ -18,6 +18,7 @@ pub mod event;
 pub mod exec;
 pub mod expression;
 pub mod guard;
+pub mod hitl;
 pub mod hooks_config;
 pub mod hub;
 pub mod identity;

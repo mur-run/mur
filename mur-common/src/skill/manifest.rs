@@ -259,6 +259,19 @@ pub struct ProcedureStep {
     /// auto-approves (v2 decision #5). Wired by the P3 executor.
     #[serde(default)]
     pub needs_approval: bool,
+
+    /// Delegate this step's sub-goal to a specialist MUR agent over A2A
+    /// (v3b, Channel mode). When set, the channel-aware executor dials this
+    /// agent via `message/send` instead of running `command`/`intent`, and
+    /// attributes the reply to `Agent{<canonical agent name>}` in the channel.
+    /// Ignored when the executor runs without a channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate_to: Option<String>,
+
+    /// Risk tier for this step (v3c). When set on a command/delegate step run
+    /// over a channel, the executor gates it via `hitl::gate` per tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<crate::hitl::RiskTier>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -324,6 +337,16 @@ needs_approval: true
         assert!(legacy.depends_on.is_empty());
         assert_eq!(legacy.on_failure, FailureAction::Abort);
         assert!(!legacy.needs_approval);
+    }
+
+    #[test]
+    fn procedure_step_parses_delegate_to() {
+        let yaml = "description: hand off to qa\ndelegate_to: qa\n";
+        let s: ProcedureStep = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(s.delegate_to.as_deref(), Some("qa"));
+        // Absent → None (every existing skill.yaml still parses).
+        let s2: ProcedureStep = serde_yaml_ng::from_str("description: local step\n").unwrap();
+        assert_eq!(s2.delegate_to, None);
     }
 
     #[test]

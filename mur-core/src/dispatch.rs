@@ -9,10 +9,10 @@ use clap::CommandFactory;
 use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPendingAction,
     AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction, AgentSecretAction,
-    AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction, ChatAction, Cli, Commands,
-    ConversationsAction, DaemonAction, DeployAction, DraftsAction, EvalAction, ExchangeAction,
-    HookEvent, InternalsAction, MurmurdAction, ProjectAction, ScheduleAction, SessionAction,
-    SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction, ChannelAction, ChatAction,
+    Cli, Commands, ConversationsAction, DaemonAction, DeployAction, DraftsAction, EvalAction,
+    ExchangeAction, HookEvent, InternalsAction, MurmurdAction, ProjectAction, ScheduleAction,
+    SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -170,6 +170,16 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
             WorkflowAction::Install { name, from } => {
                 cmd::workflow::cmd_workflow_install(&name, &from)?
+            }
+        },
+        Commands::Channel { action } => match action {
+            ChannelAction::Approve {
+                channel_id,
+                hitl_id,
+                deny,
+                reason,
+            } => {
+                cmd::channel::approve(&channel_id, &hitl_id, deny, reason)?;
             }
         },
         // Deprecated: use `mur internals reindex`

@@ -540,6 +540,10 @@ pub enum ToolPolicy {
 pub struct ToolRule {
     pub pattern: String,
     pub policy: ToolPolicy,
+    /// Intrinsic risk tier of this tool (v3c). Resolved most-restrictive-wins
+    /// against per-step risk + channel policy; gates pre-execution when not Read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<crate::hitl::RiskTier>,
 }
 
 /// Resolve the effective policy for `tool_name` against an ordered rule list.
@@ -1741,18 +1745,22 @@ mod tool_policy_tests {
             ToolRule {
                 pattern: "mcp__github__merge_pr".into(),
                 policy: ToolPolicy::Ask,
+                risk: None,
             },
             ToolRule {
                 pattern: "mcp__github__*".into(),
                 policy: ToolPolicy::Allow,
+                risk: None,
             },
             ToolRule {
                 pattern: "mcp__*".into(),
                 policy: ToolPolicy::Deny,
+                risk: None,
             },
             ToolRule {
                 pattern: "bash".into(),
                 policy: ToolPolicy::Allow,
+                risk: None,
             },
         ]
     }

@@ -167,6 +167,23 @@ pub enum InternalsAction {
 }
 
 #[derive(Subcommand)]
+pub enum ChannelAction {
+    /// Approve (or deny) a pending HITL gate on a channel (v3c)
+    Approve {
+        /// Channel ID
+        channel_id: String,
+        /// HITL request ID (from the HitlRequest event)
+        hitl_id: String,
+        /// Deny instead of approve
+        #[arg(long)]
+        deny: bool,
+        /// Optional reason recorded in the HitlResponse
+        #[arg(long)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum WorkflowAction {
     /// Run a workflow by name or semantic query
     Run {

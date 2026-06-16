@@ -10,6 +10,16 @@ use mur_common::channel::{
 use crate::index::{ChannelIndex, ChannelRow};
 use crate::store::ChannelStore;
 
+/// Typed payload for an [`EventKind::Delegation`] event. The concierge owns
+/// `child_task_id` (the A2A task id it gave the dialed agent) and stamps the
+/// canonical `target_agent` name.
+#[derive(serde::Serialize)]
+struct DelegationPayload<'a> {
+    target_agent: &'a str,
+    child_task_id: &'a str,
+    parent_channel_id: &'a str,
+}
+
 /// The single API both the CLI and the Hub call. Keeps the log + the index in
 /// sync on every mutation.
 fn state_str(s: ChannelState) -> &'static str {
@@ -135,6 +145,30 @@ impl ChannelService {
         Ok(ev)
     }
 
+    /// Append a `Delegation` event (actor `System`) recording that `target_agent`
+    /// was handed the sub-goal under `child_task_id`. `idempotency_key` is set by
+    /// the caller (deterministic in v3b) but NOT yet de-duplicated (v3c).
+    pub fn append_delegation(
+        &self,
+        channel_id: &str,
+        target_agent: &str,
+        child_task_id: &str,
+        idempotency_key: Option<String>,
+    ) -> Result<ChannelEvent> {
+        let payload = serde_json::to_value(DelegationPayload {
+            target_agent,
+            child_task_id,
+            parent_channel_id: channel_id,
+        })?;
+        self.append(
+            channel_id,
+            ChannelActor::System,
+            EventKind::Delegation,
+            payload,
+            idempotency_key,
+        )
+    }
+
     /// Emit a `StateChange` event and persist the new state on the manifest.
     pub fn transition(
         &self,
@@ -200,6 +234,22 @@ impl ChannelService {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn append_delegation_writes_typed_event() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("delegating-wf").unwrap();
+        let ev = svc
+            .append_delegation(&ch.id, "qa", "child-task-1", Some("idem-1".into()))
+            .unwrap();
+        assert_eq!(ev.kind, EventKind::Delegation);
+        assert_eq!(ev.actor, ChannelActor::System);
+        assert_eq!(ev.payload["target_agent"], "qa");
+        assert_eq!(ev.payload["child_task_id"], "child-task-1");
+        assert_eq!(ev.payload["parent_channel_id"], ch.id);
+        assert_eq!(ev.idempotency_key.as_deref(), Some("idem-1"));
+    }
 
     #[test]
     fn append_structured_and_transition() {

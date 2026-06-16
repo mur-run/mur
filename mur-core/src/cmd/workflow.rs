@@ -205,6 +205,7 @@ pub(crate) async fn cmd_workflow_run(
                                 device_id: "cli".to_string(),
                                 trigger: "manual",
                                 channel_id,
+                                run_id: format!("run-{}", uuid::Uuid::now_v7()),
                                 ..Default::default()
                             };
                             let output = crate::executor::dag::execute_dag(

@@ -27,7 +27,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Schema version for the manifest + event log; breaking changes bump this.
-pub const CHANNEL_SCHEMA_VERSION: u32 = 1;
+/// v2: `HitlResponse` events carry approval authority — a reader that silently
+/// skips one could re-apply a gated effect (v3c).
+pub const CHANNEL_SCHEMA_VERSION: u32 = 2;
 
 /// A2A v0.3 lifecycle vocabulary, serialized on the wire as kebab-case
 /// (`input-required`, `canceled`, etc.).

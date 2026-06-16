@@ -244,6 +244,7 @@ pub fn cmd_perm_set_tool(name: &str, policy: ToolPolicy, pattern: &str) -> Resul
         rules.push(ToolRule {
             pattern: pattern.to_string(),
             policy,
+            risk: None,
         });
     }
     save_profile(&path, &mut profile)?;
