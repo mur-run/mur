@@ -7,69 +7,42 @@ struct ContentView: View {
     @State private var draft = ""
 
     var body: some View {
-        mainContent
-            .scrollDismissesKeyboard(.interactively)
-            .sheet(isPresented: $showPairing) {
-                PairingSheet { info in
-                    model.connect(host: info.host, port: info.port, token: info.token)
-                }
-            }
-            .sheet(isPresented: $showSettings) {
-                SettingsSheet()
-            }
-            .onAppear { model.start() }
-    }
-
-    @ViewBuilder private var mainContent: some View {
-        if model.transcript.isEmpty {
-            // Empty state: mascot centred, PTT + typeBar pinned bottom.
-            VStack(spacing: 0) {
-                header.padding([.horizontal, .top])
-                Spacer(minLength: 0)
-                VStack(spacing: 14) {
-                    StarlingMascot(state: model.mascot, micLevel: model.micLevel)
-                    if !model.isConnected {
-                        Text("Tap Pair to connect to MUR")
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
-                    }
-                    statusLine
-                }
-                Spacer(minLength: 40)
-                OrangeButton(
-                    state: model.mascot,
-                    micMode: model.micMode,
-                    onPressStart: { model.beginCapture() },
-                    onPressEnd: { model.endCaptureAndSend() },
-                    onTripleTap: { model.toggleMicMode() }
-                )
-                .padding(.bottom, 8)
-                typeBar
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .padding(.bottom, 16)
-            }
-        } else {
-            // Conversation: header + mini-mascot pinned top, transcript scrolls, PTT pinned bottom.
+        NavigationStack {
             ScrollView {
-                VStack(spacing: 8) {
-                    transcriptView
-                    statusLine
+                VStack(spacing: 16) {
+                    // Talk zone (concierge): mascot + status. PTT/typeBar pinned bottom.
+                    VStack(spacing: 12) {
+                        StarlingMascot(state: model.mascot, micLevel: model.micLevel)
+                            .scaleEffect(model.transcript.isEmpty ? 1.0 : 0.6)
+                        statusLine
+                    }
+                    .padding(.top, 8)
+
+                    // Recent concierge turns so the talk zone shows context.
+                    if !model.transcript.isEmpty { transcriptView }
+
+                    Divider().padding(.horizontal)
+
+                    // Channel list (the home's second zone).
+                    HStack {
+                        Text("Channels").font(.headline)
+                        Spacer()
+                        Button { model.refreshChannels() } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(!model.isConnected)
+                    }
+                    .padding(.horizontal)
+                    ChannelListView()
+                        .padding(.horizontal)
                 }
-                .padding()
+                .padding(.vertical, 8)
+            }
+            .navigationDestination(for: String.self) { channelId in
+                ChannelDetailView(channelId: channelId)
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    header
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                    // Mini mascot strip
-                    StarlingMascot(state: model.mascot, micLevel: model.micLevel)
-                        .scaleEffect(0.45)
-                        .frame(height: 60)
-                        .padding(.bottom, 4)
-                }
-                .background(.bar)
+                header.padding(.horizontal).padding(.vertical, 8).background(.bar)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
@@ -87,7 +60,15 @@ struct ContentView: View {
                 }
                 .background(.bar)
             }
+            .scrollDismissesKeyboard(.interactively)
         }
+        .sheet(isPresented: $showPairing) {
+            PairingSheet { info in
+                model.connect(host: info.host, port: info.port, token: info.token)
+            }
+        }
+        .sheet(isPresented: $showSettings) { SettingsSheet() }
+        .onAppear { model.start() }
     }
 
     private var header: some View {

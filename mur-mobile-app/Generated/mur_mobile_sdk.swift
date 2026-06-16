@@ -457,6 +457,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -578,6 +594,18 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
      * and streams the TTS reply back as [`MobileEvent::AudioChunk`]s.
      */
     func endAudioStream() 
+    
+    /**
+     * Request events for a specific channel, optionally from `since_seq`
+     * (inclusive). Response arrives as [`MobileEvent::ChannelEvents`].
+     */
+    func fetchChannelEvents(channelId: String, sinceSeq: UInt64?) 
+    
+    /**
+     * Request the full channel list. The response arrives as
+     * [`MobileEvent::ChannelList`] via the listener.
+     */
+    func listChannels() 
     
     /**
      * The phone's multibase Ed25519 public key — encode this into the QR /
@@ -737,6 +765,30 @@ open func endAudioStream()  {try! rustCall() {
 }
     
     /**
+     * Request events for a specific channel, optionally from `since_seq`
+     * (inclusive). Response arrives as [`MobileEvent::ChannelEvents`].
+     */
+open func fetchChannelEvents(channelId: String, sinceSeq: UInt64?)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_fetch_channel_events(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(channelId),
+        FfiConverterOptionUInt64.lower(sinceSeq),$0
+    )
+}
+}
+    
+    /**
+     * Request the full channel list. The response arrives as
+     * [`MobileEvent::ChannelList`] via the listener.
+     */
+open func listChannels()  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_list_channels(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+    
+    /**
      * The phone's multibase Ed25519 public key — encode this into the QR /
      * share so the Mac can add it to the agent's `trusted_peers`.
      */
@@ -828,6 +880,156 @@ public func FfiConverterTypeMobileClient_lower(_ value: MobileClient) -> UInt64 
 }
 
 
+
+
+/**
+ * A single channel event returned by `fetch_channel_events`.
+ */
+public struct ChannelEventItem: Equatable, Hashable {
+    public var seq: UInt64
+    public var ts: String
+    public var actorKind: String
+    public var actorName: String
+    public var kind: String
+    public var text: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(seq: UInt64, ts: String, actorKind: String, actorName: String, kind: String, text: String) {
+        self.seq = seq
+        self.ts = ts
+        self.actorKind = actorKind
+        self.actorName = actorName
+        self.kind = kind
+        self.text = text
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ChannelEventItem: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeChannelEventItem: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ChannelEventItem {
+        return
+            try ChannelEventItem(
+                seq: FfiConverterUInt64.read(from: &buf), 
+                ts: FfiConverterString.read(from: &buf), 
+                actorKind: FfiConverterString.read(from: &buf), 
+                actorName: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterString.read(from: &buf), 
+                text: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ChannelEventItem, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.seq, into: &buf)
+        FfiConverterString.write(value.ts, into: &buf)
+        FfiConverterString.write(value.actorKind, into: &buf)
+        FfiConverterString.write(value.actorName, into: &buf)
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeChannelEventItem_lift(_ buf: RustBuffer) throws -> ChannelEventItem {
+    return try FfiConverterTypeChannelEventItem.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeChannelEventItem_lower(_ value: ChannelEventItem) -> RustBuffer {
+    return FfiConverterTypeChannelEventItem.lower(value)
+}
+
+
+/**
+ * A channel summary row returned by `list_channels`.
+ */
+public struct ChannelListItem: Equatable, Hashable {
+    public var id: String
+    public var title: String
+    public var state: String
+    public var goal: String
+    public var updatedAt: String
+    public var agents: [String]
+    public var turns: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, title: String, state: String, goal: String, updatedAt: String, agents: [String], turns: UInt32) {
+        self.id = id
+        self.title = title
+        self.state = state
+        self.goal = goal
+        self.updatedAt = updatedAt
+        self.agents = agents
+        self.turns = turns
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ChannelListItem: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeChannelListItem: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ChannelListItem {
+        return
+            try ChannelListItem(
+                id: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                state: FfiConverterString.read(from: &buf), 
+                goal: FfiConverterString.read(from: &buf), 
+                updatedAt: FfiConverterString.read(from: &buf), 
+                agents: FfiConverterSequenceString.read(from: &buf), 
+                turns: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ChannelListItem, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterString.write(value.state, into: &buf)
+        FfiConverterString.write(value.goal, into: &buf)
+        FfiConverterString.write(value.updatedAt, into: &buf)
+        FfiConverterSequenceString.write(value.agents, into: &buf)
+        FfiConverterUInt32.write(value.turns, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeChannelListItem_lift(_ buf: RustBuffer) throws -> ChannelListItem {
+    return try FfiConverterTypeChannelListItem.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeChannelListItem_lower(_ value: ChannelListItem) -> RustBuffer {
+    return FfiConverterTypeChannelListItem.lower(value)
+}
 
 
 /**
@@ -958,6 +1160,21 @@ public enum MobileEvent: Equatable, Hashable {
      */
     case audioChunk(data: Data, sampleRate: UInt32, done: Bool
     )
+    /**
+     * Response to `list_channels()`. Arrives async; update the channel list UI.
+     */
+    case channelList(channels: [ChannelListItem]
+    )
+    /**
+     * Response to `fetch_channel_events()`. Arrives async.
+     */
+    case channelEvents(channelId: String, events: [ChannelEventItem]
+    )
+    /**
+     * The daemon notified us that a channel was updated (live-push).
+     */
+    case channelUpdate(channelId: String
+    )
 
 
 
@@ -997,6 +1214,15 @@ public struct FfiConverterTypeMobileEvent: FfiConverterRustBuffer {
         )
         
         case 7: return .audioChunk(data: try FfiConverterData.read(from: &buf), sampleRate: try FfiConverterUInt32.read(from: &buf), done: try FfiConverterBool.read(from: &buf)
+        )
+        
+        case 8: return .channelList(channels: try FfiConverterSequenceTypeChannelListItem.read(from: &buf)
+        )
+        
+        case 9: return .channelEvents(channelId: try FfiConverterString.read(from: &buf), events: try FfiConverterSequenceTypeChannelEventItem.read(from: &buf)
+        )
+        
+        case 10: return .channelUpdate(channelId: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -1044,6 +1270,22 @@ public struct FfiConverterTypeMobileEvent: FfiConverterRustBuffer {
             FfiConverterData.write(data, into: &buf)
             FfiConverterUInt32.write(sampleRate, into: &buf)
             FfiConverterBool.write(done, into: &buf)
+            
+        
+        case let .channelList(channels):
+            writeInt(&buf, Int32(8))
+            FfiConverterSequenceTypeChannelListItem.write(channels, into: &buf)
+            
+        
+        case let .channelEvents(channelId,events):
+            writeInt(&buf, Int32(9))
+            FfiConverterString.write(channelId, into: &buf)
+            FfiConverterSequenceTypeChannelEventItem.write(events, into: &buf)
+            
+        
+        case let .channelUpdate(channelId):
+            writeInt(&buf, Int32(10))
+            FfiConverterString.write(channelId, into: &buf)
             
         }
     }
@@ -1313,6 +1555,30 @@ public func FfiConverterCallbackInterfaceMobileEventListener_lower(_ v: MobileEv
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -1331,6 +1597,81 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
         case 1: return try FfiConverterString.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeChannelEventItem: FfiConverterRustBuffer {
+    typealias SwiftType = [ChannelEventItem]
+
+    public static func write(_ value: [ChannelEventItem], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeChannelEventItem.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ChannelEventItem] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ChannelEventItem]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeChannelEventItem.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeChannelListItem: FfiConverterRustBuffer {
+    typealias SwiftType = [ChannelListItem]
+
+    public static func write(_ value: [ChannelListItem], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeChannelListItem.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ChannelListItem] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ChannelListItem]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeChannelListItem.read(from: &buf))
+        }
+        return seq
     }
 }
 
@@ -1362,6 +1703,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_end_audio_stream() != 16986) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_fetch_channel_events() != 13622) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_list_channels() != 8292) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_public_key() != 61081) {

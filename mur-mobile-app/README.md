@@ -1,4 +1,4 @@
-# MurVoice — iOS app (P2 shell)
+# MurVoice — iOS app
 
 Native SwiftUI app that talks to a local MUR agent over the LAN, with the 椋鳥
 (starling) mascot and the orange "speech" button. Built on `mur-mobile-sdk`
@@ -6,19 +6,28 @@ Native SwiftUI app that talks to a local MUR agent over the LAN, with the 椋鳥
 
 Design: `docs/superpowers/specs/2026-06-05-mur-voice-mobile-app-design.md`.
 
-## Status
+## Status (v4b — concierge-first home)
 
-P2 = the **app shell**. Implemented:
-- SwiftUI layout (mascot → transcript → orange button) — `Sources/`
+Implemented:
+- **Concierge-first home** — two-zone layout: talk affordance (mascot + orange
+  button + type bar) on top; a **Channel list** below showing all durable
+  channels, sorted `input-required` first.
+- **Channel-detail feed** — read-only, per-`EventKind` rendering (user/agent
+  bubbles, notes, state separators, tool disclosure groups, artifact cards).
+  Live-refreshed via `channel.updated` push while connected.
+- **HITL display card** — surfaces `HitlRequest` events with an
+  "Approval needed — respond from the MUR desktop app" card (phone-side
+  approve/deny is deferred to v4c, which needs v3c + a write RPC + v3d signing).
+- SwiftUI `NavigationStack` with `navigationDestination` for channel-detail.
 - Mascot **state machine** (idle/listening/thinking/speaking/error) — placeholder
   SwiftUI bird; the Rive `.riv` swaps in at P5 (inputs already mapped).
 - Orange button: **hold** = push-to-talk, **triple-tap** = hands-free toggle.
 - `MobileClient` wiring + `MobileEventListener` bridge — `AppModel.swift`.
 - **QR pairing**: scan `mur-pair://…` (or enter host/port/token by hand) →
-  `connectLan`. A text field stands in for voice until **P3**.
+  `connectLan`.
 
-Not yet: real audio capture / SFSpeech partials / TTS playback (P3), Rive art
-(P5), relay/off-LAN (P4).
+Deferred: HITL respond/approve on phone (v4c); send into arbitrary channel
+(v4c); APNs push for offline refresh (v4d).
 
 ## Build & run (needs **full Xcode**, not just Command Line Tools)
 

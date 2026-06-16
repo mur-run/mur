@@ -12,10 +12,33 @@ final class AppModel {
         let text: String
     }
 
+    struct ChannelSummary: Identifiable, Equatable {
+        let id: String
+        let title: String
+        let state: String       // kebab ChannelState
+        let goal: String
+        let updatedAt: String
+        let agents: [String]
+        let turns: Int
+    }
+
+    struct ChannelEventVM: Identifiable, Equatable {
+        var id: UInt64 { seq }
+        let seq: UInt64
+        let ts: String
+        let actorKind: String   // "human" | "agent" | "system"
+        let actorName: String
+        let kind: String        // "message" | "state-change" | …
+        let text: String
+    }
+
     private(set) var mascot: MascotState = .offline
     private(set) var micMode: MicMode = .pushToTalk
     private(set) var transcript: [ChatLine] = []
     private(set) var connectedAgent: String?
+    private(set) var channels: [ChannelSummary] = []
+    private(set) var detailChannelId: String?
+    private(set) var detailEvents: [ChannelEventVM] = []
     var partial: String = ""
     var micLevel: Double = 0
 
@@ -175,6 +198,16 @@ final class AppModel {
     func sendTyped(_ text: String) {
         send(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
+
+    func refreshChannels() { client?.listChannels() }
+
+    func openChannel(_ id: String) {
+        detailChannelId = id
+        detailEvents = []
+        client?.fetchChannelEvents(channelId: id, sinceSeq: nil)
+    }
+
+    func closeChannel() { detailChannelId = nil; detailEvents = [] }
 
     func toggleMicMode() {
         micMode = (micMode == .pushToTalk) ? .handsFree : .pushToTalk
@@ -368,6 +401,7 @@ final class AppModel {
         case let .connected(_, agent):
             connectedAgent = agent
             mascot = .idle
+            client?.listChannels()
         case .disconnected:
             connectedAgent = nil
             mascot = .offline
@@ -394,6 +428,20 @@ final class AppModel {
         case let .error(message):
             Haptics.error()
             mascot = .error(message)
+        case let .channelList(channels: items):
+            channels = items.map {
+                ChannelSummary(id: $0.id, title: $0.title, state: $0.state, goal: $0.goal,
+                               updatedAt: $0.updatedAt, agents: $0.agents, turns: Int($0.turns))
+            }
+        case let .channelEvents(channelId, events):
+            guard channelId == detailChannelId else { break }
+            detailEvents = events.map {
+                ChannelEventVM(seq: $0.seq, ts: $0.ts, actorKind: $0.actorKind,
+                               actorName: $0.actorName, kind: $0.kind, text: $0.text)
+            }
+        case let .channelUpdate(channelId):
+            client?.listChannels()
+            if channelId == detailChannelId { client?.fetchChannelEvents(channelId: channelId, sinceSeq: nil) }
         }
     }
 
