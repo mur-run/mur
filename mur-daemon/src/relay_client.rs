@@ -27,11 +27,35 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const RELAY_WS_PATH: &str = "/api/v1/relay/ws";
 
 /// Spawn the relay mobile client task; runs forever (reconnects on drop).
-pub fn spawn(mur_home: PathBuf, relay_url: String, api_key: String) {
+pub fn spawn(
+    mur_home: PathBuf,
+    relay_url: String,
+    api_key: String,
+    enroll_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+) {
     tokio::spawn(async move {
+        // One channel watcher for the whole relay task (mirrors the LAN server):
+        // filesystem changes under <home>/channels/ fan out via this broadcast so
+        // each connection can push `channel.updated` and a relay-only phone gets
+        // live updates instead of polling. Forgotten because the relay task lives
+        // for the process lifetime — exactly one watcher, no per-reconnect leak.
+        let (chan_tx, _chan_rx) = tokio::sync::broadcast::channel::<String>(256);
+        {
+            let tx = chan_tx.clone();
+            let home = mur_home.clone();
+            std::thread::spawn(move || {
+                match mur_channel::watch::watch_channels(&home, move |channel_id| {
+                    let _ = tx.send(channel_id);
+                }) {
+                    Ok(w) => std::mem::forget(w),
+                    Err(e) => tracing::warn!("mobile relay channel watcher failed: {e:#}"),
+                }
+            });
+        }
+
         let mut delay = Duration::from_secs(1);
         loop {
-            match run_once(&mur_home, &relay_url, &api_key).await {
+            match run_once(&mur_home, &relay_url, &api_key, &chan_tx, &enroll_lock).await {
                 Ok(()) => {
                     tracing::info!("mobile relay: clean disconnect");
                     delay = Duration::from_secs(1);
@@ -46,7 +70,13 @@ pub fn spawn(mur_home: PathBuf, relay_url: String, api_key: String) {
     });
 }
 
-async fn run_once(mur_home: &Path, relay_url: &str, api_key: &str) -> Result<()> {
+async fn run_once(
+    mur_home: &Path,
+    relay_url: &str,
+    api_key: &str,
+    chan_tx: &tokio::sync::broadcast::Sender<String>,
+    enroll_lock: &tokio::sync::Mutex<()>,
+) -> Result<()> {
     let ws_url = format!("{}{RELAY_WS_PATH}", relay_url.trim_end_matches('/'));
 
     let mut req = ws_url.into_client_request()?;
@@ -70,6 +100,16 @@ async fn run_once(mur_home: &Path, relay_url: &str, api_key: &str) -> Result<()>
 
     // Per-connection audio accumulator for voice streaming over relay.
     let mut audio_buf: Vec<u8> = Vec::new();
+    // Per-connection pairing state: `None` until a valid `Hello` (correct pair
+    // token) completes the handshake. Until then, no application frame is
+    // processed — mirrors the LAN server, which gates the whole connection.
+    let mut paired_pubkey: Option<String> = None;
+    // Pending Resume challenge for this connection: (pubkey, agent, nonce).
+    let mut pending_resume: Option<(String, String, String)> = None;
+    // Pending enrollment-proof challenge for this connection (proto≥2).
+    let mut pending_enroll: Option<PendingEnroll> = None;
+    // Live channel-update feed for this connection.
+    let mut chan_rx = chan_tx.subscribe();
 
     loop {
         tokio::select! {
@@ -79,6 +119,23 @@ async fn run_once(mur_home: &Path, relay_url: &str, api_key: &str) -> Result<()>
                     "agent_id": "mur-mobile-relay",
                 }))?;
                 write.send(Message::Text(hb.into())).await?;
+            }
+
+            Ok(channel_id) = chan_rx.recv() => {
+                // Push live channel updates ONLY to a paired connection — never
+                // leak channel ids to an unauthenticated relay peer. A lagged
+                // receiver simply drops the missed id (the phone resyncs via
+                // ChannelQuery).
+                if paired_pubkey.is_some() {
+                    relay_send(
+                        &mut write,
+                        &ServerFrame::Event {
+                            name: "channel.updated".to_string(),
+                            payload: json!({ "channel_id": channel_id }),
+                        },
+                    )
+                    .await?;
+                }
             }
 
             msg = read.next() => {
@@ -115,8 +172,17 @@ async fn run_once(mur_home: &Path, relay_url: &str, api_key: &str) -> Result<()>
                                 continue;
                             }
                         };
-                        if let Err(e) =
-                            handle_frame(mur_home, &mut write, frame, &mut audio_buf).await
+                        if let Err(e) = handle_frame(
+                            mur_home,
+                            &mut write,
+                            frame,
+                            &mut audio_buf,
+                            &mut paired_pubkey,
+                            enroll_lock,
+                            &mut pending_resume,
+                            &mut pending_enroll,
+                        )
+                        .await
                         {
                             tracing::warn!(error = %e, "mobile relay: frame handling error");
                         }
@@ -134,32 +200,250 @@ type WsWrite = futures_util::stream::SplitSink<
     Message,
 >;
 
+/// Whether a relay frame may be dispatched given the connection's pairing state.
+/// `Hello` is the only frame allowed before pairing; every other frame (envelope,
+/// channel query, voice) is an authoritative read/write that must wait for a
+/// completed token handshake. Pure + unit-tested so a refactor cannot silently
+/// reopen the no-Hello voice/ChannelQuery bypass.
+fn frame_allowed_before_dispatch(frame: &ClientFrame, paired: &Option<String>) -> bool {
+    // The handshakes that make a connection paired — Hello (transitional resume),
+    // the HelloInit/HelloProof enrollment proof, and the Resume challenge-response
+    // — are allowed pre-pairing; every other frame waits until paired.
+    matches!(
+        frame,
+        ClientFrame::Hello { .. }
+            | ClientFrame::HelloInit { .. }
+            | ClientFrame::HelloProof { .. }
+            | ClientFrame::Resume { .. }
+            | ClientFrame::ResumeProof { .. }
+    ) || paired.is_some()
+}
+
+/// Pending enrollment-proof challenge for one relay connection (proto≥2).
+struct PendingEnroll {
+    proto: u32,
+    agent: String,
+    did: String,
+    pubkey: String,
+    wid: String,
+    nonce: Vec<u8>,
+}
+
+/// Whether a relay envelope is authorized for THIS connection: its key must equal
+/// the device that paired the connection AND its signature must verify against a
+/// paired device. Mirrors the LAN server's `bridge_pubkey == pubkey && is_paired
+/// && verify`.
+fn relay_envelope_authorized(
+    home: &Path,
+    envelope: &mur_common::bridge::envelope::SignedEnvelope,
+    paired: &Option<String>,
+) -> bool {
+    paired.as_deref() == Some(envelope.bridge_pubkey_multibase.as_str())
+        && mur_core::mobile::paired_envelope_ok(home, envelope)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn handle_frame(
     home: &Path,
     write: &mut WsWrite,
     frame: ClientFrame,
     audio_buf: &mut Vec<u8>,
+    paired: &mut Option<String>,
+    enroll_lock: &tokio::sync::Mutex<()>,
+    // Pending Resume challenge for THIS connection: (pubkey, agent, nonce). Set
+    // when a `Resume` arrives, consumed by the matching `ResumeProof`.
+    pending_resume: &mut Option<(String, String, String)>,
+    // Pending enrollment-proof challenge for THIS connection (proto≥2). Set on
+    // `HelloInit`, consumed by the matching `HelloProof`.
+    pending_enroll: &mut Option<PendingEnroll>,
 ) -> Result<()> {
     use base64::Engine as _;
-    use mur_common::bridge::envelope::verify_envelope_with_pubkey;
+
+    // Connection-level gate: the relay has no per-frame transport auth, so — like
+    // the LAN server, which runs the Hello handshake before its application loop —
+    // ONLY a `Hello` may be processed before this connection is paired. Every other
+    // frame (envelope, channel query, voice) is an authoritative read/write and
+    // must wait for a completed token handshake on THIS connection.
+    if !frame_allowed_before_dispatch(&frame, paired) {
+        relay_send(
+            write,
+            &ServerFrame::Rejected {
+                reason: "not paired".to_string(),
+            },
+        )
+        .await?;
+        return Ok(());
+    }
 
     match frame {
         ClientFrame::Hello {
-            pubkey: _,
+            pubkey,
             token: _,
             agent,
         } => {
-            let canonical = canonicalize_agent_name(home, &agent);
-            relay_send(write, &ServerFrame::Paired { agent: canonical }).await?;
-        }
-
-        ClientFrame::Envelope { envelope } => {
-            let pubkey = envelope.bridge_pubkey_multibase.clone();
-            if verify_envelope_with_pubkey(&envelope, &pubkey).is_err() {
+            // Over relay, Hello is ONLY a transitional resume for an
+            // already-paired device (the shipped app re-sends Hello on reconnect).
+            // Relay NEVER does bearer-token enrollment — a new device must use the
+            // HelloInit/HelloProof proof handshake. (LAN has an opt-in legacy path;
+            // the relay does not, since the token would cross the relay hub.)
+            if mur_core::mobile::is_device_paired(home, &pubkey) {
+                *paired = Some(pubkey);
+                let canonical = canonicalize_agent_name(home, &agent);
+                relay_send(
+                    write,
+                    &ServerFrame::Paired {
+                        agent: canonical,
+                        confirm: Vec::new(),
+                    },
+                )
+                .await?;
+            } else {
                 relay_send(
                     write,
                     &ServerFrame::Rejected {
-                        reason: "bad signature".to_string(),
+                        reason: "pair this device with the QR (proof handshake required)"
+                            .to_string(),
+                    },
+                )
+                .await?;
+            }
+        }
+
+        ClientFrame::HelloInit {
+            proto,
+            agent,
+            pubkey,
+            wid,
+        } => {
+            // Enrollment step 1 (proto≥2): issue the challenge UNCONDITIONALLY
+            // (don't leak whether the wid is live); verify at the proof step.
+            // In-flight guard (like Resume): ignore a duplicate HelloInit while a
+            // challenge is pending, so a peer can't amplify work by spamming it.
+            if proto < 2 || pending_enroll.is_some() {
+                if proto < 2 {
+                    relay_send(
+                        write,
+                        &ServerFrame::Rejected {
+                            reason: "unsupported pairing protocol".to_string(),
+                        },
+                    )
+                    .await?;
+                }
+                return Ok(());
+            }
+            let canonical = canonicalize_agent_name(home, &agent);
+            match mur_core::mobile::daemon_id(home, &canonical) {
+                Some(did) => {
+                    let nonce = mur_common::mobile::mint_nonce().to_vec();
+                    *pending_enroll = Some(PendingEnroll {
+                        proto,
+                        agent: canonical,
+                        did: did.clone(),
+                        pubkey,
+                        wid: wid.clone(),
+                        nonce: nonce.clone(),
+                    });
+                    relay_send(write, &ServerFrame::PairChallenge { wid, nonce, did }).await?;
+                }
+                None => {
+                    relay_send(
+                        write,
+                        &ServerFrame::Rejected {
+                            reason: "agent has no identity".to_string(),
+                        },
+                    )
+                    .await?;
+                }
+            }
+        }
+
+        ClientFrame::HelloProof { wid, proof } => {
+            // Enrollment step 3: verify against the pending challenge for THIS wid.
+            let done = match pending_enroll.take() {
+                Some(p) if p.wid == wid => {
+                    let _guard = enroll_lock.lock().await;
+                    mur_core::mobile::verify_hello_proof(
+                        home, &wid, p.proto, &p.agent, &p.did, &p.pubkey, &p.nonce, &proof,
+                    )
+                    .map(|confirm| {
+                        if let Err(e) = mur_core::mobile::add_paired_device(home, &p.pubkey) {
+                            tracing::warn!(error = %e, "mobile relay: persist paired failed");
+                        }
+                        tracing::info!(
+                            fingerprint = %mur_core::mobile::device_fingerprint(&p.pubkey),
+                            "mobile: paired new device (relay, proof)"
+                        );
+                        (p.pubkey, p.agent, confirm)
+                    })
+                }
+                _ => None,
+            };
+            match done {
+                Some((pubkey, agent, confirm)) => {
+                    *paired = Some(pubkey);
+                    relay_send(write, &ServerFrame::Paired { agent, confirm }).await?;
+                }
+                None => {
+                    relay_send(
+                        write,
+                        &ServerFrame::Rejected {
+                            reason: "bad pairing proof".to_string(),
+                        },
+                    )
+                    .await?;
+                }
+            }
+        }
+
+        ClientFrame::Resume { pubkey, agent } => {
+            // Steady-state reconnect by paired key. In-flight guard: ignore a
+            // duplicate Resume while one is already pending, so an unauthenticated
+            // peer can't amplify work (nonce mint + Challenge send) by spamming
+            // Resume. Issue the challenge UNCONDITIONALLY (no is_device_paired
+            // branch here) so we don't leak which pubkeys are enrolled —
+            // resume_proof_ok gates pairing + signature at the proof step.
+            if pending_resume.is_none() {
+                let nonce = mur_core::mobile::new_challenge_nonce();
+                *pending_resume = Some((pubkey, agent, nonce.clone()));
+                relay_send(write, &ServerFrame::Challenge { nonce }).await?;
+            }
+        }
+
+        ClientFrame::ResumeProof { envelope } => match pending_resume.take() {
+            Some((pubkey, agent, nonce))
+                if mur_core::mobile::resume_proof_ok(home, &pubkey, &nonce, &envelope) =>
+            {
+                *paired = Some(pubkey);
+                let canonical = canonicalize_agent_name(home, &agent);
+                relay_send(
+                    write,
+                    &ServerFrame::Paired {
+                        agent: canonical,
+                        confirm: Vec::new(),
+                    },
+                )
+                .await?;
+            }
+            _ => {
+                relay_send(
+                    write,
+                    &ServerFrame::Rejected {
+                        reason: "bad resume proof".to_string(),
+                    },
+                )
+                .await?;
+            }
+        },
+
+        ClientFrame::Envelope { envelope } => {
+            // Pinned to the device that paired THIS connection: the envelope's key
+            // must equal it AND its signature must verify against a paired device.
+            // (Mirrors the LAN server's bridge_pubkey == pubkey && is_paired && verify.)
+            if !relay_envelope_authorized(home, &envelope, paired) {
+                relay_send(
+                    write,
+                    &ServerFrame::Rejected {
+                        reason: "unauthorized".to_string(),
                     },
                 )
                 .await?;
@@ -173,11 +457,29 @@ async fn handle_frame(
                         return Ok(());
                     }
                 };
-            let user_text = extract_user_text(req.params.as_ref());
-            let agent = extract_agent(req.params.as_ref(), home);
             let method = req.method.clone();
             let params = req.params.clone().unwrap_or(Value::Null);
-            agent_turn(home, write, &agent, &user_text, method, params).await?;
+            // v4c: an authoritative HITL approval rides THIS signed envelope
+            // (verified just above), so the gate-releasing write only fires for a
+            // signature-checked frame — never an unsigned one.
+            if method == mur_common::mobile::HITL_RESPOND_METHOD {
+                if let Some((channel_id, hitl_id)) =
+                    mur_core::mobile::respond_hitl_from_params(home, &params)
+                {
+                    relay_send(
+                        write,
+                        &ServerFrame::Event {
+                            name: "hitl.ack".to_string(),
+                            payload: serde_json::json!({ "hitl_id": hitl_id, "channel_id": channel_id }),
+                        },
+                    )
+                    .await?;
+                }
+            } else {
+                let user_text = extract_user_text(req.params.as_ref());
+                let agent = extract_agent(req.params.as_ref(), home);
+                agent_turn(home, write, &agent, &user_text, method, params).await?;
+            }
         }
 
         ClientFrame::AudioStreamStart { .. } => {
@@ -280,6 +582,12 @@ async fn agent_turn(
     method: String,
     params: Value,
 ) -> Result<()> {
+    // v4c: capture the explicit target channel before `params` is moved.
+    let channel_id = params
+        .get("channel_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
     let home_c = home.to_path_buf();
     let agent_c = agent.to_string();
     let dialed = tokio::task::spawn_blocking(move || {
@@ -294,7 +602,13 @@ async fn agent_turn(
     };
 
     if !reply_text.starts_with("[error]") {
-        mur_core::mobile::persist_mobile_exchange(home, agent, user_text, &reply_text);
+        mur_core::mobile::persist_mobile_exchange_into(
+            home,
+            agent,
+            channel_id.as_deref(),
+            user_text,
+            &reply_text,
+        );
     }
     relay_send(
         write,
@@ -383,4 +697,85 @@ fn extract_reply_text(value: &Value) -> String {
         return text.to_string();
     }
     "[no reply]".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mur_common::identity::AgentIdentity;
+
+    fn signed_envelope(id: &AgentIdentity) -> mur_common::bridge::envelope::SignedEnvelope {
+        mur_common::bridge::envelope::sign_payload(b"{}".to_vec(), id, 1)
+    }
+
+    #[test]
+    fn only_hello_is_allowed_before_pairing() {
+        let unpaired: Option<String> = None;
+        let hello = ClientFrame::Hello {
+            pubkey: "pk".to_string(),
+            token: "t".to_string(),
+            agent: "mur".to_string(),
+        };
+        // Hello may proceed pre-pairing; every other frame is gated.
+        assert!(frame_allowed_before_dispatch(&hello, &unpaired));
+        for frame in [
+            ClientFrame::AudioStreamEnd,
+            ClientFrame::AudioStreamStart { sample_rate: 16000 },
+            ClientFrame::ChannelQuery {
+                op: "list".to_string(),
+                channel_id: None,
+                since_seq: None,
+            },
+        ] {
+            assert!(
+                !frame_allowed_before_dispatch(&frame, &unpaired),
+                "non-Hello frame must be rejected before pairing (closes the \
+                 no-Hello voice/ChannelQuery bypass)"
+            );
+        }
+
+        // Once paired, the same frames are allowed.
+        let paired = Some("pk".to_string());
+        assert!(frame_allowed_before_dispatch(
+            &ClientFrame::AudioStreamEnd,
+            &paired
+        ));
+        assert!(frame_allowed_before_dispatch(
+            &ClientFrame::ChannelQuery {
+                op: "events".to_string(),
+                channel_id: Some("c".to_string()),
+                since_seq: None,
+            },
+            &paired
+        ));
+    }
+
+    #[test]
+    fn relay_envelope_authorized_pins_to_the_connection_device() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let id = AgentIdentity::generate();
+        let env = signed_envelope(&id);
+        let pk = env.bridge_pubkey_multibase.clone();
+        mur_core::mobile::add_paired_device(home, &pk).unwrap();
+
+        // Paired device, key matches the connection, signature intact → authorized.
+        assert!(relay_envelope_authorized(home, &env, &Some(pk.clone())));
+
+        // Connection not yet paired (None) → rejected even though the device is in
+        // the store and the signature is valid.
+        assert!(!relay_envelope_authorized(home, &env, &None));
+
+        // Connection paired as a DIFFERENT device → rejected (no cross-device use).
+        assert!(!relay_envelope_authorized(
+            home,
+            &env,
+            &Some("other".to_string())
+        ));
+
+        // Tampered payload → signature no longer verifies → rejected.
+        let mut tampered = env.clone();
+        tampered.payload = br#"{"x":1}"#.to_vec();
+        assert!(!relay_envelope_authorized(home, &tampered, &Some(pk)));
+    }
 }

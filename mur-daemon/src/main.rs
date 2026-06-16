@@ -89,21 +89,37 @@ async fn main() -> Result<()> {
         Err(e) => eprintln!("murmurd: signal-server token error: {e:#}"),
     }
 
-    // P1 — start the mobile WebSocket endpoint (best-effort; failure is non-fatal)
-    match mur_core::mobile::ensure_pair_token(&mur_dir) {
-        Ok(token) => {
-            mobile_server::spawn(mur_dir.clone(), token.clone());
-            bonjour::advertise(mur_core::mobile::mobile_port(), &token);
+    // P1 — start the mobile WebSocket endpoint (best-effort; failure is non-fatal).
+    // No persistent pairing token: enrollment uses on-demand single-use windows
+    // minted by `mur agent pair` / the Hub. One shared enrollment lock makes a
+    // window's single-use claim atomic across the LAN and relay transports.
+    {
+        let enroll_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        mobile_server::spawn(mur_dir.clone(), enroll_lock.clone());
+        bonjour::advertise(mur_core::mobile::mobile_port());
 
-            // P4: start relay client if configured in ~/.mur/config.yaml
-            let cfg = mur_common::config::Config::load_or_default(&mur_dir.join("config.yaml"));
-            if let (Some(relay_url), Some(api_key)) =
-                (cfg.mobile_relay.relay_url, cfg.mobile_relay.api_key)
-            {
-                relay_client::spawn(mur_dir.clone(), relay_url, api_key);
-            }
+        // Sweep expired (unclaimed) pairing windows off disk so a lapsed window
+        // can't be revived by rolling the wall clock back.
+        {
+            let home = mur_dir.clone();
+            tokio::spawn(async move {
+                let mut iv = tokio::time::interval(std::time::Duration::from_secs(
+                    mur_core::mobile::PAIR_WINDOW_SWEEP_SECS,
+                ));
+                loop {
+                    iv.tick().await;
+                    mur_core::mobile::sweep_expired_pair_window(&home);
+                }
+            });
         }
-        Err(e) => eprintln!("murmurd: mobile-server token error: {e:#}"),
+
+        // P4: start relay client if configured in ~/.mur/config.yaml
+        let cfg = mur_common::config::Config::load_or_default(&mur_dir.join("config.yaml"));
+        if let (Some(relay_url), Some(api_key)) =
+            (cfg.mobile_relay.relay_url, cfg.mobile_relay.api_key)
+        {
+            relay_client::spawn(mur_dir.clone(), relay_url, api_key, enroll_lock.clone());
+        }
     }
 
     let queue_file = consumer::queue_path();

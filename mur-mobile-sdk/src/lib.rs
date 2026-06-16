@@ -37,6 +37,15 @@ use transport::Command;
 /// First-generation keys are version 1; rotation (P4+) increments it.
 const PHONE_KEY_VERSION: u32 = 1;
 
+/// Build a closure that signs a Resume challenge nonce with `identity` (a free
+/// function so `uniffi::export` doesn't try to treat the `Arc<dyn Fn>` as an FFI
+/// type).
+fn build_resume_signer(identity: AgentIdentity) -> transport::ResumeSigner {
+    std::sync::Arc::new(move |nonce: &str| {
+        sign_payload(nonce.as_bytes().to_vec(), &identity, PHONE_KEY_VERSION)
+    })
+}
+
 /// Subdirectory under the app home where the phone's identity is stored.
 const IDENTITY_SUBDIR: &str = "mobile";
 
@@ -75,6 +84,9 @@ pub struct ChannelEventItem {
     pub actor_name: String,
     pub kind: String,
     pub text: String,
+    /// Set on `HitlRequest` events so the phone can respond to the gate (v4c);
+    /// empty for every other event kind.
+    pub hitl_id: String,
 }
 
 /// Events pushed to the foreign listener. The connection lifecycle and the
@@ -188,6 +200,76 @@ impl MobileClient {
             port,
             mur_common::mobile::MOBILE_WS_PATH.to_string(),
             hello,
+            None, // legacy bearer Hello: not a resume…
+            None, // …and not a proof enrollment
+            rx,
+            emit,
+        ));
+    }
+
+    /// Enroll a NEW device over LAN with the proto-2 PROOF handshake: the `token`
+    /// (from the QR) is never transmitted — the phone proves it via HMAC. `wid`
+    /// and `daemon_id` also come from the QR; `daemon_id` is verified against the
+    /// daemon's challenge to defeat a LAN MITM.
+    pub fn enroll_lan(
+        &self,
+        host: String,
+        port: u16,
+        token: String,
+        wid: String,
+        daemon_id: String,
+    ) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Ok(mut guard) = self.cmd_tx.lock() {
+            *guard = Some(tx);
+        }
+        let pubkey = self.public_key();
+        let hello = mur_common::mobile::ClientFrame::HelloInit {
+            proto: 2,
+            agent: self.default_agent.clone(),
+            pubkey: pubkey.clone(),
+            wid,
+        };
+        let ctx = transport::EnrollCtx {
+            token,
+            expected_did: daemon_id,
+            proto: 2,
+            agent: self.default_agent.clone(),
+            pubkey,
+        };
+        let emit = self.make_emitter();
+        self.rt.spawn(transport::run_lan(
+            host,
+            port,
+            mur_common::mobile::MOBILE_WS_PATH.to_string(),
+            hello,
+            None,
+            Some(ctx),
+            rx,
+            emit,
+        ));
+    }
+
+    /// Reconnect over LAN by paired KEY — no token — for a device already paired
+    /// (the steady-state path after enrollment). Sends a `Resume` and answers the
+    /// daemon's challenge with a signed proof.
+    pub fn resume_lan(&self, host: String, port: u16) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Ok(mut guard) = self.cmd_tx.lock() {
+            *guard = Some(tx);
+        }
+        let resume = mur_common::mobile::ClientFrame::Resume {
+            pubkey: self.public_key(),
+            agent: self.default_agent.clone(),
+        };
+        let emit = self.make_emitter();
+        self.rt.spawn(transport::run_lan(
+            host,
+            port,
+            mur_common::mobile::MOBILE_WS_PATH.to_string(),
+            resume,
+            Some(build_resume_signer(self.identity.clone())),
+            None,
             rx,
             emit,
         ));
@@ -231,7 +313,16 @@ impl MobileClient {
                     agent: default_agent.clone(),
                 };
                 let emit = make_emit();
-                transport::run_relay(relay_ws_url.clone(), jwt.clone(), hello, rx, emit).await;
+                transport::run_relay(
+                    relay_ws_url.clone(),
+                    jwt.clone(),
+                    hello,
+                    None,
+                    None,
+                    rx,
+                    emit,
+                )
+                .await;
 
                 // Brief pause then reconnect.
                 let emit2 = make_emit();
@@ -244,10 +335,105 @@ impl MobileClient {
         });
     }
 
+    /// Reconnect over relay by paired KEY — no token — for a device already
+    /// paired. Reconnect loop sends a `Resume` and answers the daemon's challenge
+    /// with a signed proof.
+    pub fn resume_relay(&self, relay_ws_url: String, jwt: String) {
+        let cmd_tx_slot = self.cmd_tx.clone();
+        let listener = self.listener.clone();
+        let pubkey = self.public_key();
+        let default_agent = self.default_agent.clone();
+        let signer = build_resume_signer(self.identity.clone());
+
+        let make_emit = move || {
+            let listener = listener.clone();
+            move |event: MobileEvent| {
+                if let Ok(guard) = listener.lock()
+                    && let Some(l) = guard.as_ref()
+                {
+                    l.on_event(event);
+                }
+            }
+        };
+
+        self.rt.spawn(async move {
+            let mut delay = std::time::Duration::from_secs(2);
+            loop {
+                let (tx, rx) = mpsc::unbounded_channel();
+                if let Ok(mut guard) = cmd_tx_slot.lock() {
+                    *guard = Some(tx);
+                }
+                let resume = mur_common::mobile::ClientFrame::Resume {
+                    pubkey: pubkey.clone(),
+                    agent: default_agent.clone(),
+                };
+                let emit = make_emit();
+                transport::run_relay(
+                    relay_ws_url.clone(),
+                    jwt.clone(),
+                    resume,
+                    Some(signer.clone()),
+                    None,
+                    rx,
+                    emit,
+                )
+                .await;
+
+                let emit2 = make_emit();
+                emit2(MobileEvent::Disconnected {
+                    reason: format!("relay disconnected; retry in {}s", delay.as_secs()),
+                });
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(std::time::Duration::from_secs(60));
+            }
+        });
+    }
+
+    /// Enroll a NEW device over relay with the proto-2 PROOF handshake (one-shot;
+    /// switch to `resume_relay` afterward). The `token` is never transmitted.
+    pub fn enroll_relay(
+        &self,
+        relay_ws_url: String,
+        jwt: String,
+        token: String,
+        wid: String,
+        daemon_id: String,
+    ) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Ok(mut guard) = self.cmd_tx.lock() {
+            *guard = Some(tx);
+        }
+        let pubkey = self.public_key();
+        let hello = mur_common::mobile::ClientFrame::HelloInit {
+            proto: 2,
+            agent: self.default_agent.clone(),
+            pubkey: pubkey.clone(),
+            wid,
+        };
+        let ctx = transport::EnrollCtx {
+            token,
+            expected_did: daemon_id,
+            proto: 2,
+            agent: self.default_agent.clone(),
+            pubkey,
+        };
+        let emit = self.make_emitter();
+        self.rt.spawn(transport::run_relay(
+            relay_ws_url,
+            jwt,
+            hello,
+            None,
+            Some(ctx),
+            rx,
+            emit,
+        ));
+    }
+
     /// Send a user turn as text. The reply arrives as a [`MobileEvent::Reply`]
-    /// (and a mirrored transcript) via the listener.
-    pub fn send_text(&self, text: String) {
-        let envelope = match self.sign_agent_send(&text) {
+    /// (and a mirrored transcript) via the listener. `channel_id` (v4c) drops the
+    /// turn into a specific channel; `None` uses the agent's latest/new channel.
+    pub fn send_text(&self, text: String, channel_id: Option<String>) {
+        let envelope = match self.sign_agent_send(&text, channel_id.as_deref()) {
             Ok(env) => env,
             Err(e) => {
                 self.emit(MobileEvent::Error {
@@ -300,6 +486,23 @@ impl MobileClient {
             since_seq,
         });
     }
+
+    /// Respond to a HITL gate (v4c). The approval rides a SIGNED envelope (method
+    /// `channel/hitl_respond`) so the daemon verifies the phone's Ed25519 signature
+    /// before writing the v3d-signed `HitlResponse` that releases the gate — the
+    /// approval is never trusted from an unsigned frame.
+    pub fn hitl_respond(&self, channel_id: String, hitl_id: String, allow: bool, reason: String) {
+        let envelope = match self.sign_hitl_respond(&channel_id, &hitl_id, allow, &reason) {
+            Ok(env) => env,
+            Err(e) => {
+                self.emit(MobileEvent::Error {
+                    message: format!("sign: {e}"),
+                });
+                return;
+            }
+        };
+        self.send_cmd(Command::Send(envelope));
+    }
 }
 
 impl MobileClient {
@@ -321,6 +524,7 @@ impl MobileClient {
     fn sign_agent_send(
         &self,
         text: &str,
+        channel_id: Option<&str>,
     ) -> Result<mur_common::bridge::envelope::SignedEnvelope, serde_json::Error> {
         let msg = A2aMessage {
             role: "user".to_string(),
@@ -334,6 +538,14 @@ impl MobileClient {
             serde_json::Value::String(self.default_agent.clone()),
         );
         params.insert("message".to_string(), serde_json::to_value(&msg)?);
+        // v4c: drop this turn into an explicit channel (else the daemon resolves
+        // the agent's latest/new channel).
+        if let Some(cid) = channel_id {
+            params.insert(
+                "channel_id".to_string(),
+                serde_json::Value::String(cid.to_string()),
+            );
+        }
 
         let id = self.id_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let req = JsonRpcRequest {
@@ -346,6 +558,46 @@ impl MobileClient {
         // The envelope is signed over these exact bytes; the Mac verifies the
         // stored payload without re-serializing, so no separate canonicalizer
         // is needed for parity.
+        let payload = serde_json::to_vec(&req)?;
+        Ok(sign_payload(payload, &self.identity, PHONE_KEY_VERSION))
+    }
+
+    /// Build a `channel/hitl_respond` request and sign it into an envelope (v4c).
+    /// The daemon verifies this signature before releasing the gate, so the
+    /// approval is only ever trusted when it provably came from this phone's key.
+    fn sign_hitl_respond(
+        &self,
+        channel_id: &str,
+        hitl_id: &str,
+        allow: bool,
+        reason: &str,
+    ) -> Result<mur_common::bridge::envelope::SignedEnvelope, serde_json::Error> {
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "agent".to_string(),
+            serde_json::Value::String(self.default_agent.clone()),
+        );
+        params.insert(
+            "channel_id".to_string(),
+            serde_json::Value::String(channel_id.to_string()),
+        );
+        params.insert(
+            "hitl_id".to_string(),
+            serde_json::Value::String(hitl_id.to_string()),
+        );
+        params.insert("allow".to_string(), serde_json::Value::Bool(allow));
+        params.insert(
+            "reason".to_string(),
+            serde_json::Value::String(reason.to_string()),
+        );
+
+        let id = self.id_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(serde_json::Value::from(id)),
+            method: mur_common::mobile::HITL_RESPOND_METHOD.to_string(),
+            params: Some(serde_json::Value::Object(params)),
+        };
         let payload = serde_json::to_vec(&req)?;
         Ok(sign_payload(payload, &self.identity, PHONE_KEY_VERSION))
     }

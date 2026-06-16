@@ -64,7 +64,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showPairing) {
             PairingSheet { info in
-                model.connect(host: info.host, port: info.port, token: info.token)
+                model.pair(info)
             }
         }
         .sheet(isPresented: $showSettings) { SettingsSheet() }

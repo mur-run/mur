@@ -68,3 +68,52 @@ func actorLabel(actorKind: String, actorName: String) -> String {
     default:       return "system"
     }
 }
+
+// MARK: - @mention (client-side scoping hint, v4c)
+//
+// `@name` is advisory to the concierge orchestrator — never authoritative to a
+// worker and never opens a phone→specialist socket. These pure helpers drive the
+// detail-bar autocomplete; the literal "@name …" text is delivered to the
+// concierge channel, which (v3b) decides whether to honor it.
+
+/// Index of the trailing "@" that *begins* a mention token: the last "@" that is
+/// at the start of the draft or immediately preceded by whitespace, with no
+/// whitespace between it and the cursor (end of draft). Returns nil otherwise —
+/// so an email-like "user@host" mid-word never registers as a mention.
+private func mentionAtIndex(in draft: String) -> String.Index? {
+    guard let at = draft.lastIndex(of: "@") else { return nil }
+    // "@" must start a token: beginning-of-line or preceded by whitespace.
+    if at != draft.startIndex, !draft[draft.index(before: at)].isWhitespace {
+        return nil
+    }
+    // …and the token must be unbroken up to the cursor (no whitespace after "@").
+    let after = draft[draft.index(after: at)...]
+    return after.contains(where: { $0.isWhitespace }) ? nil : at
+}
+
+/// Parse a trailing "@partial" token from the draft for autocomplete. Returns
+/// the partial (without "@") if the cursor is in a mention token, else nil.
+func mentionToken(in draft: String) -> String? {
+    guard let at = mentionAtIndex(in: draft) else { return nil }
+    return String(draft[draft.index(after: at)...])
+}
+
+/// Autocomplete candidates for a partial @mention: channel participants first,
+/// then other known agents, filtered by prefix, deduped.
+func mentionCandidates(partial: String, participants: [String], knownAgents: [String]) -> [String] {
+    let p = partial.lowercased()
+    var seen = Set<String>()
+    var out: [String] = []
+    for name in participants + knownAgents where name.lowercased().hasPrefix(p) {
+        if seen.insert(name).inserted { out.append(name) }
+    }
+    return out
+}
+
+/// Replace the trailing "@partial" with "@chosen " in the draft. Only rewrites a
+/// boundary-anchored token (same rule as `mentionToken`), so it never mangles an
+/// email address the user happens to be typing.
+func applyMention(_ draft: String, choosing name: String) -> String {
+    guard let at = mentionAtIndex(in: draft) else { return draft }
+    return String(draft[..<at]) + "@" + name + " "
+}

@@ -2,12 +2,19 @@ import SwiftUI
 import AVFoundation
 import Network
 
-/// Parsed contents of a `mur-pair://host:port/?token=…&agent=…` pairing URI.
+/// Parsed contents of a `mur-pair://host:port/?wid=…&token=…&did=…&agent=…&v=2`
+/// pairing URI. `wid`+`did` are present for the proof handshake (v=2); when
+/// absent (older QR) the app falls back to the legacy bearer path.
 struct PairingInfo: Equatable {
     let host: String
     let port: UInt16
     let token: String
     let agent: String
+    /// Pairing-window id (v=2 proof handshake); nil for a legacy QR.
+    let wid: String?
+    /// Daemon Ed25519 identity, cross-checked during the proof handshake to bind
+    /// the endpoint on the TLS-less LAN; nil for a legacy QR.
+    let did: String?
 
     init?(uri: String) {
         guard let comps = URLComponents(string: uri),
@@ -22,6 +29,8 @@ struct PairingInfo: Equatable {
         self.port = UInt16(port)
         self.token = token
         self.agent = items.first(where: { $0.name == "agent" })?.value ?? "mur"
+        self.wid = items.first(where: { $0.name == "wid" })?.value.flatMap { $0.isEmpty ? nil : $0 }
+        self.did = items.first(where: { $0.name == "did" })?.value.flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 

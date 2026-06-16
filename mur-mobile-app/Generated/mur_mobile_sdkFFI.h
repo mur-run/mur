@@ -299,9 +299,24 @@ void uniffi_mur_mobile_sdk_fn_method_mobileclient_disconnect(uint64_t ptr, RustC
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_end_audio_stream(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_ENROLL_LAN
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_ENROLL_LAN
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_enroll_lan(uint64_t ptr, RustBuffer host, uint16_t port, RustBuffer token, RustBuffer wid, RustBuffer daemon_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_ENROLL_RELAY
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_ENROLL_RELAY
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_enroll_relay(uint64_t ptr, RustBuffer relay_ws_url, RustBuffer jwt, RustBuffer token, RustBuffer wid, RustBuffer daemon_id, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_FETCH_CHANNEL_EVENTS
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_FETCH_CHANNEL_EVENTS
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_fetch_channel_events(uint64_t ptr, RustBuffer channel_id, RustBuffer since_seq, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_HITL_RESPOND
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_HITL_RESPOND
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_hitl_respond(uint64_t ptr, RustBuffer channel_id, RustBuffer hitl_id, int8_t allow, RustBuffer reason, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_LIST_CHANNELS
@@ -314,6 +329,16 @@ void uniffi_mur_mobile_sdk_fn_method_mobileclient_list_channels(uint64_t ptr, Ru
 RustBuffer uniffi_mur_mobile_sdk_fn_method_mobileclient_public_key(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_RESUME_LAN
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_RESUME_LAN
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_resume_lan(uint64_t ptr, RustBuffer host, uint16_t port, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_RESUME_RELAY
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_RESUME_RELAY
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_resume_relay(uint64_t ptr, RustBuffer relay_ws_url, RustBuffer jwt, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SEND_AUDIO_FRAME
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SEND_AUDIO_FRAME
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_send_audio_frame(uint64_t ptr, RustBuffer data, RustCallStatus *_Nonnull out_status
@@ -321,7 +346,7 @@ void uniffi_mur_mobile_sdk_fn_method_mobileclient_send_audio_frame(uint64_t ptr,
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SEND_TEXT
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SEND_TEXT
-void uniffi_mur_mobile_sdk_fn_method_mobileclient_send_text(uint64_t ptr, RustBuffer text, RustCallStatus *_Nonnull out_status
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_send_text(uint64_t ptr, RustBuffer text, RustBuffer channel_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SET_LISTENER
@@ -624,9 +649,27 @@ uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_end_audio_stream(voi
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_ENROLL_LAN
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_ENROLL_LAN
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_enroll_lan(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_ENROLL_RELAY
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_ENROLL_RELAY
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_enroll_relay(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_FETCH_CHANNEL_EVENTS
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_FETCH_CHANNEL_EVENTS
 uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_fetch_channel_events(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_HITL_RESPOND
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_HITL_RESPOND
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_hitl_respond(void
     
 );
 #endif
@@ -639,6 +682,18 @@ uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_list_channels(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_PUBLIC_KEY
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_PUBLIC_KEY
 uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_public_key(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_RESUME_LAN
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_RESUME_LAN
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_resume_lan(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_RESUME_RELAY
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_RESUME_RELAY
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_resume_relay(void
     
 );
 #endif

@@ -186,11 +186,20 @@ pub enum AgentAction {
     },
     /// Manage companion (warm voice + optional proactive messaging).
     Companion(cmd::agent_companion::CompanionArgs),
-    /// Show a QR + URI to pair a phone (MUR mobile app) with an agent over LAN.
+    /// Open a single-use pairing window: show a QR + URI to pair a phone (MUR
+    /// mobile app) with an agent over LAN. The code expires shortly and is
+    /// single-use — re-run to add another device.
     Pair {
         /// Agent name to pair with (defaults to the concierge "mur").
         #[arg(default_value = "mur")]
         name: String,
+    },
+    /// List phones paired with this Mac (fingerprint + pubkey).
+    Devices,
+    /// Revoke a paired phone by fingerprint prefix (or full pubkey).
+    Unpair {
+        /// Device fingerprint (see `mur agent devices`) or full pubkey.
+        fingerprint: String,
     },
     /// Run prereq checks for export targets (no build, just diagnostics)
     Doctor {

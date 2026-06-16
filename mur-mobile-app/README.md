@@ -6,18 +6,26 @@ Native SwiftUI app that talks to a local MUR agent over the LAN, with the 椋鳥
 
 Design: `docs/superpowers/specs/2026-06-05-mur-voice-mobile-app-design.md`.
 
-## Status (v4b — concierge-first home)
+## Status (v4c — full Channel participant)
 
 Implemented:
 - **Concierge-first home** — two-zone layout: talk affordance (mascot + orange
   button + type bar) on top; a **Channel list** below showing all durable
   channels, sorted `input-required` first.
-- **Channel-detail feed** — read-only, per-`EventKind` rendering (user/agent
-  bubbles, notes, state separators, tool disclosure groups, artifact cards).
-  Live-refreshed via `channel.updated` push while connected.
-- **HITL display card** — surfaces `HitlRequest` events with an
-  "Approval needed — respond from the MUR desktop app" card (phone-side
-  approve/deny is deferred to v4c, which needs v3c + a write RPC + v3d signing).
+- **Channel-detail feed** — per-`EventKind` rendering (user/agent bubbles, notes,
+  state separators, tool disclosure groups, artifact cards). Live-refreshed via
+  `channel.updated` push while connected.
+- **Drop into any channel** (v4c) — the detail view has a compose bar that sends
+  a turn into *that* channel (a Hub/CLI-originated one, not just the concierge);
+  `sendText(text:channelId:)` lands it there and dials the channel's router
+  agent (`mur`) — the phone never addresses a specialist directly.
+- **@mention scoping hint** (v4c) — typing `@` opens an autocomplete strip
+  (channel participants, then known agents). It's *advisory* to the concierge
+  (which may delegate); it never opens a phone→specialist socket.
+- **Actionable HITL card** (v4c) — `HitlRequest` events show Approve/Deny. The
+  daemon verifies the paired frame, then writes a **v3d-signed** `HitlResponse`
+  the v3c gate verifies and releases — so the phone's approval is authoritative
+  without the phone itself being a channel writer.
 - SwiftUI `NavigationStack` with `navigationDestination` for channel-detail.
 - Mascot **state machine** (idle/listening/thinking/speaking/error) — placeholder
   SwiftUI bird; the Rive `.riv` swaps in at P5 (inputs already mapped).
@@ -26,8 +34,7 @@ Implemented:
 - **QR pairing**: scan `mur-pair://…` (or enter host/port/token by hand) →
   `connectLan`.
 
-Deferred: HITL respond/approve on phone (v4c); send into arbitrary channel
-(v4c); APNs push for offline refresh (v4d).
+Deferred: APNs push for offline refresh (v4d).
 
 ## Build & run (needs **full Xcode**, not just Command Line Tools)
 
