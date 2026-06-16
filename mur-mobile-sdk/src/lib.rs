@@ -75,6 +75,9 @@ pub struct ChannelEventItem {
     pub actor_name: String,
     pub kind: String,
     pub text: String,
+    /// Set on `HitlRequest` events so the phone can respond to the gate (v4c);
+    /// empty for every other event kind.
+    pub hitl_id: String,
 }
 
 /// Events pushed to the foreign listener. The connection lifecycle and the

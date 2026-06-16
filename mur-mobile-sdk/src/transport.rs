@@ -367,7 +367,14 @@ where
                             .unwrap_or_default()
                             .to_string(),
                         kind: v["kind"].as_str().unwrap_or_default().to_string(),
+                        // `message` payloads carry `text`; HITL requests carry a
+                        // `summary` — fall back so the gate card has something to show.
                         text: v["payload"]["text"]
+                            .as_str()
+                            .or_else(|| v["payload"]["summary"].as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        hitl_id: v["payload"]["hitl_id"]
                             .as_str()
                             .unwrap_or_default()
                             .to_string(),

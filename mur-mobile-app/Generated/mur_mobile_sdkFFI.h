@@ -304,6 +304,11 @@ void uniffi_mur_mobile_sdk_fn_method_mobileclient_end_audio_stream(uint64_t ptr,
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_fetch_channel_events(uint64_t ptr, RustBuffer channel_id, RustBuffer since_seq, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_HITL_RESPOND
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_HITL_RESPOND
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_hitl_respond(uint64_t ptr, RustBuffer channel_id, RustBuffer hitl_id, int8_t allow, RustBuffer reason, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_LIST_CHANNELS
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_LIST_CHANNELS
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_list_channels(uint64_t ptr, RustCallStatus *_Nonnull out_status
@@ -321,7 +326,7 @@ void uniffi_mur_mobile_sdk_fn_method_mobileclient_send_audio_frame(uint64_t ptr,
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SEND_TEXT
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SEND_TEXT
-void uniffi_mur_mobile_sdk_fn_method_mobileclient_send_text(uint64_t ptr, RustBuffer text, RustCallStatus *_Nonnull out_status
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_send_text(uint64_t ptr, RustBuffer text, RustBuffer channel_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_SET_LISTENER
@@ -627,6 +632,12 @@ uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_end_audio_stream(voi
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_FETCH_CHANNEL_EVENTS
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_FETCH_CHANNEL_EVENTS
 uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_fetch_channel_events(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_HITL_RESPOND
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_HITL_RESPOND
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_hitl_respond(void
     
 );
 #endif

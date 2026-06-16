@@ -602,6 +602,12 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
     func fetchChannelEvents(channelId: String, sinceSeq: UInt64?) 
     
     /**
+     * Respond to a HITL gate (v4c). The daemon writes a v3d-signed `HitlResponse`
+     * on this paired phone's behalf, releasing the waiting gate.
+     */
+    func hitlRespond(channelId: String, hitlId: String, allow: Bool, reason: String) 
+    
+    /**
      * Request the full channel list. The response arrives as
      * [`MobileEvent::ChannelList`] via the listener.
      */
@@ -620,9 +626,10 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
     
     /**
      * Send a user turn as text. The reply arrives as a [`MobileEvent::Reply`]
-     * (and a mirrored transcript) via the listener.
+     * (and a mirrored transcript) via the listener. `channel_id` (v4c) drops the
+     * turn into a specific channel; `None` uses the agent's latest/new channel.
      */
-    func sendText(text: String) 
+    func sendText(text: String, channelId: String?) 
     
     /**
      * Register (or replace) the event listener.
@@ -778,6 +785,21 @@ open func fetchChannelEvents(channelId: String, sinceSeq: UInt64?)  {try! rustCa
 }
     
     /**
+     * Respond to a HITL gate (v4c). The daemon writes a v3d-signed `HitlResponse`
+     * on this paired phone's behalf, releasing the waiting gate.
+     */
+open func hitlRespond(channelId: String, hitlId: String, allow: Bool, reason: String)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_hitl_respond(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(channelId),
+        FfiConverterString.lower(hitlId),
+        FfiConverterBool.lower(allow),
+        FfiConverterString.lower(reason),$0
+    )
+}
+}
+    
+    /**
      * Request the full channel list. The response arrives as
      * [`MobileEvent::ChannelList`] via the listener.
      */
@@ -813,12 +835,14 @@ open func sendAudioFrame(data: Data)  {try! rustCall() {
     
     /**
      * Send a user turn as text. The reply arrives as a [`MobileEvent::Reply`]
-     * (and a mirrored transcript) via the listener.
+     * (and a mirrored transcript) via the listener. `channel_id` (v4c) drops the
+     * turn into a specific channel; `None` uses the agent's latest/new channel.
      */
-open func sendText(text: String)  {try! rustCall() {
+open func sendText(text: String, channelId: String?)  {try! rustCall() {
     uniffi_mur_mobile_sdk_fn_method_mobileclient_send_text(
             self.uniffiCloneHandle(),
-        FfiConverterString.lower(text),$0
+        FfiConverterString.lower(text),
+        FfiConverterOptionString.lower(channelId),$0
     )
 }
 }
@@ -892,16 +916,26 @@ public struct ChannelEventItem: Equatable, Hashable {
     public var actorName: String
     public var kind: String
     public var text: String
+    /**
+     * Set on `HitlRequest` events so the phone can respond to the gate (v4c);
+     * empty for every other event kind.
+     */
+    public var hitlId: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(seq: UInt64, ts: String, actorKind: String, actorName: String, kind: String, text: String) {
+    public init(seq: UInt64, ts: String, actorKind: String, actorName: String, kind: String, text: String, 
+        /**
+         * Set on `HitlRequest` events so the phone can respond to the gate (v4c);
+         * empty for every other event kind.
+         */hitlId: String) {
         self.seq = seq
         self.ts = ts
         self.actorKind = actorKind
         self.actorName = actorName
         self.kind = kind
         self.text = text
+        self.hitlId = hitlId
     }
 
     
@@ -925,7 +959,8 @@ public struct FfiConverterTypeChannelEventItem: FfiConverterRustBuffer {
                 actorKind: FfiConverterString.read(from: &buf), 
                 actorName: FfiConverterString.read(from: &buf), 
                 kind: FfiConverterString.read(from: &buf), 
-                text: FfiConverterString.read(from: &buf)
+                text: FfiConverterString.read(from: &buf), 
+                hitlId: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -936,6 +971,7 @@ public struct FfiConverterTypeChannelEventItem: FfiConverterRustBuffer {
         FfiConverterString.write(value.actorName, into: &buf)
         FfiConverterString.write(value.kind, into: &buf)
         FfiConverterString.write(value.text, into: &buf)
+        FfiConverterString.write(value.hitlId, into: &buf)
     }
 }
 
@@ -1708,6 +1744,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_fetch_channel_events() != 13622) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_hitl_respond() != 5144) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_list_channels() != 8292) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1717,7 +1756,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_send_audio_frame() != 33293) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_send_text() != 38827) {
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_send_text() != 769) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_set_listener() != 63630) {
