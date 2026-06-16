@@ -64,5 +64,14 @@ if $INSTALL; then
     sudo cp "$MCP_BINARY" /opt/homebrew/bin/mur-mcp-server
     echo "Installed mur-mcp-server -> /opt/homebrew/bin/mur-mcp-server"
   fi
+
+  # The background daemon. `mur daemon start` looks for `murmurd` alongside
+  # `mur`, so install it too — otherwise the daemon (and the Hub/phone voice
+  # path that runs through it) is unavailable on a release install.
+  DAEMON_BINARY="$SCRIPT_DIR/target/release/murmurd"
+  if [ -f "$DAEMON_BINARY" ]; then
+    sudo cp "$DAEMON_BINARY" /opt/homebrew/bin/murmurd
+    echo "Installed murmurd -> /opt/homebrew/bin/murmurd"
+  fi
   echo "✅ Installed: $(mur --version 2>/dev/null || echo 'done')"
 fi

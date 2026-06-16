@@ -250,6 +250,16 @@ fn spawn_runtime(slug: &str, mur_home: &Path) -> Result<Child, String> {
         info!(slug, %base_url, "routing agent runtime through cc-proxy bridge");
         cmd.env("ANTHROPIC_BASE_URL", base_url);
     }
+    // STT language follows the device. The Hub process can read the OS locale,
+    // but the sandboxed agent runtime cannot reach CFLocale — so pass it down as
+    // MUR_STT_LANGUAGE. The runtime maps e.g. "zh-Hant-TW" → Whisper language
+    // "zh" + Traditional output. An explicit env (user override) always wins.
+    if std::env::var_os("MUR_STT_LANGUAGE").is_none()
+        && let Some(locale) = sys_locale::get_locale()
+    {
+        info!(slug, %locale, "passing OS locale to agent runtime for STT");
+        cmd.env("MUR_STT_LANGUAGE", locale);
+    }
     cmd.spawn()
         .map_err(|e| format!("could not start the agent runtime: {e}"))
 }
