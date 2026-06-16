@@ -7,6 +7,8 @@ use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, EventKind};
 use mur_common::hitl::{HitlRequest, HitlResponse};
 
+use crate::channel_writer::ROUTER_AGENT;
+
 pub fn approve(channel_id: &str, hitl_id: &str, deny: bool, reason: Option<String>) -> Result<()> {
     let home = crate::paths::mur_root(None);
     let svc = ChannelService::open(&home)?;
@@ -29,8 +31,15 @@ pub fn approve(channel_id: &str, hitl_id: &str, deny: bool, reason: Option<Strin
         reason: reason.unwrap_or_default(),
         surface: "cli".into(),
     };
-    svc.append(
+    // The actor is the local human who approved, but the channel's WRITER signs
+    // the event (v3d) so the gate can verify authority before releasing — a
+    // forged HitlResponse from a non-router key is rejected. The router for
+    // workflow/HITL channels is the concierge "mur".
+    crate::channel_writer::append_as_writer(
+        &svc,
+        &home,
         channel_id,
+        ROUTER_AGENT,
         ChannelActor::local_human(),
         EventKind::HitlResponse,
         serde_json::to_value(&resp)?,
