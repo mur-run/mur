@@ -200,15 +200,59 @@ impl MobileClient {
             port,
             mur_common::mobile::MOBILE_WS_PATH.to_string(),
             hello,
-            None, // enrollment (Hello), not a resume
+            None, // legacy bearer Hello: not a resume…
+            None, // …and not a proof enrollment
+            rx,
+            emit,
+        ));
+    }
+
+    /// Enroll a NEW device over LAN with the proto-2 PROOF handshake: the `token`
+    /// (from the QR) is never transmitted — the phone proves it via HMAC. `wid`
+    /// and `daemon_id` also come from the QR; `daemon_id` is verified against the
+    /// daemon's challenge to defeat a LAN MITM.
+    pub fn enroll_lan(
+        &self,
+        host: String,
+        port: u16,
+        token: String,
+        wid: String,
+        daemon_id: String,
+    ) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Ok(mut guard) = self.cmd_tx.lock() {
+            *guard = Some(tx);
+        }
+        let pubkey = self.public_key();
+        let hello = mur_common::mobile::ClientFrame::HelloInit {
+            proto: 2,
+            agent: self.default_agent.clone(),
+            pubkey: pubkey.clone(),
+            wid,
+        };
+        let ctx = transport::EnrollCtx {
+            token,
+            expected_did: daemon_id,
+            proto: 2,
+            agent: self.default_agent.clone(),
+            pubkey,
+        };
+        let emit = self.make_emitter();
+        self.rt.spawn(transport::run_lan(
+            host,
+            port,
+            mur_common::mobile::MOBILE_WS_PATH.to_string(),
+            hello,
+            None,
+            Some(ctx),
             rx,
             emit,
         ));
     }
 
     /// Reconnect over LAN by paired KEY — no token — for a device already paired
-    /// (the steady-state path after `connect_lan` has enrolled once). Sends a
-    /// `Resume` and answers the daemon's challenge with a signed proof.
+    /// (the steady-state path after enrollment). Sends a `Resume` and answers the
+    /// daemon's challenge with a signed proof.
     pub fn resume_lan(&self, host: String, port: u16) {
         let (tx, rx) = mpsc::unbounded_channel();
         if let Ok(mut guard) = self.cmd_tx.lock() {
@@ -225,6 +269,7 @@ impl MobileClient {
             mur_common::mobile::MOBILE_WS_PATH.to_string(),
             resume,
             Some(build_resume_signer(self.identity.clone())),
+            None,
             rx,
             emit,
         ));
@@ -268,8 +313,16 @@ impl MobileClient {
                     agent: default_agent.clone(),
                 };
                 let emit = make_emit();
-                transport::run_relay(relay_ws_url.clone(), jwt.clone(), hello, None, rx, emit)
-                    .await;
+                transport::run_relay(
+                    relay_ws_url.clone(),
+                    jwt.clone(),
+                    hello,
+                    None,
+                    None,
+                    rx,
+                    emit,
+                )
+                .await;
 
                 // Brief pause then reconnect.
                 let emit2 = make_emit();
@@ -320,6 +373,7 @@ impl MobileClient {
                     jwt.clone(),
                     resume,
                     Some(signer.clone()),
+                    None,
                     rx,
                     emit,
                 )
@@ -333,6 +387,46 @@ impl MobileClient {
                 delay = (delay * 2).min(std::time::Duration::from_secs(60));
             }
         });
+    }
+
+    /// Enroll a NEW device over relay with the proto-2 PROOF handshake (one-shot;
+    /// switch to `resume_relay` afterward). The `token` is never transmitted.
+    pub fn enroll_relay(
+        &self,
+        relay_ws_url: String,
+        jwt: String,
+        token: String,
+        wid: String,
+        daemon_id: String,
+    ) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Ok(mut guard) = self.cmd_tx.lock() {
+            *guard = Some(tx);
+        }
+        let pubkey = self.public_key();
+        let hello = mur_common::mobile::ClientFrame::HelloInit {
+            proto: 2,
+            agent: self.default_agent.clone(),
+            pubkey: pubkey.clone(),
+            wid,
+        };
+        let ctx = transport::EnrollCtx {
+            token,
+            expected_did: daemon_id,
+            proto: 2,
+            agent: self.default_agent.clone(),
+            pubkey,
+        };
+        let emit = self.make_emitter();
+        self.rt.spawn(transport::run_relay(
+            relay_ws_url,
+            jwt,
+            hello,
+            None,
+            Some(ctx),
+            rx,
+            emit,
+        ));
     }
 
     /// Send a user turn as text. The reply arrives as a [`MobileEvent::Reply`]

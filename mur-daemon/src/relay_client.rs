@@ -106,6 +106,8 @@ async fn run_once(
     let mut paired_pubkey: Option<String> = None;
     // Pending Resume challenge for this connection: (pubkey, agent, nonce).
     let mut pending_resume: Option<(String, String, String)> = None;
+    // Pending enrollment-proof challenge for this connection (proto≥2).
+    let mut pending_enroll: Option<PendingEnroll> = None;
     // Live channel-update feed for this connection.
     let mut chan_rx = chan_tx.subscribe();
 
@@ -178,6 +180,7 @@ async fn run_once(
                             &mut paired_pubkey,
                             enroll_lock,
                             &mut pending_resume,
+                            &mut pending_enroll,
                         )
                         .await
                         {
@@ -203,13 +206,27 @@ type WsWrite = futures_util::stream::SplitSink<
 /// completed token handshake. Pure + unit-tested so a refactor cannot silently
 /// reopen the no-Hello voice/ChannelQuery bypass.
 fn frame_allowed_before_dispatch(frame: &ClientFrame, paired: &Option<String>) -> bool {
-    // Hello (enroll) and the Resume challenge-response (reconnect auth) are the
-    // ways a connection BECOMES paired, so they're allowed pre-pairing; every
-    // other frame waits until the connection is paired.
+    // The handshakes that make a connection paired — Hello (transitional resume),
+    // the HelloInit/HelloProof enrollment proof, and the Resume challenge-response
+    // — are allowed pre-pairing; every other frame waits until paired.
     matches!(
         frame,
-        ClientFrame::Hello { .. } | ClientFrame::Resume { .. } | ClientFrame::ResumeProof { .. }
+        ClientFrame::Hello { .. }
+            | ClientFrame::HelloInit { .. }
+            | ClientFrame::HelloProof { .. }
+            | ClientFrame::Resume { .. }
+            | ClientFrame::ResumeProof { .. }
     ) || paired.is_some()
+}
+
+/// Pending enrollment-proof challenge for one relay connection (proto≥2).
+struct PendingEnroll {
+    proto: u32,
+    agent: String,
+    did: String,
+    pubkey: String,
+    wid: String,
+    nonce: Vec<u8>,
 }
 
 /// Whether a relay envelope is authorized for THIS connection: its key must equal
@@ -236,6 +253,9 @@ async fn handle_frame(
     // Pending Resume challenge for THIS connection: (pubkey, agent, nonce). Set
     // when a `Resume` arrives, consumed by the matching `ResumeProof`.
     pending_resume: &mut Option<(String, String, String)>,
+    // Pending enrollment-proof challenge for THIS connection (proto≥2). Set on
+    // `HelloInit`, consumed by the matching `HelloProof`.
+    pending_enroll: &mut Option<PendingEnroll>,
 ) -> Result<()> {
     use base64::Engine as _;
 
@@ -258,42 +278,116 @@ async fn handle_frame(
     match frame {
         ClientFrame::Hello {
             pubkey,
-            token,
+            token: _,
             agent,
         } => {
-            // Same enrollment model as the LAN server. An already-paired device
-            // resumes by key (transitional: the shipped app re-sends Hello{token});
-            // a new device must atomically claim a single-use window. Either way,
-            // mark THIS connection paired so later frames are authorized.
-            let ok = if mur_core::mobile::is_device_paired(home, &pubkey) {
-                true
-            } else {
-                let _guard = enroll_lock.lock().await;
-                if mur_core::mobile::try_consume_pair_window(home, &token) {
-                    if let Err(e) = mur_core::mobile::add_paired_device(home, &pubkey) {
-                        tracing::warn!(error = %e, "mobile relay: persist paired failed");
-                    }
-                    tracing::info!(
-                        fingerprint = %mur_core::mobile::device_fingerprint(&pubkey),
-                        "mobile: paired new device (relay)"
-                    );
-                    true
-                } else {
-                    false
-                }
-            };
-            if ok {
+            // Over relay, Hello is ONLY a transitional resume for an
+            // already-paired device (the shipped app re-sends Hello on reconnect).
+            // Relay NEVER does bearer-token enrollment — a new device must use the
+            // HelloInit/HelloProof proof handshake. (LAN has an opt-in legacy path;
+            // the relay does not, since the token would cross the relay hub.)
+            if mur_core::mobile::is_device_paired(home, &pubkey) {
                 *paired = Some(pubkey);
                 let canonical = canonicalize_agent_name(home, &agent);
-                relay_send(write, &ServerFrame::Paired { agent: canonical }).await?;
+                relay_send(
+                    write,
+                    &ServerFrame::Paired {
+                        agent: canonical,
+                        confirm: Vec::new(),
+                    },
+                )
+                .await?;
             } else {
                 relay_send(
                     write,
                     &ServerFrame::Rejected {
-                        reason: "no active pairing window — run `mur agent pair`".to_string(),
+                        reason: "pair this device with the QR (proof handshake required)"
+                            .to_string(),
                     },
                 )
                 .await?;
+            }
+        }
+
+        ClientFrame::HelloInit {
+            proto,
+            agent,
+            pubkey,
+            wid,
+        } => {
+            // Enrollment step 1 (proto≥2): issue the challenge UNCONDITIONALLY
+            // (don't leak whether the wid is live); verify at the proof step.
+            if proto < 2 {
+                relay_send(
+                    write,
+                    &ServerFrame::Rejected {
+                        reason: "unsupported pairing protocol".to_string(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+            let canonical = canonicalize_agent_name(home, &agent);
+            match mur_core::mobile::daemon_id(home, &canonical) {
+                Some(did) => {
+                    let nonce = mur_common::mobile::mint_nonce().to_vec();
+                    *pending_enroll = Some(PendingEnroll {
+                        proto,
+                        agent: canonical,
+                        did: did.clone(),
+                        pubkey,
+                        wid: wid.clone(),
+                        nonce: nonce.clone(),
+                    });
+                    relay_send(write, &ServerFrame::PairChallenge { wid, nonce, did }).await?;
+                }
+                None => {
+                    relay_send(
+                        write,
+                        &ServerFrame::Rejected {
+                            reason: "agent has no identity".to_string(),
+                        },
+                    )
+                    .await?;
+                }
+            }
+        }
+
+        ClientFrame::HelloProof { wid, proof } => {
+            // Enrollment step 3: verify against the pending challenge for THIS wid.
+            let done = match pending_enroll.take() {
+                Some(p) if p.wid == wid => {
+                    let _guard = enroll_lock.lock().await;
+                    mur_core::mobile::verify_hello_proof(
+                        home, &wid, p.proto, &p.agent, &p.did, &p.pubkey, &p.nonce, &proof,
+                    )
+                    .map(|confirm| {
+                        if let Err(e) = mur_core::mobile::add_paired_device(home, &p.pubkey) {
+                            tracing::warn!(error = %e, "mobile relay: persist paired failed");
+                        }
+                        tracing::info!(
+                            fingerprint = %mur_core::mobile::device_fingerprint(&p.pubkey),
+                            "mobile: paired new device (relay, proof)"
+                        );
+                        (p.pubkey, p.agent, confirm)
+                    })
+                }
+                _ => None,
+            };
+            match done {
+                Some((pubkey, agent, confirm)) => {
+                    *paired = Some(pubkey);
+                    relay_send(write, &ServerFrame::Paired { agent, confirm }).await?;
+                }
+                None => {
+                    relay_send(
+                        write,
+                        &ServerFrame::Rejected {
+                            reason: "bad pairing proof".to_string(),
+                        },
+                    )
+                    .await?;
+                }
             }
         }
 
@@ -317,7 +411,14 @@ async fn handle_frame(
             {
                 *paired = Some(pubkey);
                 let canonical = canonicalize_agent_name(home, &agent);
-                relay_send(write, &ServerFrame::Paired { agent: canonical }).await?;
+                relay_send(
+                    write,
+                    &ServerFrame::Paired {
+                        agent: canonical,
+                        confirm: Vec::new(),
+                    },
+                )
+                .await?;
             }
             _ => {
                 relay_send(

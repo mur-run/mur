@@ -141,11 +141,12 @@ pub fn resume_proof_ok(home: &Path, pubkey: &str, nonce: &str, envelope: &Signed
 // ── Pairing window (enrollment) ──────────────────────────────────────────────
 //
 // Enrolling a NEW device requires an on-demand, single-use, short-TTL window —
-// there is no persistent pairing secret. `mur agent pair` / the Hub mints one
-// (writing only the token HASH + a TTL to a 0600 file); the daemon claims it
-// once at Hello time and burns it. The plaintext token travels out-of-band in
-// the QR/URI only — never to disk, never to mDNS. Already-paired devices never
-// need a window again (they authenticate by their key in `paired.json`).
+// there is no persistent pairing secret. `mur agent pair` / the Hub mints one,
+// writing the token + a TTL to a 0600 file; the daemon recomputes the proof
+// HMAC against that token, then burns the window. The token still travels OOB in
+// the QR/URI (same value the daemon holds) and is NEVER transmitted on the wire
+// — the phone proves possession via HMAC, see `mur_common::mobile::pair_proof`.
+// Already-paired devices never need a window again (they auth by their key).
 
 fn pair_window_path(home: &Path) -> PathBuf {
     home.join(PAIR_WINDOW_FILE)
@@ -175,10 +176,28 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PairWindowFile {
     window_id: String,
-    token_hash: String,
+    /// Plaintext token (0600 file): the daemon recomputes HMAC(token, transcript)
+    /// for the proof handshake. The same value is exposed OOB via the QR, so this
+    /// is not a weaker posture than hash-at-rest.
+    token: String,
     agent: String,
     /// Unix-epoch seconds after which the window is dead.
     expires_at: u64,
+    /// Failed proof attempts; the window is burned after `MAX_PAIR_ATTEMPTS`.
+    #[serde(default)]
+    attempts: u32,
+}
+
+/// Max failed proof attempts before a window is burned. At 122-bit entropy
+/// online guessing is already hopeless; this is defense-in-depth.
+const MAX_PAIR_ATTEMPTS: u32 = 5;
+
+/// A live pairing window resolved by id — the data the daemon needs to run the
+/// proof handshake.
+pub struct PairWindow {
+    pub window_id: String,
+    pub token: String,
+    pub agent: String,
 }
 
 fn now_unix() -> u64 {
@@ -188,18 +207,19 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// Open a fresh pairing window: mint a 122-bit token, persist only its hash + a
-/// TTL (mode 0600), and return `(window_id, token)`. Replaces any prior window
-/// (one active window at a time). The plaintext token is returned for OOB
-/// delivery (QR/URI) and is never written to disk.
+/// Open a fresh pairing window: mint a 122-bit token + window id, persist them +
+/// a TTL (mode 0600), and return `(window_id, token)`. Replaces any prior window
+/// (one active window at a time). The token is returned for OOB delivery
+/// (QR/URI) — it is never TRANSMITTED on the wire (the phone proves it via HMAC).
 pub fn mint_pair_window(home: &Path, agent: &str) -> Result<(String, String)> {
     let token = uuid::Uuid::new_v4().to_string();
     let window_id = uuid::Uuid::new_v4().to_string();
     let wf = PairWindowFile {
         window_id: window_id.clone(),
-        token_hash: sha256_hex(&token),
+        token: token.clone(),
         agent: agent.to_string(),
         expires_at: now_unix() + pair_window_ttl_secs(),
+        attempts: 0,
     };
     let path = pair_window_path(home);
     if let Some(parent) = path.parent() {
@@ -215,11 +235,10 @@ pub fn mint_pair_window(home: &Path, agent: &str) -> Result<(String, String)> {
     Ok((window_id, token))
 }
 
-/// Atomically CLAIM the open pairing window with `token`: succeeds at most once.
-/// On a hash match against a non-expired window it deletes the window file
-/// (single-use burn) and returns true; otherwise false (and sweeps an expired
-/// window). The caller MUST hold the cross-transport enrollment lock so
-/// read+burn is atomic, then record the device via [`add_paired_device`].
+/// LEGACY bearer path only: atomically CLAIM the open window with the plaintext
+/// `token` (succeeds at most once, single-use burn). Used solely by the gated
+/// legacy `Hello{token}` enrollment; the proto≥2 path uses
+/// [`lookup_pair_window`] + an HMAC proof so the token is never transmitted.
 pub fn try_consume_pair_window(home: &Path, token: &str) -> bool {
     let path = pair_window_path(home);
     let Ok(raw) = std::fs::read_to_string(&path) else {
@@ -232,11 +251,139 @@ pub fn try_consume_pair_window(home: &Path, token: &str) -> bool {
         let _ = std::fs::remove_file(&path); // sweep expired
         return false;
     }
-    if !ct_eq(wf.token_hash.as_bytes(), sha256_hex(token).as_bytes()) {
+    if !ct_eq(wf.token.as_bytes(), token.as_bytes()) {
         return false;
     }
     let _ = std::fs::remove_file(&path); // burn: single-use
     true
+}
+
+/// Look up the live (non-expired) pairing window with id `wid`, returning its
+/// token + agent so the daemon can recompute the HMAC proof. Sweeps + returns
+/// `None` if expired; `None` if absent or the id doesn't match.
+pub fn lookup_pair_window(home: &Path, wid: &str) -> Option<PairWindow> {
+    let path = pair_window_path(home);
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let wf: PairWindowFile = serde_json::from_str(&raw).ok()?;
+    if now_unix() >= wf.expires_at {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    if wf.window_id != wid {
+        return None;
+    }
+    Some(PairWindow {
+        window_id: wf.window_id,
+        token: wf.token,
+        agent: wf.agent,
+    })
+}
+
+/// Burn (delete) the pairing window if its id matches `wid` — single-use after a
+/// successful proof enrollment.
+pub fn burn_pair_window(home: &Path, wid: &str) {
+    let path = pair_window_path(home);
+    if let Ok(raw) = std::fs::read_to_string(&path)
+        && let Ok(wf) = serde_json::from_str::<PairWindowFile>(&raw)
+        && wf.window_id == wid
+    {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// Record a failed proof attempt against `wid`; burn the window once it reaches
+/// [`MAX_PAIR_ATTEMPTS`] (bounds online guessing).
+pub fn record_pair_failure(home: &Path, wid: &str) {
+    let path = pair_window_path(home);
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(mut wf) = serde_json::from_str::<PairWindowFile>(&raw) else {
+        return;
+    };
+    if wf.window_id != wid {
+        return;
+    }
+    wf.attempts += 1;
+    if wf.attempts >= MAX_PAIR_ATTEMPTS {
+        let _ = std::fs::remove_file(&path);
+    } else if let Ok(s) = serde_json::to_string_pretty(&wf) {
+        let _ = std::fs::write(&path, s);
+    }
+}
+
+/// Verify a `HelloProof` against the live window `wid` (proto≥2 enrollment, the
+/// shared crypto for BOTH transports). Recomputes the phone→daemon transcript
+/// with the window's token and constant-time-compares. On success it BURNS the
+/// window (single-use) and returns the daemon→phone `confirm` MAC for the caller
+/// to send in `Paired`; the caller must also record the device under the
+/// enrollment lock. On failure it records an attempt (burning after
+/// `MAX_PAIR_ATTEMPTS`) and returns `None`. `agent` must be the canonical name.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_hello_proof(
+    home: &Path,
+    wid: &str,
+    proto: u32,
+    agent: &str,
+    did: &str,
+    phone_pubkey: &str,
+    nonce: &[u8],
+    proof: &[u8],
+) -> Option<Vec<u8>> {
+    use mur_common::mobile::{
+        PAIR_ROLE_DAEMON_TO_PHONE, PAIR_ROLE_PHONE_TO_DAEMON, ct_verify, pair_proof,
+        pair_transcript,
+    };
+    let win = lookup_pair_window(home, wid)?;
+    let expect = pair_proof(
+        win.token.as_bytes(),
+        &pair_transcript(
+            PAIR_ROLE_PHONE_TO_DAEMON,
+            proto,
+            agent,
+            wid,
+            did,
+            phone_pubkey,
+            nonce,
+        ),
+    );
+    if !ct_verify(&expect, proof) {
+        record_pair_failure(home, wid);
+        return None;
+    }
+    let confirm = pair_proof(
+        win.token.as_bytes(),
+        &pair_transcript(
+            PAIR_ROLE_DAEMON_TO_PHONE,
+            proto,
+            agent,
+            wid,
+            did,
+            phone_pubkey,
+            nonce,
+        ),
+    );
+    burn_pair_window(home, wid);
+    Some(confirm.to_vec())
+}
+
+/// The daemon agent's stable Ed25519 identity (multibase) — the `did` bound into
+/// the pairing QR + proof transcript for endpoint authentication on TLS-less LAN.
+pub fn daemon_id(home: &Path, agent: &str) -> Option<String> {
+    let agent_home = home.join("agents").join(agent);
+    mur_common::identity::AgentIdentity::load(&agent_home)
+        .ok()
+        .map(|id| id.pubkey_text())
+}
+
+/// Whether legacy bearer-token `Hello` enrollment is allowed (env opt-in,
+/// `MUR_ALLOW_LEGACY_PAIRING`, default OFF). Proto≥2 enrollment always uses the
+/// HMAC proof; this is only a time-boxed escape hatch for operators mid-upgrade,
+/// and never applies to the relay (which always requires the proof).
+pub fn allow_legacy_pairing() -> bool {
+    std::env::var("MUR_ALLOW_LEGACY_PAIRING")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 /// Delete the pairing-window file if it has expired. Cheap to call on a timer
@@ -297,11 +444,19 @@ pub fn lan_ip() -> Option<IpAddr> {
     socket.local_addr().ok().map(|addr| addr.ip())
 }
 
-/// Build the pairing URI encoded into the QR. The phone parses host/port/token
-/// and calls `connect_lan`. `window_id` (`wid`) scopes the token to one window;
-/// older apps that ignore `wid` still work. Token (uuid) + slug are URL-safe.
-pub fn pairing_uri(host: &str, port: u16, window_id: &str, token: &str, agent: &str) -> String {
-    format!("mur-pair://{host}:{port}/?wid={window_id}&token={token}&agent={agent}")
+/// Build the pairing URI encoded into the QR. `wid` scopes the token to one
+/// window; `did` is the daemon agent's Ed25519 identity, which the phone
+/// cross-checks during the proof handshake to bind the endpoint on TLS-less LAN.
+/// `v=2` marks the proof-handshake protocol. All fields are URL-safe.
+pub fn pairing_uri(
+    host: &str,
+    port: u16,
+    window_id: &str,
+    token: &str,
+    did: &str,
+    agent: &str,
+) -> String {
+    format!("mur-pair://{host}:{port}/?wid={window_id}&token={token}&did={did}&agent={agent}&v=2")
 }
 
 /// Max channels returned to the phone (v4 scale is small).
@@ -713,11 +868,12 @@ mod tests {
         assert!(!try_consume_pair_window(home, "anything"), "no window yet");
 
         let (_wid, token) = mint_pair_window(home, "mur").unwrap();
-        // The plaintext token is NOT on disk (only its hash).
+        // The window file holds the plaintext token (0600) — the daemon recomputes
+        // the HMAC proof against it; the token is never TRANSMITTED on the wire.
         let raw = std::fs::read_to_string(pair_window_path(home)).unwrap();
         assert!(
-            !raw.contains(&token),
-            "window file must store only the token hash"
+            raw.contains(&token),
+            "window file stores the token for HMAC recompute"
         );
 
         // Wrong token never consumes the window.
@@ -871,6 +1027,108 @@ mod tests {
         assert!(
             !resume_proof_ok(home, &pk, &nonce, &sproof),
             "envelope key must match the claimed pubkey"
+        );
+    }
+
+    #[test]
+    fn verify_hello_proof_accepts_correct_token_and_is_single_use() {
+        use mur_common::mobile::{
+            PAIR_ROLE_DAEMON_TO_PHONE, PAIR_ROLE_PHONE_TO_DAEMON, pair_proof, pair_transcript,
+        };
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let (wid, token) = mint_pair_window(home, "mur").unwrap();
+        let (proto, agent, did, pubkey) = (2u32, "mur", "zDAEMON", "zPHONE");
+        let nonce = new_challenge_nonce();
+        let nonce_b = nonce.as_bytes();
+
+        // Phone computes the proof from the token (never sent).
+        let good = pair_proof(
+            token.as_bytes(),
+            &pair_transcript(
+                PAIR_ROLE_PHONE_TO_DAEMON,
+                proto,
+                agent,
+                &wid,
+                did,
+                pubkey,
+                nonce_b,
+            ),
+        );
+        let confirm = verify_hello_proof(home, &wid, proto, agent, did, pubkey, nonce_b, &good)
+            .expect("correct proof accepted");
+        // Confirm MAC matches the daemon→phone transcript (phone will verify this).
+        let expect_confirm = pair_proof(
+            token.as_bytes(),
+            &pair_transcript(
+                PAIR_ROLE_DAEMON_TO_PHONE,
+                proto,
+                agent,
+                &wid,
+                did,
+                pubkey,
+                nonce_b,
+            ),
+        );
+        assert_eq!(confirm, expect_confirm.to_vec());
+        // Single-use: window burned, a second proof fails.
+        assert!(
+            verify_hello_proof(home, &wid, proto, agent, did, pubkey, nonce_b, &good).is_none(),
+            "window is single-use"
+        );
+    }
+
+    #[test]
+    fn verify_hello_proof_rejects_wrong_token_and_bad_nonce() {
+        use mur_common::mobile::{PAIR_ROLE_PHONE_TO_DAEMON, pair_proof, pair_transcript};
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        let (wid, _token) = mint_pair_window(home, "mur").unwrap();
+        let (proto, agent, did, pubkey) = (2u32, "mur", "zDAEMON", "zPHONE");
+        let nonce = new_challenge_nonce();
+        // Proof computed with the WRONG token → rejected, window survives (until cap).
+        let bad = pair_proof(
+            b"not-the-token",
+            &pair_transcript(
+                PAIR_ROLE_PHONE_TO_DAEMON,
+                proto,
+                agent,
+                &wid,
+                did,
+                pubkey,
+                nonce.as_bytes(),
+            ),
+        );
+        assert!(
+            verify_hello_proof(
+                home,
+                &wid,
+                proto,
+                agent,
+                did,
+                pubkey,
+                nonce.as_bytes(),
+                &bad
+            )
+            .is_none()
+        );
+        assert!(
+            lookup_pair_window(home, &wid).is_some(),
+            "one bad attempt doesn't burn"
+        );
+        // Unknown wid → None.
+        assert!(
+            verify_hello_proof(
+                home,
+                "nope",
+                proto,
+                agent,
+                did,
+                pubkey,
+                nonce.as_bytes(),
+                &bad
+            )
+            .is_none()
         );
     }
 }

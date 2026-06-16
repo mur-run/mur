@@ -299,6 +299,16 @@ void uniffi_mur_mobile_sdk_fn_method_mobileclient_disconnect(uint64_t ptr, RustC
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_end_audio_stream(uint64_t ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_ENROLL_LAN
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_ENROLL_LAN
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_enroll_lan(uint64_t ptr, RustBuffer host, uint16_t port, RustBuffer token, RustBuffer wid, RustBuffer daemon_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_ENROLL_RELAY
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_ENROLL_RELAY
+void uniffi_mur_mobile_sdk_fn_method_mobileclient_enroll_relay(uint64_t ptr, RustBuffer relay_ws_url, RustBuffer jwt, RustBuffer token, RustBuffer wid, RustBuffer daemon_id, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_FETCH_CHANNEL_EVENTS
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_FN_METHOD_MOBILECLIENT_FETCH_CHANNEL_EVENTS
 void uniffi_mur_mobile_sdk_fn_method_mobileclient_fetch_channel_events(uint64_t ptr, RustBuffer channel_id, RustBuffer since_seq, RustCallStatus *_Nonnull out_status
@@ -636,6 +646,18 @@ uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_disconnect(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_END_AUDIO_STREAM
 #define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_END_AUDIO_STREAM
 uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_end_audio_stream(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_ENROLL_LAN
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_ENROLL_LAN
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_enroll_lan(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_ENROLL_RELAY
+#define UNIFFI_FFIDEF_UNIFFI_MUR_MOBILE_SDK_CHECKSUM_METHOD_MOBILECLIENT_ENROLL_RELAY
+uint16_t uniffi_mur_mobile_sdk_checksum_method_mobileclient_enroll_relay(void
     
 );
 #endif

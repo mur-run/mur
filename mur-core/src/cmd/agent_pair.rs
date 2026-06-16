@@ -19,13 +19,21 @@ pub fn cmd_pair(name: &str) -> Result<()> {
     // Mint a fresh single-use enrollment window. Only the token's hash is written
     // to disk (0600); the plaintext token below rides the QR out-of-band and is
     // valid once, for a short TTL.
+    // `did` (the agent's Ed25519 identity) is bound into the QR so the phone can
+    // authenticate the daemon during the proof handshake. Required — without it
+    // the phone cannot verify which daemon it reached on the TLS-less LAN.
+    let did = mobile::daemon_id(&home, name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent \"{name}\" has no identity yet — start it once (e.g. `mur agent run {name}`) before pairing"
+        )
+    })?;
     let (window_id, token) = mobile::mint_pair_window(&home, name)?;
     let ttl = mobile::pair_window_ttl_secs();
     let port = mobile::mobile_port();
     let host = mobile::lan_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "127.0.0.1".to_string());
-    let uri = mobile::pairing_uri(&host, port, &window_id, &token, name);
+    let uri = mobile::pairing_uri(&host, port, &window_id, &token, &did, name);
 
     let code = QrCode::new(uri.as_bytes())?;
     let qr = code.render::<unicode::Dense1x2>().quiet_zone(true).build();

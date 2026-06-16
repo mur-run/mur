@@ -19,8 +19,20 @@ use crate::MobileEvent;
 use mur_common::mobile::{ClientFrame, ServerFrame};
 
 /// Signs a Resume challenge nonce into a proof envelope. Set only when the first
-/// frame is a `Resume` (reconnect by paired key); `None` for enrollment (`Hello`).
+/// frame is a `Resume` (reconnect by paired key); `None` for enrollment.
 pub type ResumeSigner = Arc<dyn Fn(&str) -> SignedEnvelope + Send + Sync>;
+
+/// Context for a proto≥2 proof enrollment (set only when the first frame is a
+/// `HelloInit`). The token + daemon id come from the scanned QR; the token is
+/// kept here only to compute the HMAC proof and is never transmitted.
+#[derive(Clone)]
+pub struct EnrollCtx {
+    pub token: String,
+    pub expected_did: String,
+    pub proto: u32,
+    pub agent: String,
+    pub pubkey: String,
+}
 
 /// Commands the client pushes to the live transport task.
 pub enum Command {
@@ -46,12 +58,14 @@ pub enum Command {
 ///
 /// Emits `Connecting` immediately, `Connected` once paired, and exactly one
 /// terminal `Disconnected` (optionally preceded by `Error`) before returning.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_lan<E>(
     host: String,
     port: u16,
     path: String,
     hello: ClientFrame,
     resume_signer: Option<ResumeSigner>,
+    enroll_ctx: Option<EnrollCtx>,
     cmd_rx: UnboundedReceiver<Command>,
     emit: E,
 ) where
@@ -72,18 +86,29 @@ pub async fn run_lan<E>(
             return;
         }
     };
-    run_frame_loop(stream, hello, resume_signer, cmd_rx, emit, "lan").await;
+    run_frame_loop(
+        stream,
+        hello,
+        resume_signer,
+        enroll_ctx,
+        cmd_rx,
+        emit,
+        "lan",
+    )
+    .await;
 }
 
 /// Drive one relay connection to completion.
 ///
 /// Identical to `run_lan` except the URL is the full WSS relay URL and a JWT
 /// or API key is sent as `Authorization: Bearer` in the upgrade request.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_relay<E>(
     relay_url: String,
     jwt: String,
     hello: ClientFrame,
     resume_signer: Option<ResumeSigner>,
+    enroll_ctx: Option<EnrollCtx>,
     cmd_rx: UnboundedReceiver<Command>,
     emit: E,
 ) where
@@ -121,15 +146,26 @@ pub async fn run_relay<E>(
                 return;
             }
         };
-    run_frame_loop(stream, hello, resume_signer, cmd_rx, emit, "relay").await;
+    run_frame_loop(
+        stream,
+        hello,
+        resume_signer,
+        enroll_ctx,
+        cmd_rx,
+        emit,
+        "relay",
+    )
+    .await;
 }
 
 /// Shared frame loop used by both `run_lan` and `run_relay` once the
 /// WebSocket is open. Transport type is `"lan"` or `"relay"`.
+#[allow(clippy::too_many_arguments)]
 async fn run_frame_loop<S, E>(
     stream: tokio_tungstenite::WebSocketStream<S>,
     hello: ClientFrame,
     resume_signer: Option<ResumeSigner>,
+    enroll_ctx: Option<EnrollCtx>,
     mut cmd_rx: UnboundedReceiver<Command>,
     emit: E,
     _transport: &'static str,
@@ -163,13 +199,30 @@ async fn run_frame_loop<S, E>(
     }
 
     let mut paired = false;
+    // (wid, did, nonce) stashed at PairChallenge so the Paired confirm MAC can be
+    // verified (proof enrollment only).
+    let mut pending_confirm: Option<(String, String, Vec<u8>)> = None;
     loop {
         tokio::select! {
             inbound = read.next() => {
                 match inbound {
                     Some(Ok(Message::Text(txt))) => {
                         match serde_json::from_str::<ServerFrame>(txt.as_str()) {
-                            Ok(ServerFrame::Paired { agent }) => {
+                            Ok(ServerFrame::Paired { agent, confirm }) => {
+                                // Proof enrollment: authenticate the daemon by
+                                // verifying its confirm MAC before trusting pairing.
+                                if let (Some(ctx), Some((wid, did, nonce))) = (&enroll_ctx, &pending_confirm) {
+                                    let expect = mur_common::mobile::pair_proof(
+                                        ctx.token.as_bytes(),
+                                        &mur_common::mobile::pair_transcript(
+                                            mur_common::mobile::PAIR_ROLE_DAEMON_TO_PHONE,
+                                            ctx.proto, &ctx.agent, wid, did, &ctx.pubkey, nonce));
+                                    if !mur_common::mobile::ct_verify(&expect, &confirm) {
+                                        emit(MobileEvent::Error { message: "daemon confirmation failed — possible MITM".to_string() });
+                                        emit(MobileEvent::Disconnected { reason: "bad confirm".to_string() });
+                                        break;
+                                    }
+                                }
                                 paired = true;
                                 emit(MobileEvent::Connected { transport: "lan".to_string(), agent });
                             }
@@ -197,6 +250,41 @@ async fn run_frame_loop<S, E>(
                                     }
                                     None => emit(MobileEvent::Error {
                                         message: "unexpected challenge (not resuming)".to_string(),
+                                    }),
+                                }
+                            }
+                            Ok(ServerFrame::PairChallenge { wid, nonce, did }) => {
+                                // Enrollment challenge: verify the daemon identity
+                                // against the QR's `did` (MITM defense), then prove
+                                // token possession with HMAC over the transcript —
+                                // the token is never sent.
+                                match &enroll_ctx {
+                                    Some(ctx) => {
+                                        if !mur_common::mobile::ct_verify(did.as_bytes(), ctx.expected_did.as_bytes()) {
+                                            emit(MobileEvent::Error { message: "daemon identity mismatch — possible MITM".to_string() });
+                                            emit(MobileEvent::Disconnected { reason: "did mismatch".to_string() });
+                                            break;
+                                        }
+                                        let proof = mur_common::mobile::pair_proof(
+                                            ctx.token.as_bytes(),
+                                            &mur_common::mobile::pair_transcript(
+                                                mur_common::mobile::PAIR_ROLE_PHONE_TO_DAEMON,
+                                                ctx.proto, &ctx.agent, &wid, &did, &ctx.pubkey, &nonce));
+                                        pending_confirm = Some((wid.clone(), did.clone(), nonce.clone()));
+                                        let frame = ClientFrame::HelloProof { wid, proof: proof.to_vec() };
+                                        match serde_json::to_string(&frame) {
+                                            Ok(t) => {
+                                                if let Err(e) = write.send(Message::Text(t.into())).await {
+                                                    emit(MobileEvent::Error { message: format!("send hello proof: {e}") });
+                                                    emit(MobileEvent::Disconnected { reason: "send hello proof".to_string() });
+                                                    break;
+                                                }
+                                            }
+                                            Err(e) => emit(MobileEvent::Error { message: format!("encode hello proof: {e}") }),
+                                        }
+                                    }
+                                    None => emit(MobileEvent::Error {
+                                        message: "unexpected pair challenge (not enrolling)".to_string(),
                                     }),
                                 }
                             }

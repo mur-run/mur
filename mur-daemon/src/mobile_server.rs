@@ -111,9 +111,88 @@ async fn ws_handler(State(state): State<MobileState>, ws: WebSocketUpgrade) -> R
 }
 
 async fn handle_socket(mut socket: WebSocket, state: MobileState) {
-    // 1. Pairing handshake.
-    let (pubkey, agent) = match recv_text(&mut socket).await {
+    // 1. Pairing handshake. `confirm` is non-empty only for the proto≥2 proof
+    //    enrollment (the daemon→phone MAC that authenticates the daemon).
+    let (pubkey, agent, confirm) = match recv_text(&mut socket).await {
         Some(txt) => match serde_json::from_str::<ClientFrame>(&txt) {
+            // Proto ≥ 2 enrollment: token NEVER on the wire — HMAC challenge-response.
+            Ok(ClientFrame::HelloInit {
+                proto,
+                agent,
+                pubkey,
+                wid,
+            }) => {
+                let home = &state.mur_home;
+                if proto < 2 {
+                    let _ = send_frame(&mut socket, &reject("unsupported pairing protocol")).await;
+                    return;
+                }
+                let canonical = resolve_agent(home, &agent);
+                let did = match mur_core::mobile::daemon_id(home, &canonical) {
+                    Some(d) => d,
+                    None => {
+                        let _ = send_frame(&mut socket, &reject("agent has no identity")).await;
+                        return;
+                    }
+                };
+                // Issue the challenge UNCONDITIONALLY (don't branch on window
+                // existence — that would leak whether a wid is live); verification
+                // happens at the proof step. Fresh 32-byte liveness nonce.
+                let nonce = mur_common::mobile::mint_nonce().to_vec();
+                if send_frame(
+                    &mut socket,
+                    &ServerFrame::PairChallenge {
+                        wid: wid.clone(),
+                        nonce: nonce.clone(),
+                        did: did.clone(),
+                    },
+                )
+                .await
+                .is_err()
+                {
+                    return;
+                }
+                match recv_text(&mut socket).await {
+                    Some(t) => match serde_json::from_str::<ClientFrame>(&t) {
+                        Ok(ClientFrame::HelloProof { wid: pwid, proof }) if pwid == wid => {
+                            // Verify + record + burn atomically under the shared lock.
+                            let confirm = {
+                                let _guard = state.enroll_lock.lock().await;
+                                match mur_core::mobile::verify_hello_proof(
+                                    home, &wid, proto, &canonical, &did, &pubkey, &nonce, &proof,
+                                ) {
+                                    Some(c) => {
+                                        if let Err(e) =
+                                            mur_core::mobile::add_paired_device(home, &pubkey)
+                                        {
+                                            tracing::warn!(error = %e, "mobile: persist paired failed");
+                                        }
+                                        tracing::info!(
+                                            fingerprint = %mur_core::mobile::device_fingerprint(&pubkey),
+                                            "mobile: paired new device (LAN, proof)"
+                                        );
+                                        Some(c)
+                                    }
+                                    None => None,
+                                }
+                            };
+                            match confirm {
+                                Some(c) => (pubkey, canonical, c),
+                                None => {
+                                    let _ =
+                                        send_frame(&mut socket, &reject("bad pairing proof")).await;
+                                    return;
+                                }
+                            }
+                        }
+                        _ => {
+                            let _ = send_frame(&mut socket, &reject("expected hello proof")).await;
+                            return;
+                        }
+                    },
+                    None => return,
+                }
+            }
             Ok(ClientFrame::Hello {
                 pubkey,
                 token,
@@ -124,12 +203,11 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                     // Transitional resume: an already-enrolled device reconnecting.
                     // The shipped app re-sends Hello{token} on every reconnect, so
                     // accept by paired key alone (ignore the token, claim no window).
-                    // Removed once the app ships a dedicated Resume frame.
-                } else {
-                    // New device: requires a live single-use window, claimed
-                    // atomically under the shared lock (serialized with the relay).
-                    // Compute the outcome under the guard, then DROP it before any
-                    // socket write so a slow client can't stall other enrollments.
+                    // Removed once the app ships Resume; key-only, not token-gated.
+                } else if mur_core::mobile::allow_legacy_pairing() {
+                    // LEGACY bearer enrollment — opt-in only (default OFF), for
+                    // operators mid-fleet-upgrade. Sends the token in the clear, so
+                    // it reintroduces the LAN-sniff risk; the proof path is preferred.
                     let enrolled = {
                         let _guard = state.enroll_lock.lock().await;
                         if mur_core::mobile::try_consume_pair_window(home, &token) {
@@ -138,7 +216,7 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                             }
                             tracing::info!(
                                 fingerprint = %mur_core::mobile::device_fingerprint(&pubkey),
-                                "mobile: paired new device (LAN)"
+                                "mobile: paired new device (LAN, legacy)"
                             );
                             true
                         } else {
@@ -153,9 +231,16 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                         .await;
                         return;
                     }
+                } else {
+                    let _ = send_frame(
+                        &mut socket,
+                        &reject("legacy pairing disabled — update the MUR app to pair"),
+                    )
+                    .await;
+                    return;
                 }
                 let agent = resolve_agent(&state.mur_home, &agent);
-                (pubkey, agent)
+                (pubkey, agent, Vec::new())
             }
             Ok(ClientFrame::Resume { pubkey, agent }) => {
                 // Steady-state reconnect by paired key — no enrollment token.
@@ -186,7 +271,7 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
                                 home, &pubkey, &nonce, &envelope,
                             ) =>
                         {
-                            (pubkey, resolve_agent(&state.mur_home, &agent))
+                            (pubkey, resolve_agent(&state.mur_home, &agent), Vec::new())
                         }
                         _ => {
                             let _ = send_frame(&mut socket, &reject("bad resume proof")).await;
@@ -208,6 +293,7 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
         &mut socket,
         &ServerFrame::Paired {
             agent: agent.clone(),
+            confirm,
         },
     )
     .await
@@ -250,6 +336,8 @@ async fn handle_socket(mut socket: WebSocket, state: MobileState) {
 
         match frame {
             ClientFrame::Hello { .. }
+            | ClientFrame::HelloInit { .. }
+            | ClientFrame::HelloProof { .. }
             | ClientFrame::Resume { .. }
             | ClientFrame::ResumeProof { .. } => {
                 // Handshake frames after pairing — ignore silently.
@@ -634,6 +722,7 @@ mod tests {
     async fn start_server() -> (SocketAddr, TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().to_path_buf();
+        seed_agent(&home); // so daemon_id("mur") resolves for HelloInit
         let (chan_tx, _) = tokio::sync::broadcast::channel(8);
         let state = MobileState {
             mur_home: home.clone(),
@@ -649,9 +738,62 @@ mod tests {
         (addr, tmp)
     }
 
-    /// Open a single-use enrollment window in `home`; returns its token.
-    fn open_window(home: &std::path::Path) -> String {
-        mur_core::mobile::mint_pair_window(home, "mur").unwrap().1
+    /// Give the "mur" agent an on-disk identity so `daemon_id` returns a `did`.
+    fn seed_agent(home: &std::path::Path) {
+        AgentIdentity::generate()
+            .save(&home.join("agents").join("mur"))
+            .unwrap();
+    }
+
+    /// Run the full proto≥2 HMAC proof enrollment for a fresh phone identity;
+    /// returns the paired socket + the phone identity. Panics on any failure.
+    async fn enroll_via_proof(addr: SocketAddr, home: &std::path::Path) -> (Ws, AgentIdentity) {
+        use mur_common::mobile::{PAIR_ROLE_PHONE_TO_DAEMON, pair_proof, pair_transcript};
+        let (wid, token) = mur_core::mobile::mint_pair_window(home, "mur").unwrap();
+        let id = AgentIdentity::generate();
+        let pubkey = encode_pubkey(&id.verifying_key());
+        let mut ws = connect(addr).await;
+        send_frame(
+            &mut ws,
+            &ClientFrame::HelloInit {
+                proto: 2,
+                agent: "mur".to_string(),
+                pubkey: pubkey.clone(),
+                wid: wid.clone(),
+            },
+        )
+        .await;
+        let (nonce, did) = match recv_server(&mut ws).await {
+            ServerFrame::PairChallenge { nonce, did, .. } => (nonce, did),
+            other => panic!("expected PairChallenge, got {other:?}"),
+        };
+        let proof = pair_proof(
+            token.as_bytes(),
+            &pair_transcript(
+                PAIR_ROLE_PHONE_TO_DAEMON,
+                2,
+                "mur",
+                &wid,
+                &did,
+                &pubkey,
+                &nonce,
+            ),
+        );
+        send_frame(
+            &mut ws,
+            &ClientFrame::HelloProof {
+                wid,
+                proof: proof.to_vec(),
+            },
+        )
+        .await;
+        match recv_server(&mut ws).await {
+            ServerFrame::Paired { confirm, .. } => {
+                assert!(!confirm.is_empty(), "proof pairing returns a confirm MAC")
+            }
+            other => panic!("expected Paired, got {other:?}"),
+        }
+        (ws, id)
     }
 
     async fn connect(addr: SocketAddr) -> Ws {
@@ -704,8 +846,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn rejects_hello_without_active_window() {
-        // No window minted → a new device cannot enroll regardless of token.
+    async fn rejects_legacy_hello_when_disabled() {
+        // Legacy bearer Hello for a NEW (unpaired) device is refused by default
+        // (MUR_ALLOW_LEGACY_PAIRING off) — new devices must use the proof handshake.
         let (addr, _tmp) = start_server().await;
         let mut ws = connect(addr).await;
         send_frame(
@@ -724,42 +867,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn enrolls_through_a_window_then_burns_it() {
+    async fn enrolls_via_proof_handshake() {
+        // Full proto≥2 enrollment: HelloInit → PairChallenge → HelloProof → Paired,
+        // with the token never transmitted (enroll_via_proof asserts Paired+confirm).
         let (addr, tmp) = start_server().await;
-        let token = open_window(tmp.path());
-        let id = AgentIdentity::generate();
-        let mut ws = connect(addr).await;
-        send_frame(
-            &mut ws,
-            &ClientFrame::Hello {
-                pubkey: encode_pubkey(&id.verifying_key()),
-                token: token.clone(),
-                agent: "mur".to_string(),
-            },
-        )
-        .await;
-        match recv_server(&mut ws).await {
-            ServerFrame::Paired { agent } => assert_eq!(agent, "mur"),
-            other => panic!("expected Paired, got {other:?}"),
-        }
-
-        // Single-use: a different device presenting the SAME token is rejected
-        // (the window was burned by the first enrollment).
-        let id2 = AgentIdentity::generate();
-        let mut ws2 = connect(addr).await;
-        send_frame(
-            &mut ws2,
-            &ClientFrame::Hello {
-                pubkey: encode_pubkey(&id2.verifying_key()),
-                token,
-                agent: "mur".to_string(),
-            },
-        )
-        .await;
-        assert!(
-            matches!(recv_server(&mut ws2).await, ServerFrame::Rejected { .. }),
-            "window is single-use"
-        );
+        let _ = enroll_via_proof(addr, tmp.path()).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -846,22 +958,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rejects_unpaired_envelope() {
         let (addr, tmp) = start_server().await;
-        let token = open_window(tmp.path());
-        let id_a = AgentIdentity::generate();
-        let mut ws = connect(addr).await;
-        send_frame(
-            &mut ws,
-            &ClientFrame::Hello {
-                pubkey: encode_pubkey(&id_a.verifying_key()),
-                token,
-                agent: "mur".to_string(),
-            },
-        )
-        .await;
-        assert!(matches!(
-            recv_server(&mut ws).await,
-            ServerFrame::Paired { .. }
-        ));
+        let (mut ws, _id) = enroll_via_proof(addr, tmp.path()).await;
 
         // An envelope signed by a DIFFERENT identity than the paired one.
         let id_b = AgentIdentity::generate();
@@ -881,22 +978,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn valid_envelope_mirrors_user_transcript() {
         let (addr, tmp) = start_server().await;
-        let token = open_window(tmp.path());
-        let id = AgentIdentity::generate();
-        let mut ws = connect(addr).await;
-        send_frame(
-            &mut ws,
-            &ClientFrame::Hello {
-                pubkey: encode_pubkey(&id.verifying_key()),
-                token,
-                agent: "mur".to_string(),
-            },
-        )
-        .await;
-        assert!(matches!(
-            recv_server(&mut ws).await,
-            ServerFrame::Paired { .. }
-        ));
+        let (mut ws, id) = enroll_via_proof(addr, tmp.path()).await;
 
         send_frame(
             &mut ws,

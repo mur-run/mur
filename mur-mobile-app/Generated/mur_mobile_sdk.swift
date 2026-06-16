@@ -596,6 +596,20 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
     func endAudioStream() 
     
     /**
+     * Enroll a NEW device over LAN with the proto-2 PROOF handshake: the `token`
+     * (from the QR) is never transmitted — the phone proves it via HMAC. `wid`
+     * and `daemon_id` also come from the QR; `daemon_id` is verified against the
+     * daemon's challenge to defeat a LAN MITM.
+     */
+    func enrollLan(host: String, port: UInt16, token: String, wid: String, daemonId: String) 
+    
+    /**
+     * Enroll a NEW device over relay with the proto-2 PROOF handshake (one-shot;
+     * switch to `resume_relay` afterward). The `token` is never transmitted.
+     */
+    func enrollRelay(relayWsUrl: String, jwt: String, token: String, wid: String, daemonId: String) 
+    
+    /**
      * Request events for a specific channel, optionally from `since_seq`
      * (inclusive). Response arrives as [`MobileEvent::ChannelEvents`].
      */
@@ -623,8 +637,8 @@ public protocol MobileClientProtocol: AnyObject, Sendable {
     
     /**
      * Reconnect over LAN by paired KEY — no token — for a device already paired
-     * (the steady-state path after `connect_lan` has enrolled once). Sends a
-     * `Resume` and answers the daemon's challenge with a signed proof.
+     * (the steady-state path after enrollment). Sends a `Resume` and answers the
+     * daemon's challenge with a signed proof.
      */
     func resumeLan(host: String, port: UInt16) 
     
@@ -788,6 +802,40 @@ open func endAudioStream()  {try! rustCall() {
 }
     
     /**
+     * Enroll a NEW device over LAN with the proto-2 PROOF handshake: the `token`
+     * (from the QR) is never transmitted — the phone proves it via HMAC. `wid`
+     * and `daemon_id` also come from the QR; `daemon_id` is verified against the
+     * daemon's challenge to defeat a LAN MITM.
+     */
+open func enrollLan(host: String, port: UInt16, token: String, wid: String, daemonId: String)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_enroll_lan(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(host),
+        FfiConverterUInt16.lower(port),
+        FfiConverterString.lower(token),
+        FfiConverterString.lower(wid),
+        FfiConverterString.lower(daemonId),$0
+    )
+}
+}
+    
+    /**
+     * Enroll a NEW device over relay with the proto-2 PROOF handshake (one-shot;
+     * switch to `resume_relay` afterward). The `token` is never transmitted.
+     */
+open func enrollRelay(relayWsUrl: String, jwt: String, token: String, wid: String, daemonId: String)  {try! rustCall() {
+    uniffi_mur_mobile_sdk_fn_method_mobileclient_enroll_relay(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(relayWsUrl),
+        FfiConverterString.lower(jwt),
+        FfiConverterString.lower(token),
+        FfiConverterString.lower(wid),
+        FfiConverterString.lower(daemonId),$0
+    )
+}
+}
+    
+    /**
      * Request events for a specific channel, optionally from `since_seq`
      * (inclusive). Response arrives as [`MobileEvent::ChannelEvents`].
      */
@@ -842,8 +890,8 @@ open func publicKey() -> String  {
     
     /**
      * Reconnect over LAN by paired KEY — no token — for a device already paired
-     * (the steady-state path after `connect_lan` has enrolled once). Sends a
-     * `Resume` and answers the daemon's challenge with a signed proof.
+     * (the steady-state path after enrollment). Sends a `Resume` and answers the
+     * daemon's challenge with a signed proof.
      */
 open func resumeLan(host: String, port: UInt16)  {try! rustCall() {
     uniffi_mur_mobile_sdk_fn_method_mobileclient_resume_lan(
@@ -1787,6 +1835,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_end_audio_stream() != 16986) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_enroll_lan() != 40749) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_enroll_relay() != 25086) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_fetch_channel_events() != 13622) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1799,7 +1853,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_public_key() != 61081) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_resume_lan() != 18542) {
+    if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_resume_lan() != 45709) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_mur_mobile_sdk_checksum_method_mobileclient_resume_relay() != 17443) {

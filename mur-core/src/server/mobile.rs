@@ -46,13 +46,19 @@ pub(super) async fn get_pair_uri(
     // Mint a fresh single-use enrollment window (writes only the token hash to a
     // 0600 file); the plaintext token rides the QR/URI this auth-gated endpoint
     // returns — never to mDNS, never to disk.
+    let did = crate::mobile::daemon_id(&home, &q.agent).ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!(
+            "agent \"{}\" has no identity yet — start it once before pairing",
+            q.agent
+        ))
+    })?;
     let (window_id, token) =
         crate::mobile::mint_pair_window(&home, &q.agent).map_err(AppError::Internal)?;
     let port = crate::mobile::mobile_port();
     let host = crate::mobile::lan_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "127.0.0.1".to_string());
-    let uri = crate::mobile::pairing_uri(&host, port, &window_id, &token, &q.agent);
+    let uri = crate::mobile::pairing_uri(&host, port, &window_id, &token, &did, &q.agent);
 
     Ok(Json(PairUriResponse {
         uri,
