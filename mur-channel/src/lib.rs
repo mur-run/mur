@@ -3,6 +3,7 @@
 //! (`mur-core`) and the Hub (`mur-hub-gui`).
 pub mod index;
 pub mod service;
+pub mod sign;
 pub mod store;
 pub mod watch;
 

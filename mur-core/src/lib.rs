@@ -10,6 +10,7 @@ pub mod agent_wizard;
 pub mod auth;
 pub mod bridge_keychain;
 pub mod capture;
+pub mod channel_writer;
 pub mod character_card;
 pub mod codebase;
 pub mod daemon;

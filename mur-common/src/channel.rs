@@ -145,8 +145,10 @@ pub struct ChannelEvent {
     pub payload: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
-    /// RESERVED — `None` until per-event Ed25519 signing (v3d).
-    /// Sign-input: canonical `seq||ts||actor||kind||payload` bytes.
+    /// Detached Ed25519 signature (multibase) by the channel's WRITER over the
+    /// canonical sign-input `{v, channel_id, actor, kind, payload,
+    /// idempotency_key}` — EXCLUDING the store-assigned `seq`/`ts` (see
+    /// `mur-channel` `sign::sign_input`). `None` for legacy/unsigned events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
     /// RESERVED — key version for the signing key (v3d).

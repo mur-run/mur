@@ -70,6 +70,7 @@ impl ChannelStore {
     /// Append one event under an advisory lock so `seq` stays monotonic across
     /// processes (the Hub and the CLI may append concurrently). Returns the
     /// event with its assigned `seq` and timestamp.
+    #[allow(clippy::too_many_arguments)]
     pub fn append_event(
         &self,
         id: &str,
@@ -77,6 +78,8 @@ impl ChannelStore {
         kind: EventKind,
         payload: serde_json::Value,
         idempotency_key: Option<String>,
+        sig: Option<String>,
+        key_version: Option<u32>,
     ) -> Result<ChannelEvent> {
         let dir = self.channel_dir(id);
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
@@ -120,8 +123,8 @@ impl ChannelStore {
             kind,
             payload,
             idempotency_key,
-            sig: None,
-            key_version: None,
+            sig,
+            key_version,
         };
         let line = serde_json::to_string(&ev).context("serialize event")?;
         let mut data = OpenOptions::new()
@@ -197,6 +200,8 @@ mod tests {
                 EventKind::Message,
                 serde_json::json!({"text":"hi"}),
                 None,
+                None,
+                None,
             )
             .unwrap();
         let e1 = store
@@ -205,6 +210,8 @@ mod tests {
                 ChannelActor::Agent { id: "qa".into() },
                 EventKind::Message,
                 serde_json::json!({"text":"yo"}),
+                None,
+                None,
                 None,
             )
             .unwrap();
@@ -227,6 +234,8 @@ mod tests {
                 EventKind::ToolResult,
                 serde_json::json!({"x":1}),
                 Some("k1".into()),
+                None,
+                None,
             )
             .unwrap();
         // Same key again → returns the EXISTING event, does not append a 2nd row.
@@ -237,6 +246,8 @@ mod tests {
                 EventKind::ToolResult,
                 serde_json::json!({"x":2}),
                 Some("k1".into()),
+                None,
+                None,
             )
             .unwrap();
         assert_eq!(e0.seq, e0b.seq, "same idempotency_key → same event");
@@ -254,6 +265,8 @@ mod tests {
                 EventKind::Note,
                 serde_json::json!({}),
                 None,
+                None,
+                None,
             )
             .unwrap();
         store
@@ -262,6 +275,8 @@ mod tests {
                 ChannelActor::System,
                 EventKind::Note,
                 serde_json::json!({}),
+                None,
+                None,
                 None,
             )
             .unwrap();

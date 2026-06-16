@@ -354,7 +354,10 @@ async fn execute_step_inner(
 
 // ── Channel emit helper ─────────────────────────────────────────────────────
 
-/// Fire-and-forget: open the channel, append one System event, ignore errors.
+use crate::channel_writer::ROUTER_AGENT;
+
+/// Fire-and-forget: open the channel, append one System event SIGNED by the
+/// router (`"mur"`, falling back to unsigned when no identity), ignore errors.
 fn emit_channel(
     mur_home: &Path,
     channel_id: &str,
@@ -362,8 +365,11 @@ fn emit_channel(
     payload: serde_json::Value,
 ) {
     let _ = mur_channel::ChannelService::open(mur_home).and_then(|svc| {
-        svc.append(
+        crate::channel_writer::append_as_writer(
+            &svc,
+            mur_home,
             channel_id,
+            ROUTER_AGENT,
             mur_common::channel::ChannelActor::System,
             kind,
             payload,
@@ -418,9 +424,20 @@ async fn execute_step(
             .clone()
             .unwrap_or_else(|| step.description.clone());
 
-        // Record the delegation up front (System actor, deterministic key).
+        // Record the delegation up front (System actor, deterministic key),
+        // SIGNED by the router (v3d) via the single-sourced payload builder.
         if let Ok(svc) = ChannelService::open(mur_home) {
-            let _ = svc.append_delegation(cid, &canonical, &child_task_id, Some(deleg_key));
+            let payload = mur_channel::service::delegation_payload(cid, &canonical, &child_task_id);
+            let _ = crate::channel_writer::append_as_writer(
+                &svc,
+                mur_home,
+                cid,
+                ROUTER_AGENT,
+                ChannelActor::System,
+                mur_common::channel::EventKind::Delegation,
+                payload,
+                Some(deleg_key),
+            );
         }
         eprintln!("  Step {sid}: delegate → {canonical}: {goal_text}");
 
@@ -439,8 +456,11 @@ async fn execute_step(
                 // Mirror the specialist's approval request into the channel for
                 // visibility. v3c adds the interactive resolution path.
                 if let Ok(svc) = ChannelService::open(&home_for_hitl) {
-                    let _ = svc.append(
+                    let _ = crate::channel_writer::append_as_writer(
+                        &svc,
+                        &home_for_hitl,
                         &cid_for_hitl,
+                        ROUTER_AGENT,
                         ChannelActor::System,
                         mur_common::channel::EventKind::HitlRequest,
                         serde_json::json!({ "mirror": true, "from": "delegate", "params": hitl_params }),
@@ -456,8 +476,11 @@ async fn execute_step(
                 // Attribute the reply to the dialed agent; store the raw task
                 // snapshot alongside so attribution is auditable, not just asserted.
                 if let Ok(svc) = ChannelService::open(mur_home) {
-                    let _ = svc.append(
+                    let _ = crate::channel_writer::append_as_writer(
+                        &svc,
+                        mur_home,
                         cid,
+                        ROUTER_AGENT,
                         ChannelActor::Agent {
                             id: canonical.clone(),
                         },
@@ -487,8 +510,11 @@ async fn execute_step(
                 // Nothing partial is attributed; record a failure Note + fail the
                 // step so the DAG's on_failure (Abort/Skip/Retry) decides.
                 if let Ok(svc) = ChannelService::open(mur_home) {
-                    let _ = svc.append(
+                    let _ = crate::channel_writer::append_as_writer(
+                        &svc,
+                        mur_home,
                         cid,
+                        ROUTER_AGENT,
                         ChannelActor::System,
                         mur_common::channel::EventKind::Note,
                         serde_json::json!({ "text": format!("delegate to {canonical} failed: {e:#}") }),
@@ -618,8 +644,11 @@ async fn execute_step(
         // Use the deterministic idem_key so the resume cursor can match this row.
         let result_key = idem_key(cid, &opts.run_id, &sid, "result");
         let _ = ChannelService::open(mur_home).and_then(|svc| {
-            svc.append(
+            crate::channel_writer::append_as_writer(
+                &svc,
+                mur_home,
                 cid,
+                ROUTER_AGENT,
                 mur_common::channel::ChannelActor::System,
                 mur_common::channel::EventKind::ToolResult,
                 serde_json::json!({

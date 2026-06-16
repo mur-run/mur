@@ -1,7 +1,11 @@
 //! CLI transcript persistence, backed by the unified Channel store.
 //! The public surface (`Session`, `TurnRecord`, `SessionInfo`, `list_recent`,
 //! `load`, `latest`) is preserved so `app.rs`/`mod.rs` are barely touched.
-use std::path::Path;
+//!
+//! v3d: turns are SIGNED by the session's agent (the channel's writer) via
+//! `crate::channel_writer::append_as_writer`, falling back to unsigned when the
+//! agent has no on-disk identity (migration-safe).
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use mur_channel::ChannelService;
@@ -42,6 +46,8 @@ pub struct Session {
     /// `None` until the first append creates the channel.
     channel_id: Option<String>,
     agent: String,
+    /// `~/.mur` root — needed to resolve the agent's signing identity (v3d).
+    home: PathBuf,
 }
 
 impl Session {
@@ -52,6 +58,7 @@ impl Session {
             svc,
             channel_id: None,
             agent: agent.to_string(),
+            home: home.to_path_buf(),
         })
     }
 
@@ -62,6 +69,7 @@ impl Session {
             svc,
             channel_id: Some(channel_id.to_string()),
             agent: agent.to_string(),
+            home: home.to_path_buf(),
         })
     }
 
@@ -105,7 +113,22 @@ impl Session {
                 ch.id
             }
         };
-        self.svc.append_message(&id, actor, kind, text, task_id)?;
+        // Same payload shape as `append_message`, but SIGNED by the session's
+        // agent (the channel writer) when an identity exists (v3d).
+        let mut payload = serde_json::json!({ "text": text });
+        if let Some(t) = task_id {
+            payload["task_id"] = serde_json::Value::String(t.to_string());
+        }
+        crate::channel_writer::append_as_writer(
+            &self.svc,
+            &self.home,
+            &id,
+            &self.agent,
+            actor,
+            kind,
+            payload,
+            None,
+        )?;
         Ok(())
     }
 }
