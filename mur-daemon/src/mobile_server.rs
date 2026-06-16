@@ -760,11 +760,12 @@ mod tests {
         let path = tmp.path().join("agents/mur/mobile-events.jsonl");
         let mut found = false;
         for _ in 0..50 {
-            if let Ok(s) = std::fs::read_to_string(&path) {
-                if s.contains("mobile.transcript") && s.contains("hello mur") {
-                    found = true;
-                    break;
-                }
+            if let Ok(s) = std::fs::read_to_string(&path)
+                && s.contains("mobile.transcript")
+                && s.contains("hello mur")
+            {
+                found = true;
+                break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
