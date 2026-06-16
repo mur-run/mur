@@ -123,6 +123,12 @@ For detailed agent / companion / GUI export / runtime internals, read `docs/arch
   - `CHANNEL_SCHEMA_VERSION = 2` (v2: `HitlResponse` events carry approval authority).
   - Use `mur workflow run --channel-new <skill>` or `--channel <id>` to attach execution; `mur channel approve <channel_id> <hitl_id> [--deny] [--reason <msg>]` to act on HITL gates.
   - v3d (signing: `ChannelEvent.sig`/`key_version`) still pending. See `mem:project_unified_channel_pr433`.
+- **Unified Channel v4a** (mobile sync foundation) on branch `feat/unified-channel-v4a`:
+  - Every mobile turn (LAN + relay) is persisted into the agent's channel via `mur-core::mobile::persist_mobile_exchange`; the old `mobile-events.jsonl` mirror is retained for Hub live-tail.
+  - `ClientFrame::ChannelQuery { op, channel_id, since_seq }` / `ServerFrame::ChannelData { op, payload }` in `mur-common::mobile`: `op` = "list" returns channel summaries; `op` = "events" returns all events for a channel (from `since_seq` if given).
+  - Both daemon paths (`mobile_server.rs`, `relay_client.rs`) handle `ChannelQuery` by calling `mur-core::mobile::channel_query`.
+  - `mur-mobile-sdk`: `ChannelListItem`, `ChannelEventItem` UniFFI records; `MobileEvent::ChannelList/ChannelEvents/ChannelUpdate`; `MobileClient::list_channels()` and `fetch_channel_events(id, since_seq)`.
+  - Live-push: daemon spawns a `watch_channels` watcher; broadcasts `channel.updated` events to all connected phones via `tokio::sync::broadcast`; SDK translates to `MobileEvent::ChannelUpdate`.
 
 ## Release Process
 

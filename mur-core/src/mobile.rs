@@ -7,6 +7,8 @@
 //! `docs/superpowers/specs/2026-06-05-mur-voice-mobile-app-design.md`.
 
 use anyhow::{Context, Result};
+use mur_channel::ChannelService;
+use mur_common::channel::{ChannelActor, EventKind};
 use std::net::{IpAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 
@@ -80,4 +82,154 @@ pub fn lan_ip() -> Option<IpAddr> {
 /// and calls `connect_lan`. Token (uuid) and agent slug are URL-safe.
 pub fn pairing_uri(host: &str, port: u16, token: &str, agent: &str) -> String {
     format!("mur-pair://{host}:{port}/?token={token}&agent={agent}")
+}
+
+/// Max channels returned to the phone (v4 scale is small).
+const MOBILE_CHANNEL_LIMIT: usize = 200;
+
+/// Serve a channel pull for the phone. `op` ∈ "list" | "events".
+/// "list" → array of `{id,title,state,goal,updated_at,agents,turns}` (newest
+/// first, empties hidden). "events" → that channel's events at/after `since_seq`.
+/// Ownership filter: single-user, so all local channels are the owner's.
+pub fn channel_query(
+    home: &std::path::Path,
+    op: &str,
+    channel_id: Option<String>,
+    since_seq: Option<u64>,
+) -> anyhow::Result<serde_json::Value> {
+    let svc = ChannelService::open(home)?;
+    match op {
+        "list" => {
+            let mut out = Vec::new();
+            for row in svc.list(MOBILE_CHANNEL_LIMIT)? {
+                let events = svc.load_events(&row.id).unwrap_or_default();
+                if events.is_empty() {
+                    continue;
+                }
+                let manifest = svc.store().load_manifest(&row.id).ok();
+                let agents: Vec<String> = manifest
+                    .as_ref()
+                    .map(|m| {
+                        m.participants
+                            .iter()
+                            .filter_map(|p| match &p.actor {
+                                ChannelActor::Agent { id } => Some(id.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let goal = manifest
+                    .as_ref()
+                    .map(|m| m.goal.statement.clone())
+                    .unwrap_or_default();
+                out.push(serde_json::json!({
+                    "id": row.id,
+                    "title": row.title,
+                    "state": row.state,
+                    "goal": goal,
+                    "updated_at": row.updated_at,
+                    "agents": agents,
+                    "turns": events.len(),
+                }));
+            }
+            Ok(serde_json::Value::Array(out))
+        }
+        "events" => {
+            let id = channel_id.ok_or_else(|| anyhow::anyhow!("events query needs channel_id"))?;
+            let evs: Vec<_> = svc
+                .load_events(&id)?
+                .into_iter()
+                .filter(|e| since_seq.is_none_or(|s| e.seq >= s))
+                .collect();
+            Ok(serde_json::to_value(evs)?)
+        }
+        other => anyhow::bail!("unknown channel query op `{other}`"),
+    }
+}
+
+/// Persist one mobile user→agent exchange into the agent's channel (resolved
+/// once), so phone conversations are durable and shared with the Hub/CLI.
+/// Best-effort: failures are logged, never surfaced to the phone. Mirrors the
+/// Hub's `chat::persist_exchange`. The channel is created on the first exchange.
+pub fn persist_mobile_exchange(
+    home: &std::path::Path,
+    agent: &str,
+    user_text: &str,
+    agent_text: &str,
+) {
+    let res = (|| -> anyhow::Result<()> {
+        let svc = ChannelService::open(home)?;
+        let id = match svc.latest_for_agent(agent)? {
+            Some(id) => id,
+            None => svc.create_for_agent(agent)?.id,
+        };
+        svc.append_message(
+            &id,
+            ChannelActor::local_human(),
+            EventKind::Message,
+            user_text,
+            None,
+        )?;
+        svc.append_message(
+            &id,
+            ChannelActor::Agent {
+                id: agent.to_string(),
+            },
+            EventKind::Message,
+            agent_text,
+            None,
+        )?;
+        Ok(())
+    })();
+    if let Err(e) = res {
+        tracing::warn!("mobile channel persist failed for {agent}: {e:#}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_query_list_and_events() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        persist_mobile_exchange(tmp.path(), "mur", "hi", "hello");
+        // list → one summary with the agent + a turn count.
+        let list = channel_query(tmp.path(), "list", None, None).unwrap();
+        let arr = list.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["agents"][0], "mur");
+        assert!(arr[0]["turns"].as_u64().unwrap() >= 2);
+        let cid = arr[0]["id"].as_str().unwrap().to_string();
+        // events → the two messages; since_seq filters.
+        let evs = channel_query(tmp.path(), "events", Some(cid.clone()), None).unwrap();
+        assert_eq!(evs.as_array().unwrap().len(), 2);
+        let evs1 = channel_query(tmp.path(), "events", Some(cid), Some(1)).unwrap();
+        assert_eq!(evs1.as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn persist_mobile_exchange_writes_both_turns_to_one_channel() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        persist_mobile_exchange(
+            tmp.path(),
+            "mur",
+            "what's my schedule?",
+            "you have 2 meetings",
+        );
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        let id = svc
+            .latest_for_agent("mur")
+            .unwrap()
+            .expect("channel created");
+        let evs = svc.load_events(&id).unwrap();
+        assert_eq!(evs.len(), 2);
+        assert_eq!(evs[0].payload["text"], "what's my schedule?");
+        assert_eq!(evs[1].payload["text"], "you have 2 meetings");
+        // Second exchange appends to the SAME channel (shared, like the Hub).
+        persist_mobile_exchange(tmp.path(), "mur", "and tomorrow?", "3 meetings");
+        assert_eq!(svc.list(10).unwrap().len(), 1);
+        assert_eq!(svc.load_events(&id).unwrap().len(), 4);
+    }
 }

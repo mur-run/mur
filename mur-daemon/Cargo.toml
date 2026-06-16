@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 mur-common = { path = "../mur-common" }
 mur-core = { path = "../mur-core" }
+mur-channel = { path = "../mur-channel" }
 mur-agent-runtime = { path = "../mur-agent-runtime", features = ["tts"] }
 base64 = "0.22"
 mdns-sd = "0.20"

@@ -190,6 +190,26 @@ async fn handle_frame(
             }
         }
 
+        ClientFrame::ChannelQuery {
+            op,
+            channel_id,
+            since_seq,
+        } => {
+            let payload = mur_core::mobile::channel_query(home, &op, channel_id, since_seq)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "mobile relay: channel_query failed");
+                    serde_json::Value::Array(vec![])
+                });
+            relay_send(
+                write,
+                &ServerFrame::ChannelData {
+                    op: op.clone(),
+                    payload,
+                },
+            )
+            .await?;
+        }
+
         ClientFrame::AudioStreamEnd => {
             let pcm = std::mem::take(audio_buf);
             let home_c = home.to_path_buf();
@@ -273,7 +293,9 @@ async fn agent_turn(
         Err(e) => format!("[error] dial task: {e}"),
     };
 
-    let _ = user_text; // mirrored on Mac via mobile_server.rs; not needed here
+    if !reply_text.starts_with("[error]") {
+        mur_core::mobile::persist_mobile_exchange(home, agent, user_text, &reply_text);
+    }
     relay_send(
         write,
         &ServerFrame::Event {
