@@ -29,9 +29,28 @@ const RELAY_WS_PATH: &str = "/api/v1/relay/ws";
 /// Spawn the relay mobile client task; runs forever (reconnects on drop).
 pub fn spawn(mur_home: PathBuf, relay_url: String, api_key: String) {
     tokio::spawn(async move {
+        // One channel watcher for the whole relay task (mirrors the LAN server):
+        // filesystem changes under <home>/channels/ fan out via this broadcast so
+        // each connection can push `channel.updated` and a relay-only phone gets
+        // live updates instead of polling. Forgotten because the relay task lives
+        // for the process lifetime — exactly one watcher, no per-reconnect leak.
+        let (chan_tx, _chan_rx) = tokio::sync::broadcast::channel::<String>(256);
+        {
+            let tx = chan_tx.clone();
+            let home = mur_home.clone();
+            std::thread::spawn(move || {
+                match mur_channel::watch::watch_channels(&home, move |channel_id| {
+                    let _ = tx.send(channel_id);
+                }) {
+                    Ok(w) => std::mem::forget(w),
+                    Err(e) => tracing::warn!("mobile relay channel watcher failed: {e:#}"),
+                }
+            });
+        }
+
         let mut delay = Duration::from_secs(1);
         loop {
-            match run_once(&mur_home, &relay_url, &api_key).await {
+            match run_once(&mur_home, &relay_url, &api_key, &chan_tx).await {
                 Ok(()) => {
                     tracing::info!("mobile relay: clean disconnect");
                     delay = Duration::from_secs(1);
@@ -46,7 +65,12 @@ pub fn spawn(mur_home: PathBuf, relay_url: String, api_key: String) {
     });
 }
 
-async fn run_once(mur_home: &Path, relay_url: &str, api_key: &str) -> Result<()> {
+async fn run_once(
+    mur_home: &Path,
+    relay_url: &str,
+    api_key: &str,
+    chan_tx: &tokio::sync::broadcast::Sender<String>,
+) -> Result<()> {
     let ws_url = format!("{}{RELAY_WS_PATH}", relay_url.trim_end_matches('/'));
 
     let mut req = ws_url.into_client_request()?;
@@ -74,6 +98,8 @@ async fn run_once(mur_home: &Path, relay_url: &str, api_key: &str) -> Result<()>
     // token) completes the handshake. Until then, no application frame is
     // processed — mirrors the LAN server, which gates the whole connection.
     let mut paired_pubkey: Option<String> = None;
+    // Live channel-update feed for this connection.
+    let mut chan_rx = chan_tx.subscribe();
 
     loop {
         tokio::select! {
@@ -83,6 +109,23 @@ async fn run_once(mur_home: &Path, relay_url: &str, api_key: &str) -> Result<()>
                     "agent_id": "mur-mobile-relay",
                 }))?;
                 write.send(Message::Text(hb.into())).await?;
+            }
+
+            Ok(channel_id) = chan_rx.recv() => {
+                // Push live channel updates ONLY to a paired connection — never
+                // leak channel ids to an unauthenticated relay peer. A lagged
+                // receiver simply drops the missed id (the phone resyncs via
+                // ChannelQuery).
+                if paired_pubkey.is_some() {
+                    relay_send(
+                        &mut write,
+                        &ServerFrame::Event {
+                            name: "channel.updated".to_string(),
+                            payload: json!({ "channel_id": channel_id }),
+                        },
+                    )
+                    .await?;
+                }
             }
 
             msg = read.next() => {
