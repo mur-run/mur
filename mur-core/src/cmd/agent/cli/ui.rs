@@ -197,10 +197,22 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     };
 
     if let Some((hint_text, hint_color)) = right_hint {
-        spans.push(Span::styled(
-            format!(" {} ", hint_text),
-            Style::default().fg(hint_color).add_modifier(Modifier::DIM),
-        ));
+        let hint_display = format!(" {} ", hint_text);
+        let hint_width = hint_display.chars().count() as u16;
+        let left_width: u16 = spans
+            .iter()
+            .map(|s| s.content.chars().count() as u16)
+            .sum();
+        let bar_width = area.width;
+        // Only right-align if there's room; otherwise skip the hint.
+        if bar_width > left_width + hint_width {
+            let pad = bar_width - left_width - hint_width;
+            spans.push(Span::raw(" ".repeat(pad as usize)));
+            spans.push(Span::styled(
+                hint_display,
+                Style::default().fg(hint_color).add_modifier(Modifier::DIM),
+            ));
+        }
     }
 
     f.render_widget(Paragraph::new(Line::from(spans)), area);
