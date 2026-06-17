@@ -82,6 +82,9 @@ pub enum AgentAction {
         /// Auto-approve every tool call for this session (no HITL prompts)
         #[arg(long)]
         auto: bool,
+        /// Visual skin: dark (default) | light | mur
+        #[arg(long)]
+        skin: Option<String>,
     },
     /// Rotate an agent's Ed25519 identity keypair (P0a.6).
     Rekey {

@@ -51,7 +51,7 @@ const SPINNER_MS: u64 = 90;
 const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
-pub async fn cmd_cli(names: &[String], resume: bool, auto: bool) -> Result<()> {
+pub async fn cmd_cli(names: &[String], resume: bool, auto: bool, skin: Option<String>) -> Result<()> {
     if names.len() > 1 {
         let names = names.to_vec();
         return tokio::task::spawn_blocking(move || multiplex::run(&names, resume, auto)).await?;
@@ -76,7 +76,7 @@ pub async fn cmd_cli(names: &[String], resume: bool, auto: bool) -> Result<()> {
         return tokio::task::spawn_blocking(move || run_plain(&home2, &agent2, auto)).await?;
     }
 
-    run_tui(home, agent, resume, auto).await
+    run_tui(home, agent, resume, auto, skin).await
 }
 
 // ── TUI mode ────────────────────────────────────────────────────────────────
@@ -111,7 +111,21 @@ impl Drop for TerminalGuard {
     }
 }
 
-async fn run_tui(home: PathBuf, agent: String, resume: bool, auto: bool) -> Result<()> {
+async fn run_tui(
+    home: PathBuf,
+    agent: String,
+    resume: bool,
+    auto: bool,
+    skin: Option<String>,
+) -> Result<()> {
+    // Resolve skin: CLI flag > config > "dark"
+    let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+    let skin_name = skin.as_deref()
+        .or_else(|| cfg.cli.skin.as_deref())
+        .unwrap_or("dark");
+    let _unknown_skin = !theme::is_known_skin(skin_name);
+    let _active_theme = theme::resolve_skin(skin_name);
+
     // Restore the terminal even if a later panic unwinds past the guard.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
