@@ -27,6 +27,7 @@ mod dashboard;
 mod dispatch;
 #[allow(dead_code)]
 mod mobile;
+mod model_discovery;
 mod model_prices;
 // Discovery items (cache constants, LLM preference table, test-only fns) are
 // defined for library consumers and tests; the binary only uses a subset.
