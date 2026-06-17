@@ -566,3 +566,295 @@
   resize: vertical;
   box-sizing: border-box;
 }
+
+/* ── ModelCombobox (model picker) ─────────────────────────────────────── */
+
+/* Wrapper — provides the positioning root for the popover. */
+.mc-combo {
+  position: relative;
+}
+
+/* ── Trigger button ── */
+.mc-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: var(--surface-secondary, #161922);
+  border: 1px solid var(--border-line, rgba(255,255,255,.08));
+  border-radius: var(--radius-md, 10px);
+  padding: 9px 12px;
+  cursor: pointer;
+  color: var(--text-primary, #F1F5F9);
+  font-family: inherit;
+  font-size: 13px;
+  transition: border-color 0.15s;
+}
+.mc-trigger:hover {
+  border-color: rgba(255,255,255,.16);
+}
+.mc-combo--open .mc-trigger {
+  border-color: var(--color-brand, #4A90D9);
+  box-shadow: 0 0 0 3px rgba(74,144,217,.25);
+}
+.mc-trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mc-trigger__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mc-trigger__alias {
+  font-weight: 600;
+}
+.mc-trigger__sub {
+  color: var(--text-secondary, #94A3B8);
+  font-size: 12px;
+}
+.mc-trigger__chev {
+  color: var(--text-tertiary, #6B7688);
+  flex: none;
+  transition: transform 0.15s;
+}
+.mc-trigger__chev--open {
+  transform: rotate(180deg);
+}
+
+/* ── Provider avatar chip ── */
+.mc-av {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 800;
+  color: #fff;
+  flex: none;
+  line-height: 1;
+  letter-spacing: -.03em;
+}
+.mc-av--sm {
+  width: 16px;
+  height: 16px;
+  font-size: 8px;
+}
+
+/* ── Popover ── */
+.mc-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: var(--surface-popover, #10141d);
+  border: 1px solid var(--border-line, rgba(255,255,255,.08));
+  border-radius: var(--radius-md, 10px);
+  box-shadow: 0 24px 60px -20px rgba(0,0,0,.85);
+  overflow: hidden;
+}
+
+/* ── Search row ── */
+.mc-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border-line, rgba(255,255,255,.08));
+  background: var(--surface-search, #0c0f16);
+}
+.mc-search__icon {
+  color: var(--text-tertiary, #6B7688);
+  flex: none;
+}
+.mc-search__input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary, #F1F5F9);
+  font-size: 13px;
+  font-family: inherit;
+}
+.mc-search__input::placeholder {
+  color: var(--text-tertiary, #6B7688);
+}
+
+/* ── Model list ── */
+.mc-list {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+/* ── Group header ── */
+.mc-group__header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary, #6B7688);
+  padding: 10px 10px 5px;
+}
+.mc-group__count {
+  opacity: .7;
+  font-weight: 600;
+}
+
+/* ── Option row ── */
+.mc-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+  position: relative;
+}
+.mc-opt:hover,
+.mc-opt--active {
+  background: var(--surface-hover, #232838);
+}
+.mc-opt--sel {
+  background: rgba(74,144,217,.14);
+}
+.mc-opt--sel::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--color-brand, #4A90D9);
+}
+
+.mc-opt__check-wrap {
+  width: 15px;
+  flex: none;
+  color: var(--color-brand, #4A90D9);
+  display: grid;
+  place-items: center;
+}
+.mc-opt__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.mc-opt__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #F1F5F9);
+}
+.mc-opt__sub {
+  font-size: 11px;
+  color: var(--text-secondary, #94A3B8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Badges ── */
+.mc-badges {
+  display: flex;
+  gap: 5px;
+  flex: none;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.mc-badge {
+  font-size: 10px;
+  font-weight: 650;
+  padding: 2px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.mc-badge--frontier {
+  background: rgba(74,144,217,.16);
+  color: #8fc0ef;
+  border: 1px solid rgba(74,144,217,.3);
+}
+.mc-badge--local {
+  background: rgba(148,163,184,.14);
+  color: var(--text-secondary, #94A3B8);
+  border: 1px solid rgba(148,163,184,.25);
+}
+.mc-badge--tier-unknown {
+  background: rgba(148,163,184,.10);
+  color: var(--text-tertiary, #6B7688);
+  border: 1px solid rgba(148,163,184,.15);
+}
+.mc-badge--cost {
+  background: rgba(22,163,74,.14);
+  color: #5fd38a;
+  border: 1px solid rgba(22,163,74,.3);
+  font-variant-numeric: tabular-nums;
+}
+.mc-badge--ctx {
+  background: rgba(245,158,11,.14);
+  color: #F59E0B;
+  border: 1px solid rgba(245,158,11,.3);
+}
+.mc-badge--cap {
+  background: rgba(148,163,184,.10);
+  color: var(--text-secondary, #94A3B8);
+  border: 1px solid rgba(148,163,184,.20);
+  text-transform: lowercase;
+}
+
+/* ── Keyboard hint footer ── */
+.mc-kbd-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  border-top: 1px solid var(--border-line, rgba(255,255,255,.08));
+  background: var(--surface-search, #0c0f16);
+  font-size: 10.5px;
+  color: var(--text-tertiary, #6B7688);
+  flex-wrap: wrap;
+}
+.mc-kbd-foot kbd {
+  background: rgba(255,255,255,.06);
+  border: 1px solid var(--border-line, rgba(255,255,255,.08));
+  border-radius: 4px;
+  padding: 0 4px;
+  font-family: inherit;
+  color: var(--text-secondary, #94A3B8);
+  font-size: 10px;
+}
+
+/* ── Manage models link ── */
+.mc-manage-link {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--color-brand, #4A90D9);
+  font-size: 10.5px;
+  font-family: inherit;
+  text-decoration: none;
+}
+.mc-manage-link:hover {
+  text-decoration: underline;
+}
+
+/* ── Empty state ── */
+.mc-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-tertiary, #6B7688);
+  font-size: 12px;
+}

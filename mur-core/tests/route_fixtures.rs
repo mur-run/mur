@@ -17,6 +17,7 @@ pub fn test_registry() -> ModelRegistry {
             params: serde_json::Value::Null,
             tier: Some(RouteTier::Local),
             cost_per_1k_tokens: None,
+            ..Default::default()
         },
     );
     reg.models.insert(
@@ -30,6 +31,7 @@ pub fn test_registry() -> ModelRegistry {
             params: serde_json::Value::Null,
             tier: Some(RouteTier::Frontier),
             cost_per_1k_tokens: Some(0.015),
+            ..Default::default()
         },
     );
     reg

@@ -46,6 +46,7 @@ fn model_ref_resolves_from_registry() {
             params: serde_json::Value::Null,
             tier: None,
             cost_per_1k_tokens: None,
+            ..Default::default()
         },
     );
     reg.save_to(&dir.path().join(".mur/models.yaml")).unwrap();

@@ -39,6 +39,8 @@ pub mod hitl;
 pub mod inject;
 pub mod interactive;
 pub mod mobile;
+pub mod model_discovery;
+pub mod model_prices;
 pub mod nudge;
 pub mod paths;
 pub mod retrieve;

@@ -202,6 +202,7 @@ pub async fn build_provider_runner(
         params: serde_json::Value::Null,
         tier: None,
         cost_per_1k_tokens: None,
+        ..Default::default()
     });
 
     let secret_value: Option<secrecy::SecretString> = match &entry.secret {

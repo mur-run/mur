@@ -126,11 +126,7 @@ export interface AgentDetail {
   agent_name: string;
 }
 
-export interface ModelOption {
-  ref_name: string;
-  provider: string;
-  model: string;
-}
+export type { ModelOption } from "./components/modelPicker";
 
 export interface DetailPatch {
   persona_category?: string;
