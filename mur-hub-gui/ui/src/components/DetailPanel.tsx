@@ -18,6 +18,7 @@ import {
 } from "../types";
 import { CompanionInbox } from "./CompanionInbox";
 import { ModelCombobox } from "./ModelCombobox";
+import { ModelLibrary } from "./ModelLibrary";
 import { MobileTab } from "./MobileTab";
 import { MemoryTab } from "./MemoryTab";
 import { useT } from "../i18n";
@@ -58,7 +59,6 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   const [detail, setDetail] = useState<AgentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>("persona");
-  // TODO(S3 Task 6): replace placeholder with <ModelLibrary>
   const [libraryOpen, setLibraryOpen] = useState(false);
 
   useEffect(() => {
@@ -198,12 +198,7 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
               onSaved={handleSaved}
               onManage={() => setLibraryOpen(true)}
             />
-            {libraryOpen && (
-              <div className="model-library-placeholder" role="dialog">
-                <p>Model Library — coming in S3 Task 6</p>
-                <button onClick={() => setLibraryOpen(false)}>Close</button>
-              </div>
-            )}
+            <ModelLibrary open={libraryOpen} onClose={() => setLibraryOpen(false)} />
             <PersonaTab detail={detail} onSaved={handleSaved} />
           </>
         )}
