@@ -294,6 +294,7 @@ mod tests {
                 params: serde_json::Value::Null,
                 tier: Some(RouteTier::Local),
                 cost_per_1k_tokens: None,
+                ..Default::default()
             },
         );
         reg.models.insert(
@@ -307,6 +308,7 @@ mod tests {
                 params: serde_json::Value::Null,
                 tier: Some(RouteTier::Frontier),
                 cost_per_1k_tokens: Some(0.015),
+                ..Default::default()
             },
         );
         reg
@@ -400,6 +402,7 @@ mod tests {
                 params: serde_json::Value::Null,
                 tier: Some(RouteTier::Frontier),
                 cost_per_1k_tokens: Some(0.015),
+                ..Default::default()
             },
         );
         let router = Router::new(reg).unwrap();

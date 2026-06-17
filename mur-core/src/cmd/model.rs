@@ -162,6 +162,7 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
                     params: serde_json::Value::Null,
                     tier,
                     cost_per_1k_tokens: cost_per_1k,
+                    ..Default::default()
                 },
             );
             reg.save_to(&path)?;
@@ -232,6 +233,7 @@ fn cmd_migrate(dry_run: bool) -> anyhow::Result<()> {
             params: serde_json::Value::Null,
             tier: None,
             cost_per_1k_tokens: None,
+            ..Default::default()
         });
         profile.model_ref = Some(id.clone());
         migrated_agents.push(format!("{} → {id}", profile.name));
