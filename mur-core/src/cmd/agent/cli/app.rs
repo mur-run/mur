@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, Borders, Padding};
 use tui_textarea::TextArea;
 
 use super::markdown;
@@ -83,6 +83,8 @@ pub enum SlashCmd {
     Mcp(Vec<String>),
     /// `/skill [list|add|remove] …` — manage the agent's skills.
     Skill(Vec<String>),
+    /// `/skin [dark|light|mur]` — show or switch the active skin (persists to config).
+    Skin(Option<String>),
     Quit,
     Unknown(String),
 }
@@ -108,23 +110,25 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         }),
         "mcp" => SlashCmd::Mcp(words.map(str::to_string).collect()),
         "skill" | "skills" => SlashCmd::Skill(words.map(str::to_string).collect()),
+        "skin" | "theme" => SlashCmd::Skin(words.next().map(str::to_string)),
         "exit" | "quit" | "q" => SlashCmd::Quit,
         other => SlashCmd::Unknown(other.to_string()),
     })
 }
 
 /// The set of slash commands offered by tab-completion / `/help`.
-pub const SLASH_COMMANDS: [&str; 10] = [
-    "/help",
-    "/clear",
-    "/card",
-    "/sessions",
-    "/channels",
+pub const SLASH_COMMANDS: [&str; 11] = [
     "/auto",
-    "/mcp",
-    "/skill",
+    "/card",
+    "/channels",
+    "/clear",
     "/exit",
+    "/help",
+    "/mcp",
     "/quit",
+    "/sessions",
+    "/skill",
+    "/skin",
 ];
 
 pub const ESC_DOUBLE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
@@ -200,8 +204,6 @@ pub struct App {
     /// re-establishes context.
     pub cwd_sent: bool,
     /// Active visual skin, resolved at startup. Updated live by `/skin`.
-    // Used by the UI renderer (next task); suppress dead_code until then.
-    #[allow(dead_code)]
     pub theme: &'static Theme,
     pub last_esc_at: Option<std::time::Instant>,
     pub esc_hint: bool,
@@ -461,16 +463,28 @@ impl App {
     /// Call once per render frame so the style stays in sync without needing
     /// `&mut App` inside the draw closure.
     pub fn sync_input_block(&mut self) {
+        let theme = self.theme;
+        let hint = if theme.compact_input {
+            " message — Enter · Alt+Enter · /help "
+        } else {
+            " message — Enter to send · Alt+Enter newline · /help · Ctrl+D quit "
+        };
         let is_shell = self.input_text().trim_start().starts_with('!');
         let block = if is_shell {
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(theme.border_type)
                 .border_style(Style::default().fg(Color::Red))
+                .padding(Padding::horizontal(theme.inner_padding as u16))
                 .title(" ! shell command — output shared with agent ")
         } else {
             Block::default()
                 .borders(Borders::ALL)
-                .title(" message — Enter to send · Alt+Enter newline · /help · Ctrl+D quit ")
+                .border_type(theme.border_type)
+                .border_style(Style::default().fg(theme.border))
+                .padding(Padding::horizontal(theme.inner_padding as u16))
+                .title(hint)
+                .title_style(Style::default().fg(theme.border_title))
         };
         self.input.set_block(block);
     }
@@ -519,6 +533,19 @@ mod tests {
         );
         assert_eq!(parse_slash("hello"), None);
         assert_eq!(parse_slash("  not/a/cmd"), None);
+    }
+
+    #[test]
+    fn parse_slash_skin_variants() {
+        assert_eq!(parse_slash("/skin"), Some(SlashCmd::Skin(None)));
+        assert_eq!(
+            parse_slash("/skin mur"),
+            Some(SlashCmd::Skin(Some("mur".into())))
+        );
+        assert_eq!(
+            parse_slash("/theme light"),
+            Some(SlashCmd::Skin(Some("light".into())))
+        );
     }
 
     #[test]

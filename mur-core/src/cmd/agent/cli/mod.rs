@@ -318,6 +318,19 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
     }
 }
 
+/// Write `cli.skin = name` to `~/.mur/config.yaml` atomically.
+fn persist_skin(home: &std::path::Path, name: &str) -> anyhow::Result<()> {
+    use mur_common::config::Config;
+    let path = home.join("config.yaml");
+    let mut cfg = Config::load_or_default(&path);
+    cfg.cli.skin = Some(name.to_string());
+    let text = serde_yaml::to_string(&cfg).context("serialise config")?;
+    let tmp = path.with_extension("yaml.tmp");
+    std::fs::write(&tmp, &text).context("write config tmp")?;
+    std::fs::rename(&tmp, &path).context("rename config")?;
+    Ok(())
+}
+
 /// Tab completes a leading-slash command to the first matching name.
 fn complete_slash(app: &mut App) {
     let cur = app.input_text();
@@ -577,6 +590,28 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
         SlashCmd::Skill(args) => {
             run_manage(app, move |agent| manage::run_skill(&agent, &args)).await
         }
+        SlashCmd::Skin(name_opt) => match name_opt {
+            None => {
+                let current = theme::skin_name(app.theme);
+                app.push_system(format!("current skin: {current} — valid: dark, light, mur"));
+            }
+            Some(name) => {
+                if !theme::is_known_skin(&name) {
+                    app.push_system(format!(
+                        "unknown skin '{name}' — valid: dark, light, mur"
+                    ));
+                } else {
+                    app.theme = theme::resolve_skin(&name);
+                    let h = app.home.clone();
+                    match persist_skin(&h, &name) {
+                        Ok(()) => app.push_system(format!("skin changed to {name}")),
+                        Err(e) => app.push_system(format!(
+                            "skin changed to {name} (could not persist: {e})"
+                        )),
+                    }
+                }
+            }
+        },
         SlashCmd::Unknown(c) => app.push_system(format!("unknown command: /{c} — try /help")),
     }
 }
