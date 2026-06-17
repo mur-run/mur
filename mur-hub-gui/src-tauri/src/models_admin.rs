@@ -94,21 +94,55 @@ pub fn probe_local_providers() -> Result<Vec<DetectedLocalView>, String> {
         .collect())
 }
 
+/// Find the stored `SecretRef` to reuse when re-exploring an already-connected
+/// provider: the first registry entry for `provider` that carries a secret.
+/// Returns `None` for providers with no stored credential (e.g. local).
+pub fn provider_secret_ref(reg: &ModelRegistry, provider: &str) -> Option<SecretRef> {
+    reg.models
+        .values()
+        .find(|e| e.provider == provider && e.secret.is_some())
+        .and_then(|e| e.secret.clone())
+}
+
 #[tauri::command]
-pub fn test_provider(
+pub async fn test_provider(
     provider: String,
     base_url: String,
     api_key: Option<String>,
 ) -> Result<Vec<EnrichedModelView>, String> {
+    // Explicit key from the UI wins. Otherwise (re-exploring a connected
+    // provider with no key field) resolve the provider's stored SecretRef so
+    // re-explore no longer 401s.
+    let key: Option<String> = match api_key.filter(|k| !k.is_empty()) {
+        Some(k) => Some(k),
+        None => {
+            let path = ModelRegistry::default_path().map_err(|e| e.to_string())?;
+            match ModelRegistry::load_from(&path)
+                .ok()
+                .and_then(|reg| provider_secret_ref(&reg, &provider))
+            {
+                Some(secret) => secret.resolve_to_string().await,
+                None => None,
+            }
+        }
+    };
+
     let home = mur_home();
-    let ids =
-        model_discovery::discover_models(&base_url, api_key.as_deref(), DISCOVER_TIMEOUT_SECS)
-            .map_err(|e| format!("discovery failed: {e}"))?;
+    let base = base_url.clone();
+    let prov = provider.clone();
+    // discover_models uses reqwest::blocking — run it off the async runtime.
+    let ids = tokio::task::spawn_blocking(move || {
+        model_discovery::discover_models(&base, key.as_deref(), DISCOVER_TIMEOUT_SECS)
+    })
+    .await
+    .map_err(|e| format!("discovery task failed: {e}"))?
+    .map_err(|e| format!("discovery failed: {e}"))?;
+
     Ok(ids
         .into_iter()
         .map(|m| {
-            let price = model_prices::lookup(&home, &provider, &m, false);
-            EnrichedModelView::build(&provider, &m, price)
+            let price = model_prices::lookup(&home, &prov, &m, false);
+            EnrichedModelView::build(&prov, &m, price)
         })
         .collect())
 }
@@ -200,5 +234,43 @@ mod tests {
             Some(SecretRef::Keychain { .. })
         ));
         assert!(build_secret("keychain", "").is_none()); // empty → no secret
+    }
+
+    #[test]
+    fn provider_secret_ref_picks_stored_credential() {
+        let mut reg = ModelRegistry::default();
+        // anthropic entry with a keychain secret
+        reg.models.insert(
+            "claude_opus".into(),
+            ModelEntry {
+                provider: "anthropic".into(),
+                model: "claude-opus-4-8".into(),
+                secret: Some(SecretRef::Keychain {
+                    service: "mur".into(),
+                    account: "anthropic".into(),
+                }),
+                ..Default::default()
+            },
+        );
+        // local entry with no secret
+        reg.models.insert(
+            "ollama_llama3".into(),
+            ModelEntry {
+                provider: "ollama".into(),
+                model: "llama3".into(),
+                tier: Some(RouteTier::Local),
+                ..Default::default()
+            },
+        );
+
+        // connected provider → returns its stored SecretRef
+        assert!(matches!(
+            provider_secret_ref(&reg, "anthropic"),
+            Some(SecretRef::Keychain { .. })
+        ));
+        // local / keyless provider → None
+        assert_eq!(provider_secret_ref(&reg, "ollama"), None);
+        // unknown provider → None
+        assert_eq!(provider_secret_ref(&reg, "openai"), None);
     }
 }
