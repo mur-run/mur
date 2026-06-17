@@ -6,7 +6,7 @@
  * keyboard navigation (ArrowUp/Down/Enter/Esc), click-outside close.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentDetail, DetailPatch, ModelOption } from "../types";
 import { filterModels, formatCost, groupByProvider } from "./modelPicker";
@@ -153,8 +153,21 @@ export function ModelCombobox({ detail, onSaved, onManage }: Props) {
   const filtered = filterModels(models, query);
   const groups = groupByProvider(filtered);
 
+  // Precompute groups with deterministic flat indices — pure, render-count-independent.
+  // Each row's flatIndex = sum of prior groups' lengths + index within group.
+  const indexedGroups = useMemo(() => {
+    let offset = 0;
+    return groups.map(([provider, items]) => {
+      const indexed = items.map((m, i) => ({ m, flatIndex: offset + i }));
+      offset += items.length;
+      return { provider, indexed };
+    });
+  }, [groups]);
+
   // Build a flat ordered list of ref_names so keyboard nav can index them.
-  const flatRefs: string[] = groups.flatMap(([, items]) => items.map((m) => m.ref_name));
+  const flatRefs: string[] = indexedGroups.flatMap(({ indexed }) =>
+    indexed.map(({ m }) => m.ref_name)
+  );
 
   const currentModel = models.find((m) => m.ref_name === detail.model_ref);
 
@@ -248,8 +261,6 @@ export function ModelCombobox({ detail, onSaved, onManage }: Props) {
 
   // ── Render popover rows ───────────────────────────────────────────────────
 
-  let globalIdx = 0;
-
   function renderGroups() {
     if (filtered.length === 0) {
       return (
@@ -261,12 +272,9 @@ export function ModelCombobox({ detail, onSaved, onManage }: Props) {
       );
     }
 
-    return groups.map(([provider, items]) => {
+    return indexedGroups.map(({ provider, indexed }) => {
       const color = providerColor(provider);
       const initials = providerInitial(provider);
-      const groupStart = globalIdx;
-      // Advance the global index before rendering rows.
-      globalIdx += items.length;
 
       return (
         <div key={provider} className="mc-group">
@@ -275,10 +283,9 @@ export function ModelCombobox({ detail, onSaved, onManage }: Props) {
               {initials}
             </span>
             {provider}
-            <span className="mc-group__count">· {items.length}</span>
+            <span className="mc-group__count">· {indexed.length}</span>
           </div>
-          {items.map((m, i) => {
-            const idx = groupStart + i;
+          {indexed.map(({ m, flatIndex: idx }) => {
             const isSel = m.ref_name === detail.model_ref;
             const isActive = idx === activeIdx;
             const outCost = formatCost(m.output_cost);
@@ -357,9 +364,6 @@ export function ModelCombobox({ detail, onSaved, onManage }: Props) {
   }
 
   // ── Full combobox ─────────────────────────────────────────────────────────
-
-  // Reset globalIdx for each render pass through renderGroups().
-  globalIdx = 0;
 
   return (
     <div className="tab-form" style={{ marginBottom: 18 }}>
