@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyCode, KeyEventKind,
-    KeyModifiers,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -33,7 +33,7 @@ use ratatui::backend::CrosstermBackend;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use self::app::{App, Role, SlashCmd, parse_slash};
+use self::app::{App, EscAction, Role, SlashCmd, esc_action, parse_slash};
 use self::persist::Session;
 use self::stream::{StreamMsg, build_params, cancel_task, respond_hitl, spawn_stream};
 use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
@@ -42,6 +42,8 @@ use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
 const RECENT_LIMIT: usize = 10;
 /// How many transcript lines PageUp/PageDown scroll.
 const SCROLL_STEP: u16 = 5;
+/// Trackpad fires 10-20 events/sec so step=1 for mouse vs step=5 for keyboard PageUp/Down.
+const MOUSE_SCROLL_STEP: u16 = 1;
 /// Spinner animation cadence.
 const SPINNER_MS: u64 = 90;
 
@@ -84,8 +86,13 @@ struct TerminalGuard;
 impl TerminalGuard {
     fn enter() -> Result<Self> {
         enable_raw_mode().context("enable raw mode")?;
-        execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)
-            .context("enter alternate screen")?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            EnableMouseCapture
+        )
+        .context("enter alternate screen")?;
         Ok(Self)
     }
 }
@@ -96,6 +103,7 @@ impl Drop for TerminalGuard {
             io::stdout(),
             LeaveAlternateScreen,
             DisableBracketedPaste,
+            DisableMouseCapture,
             cursor::Show
         );
         let _ = disable_raw_mode();
@@ -110,6 +118,7 @@ async fn run_tui(home: PathBuf, agent: String, resume: bool, auto: bool) -> Resu
             io::stdout(),
             LeaveAlternateScreen,
             DisableBracketedPaste,
+            DisableMouseCapture,
             cursor::Show
         );
         let _ = disable_raw_mode();
@@ -222,6 +231,10 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 }
                 return;
             }
+            if key.code != KeyCode::Esc {
+                app.last_esc_at = None;
+                app.esc_hint = false;
+            }
             let alt = key.modifiers.contains(KeyModifiers::ALT);
             match key.code {
                 KeyCode::Char('d') if ctrl => request_quit(app, tx),
@@ -233,6 +246,34 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                     app.input.insert_newline();
                 }
                 KeyCode::Enter => submit(app, tx).await,
+                KeyCode::Esc => {
+                    let action =
+                        esc_action(app.last_esc_at, app.streaming, app.input_text().is_empty());
+                    match action {
+                        EscAction::Arm => {
+                            app.last_esc_at = Some(std::time::Instant::now());
+                            app.esc_hint = true;
+                        }
+                        EscAction::ClearInput => {
+                            app.clear_input();
+                            app.last_esc_at = None;
+                            app.esc_hint = false;
+                        }
+                        EscAction::CancelAndRestore => {
+                            cancel_in_flight(app, tx);
+                            if let Some(text) = app.last_sent.clone() {
+                                app.set_input(&text);
+                            }
+                            app.push_system("cancelled — message restored");
+                            app.last_esc_at = None;
+                            app.esc_hint = false;
+                        }
+                        EscAction::Nothing => {
+                            app.last_esc_at = None;
+                            app.esc_hint = false;
+                        }
+                    }
+                }
                 _ => {
                     app.input.input(key);
                 }
@@ -241,6 +282,15 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
         Event::Paste(text) => {
             app.input.insert_str(text);
         }
+        Event::Mouse(mouse_ev) => match mouse_ev.kind {
+            MouseEventKind::ScrollUp => {
+                app.scroll_back = app.scroll_back.saturating_add(MOUSE_SCROLL_STEP);
+            }
+            MouseEventKind::ScrollDown => {
+                app.scroll_back = app.scroll_back.saturating_sub(MOUSE_SCROLL_STEP);
+            }
+            _ => {}
+        },
         _ => {}
     }
 }
@@ -358,6 +408,7 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         app.push_system("still generating — press Ctrl+C to cancel first");
         return;
     }
+    app.last_sent = Some(trimmed.clone());
     app.clear_input();
 
     let task_id = app.begin_user_turn(&trimmed);
