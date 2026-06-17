@@ -179,6 +179,36 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::raw("  "));
     }
     spans.push(Span::styled(msg, Style::default().fg(color)));
+
+    let right_hint: Option<(String, Color)> = if app.scroll_back > 0 {
+        Some((format!("↑ {} lines · ⬇ to bottom", app.scroll_back), SYSTEM))
+    } else if app.esc_hint {
+        let hint = if app.streaming {
+            "ESC again to cancel"
+        } else {
+            "ESC again to clear"
+        };
+        Some((hint.to_string(), SYSTEM))
+    } else {
+        None
+    };
+
+    if let Some((hint_text, hint_color)) = right_hint {
+        let hint_display = format!(" {} ", hint_text);
+        let hint_width = hint_display.chars().count() as u16;
+        let left_width: u16 = spans.iter().map(|s| s.content.chars().count() as u16).sum();
+        let bar_width = area.width;
+        // Only right-align if there's room; otherwise skip the hint.
+        if bar_width > left_width + hint_width {
+            let pad = bar_width - left_width - hint_width;
+            spans.push(Span::raw(" ".repeat(pad as usize)));
+            spans.push(Span::styled(
+                hint_display,
+                Style::default().fg(hint_color).add_modifier(Modifier::DIM),
+            ));
+        }
+    }
+
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
