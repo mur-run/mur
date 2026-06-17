@@ -17,6 +17,7 @@ pub mod mcp_skills;
 pub mod memory;
 pub mod mlx_sidecar;
 pub mod mobile;
+pub mod models_admin;
 pub mod notif;
 pub mod onboarding;
 pub mod pet;
@@ -488,6 +489,10 @@ pub fn run() {
             detail::get_agent_detail,
             detail::update_agent_detail,
             detail::list_models,
+            models_admin::probe_local_providers,
+            models_admin::test_provider,
+            models_admin::add_models,
+            models_admin::remove_model,
             mcp_skills::agent_skill_install,
             mcp_skills::agent_skill_uninstall,
             mcp_skills::agent_mcp_add,

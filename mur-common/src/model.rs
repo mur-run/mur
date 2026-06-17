@@ -18,9 +18,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ModelEntry {
+    #[serde(default)]
     pub provider: String,
+    #[serde(default)]
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
@@ -38,6 +40,29 @@ pub struct ModelEntry {
     /// Used for ledger cost estimates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_per_1k_tokens: Option<f64>,
+    /// Estimated USD cost per 1000 input tokens.
+    /// New field for split input/output cost tracking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_cost_per_1k: Option<f64>,
+    /// Estimated USD cost per 1000 output tokens.
+    /// New field for split input/output cost tracking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_1k: Option<f64>,
+    /// Model context window size in tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+}
+
+impl ModelEntry {
+    /// Resolve effective per-1k rates as `(input, output)`.
+    ///
+    /// The deprecated `cost_per_1k_tokens` is treated as the output rate and
+    /// also as the input fallback, so legacy single-rate entries keep working.
+    pub fn effective_costs(&self) -> (Option<f64>, Option<f64>) {
+        let output = self.output_cost_per_1k.or(self.cost_per_1k_tokens);
+        let input = self.input_cost_per_1k.or(self.cost_per_1k_tokens);
+        (input, output)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -179,6 +204,9 @@ models:
                 params: serde_json::Value::Null,
                 tier: None,
                 cost_per_1k_tokens: None,
+                input_cost_per_1k: None,
+                output_cost_per_1k: None,
+                context_window: None,
             },
         );
         let s = serde_yaml_ng::to_string(&r).unwrap();
@@ -235,6 +263,9 @@ roles:
                 params: serde_json::Value::Null,
                 tier: None,
                 cost_per_1k_tokens: None,
+                input_cost_per_1k: None,
+                output_cost_per_1k: None,
+                context_window: None,
             },
         );
         reg.roles.insert(
@@ -262,6 +293,9 @@ roles:
                 params: serde_json::Value::Null,
                 tier: None,
                 cost_per_1k_tokens: None,
+                input_cost_per_1k: None,
+                output_cost_per_1k: None,
+                context_window: None,
             },
         );
         reg.roles.insert(
@@ -313,6 +347,9 @@ models:
                 params: serde_json::Value::Null,
                 tier: None,
                 cost_per_1k_tokens: None,
+                input_cost_per_1k: None,
+                output_cost_per_1k: None,
+                context_window: None,
             },
         );
         let yaml = serde_yaml_ng::to_string(&r2).unwrap();
@@ -364,6 +401,65 @@ roles:
         );
         assert_eq!(r.roles["chat"].route_policy, None);
     }
+
+    #[test]
+    fn parses_split_cost_fields() {
+        let yaml = r#"
+schema_version: 1
+models:
+  opus:
+    provider: anthropic
+    model: claude-opus-4-8
+    input_cost_per_1k: 0.005
+    output_cost_per_1k: 0.025
+    context_window: 200000
+"#;
+        let r: ModelRegistry = serde_yaml_ng::from_str(yaml).unwrap();
+        let e = r.models.get("opus").unwrap();
+        assert_eq!(e.input_cost_per_1k, Some(0.005));
+        assert_eq!(e.output_cost_per_1k, Some(0.025));
+        assert_eq!(e.context_window, Some(200_000));
+    }
+
+    #[test]
+    fn default_model_entry_is_empty() {
+        let e = ModelEntry::default();
+        assert!(e.provider.is_empty());
+        assert_eq!(e.input_cost_per_1k, None);
+        assert_eq!(e.output_cost_per_1k, None);
+        assert_eq!(e.context_window, None);
+    }
+
+    #[test]
+    fn effective_costs_fallback_matrix() {
+        // legacy only → both fall back to the blended rate
+        let mut e = ModelEntry {
+            cost_per_1k_tokens: Some(0.01),
+            ..Default::default()
+        };
+        assert_eq!(e.effective_costs(), (Some(0.01), Some(0.01)));
+
+        // split only → split wins, legacy ignored
+        e = ModelEntry {
+            input_cost_per_1k: Some(0.005),
+            output_cost_per_1k: Some(0.025),
+            ..Default::default()
+        };
+        assert_eq!(e.effective_costs(), (Some(0.005), Some(0.025)));
+
+        // both → split wins
+        e = ModelEntry {
+            cost_per_1k_tokens: Some(0.01),
+            input_cost_per_1k: Some(0.005),
+            output_cost_per_1k: Some(0.025),
+            ..Default::default()
+        };
+        assert_eq!(e.effective_costs(), (Some(0.005), Some(0.025)));
+
+        // none → none
+        e = ModelEntry::default();
+        assert_eq!(e.effective_costs(), (None, None));
+    }
 }
 
 #[cfg(test)]
@@ -395,6 +491,9 @@ mod io_tests {
                 params: serde_json::Value::Null,
                 tier: None,
                 cost_per_1k_tokens: None,
+                input_cost_per_1k: None,
+                output_cost_per_1k: None,
+                context_window: None,
             },
         );
         r.save_to(&p).unwrap();

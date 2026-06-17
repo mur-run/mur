@@ -130,6 +130,19 @@ impl SecretRef {
     pub async fn check(&self) -> bool {
         self.resolve().await.is_ok()
     }
+
+    /// Resolve and expose the secret as a plain `String` for callers that must
+    /// hand the raw value to an external API (e.g. an `Authorization: Bearer`
+    /// header). This is the deliberate materialization boundary — keep the
+    /// returned value short-lived and never log or persist it. Returns `None`
+    /// on any resolution failure (missing env var, keychain entry, etc.).
+    pub async fn resolve_to_string(&self) -> Option<String> {
+        use secrecy::ExposeSecret;
+        self.resolve()
+            .await
+            .ok()
+            .map(|s| s.expose_secret().to_string())
+    }
 }
 
 /// Read a secret from the OS keychain.
@@ -385,6 +398,19 @@ mod resolve_env_tests {
         let s = SecretRef::Env("MUR_TEST_DEFINITELY_UNSET".into());
         let err = s.resolve().await.unwrap_err();
         assert!(matches!(err, SecretError::EnvNotSet(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn resolve_to_string_exposes_value_or_none() {
+        // SAFETY: uniquely named env var so concurrent tests don't collide.
+        unsafe {
+            std::env::set_var("MUR_TEST_RESOLVE_TO_STRING", "kc-abc");
+        }
+        let set = SecretRef::Env("MUR_TEST_RESOLVE_TO_STRING".into());
+        assert_eq!(set.resolve_to_string().await.as_deref(), Some("kc-abc"));
+
+        let missing = SecretRef::Env("MUR_TEST_RESOLVE_TO_STRING_UNSET".into());
+        assert_eq!(missing.resolve_to_string().await, None);
     }
 }
 
