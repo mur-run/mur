@@ -12,6 +12,7 @@ mod markdown;
 mod multiplex;
 pub mod persist;
 mod stream;
+mod theme;
 mod ui;
 
 use std::io::{self, IsTerminal, Stdout, Write};
