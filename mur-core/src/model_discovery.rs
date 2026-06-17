@@ -76,16 +76,28 @@ pub fn discover_models(
     api_key: Option<&str>,
     timeout_secs: u64,
 ) -> Result<Vec<String>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(timeout_secs))
-        .build()?;
+    let url = models_url(base_url);
+    let bearer = api_key
+        .filter(|k| !k.is_empty())
+        .map(|k| format!("Bearer {k}"));
 
-    let mut rb = client.get(models_url(base_url));
-    if let Some(k) = api_key.filter(|k| !k.is_empty()) {
-        rb = rb.header("Authorization", format!("Bearer {k}"));
-    }
+    // `reqwest::blocking` panics if constructed inside a Tokio runtime context
+    // (the CLI's `block_on`, or a `spawn_blocking` worker which carries a
+    // runtime handle). Run it on a dedicated OS thread that has no ambient
+    // runtime so the caller's context never matters.
+    let body = std::thread::spawn(move || -> Result<String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .build()?;
+        let mut rb = client.get(url);
+        if let Some(b) = bearer {
+            rb = rb.header("Authorization", b);
+        }
+        Ok(rb.send()?.text()?)
+    })
+    .join()
+    .map_err(|_| anyhow::anyhow!("discovery thread panicked"))??;
 
-    let body = rb.send()?.text()?;
     Ok(parse_models_response(&body))
 }
 

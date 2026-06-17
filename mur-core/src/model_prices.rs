@@ -117,11 +117,20 @@ pub fn load_cached(mur_home: &Path, ttl_hours: u64) -> Option<Catalog> {
 /// Fetch the catalog from the network and write it to the cache.
 /// Returns the parsed catalog on success; never panics, returns None on any failure.
 fn fetch_and_cache(mur_home: &Path) -> Option<Catalog> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-        .build()
-        .ok()?;
-    let body = client.get(CATALOG_URL).send().ok()?.text().ok()?;
+    // `reqwest::blocking` builds its own runtime and panics if constructed
+    // inside an existing Tokio runtime — and the `mur` CLI dispatches every
+    // command inside `block_on`. Run the blocking HTTP on a dedicated OS
+    // thread so it never sees an ambient runtime, regardless of caller.
+    let body = std::thread::spawn(|| -> Option<String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
+            .build()
+            .ok()?;
+        client.get(CATALOG_URL).send().ok()?.text().ok()
+    })
+    .join()
+    .ok()
+    .flatten()?;
     let cat = parse_catalog(&body).ok()?;
     let path = cache_path(mur_home);
     if let Some(parent) = path.parent() {
