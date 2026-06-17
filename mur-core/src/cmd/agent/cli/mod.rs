@@ -123,8 +123,8 @@ async fn run_tui(
     let skin_name = skin.as_deref()
         .or(cfg.cli.skin.as_deref())
         .unwrap_or("dark");
-    let _unknown_skin = !theme::is_known_skin(skin_name);
-    let _active_theme = theme::resolve_skin(skin_name);
+    let unknown_skin = !theme::is_known_skin(skin_name);
+    let active_theme = theme::resolve_skin(skin_name);
 
     // Restore the terminal even if a later panic unwinds past the guard.
     let prev_hook = std::panic::take_hook();
@@ -144,7 +144,12 @@ async fn run_tui(
     let mut terminal =
         Terminal::new(CrosstermBackend::new(io::stdout())).context("init terminal")?;
 
-    let mut app = build_app(&home, &agent, resume)?;
+    let mut app = build_app(&home, &agent, resume, active_theme)?;
+    if unknown_skin {
+        app.push_system(format!(
+            "unknown skin '{skin_name}', using dark — valid: dark, light, mur"
+        ));
+    }
     if auto {
         app.auto_approve = true;
         app.push_system("auto-approve is ON for this session (--auto) — every tool call will be allowed without asking");
@@ -156,7 +161,7 @@ async fn run_tui(
     result
 }
 
-fn build_app(home: &Path, agent: &str, resume: bool) -> Result<App> {
+fn build_app(home: &Path, agent: &str, resume: bool, theme: &'static theme::Theme) -> Result<App> {
     if resume {
         if let Some(info) = persist::latest(home, agent)? {
             let turns = persist::load(home, &info.id, agent)?;
@@ -164,6 +169,7 @@ fn build_app(home: &Path, agent: &str, resume: bool) -> Result<App> {
                 home.to_path_buf(),
                 agent.to_string(),
                 Session::open_existing(home, agent, &info.id)?,
+                theme,
             );
             app.load_history(turns);
             app.refresh_channel();
@@ -177,6 +183,7 @@ fn build_app(home: &Path, agent: &str, resume: bool) -> Result<App> {
             home.to_path_buf(),
             agent.to_string(),
             Session::create(home, agent)?,
+            theme,
         );
         app.push_system(format!(
             "no saved conversation to resume; starting fresh. {HELP}"
@@ -187,6 +194,7 @@ fn build_app(home: &Path, agent: &str, resume: bool) -> Result<App> {
         home.to_path_buf(),
         agent.to_string(),
         Session::create(home, agent)?,
+        theme,
     );
     app.push_system(HELP);
     Ok(app)
