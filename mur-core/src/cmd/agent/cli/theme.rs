@@ -7,87 +7,87 @@ use ratatui::widgets::BorderType;
 
 pub struct Theme {
     // ── labels (bold, identifies speaker) ────────────────────────────────────
-    pub user:         Color,  // "› you" label
-    pub agent:        Color,  // "● agent" label
-    pub shell:        Color,  // "$ cmd" label for !command output
+    pub user: Color,  // "› you" label
+    pub agent: Color, // "● agent" label
+    pub shell: Color, // "$ cmd" label for !command output
     // ── body text ─────────────────────────────────────────────────────────────
-    pub user_text:    Color,  // continuation lines of a user turn
-    pub agent_text:   Color,  // continuation lines of an agent reply
-    pub thinking:     Color,  // streaming thinking tokens (italic+dim)
+    pub user_text: Color,  // continuation lines of a user turn
+    pub agent_text: Color, // continuation lines of an agent reply
+    pub thinking: Color,   // streaming thinking tokens (italic+dim)
     // ── chrome ────────────────────────────────────────────────────────────────
-    pub system:       Color,  // system hints, errors, slash-cmd output
-    pub border:       Color,  // transcript + input box borders
-    pub border_title: Color,  // text inside the border title
-    pub separator:    Color,  // inter-message separator line
+    pub system: Color,       // system hints, errors, slash-cmd output
+    pub border: Color,       // transcript + input box borders
+    pub border_title: Color, // text inside the border title
+    pub separator: Color,    // inter-message separator line
     // ── status bar ────────────────────────────────────────────────────────────
-    pub status_bg:    Color,  // status bar background
-    pub badge_fg:     Color,  // agent-name badge foreground
-    pub badge_bg:     Color,  // agent-name badge background
+    pub status_bg: Color, // status bar background
+    pub badge_fg: Color,  // agent-name badge foreground
+    pub badge_bg: Color,  // agent-name badge background
     // ── layout ────────────────────────────────────────────────────────────────
-    pub border_type:    BorderType,  // Plain | Rounded | Double
-    pub inner_padding:  u8,          // horizontal padding inside panes (0–2)
-    pub show_separator: bool,        // true = ─── line; false = blank line
-    pub compact_input:  bool,        // shorten input box hint text
+    pub border_type: BorderType, // Plain | Rounded | Double
+    pub inner_padding: u8,       // horizontal padding inside panes (0–2)
+    pub show_separator: bool,    // true = ─── line; false = blank line
+    pub compact_input: bool,     // shorten input box hint text
 }
 
 pub const DARK: Theme = Theme {
-    user:         Color::Green,
-    agent:        Color::Cyan,
-    shell:        Color::Green,
-    user_text:    Color::Gray,
-    agent_text:   Color::White,
-    thinking:     Color::DarkGray,
-    system:       Color::DarkGray,
-    border:       Color::DarkGray,
+    user: Color::Green,
+    agent: Color::Cyan,
+    shell: Color::Green,
+    user_text: Color::Gray,
+    agent_text: Color::White,
+    thinking: Color::DarkGray,
+    system: Color::DarkGray,
+    border: Color::DarkGray,
     border_title: Color::DarkGray,
-    separator:    Color::DarkGray,
-    status_bg:    Color::Reset,
-    badge_fg:     Color::Black,
-    badge_bg:     Color::Cyan,
-    border_type:    BorderType::Plain,
-    inner_padding:  0,
+    separator: Color::DarkGray,
+    status_bg: Color::Reset,
+    badge_fg: Color::Black,
+    badge_bg: Color::Cyan,
+    border_type: BorderType::Plain,
+    inner_padding: 0,
     show_separator: false,
-    compact_input:  false,
+    compact_input: false,
 };
 
 pub const LIGHT: Theme = Theme {
-    user:         Color::Rgb(0x16, 0x65, 0x34),
-    agent:        Color::Rgb(0x0e, 0x6b, 0x8c),
-    shell:        Color::Rgb(0x16, 0x65, 0x34),
-    user_text:    Color::Rgb(0x22, 0x22, 0x33),
-    agent_text:   Color::Rgb(0x22, 0x22, 0x33),
-    thinking:     Color::Rgb(0x88, 0x88, 0x99),
-    system:       Color::Rgb(0x77, 0x77, 0x88),
-    border:       Color::Rgb(0xd0, 0xd0, 0xe0),
+    user: Color::Rgb(0x16, 0x65, 0x34),
+    agent: Color::Rgb(0x0e, 0x6b, 0x8c),
+    shell: Color::Rgb(0x16, 0x65, 0x34),
+    user_text: Color::Rgb(0x22, 0x22, 0x33),
+    agent_text: Color::Rgb(0x22, 0x22, 0x33),
+    thinking: Color::Rgb(0x88, 0x88, 0x99),
+    system: Color::Rgb(0x77, 0x77, 0x88),
+    border: Color::Rgb(0xd0, 0xd0, 0xe0),
     border_title: Color::Rgb(0x99, 0x99, 0x99),
-    separator:    Color::Rgb(0xd8, 0xd8, 0xe8),
-    status_bg:    Color::Rgb(0xef, 0xef, 0xf5),
-    badge_fg:     Color::Rgb(0x0e, 0x6b, 0x8c),
-    badge_bg:     Color::Rgb(0xe0, 0xf0, 0xf8),
-    border_type:    BorderType::Rounded,
-    inner_padding:  1,
+    separator: Color::Rgb(0xd8, 0xd8, 0xe8),
+    status_bg: Color::Rgb(0xef, 0xef, 0xf5),
+    badge_fg: Color::Rgb(0x0e, 0x6b, 0x8c),
+    badge_bg: Color::Rgb(0xe0, 0xf0, 0xf8),
+    border_type: BorderType::Rounded,
+    inner_padding: 1,
     show_separator: true,
-    compact_input:  false,
+    compact_input: false,
 };
 
 pub const MUR: Theme = Theme {
-    user:         Color::Rgb(0xa7, 0x8b, 0xfa),
-    agent:        Color::Rgb(0xfb, 0xbf, 0x24),
-    shell:        Color::Rgb(0x88, 0x88, 0xcc),
-    user_text:    Color::Rgb(0xc8, 0xc8, 0xe8),
-    agent_text:   Color::Rgb(0xe0, 0xe0, 0xf0),
-    thinking:     Color::Rgb(0x44, 0x44, 0x77),
-    system:       Color::Rgb(0x77, 0x77, 0xaa),
-    border:       Color::Rgb(0x2a, 0x2a, 0x5a),
+    user: Color::Rgb(0xa7, 0x8b, 0xfa),
+    agent: Color::Rgb(0xfb, 0xbf, 0x24),
+    shell: Color::Rgb(0x88, 0x88, 0xcc),
+    user_text: Color::Rgb(0xc8, 0xc8, 0xe8),
+    agent_text: Color::Rgb(0xe0, 0xe0, 0xf0),
+    thinking: Color::Rgb(0x44, 0x44, 0x77),
+    system: Color::Rgb(0x77, 0x77, 0xaa),
+    border: Color::Rgb(0x2a, 0x2a, 0x5a),
     border_title: Color::Rgb(0x55, 0x55, 0x99),
-    separator:    Color::Rgb(0x22, 0x22, 0x44),
-    status_bg:    Color::Rgb(0x09, 0x09, 0x1a),
-    badge_fg:     Color::Rgb(0xfb, 0xbf, 0x24),
-    badge_bg:     Color::Rgb(0x22, 0x1a, 0x06),
-    border_type:    BorderType::Rounded,
-    inner_padding:  1,
+    separator: Color::Rgb(0x22, 0x22, 0x44),
+    status_bg: Color::Rgb(0x09, 0x09, 0x1a),
+    badge_fg: Color::Rgb(0xfb, 0xbf, 0x24),
+    badge_bg: Color::Rgb(0x22, 0x1a, 0x06),
+    border_type: BorderType::Rounded,
+    inner_padding: 1,
     show_separator: true,
-    compact_input:  true,
+    compact_input: true,
 };
 
 const KNOWN: [(&str, &Theme); 3] = [("dark", &DARK), ("light", &LIGHT), ("mur", &MUR)];
@@ -121,22 +121,22 @@ mod tests {
 
     #[test]
     fn resolve_known_skins() {
-        assert!(std::ptr::eq(resolve_skin("dark"),  &DARK));
+        assert!(std::ptr::eq(resolve_skin("dark"), &DARK));
         assert!(std::ptr::eq(resolve_skin("light"), &LIGHT));
-        assert!(std::ptr::eq(resolve_skin("mur"),   &MUR));
+        assert!(std::ptr::eq(resolve_skin("mur"), &MUR));
     }
 
     #[test]
     fn resolve_unknown_falls_back_to_dark() {
         assert!(std::ptr::eq(resolve_skin("neon"), &DARK));
-        assert!(std::ptr::eq(resolve_skin(""),     &DARK));
+        assert!(std::ptr::eq(resolve_skin(""), &DARK));
     }
 
     #[test]
     fn skin_name_round_trips() {
-        assert_eq!(skin_name(&DARK),  "dark");
+        assert_eq!(skin_name(&DARK), "dark");
         assert_eq!(skin_name(&LIGHT), "light");
-        assert_eq!(skin_name(&MUR),   "mur");
+        assert_eq!(skin_name(&MUR), "mur");
     }
 
     #[test]

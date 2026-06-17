@@ -512,13 +512,23 @@ mod tests {
     fn app() -> App {
         let home = tempdir().unwrap();
         let session = Session::create(home.path(), "a").unwrap();
-        App::new(home.path().to_path_buf(), "a".into(), session, &super::super::theme::DARK)
+        App::new(
+            home.path().to_path_buf(),
+            "a".into(),
+            session,
+            &super::super::theme::DARK,
+        )
     }
 
     /// Helper that borrows an existing TempDir so the directory survives the test.
     fn app_at(home: &tempfile::TempDir) -> App {
         let session = Session::create(home.path(), "a").unwrap();
-        App::new(home.path().to_path_buf(), "a".into(), session, &super::super::theme::DARK)
+        App::new(
+            home.path().to_path_buf(),
+            "a".into(),
+            session,
+            &super::super::theme::DARK,
+        )
     }
 
     #[test]

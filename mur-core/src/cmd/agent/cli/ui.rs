@@ -102,7 +102,9 @@ fn push_message(
                 let prefix = if i == 0 { "· " } else { "  " };
                 lines.push(Line::styled(
                     format!("{prefix}{l}"),
-                    Style::default().fg(theme.system).add_modifier(Modifier::ITALIC),
+                    Style::default()
+                        .fg(theme.system)
+                        .add_modifier(Modifier::ITALIC),
                 ));
             }
         }
@@ -112,17 +114,24 @@ fn push_message(
             if let Some(first) = it.next() {
                 lines.push(Line::styled(
                     first.to_string(),
-                    Style::default().fg(theme.shell).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.shell)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             for l in it {
-                lines.push(Line::styled(l.to_string(), Style::default().fg(theme.system)));
+                lines.push(Line::styled(
+                    l.to_string(),
+                    Style::default().fg(theme.system),
+                ));
             }
         }
         Role::Agent => {
             lines.push(Line::from(Span::styled(
                 "● agent",
-                Style::default().fg(theme.agent).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.agent)
+                    .add_modifier(Modifier::BOLD),
             )));
             if m.streaming {
                 if !m.thinking.is_empty() {
@@ -140,10 +149,14 @@ fn push_message(
                 // Trailing spinner so the user sees liveness.
                 let spin = SPINNER[spinner % SPINNER.len()];
                 match body.last_mut() {
-                    Some(last) => last
-                        .spans
-                        .push(Span::styled(format!(" {spin}"), Style::default().fg(theme.agent))),
-                    None => body.push(Line::styled(spin.to_string(), Style::default().fg(theme.agent))),
+                    Some(last) => last.spans.push(Span::styled(
+                        format!(" {spin}"),
+                        Style::default().fg(theme.agent),
+                    )),
+                    None => body.push(Line::styled(
+                        spin.to_string(),
+                        Style::default().fg(theme.agent),
+                    )),
                 }
                 lines.extend(body);
             } else if let Some(cached) = &m.rendered {
@@ -203,7 +216,10 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     spans.push(Span::styled(msg, Style::default().fg(color)));
 
     let right_hint: Option<(String, Color)> = if app.scroll_back > 0 {
-        Some((format!("↑ {} lines · ⬇ to bottom", app.scroll_back), theme.system))
+        Some((
+            format!("↑ {} lines · ⬇ to bottom", app.scroll_back),
+            theme.system,
+        ))
     } else if app.esc_hint {
         let hint = if app.streaming {
             "ESC again to cancel"
@@ -249,7 +265,10 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest) {
         ]),
     ];
     for l in input.lines().take(12) {
-        lines.push(Line::styled(l.to_string(), Style::default().fg(Color::DarkGray)));
+        lines.push(Line::styled(
+            l.to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     lines.push(Line::default());
     lines.push(Line::from(vec![

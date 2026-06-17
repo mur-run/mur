@@ -51,7 +51,12 @@ const SPINNER_MS: u64 = 90;
 const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
-pub async fn cmd_cli(names: &[String], resume: bool, auto: bool, skin: Option<String>) -> Result<()> {
+pub async fn cmd_cli(
+    names: &[String],
+    resume: bool,
+    auto: bool,
+    skin: Option<String>,
+) -> Result<()> {
     if names.len() > 1 {
         let names = names.to_vec();
         return tokio::task::spawn_blocking(move || multiplex::run(&names, resume, auto)).await?;
@@ -120,7 +125,8 @@ async fn run_tui(
 ) -> Result<()> {
     // Resolve skin: CLI flag > config > "dark"
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
-    let skin_name = skin.as_deref()
+    let skin_name = skin
+        .as_deref()
         .or(cfg.cli.skin.as_deref())
         .unwrap_or("dark");
     let unknown_skin = !theme::is_known_skin(skin_name);
@@ -597,9 +603,7 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
             }
             Some(name) => {
                 if !theme::is_known_skin(&name) {
-                    app.push_system(format!(
-                        "unknown skin '{name}' — valid: dark, light, mur"
-                    ));
+                    app.push_system(format!("unknown skin '{name}' — valid: dark, light, mur"));
                 } else {
                     app.theme = theme::resolve_skin(&name);
                     let h = app.home.clone();
