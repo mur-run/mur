@@ -128,6 +128,49 @@ pub fn default_alias(provider: &str, model_id: &str) -> String {
     result.trim_matches('_').to_string()
 }
 
+/// Known local OpenAI-compatible runtimes probed during auto-detection.
+pub struct LocalPreset {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub base_url: &'static str,
+}
+
+pub const LOCAL_PRESETS: &[LocalPreset] = &[
+    LocalPreset { key: "ollama",   name: "Ollama",        base_url: "http://localhost:11434/v1" },
+    LocalPreset { key: "mlx",      name: "MLX (omlx)",    base_url: "http://127.0.0.1:8000/v1" },
+    LocalPreset { key: "lmstudio", name: "LM Studio",     base_url: "http://localhost:1234/v1" },
+];
+
+/// A local runtime that answered the probe.
+#[derive(Debug, Clone, Serialize)]
+pub struct DetectedLocal {
+    pub key: String,
+    pub name: String,
+    pub base_url: String,
+    pub models: Vec<String>,
+}
+
+/// Probe each local preset; return those reachable. Best-effort, never panics.
+#[allow(dead_code)] // wired by S3 Task 3
+pub fn probe_local(timeout_secs: u64) -> Vec<DetectedLocal> {
+    LOCAL_PRESETS
+        .iter()
+        .filter_map(|p| {
+            // local servers need no key. Treat any successful HTTP response
+            // (even an empty model list) as "reachable".
+            match discover_models(p.base_url, None, timeout_secs) {
+                Ok(models) => Some(DetectedLocal {
+                    key: p.key.to_string(),
+                    name: p.name.to_string(),
+                    base_url: p.base_url.to_string(),
+                    models,
+                }),
+                Err(_) => None,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +207,35 @@ mod tests {
         assert_eq!(default_alias("ollama", "qwen3:8b"), "ollama_qwen3_8b");
         // Lowercasing fix verification
         assert_eq!(default_alias("Anthropic", "Claude-Opus-4-8"), "anthropic_claude_opus_4_8");
+    }
+
+    #[test]
+    fn local_presets_cover_known_runtimes() {
+        // Ensure the preset table includes all documented local runtimes.
+        let keys: Vec<&str> = LOCAL_PRESETS.iter().map(|p| p.key).collect();
+        assert!(keys.contains(&"ollama"), "ollama preset expected");
+        assert!(keys.contains(&"mlx"), "mlx preset expected");
+        assert!(keys.contains(&"lmstudio"), "lmstudio preset expected");
+
+        // Ensure each preset has a non-empty base_url (with /v1 suffix).
+        for preset in LOCAL_PRESETS {
+            assert!(!preset.base_url.is_empty(), "base_url must not be empty");
+            assert!(preset.base_url.ends_with("/v1"), "base_url must end with /v1");
+        }
+    }
+
+    #[test]
+    fn probe_local_handles_unreachable_without_panic() {
+        // With a short timeout (1s), localhost ports 11434/8000/1234 are likely
+        // unreachable and will time out. Ensure probe_local never panics and
+        // returns an empty list (or at least a list with len ≤ 3).
+        let result = probe_local(1);
+        // Should not panic. Result may be empty or partially populated if
+        // a local server happens to be running, but length should be ≤ 3.
+        assert!(result.len() <= 3, "probe_local returned too many results");
+        for detected in &result {
+            assert!(!detected.key.is_empty(), "detected.key must not be empty");
+            assert!(!detected.base_url.is_empty(), "detected.base_url must not be empty");
+        }
     }
 }
