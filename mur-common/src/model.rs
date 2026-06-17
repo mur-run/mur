@@ -53,6 +53,18 @@ pub struct ModelEntry {
     pub context_window: Option<u64>,
 }
 
+impl ModelEntry {
+    /// Resolve effective per-1k rates as `(input, output)`.
+    ///
+    /// The deprecated `cost_per_1k_tokens` is treated as the output rate and
+    /// also as the input fallback, so legacy single-rate entries keep working.
+    pub fn effective_costs(&self) -> (Option<f64>, Option<f64>) {
+        let output = self.output_cost_per_1k.or(self.cost_per_1k_tokens);
+        let input = self.input_cost_per_1k.or(self.cost_per_1k_tokens);
+        (input, output)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RoleEntry {
     /// Registry model ID (key in `models:`) to use as primary.
@@ -416,6 +428,34 @@ models:
         assert_eq!(e.input_cost_per_1k, None);
         assert_eq!(e.output_cost_per_1k, None);
         assert_eq!(e.context_window, None);
+    }
+
+    #[test]
+    fn effective_costs_fallback_matrix() {
+        // legacy only → both fall back to the blended rate
+        let mut e = ModelEntry { cost_per_1k_tokens: Some(0.01), ..Default::default() };
+        assert_eq!(e.effective_costs(), (Some(0.01), Some(0.01)));
+
+        // split only → split wins, legacy ignored
+        e = ModelEntry {
+            input_cost_per_1k: Some(0.005),
+            output_cost_per_1k: Some(0.025),
+            ..Default::default()
+        };
+        assert_eq!(e.effective_costs(), (Some(0.005), Some(0.025)));
+
+        // both → split wins
+        e = ModelEntry {
+            cost_per_1k_tokens: Some(0.01),
+            input_cost_per_1k: Some(0.005),
+            output_cost_per_1k: Some(0.025),
+            ..Default::default()
+        };
+        assert_eq!(e.effective_costs(), (Some(0.005), Some(0.025)));
+
+        // none → none
+        e = ModelEntry::default();
+        assert_eq!(e.effective_costs(), (None, None));
     }
 }
 
