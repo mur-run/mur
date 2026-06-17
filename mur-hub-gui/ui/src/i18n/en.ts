@@ -110,6 +110,8 @@ export const en = {
   "detail.modelInline": "{model} (inline config)",
   "detail.modelEmpty": "No models in the registry yet — add one with `mur model add`.",
   "detail.modelRestartHint": "Model saved. Restart the agent to apply it.",
+  "detail.modelSearch": "Search models…",
+  "detail.manageModels": "Manage models…",
   "detail.renderBtnRender": "Render avatar",
   "detail.renderBtnRerender": "Re-render avatar",
   "detail.renderBtnRendering": "Rendering…",

@@ -112,6 +112,8 @@ export const zhTW: Table = {
   "detail.modelInline": "{model}（內嵌設定）",
   "detail.modelEmpty": "模型庫還沒有任何模型 — 用 `mur model add` 新增一個。",
   "detail.modelRestartHint": "模型已儲存。重新啟動 agent 後生效。",
+  "detail.modelSearch": "搜尋模型…",
+  "detail.manageModels": "管理模型…",
   "detail.renderBtnRender": "算繪頭像",
   "detail.renderBtnRerender": "重新算繪頭像",
   "detail.renderBtnRendering": "算繪中…",

@@ -12,12 +12,12 @@ import {
   type AgentDetail,
   type DetailPatch,
   type DetailTab,
-  type ModelOption,
   type NotifConfig,
   type NotifPatch,
   type SkillInstallResult,
 } from "../types";
 import { CompanionInbox } from "./CompanionInbox";
+import { ModelCombobox } from "./ModelCombobox";
 import { MobileTab } from "./MobileTab";
 import { MemoryTab } from "./MemoryTab";
 import { useT } from "../i18n";
@@ -58,6 +58,8 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   const [detail, setDetail] = useState<AgentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>("persona");
+  // TODO(S3 Task 6): replace placeholder with <ModelLibrary>
+  const [libraryOpen, setLibraryOpen] = useState(false);
 
   useEffect(() => {
     setError(null);
@@ -191,7 +193,17 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
       <div className="detail-panel__body">
         {activeTab === "persona" && (
           <>
-            <ModelSection detail={detail} onSaved={handleSaved} />
+            <ModelCombobox
+              detail={detail}
+              onSaved={handleSaved}
+              onManage={() => setLibraryOpen(true)}
+            />
+            {libraryOpen && (
+              <div className="model-library-placeholder" role="dialog">
+                <p>Model Library — coming in S3 Task 6</p>
+                <button onClick={() => setLibraryOpen(false)}>Close</button>
+              </div>
+            )}
             <PersonaTab detail={detail} onSaved={handleSaved} />
           </>
         )}
@@ -214,84 +226,7 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   );
 }
 
-// ─── Model Section ────────────────────────────────────────────────────────
-
-function ModelSection({
-  detail,
-  onSaved,
-}: {
-  detail: AgentDetail;
-  onSaved: (d: AgentDetail) => void;
-}) {
-  const { t } = useT();
-  const [models, setModels] = useState<ModelOption[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [justSaved, setJustSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    invoke<ModelOption[]>("list_models")
-      .then(setModels)
-      .catch((e) => setError(String(e)));
-  }, []);
-
-  async function pick(refName: string) {
-    if (!refName || refName === detail.model_ref) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const updated = await invoke<AgentDetail>("update_agent_detail", {
-        name: detail.agent_name,
-        patch: { model_ref: refName } as DetailPatch,
-      });
-      onSaved(updated);
-      setJustSaved(true);
-      setTimeout(() => setJustSaved(false), 4000);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  // Inline (legacy) binding shown as a synthetic option when no ref is set.
-  const inlineLabel = `${detail.model_provider}/${detail.model_name}`;
-
-  return (
-    <div className="tab-form" style={{ marginBottom: 18 }}>
-      <label className="field-label">{t("detail.model")}</label>
-      {models.length === 0 ? (
-        <p className="field-muted" style={{ fontSize: 12 }}>
-          {t("detail.modelEmpty")}
-        </p>
-      ) : (
-        <select
-          className="input"
-          value={detail.model_ref ?? ""}
-          disabled={saving}
-          onChange={(e) => pick(e.target.value)}
-        >
-          {!detail.model_ref && (
-            <option value="" disabled>
-              {t("detail.modelInline", { model: inlineLabel })}
-            </option>
-          )}
-          {models.map((m) => (
-            <option key={m.ref_name} value={m.ref_name}>
-              {m.ref_name} — {m.provider}/{m.model}
-            </option>
-          ))}
-        </select>
-      )}
-      {justSaved && (
-        <p className="field-muted" style={{ fontSize: 12 }}>
-          {t("detail.modelRestartHint")}
-        </p>
-      )}
-      {error && <p className="save-error">{error}</p>}
-    </div>
-  );
-}
+// ModelSection replaced by ModelCombobox (S3 Task 5).
 
 // ─── Persona Tab ──────────────────────────────────────────────────────────
 
