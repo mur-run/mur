@@ -4,14 +4,10 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 
 use super::app::{App, ChatMsg, Role, SPINNER};
 use super::markdown;
-
-const USER: Color = Color::Green;
-const AGENT: Color = Color::Cyan;
-const SYSTEM: Color = Color::DarkGray;
 
 /// Draw the whole UI for one frame.
 pub fn render(f: &mut Frame, app: &App) {
@@ -36,52 +32,81 @@ pub fn render(f: &mut Frame, app: &App) {
 }
 
 fn render_transcript(f: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" chat · {} ", app.agent));
+        .border_type(theme.border_type)
+        .border_style(Style::default().fg(theme.border))
+        .padding(Padding::horizontal(theme.inner_padding as u16))
+        .title(format!(" chat · {} ", app.agent))
+        .title_style(Style::default().fg(theme.border_title));
     let inner = block.inner(area);
 
     let mut lines: Vec<Line> = Vec::new();
-    for m in &app.messages {
-        push_message(&mut lines, m, app.spinner);
+    let msg_count = app.messages.len();
+    for (i, m) in app.messages.iter().enumerate() {
+        push_message(&mut lines, m, app.spinner, theme);
+        if i + 1 < msg_count {
+            if theme.show_separator {
+                let sep_width = inner.width as usize;
+                lines.push(Line::styled(
+                    "─".repeat(sep_width),
+                    Style::default().fg(theme.separator),
+                ));
+            } else {
+                lines.push(Line::default());
+            }
+        }
     }
+
     if lines.is_empty() {
         lines.push(Line::styled(
             "Say hello — type below and press Enter.",
-            Style::default().fg(SYSTEM),
+            Style::default().fg(theme.system),
         ));
     }
 
-    let para = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-    let total = para.line_count(inner.width) as u16;
-    let max_off = total.saturating_sub(inner.height);
+    let total = lines.len() as u16;
+    let visible = inner.height;
+    let max_off = total.saturating_sub(visible);
     let offset = max_off.saturating_sub(app.scroll_back);
 
-    f.render_widget(block, area);
-    f.render_widget(para.scroll((offset, 0)), inner);
+    let output = Paragraph::new(Text::from(lines))
+        .block(block)
+        .wrap(Wrap { trim: false })
+        .scroll((offset, 0));
+    f.render_widget(output, area);
 }
 
-fn push_message(lines: &mut Vec<Line<'static>>, m: &ChatMsg, spinner: usize) {
+fn push_message(
+    lines: &mut Vec<Line<'static>>,
+    m: &ChatMsg,
+    spinner: usize,
+    theme: &'static super::theme::Theme,
+) {
     match m.role {
         Role::User => {
             lines.push(Line::from(Span::styled(
                 "you ›",
-                Style::default().fg(USER).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.user).add_modifier(Modifier::BOLD),
             )));
             for l in m.text.lines() {
-                lines.push(Line::raw(l.to_string()));
+                lines.push(Line::styled(
+                    l.to_string(),
+                    Style::default().fg(theme.user_text),
+                ));
             }
-            lines.push(Line::default());
         }
         Role::System => {
             for (i, l) in m.text.lines().enumerate() {
                 let prefix = if i == 0 { "· " } else { "  " };
                 lines.push(Line::styled(
                     format!("{prefix}{l}"),
-                    Style::default().fg(SYSTEM).add_modifier(Modifier::ITALIC),
+                    Style::default()
+                        .fg(theme.system)
+                        .add_modifier(Modifier::ITALIC),
                 ));
             }
-            lines.push(Line::default());
         }
         Role::Shell => {
             // `$ cmd` highlighted, output dim — visually a local terminal block.
@@ -89,18 +114,24 @@ fn push_message(lines: &mut Vec<Line<'static>>, m: &ChatMsg, spinner: usize) {
             if let Some(first) = it.next() {
                 lines.push(Line::styled(
                     first.to_string(),
-                    Style::default().fg(USER).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.shell)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             for l in it {
-                lines.push(Line::styled(l.to_string(), Style::default().fg(SYSTEM)));
+                lines.push(Line::styled(
+                    l.to_string(),
+                    Style::default().fg(theme.system),
+                ));
             }
-            lines.push(Line::default());
         }
         Role::Agent => {
             lines.push(Line::from(Span::styled(
                 "● agent",
-                Style::default().fg(AGENT).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.agent)
+                    .add_modifier(Modifier::BOLD),
             )));
             if m.streaming {
                 if !m.thinking.is_empty() {
@@ -108,7 +139,7 @@ fn push_message(lines: &mut Vec<Line<'static>>, m: &ChatMsg, spinner: usize) {
                         lines.push(Line::styled(
                             l.to_string(),
                             Style::default()
-                                .fg(SYSTEM)
+                                .fg(theme.thinking)
                                 .add_modifier(Modifier::ITALIC | Modifier::DIM),
                         ));
                     }
@@ -118,10 +149,14 @@ fn push_message(lines: &mut Vec<Line<'static>>, m: &ChatMsg, spinner: usize) {
                 // Trailing spinner so the user sees liveness.
                 let spin = SPINNER[spinner % SPINNER.len()];
                 match body.last_mut() {
-                    Some(last) => last
-                        .spans
-                        .push(Span::styled(format!(" {spin}"), Style::default().fg(AGENT))),
-                    None => body.push(Line::styled(spin.to_string(), Style::default().fg(AGENT))),
+                    Some(last) => last.spans.push(Span::styled(
+                        format!(" {spin}"),
+                        Style::default().fg(theme.agent),
+                    )),
+                    None => body.push(Line::styled(
+                        spin.to_string(),
+                        Style::default().fg(theme.agent),
+                    )),
                 }
                 lines.extend(body);
             } else if let Some(cached) = &m.rendered {
@@ -131,12 +166,12 @@ fn push_message(lines: &mut Vec<Line<'static>>, m: &ChatMsg, spinner: usize) {
                 // Fallback (should not happen): render on the fly.
                 lines.extend(markdown::render(&m.text).lines);
             }
-            lines.push(Line::default());
         }
     }
 }
 
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
     let (msg, color) = if app.hitl.is_some() {
         (
             "tool approval needed — [y] approve · [a] always (session) · [n] deny".to_string(),
@@ -144,19 +179,19 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         )
     } else if app.streaming {
         let spin = SPINNER[app.spinner % SPINNER.len()];
-        (format!("{spin} generating… Ctrl+C to cancel"), AGENT)
+        (format!("{spin} generating… Ctrl+C to cancel"), theme.agent)
     } else {
         let ctx = if app.context_task_id.is_some() {
             " · context kept"
         } else {
             ""
         };
-        (format!("ready{ctx}"), SYSTEM)
+        (format!("ready{ctx}"), theme.system)
     };
     let mut spans = vec![
         Span::styled(
             format!(" {} ", app.agent),
-            Style::default().fg(Color::Black).bg(AGENT),
+            Style::default().fg(theme.badge_fg).bg(theme.badge_bg),
         ),
         Span::raw("  "),
     ];
@@ -174,21 +209,24 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         let short: String = meta.id.chars().take(8).collect();
         spans.push(Span::styled(
             format!(" ⏵ {}:{} ", short, meta.state),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme.agent),
         ));
         spans.push(Span::raw("  "));
     }
     spans.push(Span::styled(msg, Style::default().fg(color)));
 
     let right_hint: Option<(String, Color)> = if app.scroll_back > 0 {
-        Some((format!("↑ {} lines · ⬇ to bottom", app.scroll_back), SYSTEM))
+        Some((
+            format!("↑ {} lines · ⬇ to bottom", app.scroll_back),
+            theme.system,
+        ))
     } else if app.esc_hint {
         let hint = if app.streaming {
             "ESC again to cancel"
         } else {
             "ESC again to clear"
         };
-        Some((hint.to_string(), SYSTEM))
+        Some((hint.to_string(), theme.system))
     } else {
         None
     };
@@ -222,12 +260,15 @@ fn render_hitl(f: &mut Frame, hitl: &super::stream::HitlRequest) {
         )),
         Line::default(),
         Line::from(vec![
-            Span::styled("tool: ", Style::default().fg(SYSTEM)),
+            Span::styled("tool: ", Style::default().fg(Color::DarkGray)),
             Span::styled(hitl.tool_name.clone(), Style::default().fg(Color::Yellow)),
         ]),
     ];
     for l in input.lines().take(12) {
-        lines.push(Line::styled(l.to_string(), Style::default().fg(SYSTEM)));
+        lines.push(Line::styled(
+            l.to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     lines.push(Line::default());
     lines.push(Line::from(vec![

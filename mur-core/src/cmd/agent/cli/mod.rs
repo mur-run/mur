@@ -12,6 +12,7 @@ mod markdown;
 mod multiplex;
 pub mod persist;
 mod stream;
+mod theme;
 mod ui;
 
 use std::io::{self, IsTerminal, Stdout, Write};
@@ -50,7 +51,12 @@ const SPINNER_MS: u64 = 90;
 const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
 
 /// Entry point dispatched from `AgentAction::Cli`.
-pub async fn cmd_cli(names: &[String], resume: bool, auto: bool) -> Result<()> {
+pub async fn cmd_cli(
+    names: &[String],
+    resume: bool,
+    auto: bool,
+    skin: Option<String>,
+) -> Result<()> {
     if names.len() > 1 {
         let names = names.to_vec();
         return tokio::task::spawn_blocking(move || multiplex::run(&names, resume, auto)).await?;
@@ -75,7 +81,7 @@ pub async fn cmd_cli(names: &[String], resume: bool, auto: bool) -> Result<()> {
         return tokio::task::spawn_blocking(move || run_plain(&home2, &agent2, auto)).await?;
     }
 
-    run_tui(home, agent, resume, auto).await
+    run_tui(home, agent, resume, auto, skin).await
 }
 
 // ── TUI mode ────────────────────────────────────────────────────────────────
@@ -110,7 +116,22 @@ impl Drop for TerminalGuard {
     }
 }
 
-async fn run_tui(home: PathBuf, agent: String, resume: bool, auto: bool) -> Result<()> {
+async fn run_tui(
+    home: PathBuf,
+    agent: String,
+    resume: bool,
+    auto: bool,
+    skin: Option<String>,
+) -> Result<()> {
+    // Resolve skin: CLI flag > config > "dark"
+    let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
+    let skin_name = skin
+        .as_deref()
+        .or(cfg.cli.skin.as_deref())
+        .unwrap_or("dark");
+    let unknown_skin = !theme::is_known_skin(skin_name);
+    let active_theme = theme::resolve_skin(skin_name);
+
     // Restore the terminal even if a later panic unwinds past the guard.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -129,7 +150,12 @@ async fn run_tui(home: PathBuf, agent: String, resume: bool, auto: bool) -> Resu
     let mut terminal =
         Terminal::new(CrosstermBackend::new(io::stdout())).context("init terminal")?;
 
-    let mut app = build_app(&home, &agent, resume)?;
+    let mut app = build_app(&home, &agent, resume, active_theme)?;
+    if unknown_skin {
+        app.push_system(format!(
+            "unknown skin '{skin_name}', using dark — valid: dark, light, mur"
+        ));
+    }
     if auto {
         app.auto_approve = true;
         app.push_system("auto-approve is ON for this session (--auto) — every tool call will be allowed without asking");
@@ -141,7 +167,7 @@ async fn run_tui(home: PathBuf, agent: String, resume: bool, auto: bool) -> Resu
     result
 }
 
-fn build_app(home: &Path, agent: &str, resume: bool) -> Result<App> {
+fn build_app(home: &Path, agent: &str, resume: bool, theme: &'static theme::Theme) -> Result<App> {
     if resume {
         if let Some(info) = persist::latest(home, agent)? {
             let turns = persist::load(home, &info.id, agent)?;
@@ -149,6 +175,7 @@ fn build_app(home: &Path, agent: &str, resume: bool) -> Result<App> {
                 home.to_path_buf(),
                 agent.to_string(),
                 Session::open_existing(home, agent, &info.id)?,
+                theme,
             );
             app.load_history(turns);
             app.refresh_channel();
@@ -162,6 +189,7 @@ fn build_app(home: &Path, agent: &str, resume: bool) -> Result<App> {
             home.to_path_buf(),
             agent.to_string(),
             Session::create(home, agent)?,
+            theme,
         );
         app.push_system(format!(
             "no saved conversation to resume; starting fresh. {HELP}"
@@ -172,6 +200,7 @@ fn build_app(home: &Path, agent: &str, resume: bool) -> Result<App> {
         home.to_path_buf(),
         agent.to_string(),
         Session::create(home, agent)?,
+        theme,
     );
     app.push_system(HELP);
     Ok(app)
@@ -293,6 +322,19 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
         },
         _ => {}
     }
+}
+
+/// Write `cli.skin = name` to `~/.mur/config.yaml` atomically.
+fn persist_skin(home: &std::path::Path, name: &str) -> anyhow::Result<()> {
+    use mur_common::config::Config;
+    let path = home.join("config.yaml");
+    let mut cfg = Config::load_or_default(&path);
+    cfg.cli.skin = Some(name.to_string());
+    let text = serde_yaml::to_string(&cfg).context("serialise config")?;
+    let tmp = path.with_extension("yaml.tmp");
+    std::fs::write(&tmp, &text).context("write config tmp")?;
+    std::fs::rename(&tmp, &path).context("rename config")?;
+    Ok(())
 }
 
 /// Tab completes a leading-slash command to the first matching name.
@@ -554,6 +596,26 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
         SlashCmd::Skill(args) => {
             run_manage(app, move |agent| manage::run_skill(&agent, &args)).await
         }
+        SlashCmd::Skin(name_opt) => match name_opt {
+            None => {
+                let current = theme::skin_name(app.theme);
+                app.push_system(format!("current skin: {current} — valid: dark, light, mur"));
+            }
+            Some(name) => {
+                if !theme::is_known_skin(&name) {
+                    app.push_system(format!("unknown skin '{name}' — valid: dark, light, mur"));
+                } else {
+                    app.theme = theme::resolve_skin(&name);
+                    let h = app.home.clone();
+                    match persist_skin(&h, &name) {
+                        Ok(()) => app.push_system(format!("skin changed to {name}")),
+                        Err(e) => app.push_system(format!(
+                            "skin changed to {name} (could not persist: {e})"
+                        )),
+                    }
+                }
+            }
+        },
         SlashCmd::Unknown(c) => app.push_system(format!("unknown command: /{c} — try /help")),
     }
 }
