@@ -126,10 +126,8 @@ pub const SLASH_COMMANDS: [&str; 10] = [
     "/quit",
 ];
 
-#[allow(dead_code)]
 pub const ESC_DOUBLE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
 pub enum EscAction {
     Arm,
@@ -139,7 +137,6 @@ pub enum EscAction {
 }
 
 /// Pure function — no wall-clock calls, fully testable.
-#[allow(dead_code)]
 pub fn esc_action(
     last_esc_at: Option<std::time::Instant>,
     streaming: bool,
