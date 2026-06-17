@@ -270,9 +270,11 @@ impl Router {
     }
 
     /// USD-per-1k of the best frontier model, if known.
+    /// Returns the effective **output** rate from `effective_costs()` so that
+    /// cost estimates reflect the higher per-token charge for generated tokens.
     fn frontier_cost_per_1k(&self) -> Option<f64> {
         let id = self.pick_best_frontier()?;
-        self.registry.models.get(&id)?.cost_per_1k_tokens
+        self.registry.models.get(&id)?.effective_costs().1
     }
 }
 
@@ -493,6 +495,65 @@ mod tests {
         assert!(
             matches!(decision, RouteDecision::Escalate { .. }),
             "extreme task must escalate even under prefer_local, got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn frontier_cost_prefers_output_rate() {
+        // Regression: `frontier_cost_per_1k` must read the effective OUTPUT rate,
+        // not the now-deprecated `cost_per_1k_tokens` field.
+        // Build a registry with split costs (no legacy field) so the old code
+        // returns 0.0 and the new code returns the output rate.
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "ollama_llama3".into(),
+            ModelEntry {
+                provider: "ollama".into(),
+                model: "llama3.2:3b".into(),
+                base_url: None,
+                secret: None,
+                capabilities: vec!["chat".into()],
+                params: serde_json::Value::Null,
+                tier: Some(RouteTier::Local),
+                cost_per_1k_tokens: None,
+                ..Default::default()
+            },
+        );
+        reg.models.insert(
+            "anthropic_opus".into(),
+            ModelEntry {
+                provider: "anthropic".into(),
+                model: "claude-opus-4-8".into(),
+                base_url: None,
+                secret: None,
+                capabilities: vec!["chat".into(), "tools".into()],
+                params: serde_json::Value::Null,
+                tier: Some(RouteTier::Frontier),
+                cost_per_1k_tokens: None, // explicitly absent — forces use of split fields
+                input_cost_per_1k: Some(0.005),
+                output_cost_per_1k: Some(0.025),
+                ..Default::default()
+            },
+        );
+        let router = Router::new(reg).unwrap();
+        // Hard refactor + large context forces escalation (same inputs as
+        // `hard_task_routes_to_frontier`).
+        let ev = router.audit(
+            "refactor the entire auth system across 12 modules",
+            TaskType::Refactor,
+            8000,
+            None,
+            "2026-01-01T00:00:00Z",
+        );
+        assert!(
+            matches!(ev.decision, RouteDecision::Escalate { .. }),
+            "test setup must produce Escalate so counterfactual cost is non-zero; got {ev:?}"
+        );
+        let expected = 8000_f64 / 1000.0 * 0.025;
+        assert!(
+            (ev.estimated_cost_usd - expected).abs() < 1e-9,
+            "expected cost {expected} (output rate 0.025), got {}",
+            ev.estimated_cost_usd
         );
     }
 
