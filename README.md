@@ -136,6 +136,22 @@ murmur coach                                  # quick form (murmur symlink), ide
 
 <p align="center"><img src="assets/demo.gif" alt="mur agent cli — streaming TUI chat with a local agent" width="92%" /></p>
 
+### Models & providers
+
+Agents draw from a local provider/model registry at `~/.mur/models.yaml`:
+
+```bash
+mur model add gpt5 --provider openai --model gpt-5.2 --secret env:OPENAI_API_KEY
+                                              # input/output pricing + context window are auto-filled
+                                              #   from the models.dev catalog (--no-fetch to skip, or
+                                              #   --input-cost/--output-cost to set them by hand)
+mur model list                                # list registered models
+mur model show gpt5                           # provider, model, effective in/out cost, context window
+mur model prices refresh                      # refresh the cached models.dev price catalog
+```
+
+API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — never written to config in plaintext. The **MUR Hub** desktop app has a **Model Library** that connects cloud providers (key saved to the macOS Keychain), auto-detects local runtimes (Ollama / MLX / LM Studio), discovers their models via `/v1/models`, and adds them to the registry — no YAML editing required.
+
 ### Teach the AI tools you already use
 
 MUR's memory layer works even if you never create an agent — it rides along with
