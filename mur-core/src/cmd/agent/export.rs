@@ -250,6 +250,7 @@ mod sanitize_tests {
                     params: serde_json::Value::Null,
                     tier: None,
                     cost_per_1k_tokens: None,
+                    ..Default::default()
                 },
             )]),
             roles: Default::default(),

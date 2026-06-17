@@ -40,6 +40,11 @@ pub struct ModelOptionView {
     pub ref_name: String,
     pub provider: String,
     pub model: String,
+    pub tier: Option<String>,
+    pub input_cost: Option<f64>,
+    pub output_cost: Option<f64>,
+    pub context_window: Option<u64>,
+    pub capabilities: Vec<String>,
 }
 
 #[tauri::command]
@@ -49,10 +54,18 @@ pub fn list_models() -> Result<Vec<ModelOptionView>, String> {
     Ok(reg
         .models
         .into_iter()
-        .map(|(ref_name, entry)| ModelOptionView {
-            ref_name,
-            provider: entry.provider,
-            model: entry.model,
+        .map(|(ref_name, entry)| {
+            let (input_cost, output_cost) = entry.effective_costs();
+            ModelOptionView {
+                ref_name,
+                provider: entry.provider,
+                model: entry.model,
+                tier: entry.tier.map(|t| format!("{t:?}").to_lowercase()),
+                input_cost,
+                output_cost,
+                context_window: entry.context_window,
+                capabilities: entry.capabilities,
+            }
         })
         .collect())
 }

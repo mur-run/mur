@@ -1,0 +1,58 @@
+import { describe, it, expect } from "vitest";
+import { CLOUD_PRESETS, togglePick } from "./modelLibraryHelpers";
+
+describe("CLOUD_PRESETS", () => {
+  it("ships the 5 required provider keys", () => {
+    const keys = CLOUD_PRESETS.map((p) => p.key);
+    expect(keys).toEqual(
+      expect.arrayContaining(["openai", "google", "openrouter", "xai", "custom"])
+    );
+  });
+
+  it("has exactly 5 presets", () => {
+    expect(CLOUD_PRESETS).toHaveLength(5);
+  });
+
+  it("every preset has a non-empty name, baseUrl, logo, and color", () => {
+    for (const p of CLOUD_PRESETS) {
+      expect(p.name.length).toBeGreaterThan(0);
+      expect(p.baseUrl.length).toBeGreaterThan(0);
+      expect(p.logo.length).toBeGreaterThan(0);
+      expect(p.color.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("togglePick", () => {
+  it("adds an id that is not in the set", () => {
+    const initial = new Set<string>(["a", "b"]);
+    const result = togglePick(initial, "c");
+    expect(result.has("c")).toBe(true);
+    expect(result.size).toBe(3);
+  });
+
+  it("removes an id that is already in the set", () => {
+    const initial = new Set<string>(["a", "b", "c"]);
+    const result = togglePick(initial, "b");
+    expect(result.has("b")).toBe(false);
+    expect(result.size).toBe(2);
+  });
+
+  it("does not mutate the original set (immutable toggle)", () => {
+    const initial = new Set<string>(["a"]);
+    const frozen = new Set(initial);
+    togglePick(initial, "b");
+    expect(initial).toEqual(frozen);
+  });
+
+  it("works on an empty set (add)", () => {
+    const result = togglePick(new Set<string>(), "x");
+    expect(result.has("x")).toBe(true);
+    expect(result.size).toBe(1);
+  });
+
+  it("removing the last element returns an empty set", () => {
+    const result = togglePick(new Set<string>(["only"]), "only");
+    expect(result.size).toBe(0);
+  });
+});
