@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{
-    DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyCode, KeyEventKind,
-    KeyModifiers,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -42,6 +42,8 @@ use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
 const RECENT_LIMIT: usize = 10;
 /// How many transcript lines PageUp/PageDown scroll.
 const SCROLL_STEP: u16 = 5;
+/// Trackpad fires 10-20 events/sec so step=1 for mouse vs step=5 for keyboard PageUp/Down.
+const MOUSE_SCROLL_STEP: u16 = 1;
 /// Spinner animation cadence.
 const SPINNER_MS: u64 = 90;
 
@@ -84,8 +86,13 @@ struct TerminalGuard;
 impl TerminalGuard {
     fn enter() -> Result<Self> {
         enable_raw_mode().context("enable raw mode")?;
-        execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)
-            .context("enter alternate screen")?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            EnableMouseCapture
+        )
+        .context("enter alternate screen")?;
         Ok(Self)
     }
 }
@@ -96,6 +103,7 @@ impl Drop for TerminalGuard {
             io::stdout(),
             LeaveAlternateScreen,
             DisableBracketedPaste,
+            DisableMouseCapture,
             cursor::Show
         );
         let _ = disable_raw_mode();
@@ -110,6 +118,7 @@ async fn run_tui(home: PathBuf, agent: String, resume: bool, auto: bool) -> Resu
             io::stdout(),
             LeaveAlternateScreen,
             DisableBracketedPaste,
+            DisableMouseCapture,
             cursor::Show
         );
         let _ = disable_raw_mode();
@@ -276,6 +285,15 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
         Event::Paste(text) => {
             app.input.insert_str(text);
         }
+        Event::Mouse(mouse_ev) => match mouse_ev.kind {
+            MouseEventKind::ScrollUp => {
+                app.scroll_back = app.scroll_back.saturating_add(MOUSE_SCROLL_STEP);
+            }
+            MouseEventKind::ScrollDown => {
+                app.scroll_back = app.scroll_back.saturating_sub(MOUSE_SCROLL_STEP);
+            }
+            _ => {}
+        },
         _ => {}
     }
 }
