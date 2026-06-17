@@ -8,6 +8,7 @@ use mur_common::model::{ModelEntry, ModelRegistry, RoleEntry};
 use mur_common::route::{RouteDecision, RoutePolicy, RouteTier, TaskType};
 use mur_common::secret::SecretRef;
 
+use crate::model_prices::{self, PriceInfo};
 use crate::route::Router;
 use crate::route::ledger::EscalationLedger;
 
@@ -47,6 +48,9 @@ pub enum ModelCmd {
         /// Estimated USD per 1000 output tokens (deprecated — use --output-cost).
         #[arg(long)]
         cost_per_1k: Option<f64>,
+        /// Skip automatic price lookup from the models.dev catalog.
+        #[arg(long)]
+        no_fetch: bool,
     },
     List,
     Show {
@@ -71,6 +75,11 @@ pub enum ModelCmd {
     Route {
         #[command(subcommand)]
         sub: RouteSubCmd,
+    },
+    /// Manage the cached models.dev price catalog.
+    Prices {
+        #[command(subcommand)]
+        sub: PricesSubCmd,
     },
 }
 
@@ -133,6 +142,17 @@ pub enum RouteSubCmd {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum PricesSubCmd {
+    /// Delete the local cache so the next lookup re-fetches from models.dev.
+    Refresh,
+    /// Look up current pricing for a registered model by registry name.
+    Show {
+        /// Registry entry name (e.g. anthropic_opus_4_7).
+        name: String,
+    },
+}
+
 /// Populate cost fields on a partially-built [`ModelEntry`].
 ///
 /// `--output-cost` takes precedence over the deprecated `--cost-per-1k`.
@@ -156,6 +176,24 @@ pub fn build_entry_costs(
     entry
 }
 
+/// Fill only fields that are still `None` on `entry` with values from `fetched`.
+/// Explicit flag values set by `build_entry_costs` always take precedence.
+/// If `fetched` is `None` the entry is returned unchanged.
+pub fn apply_fetched_prices(mut entry: ModelEntry, fetched: Option<PriceInfo>) -> ModelEntry {
+    if let Some(p) = fetched {
+        if entry.input_cost_per_1k.is_none() {
+            entry.input_cost_per_1k = Some(p.input_per_1k);
+        }
+        if entry.output_cost_per_1k.is_none() {
+            entry.output_cost_per_1k = Some(p.output_per_1k);
+        }
+        if entry.context_window.is_none() {
+            entry.context_window = p.context_window;
+        }
+    }
+    entry
+}
+
 pub fn run(args: ModelArgs) -> anyhow::Result<()> {
     let path = ModelRegistry::default_path()?;
     let mut reg = ModelRegistry::load_from(&path)
@@ -172,6 +210,7 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
             input_cost,
             output_cost,
             cost_per_1k,
+            no_fetch,
         } => {
             let secret_ref = secret.map(|s| s.parse::<SecretRef>()).transpose()?;
             let tier = tier
@@ -184,8 +223,8 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
                 .transpose()?;
             let entry = build_entry_costs(
                 ModelEntry {
-                    provider,
-                    model,
+                    provider: provider.clone(),
+                    model: model.clone(),
                     base_url,
                     secret: secret_ref,
                     capabilities,
@@ -197,6 +236,18 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
                 output_cost,
                 cost_per_1k,
             );
+            let is_local = matches!(tier, Some(RouteTier::Local));
+            let entry = if no_fetch {
+                entry
+            } else {
+                let mur_home = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+                let fetched = model_prices::lookup(&mur_home, &provider, &model, is_local);
+                let e = apply_fetched_prices(entry, fetched);
+                if let (Some(i), Some(o)) = (e.input_cost_per_1k, e.output_cost_per_1k) {
+                    println!("Auto-filled pricing: input ${i}/1k, output ${o}/1k");
+                }
+                e
+            };
             reg.models.insert(name.clone(), entry);
             reg.save_to(&path)?;
             println!("Added model {name} → {}", path.display());
@@ -237,6 +288,53 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
         ModelCmd::Migrate { dry_run } => cmd_migrate(dry_run)?,
         ModelCmd::Role { sub } => cmd_role(sub, &mut reg, &path)?,
         ModelCmd::Route { sub } => cmd_route(&sub, &reg)?,
+        ModelCmd::Prices { sub } => {
+            let mur_home = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            cmd_prices(sub, &mur_home, &reg)?;
+        }
+    }
+    Ok(())
+}
+
+fn cmd_prices(
+    sub: PricesSubCmd,
+    mur_home: &std::path::Path,
+    reg: &ModelRegistry,
+) -> anyhow::Result<()> {
+    match sub {
+        PricesSubCmd::Refresh => {
+            let cache = model_prices::cache_path(mur_home);
+            match std::fs::remove_file(&cache) {
+                Ok(()) => println!("Price cache cleared: {}", cache.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    println!("Price cache not present (nothing to clear)");
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        PricesSubCmd::Show { name } => {
+            let entry = reg
+                .models
+                .get(&name)
+                .ok_or_else(|| anyhow::anyhow!("not found in registry: {name}"))?;
+            let is_local = matches!(entry.tier, Some(RouteTier::Local));
+            match model_prices::lookup(mur_home, &entry.provider, &entry.model, is_local) {
+                Some(p) => {
+                    println!("Pricing for {name} ({}/{}):", entry.provider, entry.model);
+                    println!("  input:   ${}/1k tokens", p.input_per_1k);
+                    println!("  output:  ${}/1k tokens", p.output_per_1k);
+                    if let Some(ctx) = p.context_window {
+                        println!("  context: {ctx} tokens");
+                    }
+                }
+                None => {
+                    println!(
+                        "No pricing found for {name} ({}/{})",
+                        entry.provider, entry.model
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }

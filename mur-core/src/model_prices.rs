@@ -97,14 +97,12 @@ impl Catalog {
 }
 
 /// Return the path where the catalog cache should be stored.
-#[allow(dead_code)]
 pub fn cache_path(mur_home: &Path) -> PathBuf {
     mur_home.join("cache").join(CACHE_FILE)
 }
 
 /// Load and parse the cached catalog if it exists and is fresh (within ttl_hours).
 /// Returns None if the cache file is missing, stale, or unparseable.
-#[allow(dead_code)]
 pub fn load_cached(mur_home: &Path, ttl_hours: u64) -> Option<Catalog> {
     let path = cache_path(mur_home);
     let meta = std::fs::metadata(&path).ok()?;
@@ -118,7 +116,6 @@ pub fn load_cached(mur_home: &Path, ttl_hours: u64) -> Option<Catalog> {
 
 /// Fetch the catalog from the network and write it to the cache.
 /// Returns the parsed catalog on success; never panics, returns None on any failure.
-#[allow(dead_code)]
 fn fetch_and_cache(mur_home: &Path) -> Option<Catalog> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
@@ -140,7 +137,6 @@ fn fetch_and_cache(mur_home: &Path) -> Option<Catalog> {
 /// Resolve pricing for one model. Local tier short-circuits to zero with no IO.
 /// Otherwise: fresh cache → network fetch (+cache) → stale cache.
 /// All best-effort; returns None when nothing resolves.
-#[allow(dead_code)]
 pub fn lookup(
     mur_home: &Path,
     provider: &str,
@@ -155,15 +151,12 @@ pub fn lookup(
         });
     }
     // Try fresh cache first
-    if let Some(cat) = load_cached(mur_home, TTL_HOURS)
-        .and_then(|cat| cat.lookup(provider, model))
+    if let Some(cat) = load_cached(mur_home, TTL_HOURS).and_then(|cat| cat.lookup(provider, model))
     {
         return Some(cat);
     }
     // Try network fetch
-    if let Some(cat) = fetch_and_cache(mur_home)
-        .and_then(|cat| cat.lookup(provider, model))
-    {
+    if let Some(cat) = fetch_and_cache(mur_home).and_then(|cat| cat.lookup(provider, model)) {
         return Some(cat);
     }
     // Fall back to stale cache
@@ -219,18 +212,24 @@ mod tests {
         // OpenRouter-style id "anthropic/claude-opus-4-8" under provider "openrouter"
         let cat = parse_catalog(FIXTURE).unwrap();
         let p = cat.lookup("openrouter", "anthropic/claude-opus-4-8");
-        assert!(p.is_some(), "namespaced id should fall back to embedded provider/model");
+        assert!(
+            p.is_some(),
+            "namespaced id should fall back to embedded provider/model"
+        );
     }
 
     #[test]
     fn local_tier_short_circuits_without_network() {
         let tmp = TempDir::new().unwrap();
         let p = lookup(tmp.path(), "ollama", "llama3", true).unwrap();
-        assert_eq!(p, PriceInfo {
-            input_per_1k: 0.0,
-            output_per_1k: 0.0,
-            context_window: None
-        });
+        assert_eq!(
+            p,
+            PriceInfo {
+                input_per_1k: 0.0,
+                output_per_1k: 0.0,
+                context_window: None
+            }
+        );
         // Verify no cache file was created
         let cache = cache_path(tmp.path());
         assert!(!cache.exists());
