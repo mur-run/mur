@@ -382,7 +382,6 @@ export const en = {
   "lib.baseUrlHint": "OpenAI-compatible endpoint · pre-filled, editable (proxy / self-hosted)",
   "lib.apiKey": "API Key",
   "lib.apiKeyPlaceholder": "Paste your API key",
-  "lib.apiKeyPlaceholderConnected": "•••••••••••• (stored in Keychain)",
   "lib.keyStorage": "Key storage",
   "lib.keyStorageHint": "Key is never written to config or logs; stored as a SecretRef.",
   "lib.keychain": "Keychain (recommended)",

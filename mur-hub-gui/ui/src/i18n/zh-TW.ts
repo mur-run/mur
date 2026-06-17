@@ -384,7 +384,6 @@ export const zhTW: Table = {
   "lib.baseUrlHint": "OpenAI-compatible endpoint · 預填預設，可改（走 proxy / 自建請改這裡）",
   "lib.apiKey": "API Key",
   "lib.apiKeyPlaceholder": "貼上你的 API key",
-  "lib.apiKeyPlaceholderConnected": "•••••••••••• (已存於 Keychain)",
   "lib.keyStorage": "儲存方式",
   "lib.keyStorageHint": "金鑰絕不寫進 config 或 log；以 SecretRef 形式記錄。",
   "lib.keychain": "🔐 Keychain（推薦）",
