@@ -121,7 +121,7 @@ async fn run_tui(
     // Resolve skin: CLI flag > config > "dark"
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
     let skin_name = skin.as_deref()
-        .or_else(|| cfg.cli.skin.as_deref())
+        .or(cfg.cli.skin.as_deref())
         .unwrap_or("dark");
     let _unknown_skin = !theme::is_known_skin(skin_name);
     let _active_theme = theme::resolve_skin(skin_name);
