@@ -82,6 +82,9 @@ pub enum AgentAction {
         /// Auto-approve every tool call for this session (no HITL prompts)
         #[arg(long)]
         auto: bool,
+        /// Visual skin: dark (default) | light | mur
+        #[arg(long)]
+        skin: Option<String>,
     },
     /// Rotate an agent's Ed25519 identity keypair (P0a.6).
     Rekey {
@@ -777,6 +780,7 @@ mod tests {
             names,
             resume,
             auto,
+            skin: _,
         } = parse_cli_action(&["mur", "agent", "cli", "a1", "a2", "a3", "--auto"])
         else {
             panic!("expected Cli variant");

@@ -5,12 +5,13 @@ use std::path::PathBuf;
 
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders};
+use ratatui::widgets::{Block, Borders, Padding};
 use tui_textarea::TextArea;
 
 use super::markdown;
 use super::persist::{ChannelMeta, Session, TurnRecord};
 use super::stream::HitlRequest;
+use super::theme::Theme;
 
 /// Spinner frames shown while the agent is generating.
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -82,6 +83,8 @@ pub enum SlashCmd {
     Mcp(Vec<String>),
     /// `/skill [list|add|remove] …` — manage the agent's skills.
     Skill(Vec<String>),
+    /// `/skin [dark|light|mur]` — show or switch the active skin (persists to config).
+    Skin(Option<String>),
     Quit,
     Unknown(String),
 }
@@ -107,23 +110,25 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         }),
         "mcp" => SlashCmd::Mcp(words.map(str::to_string).collect()),
         "skill" | "skills" => SlashCmd::Skill(words.map(str::to_string).collect()),
+        "skin" | "theme" => SlashCmd::Skin(words.next().map(str::to_string)),
         "exit" | "quit" | "q" => SlashCmd::Quit,
         other => SlashCmd::Unknown(other.to_string()),
     })
 }
 
 /// The set of slash commands offered by tab-completion / `/help`.
-pub const SLASH_COMMANDS: [&str; 10] = [
-    "/help",
-    "/clear",
-    "/card",
-    "/sessions",
-    "/channels",
+pub const SLASH_COMMANDS: [&str; 11] = [
     "/auto",
-    "/mcp",
-    "/skill",
+    "/card",
+    "/channels",
+    "/clear",
     "/exit",
+    "/help",
+    "/mcp",
     "/quit",
+    "/sessions",
+    "/skill",
+    "/skin",
 ];
 
 pub const ESC_DOUBLE_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
@@ -198,13 +203,15 @@ pub struct App {
     /// session. Reset on `/clear` or channel switch so each new session
     /// re-establishes context.
     pub cwd_sent: bool,
+    /// Active visual skin, resolved at startup. Updated live by `/skin`.
+    pub theme: &'static Theme,
     pub last_esc_at: Option<std::time::Instant>,
     pub esc_hint: bool,
     pub last_sent: Option<String>,
 }
 
 impl App {
-    pub fn new(home: PathBuf, agent: String, session: Session) -> Self {
+    pub fn new(home: PathBuf, agent: String, session: Session, theme: &'static Theme) -> Self {
         Self {
             home,
             agent,
@@ -225,6 +232,7 @@ impl App {
             persist_warned: false,
             cwd: std::env::current_dir().ok(),
             cwd_sent: false,
+            theme,
             last_esc_at: None,
             esc_hint: false,
             last_sent: None,
@@ -455,16 +463,28 @@ impl App {
     /// Call once per render frame so the style stays in sync without needing
     /// `&mut App` inside the draw closure.
     pub fn sync_input_block(&mut self) {
+        let theme = self.theme;
+        let hint = if theme.compact_input {
+            " message — Enter · Alt+Enter · /help "
+        } else {
+            " message — Enter to send · Alt+Enter newline · /help · Ctrl+D quit "
+        };
         let is_shell = self.input_text().trim_start().starts_with('!');
         let block = if is_shell {
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(theme.border_type)
                 .border_style(Style::default().fg(Color::Red))
+                .padding(Padding::horizontal(theme.inner_padding as u16))
                 .title(" ! shell command — output shared with agent ")
         } else {
             Block::default()
                 .borders(Borders::ALL)
-                .title(" message — Enter to send · Alt+Enter newline · /help · Ctrl+D quit ")
+                .border_type(theme.border_type)
+                .border_style(Style::default().fg(theme.border))
+                .padding(Padding::horizontal(theme.inner_padding as u16))
+                .title(hint)
+                .title_style(Style::default().fg(theme.border_title))
         };
         self.input.set_block(block);
     }
@@ -492,13 +512,23 @@ mod tests {
     fn app() -> App {
         let home = tempdir().unwrap();
         let session = Session::create(home.path(), "a").unwrap();
-        App::new(home.path().to_path_buf(), "a".into(), session)
+        App::new(
+            home.path().to_path_buf(),
+            "a".into(),
+            session,
+            &super::super::theme::DARK,
+        )
     }
 
     /// Helper that borrows an existing TempDir so the directory survives the test.
     fn app_at(home: &tempfile::TempDir) -> App {
         let session = Session::create(home.path(), "a").unwrap();
-        App::new(home.path().to_path_buf(), "a".into(), session)
+        App::new(
+            home.path().to_path_buf(),
+            "a".into(),
+            session,
+            &super::super::theme::DARK,
+        )
     }
 
     #[test]
@@ -513,6 +543,19 @@ mod tests {
         );
         assert_eq!(parse_slash("hello"), None);
         assert_eq!(parse_slash("  not/a/cmd"), None);
+    }
+
+    #[test]
+    fn parse_slash_skin_variants() {
+        assert_eq!(parse_slash("/skin"), Some(SlashCmd::Skin(None)));
+        assert_eq!(
+            parse_slash("/skin mur"),
+            Some(SlashCmd::Skin(Some("mur".into())))
+        );
+        assert_eq!(
+            parse_slash("/theme light"),
+            Some(SlashCmd::Skin(Some("light".into())))
+        );
     }
 
     #[test]
