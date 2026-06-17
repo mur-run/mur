@@ -98,12 +98,12 @@ pub fn probe_local_providers() -> Result<Vec<DetectedLocalView>, String> {
 pub fn test_provider(
     provider: String,
     base_url: String,
-    api_key: String,
+    api_key: Option<String>,
 ) -> Result<Vec<EnrichedModelView>, String> {
     let home = mur_home();
-    let key = (!api_key.is_empty()).then_some(api_key.as_str());
-    let ids = model_discovery::discover_models(&base_url, key, DISCOVER_TIMEOUT_SECS)
-        .map_err(|e| format!("discovery failed: {e}"))?;
+    let ids =
+        model_discovery::discover_models(&base_url, api_key.as_deref(), DISCOVER_TIMEOUT_SECS)
+            .map_err(|e| format!("discovery failed: {e}"))?;
     Ok(ids
         .into_iter()
         .map(|m| {
@@ -116,10 +116,10 @@ pub fn test_provider(
 #[tauri::command]
 pub fn add_models(
     provider: String,
-    base_url: String,
+    base_url: Option<String>,
     tier: String,
     secret_kind: String,
-    secret_value: String,
+    secret_value: Option<String>,
     picks: Vec<Pick>,
 ) -> Result<(), String> {
     let path = ModelRegistry::default_path().map_err(|e| e.to_string())?;
@@ -130,14 +130,23 @@ pub fn add_models(
     } else {
         RouteTier::Frontier
     };
-    let secret = build_secret(&secret_kind, &secret_value);
+    let secret = build_secret(&secret_kind, secret_value.as_deref().unwrap_or(""));
     let is_local = route_tier == RouteTier::Local;
+    // Resolve base_url: use the provided value, or fall back to an existing
+    // registry entry for the same provider (handles connected providers whose
+    // base_url was already stored), or leave None.
+    let resolved_base_url = base_url.clone().or_else(|| {
+        reg.models
+            .values()
+            .find(|e| e.provider == provider)
+            .and_then(|e| e.base_url.clone())
+    });
     for pick in picks {
         let price = model_prices::lookup(&home, &provider, &pick.model, is_local);
         let entry = ModelEntry {
             provider: provider.clone(),
             model: pick.model.clone(),
-            base_url: Some(base_url.clone()),
+            base_url: resolved_base_url.clone(),
             secret: secret.clone(),
             tier: Some(route_tier),
             input_cost_per_1k: price.as_ref().map(|p| p.input_per_1k),

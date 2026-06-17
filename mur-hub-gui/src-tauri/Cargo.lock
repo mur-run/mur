@@ -6508,6 +6508,7 @@ dependencies = [
  "landlock",
  "libc",
  "mime_guess",
+ "mur-channel",
  "mur-common",
  "mur-compress",
  "rand 0.8.6",
@@ -6522,6 +6523,7 @@ dependencies = [
  "sled",
  "snow",
  "subtle",
+ "sys-locale",
  "tar",
  "teloxide",
  "tempfile",
@@ -6540,22 +6542,26 @@ dependencies = [
 
 [[package]]
 name = "mur-channel"
-version = "2.24.5"
+version = "2.25.1"
 dependencies = [
  "anyhow",
  "chrono",
+ "ed25519-dalek",
  "fs2",
+ "multibase",
  "mur-common",
  "notify",
  "rusqlite",
+ "serde",
  "serde_json",
  "serde_yaml",
+ "tracing",
  "uuid",
 ]
 
 [[package]]
 name = "mur-common"
-version = "2.24.5"
+version = "2.25.1"
 dependencies = [
  "age",
  "anyhow",
@@ -6569,6 +6575,7 @@ dependencies = [
  "fs2",
  "globset",
  "hex",
+ "hmac",
  "keyring",
  "libc",
  "multibase",
@@ -6603,7 +6610,7 @@ dependencies = [
 
 [[package]]
 name = "mur-compress"
-version = "2.24.5"
+version = "2.25.1"
 dependencies = [
  "blake3",
  "flate2",
@@ -6618,7 +6625,7 @@ dependencies = [
 
 [[package]]
 name = "mur-core"
-version = "2.24.5"
+version = "2.25.1"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -6698,7 +6705,7 @@ dependencies = [
 
 [[package]]
 name = "mur-gui-core"
-version = "2.24.5"
+version = "2.25.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6712,6 +6719,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sys-locale",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -9928,6 +9936,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

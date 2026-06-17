@@ -107,7 +107,7 @@ pub fn load_cached(mur_home: &Path, ttl_hours: u64) -> Option<Catalog> {
     let path = cache_path(mur_home);
     let meta = std::fs::metadata(&path).ok()?;
     let age = meta.modified().ok()?.elapsed().ok()?;
-    if age > std::time::Duration::from_secs(ttl_hours * 3600) {
+    if age > std::time::Duration::from_secs(ttl_hours.saturating_mul(3600)) {
         return None;
     }
     let body = std::fs::read_to_string(&path).ok()?;
@@ -262,5 +262,23 @@ mod tests {
         }
         fs::write(&cache, FIXTURE).unwrap();
         assert!(load_cached(tmp.path(), 0).is_none());
+    }
+
+    /// u64::MAX * 3600 would overflow in debug builds (panic) before the
+    /// saturating_mul fix.  Verify the offline stale-cache fallback path:
+    /// `load_cached(_, u64::MAX)` must return Some and must NOT panic.
+    #[test]
+    fn stale_fallback_serves_cache_without_panic() {
+        let tmp = TempDir::new().unwrap();
+        let cache = cache_path(tmp.path());
+        if let Some(parent) = cache.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&cache, FIXTURE).unwrap();
+        // u64::MAX ttl means "accept any age" — must not overflow or panic.
+        let cat = load_cached(tmp.path(), u64::MAX);
+        assert!(cat.is_some(), "stale-cache fallback must return Some");
+        let p = cat.unwrap().lookup("anthropic", "claude-opus-4-8").unwrap();
+        assert!((p.input_per_1k - 0.005).abs() < 1e-12);
     }
 }

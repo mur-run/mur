@@ -136,9 +136,21 @@ pub struct LocalPreset {
 }
 
 pub const LOCAL_PRESETS: &[LocalPreset] = &[
-    LocalPreset { key: "ollama",   name: "Ollama",        base_url: "http://localhost:11434/v1" },
-    LocalPreset { key: "mlx",      name: "MLX (omlx)",    base_url: "http://127.0.0.1:8000/v1" },
-    LocalPreset { key: "lmstudio", name: "LM Studio",     base_url: "http://localhost:1234/v1" },
+    LocalPreset {
+        key: "ollama",
+        name: "Ollama",
+        base_url: "http://localhost:11434/v1",
+    },
+    LocalPreset {
+        key: "mlx",
+        name: "MLX (omlx)",
+        base_url: "http://127.0.0.1:8000/v1",
+    },
+    LocalPreset {
+        key: "lmstudio",
+        name: "LM Studio",
+        base_url: "http://localhost:1234/v1",
+    },
 ];
 
 /// A local runtime that answered the probe.
@@ -197,16 +209,34 @@ mod tests {
 
     #[test]
     fn alias_slugs_punctuation() {
-        assert_eq!(default_alias("anthropic", "claude-opus-4.8"), "anthropic_claude_opus_4_8");
+        assert_eq!(
+            default_alias("anthropic", "claude-opus-4.8"),
+            "anthropic_claude_opus_4_8"
+        );
         assert_eq!(default_alias("openai", "gpt-4-turbo"), "openai_gpt_4_turbo");
-        assert_eq!(default_alias("meta", "llama-2-70b-chat"), "meta_llama_2_70b_chat");
-        assert_eq!(default_alias("provider", "model@latest#v1"), "provider_model_latest_v1");
+        assert_eq!(
+            default_alias("meta", "llama-2-70b-chat"),
+            "meta_llama_2_70b_chat"
+        );
+        assert_eq!(
+            default_alias("provider", "model@latest#v1"),
+            "provider_model_latest_v1"
+        );
         // S3 Task 1 mandated test vectors
-        assert_eq!(default_alias("anthropic", "claude-opus-4-8"), "anthropic_claude_opus_4_8");
-        assert_eq!(default_alias("openrouter", "meta-llama/llama-4"), "openrouter_meta_llama_llama_4");
+        assert_eq!(
+            default_alias("anthropic", "claude-opus-4-8"),
+            "anthropic_claude_opus_4_8"
+        );
+        assert_eq!(
+            default_alias("openrouter", "meta-llama/llama-4"),
+            "openrouter_meta_llama_llama_4"
+        );
         assert_eq!(default_alias("ollama", "qwen3:8b"), "ollama_qwen3_8b");
         // Lowercasing fix verification
-        assert_eq!(default_alias("Anthropic", "Claude-Opus-4-8"), "anthropic_claude_opus_4_8");
+        assert_eq!(
+            default_alias("Anthropic", "Claude-Opus-4-8"),
+            "anthropic_claude_opus_4_8"
+        );
     }
 
     #[test]
@@ -220,7 +250,10 @@ mod tests {
         // Ensure each preset has a non-empty base_url (with /v1 suffix).
         for preset in LOCAL_PRESETS {
             assert!(!preset.base_url.is_empty(), "base_url must not be empty");
-            assert!(preset.base_url.ends_with("/v1"), "base_url must end with /v1");
+            assert!(
+                preset.base_url.ends_with("/v1"),
+                "base_url must end with /v1"
+            );
         }
     }
 
@@ -235,7 +268,10 @@ mod tests {
         assert!(result.len() <= 3, "probe_local returned too many results");
         for detected in &result {
             assert!(!detected.key.is_empty(), "detected.key must not be empty");
-            assert!(!detected.base_url.is_empty(), "detected.base_url must not be empty");
+            assert!(
+                !detected.base_url.is_empty(),
+                "detected.base_url must not be empty"
+            );
         }
     }
 }
