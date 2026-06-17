@@ -11,6 +11,7 @@ use tui_textarea::TextArea;
 use super::markdown;
 use super::persist::{ChannelMeta, Session, TurnRecord};
 use super::stream::HitlRequest;
+use super::theme::Theme;
 
 /// Spinner frames shown while the agent is generating.
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -198,13 +199,17 @@ pub struct App {
     /// session. Reset on `/clear` or channel switch so each new session
     /// re-establishes context.
     pub cwd_sent: bool,
+    /// Active visual skin, resolved at startup. Updated live by `/skin`.
+    // Used by the UI renderer (next task); suppress dead_code until then.
+    #[allow(dead_code)]
+    pub theme: &'static Theme,
     pub last_esc_at: Option<std::time::Instant>,
     pub esc_hint: bool,
     pub last_sent: Option<String>,
 }
 
 impl App {
-    pub fn new(home: PathBuf, agent: String, session: Session) -> Self {
+    pub fn new(home: PathBuf, agent: String, session: Session, theme: &'static Theme) -> Self {
         Self {
             home,
             agent,
@@ -225,6 +230,7 @@ impl App {
             persist_warned: false,
             cwd: std::env::current_dir().ok(),
             cwd_sent: false,
+            theme,
             last_esc_at: None,
             esc_hint: false,
             last_sent: None,
@@ -492,13 +498,13 @@ mod tests {
     fn app() -> App {
         let home = tempdir().unwrap();
         let session = Session::create(home.path(), "a").unwrap();
-        App::new(home.path().to_path_buf(), "a".into(), session)
+        App::new(home.path().to_path_buf(), "a".into(), session, &super::super::theme::DARK)
     }
 
     /// Helper that borrows an existing TempDir so the directory survives the test.
     fn app_at(home: &tempfile::TempDir) -> App {
         let session = Session::create(home.path(), "a").unwrap();
-        App::new(home.path().to_path_buf(), "a".into(), session)
+        App::new(home.path().to_path_buf(), "a".into(), session, &super::super::theme::DARK)
     }
 
     #[test]
