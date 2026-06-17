@@ -38,7 +38,13 @@ pub enum ModelCmd {
         /// Routing tier: local or frontier.
         #[arg(long)]
         tier: Option<String>,
+        /// Estimated USD per 1000 input tokens.
+        #[arg(long)]
+        input_cost: Option<f64>,
         /// Estimated USD per 1000 output tokens.
+        #[arg(long)]
+        output_cost: Option<f64>,
+        /// Estimated USD per 1000 output tokens (deprecated — use --output-cost).
         #[arg(long)]
         cost_per_1k: Option<f64>,
     },
@@ -127,6 +133,29 @@ pub enum RouteSubCmd {
     },
 }
 
+/// Populate cost fields on a partially-built [`ModelEntry`].
+///
+/// `--output-cost` takes precedence over the deprecated `--cost-per-1k`.
+/// When only `--cost-per-1k` is given (and `--output-cost` is absent) it maps
+/// to `output_cost_per_1k` for back-compat; `cost_per_1k_tokens` is also set
+/// so the `effective_costs()` fallback chain resolves correctly.
+pub fn build_entry_costs(
+    mut entry: ModelEntry,
+    input_cost: Option<f64>,
+    output_cost: Option<f64>,
+    cost_per_1k: Option<f64>,
+) -> ModelEntry {
+    entry.input_cost_per_1k = input_cost;
+    // --output-cost wins; fall back to --cost-per-1k for the output slot.
+    entry.output_cost_per_1k = output_cost.or(cost_per_1k);
+    // Retain the deprecated field so existing callers that read it directly
+    // still get a value when only the old flag was used.
+    if output_cost.is_none() {
+        entry.cost_per_1k_tokens = cost_per_1k;
+    }
+    entry
+}
+
 pub fn run(args: ModelArgs) -> anyhow::Result<()> {
     let path = ModelRegistry::default_path()?;
     let mut reg = ModelRegistry::load_from(&path)
@@ -140,6 +169,8 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
             secret,
             capabilities,
             tier,
+            input_cost,
+            output_cost,
             cost_per_1k,
         } => {
             let secret_ref = secret.map(|s| s.parse::<SecretRef>()).transpose()?;
@@ -151,8 +182,7 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
                     other => anyhow::bail!("invalid tier: {other}. Valid: local, frontier"),
                 })
                 .transpose()?;
-            reg.models.insert(
-                name.clone(),
+            let entry = build_entry_costs(
                 ModelEntry {
                     provider,
                     model,
@@ -161,10 +191,13 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
                     capabilities,
                     params: serde_json::Value::Null,
                     tier,
-                    cost_per_1k_tokens: cost_per_1k,
                     ..Default::default()
                 },
+                input_cost,
+                output_cost,
+                cost_per_1k,
             );
+            reg.models.insert(name.clone(), entry);
             reg.save_to(&path)?;
             println!("Added model {name} → {}", path.display());
         }
@@ -182,6 +215,16 @@ pub fn run(args: ModelArgs) -> anyhow::Result<()> {
                 .get(&name)
                 .ok_or_else(|| anyhow::anyhow!("not found: {name}"))?;
             print!("{}", serde_yaml_ng::to_string(e)?);
+            let (inp, out) = e.effective_costs();
+            if let Some(i) = inp {
+                println!("  input $/1k:  {i}");
+            }
+            if let Some(o) = out {
+                println!("  output $/1k: {o}");
+            }
+            if let Some(c) = e.context_window {
+                println!("  context:     {c}");
+            }
         }
         ModelCmd::Remove { name } => {
             if reg.models.remove(&name).is_some() {

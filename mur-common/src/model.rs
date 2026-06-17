@@ -433,7 +433,10 @@ models:
     #[test]
     fn effective_costs_fallback_matrix() {
         // legacy only → both fall back to the blended rate
-        let mut e = ModelEntry { cost_per_1k_tokens: Some(0.01), ..Default::default() };
+        let mut e = ModelEntry {
+            cost_per_1k_tokens: Some(0.01),
+            ..Default::default()
+        };
         assert_eq!(e.effective_costs(), (Some(0.01), Some(0.01)));
 
         // split only → split wins, legacy ignored
