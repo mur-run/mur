@@ -156,6 +156,13 @@ pub struct App {
     /// Set once we've warned the user that session writes are failing, so the
     /// warning isn't repeated every turn.
     persist_warned: bool,
+    /// Working directory captured at CLI startup; sent to the agent once per
+    /// session so it knows what project the user is in.
+    pub cwd: Option<PathBuf>,
+    /// True after CWD has been injected into the first outgoing message this
+    /// session. Reset on `/clear` or channel switch so each new session
+    /// re-establishes context.
+    pub cwd_sent: bool,
 }
 
 impl App {
@@ -178,6 +185,8 @@ impl App {
             session_tool_allow: HashSet::new(),
             pending_shell: Vec::new(),
             persist_warned: false,
+            cwd: std::env::current_dir().ok(),
+            cwd_sent: false,
         }
     }
 
@@ -323,6 +332,7 @@ impl App {
         self.current_task_id = None;
         self.streaming = false;
         self.hitl = None;
+        self.cwd_sent = false;
         self.push_system("started a new conversation");
     }
 
@@ -338,6 +348,7 @@ impl App {
         self.current_task_id = None;
         self.streaming = false;
         self.hitl = None;
+        self.cwd_sent = false;
         self.load_history(turns);
         self.refresh_channel();
         Ok(())
@@ -394,6 +405,24 @@ impl App {
 
     pub fn tick_spinner(&mut self) {
         self.spinner = (self.spinner + 1) % SPINNER.len();
+    }
+
+    /// Update the input textarea's border to reflect the current content mode.
+    /// Call once per render frame so the style stays in sync without needing
+    /// `&mut App` inside the draw closure.
+    pub fn sync_input_block(&mut self) {
+        let is_shell = self.input_text().trim_start().starts_with('!');
+        let block = if is_shell {
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red))
+                .title(" ! shell command — output shared with agent ")
+        } else {
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" message — Enter to send · Alt+Enter newline · /help · Ctrl+D quit ")
+        };
+        self.input.set_block(block);
     }
 }
 

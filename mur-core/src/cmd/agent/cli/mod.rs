@@ -177,6 +177,7 @@ async fn event_loop(
     let mut spinner = tokio::time::interval(Duration::from_millis(SPINNER_MS));
 
     loop {
+        app.sync_input_block();
         terminal.draw(|f| ui::render(f, app))?;
         if app.should_quit {
             return Ok(());
@@ -360,12 +361,23 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     app.clear_input();
 
     let task_id = app.begin_user_turn(&trimmed);
+    // On the first send of each session, prepend the user's working directory
+    // so the agent knows which project they're in.
+    let cwd_prefix = if !app.cwd_sent {
+        app.cwd_sent = true;
+        app.cwd
+            .as_ref()
+            .map(|d| format!("[working directory: {}]\n\n", d.display()))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     // Prefix any `!command` output the agent hasn't seen yet, so it has the
     // same context the user is looking at. The transcript shows only the
     // user's text; the shell blocks were already rendered when they ran.
     let outgoing = match app.take_pending_shell() {
-        Some(ctx) => format!("{ctx}\n\n{trimmed}"),
-        None => trimmed.clone(),
+        Some(ctx) => format!("{cwd_prefix}{ctx}\n\n{trimmed}"),
+        None => format!("{cwd_prefix}{trimmed}"),
     };
     let params = build_params(&outgoing, &task_id, app.context_task_id.as_deref());
     spawn_stream(
