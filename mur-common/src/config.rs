@@ -77,6 +77,10 @@ pub struct Config {
     // --- OAuth bridge (cc-proxy) routing for subscription tokens ---
     #[serde(default)]
     pub cc_proxy: CcProxyConfig,
+
+    // --- Agent CLI TUI ---
+    #[serde(default)]
+    pub cli: CliConfig,
 }
 
 /// Routing for Anthropic subscription-OAuth (`sk-ant-oat*`) tokens through a
@@ -116,6 +120,15 @@ impl Default for CcProxyConfig {
             enabled: true,
         }
     }
+}
+
+/// Configuration for the agent CLI TUI.
+/// Stored in ~/.mur/config.yaml under the `cli:` key.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CliConfig {
+    /// Default visual skin for `mur agent cli`. Overridable with --skin.
+    /// Valid values: "dark" (default), "light", "mur".
+    pub skin: Option<String>,
 }
 
 /// Configuration for the mobile relay (P4).
