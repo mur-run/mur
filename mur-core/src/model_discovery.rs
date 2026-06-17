@@ -98,7 +98,7 @@ pub fn discover_models(
 #[allow(dead_code)]
 pub fn default_alias(provider: &str, model_id: &str) -> String {
     let mut s = String::with_capacity(provider.len() + 1 + model_id.len());
-    s.push_str(provider);
+    s.push_str(&provider.to_ascii_lowercase());
     s.push('_');
 
     for c in model_id.chars() {
@@ -158,5 +158,11 @@ mod tests {
         assert_eq!(default_alias("openai", "gpt-4-turbo"), "openai_gpt_4_turbo");
         assert_eq!(default_alias("meta", "llama-2-70b-chat"), "meta_llama_2_70b_chat");
         assert_eq!(default_alias("provider", "model@latest#v1"), "provider_model_latest_v1");
+        // S3 Task 1 mandated test vectors
+        assert_eq!(default_alias("anthropic", "claude-opus-4-8"), "anthropic_claude_opus_4_8");
+        assert_eq!(default_alias("openrouter", "meta-llama/llama-4"), "openrouter_meta_llama_llama_4");
+        assert_eq!(default_alias("ollama", "qwen3:8b"), "ollama_qwen3_8b");
+        // Lowercasing fix verification
+        assert_eq!(default_alias("Anthropic", "Claude-Opus-4-8"), "anthropic_claude_opus_4_8");
     }
 }
