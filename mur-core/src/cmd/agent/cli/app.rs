@@ -201,6 +201,9 @@ pub struct App {
     /// session. Reset on `/clear` or channel switch so each new session
     /// re-establishes context.
     pub cwd_sent: bool,
+    pub last_esc_at: Option<std::time::Instant>,
+    pub esc_hint: bool,
+    pub last_sent: Option<String>,
 }
 
 impl App {
@@ -225,6 +228,9 @@ impl App {
             persist_warned: false,
             cwd: std::env::current_dir().ok(),
             cwd_sent: false,
+            last_esc_at: None,
+            esc_hint: false,
+            last_sent: None,
         }
     }
 
@@ -371,6 +377,9 @@ impl App {
         self.streaming = false;
         self.hitl = None;
         self.cwd_sent = false;
+        self.last_sent = None;
+        self.last_esc_at = None;
+        self.esc_hint = false;
         self.push_system("started a new conversation");
     }
 
@@ -674,6 +683,20 @@ mod tests {
             a.messages.iter().any(|m| m.text == "first question"),
             "history rehydrated after switch"
         );
+    }
+
+    #[test]
+    fn start_new_session_clears_last_sent() {
+        let home = tempdir().unwrap();
+        let mut a = app_at(&home);
+        a.last_sent = Some("hello".into());
+        a.last_esc_at = Some(std::time::Instant::now());
+        a.esc_hint = true;
+        let s = Session::create(home.path(), "a").unwrap();
+        a.start_new_session(s);
+        assert!(a.last_sent.is_none());
+        assert!(a.last_esc_at.is_none());
+        assert!(!a.esc_hint);
     }
 }
 
