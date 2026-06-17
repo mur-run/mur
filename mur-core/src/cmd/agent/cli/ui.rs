@@ -181,10 +181,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     spans.push(Span::styled(msg, Style::default().fg(color)));
 
     let right_hint: Option<(String, Color)> = if app.scroll_back > 0 {
-        Some((
-            format!("↑ {} lines · ⬇ to bottom", app.scroll_back),
-            SYSTEM,
-        ))
+        Some((format!("↑ {} lines · ⬇ to bottom", app.scroll_back), SYSTEM))
     } else if app.esc_hint {
         let hint = if app.streaming {
             "ESC again to cancel"
@@ -199,10 +196,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     if let Some((hint_text, hint_color)) = right_hint {
         let hint_display = format!(" {} ", hint_text);
         let hint_width = hint_display.chars().count() as u16;
-        let left_width: u16 = spans
-            .iter()
-            .map(|s| s.content.chars().count() as u16)
-            .sum();
+        let left_width: u16 = spans.iter().map(|s| s.content.chars().count() as u16).sum();
         let bar_width = area.width;
         // Only right-align if there's room; otherwise skip the hint.
         if bar_width > left_width + hint_width {

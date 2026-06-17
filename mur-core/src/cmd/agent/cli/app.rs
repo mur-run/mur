@@ -731,12 +731,18 @@ mod esc_action_tests {
 
     #[test]
     fn esc_cancel_restore_on_second_press_while_streaming() {
-        assert_eq!(esc_action(recent(), true, true), EscAction::CancelAndRestore);
+        assert_eq!(
+            esc_action(recent(), true, true),
+            EscAction::CancelAndRestore
+        );
     }
 
     #[test]
     fn esc_cancel_restore_on_second_press_streaming_has_text() {
-        assert_eq!(esc_action(recent(), true, false), EscAction::CancelAndRestore);
+        assert_eq!(
+            esc_action(recent(), true, false),
+            EscAction::CancelAndRestore
+        );
     }
 
     #[test]

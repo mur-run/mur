@@ -247,11 +247,8 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 }
                 KeyCode::Enter => submit(app, tx).await,
                 KeyCode::Esc => {
-                    let action = esc_action(
-                        app.last_esc_at,
-                        app.streaming,
-                        app.input_text().is_empty(),
-                    );
+                    let action =
+                        esc_action(app.last_esc_at, app.streaming, app.input_text().is_empty());
                     match action {
                         EscAction::Arm => {
                             app.last_esc_at = Some(std::time::Instant::now());
