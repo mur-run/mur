@@ -48,11 +48,11 @@ export function groupByProvider(models: ModelOption[]): [string, ModelOption[]][
 
 /**
  * Format input or output cost in millions.
- * Returns null if cost is undefined (unknown cost).
+ * Returns null if cost is undefined or null (unknown cost).
  * Returns "$X/M" for known costs (e.g., "$5/M" for 0.005).
  */
-export function formatCost(perK?: number): string | null {
-  if (perK === undefined) return null;
+export function formatCost(perK?: number | null): string | null {
+  if (perK === undefined || perK === null || !Number.isFinite(perK)) return null;
 
   // Convert per-1K to per-1M (multiply by 1000)
   const perMillion = perK * 1000;

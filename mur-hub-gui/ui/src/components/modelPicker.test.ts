@@ -89,6 +89,10 @@ describe("formatCost", () => {
     expect(formatCost(undefined)).toBeNull();
   });
 
+  it("returns null for null", () => {
+    expect(formatCost(null)).toBeNull();
+  });
+
   it("formats cost in millions with 1 decimal place", () => {
     expect(formatCost(0.003)).toBe("$3/M");
     expect(formatCost(0.005)).toBe("$5/M");
