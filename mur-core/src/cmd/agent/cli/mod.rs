@@ -358,6 +358,7 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         app.push_system("still generating — press Ctrl+C to cancel first");
         return;
     }
+    app.last_sent = Some(trimmed.clone());
     app.clear_input();
 
     let task_id = app.begin_user_turn(&trimmed);
