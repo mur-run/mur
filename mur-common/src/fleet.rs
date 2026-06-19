@@ -1,3 +1,5 @@
+//! Fleet — a named squad of agents working a shared goal over one channel.
+
 use serde::{Deserialize, Serialize};
 
 pub const CONCIERGE_AGENT: &str = "mur";
@@ -5,14 +7,20 @@ pub const CONCIERGE_AGENT: &str = "mur";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fleet {
     pub name: String,
+    #[serde(default)]
     pub display_name: String,
+    #[serde(default)]
     pub goal: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub router: Option<String>,
+    #[serde(default)]
     pub members: Vec<String>,
     pub channel_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
-    #[serde(rename = "loop")]
+    #[serde(default, rename = "loop", skip_serializing_if = "Option::is_none")]
     pub loop_cfg: Option<FleetLoop>,
 }
 
@@ -22,7 +30,9 @@ pub struct FleetLoop {
     pub trigger: String,
     pub max_iterations: u32,
     pub budget_usd: f64,
+    #[serde(default)]
     pub deadline: String,
+    #[serde(default)]
     pub done_when: String,
 }
 
@@ -39,6 +49,16 @@ impl Fleet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fleet_minimal_yaml_deserializes_with_defaults() {
+        let f: Fleet = serde_yaml::from_str("name: dev\nchannel_id: fleet-dev\n").unwrap();
+        assert_eq!(f.name, "dev");
+        assert_eq!(f.channel_id, "fleet-dev");
+        assert!(f.members.is_empty());
+        assert_eq!(f.router_or_concierge(), CONCIERGE_AGENT);
+        assert!(f.loop_cfg.is_none());
+    }
 
     #[test]
     fn fleet_yaml_roundtrip_and_router_default() {
