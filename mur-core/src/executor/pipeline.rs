@@ -72,6 +72,7 @@ impl PipelineExecutor {
                     output_data: None,
                     exit_code: 1,
                     duration_ms: 0,
+                    tokens_used: 0,
                 });
             }
 
@@ -130,6 +131,7 @@ impl PipelineExecutor {
                             output_data: None,
                             exit_code: 1,
                             duration_ms,
+                            tokens_used: 0,
                         });
                     }
                 }
@@ -153,6 +155,7 @@ impl PipelineExecutor {
                 output_data: None,
                 exit_code: 0,
                 duration_ms,
+                tokens_used: 0,
             });
         }
 
@@ -216,6 +219,7 @@ impl PipelineExecutor {
                         output_data: None,
                         exit_code: 1,
                         duration_ms: start.elapsed().as_millis() as u64,
+                        tokens_used: 0,
                     });
                 }
 
@@ -314,6 +318,7 @@ impl PipelineExecutor {
             output_data,
             exit_code: last_exit_code,
             duration_ms,
+            tokens_used: 0,
         })
     }
 
@@ -397,6 +402,7 @@ impl PipelineExecutor {
                         output_data: None,
                         exit_code: 1,
                         duration_ms: (elapsed * 1000.0) as u64,
+                        tokens_used: 0,
                     };
                     if first_error.is_none() {
                         first_error = Some(err_output.clone());
@@ -413,6 +419,7 @@ impl PipelineExecutor {
                         output_data: None,
                         exit_code: 1,
                         duration_ms: 0,
+                        tokens_used: 0,
                     };
                     if first_error.is_none() {
                         first_error = Some(err_output.clone());
@@ -456,6 +463,7 @@ impl PipelineExecutor {
                             output_data: None,
                             exit_code: 1,
                             duration_ms: (elapsed * 1000.0) as u64,
+                            tokens_used: 0,
                         },
                     ));
                 }
@@ -469,6 +477,7 @@ impl PipelineExecutor {
                             output_data: None,
                             exit_code: 1,
                             duration_ms: 0,
+                            tokens_used: 0,
                         },
                     ));
                 }
@@ -537,6 +546,7 @@ impl PipelineExecutor {
             output_data,
             exit_code,
             duration_ms,
+            tokens_used: 0,
         })
     }
 }
@@ -648,6 +658,7 @@ mod tests {
             output_data: None,
             exit_code: 0,
             duration_ms: 0,
+            tokens_used: 0,
         };
 
         let expr = PipelineExpr::Single("injector".into());
@@ -673,6 +684,7 @@ mod tests {
             output_data: None,
             exit_code: 0,
             duration_ms: 0,
+            tokens_used: 0,
         };
 
         let expr = PipelineExpr::Single("prompt-inject".into());
