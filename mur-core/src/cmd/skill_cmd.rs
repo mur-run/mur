@@ -166,6 +166,67 @@ pub fn cmd_show(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Pure: apply a scope choice to a manifest. Exactly one of fleet/project/user
+/// must be selected; clears the other selectors. Fleet name is slug-validated.
+pub(crate) fn set_manifest_scope(
+    m: &mut mur_common::skill::manifest::SkillManifest,
+    fleet: Option<&str>,
+    project: Option<&str>,
+    user: bool,
+) -> Result<()> {
+    use mur_common::skill::manifest::SkillScope;
+    let n = fleet.is_some() as u8 + project.is_some() as u8 + user as u8;
+    if n != 1 {
+        return Err(anyhow!(
+            "specify exactly one of --fleet <name>, --project, or --user"
+        ));
+    }
+    if user {
+        m.scope = SkillScope::User;
+        m.fleet = None;
+        m.project = None;
+    } else if let Some(f) = fleet {
+        if !mur_common::fleet::valid_fleet_name(f) {
+            return Err(anyhow!(
+                "invalid fleet name '{f}': lowercase letters, digits, '-' or '_'"
+            ));
+        }
+        m.scope = SkillScope::Fleet;
+        m.fleet = Some(f.to_string());
+        m.project = None;
+    } else if let Some(p) = project {
+        m.scope = SkillScope::Project;
+        m.project = Some(p.to_string());
+        m.fleet = None;
+    }
+    Ok(())
+}
+
+/// `mur skill scope <name>` — set a skill's visibility scope so the scope-aware
+/// injector (CLI + runtime) only surfaces it in the matching context. `--project`
+/// scopes to the current git repo; `--fleet <name>` to a fleet; `--user` resets.
+pub fn cmd_scope(name: &str, fleet: Option<String>, project: bool, user: bool) -> Result<()> {
+    let home = resolve_mur_home()?;
+    let dir = local::installed_path(&home, name);
+    let mut m =
+        local::load_installed(&home, name).map_err(|_| anyhow!("skill '{name}' not installed"))?;
+    let proj_id = if project {
+        let cwd = std::env::current_dir()?;
+        Some(
+            mur_common::project::project_id(&cwd)
+                .ok_or_else(|| anyhow!("--project requires being inside a git repo"))?,
+        )
+    } else {
+        None
+    };
+    set_manifest_scope(&mut m, fleet.as_deref(), proj_id.as_deref(), user)?;
+    m.updated_at = chrono::Utc::now();
+    mur_common::skill::store::write_to_dir(&dir, &m)
+        .map_err(|e| anyhow!("write skill '{name}': {e}"))?;
+    println!("Set '{name}' scope = {:?}", m.scope);
+    Ok(())
+}
+
 pub fn cmd_remove(name: &str) -> Result<()> {
     let home = resolve_mur_home()?;
     local::remove_installed(&home, name).map_err(|e| anyhow!("failed to remove '{name}': {e}"))?;
@@ -659,6 +720,32 @@ fn read_any(path: &str) -> Result<mur_common::skill::SkillManifest> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn set_manifest_scope_sets_and_validates() {
+        use mur_common::skill::manifest::SkillScope;
+        let yaml = "name: s\nversion: 1.0.0\npublisher: human:t\ndescription: d\n\
+                    category: context\ncontent:\n  abstract: a\n  context: c\n";
+        let mut m = mur_common::skill::parser::parse_canonical(yaml).unwrap();
+        // fleet
+        set_manifest_scope(&mut m, Some("dev"), None, false).unwrap();
+        assert_eq!(m.scope, SkillScope::Fleet);
+        assert_eq!(m.fleet.as_deref(), Some("dev"));
+        assert!(m.project.is_none());
+        // project (clears fleet)
+        set_manifest_scope(&mut m, None, Some("/repo"), false).unwrap();
+        assert_eq!(m.scope, SkillScope::Project);
+        assert_eq!(m.project.as_deref(), Some("/repo"));
+        assert!(m.fleet.is_none());
+        // user reset (clears both)
+        set_manifest_scope(&mut m, None, None, true).unwrap();
+        assert_eq!(m.scope, SkillScope::User);
+        assert!(m.fleet.is_none() && m.project.is_none());
+        // exactly-one enforcement + invalid fleet name → errors
+        assert!(set_manifest_scope(&mut m, None, None, false).is_err());
+        assert!(set_manifest_scope(&mut m, Some("x"), None, true).is_err());
+        assert!(set_manifest_scope(&mut m, Some("Bad Name"), None, false).is_err());
+    }
 
     const VALID: &str = r#"
 name: cli-demo
