@@ -33,6 +33,7 @@ impl SkillScope {
 /// Is a skill with this (scope, fleet, project) visible in the given active context?
 /// Layers combine: user/enterprise are always visible; fleet/project are visible
 /// only when their selector matches the active context. (specific wins; see spec §6)
+// ponytail: predicate ready; wire into inject/hook.rs when fleet runtime context lands (Phase 2)
 pub fn scope_visible(
     scope: SkillScope,
     skill_fleet: Option<&str>,
@@ -86,7 +87,7 @@ pub struct SkillManifest {
 
     /// Visibility scope of this skill (user/project/fleet/enterprise).
     /// Defaults to `User` for back-compat with unsigned skills.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "SkillScope::is_user")]
     pub scope: SkillScope,
 
     /// Fleet identifier (required if scope is Fleet).
@@ -599,6 +600,7 @@ evolution_log:
         assert_eq!(SkillScope::default(), SkillScope::User);
         assert!(SkillScope::User.is_user());
         assert!(!SkillScope::Project.is_user());
+        assert!(!SkillScope::Fleet.is_user());
 
         // Serde: lowercase in YAML.
         let yaml = r#"
