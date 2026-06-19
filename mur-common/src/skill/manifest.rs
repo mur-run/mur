@@ -7,7 +7,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Visibility scope for a skill — determines which layers can see and use it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillScope {
     /// Visible to the current user only (default).
@@ -25,6 +27,25 @@ impl SkillScope {
     /// Returns `true` if this scope is `User`.
     pub fn is_user(&self) -> bool {
         matches!(self, SkillScope::User)
+    }
+}
+
+/// Is a skill with this (scope, fleet, project) visible in the given active context?
+/// Layers combine: user/enterprise are always visible; fleet/project are visible
+/// only when their selector matches the active context. (specific wins; see spec §6)
+pub fn scope_visible(
+    scope: SkillScope,
+    skill_fleet: Option<&str>,
+    skill_project: Option<&str>,
+    active_fleet: Option<&str>,
+    active_project: Option<&str>,
+) -> bool {
+    match scope {
+        SkillScope::User | SkillScope::Enterprise => true,
+        SkillScope::Fleet => matches!((skill_fleet, active_fleet), (Some(f), Some(a)) if f == a),
+        SkillScope::Project => {
+            matches!((skill_project, active_project), (Some(p), Some(a)) if p == a)
+        }
     }
 }
 
@@ -617,5 +638,55 @@ content:
         assert_eq!(m3.scope, SkillScope::User);
         assert!(m3.fleet.is_none());
         assert!(m3.project.is_none());
+    }
+
+    #[test]
+    fn scope_visible_matrix() {
+        // user + enterprise always visible
+        assert!(scope_visible(SkillScope::User, None, None, None, None));
+        assert!(scope_visible(
+            SkillScope::Enterprise,
+            None,
+            None,
+            None,
+            None
+        ));
+        // fleet skill visible only when active fleet matches
+        assert!(scope_visible(
+            SkillScope::Fleet,
+            Some("dev"),
+            None,
+            Some("dev"),
+            None
+        ));
+        assert!(!scope_visible(
+            SkillScope::Fleet,
+            Some("dev"),
+            None,
+            Some("ops"),
+            None
+        ));
+        assert!(!scope_visible(
+            SkillScope::Fleet,
+            Some("dev"),
+            None,
+            None,
+            None
+        ));
+        // project skill visible only when active project matches
+        assert!(scope_visible(
+            SkillScope::Project,
+            None,
+            Some("/p"),
+            None,
+            Some("/p")
+        ));
+        assert!(!scope_visible(
+            SkillScope::Project,
+            None,
+            Some("/p"),
+            None,
+            Some("/q")
+        ));
     }
 }
