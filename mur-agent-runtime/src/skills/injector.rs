@@ -193,6 +193,44 @@ content:
     }
 
     #[test]
+    fn fleet_scoped_skill_injects_only_when_fleet_matches() {
+        let mk = |name: &str, scope_yaml: &str| {
+            let yaml = format!(
+                "name: {name}\nversion: 1.0.0\npublisher: human:t\ndescription: test\n\
+                 category: context\n{scope_yaml}content:\n  abstract: \"a\"\n  context: body\n\
+                 triggers:\n  - type: session_start\n"
+            );
+            LoadedSkill {
+                name: name.to_string(),
+                manifest: parse_canonical(&yaml).unwrap(),
+                trust: TrustLevel::Verified,
+                scope: SkillScope::Global,
+                content_hash: String::new(),
+            }
+        };
+        let skills = vec![mk("u", ""), mk("f", "scope: fleet\nfleet: dev\n")];
+        // active_fleet is the 5th arg; active_project stays None throughout.
+        let names = |active_fleet: Option<&str>| {
+            inject_layer2(
+                &skills,
+                &SkillsConfig::default(),
+                0.0,
+                &HashSet::new(),
+                active_fleet,
+                None,
+            )
+            .injected_names
+        };
+        // no active fleet → fleet skill fail-closed; user always injects
+        let n0 = names(None);
+        assert!(n0.contains(&"u".to_string()) && !n0.contains(&"f".to_string()));
+        // matching active fleet → fleet skill injects
+        assert!(names(Some("dev")).contains(&"f".to_string()));
+        // wrong fleet → fail-closed
+        assert!(!names(Some("other")).contains(&"f".to_string()));
+    }
+
+    #[test]
     fn no_session_start_not_injected() {
         let s = loaded(
             "cmd-only",

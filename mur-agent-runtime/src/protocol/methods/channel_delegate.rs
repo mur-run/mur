@@ -125,6 +125,11 @@ impl MethodHandler for ChannelDelegateHandler {
             input: message,
             context_task_id,
             task_id,
+            // A fleet's shared channel is `fleet-<name>`; derive the active fleet
+            // so the runtime injects this fleet's fleet-scoped skills for the turn.
+            // A non-fleet or malformed channel id yields None (fail-closed).
+            active_fleet: mur_common::fleet::fleet_name_from_channel_id(&channel_id)
+                .map(str::to_string),
         };
 
         // Run the turn (non-streaming path; v3d-2 does not need per-delta
