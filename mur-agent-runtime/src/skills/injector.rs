@@ -57,7 +57,8 @@ pub fn inject_layer2(
         })
         // Scope: fleet/project-scoped skills inject only when the active scope
         // matches (fail-closed); user/enterprise always pass. active_project is
-        // the member's cwd repo root; active_fleet is None for now (deferred).
+        // the member's cwd repo root; active_fleet is the turn's `fleet-<name>`
+        // channel (membership-verified by the channel/delegate handler).
         .filter(|s| {
             mur_common::skill::manifest::scope_visible(
                 s.manifest.scope,
