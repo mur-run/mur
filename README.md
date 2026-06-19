@@ -309,13 +309,14 @@ mur dashboard        # terminal TUI dashboard
 ```
 
 <details>
-<summary><b>Full command tree</b> (23 top-level commands)</summary>
+<summary><b>Full command tree</b> (24 top-level commands)</summary>
 
 ```
 mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · cli · send · card · export · install · companion · voice ·
 │                pair · schedule · perm · secret · trash · queue · rollback … (40+)
+├── fleet        create · list · show · run   (squads of agents over a shared channel)
 ├── skill        install · search · show · generate · suggest · evolve · recombine ·
 │                publish · audit · trust · exchange · drafts · eval …
 ├── notes        create · search · list · show
