@@ -28,7 +28,11 @@ pub struct Fleet {
 pub struct FleetLoop {
     #[serde(default = "default_trigger")]
     pub trigger: String,
+    // default 0 → resolvers fall back (cap → DEFAULT_MAX_ITERATIONS, budget → no cap),
+    // so a minimal `loop:` block (e.g. just `trigger:`) deserializes.
+    #[serde(default)]
     pub max_iterations: u32,
+    #[serde(default)]
     pub budget_usd: f64,
     #[serde(default)]
     pub deadline: String,
@@ -109,5 +113,19 @@ mod tests {
             "name: dev\ndisplay_name: Dev\ngoal: test\nchannel_id: fleet-dev\nrules: []\nskills: []\nmembers: []\nloop:\n  trigger: manual\n  max_iterations: 3\n  budget_usd: 1.0\n  deadline: '2026-12-31'\n  done_when: 'all_tasks_done'\n",
         ).unwrap();
         assert_eq!(with_loop.loop_cfg.unwrap().max_iterations, 3);
+    }
+
+    #[test]
+    fn minimal_loop_block_deserializes_with_defaults() {
+        // A `loop:` block with only a trigger must not fail (max_iterations /
+        // budget_usd default to 0 → resolvers fall back).
+        let f: Fleet = serde_yaml::from_str(
+            "name: dev\nchannel_id: fleet-dev\nloop:\n  trigger: \"interval:1h\"\n",
+        )
+        .unwrap();
+        let l = f.loop_cfg.unwrap();
+        assert_eq!(l.trigger, "interval:1h");
+        assert_eq!(l.max_iterations, 0);
+        assert_eq!(l.budget_usd, 0.0);
     }
 }

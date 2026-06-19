@@ -125,6 +125,12 @@ struct DagGraph {
     id_to_idx: HashMap<String, usize>,
 }
 
+/// Validate a step list (resolvable `depends_on`, no cycles) without executing.
+/// Used by fleet router-planning to reject an invalid plan and fall back.
+pub(crate) fn validate_steps(steps: &[ProcedureStep]) -> Result<()> {
+    build_dag(steps).map(|_| ())
+}
+
 /// Build the DAG: assign ids, validate depends_on, detect cycles, compute ranks.
 fn build_dag(steps: &[ProcedureStep]) -> Result<DagGraph> {
     // Assign default ids to steps without one.

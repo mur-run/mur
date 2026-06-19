@@ -13,6 +13,9 @@ pub fn cmd_fleet_show(mur_home: &Path, name: &str) -> Result<()> {
     println!("Router: {}", f.router_or_concierge());
     println!("Members: {}", f.members.join(", "));
     println!("Channel: {}", f.channel_id);
+    if super::control::is_stopped(mur_home, name) {
+        println!("Status: STOPPED (kill-switch active — `mur fleet start {name}`)");
+    }
     if !f.rules.is_empty() {
         println!("Rules: {}", f.rules.join(", "));
     }

@@ -51,12 +51,15 @@ pub fn due_fleets(mur_home: &Path, now_unix: u64) -> Result<Vec<String>> {
     let mut due = vec![];
     for name in store::list_fleets(mur_home)? {
         let fleet = store::load_fleet(mur_home, &name)?;
-        let trigger = fleet
-            .loop_cfg
-            .as_ref()
-            .map(|l| l.trigger.as_str())
-            .unwrap_or("manual");
-        if is_due(trigger, read_last_run(mur_home, &name), now_unix) {
+        let lc = fleet.loop_cfg.as_ref();
+        let trigger = lc.map(|l| l.trigger.as_str()).unwrap_or("manual");
+        // Auto-run requires a positive budget (no unattended run without a $ ceiling)
+        // and is skipped when the kill-switch is engaged.
+        let has_budget = lc.map(|l| l.budget_usd > 0.0).unwrap_or(false);
+        if has_budget
+            && is_due(trigger, read_last_run(mur_home, &name), now_unix)
+            && !mur_core::cmd::fleet::control::is_stopped(mur_home, &name)
+        {
             due.push(name);
         }
     }
@@ -111,9 +114,9 @@ pub fn tick(mur_home: &Path) {
                 }
             };
             tracing::info!(fleet = %fleet, "fleet_tick: auto-running loop");
-            // None/None → use the fleet.yaml loop config (max_iterations/deadline).
+            // None args → use the fleet.yaml loop config (max_iterations/deadline/budget).
             if let Err(e) = rt.block_on(mur_core::cmd::fleet::loop_run::cmd_fleet_run_loop(
-                &home, &fleet, None, None,
+                &home, &fleet, None, None, None,
             )) {
                 tracing::error!(error = %e, fleet = %fleet, "fleet_tick: loop failed");
             }
@@ -139,7 +142,7 @@ mod tests {
             loop_cfg: Some(FleetLoop {
                 trigger: trigger.into(),
                 max_iterations: 3,
-                budget_usd: 0.0,
+                budget_usd: 1.0, // positive so auto-run eligibility holds in tests
                 deadline: String::new(),
                 done_when: String::new(),
             }),
@@ -188,5 +191,29 @@ mod tests {
         assert!(due_fleets(home, 5030).unwrap().is_empty());
 
         assert_eq!(due_fleets(home, 5070).unwrap(), vec!["auto".to_string()]);
+    }
+
+    #[test]
+    fn due_fleets_requires_positive_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let mut f = loop_fleet("nobudget", "interval:1m");
+        if let Some(l) = f.loop_cfg.as_mut() {
+            l.budget_usd = 0.0;
+        }
+        store::save_fleet(home, &f).unwrap();
+        // interval + not stopped, but no budget → NOT auto-run-eligible
+        assert!(due_fleets(home, 5000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn due_fleets_skips_stopped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        store::save_fleet(home, &loop_fleet("auto", "interval:1m")).unwrap();
+        assert_eq!(due_fleets(home, 5000).unwrap(), vec!["auto".to_string()]);
+        // kill-switch engaged → no longer auto-run-eligible
+        mur_core::cmd::fleet::control::cmd_fleet_stop(home, "auto").unwrap();
+        assert!(due_fleets(home, 5000).unwrap().is_empty());
     }
 }
