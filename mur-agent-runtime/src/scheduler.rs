@@ -130,3 +130,16 @@ pub fn next_n_fires(cron_expr: &str, count: usize) -> Result<Vec<chrono::DateTim
         .with_context(|| format!("parse cron expression {cron_expr:?}"))?;
     Ok(schedule.upcoming(Local).take(count).collect())
 }
+
+/// Next fire time strictly after `after`, for a 5-field POSIX cron expression
+/// (seconds = 0, same grammar as [`next_n_fires`]). `None` when the expression
+/// is invalid or yields no future time. Used by the daemon's fleet auto-run to
+/// decide cron due-ness in its poll loop (it has a `last_run` lower bound, so it
+/// needs "after X" rather than "after now").
+pub fn next_fire_after(
+    cron_expr: &str,
+    after: chrono::DateTime<Local>,
+) -> Option<chrono::DateTime<Local>> {
+    let expr = format!("0 {cron_expr}");
+    Schedule::from_str(&expr).ok()?.after(&after).next()
+}
