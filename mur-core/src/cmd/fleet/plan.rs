@@ -1,0 +1,183 @@
+//! Phase 3 router planning. Instead of broadcasting the goal to every member,
+//! the router agent emits a structured plan (steps with `delegate_to` +
+//! `depends_on`) that becomes the `Procedure` the DAG executor runs. LLM output
+//! is fragile, so parsing is defensive and **falls back to broadcast** on any
+//! problem (unknown member, bad JSON, unresolved dep, cycle, oversize). The
+//! parse/validate path is pure + unit-tested; the router dial is live.
+
+use std::collections::HashSet;
+use std::path::Path;
+
+use mur_common::channel::ChannelEvent;
+use mur_common::fleet::Fleet;
+use mur_common::skill::manifest::{Procedure, ProcedureStep};
+use serde::Deserialize;
+use serde_json::json;
+
+/// Upper bound on plan size — a runaway plan falls back to broadcast.
+const MAX_PLAN_STEPS: usize = 32;
+
+#[derive(Deserialize)]
+struct RouterPlan {
+    #[serde(default)]
+    steps: Vec<PlanStep>,
+}
+
+#[derive(Deserialize)]
+struct PlanStep {
+    #[serde(default)]
+    id: Option<String>,
+    member: String,
+    #[serde(default)]
+    task: String,
+    #[serde(default)]
+    depends_on: Vec<String>,
+}
+
+/// Extract the JSON object from a (possibly prose- or fence-wrapped) reply:
+/// the span from the first `{` to the last `}`.
+fn extract_json(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    (end > start).then(|| &text[start..=end])
+}
+
+/// Parse a router reply into a validated `Procedure`, or `None` to fall back to
+/// broadcast. Validates: parseable JSON, non-empty and ≤ `MAX_PLAN_STEPS`, every
+/// `member` is a real fleet member, and (via the executor's own validator)
+/// resolvable `depends_on` with no cycles.
+pub fn parse_router_plan(text: &str, members: &[String]) -> Option<Procedure> {
+    let plan: RouterPlan = serde_json::from_str(extract_json(text)?).ok()?;
+    if plan.steps.is_empty() || plan.steps.len() > MAX_PLAN_STEPS {
+        return None;
+    }
+    let member_set: HashSet<&str> = members.iter().map(String::as_str).collect();
+    let mut steps = Vec::with_capacity(plan.steps.len());
+    for (i, ps) in plan.steps.iter().enumerate() {
+        if !member_set.contains(ps.member.as_str()) {
+            return None; // unknown member → fall back to broadcast
+        }
+        let task = if ps.task.trim().is_empty() {
+            ps.member.clone()
+        } else {
+            ps.task.clone()
+        };
+        steps.push(ProcedureStep {
+            description: format!("{}: {task}", ps.member),
+            intent: Some(task),
+            delegate_to: Some(ps.member.clone()),
+            id: Some(ps.id.clone().unwrap_or_else(|| format!("s{i}"))),
+            depends_on: ps.depends_on.clone(),
+            ..Default::default()
+        });
+    }
+    // Reuse the executor's validator: resolvable deps + acyclic.
+    crate::executor::dag::validate_steps(&steps).ok()?;
+    Some(Procedure {
+        variables: vec![],
+        steps,
+    })
+}
+
+/// Ask the router agent to produce a plan; `None` on any failure (caller falls
+/// back to broadcast). Requires the router agent to be running.
+pub fn plan_via_router(
+    mur_home: &Path,
+    fleet: &Fleet,
+    events: &[ChannelEvent],
+) -> Option<Procedure> {
+    let prompt = build_plan_prompt(fleet, events);
+    let params = json!({
+        "message": { "role": "user", "parts": [{ "kind": "text", "text": prompt }] }
+    });
+    let mut out = String::new();
+    crate::a2a_dial::dial_message_streaming(
+        mur_home,
+        fleet.router_or_concierge(),
+        params,
+        |delta, _thinking, _id| out.push_str(delta),
+        |_hitl| {},
+    )
+    .ok()?;
+    parse_router_plan(&out, &fleet.members)
+}
+
+fn build_plan_prompt(fleet: &Fleet, events: &[ChannelEvent]) -> String {
+    let recent: String = events
+        .iter()
+        .rev()
+        .take(8)
+        .rev()
+        .filter_map(|e| e.payload.get("text").and_then(|v| v.as_str()))
+        .map(|t| format!("- {t}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "You are the router for fleet '{}'. Goal: {}\nMembers (delegate ONLY to these): {}\nRecent channel activity:\n{}\n\nProduce a minimal plan that assigns work to the RIGHT members (not everyone) with dependencies. Reply with ONLY JSON:\n{{\"steps\":[{{\"id\":\"s1\",\"member\":\"<one of the members>\",\"task\":\"<what to do>\",\"depends_on\":[]}}]}}\nUse `depends_on` (referencing earlier step ids) for steps that must wait. Keep it small.",
+        fleet.name,
+        fleet.goal,
+        fleet.members.join(", "),
+        if recent.is_empty() {
+            "(none yet)"
+        } else {
+            &recent
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn members() -> Vec<String> {
+        vec!["pm".into(), "qa".into()]
+    }
+
+    #[test]
+    fn parses_valid_plan_with_deps() {
+        let txt = r#"{"steps":[
+            {"id":"a","member":"pm","task":"triage"},
+            {"id":"b","member":"qa","task":"test","depends_on":["a"]}
+        ]}"#;
+        let p = parse_router_plan(txt, &members()).unwrap();
+        assert_eq!(p.steps.len(), 2);
+        assert_eq!(p.steps[0].delegate_to.as_deref(), Some("pm"));
+        assert_eq!(p.steps[1].delegate_to.as_deref(), Some("qa"));
+        assert_eq!(p.steps[1].depends_on, vec!["a".to_string()]);
+        assert_eq!(p.steps[0].intent.as_deref(), Some("triage"));
+    }
+
+    #[test]
+    fn extracts_json_from_prose_and_fences() {
+        let txt = "Sure! Here is the plan:\n```json\n{\"steps\":[{\"member\":\"pm\",\"task\":\"go\"}]}\n```\nHope that helps.";
+        let p = parse_router_plan(txt, &members()).unwrap();
+        assert_eq!(p.steps.len(), 1);
+        assert_eq!(p.steps[0].delegate_to.as_deref(), Some("pm"));
+    }
+
+    #[test]
+    fn falls_back_on_unknown_member() {
+        let txt = r#"{"steps":[{"member":"intruder","task":"x"}]}"#;
+        assert!(parse_router_plan(txt, &members()).is_none());
+    }
+
+    #[test]
+    fn falls_back_on_malformed_or_empty() {
+        assert!(parse_router_plan("not json at all", &members()).is_none());
+        assert!(parse_router_plan(r#"{"steps":[]}"#, &members()).is_none());
+        assert!(parse_router_plan("{ totally broken", &members()).is_none());
+    }
+
+    #[test]
+    fn falls_back_on_cycle_and_unknown_dep() {
+        // cycle a<->b
+        let cyc = r#"{"steps":[
+            {"id":"a","member":"pm","task":"x","depends_on":["b"]},
+            {"id":"b","member":"qa","task":"y","depends_on":["a"]}
+        ]}"#;
+        assert!(parse_router_plan(cyc, &members()).is_none());
+        // depends_on an id that doesn't exist
+        let bad = r#"{"steps":[{"id":"a","member":"pm","task":"x","depends_on":["ghost"]}]}"#;
+        assert!(parse_router_plan(bad, &members()).is_none());
+    }
+}

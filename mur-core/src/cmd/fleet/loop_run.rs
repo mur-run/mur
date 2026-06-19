@@ -204,7 +204,10 @@ pub async fn cmd_fleet_run_loop(
         }
         println!("── fleet '{}' iteration {} ──", name, iteration + 1);
 
-        let proc = build_fleet_procedure(&fleet.goal, &fleet.members);
+        // Router plans this iteration (seeing prior state); falls back to broadcast.
+        let pre_events = svc.load_events(&fleet.channel_id).unwrap_or_default();
+        let proc = super::plan::plan_via_router(mur_home, &fleet, &pre_events)
+            .unwrap_or_else(|| build_fleet_procedure(&fleet.goal, &fleet.members));
         let opts = crate::executor::dag::DagExecOptions {
             // Fail-closed on the unattended loop path: never blanket-approve.
             // (No risk tier on fan-out steps today; this guards future

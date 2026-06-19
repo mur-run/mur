@@ -293,9 +293,11 @@ intentionally behind the design, so the doc never advertises a guard the runtime
 - **Shipped:** Phase 1 (`create/list/show/run`, `Fleet` type, `create_for_fleet`, `SkillScope`
   fields + `scope_visible`) and Phase 2 (`run --loop` guarded loop: cap/deadline/stuck + router
   DONE/CONTINUE convergence; daemon `fleet_tick` interval auto-run).
-- **Each iteration is a static fan-out to *all* members** (`build_fleet_procedure`), not a
-  router-emitted plan/route. The §5 "PLAN → router returns DAG" flow is **Phase 3**
-  (router-emits-DAG); today the "plan" is broadcast-to-all.
+- **Router planning shipped:** each iteration the router emits a structured DAG
+  (`cmd/fleet/plan.rs`; JSON parsed, member + dependency + cycle validated via the executor's own
+  `validate_steps`) routing work to the right members. On any absent/invalid plan it **falls back to
+  the static broadcast-to-all** (`build_fleet_procedure`), so a down or confused router degrades
+  gracefully. The §5 "PLAN → router returns DAG" flow is now the live path.
 - **Unattended auto-run ships OFF by default.** `fleet_tick` no-ops unless `MUR_FLEET_AUTORUN=1`.
   Best practice (OWASP Agentic ASI06 excessive agency; EU AI Act Art. 14): no unattended autonomy
   without an explicit switch **and** an enforced budget **and** a kill-switch. **Budget is now
@@ -314,6 +316,6 @@ intentionally behind the design, so the doc never advertises a guard the runtime
   yet); a `scope: fleet` skill does not actually scope anything until that wiring lands (Phase 3).
   Until then the predicate is dormant, not enforcing.
 - **Phase-3 priority order:** ✅ `$`-budget projection, ✅ kill-switch + budget-required auto-run
-  (the safety triad is complete) → (1) router-emits-DAG (today `run` broadcasts to all members),
-  (2) scope-injection wiring + ActiveContext propagation, (3) structured `done_when`, then real
+  (the safety triad is complete), ✅ router-emits-DAG (with broadcast fallback) →
+  (1) scope-injection wiring + ActiveContext propagation, (2) structured `done_when`, then real
   per-token accounting / harvest scope-stamping / `cron:` trigger / commander.
