@@ -5,27 +5,59 @@
 //! decision is pure + unit-tested here; the guards + loop live in mur-core.
 //! Live runs need the member agents up (operator-observable).
 //!
-//! Trigger grammar (lazy; no cron dependency): `manual` (default — never
-//! auto-runs) | `interval:<dur>` e.g. `interval:30m`. `cron:<expr>` is a
-//! future addition (the `cron` crate is already vendored elsewhere).
+//! Trigger grammar: `manual` (default — never auto-runs) | `interval:<dur>`
+//! e.g. `interval:30m` | `cron:<expr>` where `<expr>` is a 5-field POSIX cron
+//! expression (min hour dom month dow), interpreted in local time — same
+//! grammar as agent lifecycle schedules. A cron fleet fires on the NEXT
+//! schedule boundary after it is first seen (a baseline is stamped on first
+//! sight), never spuriously on enable.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{Local, TimeZone, Utc};
 use mur_core::cmd::fleet::loop_run::parse_duration;
 use mur_core::cmd::fleet::store;
 
+/// Cron catch-up grace window (seconds). The daemon polls [`tick`] on its ~30s
+/// action-tick cycle (see `main.rs`); a `.last_run` older than a few of those
+/// cycles is stale. Clamping the cron lower bound to this window upholds the
+/// "fires on the next boundary, never spuriously on enable" invariant when a
+/// `.last_run` predates a switch to `cron:` (or daemon downtime), while still
+/// honoring a boundary that fell within the last poll window. ~3 tick cycles.
+const CRON_CATCHUP_GRACE_SECS: u64 = 90;
+
 /// Is a fleet with this `trigger` due, given its last run and now (unix secs)?
-/// Only `interval:<dur>` ever returns true; `manual`/unknown → false.
+/// `interval:<dur>` and `cron:<expr>` can return true; `manual`/unknown → false.
+/// A never-run (`None`) cron fleet is NOT due — it gets a baseline stamp first
+/// (see [`establish_cron_baselines`]) so it fires on the next boundary, not now.
 pub fn is_due(trigger: &str, last_run_unix: Option<u64>, now_unix: u64) -> bool {
-    let Some(dur) = trigger.strip_prefix("interval:").and_then(parse_duration) else {
-        return false;
-    };
-    match last_run_unix {
-        None => true, // never run → due
-        Some(last) => now_unix.saturating_sub(last) >= dur.as_secs(),
+    if let Some(dur) = trigger.strip_prefix("interval:").and_then(parse_duration) {
+        return match last_run_unix {
+            None => true, // never run → due
+            Some(last) => now_unix.saturating_sub(last) >= dur.as_secs(),
+        };
     }
+    if let Some(expr) = trigger.strip_prefix("cron:") {
+        let Some(last) = last_run_unix else {
+            return false; // baseline established separately; not due until next boundary
+        };
+        // Clamp the lower bound to the catch-up grace window: a `.last_run` far
+        // older than now (a stale stamp left by a prior `interval:`/`manual` run
+        // before the operator switched to `cron:`, or daemon downtime) must not
+        // replay long-past boundaries. Standard-cron semantics — missed runs are
+        // skipped, not flooded. In steady state last_run is within one tick, so
+        // this is a no-op; it only bites a genuinely stale stamp.
+        let last = last.max(now_unix.saturating_sub(CRON_CATCHUP_GRACE_SECS));
+        let Some(last_dt) = Local.timestamp_opt(last as i64, 0).single() else {
+            return false;
+        };
+        // Due iff a schedule boundary falls in (last, now].
+        return mur_agent_runtime::scheduler::next_fire_after(expr.trim(), last_dt)
+            .map(|t| t.timestamp().max(0) as u64 <= now_unix)
+            .unwrap_or(false);
+    }
+    false
 }
 
 fn last_run_path(mur_home: &Path, name: &str) -> PathBuf {
@@ -43,6 +75,32 @@ fn read_last_run(mur_home: &Path, name: &str) -> Option<u64> {
 fn write_last_run(mur_home: &Path, name: &str, now_unix: u64) -> Result<()> {
     std::fs::write(last_run_path(mur_home, name), now_unix.to_string())?;
     Ok(())
+}
+
+/// Stamp a `.last_run` baseline for cron fleets seen for the first time, so a
+/// cron fleet fires on its NEXT schedule boundary rather than immediately (no
+/// lower bound = nothing for [`is_due`] to compute "next boundary after" from).
+/// Idempotent: fleets that already have a `.last_run` are left untouched.
+fn establish_cron_baselines(mur_home: &Path, now_unix: u64) {
+    let Ok(names) = store::list_fleets(mur_home) else {
+        return;
+    };
+    for name in names {
+        let Ok(fleet) = store::load_fleet(mur_home, &name) else {
+            continue;
+        };
+        let is_cron = fleet
+            .loop_cfg
+            .as_ref()
+            .map(|l| l.trigger.starts_with("cron:"))
+            .unwrap_or(false);
+        if is_cron
+            && read_last_run(mur_home, &name).is_none()
+            && let Err(e) = write_last_run(mur_home, &name, now_unix)
+        {
+            tracing::error!(error = %e, fleet = %name, "fleet_tick: cron baseline stamp failed");
+        }
+    }
 }
 
 /// Fleets due to auto-run at `now_unix`. Reads each `fleet.yaml` trigger +
@@ -88,6 +146,9 @@ pub fn tick(mur_home: &Path) {
         return;
     }
     let now = Utc::now().timestamp().max(0) as u64;
+    // Give never-run cron fleets a baseline so they fire on the next boundary,
+    // not on this tick. (interval/manual unaffected.)
+    establish_cron_baselines(mur_home, now);
     let due = match due_fleets(mur_home, now) {
         Ok(d) => d,
         Err(e) => {
@@ -175,6 +236,73 @@ mod tests {
         assert!(is_due("interval:1m", Some(1000), 2000)); // past
         assert!(!is_due("interval:1m", Some(1000), 1030)); // within
         assert!(!is_due("interval:1m", Some(2000), 1000)); // clock skew → not due
+    }
+
+    #[test]
+    fn is_due_cron_fires_on_boundary() {
+        // `* * * * *` → every minute at :00. Minute boundaries are unix%60==0 in
+        // every real timezone (whole-minute offsets), so this is TZ-independent.
+        // last_run=1000 (..:40s); next boundary strictly after is 1020.
+        assert!(!is_due("cron:* * * * *", Some(1000), 1010)); // before boundary
+        assert!(is_due("cron:* * * * *", Some(1000), 1020)); // boundary reached
+        assert!(is_due("cron:* * * * *", Some(1000), 1080)); // well past
+        // never-run → not due (baseline stamped separately, then next boundary)
+        assert!(!is_due("cron:* * * * *", None, 1000));
+        // clock skew (last_run in the future) → next boundary > now → not due
+        assert!(!is_due("cron:* * * * *", Some(2000), 1000));
+        // invalid expression → not due (fail-safe)
+        assert!(!is_due("cron:not a cron", Some(1000), 999999));
+    }
+
+    #[test]
+    fn cron_stale_last_run_clamped_to_grace_window() {
+        // A `.last_run` far older than now (e.g. left by a prior interval/manual
+        // run before switching to cron, or daemon downtime) must be clamped to
+        // (now - grace), so it can't replay long-past boundaries on the first
+        // cron tick. Proof: a decades-stale last_run yields the SAME verdict as
+        // a last_run of exactly (now - grace). TZ-independent (both sides use the
+        // same Local-based boundary computation).
+        let now = 1_700_000_000u64;
+        let expr = "cron:0 0 * * *"; // sparse (daily) so the clamp is observable
+        let clamped = is_due(expr, Some(now - CRON_CATCHUP_GRACE_SECS), now);
+        assert_eq!(is_due(expr, Some(0), now), clamped); // epoch-stale ≡ clamped
+        assert_eq!(is_due(expr, Some(now - 10 * 86400), now), clamped); // 10d-stale ≡ clamped
+        // And it must NOT be perpetually due: a daily cron with a clamped bound
+        // is not due unless midnight genuinely fell in the last grace window.
+        // (We don't assert the exact bool — it's TZ-dependent — only stability.)
+    }
+
+    #[test]
+    fn establish_cron_baselines_stamps_only_new_cron() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        store::save_fleet(home, &loop_fleet("cronf", "cron:* * * * *")).unwrap();
+        store::save_fleet(home, &loop_fleet("intf", "interval:1m")).unwrap();
+        store::save_fleet(home, &loop_fleet("manf", "manual")).unwrap();
+
+        establish_cron_baselines(home, 5000);
+        // cron fleet got a baseline; interval/manual did not
+        assert_eq!(read_last_run(home, "cronf"), Some(5000));
+        assert_eq!(read_last_run(home, "intf"), None);
+        assert_eq!(read_last_run(home, "manf"), None);
+
+        // idempotent: an existing baseline is not overwritten
+        establish_cron_baselines(home, 9000);
+        assert_eq!(read_last_run(home, "cronf"), Some(5000));
+    }
+
+    #[test]
+    fn cron_fleet_not_due_immediately_after_baseline() {
+        // The baseline+is_due composition: a freshly-baselined cron fleet is not
+        // due on the same tick (next boundary is strictly in the future).
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        store::save_fleet(home, &loop_fleet("cronf", "cron:* * * * *")).unwrap();
+        // 1000 is ..:40s; baseline at 1000, due-check at 1000 → next boundary 1020 > 1000.
+        establish_cron_baselines(home, 1000);
+        assert!(due_fleets(home, 1000).unwrap().is_empty());
+        // at the boundary it becomes due
+        assert_eq!(due_fleets(home, 1020).unwrap(), vec!["cronf".to_string()]);
     }
 
     #[test]
