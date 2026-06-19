@@ -217,6 +217,9 @@ mod tests {
             description: format!("desc for {name}"),
             category: Category::Context,
             hosts: vec![],
+            scope: Default::default(),
+            fleet: None,
+            project: None,
             content: Content {
                 r#abstract: format!("abstract about {name}"),
                 context: Some(format!("body of {name}")),
