@@ -306,7 +306,19 @@ impl TaskRunner {
                 (cumulative as f64 / max as f64).clamp(0.0, 1.0)
             }
         };
-        let injection = inject_layer2(&skills.loaded, &self.skills_cfg, ctx_fill, &recently);
+        // Scope filter: project from the member's cwd repo root (shared detection
+        // with the CLI hook). active_fleet is None for now — fleet-scoped skills
+        // have no creation path yet, and threading a turn's fleet through the
+        // runtime is a deferred follow-on.
+        let active_project = mur_common::project::active_project_id();
+        let injection = inject_layer2(
+            &skills.loaded,
+            &self.skills_cfg,
+            ctx_fill,
+            &recently,
+            None,
+            active_project.as_deref(),
+        );
 
         let triggered = match_prompt(&skills.triggers, user_prompt);
 

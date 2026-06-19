@@ -36,10 +36,32 @@ pub fn project_id(start: &Path) -> Option<String> {
     canon.to_str().map(str::to_owned)
 }
 
+/// The active project id for scope matching: `MUR_ACTIVE_PROJECT` env override,
+/// else the current working dir's repo root. `None` when neither resolves
+/// (→ only user/enterprise skills inject). Single source used by both the CLI
+/// injection hook and the agent runtime injector so they can't diverge.
+pub fn active_project_id() -> Option<String> {
+    if let Ok(v) = std::env::var("MUR_ACTIVE_PROJECT") {
+        let v = v.trim();
+        if !v.is_empty() {
+            return Some(v.to_string());
+        }
+    }
+    std::env::current_dir().ok().and_then(|d| project_id(&d))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn active_project_id_prefers_env_override() {
+        // nextest isolates each test in its own process → env is safe to set.
+        unsafe { std::env::set_var("MUR_ACTIVE_PROJECT", "/explicit") };
+        assert_eq!(active_project_id().as_deref(), Some("/explicit"));
+        unsafe { std::env::remove_var("MUR_ACTIVE_PROJECT") };
+    }
 
     #[test]
     fn repo_root_found_from_subdir_and_none_outside() {
