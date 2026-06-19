@@ -11,8 +11,9 @@ use crate::cli::{
     AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction, AgentSecretAction,
     AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction, ChannelAction, ChatAction,
     Cli, Commands, ConversationsAction, DaemonAction, DeployAction, DraftsAction, EvalAction,
-    ExchangeAction, HookEvent, InternalsAction, MurmurdAction, ProjectAction, ScheduleAction,
-    SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
+    ExchangeAction, FleetAction, HookEvent, InternalsAction, MurmurdAction, ProjectAction,
+    ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
+    WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -264,6 +265,22 @@ pub async fn run(cli: Cli) -> Result<()> {
         },
         Commands::Dashboard => {
             dashboard::render_dashboard()?;
+        }
+        Commands::Fleet { action } => {
+            let mur_home = crate::paths::mur_root(None);
+            match action {
+                FleetAction::Create {
+                    name,
+                    members,
+                    router,
+                    goal,
+                } => cmd::fleet::create::cmd_fleet_create(&mur_home, &name, members, router, goal)?,
+                FleetAction::List => cmd::fleet::list::cmd_fleet_list(&mur_home)?,
+                FleetAction::Show { name } => cmd::fleet::show::cmd_fleet_show(&mur_home, &name)?,
+                FleetAction::Run { name } => {
+                    cmd::fleet::run::cmd_fleet_run(&mur_home, &name).await?
+                }
+            }
         }
         Commands::Team { action } => match action {
             TeamAction::List { team } => match team {

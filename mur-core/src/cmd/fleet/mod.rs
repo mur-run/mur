@@ -1,5 +1,4 @@
-//! `mur fleet` command module — wiring to the dispatcher is a separate task.
-#![allow(dead_code)]
+//! `mur fleet` command module.
 
 pub mod create;
 pub mod list;

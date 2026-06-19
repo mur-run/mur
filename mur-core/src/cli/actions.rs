@@ -400,6 +400,36 @@ pub enum SessionAction {
     Gc,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum FleetAction {
+    /// Create a new fleet (squad of agents + a goal + a shared channel)
+    Create {
+        /// Fleet name (lowercase slug)
+        name: String,
+        /// Comma-separated member agent names
+        #[arg(long, value_delimiter = ',')]
+        members: Vec<String>,
+        /// Router agent (defaults to the concierge `mur`)
+        #[arg(long)]
+        router: Option<String>,
+        /// One-line goal
+        #[arg(long)]
+        goal: Option<String>,
+    },
+    /// List all fleets
+    List,
+    /// Show a fleet's roster + goal
+    Show {
+        /// Fleet name
+        name: String,
+    },
+    /// Run one fleet iteration (Phase 1)
+    Run {
+        /// Fleet name
+        name: String,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum TeamAction {
     /// List your teams (or patterns in a specific team)
