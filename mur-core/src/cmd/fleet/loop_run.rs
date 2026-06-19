@@ -40,6 +40,8 @@ pub enum LoopStop {
     Stuck,
     /// Projected cumulative cost would exceed the fleet's budget.
     Budget,
+    /// Kill-switch engaged via `mur fleet stop`.
+    Stopped,
 }
 
 /// Parse a humantime-ish duration: `30s`, `5m`, `2h`, `1d`, or a bare integer
@@ -189,6 +191,10 @@ pub async fn cmd_fleet_run_loop(
     let mut stuck = 0u32;
 
     let stop = loop {
+        // Kill-switch (highest priority): a `mur fleet stop` between iterations halts here.
+        if super::control::is_stopped(mur_home, name) {
+            break LoopStop::Stopped;
+        }
         if let Some(stop) = check_guards(iteration, max_iter, start.elapsed(), deadline, stuck) {
             break stop;
         }

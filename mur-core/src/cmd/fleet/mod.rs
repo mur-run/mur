@@ -1,5 +1,6 @@
 //! `mur fleet` command module.
 
+pub mod control;
 pub mod create;
 pub mod list;
 pub mod loop_run;

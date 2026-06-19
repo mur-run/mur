@@ -297,6 +297,12 @@ pub async fn run(cli: Cli) -> Result<()> {
                         cmd::fleet::run::cmd_fleet_run(&mur_home, &name).await?
                     }
                 }
+                FleetAction::Stop { name } => {
+                    cmd::fleet::control::cmd_fleet_stop(&mur_home, &name)?
+                }
+                FleetAction::Start { name } => {
+                    cmd::fleet::control::cmd_fleet_start(&mur_home, &name)?
+                }
             }
         }
         Commands::Team { action } => match action {

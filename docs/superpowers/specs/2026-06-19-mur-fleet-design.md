@@ -302,16 +302,18 @@ intentionally behind the design, so the doc never advertises a guard the runtime
   enforced** (Phase 3) as a conservative cost *projection* — `run --loop --budget-usd`/`loop.budget_usd`
   stops before projected cumulative cost exceeds the cap (`members × est-tokens/turn × dearest rate`
   from `MUR_FLEET_COST_PER_1K`/`models.yaml`); fail-safe, since `PipelineOutput` carries no real cost
-  yet. **Still missing before auto-run can be enabled:** a kill-switch (`mur fleet stop`/sentinel) and
-  a per-fleet `autonomy` opt-in that *requires* a budget. Real per-token accounting is a later refinement.
+  yet. **Kill-switch + budget-required auto-run now shipped:** `mur fleet stop`/`.stopped` sentinel
+  (checked in the loop → `LoopStop::Stopped`, in the daemon `due_fleets`, and on manual `run`),
+  and `due_fleets` requires `budget_usd > 0`. The auto-run safety triad — switch + budget +
+  kill-switch — is **complete**: `MUR_FLEET_AUTORUN` may now be enabled and will only auto-run
+  budgeted, non-stopped fleets. Real per-token accounting (replacing the projection) is a later refinement.
 - **Both `run` and `--loop` pass `yes:false`** (fail-closed). Fleet fan-out steps carry no risk
   tier today and member runtimes gate their own tools, so the §"HITL" loop-level gate is not yet
   exercised by the fleet path; it becomes load-bearing once a router-emitted DAG carries risk steps.
 - **`scope_visible` is shipped but not wired into live injection** (no active fleet/project context
   yet); a `scope: fleet` skill does not actually scope anything until that wiring lands (Phase 3).
   Until then the predicate is dormant, not enforcing.
-- **Phase-3 priority order (by safety/leverage):** ✅ enforced `$`-budget projection (done) →
-  (1) kill-switch (`mur fleet stop`/sentinel) + per-fleet `autonomy` opt-in that requires a budget
-  (the remaining auto-run prerequisites), (2) router-emits-DAG, (3) scope-injection wiring +
-  ActiveContext propagation, (4) structured `done_when`, then real per-token accounting / harvest
-  scope-stamping / `cron:` trigger / commander.
+- **Phase-3 priority order:** ✅ `$`-budget projection, ✅ kill-switch + budget-required auto-run
+  (the safety triad is complete) → (1) router-emits-DAG (today `run` broadcasts to all members),
+  (2) scope-injection wiring + ActiveContext propagation, (3) structured `done_when`, then real
+  per-token accounting / harvest scope-stamping / `cron:` trigger / commander.

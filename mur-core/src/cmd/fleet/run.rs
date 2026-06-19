@@ -32,6 +32,11 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str) -> Result<()> {
     if fleet.members.is_empty() {
         bail!("fleet '{name}' has no members");
     }
+    if super::control::is_stopped(mur_home, name) {
+        bail!(
+            "fleet '{name}' is stopped (kill-switch). Run `mur fleet start {name}` to re-enable."
+        );
+    }
     let proc = build_fleet_procedure(&fleet.goal, &fleet.members);
     let svc = mur_channel::ChannelService::open(mur_home)?;
     // Cursor BEFORE this run so the reply tail prints only THIS run's events,

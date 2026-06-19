@@ -440,6 +440,16 @@ pub enum FleetAction {
         #[arg(long)]
         budget_usd: Option<f64>,
     },
+    /// Stop a fleet (kill-switch): disable auto-run and halt a running loop
+    Stop {
+        /// Fleet name
+        name: String,
+    },
+    /// Start a fleet: clear the kill-switch
+    Start {
+        /// Fleet name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
