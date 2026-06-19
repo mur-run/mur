@@ -450,6 +450,9 @@ mod tests {
                 publisher: "p".into(),
                 description: "d".into(),
                 category: Category::Context,
+                scope: Default::default(),
+                fleet: None,
+                project: None,
                 provenance: Default::default(),
                 hosts: vec![],
                 content: Content {
@@ -496,6 +499,9 @@ mod tests {
                 publisher: "p".into(),
                 description: "d".into(),
                 category: Category::Context,
+                scope: Default::default(),
+                fleet: None,
+                project: None,
                 provenance: Default::default(),
                 hosts: vec![],
                 content: Content {

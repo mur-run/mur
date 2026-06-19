@@ -17,6 +17,7 @@ pub mod eval;
 pub mod event;
 pub mod exec;
 pub mod expression;
+pub mod fleet;
 pub mod guard;
 pub mod hitl;
 pub mod hooks_config;

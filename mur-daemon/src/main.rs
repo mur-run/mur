@@ -1,6 +1,7 @@
 mod action_tick;
 mod bonjour;
 mod consumer;
+mod fleet_tick;
 mod inbox;
 mod lock;
 mod mobile_server;
@@ -153,6 +154,8 @@ async fn main() -> Result<()> {
             if let Err(e) = action_tick::scan_all_agents(&mur_home_tick) {
                 tracing::error!(error = %e, "action_tick failed");
             }
+            // Phase 2b: auto-run any fleets whose interval trigger is due.
+            fleet_tick::tick(&mur_home_tick);
         }
     });
 
