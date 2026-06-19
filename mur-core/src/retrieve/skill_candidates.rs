@@ -76,14 +76,10 @@ impl ActiveScope {
     /// env-only until the fleet runtime supplies it (ActiveContext for fleets).
     pub fn detect() -> Self {
         let nonempty = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
-        let project = nonempty("MUR_ACTIVE_PROJECT").or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .and_then(|d| mur_common::project::project_id(&d))
-        });
         Self {
             fleet: nonempty("MUR_ACTIVE_FLEET"),
-            project,
+            // Shared detection (env override → cwd repo root) with the runtime injector.
+            project: mur_common::project::active_project_id(),
         }
     }
 }
