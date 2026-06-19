@@ -18,9 +18,11 @@ use super::store;
 const STUCK_LIMIT: u32 = 2;
 /// Default iteration cap when neither the CLI flag nor fleet.yaml sets one.
 const DEFAULT_MAX_ITERATIONS: u32 = 8;
-/// Conservative per-turn token estimate for budget *projection*. Real per-token
-/// cost isn't available real-time (OTel telemetry is input-only + async), so we
-/// project high and stop early — a safety ceiling, not an invoice.
+/// Conservative per-turn token estimate, used as the iteration-1 forward estimate
+/// and the fail-safe fallback when an iteration reports no usage. Real per-token
+/// cost now flows back via `PipelineOutput.tokens_used` (summed from each
+/// delegate's `Task.usage`), so cumulative spend is actual, not projected; this
+/// estimate only seeds the forward budget check before real data exists.
 const EST_TOKENS_PER_TURN: u64 = 8000;
 /// Fallback per-1k-token USD rate when models.yaml has no priced entry and no
 /// `MUR_FLEET_COST_PER_1K` override. Deliberately dear (frontier-ish output rate)
@@ -122,9 +124,16 @@ fn effective_deadline(flag: Option<&str>, fleet: &Fleet) -> Option<Duration> {
 }
 
 /// Projected USD for one iteration: every member takes a ~`EST_TOKENS_PER_TURN`
-/// turn at `price_per_1k`. Conservative so real spend stays BELOW the projection.
+/// turn at `price_per_1k`. Used as the iteration-1 forward estimate (before any
+/// real data) and as the fail-safe fallback when an iteration reports no usage.
 pub fn estimate_iteration_cost_usd(members: usize, price_per_1k: f64) -> f64 {
     members as f64 * (EST_TOKENS_PER_TURN as f64 / 1000.0) * price_per_1k
+}
+
+/// Real USD for an iteration from its actual token total (`PipelineOutput.tokens_used`,
+/// input + output summed across delegate turns) at `price_per_1k`.
+pub fn iteration_cost_usd(tokens_used: u64, price_per_1k: f64) -> f64 {
+    (tokens_used as f64 / 1000.0) * price_per_1k
 }
 
 /// Would another iteration (projected `next_cost`) exceed `budget`? Enforced only
@@ -177,8 +186,11 @@ pub async fn cmd_fleet_run_loop(
     let max_iter = effective_max_iterations(max_iterations, &fleet);
     let deadline = effective_deadline(deadline.as_deref(), &fleet);
     let budget = effective_budget(budget_usd, &fleet);
-    let per_iter_cost =
-        estimate_iteration_cost_usd(fleet.members.len(), fleet_price_per_1k(mur_home));
+    let price_per_1k = fleet_price_per_1k(mur_home);
+    // Forward estimate before any real data (and the fail-safe fallback when an
+    // iteration reports no token usage), so spend can never silently under-count.
+    let projection = estimate_iteration_cost_usd(fleet.members.len(), price_per_1k);
+    // Real cumulative spend, accumulated from each iteration's actual token usage.
     let mut spent = 0.0_f64;
     let start = Instant::now();
     let svc = mur_channel::ChannelService::open(mur_home)?;
@@ -198,8 +210,16 @@ pub async fn cmd_fleet_run_loop(
         if let Some(stop) = check_guards(iteration, max_iter, start.elapsed(), deadline, stuck) {
             break stop;
         }
-        // Budget projection (fail-safe: stop before an iteration we can't afford).
-        if budget_exceeded(spent, per_iter_cost, budget) {
+        // Budget guard: stop before an iteration we can't afford. `spent` is the
+        // REAL cost so far; the forward estimate is the observed average once we
+        // have data (so the loop uses the true budget instead of halting on an
+        // inflated projection), falling back to the projection for iteration 1.
+        let next_cost = if iteration > 0 {
+            spent / iteration as f64
+        } else {
+            projection
+        };
+        if budget_exceeded(spent, next_cost, budget) {
             break LoopStop::Budget;
         }
         println!("── fleet '{}' iteration {} ──", name, iteration + 1);
@@ -219,10 +239,18 @@ pub async fn cmd_fleet_run_loop(
             run_id: format!("loop-{}-{}-{}", name, uuid::Uuid::now_v7(), iteration),
             ..Default::default()
         };
-        let _ = crate::executor::dag::execute_dag(mur_home, &format!("fleet:{name}"), &proc, &opts)
-            .await?;
+        let out =
+            crate::executor::dag::execute_dag(mur_home, &format!("fleet:{name}"), &proc, &opts)
+                .await?;
         iteration += 1;
-        spent += per_iter_cost;
+        // Account REAL cost from this iteration's token usage. A 0-token result
+        // (older runtime, stub, or a reply that carried no usage) falls back to
+        // the projection so the budget guard never silently under-counts.
+        spent += if out.tokens_used > 0 {
+            iteration_cost_usd(out.tokens_used, price_per_1k)
+        } else {
+            projection
+        };
 
         // Stuck-detection: did this iteration add any new agent-authored event?
         let events = svc.load_events(&fleet.channel_id)?;
@@ -244,7 +272,7 @@ pub async fn cmd_fleet_run_loop(
     };
 
     println!(
-        "fleet '{}' loop stopped after {iteration} iteration(s) (~${spent:.2} projected): {stop:?}",
+        "fleet '{}' loop stopped after {iteration} iteration(s) (~${spent:.2} spent): {stop:?}",
         name
     );
     Ok(())
@@ -378,6 +406,18 @@ mod tests {
         assert!(!budget_exceeded(0.7, 0.2, Some(1.0))); // 0.9 <= 1.0
         // even iteration 0 unaffordable → blocked immediately
         assert!(budget_exceeded(0.0, 2.0, Some(1.0)));
+    }
+
+    #[test]
+    fn real_iteration_cost_from_tokens() {
+        // 10_000 tokens × $0.05/1k = $0.50
+        assert!((iteration_cost_usd(10_000, 0.05) - 0.5).abs() < 1e-9);
+        // zero tokens → zero (caller falls back to the projection to avoid
+        // under-counting; the helper itself is exact).
+        assert_eq!(iteration_cost_usd(0, 0.05), 0.0);
+        // real cost is typically well under the 8000-tok/member projection:
+        // a 1200-token iteration costs far less than the 1-member projection.
+        assert!(iteration_cost_usd(1200, 0.05) < estimate_iteration_cost_usd(1, 0.05));
     }
 
     #[test]
