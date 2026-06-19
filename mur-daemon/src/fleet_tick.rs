@@ -19,6 +19,14 @@ use chrono::{Local, TimeZone, Utc};
 use mur_core::cmd::fleet::loop_run::parse_duration;
 use mur_core::cmd::fleet::store;
 
+/// Cron catch-up grace window (seconds). The daemon polls [`tick`] on its ~30s
+/// action-tick cycle (see `main.rs`); a `.last_run` older than a few of those
+/// cycles is stale. Clamping the cron lower bound to this window upholds the
+/// "fires on the next boundary, never spuriously on enable" invariant when a
+/// `.last_run` predates a switch to `cron:` (or daemon downtime), while still
+/// honoring a boundary that fell within the last poll window. ~3 tick cycles.
+const CRON_CATCHUP_GRACE_SECS: u64 = 90;
+
 /// Is a fleet with this `trigger` due, given its last run and now (unix secs)?
 /// `interval:<dur>` and `cron:<expr>` can return true; `manual`/unknown → false.
 /// A never-run (`None`) cron fleet is NOT due — it gets a baseline stamp first
@@ -34,10 +42,17 @@ pub fn is_due(trigger: &str, last_run_unix: Option<u64>, now_unix: u64) -> bool 
         let Some(last) = last_run_unix else {
             return false; // baseline established separately; not due until next boundary
         };
+        // Clamp the lower bound to the catch-up grace window: a `.last_run` far
+        // older than now (a stale stamp left by a prior `interval:`/`manual` run
+        // before the operator switched to `cron:`, or daemon downtime) must not
+        // replay long-past boundaries. Standard-cron semantics — missed runs are
+        // skipped, not flooded. In steady state last_run is within one tick, so
+        // this is a no-op; it only bites a genuinely stale stamp.
+        let last = last.max(now_unix.saturating_sub(CRON_CATCHUP_GRACE_SECS));
         let Some(last_dt) = Local.timestamp_opt(last as i64, 0).single() else {
             return false;
         };
-        // Due iff a schedule boundary falls in (last_run, now].
+        // Due iff a schedule boundary falls in (last, now].
         return mur_agent_runtime::scheduler::next_fire_after(expr.trim(), last_dt)
             .map(|t| t.timestamp().max(0) as u64 <= now_unix)
             .unwrap_or(false);
@@ -237,6 +252,24 @@ mod tests {
         assert!(!is_due("cron:* * * * *", Some(2000), 1000));
         // invalid expression → not due (fail-safe)
         assert!(!is_due("cron:not a cron", Some(1000), 999999));
+    }
+
+    #[test]
+    fn cron_stale_last_run_clamped_to_grace_window() {
+        // A `.last_run` far older than now (e.g. left by a prior interval/manual
+        // run before switching to cron, or daemon downtime) must be clamped to
+        // (now - grace), so it can't replay long-past boundaries on the first
+        // cron tick. Proof: a decades-stale last_run yields the SAME verdict as
+        // a last_run of exactly (now - grace). TZ-independent (both sides use the
+        // same Local-based boundary computation).
+        let now = 1_700_000_000u64;
+        let expr = "cron:0 0 * * *"; // sparse (daily) so the clamp is observable
+        let clamped = is_due(expr, Some(now - CRON_CATCHUP_GRACE_SECS), now);
+        assert_eq!(is_due(expr, Some(0), now), clamped); // epoch-stale ≡ clamped
+        assert_eq!(is_due(expr, Some(now - 10 * 86400), now), clamped); // 10d-stale ≡ clamped
+        // And it must NOT be perpetually due: a daily cron with a clamped bound
+        // is not due unless midnight genuinely fell in the last grace window.
+        // (We don't assert the exact bool — it's TZ-dependent — only stability.)
     }
 
     #[test]
