@@ -378,6 +378,12 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::SkillAction::List => cmd::skill_cmd::cmd_list()?,
             crate::cli::SkillAction::Show { name } => cmd::skill_cmd::cmd_show(&name)?,
             crate::cli::SkillAction::Remove { name } => cmd::skill_cmd::cmd_remove(&name)?,
+            crate::cli::SkillAction::Scope {
+                name,
+                fleet,
+                project,
+                user,
+            } => cmd::skill_cmd::cmd_scope(&name, fleet, project, user)?,
             crate::cli::SkillAction::Search { query, local } => {
                 cmd::skill_cmd::cmd_search(&query, local)?
             }

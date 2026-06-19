@@ -59,6 +59,21 @@ pub enum SkillAction {
     Show { name: String },
     /// Uninstall a skill.
     Remove { name: String },
+    /// Set a skill's visibility scope (so the scope-aware injector only surfaces
+    /// it in the matching context). Choose exactly one of the flags.
+    Scope {
+        /// Skill name
+        name: String,
+        /// Scope to a fleet (by name)
+        #[arg(long)]
+        fleet: Option<String>,
+        /// Scope to the current git repo
+        #[arg(long)]
+        project: bool,
+        /// Reset to user scope (global)
+        #[arg(long)]
+        user: bool,
+    },
     /// Search installed skills (--local) or remote registry.
     Search {
         query: String,
