@@ -69,13 +69,21 @@ pub struct ActiveScope {
 }
 
 impl ActiveScope {
-    /// Read the active scope from `MUR_ACTIVE_FLEET` / `MUR_ACTIVE_PROJECT`
-    /// (empty/unset → None).
-    pub fn from_env() -> Self {
+    /// Detect the active scope. `MUR_ACTIVE_FLEET` / `MUR_ACTIVE_PROJECT` env
+    /// override; otherwise `project` defaults to the current working dir's git
+    /// repo root (so a `scope: Project` skill learned in repo X injects anywhere
+    /// in X, and nowhere else). `fleet` has no cwd-derivable default — it stays
+    /// env-only until the fleet runtime supplies it (ActiveContext for fleets).
+    pub fn detect() -> Self {
         let nonempty = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
+        let project = nonempty("MUR_ACTIVE_PROJECT").or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|d| mur_common::project::project_id(&d))
+        });
         Self {
             fleet: nonempty("MUR_ACTIVE_FLEET"),
-            project: nonempty("MUR_ACTIVE_PROJECT"),
+            project,
         }
     }
 }
