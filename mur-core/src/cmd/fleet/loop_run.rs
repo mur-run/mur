@@ -141,7 +141,10 @@ pub async fn cmd_fleet_run_loop(
 
         let proc = build_fleet_procedure(&fleet.goal, &fleet.members);
         let opts = crate::executor::dag::DagExecOptions {
-            yes: true,
+            // Fail-closed on the unattended loop path: never blanket-approve.
+            // (No risk tier on fan-out steps today; this guards future
+            // router-emitted risk steps. Best-practice audit / OWASP ASI06.)
+            yes: false,
             channel_id: Some(fleet.channel_id.clone()),
             // uuid nonce so concurrent `--loop` runs don't collide on the
             // channel's idempotency-key dedup (the iteration stays for readability).

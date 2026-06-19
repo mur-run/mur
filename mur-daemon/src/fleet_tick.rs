@@ -66,7 +66,24 @@ pub fn due_fleets(mur_home: &Path, now_unix: u64) -> Result<Vec<String>> {
 /// One daemon cycle: find due fleets and detach each one's guarded loop onto its
 /// own thread. Non-blocking. Stamps `.last_run` BEFORE launching so the next
 /// tick won't re-trigger a fleet whose loop is still running.
+/// Is unattended fleet auto-run enabled? OFF unless `MUR_FLEET_AUTORUN` is set
+/// truthy, so the shipped daemon never runs fleets on its own without an
+/// operator explicitly opting in. (Per-fleet autonomy + an enforced budget +
+/// a kill-switch are the Phase-3 prerequisites for flipping this on safely.)
+fn autorun_flag(v: Option<&str>) -> bool {
+    matches!(v, Some(s) if s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes"))
+}
+
+fn auto_run_enabled() -> bool {
+    autorun_flag(std::env::var("MUR_FLEET_AUTORUN").ok().as_deref())
+}
+
 pub fn tick(mur_home: &Path) {
+    // Safety gate: unattended auto-run is OFF by default (best-practice audit;
+    // OWASP Agentic ASI06 excessive agency). Opt in with `MUR_FLEET_AUTORUN=1`.
+    if !auto_run_enabled() {
+        return;
+    }
     let now = Utc::now().timestamp().max(0) as u64;
     let due = match due_fleets(mur_home, now) {
         Ok(d) => d,
@@ -127,6 +144,17 @@ mod tests {
                 done_when: String::new(),
             }),
         }
+    }
+
+    #[test]
+    fn autorun_flag_off_by_default() {
+        assert!(!autorun_flag(None)); // unset → OFF (shipped default)
+        assert!(!autorun_flag(Some("")));
+        assert!(!autorun_flag(Some("0")));
+        assert!(!autorun_flag(Some("false")));
+        assert!(autorun_flag(Some("1")));
+        assert!(autorun_flag(Some("true")));
+        assert!(autorun_flag(Some("YES")));
     }
 
     #[test]

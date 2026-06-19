@@ -284,3 +284,31 @@ flowchart LR
 Long-running implementation uses the Harness pattern with a tracked task list and this spec as the
 durable contract. Each phase is independently shippable; the workflow that produced this brief is
 resumable via `{scriptPath, resumeFromRunId: "wf_ce1f3292-114"}`.
+
+## As-built status & safety posture (2026-06-19, post best-practice audit)
+
+The sections above are the *design*; this records what actually shipped and where the build is
+intentionally behind the design, so the doc never advertises a guard the runtime doesn't enforce.
+
+- **Shipped:** Phase 1 (`create/list/show/run`, `Fleet` type, `create_for_fleet`, `SkillScope`
+  fields + `scope_visible`) and Phase 2 (`run --loop` guarded loop: cap/deadline/stuck + router
+  DONE/CONTINUE convergence; daemon `fleet_tick` interval auto-run).
+- **Each iteration is a static fan-out to *all* members** (`build_fleet_procedure`), not a
+  router-emitted plan/route. The §5 "PLAN → router returns DAG" flow is **Phase 3**
+  (router-emits-DAG); today the "plan" is broadcast-to-all.
+- **Unattended auto-run ships OFF by default.** `fleet_tick` no-ops unless `MUR_FLEET_AUTORUN=1`.
+  Best practice (OWASP Agentic ASI06 excessive agency; EU AI Act Art. 14): no unattended autonomy
+  without an explicit switch **and** an enforced budget **and** a kill-switch. The budget
+  (`loop.budget_usd`) and kill-switch are **not yet enforced** — `PipelineOutput` carries no cost,
+  and there is no `mur fleet stop`/sentinel. These three are the **prerequisites for enabling
+  auto-run** (Phase 3), not optional polish.
+- **Both `run` and `--loop` pass `yes:false`** (fail-closed). Fleet fan-out steps carry no risk
+  tier today and member runtimes gate their own tools, so the §"HITL" loop-level gate is not yet
+  exercised by the fleet path; it becomes load-bearing once a router-emitted DAG carries risk steps.
+- **`scope_visible` is shipped but not wired into live injection** (no active fleet/project context
+  yet); a `scope: fleet` skill does not actually scope anything until that wiring lands (Phase 3).
+  Until then the predicate is dormant, not enforcing.
+- **Phase-3 priority order (by safety/leverage):** (1) enforced `$`-budget, (2) non-`yes`
+  unattended HITL + kill-switch + per-fleet `autonomy` opt-in, (3) router-emits-DAG, (4)
+  scope-injection wiring + ActiveContext propagation, (5) structured `done_when`, then harvest
+  scope-stamping / `cron:` trigger / commander.

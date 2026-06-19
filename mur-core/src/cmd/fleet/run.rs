@@ -33,8 +33,20 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str) -> Result<()> {
         bail!("fleet '{name}' has no members");
     }
     let proc = build_fleet_procedure(&fleet.goal, &fleet.members);
+    let svc = mur_channel::ChannelService::open(mur_home)?;
+    // Cursor BEFORE this run so the reply tail prints only THIS run's events,
+    // not the whole channel history.
+    let since = svc
+        .load_events(&fleet.channel_id)?
+        .last()
+        .map(|e| e.seq)
+        .unwrap_or(0);
     let opts = crate::executor::dag::DagExecOptions {
-        yes: true,
+        // Fail-closed default: do NOT blanket-approve. Fleet delegation steps carry
+        // no risk tier today (member runtimes gate their own tools), but a future
+        // router-emitted DAG with risk steps must fail-closed, never auto-approve
+        // unattended. See the best-practice audit (OWASP Agentic ASI06).
+        yes: false,
         channel_id: Some(fleet.channel_id.clone()),
         run_id: format!("run-{}", uuid::Uuid::now_v7()),
         ..Default::default()
@@ -47,10 +59,13 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str) -> Result<()> {
         println!("{t}");
     }
 
-    // Tail agent-authored replies written into the shared channel (peer-writes-own).
+    // Tail agent-authored replies from THIS run (seq > pre-run cursor), peer-writes-own.
     // Note: prints payload["text"]; confirm the exact reply payload shape in the live Harness test.
-    let svc = mur_channel::ChannelService::open(mur_home)?;
-    for ev in svc.load_events(&fleet.channel_id)? {
+    for ev in svc
+        .load_events(&fleet.channel_id)?
+        .into_iter()
+        .filter(|e| e.seq > since)
+    {
         if let (ChannelActor::Agent { id }, Some(text)) = (
             &ev.actor,
             ev.payload
