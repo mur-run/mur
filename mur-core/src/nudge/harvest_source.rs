@@ -53,6 +53,7 @@ mod tests {
             tmp.path(),
             &Proposal {
                 id: "s1".into(),
+                project: None,
                 title: "Deploy api".into(),
                 suggested_name: "deploy-api".into(),
                 steps: vec!["cargo build".into()],

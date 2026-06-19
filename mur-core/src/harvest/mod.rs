@@ -100,6 +100,11 @@ pub fn scan_in_dirs(
             }
             _ => 0,
         };
+        // Project the session ran in (repo root), for project-local skill scope.
+        let project = events
+            .iter()
+            .find_map(|e| e.working_dir.as_deref())
+            .and_then(|wd| mur_common::project::project_id(std::path::Path::new(wd)));
         let p = proposal::Proposal {
             id: id.clone(),
             suggested_name: proposal::suggest_name(&title),
@@ -110,6 +115,7 @@ pub fn scan_in_dirs(
             created_at: chrono::Utc::now().to_rfc3339(),
             status: proposal::ProposalStatus::Pending,
             similar_to,
+            project,
         };
         proposal::save_in_dir(inbox_dir, &p)?;
         report.proposed += 1;
@@ -195,6 +201,72 @@ mod tests {
             serde_json::to_string_pretty(&meta).unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn scan_stamps_project_from_repo_working_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let rec = tmp.path().join("recordings");
+        let inbox = tmp.path().join("inbox");
+        std::fs::create_dir_all(&rec).unwrap();
+
+        let wd = repo.to_string_lossy().to_string();
+        let mut lines = vec![
+            serde_json::to_string(&SessionEvent {
+                timestamp: 1000,
+                event_type: "user".into(),
+                content: "deploy the api".into(),
+                working_dir: Some(wd.clone()),
+                ..Default::default()
+            })
+            .unwrap(),
+        ];
+        for i in 0..4 {
+            lines.push(
+                serde_json::to_string(&SessionEvent {
+                    timestamp: 2000 + i as u64,
+                    event_type: "tool_call".into(),
+                    tool: Some("Bash".into()),
+                    content: format!(r#"{{"command":"step-{i} \"x\""}}"#),
+                    exit_code: Some(0),
+                    working_dir: Some(wd.clone()),
+                    ..Default::default()
+                })
+                .unwrap(),
+            );
+        }
+        std::fs::write(rec.join("s9.jsonl"), lines.join("\n") + "\n").unwrap();
+        let meta = SessionMeta {
+            id: "s9".into(),
+            source: "claude".into(),
+            started_at: "2026-06-01T00:00:00Z".into(),
+            stopped_at: None,
+            title: Some("deploy the api".into()),
+            tools_used: vec!["Bash".into()],
+            user_turns: 3,
+            assistant_turns: 3,
+            marked: false,
+            gated_at: None,
+            harvested_at: None,
+        };
+        std::fs::write(
+            rec.join("s9.meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+
+        let cfg = HarvestCfg {
+            idle_minutes: 0,
+            ..Default::default()
+        };
+        scan_in_dirs(&rec, &inbox, &[], &cfg).unwrap();
+        let props = proposal::pending_in_dir(&inbox).unwrap();
+        assert_eq!(props.len(), 1);
+        // proposal.project == the session repo root → accept will stamp scope: Project
+        assert_eq!(props[0].project, mur_common::project::project_id(&repo));
+        assert!(props[0].project.is_some());
     }
 
     #[test]

@@ -148,7 +148,14 @@ pub(crate) async fn cmd_hook_prompt(tool: &str) -> Result<()> {
 
     // Degraded-mode / cold-start fallback: synchronous skill retrieval
     let mur_dir = mur_common::trust::mur_home();
-    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
+    let mut candidates =
+        load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
+    // Scope filter: fail-closed for fleet/project-tagged skills (only inject them
+    // when the runtime's active scope matches). User/Enterprise always pass.
+    crate::retrieve::skill_candidates::filter_by_scope(
+        &mut candidates,
+        &crate::retrieve::skill_candidates::ActiveScope::detect(),
+    );
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
@@ -228,7 +235,14 @@ pub(crate) async fn cmd_hook_tool(tool: &str) -> Result<()> {
     }
 
     let mur_dir = mur_common::trust::mur_home();
-    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
+    let mut candidates =
+        load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
+    // Scope filter: fail-closed for fleet/project-tagged skills (only inject them
+    // when the runtime's active scope matches). User/Enterprise always pass.
+    crate::retrieve::skill_candidates::filter_by_scope(
+        &mut candidates,
+        &crate::retrieve::skill_candidates::ActiveScope::detect(),
+    );
     let workflow_store = WorkflowYamlStore::default_store()?;
     let workflows = workflow_store.list_all()?;
 
@@ -278,13 +292,22 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
         .spawn();
 
     let mur_dir = mur_common::trust::mur_home();
-    let candidates = load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
+    let mut candidates =
+        load_skill_candidates(&mur_dir.join("skills"), &mur_dir).unwrap_or_default();
+    // Scope filter: fail-closed for fleet/project-tagged skills (only inject them
+    // when the runtime's active scope matches). User/Enterprise always pass.
+    crate::retrieve::skill_candidates::filter_by_scope(
+        &mut candidates,
+        &crate::retrieve::skill_candidates::ActiveScope::detect(),
+    );
 
-    let project = std::env::current_dir()
+    // Display label for the skill index (last path component) — distinct from
+    // ActiveScope.project (the repo-root id used for scope matching).
+    let project_label = std::env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
-    let index = crate::inject::index::build_from_skills(&candidates, project.as_deref());
+    let index = crate::inject::index::build_from_skills(&candidates, project_label.as_deref());
     if let Err(e) = crate::inject::index::save(&index) {
         tracing::warn!("capability index save failed (non-fatal): {e}");
     }

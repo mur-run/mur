@@ -539,9 +539,16 @@ async fn accept_proposal_as_skill(
         category: Category::Workflow,
         provenance: Provenance::Llm,
         hosts: vec![],
-        scope: Default::default(),
+        // Project-local scope: a skill harvested from a repo session is stamped
+        // scope: Project so it injects only in that repo (matches injection's
+        // active_project = current repo root). Non-repo sessions → User (global).
+        scope: if proposal.project.is_some() {
+            mur_common::skill::manifest::SkillScope::Project
+        } else {
+            Default::default()
+        },
         fleet: None,
-        project: None,
+        project: proposal.project.clone(),
         content: Content {
             r#abstract: abstract_text,
             procedure: Some(Procedure {

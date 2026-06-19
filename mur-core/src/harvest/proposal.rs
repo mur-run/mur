@@ -31,6 +31,11 @@ pub struct Proposal {
     /// Existing workflow this proposal nearly duplicates (suggest merge).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub similar_to: Option<String>,
+    /// Git repo root the session ran in (canonical project id). Set when the
+    /// session had a working dir inside a repo; used to stamp `scope: Project`
+    /// at accept so the learned skill is project-local.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 pub fn inbox_dir() -> PathBuf {
@@ -121,6 +126,7 @@ mod tests {
     fn proposal(id: &str, status: ProposalStatus) -> Proposal {
         Proposal {
             id: id.into(),
+            project: None,
             title: "Deploy api".into(),
             suggested_name: "deploy-api".into(),
             steps: vec!["cargo build".into(), "fly deploy --app <STR>".into()],
