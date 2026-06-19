@@ -486,6 +486,23 @@ impl TaskRunner {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
 
+        // Real token usage for THIS turn (delta of the runner-lifetime counters
+        // from the pre-generation snapshot). Reported on EVERY outcome — a turn
+        // that burned tokens then failed or was cancelled must still be
+        // accounted, or the fleet budget guard would under-count (the dangerous
+        // direction for a spend cap).
+        let token_usage = || {
+            let input_tokens = self
+                .cumulative_input_tokens
+                .load(Ordering::Relaxed)
+                .saturating_sub(tok_in0);
+            let output_tokens = self
+                .cumulative_output_tokens
+                .load(Ordering::Relaxed)
+                .saturating_sub(tok_out0);
+            serde_json::json!({ "input_tokens": input_tokens, "output_tokens": output_tokens })
+        };
+
         let now = chrono::Utc::now().to_rfc3339();
         let result = match result {
             None => {
@@ -497,7 +514,7 @@ impl TaskRunner {
                     created_at: now.clone(),
                     completed_at: Some(now),
                     error: None,
-                    usage: None,
+                    usage: Some(token_usage()),
                 });
             }
             Some(r) => r,
@@ -512,18 +529,7 @@ impl TaskRunner {
                 // iteration count so callers can tell a truncated completion
                 // from a natural one (the task still reports Completed — work is
                 // preserved, not failed).
-                let tok_in = self
-                    .cumulative_input_tokens
-                    .load(Ordering::Relaxed)
-                    .saturating_sub(tok_in0);
-                let tok_out = self
-                    .cumulative_output_tokens
-                    .load(Ordering::Relaxed)
-                    .saturating_sub(tok_out0);
-                let mut usage_obj = serde_json::json!({
-                    "input_tokens": tok_in,
-                    "output_tokens": tok_out,
-                });
+                let mut usage_obj = token_usage();
                 if let Some(exit) = stop {
                     usage_obj["stop_reason"] = exit.reason.as_str().into();
                     usage_obj["iterations"] = exit.iterations.into();
@@ -552,7 +558,9 @@ impl TaskRunner {
                     created_at: now.clone(),
                     completed_at: Some(now),
                     error: Some(err),
-                    usage: None,
+                    // Account tokens already burned before the failure (a long
+                    // agentic turn can error after real spend) — never drop it.
+                    usage: Some(token_usage()),
                 })
             }
         }

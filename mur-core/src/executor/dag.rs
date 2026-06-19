@@ -879,6 +879,12 @@ pub async fn execute_dag(
                             );
                             let retry_result =
                                 execute_step(step, opts, indices[ri], mur_home).await;
+                            // Each retry is additional real spend (the original
+                            // attempt was already counted once at the per-step
+                            // accumulation); count every attempt so the budget
+                            // guard never under-counts a retried delegate.
+                            overall_tokens =
+                                overall_tokens.saturating_add(retry_result.tokens_used);
                             if retry_result.success {
                                 results[ri] = retry_result;
                                 overall_exit_code = 0;
