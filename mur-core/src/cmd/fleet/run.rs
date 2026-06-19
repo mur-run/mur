@@ -32,15 +32,18 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str) -> Result<()> {
     if fleet.members.is_empty() {
         bail!("fleet '{name}' has no members");
     }
-    let proc = build_fleet_procedure(&fleet.goal, &fleet.members);
+    if super::control::is_stopped(mur_home, name) {
+        bail!(
+            "fleet '{name}' is stopped (kill-switch). Run `mur fleet start {name}` to re-enable."
+        );
+    }
     let svc = mur_channel::ChannelService::open(mur_home)?;
-    // Cursor BEFORE this run so the reply tail prints only THIS run's events,
-    // not the whole channel history.
-    let since = svc
-        .load_events(&fleet.channel_id)?
-        .last()
-        .map(|e| e.seq)
-        .unwrap_or(0);
+    let events = svc.load_events(&fleet.channel_id)?;
+    // Cursor BEFORE this run so the reply tail prints only THIS run's events.
+    let since = events.last().map(|e| e.seq).unwrap_or(0);
+    // Router plans which members do what (with deps); falls back to broadcast-to-all.
+    let proc = super::plan::plan_via_router(mur_home, &fleet, &events)
+        .unwrap_or_else(|| build_fleet_procedure(&fleet.goal, &fleet.members));
     let opts = crate::executor::dag::DagExecOptions {
         // Fail-closed default: do NOT blanket-approve. Fleet delegation steps carry
         // no risk tier today (member runtimes gate their own tools), but a future
