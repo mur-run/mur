@@ -282,6 +282,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     loop_flag,
                     max_iterations,
                     deadline,
+                    budget_usd,
                 } => {
                     if loop_flag {
                         cmd::fleet::loop_run::cmd_fleet_run_loop(
@@ -289,11 +290,18 @@ pub async fn run(cli: Cli) -> Result<()> {
                             &name,
                             max_iterations,
                             deadline,
+                            budget_usd,
                         )
                         .await?
                     } else {
                         cmd::fleet::run::cmd_fleet_run(&mur_home, &name).await?
                     }
+                }
+                FleetAction::Stop { name } => {
+                    cmd::fleet::control::cmd_fleet_stop(&mur_home, &name)?
+                }
+                FleetAction::Start { name } => {
+                    cmd::fleet::control::cmd_fleet_start(&mur_home, &name)?
                 }
             }
         }

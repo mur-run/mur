@@ -18,6 +18,14 @@ use super::store;
 const STUCK_LIMIT: u32 = 2;
 /// Default iteration cap when neither the CLI flag nor fleet.yaml sets one.
 const DEFAULT_MAX_ITERATIONS: u32 = 8;
+/// Conservative per-turn token estimate for budget *projection*. Real per-token
+/// cost isn't available real-time (OTel telemetry is input-only + async), so we
+/// project high and stop early — a safety ceiling, not an invoice.
+const EST_TOKENS_PER_TURN: u64 = 8000;
+/// Fallback per-1k-token USD rate when models.yaml has no priced entry and no
+/// `MUR_FLEET_COST_PER_1K` override. Deliberately dear (frontier-ish output rate)
+/// so the projection errs high → stops early.
+const DEFAULT_PRICE_PER_1K: f64 = 0.05;
 
 /// Why the loop stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +38,10 @@ pub enum LoopStop {
     Deadline,
     /// `STUCK_LIMIT` consecutive iterations produced no new agent activity.
     Stuck,
+    /// Projected cumulative cost would exceed the fleet's budget.
+    Budget,
+    /// Kill-switch engaged via `mur fleet stop`.
+    Stopped,
 }
 
 /// Parse a humantime-ish duration: `30s`, `5m`, `2h`, `1d`, or a bare integer
@@ -109,6 +121,46 @@ fn effective_deadline(flag: Option<&str>, fleet: &Fleet) -> Option<Duration> {
     })
 }
 
+/// Projected USD for one iteration: every member takes a ~`EST_TOKENS_PER_TURN`
+/// turn at `price_per_1k`. Conservative so real spend stays BELOW the projection.
+pub fn estimate_iteration_cost_usd(members: usize, price_per_1k: f64) -> f64 {
+    members as f64 * (EST_TOKENS_PER_TURN as f64 / 1000.0) * price_per_1k
+}
+
+/// Would another iteration (projected `next_cost`) exceed `budget`? Enforced only
+/// when budget is `Some(>0)`; stops BEFORE the unaffordable iteration (fail-safe).
+pub fn budget_exceeded(spent: f64, next_cost: f64, budget: Option<f64>) -> bool {
+    matches!(budget, Some(b) if b > 0.0 && spent + next_cost > b)
+}
+
+/// Conservative per-1k-token USD rate for projection: `MUR_FLEET_COST_PER_1K`
+/// env → else the dearest output rate in `models.yaml` → else `DEFAULT_PRICE_PER_1K`.
+fn fleet_price_per_1k(mur_home: &Path) -> f64 {
+    if let Ok(v) = std::env::var("MUR_FLEET_COST_PER_1K")
+        && let Ok(p) = v.parse::<f64>()
+        && p > 0.0
+    {
+        return p;
+    }
+    if let Ok(reg) = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml")) {
+        let max = reg
+            .models
+            .values()
+            .filter_map(|m| m.effective_costs().1)
+            .fold(0.0_f64, f64::max);
+        if max > 0.0 {
+            return max;
+        }
+    }
+    DEFAULT_PRICE_PER_1K
+}
+
+/// Resolve the effective budget USD: CLI flag > fleet.yaml `loop.budget_usd` > none.
+fn effective_budget(flag: Option<f64>, fleet: &Fleet) -> Option<f64> {
+    flag.or_else(|| fleet.loop_cfg.as_ref().map(|l| l.budget_usd))
+        .filter(|&b| b > 0.0)
+}
+
 /// `mur fleet run --loop`: run guarded iterations until the router converges or
 /// a guard trips. Requires the member + router agents to be running.
 pub async fn cmd_fleet_run_loop(
@@ -116,6 +168,7 @@ pub async fn cmd_fleet_run_loop(
     name: &str,
     max_iterations: Option<u32>,
     deadline: Option<String>,
+    budget_usd: Option<f64>,
 ) -> Result<()> {
     let fleet = store::load_fleet(mur_home, name)?;
     if fleet.members.is_empty() {
@@ -123,6 +176,10 @@ pub async fn cmd_fleet_run_loop(
     }
     let max_iter = effective_max_iterations(max_iterations, &fleet);
     let deadline = effective_deadline(deadline.as_deref(), &fleet);
+    let budget = effective_budget(budget_usd, &fleet);
+    let per_iter_cost =
+        estimate_iteration_cost_usd(fleet.members.len(), fleet_price_per_1k(mur_home));
+    let mut spent = 0.0_f64;
     let start = Instant::now();
     let svc = mur_channel::ChannelService::open(mur_home)?;
     let mut last_seq = svc
@@ -134,12 +191,23 @@ pub async fn cmd_fleet_run_loop(
     let mut stuck = 0u32;
 
     let stop = loop {
+        // Kill-switch (highest priority): a `mur fleet stop` between iterations halts here.
+        if super::control::is_stopped(mur_home, name) {
+            break LoopStop::Stopped;
+        }
         if let Some(stop) = check_guards(iteration, max_iter, start.elapsed(), deadline, stuck) {
             break stop;
         }
+        // Budget projection (fail-safe: stop before an iteration we can't afford).
+        if budget_exceeded(spent, per_iter_cost, budget) {
+            break LoopStop::Budget;
+        }
         println!("── fleet '{}' iteration {} ──", name, iteration + 1);
 
-        let proc = build_fleet_procedure(&fleet.goal, &fleet.members);
+        // Router plans this iteration (seeing prior state); falls back to broadcast.
+        let pre_events = svc.load_events(&fleet.channel_id).unwrap_or_default();
+        let proc = super::plan::plan_via_router(mur_home, &fleet, &pre_events)
+            .unwrap_or_else(|| build_fleet_procedure(&fleet.goal, &fleet.members));
         let opts = crate::executor::dag::DagExecOptions {
             // Fail-closed on the unattended loop path: never blanket-approve.
             // (No risk tier on fan-out steps today; this guards future
@@ -154,6 +222,7 @@ pub async fn cmd_fleet_run_loop(
         let _ = crate::executor::dag::execute_dag(mur_home, &format!("fleet:{name}"), &proc, &opts)
             .await?;
         iteration += 1;
+        spent += per_iter_cost;
 
         // Stuck-detection: did this iteration add any new agent-authored event?
         let events = svc.load_events(&fleet.channel_id)?;
@@ -175,7 +244,7 @@ pub async fn cmd_fleet_run_loop(
     };
 
     println!(
-        "fleet '{}' loop stopped after {iteration} iteration(s): {stop:?}",
+        "fleet '{}' loop stopped after {iteration} iteration(s) (~${spent:.2} projected): {stop:?}",
         name
     );
     Ok(())
@@ -295,6 +364,31 @@ mod tests {
             check_guards(8, 8, Duration::from_secs(0), None, STUCK_LIMIT),
             Some(LoopStop::MaxIterations)
         );
+    }
+
+    #[test]
+    fn estimate_and_budget_guard() {
+        // 2 members × 8000/1000 × 0.05 = 0.8 / iteration
+        assert!((estimate_iteration_cost_usd(2, 0.05) - 0.8).abs() < 1e-9);
+        // no budget / zero budget → never blocks
+        assert!(!budget_exceeded(100.0, 5.0, None));
+        assert!(!budget_exceeded(100.0, 5.0, Some(0.0)));
+        // stops BEFORE exceeding
+        assert!(budget_exceeded(0.9, 0.2, Some(1.0))); // 1.1 > 1.0
+        assert!(!budget_exceeded(0.7, 0.2, Some(1.0))); // 0.9 <= 1.0
+        // even iteration 0 unaffordable → blocked immediately
+        assert!(budget_exceeded(0.0, 2.0, Some(1.0)));
+    }
+
+    #[test]
+    fn fleet_price_per_1k_env_then_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        // env override wins (nextest isolates per-process, so this is safe)
+        unsafe { std::env::set_var("MUR_FLEET_COST_PER_1K", "0.123") };
+        assert!((fleet_price_per_1k(tmp.path()) - 0.123).abs() < 1e-9);
+        // no env + no models.yaml → documented default
+        unsafe { std::env::remove_var("MUR_FLEET_COST_PER_1K") };
+        assert!((fleet_price_per_1k(tmp.path()) - DEFAULT_PRICE_PER_1K).abs() < 1e-9);
     }
 
     #[test]
