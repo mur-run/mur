@@ -423,10 +423,19 @@ pub enum FleetAction {
         /// Fleet name
         name: String,
     },
-    /// Run one fleet iteration (Phase 1)
+    /// Run a fleet: one iteration, or `--loop` for a guarded loop
     Run {
         /// Fleet name
         name: String,
+        /// Loop until the router converges or a guard trips (cap/deadline/stuck)
+        #[arg(long = "loop")]
+        loop_flag: bool,
+        /// Max iterations in loop mode (overrides fleet.yaml `loop.max_iterations`)
+        #[arg(long)]
+        max_iterations: Option<u32>,
+        /// Wall-clock deadline in loop mode, e.g. 30s/5m/2h (overrides fleet.yaml)
+        #[arg(long)]
+        deadline: Option<String>,
     },
 }
 

@@ -277,8 +277,23 @@ pub async fn run(cli: Cli) -> Result<()> {
                 } => cmd::fleet::create::cmd_fleet_create(&mur_home, &name, members, router, goal)?,
                 FleetAction::List => cmd::fleet::list::cmd_fleet_list(&mur_home)?,
                 FleetAction::Show { name } => cmd::fleet::show::cmd_fleet_show(&mur_home, &name)?,
-                FleetAction::Run { name } => {
-                    cmd::fleet::run::cmd_fleet_run(&mur_home, &name).await?
+                FleetAction::Run {
+                    name,
+                    loop_flag,
+                    max_iterations,
+                    deadline,
+                } => {
+                    if loop_flag {
+                        cmd::fleet::loop_run::cmd_fleet_run_loop(
+                            &mur_home,
+                            &name,
+                            max_iterations,
+                            deadline,
+                        )
+                        .await?
+                    } else {
+                        cmd::fleet::run::cmd_fleet_run(&mur_home, &name).await?
+                    }
                 }
             }
         }
