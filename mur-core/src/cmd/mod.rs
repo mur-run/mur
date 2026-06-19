@@ -28,6 +28,7 @@ pub(crate) mod deploy;
 pub mod doctor;
 pub(crate) mod drafts;
 pub(crate) mod eval;
+pub mod fleet;
 #[allow(dead_code)]
 pub mod fleet_sync;
 pub(crate) mod hook;

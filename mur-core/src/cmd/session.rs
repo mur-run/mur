@@ -539,6 +539,9 @@ async fn accept_proposal_as_skill(
         category: Category::Workflow,
         provenance: Provenance::Llm,
         hosts: vec![],
+        scope: Default::default(),
+        fleet: None,
+        project: None,
         content: Content {
             r#abstract: abstract_text,
             procedure: Some(Procedure {
