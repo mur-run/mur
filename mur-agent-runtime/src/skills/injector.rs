@@ -25,6 +25,8 @@ pub fn inject_layer2(
     cfg: &SkillsConfig,
     context_fill_ratio: f64,
     recently_fired: &HashSet<String>,
+    active_fleet: Option<&str>,
+    active_project: Option<&str>,
 ) -> InjectionResult {
     // Adaptive cutoff: skip entirely when remaining context is too small.
     if let Some(ad) = &cfg.adaptive {
@@ -52,6 +54,18 @@ pub fn inject_layer2(
                 .triggers
                 .iter()
                 .any(|t| matches!(t.kind, TriggerKind::SessionStart))
+        })
+        // Scope: fleet/project-scoped skills inject only when the active scope
+        // matches (fail-closed); user/enterprise always pass. active_project is
+        // the member's cwd repo root; active_fleet is None for now (deferred).
+        .filter(|s| {
+            mur_common::skill::manifest::scope_visible(
+                s.manifest.scope,
+                s.manifest.fleet.as_deref(),
+                s.manifest.project.as_deref(),
+                active_fleet,
+                active_project,
+            )
         })
         .collect();
 
@@ -142,6 +156,43 @@ content:
     }
 
     #[test]
+    fn project_scoped_skill_injects_only_when_project_matches() {
+        let mk = |name: &str, scope_yaml: &str| {
+            let yaml = format!(
+                "name: {name}\nversion: 1.0.0\npublisher: human:t\ndescription: test\n\
+                 category: context\n{scope_yaml}content:\n  abstract: \"a\"\n  context: body\n\
+                 triggers:\n  - type: session_start\n"
+            );
+            LoadedSkill {
+                name: name.to_string(),
+                manifest: parse_canonical(&yaml).unwrap(),
+                trust: TrustLevel::Verified,
+                scope: SkillScope::Global,
+                content_hash: String::new(),
+            }
+        };
+        let skills = vec![mk("u", ""), mk("p", "scope: project\nproject: /repo\n")];
+        let names = |active: Option<&str>| {
+            inject_layer2(
+                &skills,
+                &SkillsConfig::default(),
+                0.0,
+                &HashSet::new(),
+                None,
+                active,
+            )
+            .injected_names
+        };
+        // no active project → project skill fail-closed; user always injects
+        let n0 = names(None);
+        assert!(n0.contains(&"u".to_string()) && !n0.contains(&"p".to_string()));
+        // matching active project → project skill injects
+        assert!(names(Some("/repo")).contains(&"p".to_string()));
+        // wrong project → fail-closed
+        assert!(!names(Some("/other")).contains(&"p".to_string()));
+    }
+
+    #[test]
     fn no_session_start_not_injected() {
         let s = loaded(
             "cmd-only",
@@ -149,7 +200,14 @@ content:
             TrustLevel::Verified,
             "triggers:\n  - type: command\n    pattern: /x\n",
         );
-        let result = inject_layer2(&[s], &SkillsConfig::default(), 0.0, &HashSet::new());
+        let result = inject_layer2(
+            &[s],
+            &SkillsConfig::default(),
+            0.0,
+            &HashSet::new(),
+            None,
+            None,
+        );
         assert!(result.system_addendum.is_empty());
         assert!(result.injected_names.is_empty());
     }
@@ -168,7 +226,14 @@ content:
             TrustLevel::Trusted,
             "triggers:\n  - type: session_start\n",
         );
-        let result = inject_layer2(&[a, b], &SkillsConfig::default(), 0.0, &HashSet::new());
+        let result = inject_layer2(
+            &[a, b],
+            &SkillsConfig::default(),
+            0.0,
+            &HashSet::new(),
+            None,
+            None,
+        );
         assert_eq!(result.injected_names.len(), 2);
         assert_eq!(result.injected_names[0], "trust");
         assert_eq!(result.injected_names[1], "sand");
@@ -189,7 +254,7 @@ content:
             }),
             ..SkillsConfig::default()
         };
-        let result = inject_layer2(&[s], &cfg, 0.85, &HashSet::new());
+        let result = inject_layer2(&[s], &cfg, 0.85, &HashSet::new(), None, None);
         assert!(result.budget_skipped);
         assert!(result.injected_names.is_empty());
     }
@@ -210,7 +275,7 @@ content:
             max_skills_in_prompt: 2,
             ..SkillsConfig::default()
         };
-        let result = inject_layer2(&skills, &cfg, 0.0, &HashSet::new());
+        let result = inject_layer2(&skills, &cfg, 0.0, &HashSet::new(), None, None);
         assert_eq!(result.injected_names.len(), 2);
     }
 
@@ -230,7 +295,7 @@ content:
         );
         let mut fired = HashSet::new();
         fired.insert("b".to_string());
-        let result = inject_layer2(&[a, b], &SkillsConfig::default(), 0.0, &fired);
+        let result = inject_layer2(&[a, b], &SkillsConfig::default(), 0.0, &fired, None, None);
         assert_eq!(result.injected_names.len(), 2);
         assert_eq!(result.injected_names[0], "b");
     }
