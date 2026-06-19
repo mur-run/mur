@@ -167,10 +167,13 @@ LEARN   harvest gate scans the iteration → scoped skill proposals to inbox
 - **Time circuit-breaker** — absolute `loop.deadline`.
 - **Semantic done** — `done_when`. Two forms: (a) **structured** `marker:<TEXT>` — a
   machine-checkable predicate the loop evaluates deterministically (converge when a member emits
-  `<TEXT>` in a channel event newer than the run's start seq; no LLM, no trusting the router's
-  self-assessment); (b) free text / empty — passed to the router as a hint and judged by its
-  one-word DONE/CONTINUE reply (`is_converged`). Both fail safe: no signal → keep going, bounded by
-  the cap/deadline/stuck/budget guards.
+  `<TEXT>` as a **sentinel on its own line** in a channel event newer than the run's start seq; no
+  LLM, no trusting the router's self-assessment). Own-line (not substring) matching is deliberate:
+  the marker is fanned out to members in the goal, so prose that quotes/negates it ("will emit X
+  when done", "X not yet") must not converge — only a deliberate sentinel line does. (b) free text
+  / empty — passed to the router as a hint and judged by its one-word DONE/CONTINUE reply
+  (`is_converged`). Both fail safe: no signal → keep going, bounded by the cap/deadline/stuck/budget
+  guards.
 
 ### HITL + intervention ladder
 

@@ -83,8 +83,9 @@ pub fn is_converged(reply: &str) -> bool {
 }
 
 /// A structured `done_when` marker predicate: `marker:<TEXT>` means "converge
-/// when a member emits `<TEXT>` in the channel". Returns the (trimmed, non-empty)
-/// marker text, or None for an empty / non-`marker:` criterion (→ router fallback).
+/// when a member emits `<TEXT>` as a sentinel (its own line) in the channel".
+/// Returns the (trimmed, non-empty) marker text, or None for an empty /
+/// non-`marker:` criterion (→ router fallback).
 /// Machine-checkable convergence: deterministic and LLM-independent, vs. trusting
 /// the router's free-text self-assessment.
 pub fn done_marker(done_when: &str) -> Option<&str> {
@@ -94,9 +95,18 @@ pub fn done_marker(done_when: &str) -> Option<&str> {
         .filter(|m| !m.is_empty())
 }
 
-/// Has a member emitted `marker` in a channel event newer than `after_seq`?
-/// Only `Agent`-authored events count (matching the stuck-detection filter), so
-/// the operator-set criterion text in the System goal event can't self-trigger.
+/// Has a member emitted `marker` as a SENTINEL — the sole trimmed content of
+/// some line — in a channel event newer than `after_seq`?
+///
+/// Sentinel (own-line) matching, not substring, is deliberate and fail-safe:
+/// the marker text is fanned out to every member in the goal, so a member that
+/// merely quotes or negates it in prose ("will emit DONE_TOKEN when done",
+/// "DONE_TOKEN not yet") must NOT converge the loop. Requiring the marker to be
+/// a line by itself makes it an unambiguous deliberate signal and inherently
+/// excludes negated/embedded mentions — mirroring `is_converged`'s posture that
+/// stopping early on a false positive is worse than one extra iteration. Only
+/// `Agent`-authored events count (matching the stuck-detection filter), so the
+/// criterion text in the System goal event can't self-trigger either.
 pub fn channel_has_marker(events: &[ChannelEvent], marker: &str, after_seq: u64) -> bool {
     events.iter().any(|e| {
         e.seq > after_seq
@@ -104,7 +114,7 @@ pub fn channel_has_marker(events: &[ChannelEvent], marker: &str, after_seq: u64)
             && e.payload
                 .get("text")
                 .and_then(|t| t.as_str())
-                .is_some_and(|t| t.contains(marker))
+                .is_some_and(|t| t.lines().any(|line| line.trim() == marker))
     })
 }
 
@@ -409,9 +419,9 @@ mod tests {
             // System goal event MENTIONS the token — must NOT self-trigger.
             sys_event(1, "goal: emit DONE_TOKEN when finished"),
             agent_event(2, "qa", "still working"),
-            agent_event(3, "pm", "all green DONE_TOKEN"), // member declares done
+            agent_event(3, "pm", "all green\nDONE_TOKEN"), // sentinel on its own line
         ];
-        // a member emitted the marker after baseline 0 → converged
+        // a member emitted the marker as a sentinel after baseline 0 → converged
         assert!(channel_has_marker(&evs, "DONE_TOKEN", 0));
         // baseline at seq 3 excludes this-run events → not converged (stale-run guard)
         assert!(!channel_has_marker(&evs, "DONE_TOKEN", 3));
@@ -419,6 +429,25 @@ mod tests {
         assert!(!channel_has_marker(&evs[..1], "DONE_TOKEN", 0));
         // absent marker
         assert!(!channel_has_marker(&evs, "NOT_PRESENT", 0));
+    }
+
+    #[test]
+    fn channel_has_marker_rejects_prose_mentions_of_the_marker() {
+        // The marker is fanned out to members in the goal, so prose that quotes
+        // or negates it must NOT converge — only a deliberate own-line sentinel.
+        let planning = vec![agent_event(
+            2,
+            "qa",
+            "I will emit DONE_TOKEN when tests pass",
+        )];
+        assert!(!channel_has_marker(&planning, "DONE_TOKEN", 0));
+        let negated = vec![agent_event(2, "qa", "DONE_TOKEN not yet emitted")];
+        assert!(!channel_has_marker(&negated, "DONE_TOKEN", 0));
+        let embedded = vec![agent_event(2, "qa", "see ABANDONED_TOKENS below")];
+        assert!(!channel_has_marker(&embedded, "DONE_TOKEN", 0));
+        // but a trailing-whitespace sentinel line still converges (trimmed)
+        let sentinel = vec![agent_event(2, "qa", "done:\n  DONE_TOKEN  ")];
+        assert!(channel_has_marker(&sentinel, "DONE_TOKEN", 0));
     }
 
     #[test]
