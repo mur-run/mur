@@ -39,8 +39,10 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str) -> Result<()> {
         run_id: format!("run-{}", uuid::Uuid::now_v7()),
         ..Default::default()
     };
-    // skill_name here is just a label for the run; the fleet channel id is reused.
-    let out = crate::executor::dag::execute_dag(mur_home, &fleet.channel_id, &proc, &opts).await?;
+    // skill_name here is a readable run-history label; channel routing still uses opts.channel_id.
+    let out =
+        crate::executor::dag::execute_dag(mur_home, &format!("fleet:{}", fleet.name), &proc, &opts)
+            .await?;
     if let Some(t) = out.output_text.filter(|t| !t.is_empty()) {
         println!("{t}");
     }

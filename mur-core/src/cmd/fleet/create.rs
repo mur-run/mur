@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use mur_common::fleet::{CONCIERGE_AGENT, Fleet};
+use mur_common::fleet::{CONCIERGE_AGENT, Fleet, valid_fleet_name};
 
 use super::store;
 
@@ -14,10 +14,21 @@ pub fn cmd_fleet_create(
     router: Option<String>,
     goal: Option<String>,
 ) -> Result<()> {
+    if !valid_fleet_name(name) {
+        bail!("invalid fleet name '{name}': use lowercase letters, digits, '-' or '_'");
+    }
     if store::fleet_path(mur_home, name).exists() {
         bail!("fleet '{name}' already exists");
     }
-    let router_name = router
+
+    // Canonicalize member names and router to match the agent runtime's on-disk ids.
+    let members: Vec<String> = members
+        .into_iter()
+        .map(|m| crate::a2a_dial::canonicalize_agent_name(mur_home, &m))
+        .collect();
+    let canonical_router: Option<String> =
+        router.map(|r| crate::a2a_dial::canonicalize_agent_name(mur_home, &r));
+    let router_name = canonical_router
         .clone()
         .unwrap_or_else(|| CONCIERGE_AGENT.to_string());
 
@@ -28,7 +39,7 @@ pub fn cmd_fleet_create(
         name: name.to_string(),
         display_name: String::new(),
         goal: goal.unwrap_or_default(),
-        router,
+        router: canonical_router,
         members,
         channel_id: ch.id.clone(),
         rules: vec![],

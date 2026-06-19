@@ -46,9 +46,36 @@ impl Fleet {
     }
 }
 
+/// A fleet name must be a filesystem-safe lowercase slug (it becomes a directory
+/// `~/.mur/fleets/<name>` and a channel id `fleet-<name>`).
+pub fn valid_fleet_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valid_fleet_name_accepts_and_rejects() {
+        // accepted
+        assert!(valid_fleet_name("dev"));
+        assert!(valid_fleet_name("dev-team"));
+        assert!(valid_fleet_name("dev_1"));
+        assert!(valid_fleet_name("ab12"));
+        // rejected
+        assert!(!valid_fleet_name("")); // empty
+        assert!(!valid_fleet_name("../x")); // path traversal
+        assert!(!valid_fleet_name("a/b")); // slash
+        assert!(!valid_fleet_name("a\\b")); // backslash
+        assert!(!valid_fleet_name("Dev")); // uppercase
+        assert!(!valid_fleet_name("a b")); // space
+        assert!(!valid_fleet_name(".hidden")); // dot
+    }
 
     #[test]
     fn fleet_minimal_yaml_deserializes_with_defaults() {

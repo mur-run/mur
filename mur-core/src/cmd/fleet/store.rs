@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-use mur_common::fleet::Fleet;
+use anyhow::{Context, Result, bail};
+use mur_common::fleet::{Fleet, valid_fleet_name};
 
 /// Directory that holds all fleet subdirectories.
 pub fn fleets_dir(mur_home: &Path) -> PathBuf {
@@ -35,6 +35,9 @@ pub fn save_fleet(mur_home: &Path, fleet: &Fleet) -> Result<()> {
 
 /// Load a fleet from disk. Errors if the fleet does not exist.
 pub fn load_fleet(mur_home: &Path, name: &str) -> Result<Fleet> {
+    if !valid_fleet_name(name) {
+        bail!("invalid fleet name '{name}': use lowercase letters, digits, '-' or '_'");
+    }
     let path = fleet_path(mur_home, name);
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("fleet '{name}' not found at {}", path.display()))?;
