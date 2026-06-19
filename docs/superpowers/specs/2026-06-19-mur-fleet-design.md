@@ -165,8 +165,12 @@ LEARN   harvest gate scans the iteration → scoped skill proposals to inbox
   no new `ToolResult{success=true}` and the same step set repeats (OpenHands-style: same action+result
   ≥4×, or router monologue ≥3×). Cheap — the channel already records every attributed event.
 - **Time circuit-breaker** — absolute `loop.deadline`.
-- **Semantic done** — `done_when`: a machine-checkable predicate or a router self-eval signed as
-  `StateChange→Completed`. A loop with an unevaluable goal must not run (require an explicit done test).
+- **Semantic done** — `done_when`. Two forms: (a) **structured** `marker:<TEXT>` — a
+  machine-checkable predicate the loop evaluates deterministically (converge when a member emits
+  `<TEXT>` in a channel event newer than the run's start seq; no LLM, no trusting the router's
+  self-assessment); (b) free text / empty — passed to the router as a hint and judged by its
+  one-word DONE/CONTINUE reply (`is_converged`). Both fail safe: no signal → keep going, bounded by
+  the cap/deadline/stuck/budget guards.
 
 ### HITL + intervention ladder
 
@@ -319,6 +323,6 @@ intentionally behind the design, so the doc never advertises a guard the runtime
   skills — fail-closed). Harvest stamps Project scope; `mur skill scope` authors fleet/project/user.
 - **Phase-3 priority order:** ✅ `$`-budget projection, ✅ kill-switch + budget-required auto-run
   (the safety triad is complete), ✅ router-emits-DAG (with broadcast fallback), ✅ scope-injection
-  wiring (user/project/fleet end-to-end), ✅ `cron:` trigger (local tz, baseline-stamped) →
-  remaining: (1) structured `done_when`, (2) real per-token accounting, (3) team-shared fleets +
-  commander.
+  wiring (user/project/fleet end-to-end), ✅ `cron:` trigger (local tz, baseline-stamped),
+  ✅ real per-token accounting (`PipelineOutput.tokens_used`), ✅ structured `done_when`
+  (`marker:<TEXT>` machine-checkable convergence) → remaining: team-shared fleets + commander.
