@@ -105,6 +105,7 @@ async fn run_entry(entry: ScheduleEntry, runner: Arc<TaskRunner>, cancel: Cancel
                 input,
                 context_task_id: None,
                 task_id: None,
+                active_fleet: None,
             })
             .await;
 
