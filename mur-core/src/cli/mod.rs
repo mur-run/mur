@@ -401,4 +401,46 @@ pub enum Commands {
         #[arg(long)]
         query: Option<String>,
     },
+    /// Manage fleets — squads of agents working a shared goal
+    Fleet {
+        #[command(subcommand)]
+        action: FleetAction,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_parses_fleet_create() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "mur",
+            "fleet",
+            "create",
+            "dev",
+            "--members",
+            "pm,qa",
+            "--goal",
+            "ship",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Fleet {
+                action:
+                    crate::cli::actions::FleetAction::Create {
+                        name,
+                        members,
+                        goal,
+                        ..
+                    },
+            } => {
+                assert_eq!(name, "dev");
+                assert_eq!(members, vec!["pm".to_string(), "qa".to_string()]);
+                assert_eq!(goal.as_deref(), Some("ship"));
+            }
+            _ => panic!("expected fleet create"),
+        }
+    }
 }

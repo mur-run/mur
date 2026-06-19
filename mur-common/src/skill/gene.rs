@@ -247,6 +247,9 @@ mod tests {
             publisher: "human:test".into(),
             description: "t".into(),
             category: Category::Workflow,
+            scope: Default::default(),
+            fleet: None,
+            project: None,
             hosts: vec![],
             content: Content {
                 r#abstract: "a".into(),

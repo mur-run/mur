@@ -845,6 +845,9 @@ mod tests {
                 category: Category::Context,
                 provenance: Default::default(),
                 hosts: vec![],
+                scope: Default::default(),
+                fleet: None,
+                project: None,
                 content: Content {
                     r#abstract: "a".into(),
                     context: Some("old".into()),
@@ -896,6 +899,9 @@ mod tests {
                 category: Category::Context,
                 provenance: Default::default(),
                 hosts: vec![],
+                scope: Default::default(),
+                fleet: None,
+                project: None,
                 content: Content {
                     r#abstract: "a".into(),
                     context: Some("keep-me".into()),

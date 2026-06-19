@@ -57,6 +57,9 @@ mod tests {
             description: desc.into(),
             category: mur_common::skill::types::Category::Context,
             hosts: vec![],
+            scope: Default::default(),
+            fleet: None,
+            project: None,
             content: Content {
                 r#abstract: abstract_.into(),
                 context: Some("context text".into()),

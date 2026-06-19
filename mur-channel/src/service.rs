@@ -98,6 +98,52 @@ impl ChannelService {
         Ok(ch)
     }
 
+    /// Create the long-lived shared channel for a fleet. Id is the stable,
+    /// filesystem-safe `fleet-<name>`. Router gets `Router`, members `Delegate`.
+    pub fn create_for_fleet(
+        &self,
+        fleet_name: &str,
+        router: &str,
+        members: &[String],
+    ) -> Result<Channel> {
+        let now = Utc::now();
+        let mut participants = vec![
+            Participant {
+                actor: ChannelActor::local_human(),
+                role: ParticipantRole::Owner,
+                joined_at: now,
+            },
+            Participant {
+                actor: ChannelActor::Agent {
+                    id: router.to_string(),
+                },
+                role: ParticipantRole::Router,
+                joined_at: now,
+            },
+        ];
+        for m in members {
+            participants.push(Participant {
+                actor: ChannelActor::Agent { id: m.clone() },
+                role: ParticipantRole::Delegate,
+                joined_at: now,
+            });
+        }
+        let ch = Channel {
+            v: CHANNEL_SCHEMA_VERSION,
+            id: format!("fleet-{fleet_name}"),
+            title: format!("fleet: {fleet_name}"),
+            goal: Goal::default(),
+            state: ChannelState::Working,
+            owner: ChannelActor::local_human(),
+            participants,
+            created_at: now,
+            updated_at: now,
+        };
+        self.store.create(&ch)?;
+        self.index.upsert(&ch)?;
+        Ok(ch)
+    }
+
     /// Append a message event and bump the manifest's `updated_at` + index.
     pub fn append_message(
         &self,
@@ -405,5 +451,32 @@ mod tests {
         let latest = svc.latest_for_agent("qa").unwrap();
         assert_eq!(latest.as_deref(), Some(ch.id.as_str()));
         assert!(svc.latest_for_agent("other").unwrap().is_none());
+    }
+
+    #[test]
+    fn create_for_fleet_sets_roles_and_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc
+            .create_for_fleet("dev", "mur", &["pm".to_string(), "qa".to_string()])
+            .unwrap();
+        assert_eq!(ch.id, "fleet-dev");
+        // owner human + router + 2 delegates = 4 participants
+        assert_eq!(ch.participants.len(), 4);
+        assert!(
+            ch.participants
+                .iter()
+                .any(|p| p.role == ParticipantRole::Router
+                    && matches!(&p.actor, ChannelActor::Agent { id } if id == "mur"))
+        );
+        assert_eq!(
+            ch.participants
+                .iter()
+                .filter(|p| p.role == ParticipantRole::Delegate)
+                .count(),
+            2
+        );
+        // persisted
+        assert_eq!(svc.load_events(&ch.id).unwrap().len(), 0);
     }
 }
