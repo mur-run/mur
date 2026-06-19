@@ -1,5 +1,5 @@
 //! Phase 2a: the fleet loop. Wraps Phase 1's single iteration in a guarded loop
-//! (iteration cap, deadline, stuck-detection, router convergence). The guards
+//! (iteration cap, deadline, stuck-detection, marker/router convergence). The guards
 //! live HERE — outside any agent — so the daemon `fleet_tick` (Phase 2b) can
 //! reuse the same logic. The live orchestration needs running member agents;
 //! the pure guard helpers below are unit-tested.
@@ -32,7 +32,8 @@ const DEFAULT_PRICE_PER_1K: f64 = 0.05;
 /// Why the loop stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopStop {
-    /// Router judged the goal complete.
+    /// Goal complete: a structured `done_when: marker:<TEXT>` was emitted by a
+    /// member, or (free-text/empty criterion) the router judged it done.
     Converged,
     /// Hit the iteration cap.
     MaxIterations,
@@ -79,6 +80,42 @@ pub fn is_converged(reply: &str) -> bool {
         .collect();
     let has = |t: &str| tokens.iter().any(|w| w == t);
     has("done") && !has("continue") && !has("not") && !has("incomplete")
+}
+
+/// A structured `done_when` marker predicate: `marker:<TEXT>` means "converge
+/// when a member emits `<TEXT>` as a sentinel (its own line) in the channel".
+/// Returns the (trimmed, non-empty) marker text, or None for an empty /
+/// non-`marker:` criterion (→ router fallback).
+/// Machine-checkable convergence: deterministic and LLM-independent, vs. trusting
+/// the router's free-text self-assessment.
+pub fn done_marker(done_when: &str) -> Option<&str> {
+    done_when
+        .strip_prefix("marker:")
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+}
+
+/// Has a member emitted `marker` as a SENTINEL — the sole trimmed content of
+/// some line — in a channel event newer than `after_seq`?
+///
+/// Sentinel (own-line) matching, not substring, is deliberate and fail-safe:
+/// the marker text is fanned out to every member in the goal, so a member that
+/// merely quotes or negates it in prose ("will emit DONE_TOKEN when done",
+/// "DONE_TOKEN not yet") must NOT converge the loop. Requiring the marker to be
+/// a line by itself makes it an unambiguous deliberate signal and inherently
+/// excludes negated/embedded mentions — mirroring `is_converged`'s posture that
+/// stopping early on a false positive is worse than one extra iteration. Only
+/// `Agent`-authored events count (matching the stuck-detection filter), so the
+/// criterion text in the System goal event can't self-trigger either.
+pub fn channel_has_marker(events: &[ChannelEvent], marker: &str, after_seq: u64) -> bool {
+    events.iter().any(|e| {
+        e.seq > after_seq
+            && matches!(e.actor, ChannelActor::Agent { .. })
+            && e.payload
+                .get("text")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| t.lines().any(|line| line.trim() == marker))
+    })
 }
 
 /// Pure pre-iteration guard check. `iteration` = number of iterations already
@@ -199,6 +236,10 @@ pub async fn cmd_fleet_run_loop(
         .last()
         .map(|e| e.seq)
         .unwrap_or(0);
+    // Baseline for the structured `done_when: marker:<TEXT>` check: only events
+    // produced during THIS run (seq > start_seq) count, so a marker left in the
+    // channel by a previous run can't make the loop converge instantly.
+    let start_seq = last_seq;
     let mut iteration = 0u32;
     let mut stuck = 0u32;
 
@@ -264,9 +305,21 @@ pub async fn cmd_fleet_run_loop(
             stuck += 1;
         }
 
-        // Convergence: ask the router. A failed ask (e.g. router down) is treated
-        // as "continue" — the cap/deadline/stuck guards still bound the loop.
-        if ask_router_done(mur_home, &fleet, &events).unwrap_or(false) {
+        // Convergence. A structured `done_when: marker:<TEXT>` is checked
+        // deterministically against this run's channel events (no LLM, no
+        // trusting the router's self-assessment). Otherwise fall back to asking
+        // the router — a failed ask (e.g. router down) is treated as "continue",
+        // and the cap/deadline/stuck guards still bound the loop either way.
+        let done_when = fleet
+            .loop_cfg
+            .as_ref()
+            .map(|l| l.done_when.as_str())
+            .unwrap_or("");
+        let converged = match done_marker(done_when) {
+            Some(marker) => channel_has_marker(&events, marker, start_seq),
+            None => ask_router_done(mur_home, &fleet, &events).unwrap_or(false),
+        };
+        if converged {
             break LoopStop::Converged;
         }
     };
@@ -323,6 +376,79 @@ fn ask_router_done(mur_home: &Path, fleet: &Fleet, events: &[ChannelEvent]) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn agent_event(seq: u64, id: &str, text: &str) -> ChannelEvent {
+        ChannelEvent {
+            seq,
+            ts: chrono::Utc::now(),
+            actor: ChannelActor::Agent { id: id.into() },
+            kind: mur_common::channel::EventKind::Note,
+            payload: serde_json::json!({ "text": text }),
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+        }
+    }
+
+    fn sys_event(seq: u64, text: &str) -> ChannelEvent {
+        ChannelEvent {
+            seq,
+            ts: chrono::Utc::now(),
+            actor: ChannelActor::System,
+            kind: mur_common::channel::EventKind::Note,
+            payload: serde_json::json!({ "text": text }),
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+        }
+    }
+
+    #[test]
+    fn done_marker_parses_structured_criterion() {
+        assert_eq!(done_marker("marker:FLEET_DONE"), Some("FLEET_DONE"));
+        assert_eq!(done_marker("marker:  SHIPPED  "), Some("SHIPPED")); // trimmed
+        assert_eq!(done_marker("marker:"), None); // empty
+        assert_eq!(done_marker("marker:   "), None); // whitespace only
+        assert_eq!(done_marker("all tasks closed"), None); // free text → router fallback
+        assert_eq!(done_marker(""), None);
+    }
+
+    #[test]
+    fn channel_has_marker_matches_member_events_after_baseline() {
+        let evs = vec![
+            // System goal event MENTIONS the token — must NOT self-trigger.
+            sys_event(1, "goal: emit DONE_TOKEN when finished"),
+            agent_event(2, "qa", "still working"),
+            agent_event(3, "pm", "all green\nDONE_TOKEN"), // sentinel on its own line
+        ];
+        // a member emitted the marker as a sentinel after baseline 0 → converged
+        assert!(channel_has_marker(&evs, "DONE_TOKEN", 0));
+        // baseline at seq 3 excludes this-run events → not converged (stale-run guard)
+        assert!(!channel_has_marker(&evs, "DONE_TOKEN", 3));
+        // the System goal event alone never counts (Agent-authored only)
+        assert!(!channel_has_marker(&evs[..1], "DONE_TOKEN", 0));
+        // absent marker
+        assert!(!channel_has_marker(&evs, "NOT_PRESENT", 0));
+    }
+
+    #[test]
+    fn channel_has_marker_rejects_prose_mentions_of_the_marker() {
+        // The marker is fanned out to members in the goal, so prose that quotes
+        // or negates it must NOT converge — only a deliberate own-line sentinel.
+        let planning = vec![agent_event(
+            2,
+            "qa",
+            "I will emit DONE_TOKEN when tests pass",
+        )];
+        assert!(!channel_has_marker(&planning, "DONE_TOKEN", 0));
+        let negated = vec![agent_event(2, "qa", "DONE_TOKEN not yet emitted")];
+        assert!(!channel_has_marker(&negated, "DONE_TOKEN", 0));
+        let embedded = vec![agent_event(2, "qa", "see ABANDONED_TOKENS below")];
+        assert!(!channel_has_marker(&embedded, "DONE_TOKEN", 0));
+        // but a trailing-whitespace sentinel line still converges (trimmed)
+        let sentinel = vec![agent_event(2, "qa", "done:\n  DONE_TOKEN  ")];
+        assert!(channel_has_marker(&sentinel, "DONE_TOKEN", 0));
+    }
 
     #[test]
     fn parse_duration_units_and_bare_seconds() {
