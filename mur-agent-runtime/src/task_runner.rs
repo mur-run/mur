@@ -71,6 +71,11 @@ pub struct TaskRunner {
     recently_fired: Mutex<VecDeque<(u64, String)>>,
     turn_counter: AtomicU64,
     cumulative_input_tokens: AtomicU64,
+    /// Parallel to `cumulative_input_tokens` (runner-lifetime, shared across
+    /// tasks). Not used by the loop's own input-only token budget; it exists so
+    /// `run_sync_inner` can snapshot-delta both counters and report a turn's
+    /// real input+output token usage in `Task.usage` (fleet cost accounting).
+    cumulative_output_tokens: AtomicU64,
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
@@ -170,6 +175,7 @@ impl TaskRunner {
             recently_fired: Mutex::new(VecDeque::new()),
             turn_counter: AtomicU64::new(0),
             cumulative_input_tokens: AtomicU64::new(0),
+            cumulative_output_tokens: AtomicU64::new(0),
             hook_chain: None,
             hook_ctx: None,
             hook_cancel: None,
@@ -425,6 +431,14 @@ impl TaskRunner {
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), tx_cancel);
 
+        // Snapshot the runner-lifetime token counters so we can report THIS
+        // turn's real input+output usage as a delta in `Task.usage`. Same
+        // snapshot-delta approach (and concurrency caveat — concurrent turns on
+        // one runner can inflate a delta) the agentic loop's own token budget
+        // already uses; fine for the serial-delegate fleet path.
+        let tok_in0 = self.cumulative_input_tokens.load(Ordering::Relaxed);
+        let tok_out0 = self.cumulative_output_tokens.load(Ordering::Relaxed);
+
         let generation = async {
             match &self.backend {
                 RunnerBackend::StubEcho => Ok((echo_response(&spec.input), None)),
@@ -491,16 +505,30 @@ impl TaskRunner {
         match result {
             Ok((reply, stop)) => {
                 self.set_state(&id, TaskState::Completed);
-                // When a budget forced an early, graceful exit, surface the
-                // reason + iteration count in `usage` so callers can tell a
-                // truncated completion from a natural one (the task still
-                // reports Completed — work is preserved, not failed).
-                let usage = stop.map(|exit| {
-                    serde_json::json!({
-                        "stop_reason": exit.reason.as_str(),
-                        "iterations": exit.iterations,
-                    })
+                // Report this turn's real token usage (delta of the lifetime
+                // counters) so callers — notably the fleet budget guard — can
+                // account actual spend instead of a projection. When a budget
+                // forced an early, graceful exit, also surface the reason +
+                // iteration count so callers can tell a truncated completion
+                // from a natural one (the task still reports Completed — work is
+                // preserved, not failed).
+                let tok_in = self
+                    .cumulative_input_tokens
+                    .load(Ordering::Relaxed)
+                    .saturating_sub(tok_in0);
+                let tok_out = self
+                    .cumulative_output_tokens
+                    .load(Ordering::Relaxed)
+                    .saturating_sub(tok_out0);
+                let mut usage_obj = serde_json::json!({
+                    "input_tokens": tok_in,
+                    "output_tokens": tok_out,
                 });
+                if let Some(exit) = stop {
+                    usage_obj["stop_reason"] = exit.reason.as_str().into();
+                    usage_obj["iterations"] = exit.iterations.into();
+                }
+                let usage = Some(usage_obj);
                 TaskOutcome::Completed(Task {
                     id,
                     state: TaskState::Completed,
@@ -694,6 +722,8 @@ impl TaskRunner {
                 let _prev = self
                     .cumulative_input_tokens
                     .fetch_add(resp.input_tokens, Ordering::Relaxed);
+                self.cumulative_output_tokens
+                    .fetch_add(resp.output_tokens, Ordering::Relaxed);
                 if let Some(tx) = &self.telemetry {
                     // Emit per-skill SkillExecuted events (M5a). Outcome is
                     // NotEvaluated because the M2 wiring doesn't track
@@ -955,6 +985,8 @@ impl TaskRunner {
 
             self.cumulative_input_tokens
                 .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
+            self.cumulative_output_tokens
+                .fetch_add(resp.output_tokens, std::sync::atomic::Ordering::Relaxed);
 
             // Truncation guard: a turn that hit the output-token ceiling AND
             // carries tool_calls was cut off MID-tool_use — the tool_use
@@ -1103,6 +1135,8 @@ impl TaskRunner {
             Ok(resp) => {
                 self.cumulative_input_tokens
                     .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
+                self.cumulative_output_tokens
+                    .fetch_add(resp.output_tokens, std::sync::atomic::Ordering::Relaxed);
                 Message {
                     role: "agent".into(),
                     parts: vec![mur_common::a2a::MessagePart::Text { text: resp.text }],
@@ -1551,16 +1585,22 @@ mod tests {
             "truncated tool_use must not be executed"
         );
         // The following well-formed turn proceeds and is the natural terminus —
-        // no budget tripped, so usage is None (natural end_turn).
+        // no budget tripped, so usage carries token counts but NO stop_reason.
         let reply_text = task.messages.last().map(text_of).unwrap_or_default();
         assert!(
             reply_text.contains("RECOVERED"),
             "expected the recovery turn's reply, got: {reply_text}"
         );
+        let usage = task
+            .usage
+            .expect("usage is always populated with token counts");
         assert!(
-            task.usage.is_none(),
-            "natural end_turn after recovery must not populate a budget stop_reason; usage={:?}",
-            task.usage
+            usage.get("stop_reason").is_none(),
+            "natural end_turn after recovery must not populate a budget stop_reason; usage={usage:?}",
+        );
+        assert!(
+            usage.get("input_tokens").is_some() && usage.get("output_tokens").is_some(),
+            "usage must report real token counts; usage={usage:?}",
         );
     }
 

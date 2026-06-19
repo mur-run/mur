@@ -38,6 +38,12 @@ pub struct PipelineOutput {
     pub output_data: Option<serde_json::Value>,
     pub exit_code: i32,
     pub duration_ms: u64,
+    /// Real LLM tokens (input + output) consumed producing this output, summed
+    /// across any delegated agent turns. 0 when unknown (e.g. shell stages or a
+    /// reply that carried no usage). Drives the fleet budget guard's real-cost
+    /// accounting. `#[serde(default)]` keeps older serialized outputs readable.
+    #[serde(default)]
+    pub tokens_used: u64,
 }
 
 /// Replace `{{input}}` placeholders in a template string with the given value.

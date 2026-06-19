@@ -108,6 +108,19 @@ fn extract_agent_reply(task: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
+/// Sum the real token usage a specialist reported in its `Task.usage`
+/// (`input_tokens + output_tokens`). 0 when absent — older runtimes, stub
+/// backends, or a reply that carried no usage — so accounting degrades to the
+/// projection rather than under-counting silently.
+fn extract_usage_tokens(task: &serde_json::Value) -> u64 {
+    let usage = match task.get("usage") {
+        Some(u) => u,
+        None => return 0,
+    };
+    let field = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    field("input_tokens").saturating_add(field("output_tokens"))
+}
+
 // ── Graph types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -230,6 +243,10 @@ struct StepResult {
     duration_ms: u64,
     failed_step: Option<String>,
     success: bool,
+    /// Real LLM tokens (input + output) this step consumed — non-zero only for
+    /// delegate steps, read from the specialist's `Task.usage`. Summed into the
+    /// run's `PipelineOutput.tokens_used` for real fleet budget accounting.
+    tokens_used: u64,
 }
 
 /// Core step execution: run the command, handle approval, return result.
@@ -286,6 +303,7 @@ async fn execute_step_inner(
                             duration_ms: start.elapsed().as_millis() as u64,
                             failed_step: Some(step.description.clone()),
                             success: false,
+                            tokens_used: 0,
                         };
                     }
                     Err(_) => {
@@ -299,6 +317,7 @@ async fn execute_step_inner(
                             duration_ms: start.elapsed().as_millis() as u64,
                             failed_step: Some(step.description.clone()),
                             success: false,
+                            tokens_used: 0,
                         };
                     }
                 },
@@ -316,6 +335,7 @@ async fn execute_step_inner(
                             duration_ms: start.elapsed().as_millis() as u64,
                             failed_step: Some(step.description.clone()),
                             success: false,
+                            tokens_used: 0,
                         };
                     }
                 },
@@ -346,6 +366,7 @@ async fn execute_step_inner(
                 None
             },
             success: exit_code == 0,
+            tokens_used: 0,
         }
     } else {
         // ── Intent-mode (no command) ──
@@ -364,6 +385,7 @@ async fn execute_step_inner(
             duration_ms: start.elapsed().as_millis() as u64,
             failed_step: None,
             success: true,
+            tokens_used: 0,
         }
     }
 }
@@ -422,6 +444,7 @@ async fn execute_step(
                 duration_ms: 0,
                 failed_step: None,
                 success: true,
+                tokens_used: 0,
             };
         }
     }
@@ -493,6 +516,8 @@ async fn execute_step(
                         None
                     },
                     success: !empty,
+                    // Real tokens the specialist's turn consumed, from Task.usage.
+                    tokens_used: extract_usage_tokens(&task),
                 }
             }
             Err(e) => {
@@ -517,6 +542,7 @@ async fn execute_step(
                     duration_ms: start.elapsed().as_millis() as u64,
                     failed_step: Some(step.description.clone()),
                     success: false,
+                    tokens_used: 0,
                 }
             }
         };
@@ -562,6 +588,7 @@ async fn execute_step(
                 duration_ms: start.elapsed().as_millis() as u64,
                 failed_step: Some(step.description.clone()),
                 success: false,
+                tokens_used: 0,
             };
         }
         // Re-verify the pin at the execute boundary (fail-closed on drift).
@@ -574,6 +601,7 @@ async fn execute_step(
                 duration_ms: start.elapsed().as_millis() as u64,
                 failed_step: Some(step.description.clone()),
                 success: false,
+                tokens_used: 0,
             };
         }
     } else if step.needs_approval {
@@ -604,6 +632,7 @@ async fn execute_step(
                 duration_ms: 0,
                 failed_step: None,
                 success: true,
+                tokens_used: 0,
             };
         }
     }
@@ -685,6 +714,7 @@ pub async fn execute_dag(
             output_data: None,
             exit_code: 0,
             duration_ms: 0,
+            tokens_used: 0,
         });
     }
 
@@ -705,6 +735,9 @@ pub async fn execute_dag(
     let max_rank = graph.nodes.iter().map(|n| n.rank).max().unwrap_or(0);
     let mut overall_exit_code = 0i32;
     let mut overall_output = String::new();
+    // Real LLM tokens summed across every step (delegate turns report usage;
+    // others contribute 0) → the run's PipelineOutput.tokens_used.
+    let mut overall_tokens: u64 = 0;
 
     for rank in 0..=max_rank {
         let indices: Vec<usize> = (0..graph.nodes.len())
@@ -761,6 +794,7 @@ pub async fn execute_dag(
                         duration_ms: 0,
                         failed_step: Some("(task)".to_string()),
                         success: false,
+                        tokens_used: 0,
                     });
                 }
             }
@@ -770,6 +804,7 @@ pub async fn execute_dag(
         for ri in 0..results.len() {
             let result = &results[ri];
             let step = &graph.nodes[indices[ri]].step;
+            overall_tokens = overall_tokens.saturating_add(result.tokens_used);
 
             // Write run-ledger record.
             let stderr_for_ledger = if !result.success && result.output_text.is_empty() {
@@ -819,6 +854,7 @@ pub async fn execute_dag(
                             output_data: None,
                             exit_code: result.exit_code,
                             duration_ms: start.elapsed().as_millis() as u64,
+                            tokens_used: overall_tokens,
                         });
                     }
                     FailureAction::Skip => {
@@ -858,6 +894,7 @@ pub async fn execute_dag(
                                     output_data: None,
                                     exit_code: retry_result.exit_code,
                                     duration_ms: start.elapsed().as_millis() as u64,
+                                    tokens_used: overall_tokens,
                                 });
                             }
                         }
@@ -882,6 +919,7 @@ pub async fn execute_dag(
         output_data: None,
         exit_code: overall_exit_code,
         duration_ms,
+        tokens_used: overall_tokens,
     })
 }
 
