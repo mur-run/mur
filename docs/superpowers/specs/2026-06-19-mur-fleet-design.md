@@ -44,7 +44,7 @@ Everything else is wiring.
 
 | ID | Decision |
 |----|----------|
-| **D0** | `team` = shareable **template/bundle** (definition); `fleet` = **running working group** (runtime instance). Best-practice "definition vs run" split (CrewAI Crew/kickoff, AutoGen GroupChat/run, LangGraph graph/thread). `mur fleet create --from-team <slug>` is an **optional** seed, not a prerequisite. Existing `mur team` (use/share/sync) is unchanged and orthogonal. |
+| **D0** | `team` and `fleet` are **orthogonal axes**. `team` (existing, mur server) = the user's **human organization / seats** — members, billing seats, and knowledge (patterns/skills) shared *across people*. `fleet` (new, local runtime) = a squad of **AI agents** working a shared goal. team answers "which people/seats"; fleet answers "which agents". `fleet` is a brand-new independent concept; **`team` is unchanged**. No `--from-team` seeding (team is not a bundle of agents). Phase 3: a fleet can be **shared within a team** (the existing seats/sharing boundary) and governed by commander. |
 | **D1** | Each iteration is planned by a **router agent named in `fleet.yaml`**; if omitted, the concierge `mur` is the router. Reuses `ParticipantRole::Router`. |
 | **D2** | Loop trigger: **Phase 1 manual `mur fleet run`** (one iteration); **Phase 2 cron** via existing schedule. **Never** always-on without guards. |
 | **D3** | Rule/skill scope uses **both** a `scope` field on `SkillManifest` (injection precedence) **and** `fleet.yaml` lists (portability — a fleet travels as one file + referenced skills). |
@@ -53,9 +53,14 @@ Everything else is wiring.
 
 ### Naming note
 
-`fleet_sync` (existing) is **device** entity-sync; it keeps its internal name but is surfaced to
-users as "device sync". The top-level `mur fleet` noun means the agent working-group only — we do
-not expose two "fleet" meanings to users.
+Three distinct concepts, no user-facing collision:
+- **team** = the user's human organization on mur server (seats/members + shared patterns/skills). Unchanged.
+- **fleet** = a squad of AI agents working a goal (this spec). The top-level `mur fleet` noun means this only.
+- **fleet_sync** (existing) = cross-**device** entity-sync; keeps its internal name, surfaced to users as
+  "device sync". We do not expose two "fleet" meanings to users.
+
+The "team (people) vs fleet (agents)" split is intuitive and is the natural Phase-3 boundary:
+fleets are personal/local now; later they can be shared within a team across its seats.
 
 ## Data model
 
@@ -68,8 +73,7 @@ display_name: Dev Team         # uppercase brand-safe label
 goal: "Keep the mur repo green: triage, fix, test, open PRs."
 router: mur                    # optional; omit → concierge `mur`
 members: [pm, qa, ghmanager]   # agent names (must resolve via canonicalize_agent_name)
-from_team: mur-devteam         # optional provenance: team template this was seeded from
-channel_id: "fleet:devteam"    # shared blackboard; auto-created on `create`
+channel_id: "fleet-devteam"    # shared blackboard; auto-created on `create` (filesystem-safe id, no colon)
 rules:  [fleet-pr-etiquette, repo-safety]      # skill names, scope=fleet
 skills: [triage-issue, run-nextest, open-pr]   # skill names, scope=fleet
 loop:                          # optional; Phase 2. Absent = manual single-run only.
@@ -113,21 +117,23 @@ project: Option<String>,      // selector when scope == Project (repo path or id
 | Cross-network governance (later) | commander bridge, signal server, schedule claim | `mur-daemon/src/signal_server.rs`; `mur-common/src/schedule_claim.rs` |
 | Command-shape template | `mur team` subcommands | `mur-core/src/cmd/team_cmd.rs` |
 
-- **Channels/tasks:** a fleet === one long-lived channel `fleet:<name>`. Members are `Participant`s
+- **Channels/tasks:** a fleet === one long-lived channel `fleet-<name>` (filesystem-safe id stored in `fleet.yaml`). Members are `Participant`s
   (router → `Router`, members → `Delegate`). Every loop step is an existing `EventKind`
   (`StateChange`, `Delegation`, `ToolCall/Result`, `Note`, `HitlRequest/Response`). **Zero new event types.**
 - **Daemon:** add `fleet_tick::scan_all_fleets(&mur_home)` next to `action_tick` (same 30s cadence,
   same spawn pattern). The tick owns all loop guards.
-- **mur server:** nothing required for Phase 1/2. Phase 3 reuses `fleet_sync` to replicate
-  `fleet.yaml` + scoped skills across devices.
-- **mur commander:** Phase 3 governance plane — fleet-wide budget ceilings + an un-overridable
+- **mur server / team:** nothing required for Phase 1/2 (fleets are personal/local). Phase 3: the
+  **team** (the user's org/seats) is the sharing boundary — a fleet can be shared within a team so all
+  seats get it, reusing the existing `team share/sync` rails and `fleet_sync` to replicate
+  `fleet.yaml` + scoped skills across the team's devices.
+- **mur commander:** Phase 3 governance plane — team/fleet-wide budget ceilings + an un-overridable
   kill switch (a commander-signed `System` event written into the fleet channel via the existing
   signal server) + signed audit aggregation. No new commander surface before Phase 3.
 
 ## CLI surface
 
 ```
-mur fleet create <name> [--members a,b,c] [--router <agent>] [--goal "..."] [--from-team <slug>]
+mur fleet create <name> [--members a,b,c] [--router <agent>] [--goal "..."]
 mur fleet list
 mur fleet show <name>
 mur fleet run  <name>                 # Phase 1: one iteration; Phase 2: loop with guards
