@@ -86,6 +86,7 @@ mod tests {
         };
         save_fleet(home, &f).unwrap();
         assert!(fleet_path(home, "dev").exists());
+        assert_eq!(load_fleet(home, "dev").unwrap(), f);
         assert_eq!(list_fleets(home).unwrap(), vec!["dev".to_string()]);
         assert!(load_fleet(home, "missing").is_err());
     }
