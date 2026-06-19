@@ -57,6 +57,44 @@ impl LoadedSkill {
     }
 }
 
+/// Active scope context for injection filtering. Set by the runtime (a fleet
+/// member's turn / project tooling) via env; absent → that scope's skills are
+/// NOT injected (fail-closed). Until the runtime sets these, only `User`/
+/// `Enterprise` skills inject — making `scope_visible` live without leaking
+/// fleet/project-tagged skills into unrelated sessions.
+#[derive(Debug, Default, Clone)]
+pub struct ActiveScope {
+    pub fleet: Option<String>,
+    pub project: Option<String>,
+}
+
+impl ActiveScope {
+    /// Read the active scope from `MUR_ACTIVE_FLEET` / `MUR_ACTIVE_PROJECT`
+    /// (empty/unset → None).
+    pub fn from_env() -> Self {
+        let nonempty = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
+        Self {
+            fleet: nonempty("MUR_ACTIVE_FLEET"),
+            project: nonempty("MUR_ACTIVE_PROJECT"),
+        }
+    }
+}
+
+/// Drop candidate skills not visible in the active scope. `User`/`Enterprise`
+/// always pass; `Fleet`/`Project` pass only when their selector matches `ctx`,
+/// so an unmatched fleet/project skill is excluded, never leaked (fail-closed).
+pub fn filter_by_scope(candidates: &mut Vec<LoadedSkill>, ctx: &ActiveScope) {
+    candidates.retain(|c| {
+        mur_common::skill::manifest::scope_visible(
+            c.manifest.scope,
+            c.manifest.fleet.as_deref(),
+            c.manifest.project.as_deref(),
+            ctx.fleet.as_deref(),
+            ctx.project.as_deref(),
+        )
+    });
+}
+
 /// Scan `skills_dir` (typically `<mur_home>/skills/`) for skill directories
 /// and return a `LoadedSkill` for each parseable `skill.yaml`.
 ///
@@ -338,6 +376,56 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"alpha".to_string()));
         assert!(names.contains(&"beta".to_string()));
+    }
+
+    #[test]
+    fn filter_by_scope_fail_closed() {
+        use std::fs;
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        let mur_home = tmp.path();
+        let write = |name: &str, extra: &str| {
+            let dir = skills_dir.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            let yaml = format!(
+                "name: {name}\nversion: 1.0.0\npublisher: human:test\n\
+                 description: d\ncategory: context\n{extra}\
+                 content:\n  abstract: a\n  context: c\n"
+            );
+            fs::write(dir.join("skill.yaml"), yaml).unwrap();
+        };
+        write("u", ""); // scope defaults to user
+        write("f", "scope: fleet\nfleet: devteam\n");
+        write("p", "scope: project\nproject: /repo\n");
+
+        let names = |ctx: &ActiveScope| {
+            let mut v = load_skill_candidates(&skills_dir, mur_home).unwrap();
+            filter_by_scope(&mut v, ctx);
+            let mut n: Vec<String> = v.iter().map(|s| s.name().to_string()).collect();
+            n.sort();
+            n
+        };
+        // no context → only user skill (fleet/project fail-closed)
+        assert_eq!(names(&ActiveScope::default()), vec!["u".to_string()]);
+        // matching fleet context → user + that fleet skill
+        let ctx = ActiveScope {
+            fleet: Some("devteam".into()),
+            project: None,
+        };
+        assert_eq!(names(&ctx), vec!["f".to_string(), "u".to_string()]);
+        // matching project context
+        let ctx = ActiveScope {
+            fleet: None,
+            project: Some("/repo".into()),
+        };
+        assert_eq!(names(&ctx), vec!["p".to_string(), "u".to_string()]);
+        // wrong fleet → fail-closed (only user)
+        let ctx = ActiveScope {
+            fleet: Some("other".into()),
+            project: None,
+        };
+        assert_eq!(names(&ctx), vec!["u".to_string()]);
     }
 
     #[test]

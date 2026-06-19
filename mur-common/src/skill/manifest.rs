@@ -33,7 +33,8 @@ impl SkillScope {
 /// Is a skill with this (scope, fleet, project) visible in the given active context?
 /// Layers combine: user/enterprise are always visible; fleet/project are visible
 /// only when their selector matches the active context. (specific wins; see spec §6)
-// ponytail: predicate ready; wire into inject/hook.rs when fleet runtime context lands (Phase 2)
+/// Wired into injection via `mur-core` `retrieve::skill_candidates::filter_by_scope`;
+/// the runtime supplying active fleet/project context (env) is the remaining piece.
 pub fn scope_visible(
     scope: SkillScope,
     skill_fleet: Option<&str>,
