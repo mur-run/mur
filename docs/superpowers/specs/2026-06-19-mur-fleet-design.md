@@ -77,7 +77,7 @@ channel_id: "fleet-devteam"    # shared blackboard; auto-created on `create` (fi
 rules:  [fleet-pr-etiquette, repo-safety]      # skill names, scope=fleet
 skills: [triage-issue, run-nextest, open-pr]   # skill names, scope=fleet
 loop:                          # optional; Phase 2. Absent = manual single-run only.
-  trigger: manual              # manual | cron:<expr>
+  trigger: manual              # manual | interval:<dur> (e.g. 30m) | cron:<5-field POSIX> (local tz)
   max_iterations: 8
   budget_usd: 5.0
   deadline: 2h                 # humantime duration
@@ -312,10 +312,13 @@ intentionally behind the design, so the doc never advertises a guard the runtime
 - **Both `run` and `--loop` pass `yes:false`** (fail-closed). Fleet fan-out steps carry no risk
   tier today and member runtimes gate their own tools, so the §"HITL" loop-level gate is not yet
   exercised by the fleet path; it becomes load-bearing once a router-emitted DAG carries risk steps.
-- **`scope_visible` is shipped but not wired into live injection** (no active fleet/project context
-  yet); a `scope: fleet` skill does not actually scope anything until that wiring lands (Phase 3).
-  Until then the predicate is dormant, not enforcing.
+- **`scope_visible` is shipped AND wired** into live injection on both paths: the CLI hook
+  (`ActiveScope::detect`) and the runtime injector (`inject_layer2`). `active_project` = cwd repo
+  root; `active_fleet` = the `fleet-<name>` channel id, **membership-verified** at the
+  `channel/delegate` handler (a crafted channel id can't make a non-member surface another fleet's
+  skills — fail-closed). Harvest stamps Project scope; `mur skill scope` authors fleet/project/user.
 - **Phase-3 priority order:** ✅ `$`-budget projection, ✅ kill-switch + budget-required auto-run
-  (the safety triad is complete), ✅ router-emits-DAG (with broadcast fallback) →
-  (1) scope-injection wiring + ActiveContext propagation, (2) structured `done_when`, then real
-  per-token accounting / harvest scope-stamping / `cron:` trigger / commander.
+  (the safety triad is complete), ✅ router-emits-DAG (with broadcast fallback), ✅ scope-injection
+  wiring (user/project/fleet end-to-end), ✅ `cron:` trigger (local tz, baseline-stamped) →
+  remaining: (1) structured `done_when`, (2) real per-token accounting, (3) team-shared fleets +
+  commander.
