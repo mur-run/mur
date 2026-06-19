@@ -436,6 +436,9 @@ pub enum FleetAction {
         /// Wall-clock deadline in loop mode, e.g. 30s/5m/2h (overrides fleet.yaml)
         #[arg(long)]
         deadline: Option<String>,
+        /// Projected USD budget for the loop (overrides fleet.yaml `loop.budget_usd`)
+        #[arg(long)]
+        budget_usd: Option<f64>,
     },
 }
 

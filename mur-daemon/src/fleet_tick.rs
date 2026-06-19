@@ -111,9 +111,9 @@ pub fn tick(mur_home: &Path) {
                 }
             };
             tracing::info!(fleet = %fleet, "fleet_tick: auto-running loop");
-            // None/None → use the fleet.yaml loop config (max_iterations/deadline).
+            // None args → use the fleet.yaml loop config (max_iterations/deadline/budget).
             if let Err(e) = rt.block_on(mur_core::cmd::fleet::loop_run::cmd_fleet_run_loop(
-                &home, &fleet, None, None,
+                &home, &fleet, None, None, None,
             )) {
                 tracing::error!(error = %e, fleet = %fleet, "fleet_tick: loop failed");
             }
