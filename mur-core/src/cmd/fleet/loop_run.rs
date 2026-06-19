@@ -143,7 +143,9 @@ pub async fn cmd_fleet_run_loop(
         let opts = crate::executor::dag::DagExecOptions {
             yes: true,
             channel_id: Some(fleet.channel_id.clone()),
-            run_id: format!("loop-{}-{}", name, iteration),
+            // uuid nonce so concurrent `--loop` runs don't collide on the
+            // channel's idempotency-key dedup (the iteration stays for readability).
+            run_id: format!("loop-{}-{}-{}", name, uuid::Uuid::now_v7(), iteration),
             ..Default::default()
         };
         let _ = crate::executor::dag::execute_dag(mur_home, &format!("fleet:{name}"), &proc, &opts)
@@ -318,5 +320,10 @@ mod tests {
         assert_eq!(effective_max_iterations(None, &f), 3);
         // CLI flag wins
         assert_eq!(effective_max_iterations(Some(5), &f), 5);
+        // a 0 in fleet.yaml is ignored → default
+        if let Some(l) = f.loop_cfg.as_mut() {
+            l.max_iterations = 0;
+        }
+        assert_eq!(effective_max_iterations(None, &f), DEFAULT_MAX_ITERATIONS);
     }
 }
