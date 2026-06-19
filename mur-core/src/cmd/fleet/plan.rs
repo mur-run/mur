@@ -71,6 +71,14 @@ pub fn parse_router_plan(text: &str, members: &[String]) -> Option<Procedure> {
             ..Default::default()
         });
     }
+    // Reject duplicate step ids: build_dag's id→index map would silently
+    // overwrite, producing wrong execution rather than a clean fallback.
+    let mut seen: HashSet<&str> = HashSet::new();
+    for s in &steps {
+        if !seen.insert(s.id.as_deref().unwrap_or("")) {
+            return None;
+        }
+    }
     // Reuse the executor's validator: resolvable deps + acyclic.
     crate::executor::dag::validate_steps(&steps).ok()?;
     Some(Procedure {
@@ -179,5 +187,14 @@ mod tests {
         // depends_on an id that doesn't exist
         let bad = r#"{"steps":[{"id":"a","member":"pm","task":"x","depends_on":["ghost"]}]}"#;
         assert!(parse_router_plan(bad, &members()).is_none());
+    }
+
+    #[test]
+    fn falls_back_on_duplicate_ids() {
+        let txt = r#"{"steps":[
+            {"id":"s1","member":"pm","task":"a"},
+            {"id":"s1","member":"qa","task":"b"}
+        ]}"#;
+        assert!(parse_router_plan(txt, &members()).is_none());
     }
 }
