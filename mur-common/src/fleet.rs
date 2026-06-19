@@ -60,6 +60,20 @@ pub fn valid_fleet_name(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
+/// Channel-id prefix for a fleet's shared channel (`fleet-<name>`).
+pub const CHANNEL_PREFIX: &str = "fleet-";
+
+/// Derive the fleet name from a channel id of the form `fleet-<name>`.
+///
+/// Returns `None` for non-fleet channels, and also for a `fleet-`-prefixed id
+/// whose remainder isn't a valid fleet name — so a crafted channel id can't
+/// smuggle a path-traversal segment or otherwise masquerade as a fleet to pull
+/// in fleet-scoped skills.
+pub fn fleet_name_from_channel_id(channel_id: &str) -> Option<&str> {
+    let name = channel_id.strip_prefix(CHANNEL_PREFIX)?;
+    valid_fleet_name(name).then_some(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,6 +93,25 @@ mod tests {
         assert!(!valid_fleet_name("Dev")); // uppercase
         assert!(!valid_fleet_name("a b")); // space
         assert!(!valid_fleet_name(".hidden")); // dot
+    }
+
+    #[test]
+    fn fleet_name_from_channel_id_extracts_and_validates() {
+        // valid fleet channels
+        assert_eq!(fleet_name_from_channel_id("fleet-dev"), Some("dev"));
+        assert_eq!(
+            fleet_name_from_channel_id("fleet-my-squad"),
+            Some("my-squad")
+        );
+        assert_eq!(fleet_name_from_channel_id("fleet-ab12"), Some("ab12"));
+        // not a fleet channel
+        assert_eq!(fleet_name_from_channel_id("dev"), None);
+        assert_eq!(fleet_name_from_channel_id("agent:foo:uuid"), None);
+        // prefixed but invalid remainder → rejected (no masquerading)
+        assert_eq!(fleet_name_from_channel_id("fleet-"), None); // empty
+        assert_eq!(fleet_name_from_channel_id("fleet-../etc"), None); // traversal
+        assert_eq!(fleet_name_from_channel_id("fleet-a/b"), None); // slash
+        assert_eq!(fleet_name_from_channel_id("fleet-Dev"), None); // uppercase
     }
 
     #[test]

@@ -14,6 +14,29 @@ use serde_json::Value;
 use crate::protocol::a2a_server::{HandlerError, MethodHandler, RequestContext};
 use crate::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 
+/// Derive the active fleet for a delegated turn from the (caller-supplied)
+/// `channel_id`, **verified against the local fleet record**.
+///
+/// The channel id arrives in untrusted JSON-RPC params, so a string match on
+/// `fleet-<name>` is not enough: a peer could dial with `channel_id="fleet-X"`
+/// to make a non-member surface fleet-X-scoped skills (a confused deputy).
+/// We therefore stamp `active_fleet` only when this agent is actually a member
+/// (or the router) of an existing local fleet `<name>` — making `active_fleet`
+/// a verified-local fact, like `active_project` (the cwd repo root). Any miss
+/// (non-fleet channel, no such fleet on disk, not a member) yields `None`
+/// (fail-closed), so fleet-scoped skills stay hidden outside their fleet.
+fn verified_active_fleet(mur_home: &Path, agent: &str, channel_id: &str) -> Option<String> {
+    let name = mur_common::fleet::fleet_name_from_channel_id(channel_id)?;
+    let path = mur_home.join("fleets").join(name).join("fleet.yaml");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let fleet: mur_common::fleet::Fleet = serde_yaml_ng::from_str(&raw).ok()?;
+    // Members and router are stored canonicalized (lowercase on-disk names), as
+    // is `agent`, so an exact match is correct here.
+    let is_member =
+        fleet.members.iter().any(|m| m == agent) || fleet.router_or_concierge() == agent;
+    is_member.then(|| name.to_string())
+}
+
 /// Append the specialist's reply to `channel_id` as `Agent{self}`, signed by the
 /// specialist's identity (v3d-2 peer-writes-own).
 #[allow(clippy::too_many_arguments)]
@@ -125,6 +148,11 @@ impl MethodHandler for ChannelDelegateHandler {
             input: message,
             context_task_id,
             task_id,
+            // A fleet's shared channel is `fleet-<name>`; derive (and verify
+            // membership of) the active fleet so the runtime injects only this
+            // agent's own fleet's fleet-scoped skills. Untrusted/non-member/
+            // non-fleet channel ids yield None (fail-closed).
+            active_fleet: verified_active_fleet(&self.mur_home, &self.agent, &channel_id),
         };
 
         // Run the turn (non-streaming path; v3d-2 does not need per-delta
@@ -199,5 +227,57 @@ mod tests {
             &id.verifying_key_bytes(),
             true
         ));
+    }
+
+    fn write_fleet(home: &Path, name: &str, members: &[&str], router: Option<&str>) {
+        let dir = home.join("fleets").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut yaml = format!("name: {name}\nchannel_id: fleet-{name}\nmembers:\n");
+        for m in members {
+            yaml.push_str(&format!("  - {m}\n"));
+        }
+        if let Some(r) = router {
+            yaml.push_str(&format!("router: {r}\n"));
+        }
+        std::fs::write(dir.join("fleet.yaml"), yaml).unwrap();
+    }
+
+    #[test]
+    fn verified_active_fleet_requires_membership() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        write_fleet(home, "dev", &["qa", "pm"], None);
+
+        // member → Some
+        assert_eq!(
+            verified_active_fleet(home, "qa", "fleet-dev").as_deref(),
+            Some("dev")
+        );
+        // non-member → None (confused-deputy defense): a crafted channel id for a
+        // real fleet must not surface that fleet's skills to a non-member.
+        assert_eq!(verified_active_fleet(home, "eve", "fleet-dev"), None);
+        // non-fleet / malformed channel id → None
+        assert_eq!(verified_active_fleet(home, "qa", "agent:foo:uuid"), None);
+        assert_eq!(verified_active_fleet(home, "qa", "fleet-../etc"), None);
+        // fleet not on disk → None (fail-closed)
+        assert_eq!(verified_active_fleet(home, "qa", "fleet-ghost"), None);
+    }
+
+    #[test]
+    fn verified_active_fleet_accepts_router() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        // explicit router that is not in the members list
+        write_fleet(home, "ops", &["qa"], Some("lead"));
+        assert_eq!(
+            verified_active_fleet(home, "lead", "fleet-ops").as_deref(),
+            Some("ops")
+        );
+        // default router (concierge "mur") when none is set
+        write_fleet(home, "sq", &["qa"], None);
+        assert_eq!(
+            verified_active_fleet(home, "mur", "fleet-sq").as_deref(),
+            Some("sq")
+        );
     }
 }

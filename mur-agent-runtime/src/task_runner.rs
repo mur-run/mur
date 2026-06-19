@@ -26,6 +26,11 @@ pub struct TaskSpec {
     /// client can cancel by an id it already holds; when `None` the runner
     /// generates one (back-compatible).
     pub task_id: Option<String>,
+    /// Active fleet name for this turn, derived from a `fleet-<name>` channel id
+    /// by the `channel/delegate` handler. Drives fleet-scoped skill injection;
+    /// `None` for non-fleet turns, so fleet-scoped skills stay hidden outside
+    /// their fleet (fail-closed).
+    pub active_fleet: Option<String>,
 }
 
 #[derive(Debug)]
@@ -265,7 +270,11 @@ impl TaskRunner {
         self
     }
 
-    fn assemble_system_prompt(&self, user_prompt: &str) -> (String, Vec<String>) {
+    fn assemble_system_prompt(
+        &self,
+        user_prompt: &str,
+        active_fleet: Option<&str>,
+    ) -> (String, Vec<String>) {
         let base = self.system_prompt.clone().unwrap_or_default();
         let Some(skills) = &self.skills else {
             return (base, vec![]);
@@ -307,16 +316,16 @@ impl TaskRunner {
             }
         };
         // Scope filter: project from the member's cwd repo root (shared detection
-        // with the CLI hook). active_fleet is None for now — fleet-scoped skills
-        // have no creation path yet, and threading a turn's fleet through the
-        // runtime is a deferred follow-on.
+        // with the CLI hook); fleet from the turn's `fleet-<name>` channel id,
+        // threaded in by the `channel/delegate` handler. Fleet- and project-scoped
+        // skills only surface in their matching context; user/enterprise always.
         let active_project = mur_common::project::active_project_id();
         let injection = inject_layer2(
             &skills.loaded,
             &self.skills_cfg,
             ctx_fill,
             &recently,
-            None,
+            active_fleet,
             active_project.as_deref(),
         );
 
@@ -427,15 +436,21 @@ impl TaskRunner {
                 RunnerBackend::Llm(client) => {
                     if self.pending_approvals.is_some() {
                         let system = self
-                            .prepare_system_prompt(&spec.input)
+                            .prepare_system_prompt(&spec.input, spec.active_fleet.as_deref())
                             .await
                             .unwrap_or_default();
                         self.run_agentic_loop(&id, client.as_ref(), system, &spec.input, sink)
                             .await
                     } else {
-                        self.run_llm(&id, client.as_ref(), &spec.input, sink)
-                            .await
-                            .map(|m| (m, None))
+                        self.run_llm(
+                            &id,
+                            client.as_ref(),
+                            &spec.input,
+                            spec.active_fleet.as_deref(),
+                            sink,
+                        )
+                        .await
+                        .map(|m| (m, None))
                     }
                 }
             }
@@ -611,12 +626,13 @@ impl TaskRunner {
         task_id: &str,
         client: &dyn LlmClient,
         input: &Message,
+        active_fleet: Option<&str>,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
     ) -> Result<Message, TaskError> {
         let prompt = text_of(input);
         let mut messages: Vec<RichMessage> = Vec::new();
 
-        let (system, fired) = self.assemble_system_prompt(&prompt);
+        let (system, fired) = self.assemble_system_prompt(&prompt, active_fleet);
 
         // Apply hook chain on_prompt_submit if wired.
         let system = if let (Some(chain), Some(ctx), Some(cancel)) =
@@ -731,9 +747,13 @@ impl TaskRunner {
         &self.tools
     }
 
-    async fn prepare_system_prompt(&self, input: &Message) -> Result<String, TaskError> {
+    async fn prepare_system_prompt(
+        &self,
+        input: &Message,
+        active_fleet: Option<&str>,
+    ) -> Result<String, TaskError> {
         let prompt = text_of(input);
-        let (system, _fired) = self.assemble_system_prompt(&prompt);
+        let (system, _fired) = self.assemble_system_prompt(&prompt, active_fleet);
         if let (Some(chain), Some(ctx), Some(cancel)) =
             (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
         {
@@ -1272,6 +1292,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: None,
+            active_fleet: None,
         }
     }
 
@@ -1318,6 +1339,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: Some("task-fixed-1".to_string()),
+            active_fleet: None,
         };
         assert_eq!(spec.task_id.as_deref(), Some("task-fixed-1"));
     }
@@ -1332,6 +1354,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: Some("task-supplied-9".to_string()),
+            active_fleet: None,
         };
         let outcome = runner.run_sync(spec).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -1354,6 +1377,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: Some("task-cancelme".to_string()),
+            active_fleet: None,
         };
         let r2 = runner.clone();
         let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx).await });
@@ -1564,6 +1588,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: None,
+            active_fleet: None,
         };
         let outcome = runner.run_sync(spec).await;
         assert!(matches!(outcome, TaskOutcome::Completed(_)));
@@ -1608,6 +1633,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: None,
+            active_fleet: None,
         };
         let outcome = runner.run_sync(spec).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -1747,6 +1773,7 @@ mod tests {
             },
             context_task_id: None,
             task_id: None,
+            active_fleet: None,
         }
     }
 

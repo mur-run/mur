@@ -13,6 +13,7 @@ async fn sync_task_reaches_completed_state() {
         },
         context_task_id: None,
         task_id: None,
+        active_fleet: None,
     };
     let outcome = runner.run_sync(spec).await;
     match outcome {
@@ -36,6 +37,7 @@ async fn cancellation_transitions_to_cancelled() {
         },
         context_task_id: None,
         task_id: None,
+        active_fleet: None,
     };
     let handle = runner.start_async(spec);
     let task_id = handle.task_id().to_string();

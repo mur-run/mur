@@ -138,6 +138,7 @@ async fn run_idle_loop(scheduler: IdleScheduler, cancel: CancellationToken) {
                         input,
                         context_task_id: None,
                         task_id: None,
+                        active_fleet: None,
                     })
                     .await;
 
