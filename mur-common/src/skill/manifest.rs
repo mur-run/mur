@@ -6,6 +6,28 @@ use super::types::{Category, ContentMode, HostId, Priority, Provenance, TriggerK
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Visibility scope for a skill — determines which layers can see and use it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillScope {
+    /// Visible to the current user only (default).
+    #[default]
+    User,
+    /// Visible across the current project (if active_project is set).
+    Project,
+    /// Visible across the current fleet (if active_fleet is set).
+    Fleet,
+    /// Visible across the entire enterprise (always visible if scoping is enabled).
+    Enterprise,
+}
+
+impl SkillScope {
+    /// Returns `true` if this scope is `User`.
+    pub fn is_user(&self) -> bool {
+        matches!(self, SkillScope::User)
+    }
+}
+
 /// Top-level skill — wraps the manifest with security metadata that lives
 /// alongside (but separate from) the publisher-authored fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +62,19 @@ pub struct SkillManifest {
     pub publisher: String,
     pub description: String,
     pub category: Category,
+
+    /// Visibility scope of this skill (user/project/fleet/enterprise).
+    /// Defaults to `User` for back-compat with unsigned skills.
+    #[serde(default)]
+    pub scope: SkillScope,
+
+    /// Fleet identifier (required if scope is Fleet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet: Option<String>,
+
+    /// Project path (required if scope is Project).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 
     /// Origin of this skill. Defaults to `Human` so every existing manifest
     /// (which has no `provenance:` key) parses as human-authored.
@@ -535,5 +570,52 @@ evolution_log:
             pattern: None,
         };
         assert_eq!(t.exact_keyword(), None);
+    }
+
+    #[test]
+    fn skill_scope_serde_and_default() {
+        // Default is User.
+        assert_eq!(SkillScope::default(), SkillScope::User);
+        assert!(SkillScope::User.is_user());
+        assert!(!SkillScope::Project.is_user());
+
+        // Serde: lowercase in YAML.
+        let yaml = r#"
+name: scoped-skill
+version: 0.1.0
+publisher: human:test
+description: test
+category: workflow
+scope: fleet
+fleet: prod
+project: null
+content:
+  abstract: test
+"#;
+        let m: SkillManifest = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(m.scope, SkillScope::Fleet);
+        assert_eq!(m.fleet, Some("prod".into()));
+        assert_eq!(m.project, None);
+
+        // Round-trip preserves scope.
+        let back = serde_yaml_ng::to_string(&m).unwrap();
+        let m2: SkillManifest = serde_yaml_ng::from_str(&back).unwrap();
+        assert_eq!(m2.scope, SkillScope::Fleet);
+        assert_eq!(m2.fleet, Some("prod".into()));
+
+        // Missing scope defaults to User.
+        let yaml_no_scope = r#"
+name: default-scope
+version: 0.1.0
+publisher: human:test
+description: test
+category: workflow
+content:
+  abstract: test
+"#;
+        let m3: SkillManifest = serde_yaml_ng::from_str(yaml_no_scope).unwrap();
+        assert_eq!(m3.scope, SkillScope::User);
+        assert!(m3.fleet.is_none());
+        assert!(m3.project.is_none());
     }
 }
