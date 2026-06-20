@@ -97,6 +97,11 @@ pub async fn post_directive(
     }
 
     // Was this nonce already persisted? (don't double-write the receipt audit.)
+    // ponytail: this load_events → append_event → audit sequence makes the receipt
+    // row exactly-once for SEQUENTIAL retries (what the single-node engine does) but
+    // at-least-once under two truly-concurrent identical POSTs. A duplicate row is
+    // benign — the engine's ComplianceChecker matches by nonce and the content_sha256
+    // is identical. Tighten with a per-channel lock only if multiple issuers ever race.
     let already = idem.as_deref().is_some_and(|k| {
         store
             .load_events(&channel_id)
