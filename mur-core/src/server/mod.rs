@@ -282,6 +282,10 @@ pub fn build_router_with_auth(state: AppState, auth_token: Option<Arc<str>>) -> 
         .route(
             "/api/v1/governance/directive",
             post(governance::post_directive),
+        )
+        .route(
+            "/api/v1/governance/audit/{fleet}",
+            get(governance::get_audit),
         );
 
     // When a token is configured (non-loopback bind), require it on /api/*.

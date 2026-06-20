@@ -147,6 +147,40 @@ pub async fn post_directive(
     Ok(Json(json!({ "accepted": true, "seq": ev.seq })))
 }
 
+/// Query parameters for `GET /api/v1/governance/audit/{fleet}`.
+#[derive(Deserialize)]
+pub struct AuditQuery {
+    /// If set, skip all entries up to and including the entry with this nonce,
+    /// returning only entries that came after it.
+    pub since_nonce: Option<String>,
+}
+
+/// Return the governance audit log for a fleet.
+///
+/// The ComplianceChecker on the engine side reads this to confirm the node
+/// received and persisted each directive.
+pub async fn get_audit(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(fleet): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<AuditQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    use crate::conversations::audit::AuditAction;
+    let all = crate::conversations::audit::read_entries(state.mur_home().to_str())
+        .map_err(AppError::Internal)?;
+    let mut entries: Vec<_> = all
+        .into_iter()
+        .filter(|e| matches!(&e.action, AuditAction::Governance { fleet: f, .. } if *f == fleet))
+        .collect();
+    if let Some(since) = q.since_nonce.as_deref()
+        && let Some(pos) = entries.iter().position(
+            |e| matches!(&e.action, AuditAction::Governance { nonce, .. } if nonce == since),
+        )
+    {
+        entries.drain(..=pos);
+    }
+    Ok(Json(json!({ "entries": entries })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +363,113 @@ mod tests {
             })
             .count();
         assert_eq!(received, 1); // not double-written
+    }
+
+    // Helper: issue a GET to the audit endpoint and return (StatusCode, JSON body).
+    async fn get_audit(
+        state: Arc<AppState>,
+        fleet: &str,
+        since_nonce: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let uri = match since_nonce {
+            Some(n) => format!("/api/v1/governance/audit/{fleet}?since_nonce={n}"),
+            None => format!("/api/v1/governance/audit/{fleet}"),
+        };
+        let app = crate::server::build_router((*state).clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn get_audit_returns_received_row_with_matching_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (state, id) = setup(&tmp);
+        // POST a directive so an audit row is written.
+        let body = directive_body(&id, "dev", "kill", None);
+        let (post_status, _) = post(state.clone(), body).await;
+        assert_eq!(post_status, StatusCode::OK);
+
+        // GET the audit log for fleet "dev".
+        let (status, json) = get_audit(state, "dev", None).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let entries = json["entries"].as_array().expect("entries array");
+        assert_eq!(entries.len(), 1, "expected exactly one audit row");
+
+        let row = &entries[0];
+        // The content_sha256 must be non-empty — proves the directive was hashed.
+        let sha = row["content_sha256"].as_str().unwrap_or("");
+        assert!(!sha.is_empty(), "content_sha256 must be present");
+    }
+
+    #[tokio::test]
+    async fn get_audit_since_nonce_excludes_earlier_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (state, id) = setup(&tmp);
+
+        // POST the same directive twice (idempotent — but we need two distinct
+        // nonces, so build two bodies manually).
+        let nonce1 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let nonce2 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+
+        // Build a directive with a custom nonce by overriding the helper.
+        let make_body = |nonce: &str| {
+            let channel_id = "fleet-dev".to_string();
+            let payload = serde_json::json!({ COMMANDER_DIRECTIVE_KEY: {
+                "kind": "budget_ceiling", "fleet": "dev", "budget_usd": 5.0,
+                "nonce": nonce, "issued_at_ms": 1_000_000u64,
+            }});
+            let actor = ChannelActor::System;
+            let sig = mur_channel::sign::sign_event(
+                &id,
+                &channel_id,
+                &actor,
+                EventKind::Note,
+                &payload,
+                Some(nonce),
+            );
+            serde_json::json!({ "event": {
+                "seq": 0,
+                "ts": chrono::Utc::now().to_rfc3339(),
+                "actor": serde_json::to_value(&actor).unwrap(),
+                "kind": serde_json::to_value(EventKind::Note).unwrap(),
+                "payload": payload,
+                "idempotency_key": nonce,
+                "sig": sig,
+                "key_version": serde_json::Value::Null,
+            }})
+        };
+
+        let (s1, _) = post(state.clone(), make_body(nonce1)).await;
+        assert_eq!(s1, StatusCode::OK);
+        let (s2, _) = post(state.clone(), make_body(nonce2)).await;
+        assert_eq!(s2, StatusCode::OK);
+
+        // Without since_nonce we get both rows.
+        let (_, json_all) = get_audit(state.clone(), "dev", None).await;
+        assert_eq!(json_all["entries"].as_array().unwrap().len(), 2);
+
+        // With since_nonce=nonce1 we get only nonce2.
+        let (status, json_since) = get_audit(state, "dev", Some(nonce1)).await;
+        assert_eq!(status, StatusCode::OK);
+        let after = json_since["entries"].as_array().unwrap();
+        assert_eq!(after.len(), 1, "since_nonce should exclude the first entry");
+        // The remaining entry must be for nonce2.
+        // AuditAction is tagged: { "kind": "governance", "nonce": "...", ... }
+        let action = &after[0]["action"];
+        let nonce_val = action["nonce"].as_str().unwrap_or("");
+        assert_eq!(nonce_val, nonce2);
     }
 }
