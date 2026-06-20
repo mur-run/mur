@@ -63,8 +63,12 @@ export function PetApp() {
         paths,
       })
         .then((res) => {
+          const base = res.reply || t("pet.dropOpened");
+          const skipped = res.skipped?.length
+            ? ` ${t("pet.dropSkipped", { count: res.skipped.length })}`
+            : "";
           setBubble({
-            text: res.reply || t("pet.dropOpened"),
+            text: base + skipped,
             dwell_ms: res.reply ? 12000 : 6000,
             ack_required: false,
           });
@@ -295,6 +299,14 @@ function Bubble({ text, dwellMs, onClose }: BubbleProps) {
   const [remaining, setRemaining] = useState(dwellMs);
   const hoveredRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // The same <Bubble> instance is reused when the message changes (e.g. the
+  // file-drop "reading…" 60s bubble → the 12s reply). useState only seeds
+  // `remaining` once, so reset it whenever the message/dwell changes — else the
+  // countdown (and the progress bar) keep the stale value and over-run.
+  useEffect(() => {
+    setRemaining(dwellMs);
+  }, [dwellMs, text]);
 
   useEffect(() => {
     intervalRef.current = setInterval(() => {
