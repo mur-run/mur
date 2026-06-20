@@ -80,7 +80,7 @@ fn validate(home: &Path, names: &[String]) -> Result<Vec<String>> {
     }
     if !stopped.is_empty() {
         bail!(
-            "agent(s) not running: {} — start them first, e.g. `mur agent run {}`",
+            "agent(s) not running: {} — start them first, e.g. `mur agent install-service {}`",
             stopped.join(", "),
             stopped[0]
         );
@@ -887,7 +887,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("a2") && err.contains("mur agent run"),
+            err.contains("a2") && err.contains("mur agent install-service"),
             "got: {err}"
         );
     }
