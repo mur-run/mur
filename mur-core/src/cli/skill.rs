@@ -70,6 +70,9 @@ pub enum SkillAction {
         /// Scope to the current git repo
         #[arg(long)]
         project: bool,
+        /// Scope to a MUR Server team (by id)
+        #[arg(long)]
+        team: Option<String>,
         /// Reset to user scope (global)
         #[arg(long)]
         user: bool,

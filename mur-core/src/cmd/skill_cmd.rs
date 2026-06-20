@@ -172,19 +172,21 @@ pub(crate) fn set_manifest_scope(
     m: &mut mur_common::skill::manifest::SkillManifest,
     fleet: Option<&str>,
     project: Option<&str>,
+    team: Option<&str>,
     user: bool,
 ) -> Result<()> {
     use mur_common::skill::manifest::SkillScope;
-    let n = fleet.is_some() as u8 + project.is_some() as u8 + user as u8;
+    let n = fleet.is_some() as u8 + project.is_some() as u8 + team.is_some() as u8 + user as u8;
     if n != 1 {
         return Err(anyhow!(
-            "specify exactly one of --fleet <name>, --project, or --user"
+            "specify exactly one of --fleet <name>, --project, --team <id>, or --user"
         ));
     }
     if user {
         m.scope = SkillScope::User;
         m.fleet = None;
         m.project = None;
+        m.team = None;
     } else if let Some(f) = fleet {
         if !mur_common::fleet::valid_fleet_name(f) {
             return Err(anyhow!(
@@ -194,18 +196,28 @@ pub(crate) fn set_manifest_scope(
         m.scope = SkillScope::Fleet;
         m.fleet = Some(f.to_string());
         m.project = None;
+        m.team = None;
     } else if let Some(p) = project {
         m.scope = SkillScope::Project;
         m.project = Some(p.to_string());
         m.fleet = None;
+        m.team = None;
+    } else if let Some(t) = team {
+        if t.trim().is_empty() {
+            return Err(anyhow!("--team <id> cannot be empty"));
+        }
+        m.scope = SkillScope::Team;
+        m.team = Some(t.to_string());
+        m.fleet = None;
+        m.project = None;
     }
     Ok(())
 }
 
 /// `mur skill scope <name>` — set a skill's visibility scope so the scope-aware
 /// injector (CLI + runtime) only surfaces it in the matching context. `--project`
-/// scopes to the current git repo; `--fleet <name>` to a fleet; `--user` resets.
-pub fn cmd_scope(name: &str, fleet: Option<String>, project: bool, user: bool) -> Result<()> {
+/// scopes to the current git repo; `--fleet <name>` to a fleet; `--team <id>` to a team; `--user` resets.
+pub fn cmd_scope(name: &str, fleet: Option<String>, project: bool, team: Option<String>, user: bool) -> Result<()> {
     let home = resolve_mur_home()?;
     let dir = local::installed_path(&home, name);
     let mut m =
@@ -219,7 +231,7 @@ pub fn cmd_scope(name: &str, fleet: Option<String>, project: bool, user: bool) -
     } else {
         None
     };
-    set_manifest_scope(&mut m, fleet.as_deref(), proj_id.as_deref(), user)?;
+    set_manifest_scope(&mut m, fleet.as_deref(), proj_id.as_deref(), team.as_deref(), user)?;
     m.updated_at = chrono::Utc::now();
     mur_common::skill::store::write_to_dir(&dir, &m)
         .map_err(|e| anyhow!("write skill '{name}': {e}"))?;
@@ -728,23 +740,40 @@ mod tests {
                     category: context\ncontent:\n  abstract: a\n  context: c\n";
         let mut m = mur_common::skill::parser::parse_canonical(yaml).unwrap();
         // fleet
-        set_manifest_scope(&mut m, Some("dev"), None, false).unwrap();
+        set_manifest_scope(&mut m, Some("dev"), None, None, false).unwrap();
         assert_eq!(m.scope, SkillScope::Fleet);
         assert_eq!(m.fleet.as_deref(), Some("dev"));
         assert!(m.project.is_none());
         // project (clears fleet)
-        set_manifest_scope(&mut m, None, Some("/repo"), false).unwrap();
+        set_manifest_scope(&mut m, None, Some("/repo"), None, false).unwrap();
         assert_eq!(m.scope, SkillScope::Project);
         assert_eq!(m.project.as_deref(), Some("/repo"));
         assert!(m.fleet.is_none());
         // user reset (clears both)
-        set_manifest_scope(&mut m, None, None, true).unwrap();
+        set_manifest_scope(&mut m, None, None, None, true).unwrap();
         assert_eq!(m.scope, SkillScope::User);
         assert!(m.fleet.is_none() && m.project.is_none());
         // exactly-one enforcement + invalid fleet name → errors
-        assert!(set_manifest_scope(&mut m, None, None, false).is_err());
-        assert!(set_manifest_scope(&mut m, Some("x"), None, true).is_err());
-        assert!(set_manifest_scope(&mut m, Some("Bad Name"), None, false).is_err());
+        assert!(set_manifest_scope(&mut m, None, None, None, false).is_err());
+        assert!(set_manifest_scope(&mut m, Some("x"), None, None, true).is_err());
+        assert!(set_manifest_scope(&mut m, Some("Bad Name"), None, None, false).is_err());
+    }
+
+    #[test]
+    fn set_manifest_scope_team() {
+        use mur_common::skill::manifest::SkillScope;
+        let yaml = "name: s\nversion: 1.0.0\npublisher: human:t\ndescription: d\n\
+                    category: context\ncontent:\n  abstract: a\n  context: c\n";
+        let mut m = mur_common::skill::parser::parse_canonical(yaml).unwrap();
+        set_manifest_scope(&mut m, None, None, Some("org-1"), false).unwrap();
+        assert_eq!(m.scope, SkillScope::Team);
+        assert_eq!(m.team.as_deref(), Some("org-1"));
+        assert!(m.fleet.is_none());
+        assert!(m.project.is_none());
+        // empty team-id must error
+        assert!(set_manifest_scope(&mut m, None, None, Some(""), false).is_err());
+        // team + user together must error
+        assert!(set_manifest_scope(&mut m, None, None, Some("org-1"), true).is_err());
     }
 
     const VALID: &str = r#"
