@@ -10,9 +10,9 @@ use crate::cli::{
     AgentAction, AgentEvalAction, AgentHooksAction, AgentMcpAction, AgentPendingAction,
     AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction, AgentSecretAction,
     AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction, ChannelAction, ChatAction,
-    Cli, Commands, ConversationsAction, DaemonAction, DeployAction, DraftsAction, EvalAction,
-    ExchangeAction, FleetAction, HookEvent, InternalsAction, MurmurdAction, ProjectAction,
-    ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
+    Cli, CommanderAction, Commands, ConversationsAction, DaemonAction, DeployAction, DraftsAction,
+    EvalAction, ExchangeAction, FleetAction, HookEvent, InternalsAction, MurmurdAction,
+    ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction, VoiceAction,
     WorkflowAction,
 };
 use crate::store::config as store_config;
@@ -328,6 +328,31 @@ pub async fn run(cli: Cli) -> Result<()> {
                         yes,
                     },
                 )?,
+            }
+        }
+        Commands::Commander { action } => {
+            let mur_home = crate::paths::mur_root(None);
+            match action {
+                CommanderAction::Pin { pubkey, force } => {
+                    cmd::commander::cmd_commander_pin(&mur_home, &pubkey, force)?
+                }
+                CommanderAction::Status => cmd::commander::cmd_commander_status(&mur_home)?,
+                CommanderAction::Directive {
+                    fleet,
+                    kind,
+                    budget_usd,
+                } => {
+                    // CLI uses "budget-ceiling"; map to the internal "budget_ceiling".
+                    let k = if kind == "budget-ceiling" {
+                        "budget_ceiling"
+                    } else {
+                        &kind
+                    };
+                    let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                    cmd::commander::cmd_commander_directive(
+                        &mur_home, &fleet, k, budget_usd, now_ms,
+                    )?
+                }
             }
         }
         Commands::Team { action } => match action {

@@ -406,6 +406,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: FleetAction,
     },
+    /// Commander governance: pin the operator key + issue/inspect directives
+    Commander {
+        #[command(subcommand)]
+        action: CommanderAction,
+    },
 }
 
 #[cfg(test)]

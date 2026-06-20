@@ -476,6 +476,26 @@ pub enum FleetAction {
     },
 }
 
+#[derive(clap::Subcommand)]
+pub enum CommanderAction {
+    /// Pin the commander public key (multibase). Refuses overwrite without --force.
+    Pin {
+        pubkey: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show whether a commander key is pinned.
+    Status,
+    /// Issue a signed directive into a fleet channel (v1 local delivery).
+    Directive {
+        fleet: String,
+        /// kill | resume | budget-ceiling
+        kind: String,
+        #[arg(long)]
+        budget_usd: Option<f64>,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum TeamAction {
     /// List your teams (or patterns in a specific team)

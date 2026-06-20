@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use mur_common::channel::{ChannelActor, ChannelEvent};
 use mur_common::fleet::Fleet;
+use sha2::{Digest, Sha256};
 
 use super::run::build_fleet_procedure;
 use super::store;
@@ -45,6 +46,8 @@ pub enum LoopStop {
     Budget,
     /// Kill-switch engaged via `mur fleet stop`.
     Stopped,
+    /// A commander governance kill (or zero budget-ceiling) halted the loop.
+    CommanderKilled,
 }
 
 /// Parse a humantime-ish duration: `30s`, `5m`, `2h`, `1d`, or a bare integer
@@ -207,15 +210,60 @@ fn effective_budget(flag: Option<f64>, fleet: &Fleet) -> Option<f64> {
         .filter(|&b| b > 0.0)
 }
 
-/// `mur fleet run --loop`: run guarded iterations until the router converges or
-/// a guard trips. Requires the member + router agents to be running.
-pub async fn cmd_fleet_run_loop(
+/// SHA-256 (hex) of the deciding directive's canonical sign-input, so the audit
+/// row binds to exactly the signed directive that was honored. Empty if the
+/// nonce has no matching event (defensive).
+fn directive_content_sha256(events: &[ChannelEvent], nonce: &str, channel_id: &str) -> String {
+    events
+        .iter()
+        .find(|e| e.idempotency_key.as_deref() == Some(nonce))
+        .map(|e| {
+            let input = mur_channel::sign::sign_input(
+                channel_id,
+                &e.actor,
+                e.kind,
+                &e.payload,
+                e.idempotency_key.as_deref(),
+            );
+            hex::encode(Sha256::digest(&input))
+        })
+        .unwrap_or_default()
+}
+
+/// Record (best-effort) that a commander directive was honored. Never blocks the
+/// halt. `content_sha256` binds the row to the exact signed directive.
+fn emit_governance_audit(
+    mur_home: &Path,
+    fleet: &str,
+    directive: &str,
+    decision: &str,
+    nonce: &str,
+    content_sha256: &str,
+) {
+    let root_str = mur_home.to_str();
+    if let Ok(audit) = crate::conversations::audit::Audit::open(root_str) {
+        let _ = audit.append(
+            crate::conversations::audit::AuditAction::Governance {
+                fleet: fleet.to_string(),
+                directive: directive.to_string(),
+                decision: decision.to_string(),
+                nonce: nonce.to_string(),
+            },
+            content_sha256.to_string(),
+        );
+    }
+}
+
+/// Inner guarded loop: runs iterations until a stop reason fires. Returns
+/// `(stop, iterations_completed, spent_usd)`. Extracted so tests can call it
+/// directly and inspect the `LoopStop` without going through the print layer.
+pub async fn run_guarded(
     mur_home: &Path,
     name: &str,
     max_iterations: Option<u32>,
     deadline: Option<String>,
     budget_usd: Option<f64>,
-) -> Result<()> {
+) -> Result<(LoopStop, u32, f64)> {
     let fleet = store::load_fleet(mur_home, name)?;
     if fleet.members.is_empty() {
         anyhow::bail!("fleet '{name}' has no members");
@@ -243,8 +291,55 @@ pub async fn cmd_fleet_run_loop(
     let mut iteration = 0u32;
     let mut stuck = 0u32;
 
+    // Load commander keys once; empty = governance inert.
+    let commander_keys = crate::cmd::commander::accepted_pubkeys(mur_home);
+    let governed = !commander_keys.is_empty();
+
     let stop = loop {
-        // Kill-switch (highest priority): a `mur fleet stop` between iterations halts here.
+        // Commander governance (highest priority). Fail-closed: a channel read
+        // error halts rather than running ungoverned.
+        let mut commander_ceiling: Option<f64> = None;
+        if governed {
+            let events = match svc.load_events(&fleet.channel_id) {
+                Ok(e) => e,
+                Err(_) => {
+                    // Fail-closed: cannot read governance ⇒ halt, but label the
+                    // audit as a read error, not a confirmed commander kill.
+                    // Reachable only via a mid-loop FS-level read fault: a missing
+                    // channel reads as Ok(empty) and corrupt lines are silently
+                    // skipped (store::load_events filter_map), so only a genuine
+                    // read failure errors here. The same fault AT ENTRY surfaces via
+                    // the `?` on the last_seq load above → run_guarded returns Err →
+                    // the caller never runs the loop (also fail-closed). Not
+                    // unit-tested: portable FS-fault injection is brittle (mirrors
+                    // the daemon's analogous Err arm in fleet_tick::due_fleets).
+                    emit_governance_audit(mur_home, name, "read_error", "fail_closed", "", "");
+                    break LoopStop::CommanderKilled;
+                }
+            };
+            let gov = mur_channel::governance::fold_governance(
+                &events,
+                &fleet.channel_id,
+                name,
+                &commander_keys,
+            );
+            if gov.killed {
+                let nonce = gov.kill_nonce.as_deref().unwrap_or("");
+                let csum = directive_content_sha256(&events, nonce, &fleet.channel_id);
+                emit_governance_audit(mur_home, name, "kill", "halted", nonce, &csum);
+                break LoopStop::CommanderKilled;
+            }
+            // A zero budget ceiling is a budget halt (spec §6), not a kill.
+            if matches!(gov.budget_ceiling, Some(c) if c == 0.0) {
+                let nonce = gov.budget_nonce.as_deref().unwrap_or("");
+                let csum = directive_content_sha256(&events, nonce, &fleet.channel_id);
+                emit_governance_audit(mur_home, name, "budget_ceiling", "capped", nonce, &csum);
+                break LoopStop::Budget;
+            }
+            commander_ceiling = gov.budget_ceiling;
+        }
+
+        // Kill-switch: a `mur fleet stop` between iterations halts here.
         if super::control::is_stopped(mur_home, name) {
             break LoopStop::Stopped;
         }
@@ -260,7 +355,12 @@ pub async fn cmd_fleet_run_loop(
         } else {
             projection
         };
-        if budget_exceeded(spent, next_cost, budget) {
+        let effective_budget = match (budget, commander_ceiling) {
+            (Some(l), Some(c)) => Some(l.min(c)),
+            (None, Some(c)) => Some(c),
+            (l, None) => l,
+        };
+        if budget_exceeded(spent, next_cost, effective_budget) {
             break LoopStop::Budget;
         }
         println!("── fleet '{}' iteration {} ──", name, iteration + 1);
@@ -324,6 +424,20 @@ pub async fn cmd_fleet_run_loop(
         }
     };
 
+    Ok((stop, iteration, spent))
+}
+
+/// `mur fleet run --loop`: run guarded iterations until the router converges or
+/// a guard trips. Requires the member + router agents to be running.
+pub async fn cmd_fleet_run_loop(
+    mur_home: &Path,
+    name: &str,
+    max_iterations: Option<u32>,
+    deadline: Option<String>,
+    budget_usd: Option<f64>,
+) -> Result<()> {
+    let (stop, iteration, spent) =
+        run_guarded(mur_home, name, max_iterations, deadline, budget_usd).await?;
     println!(
         "fleet '{}' loop stopped after {iteration} iteration(s) (~${spent:.2} spent): {stop:?}",
         name
@@ -589,5 +703,128 @@ mod tests {
             l.max_iterations = 0;
         }
         assert_eq!(effective_max_iterations(None, &f), DEFAULT_MAX_ITERATIONS);
+    }
+
+    /// Test seam: run one guarded iteration and return the stop reason.
+    async fn run_loop_for_test(home: &Path) -> LoopStop {
+        run_guarded(home, "dev", Some(1), None, None)
+            .await
+            .map(|(stop, _, _)| stop)
+            .unwrap_or(LoopStop::MaxIterations)
+    }
+
+    #[tokio::test]
+    async fn commander_kill_halts_loop_and_local_start_cannot_clear_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        // commander identity + pinned key
+        let cdir = home.join("commander");
+        std::fs::create_dir_all(&cdir).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&cdir)
+            .unwrap();
+        // a fleet + channel
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        // plant a commander kill
+        crate::cmd::commander::cmd_commander_directive(home, "dev", "kill", None, 1000).unwrap();
+
+        // one guarded run: must stop CommanderKilled before doing any work
+        let stop = run_loop_for_test(home).await;
+        assert_eq!(stop, LoopStop::CommanderKilled);
+
+        // local kill-switch clear does NOT lift the commander kill
+        crate::cmd::fleet::control::cmd_fleet_start(home, "dev").ok();
+        let stop2 = run_loop_for_test(home).await;
+        assert_eq!(stop2, LoopStop::CommanderKilled);
+
+        // an audit Governance entry was recorded
+        let audit =
+            std::fs::read_to_string(home.join("conversations").join("audit.jsonl")).unwrap();
+        assert!(
+            audit.contains("\"kind\":\"governance\"") && audit.contains("\"decision\":\"halted\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn commander_zero_budget_ceiling_halts_loop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let cdir = home.join("commander");
+        std::fs::create_dir_all(&cdir).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&cdir)
+            .unwrap();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        // a zero budget ceiling is a budget halt (spec §6), not a kill
+        crate::cmd::commander::cmd_commander_directive(
+            home,
+            "dev",
+            "budget_ceiling",
+            Some(0.0),
+            1000,
+        )
+        .unwrap();
+
+        let stop = run_loop_for_test(home).await;
+        assert_eq!(stop, LoopStop::Budget);
+
+        // The audit row must bind the EXACT deciding directive — pull its real
+        // nonce from the channel and assert the audit references it (guards the
+        // wire-through: the loop passes gov.budget_nonce, not a constant).
+        let nonce = mur_channel::ChannelService::open(home)
+            .unwrap()
+            .load_events("fleet-dev")
+            .unwrap()
+            .iter()
+            .find_map(|e| {
+                e.payload
+                    .get("commander_directive")
+                    .and_then(|d| d.get("nonce"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .expect("directive nonce present in channel");
+        let audit =
+            std::fs::read_to_string(home.join("conversations").join("audit.jsonl")).unwrap();
+        assert!(
+            audit.contains("\"decision\":\"capped\"")
+                && audit.contains("\"directive\":\"budget_ceiling\"")
+        );
+        assert!(
+            audit.contains(&format!("\"nonce\":\"{nonce}\"")),
+            "audit must bind the exact deciding directive nonce ({nonce})"
+        );
     }
 }

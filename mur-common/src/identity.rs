@@ -156,6 +156,11 @@ pub fn verify_bytes(pubkey: &[u8; 32], msg: &[u8], sig_multibase: &str) -> bool 
         .is_ok()
 }
 
+/// True iff `bytes` is a valid Ed25519 verifying key (on-curve), not just 32 bytes.
+pub fn valid_ed25519_pubkey(bytes: &[u8; 32]) -> bool {
+    VerifyingKey::from_bytes(bytes).is_ok()
+}
+
 /// Encode an Ed25519 public key to multibase base58btc (`z` prefix).
 pub fn encode_pubkey(key: &VerifyingKey) -> String {
     multibase::encode(multibase::Base::Base58Btc, key.as_bytes())

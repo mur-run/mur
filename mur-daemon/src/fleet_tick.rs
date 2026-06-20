@@ -114,9 +114,19 @@ pub fn due_fleets(mur_home: &Path, now_unix: u64) -> Result<Vec<String>> {
         // Auto-run requires a positive budget (no unattended run without a $ ceiling)
         // and is skipped when the kill-switch is engaged.
         let has_budget = lc.map(|l| l.budget_usd > 0.0).unwrap_or(false);
+        // Fail-closed: if governance_state errors (e.g. I/O, bad signature),
+        // treat the fleet as halted and skip it. A zero budget ceiling is a hard
+        // halt too (the loop breaks LoopStop::Budget on it), so skip those as
+        // well — otherwise the daemon would re-spawn a halted fleet every tick.
+        let gov = mur_core::cmd::commander::governance_state(mur_home, &name);
+        let commander_halted = match gov {
+            Ok(g) => g.killed || matches!(g.budget_ceiling, Some(c) if c == 0.0),
+            Err(_) => true, // fail-closed
+        };
         if has_budget
             && is_due(trigger, read_last_run(mur_home, &name), now_unix)
             && !mur_core::cmd::fleet::control::is_stopped(mur_home, &name)
+            && !commander_halted
         {
             due.push(name);
         }
@@ -345,4 +355,66 @@ mod tests {
         mur_core::cmd::fleet::control::cmd_fleet_stop(home, "auto").unwrap();
         assert!(due_fleets(home, 5000).unwrap().is_empty());
     }
+
+    #[test]
+    fn due_fleets_skips_commander_killed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        // commander identity + a due interval fleet with a budget + channel
+        let cdir = home.join("commander");
+        std::fs::create_dir_all(&cdir).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&cdir)
+            .unwrap();
+        let mut f = loop_fleet("killed", "interval:1m");
+        f.channel_id = "fleet-killed".into();
+        store::save_fleet(home, &f).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("killed", "mur", &[])
+            .unwrap();
+        mur_core::cmd::commander::cmd_commander_directive(home, "killed", "kill", None, 1000)
+            .unwrap();
+        // even though due + budgeted, a commander kill excludes it
+        assert!(
+            !due_fleets(home, 5000)
+                .unwrap()
+                .contains(&"killed".to_string())
+        );
+    }
+
+    #[test]
+    fn due_fleets_skips_zero_budget_ceiling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let cdir = home.join("commander");
+        std::fs::create_dir_all(&cdir).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&cdir)
+            .unwrap();
+        let f = loop_fleet("capped", "interval:1m");
+        store::save_fleet(home, &f).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("capped", "mur", &[])
+            .unwrap();
+        mur_core::cmd::commander::cmd_commander_directive(
+            home,
+            "capped",
+            "budget_ceiling",
+            Some(0.0),
+            1000,
+        )
+        .unwrap();
+        // a zero budget ceiling is a hard halt → excluded from auto-run
+        assert!(
+            !due_fleets(home, 5000)
+                .unwrap()
+                .contains(&"capped".to_string())
+        );
+    }
+    // Note: the `governance_state` Err → fail-closed skip arm is defensive against
+    // genuine channel-store corruption. A *missing* channel reads as Ok(empty)
+    // (inert, no directives possible), so it is intentionally not unit-tested
+    // here — exercising the Err arm would require corrupting the on-disk log.
 }
