@@ -56,7 +56,7 @@ interface GridCardProps {
 
 export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
   const { t } = useT();
-  const { setSelected } = useAgents();
+  const { setSelected, setDesiredDetailTab } = useAgents();
   const { openConversation } = useConversations();
   const unread = useUnreadCount(agent.name);
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
@@ -210,6 +210,16 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
           >
             💬 {t("detail.chat")}
           </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setDesiredDetailTab("style");
+              setSelected(agent.name);
+            }}
+            title={t("dashboard.styleTooltip")}
+          >
+            🎨 {t("dashboard.style")}
+          </button>
         </div>
         <div className="grid-card__foot">
           <span className={pill.cls}>
@@ -337,7 +347,7 @@ function BrainBadge() {
 export function DashboardApp() {
   const { t, lang, setLang } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
-  const { open: openConvs } = useConversations();
+  const { open: openConvs, openConversation, setDraft } = useConversations();
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [surface, setSurface] = useState<"agents" | "work">("agents");
@@ -382,6 +392,7 @@ export function DashboardApp() {
 
   useEffect(() => {
     const unSelect = listen<string>("select-agent", (e) => {
+      setSelected(e.payload);
       setTimeout(() => {
         document
           .querySelector(`[data-agent="${e.payload}"]`)
@@ -391,7 +402,17 @@ export function DashboardApp() {
     return () => {
       unSelect.then((fn) => fn());
     };
-  }, []);
+  }, [setSelected]);
+
+  // Pet "Chat" / file-drop → open that agent's conversation (and stage a draft).
+  useEffect(() => {
+    const unsub = listen<{ agent: string; draft?: string | null }>("pet-open-chat", (e) => {
+      const { agent, draft } = e.payload;
+      if (draft) setDraft(agent, draft);
+      openConversation(agent);
+    });
+    return () => { unsub.then((fn) => fn()); };
+  }, [openConversation, setDraft]);
 
   // Listen for .muragent file open events from OS file association / deep-link
   useEffect(() => {

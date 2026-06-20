@@ -4,6 +4,19 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+/// How the pet's frames are produced. `Ai` means real LLM-rendered `.webp`
+/// images are on disk; `Vector` means no image model was available and the pet
+/// renders the built-in vector mascot (`PetFace`) instead — no `.webp` written.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RenderMode {
+    /// Real LLM-rendered art on disk. Default keeps legacy manifests as `Ai`.
+    #[default]
+    Ai,
+    /// Built-in vector mascot; no rendered `.webp` files.
+    Vector,
+}
+
 /// Cached record of the last successful expression render for one agent.
 /// Written as `<agent_dir>/expressions/manifest.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -14,6 +27,10 @@ pub struct PresetManifest {
     pub sha256: String,
     /// Expression IDs that were successfully rendered.
     pub expressions: Vec<String>,
+    /// Whether `.webp` art exists (`Ai`) or the vector mascot is used (`Vector`).
+    /// `#[serde(default)]` keeps pre-existing manifests deserialising as `Ai`.
+    #[serde(default)]
+    pub mode: RenderMode,
 }
 
 /// Path to the manifest file for `agent_dir`.
@@ -49,6 +66,7 @@ mod tests {
             rendered_at: Utc::now(),
             sha256: hash,
             expressions: vec!["idle".into()],
+            mode: RenderMode::Ai,
         };
         assert!(!manifest_stale(&manifest, &preset));
     }
@@ -61,6 +79,7 @@ mod tests {
             rendered_at: Utc::now(),
             sha256: "aabbccddeeff".into(),
             expressions: vec!["idle".into()],
+            mode: RenderMode::Ai,
         };
         assert!(manifest_stale(&manifest, &preset));
     }
@@ -92,8 +111,35 @@ mod tests {
             rendered_at: DateTime::from_timestamp(0, 0).unwrap(),
             sha256: compute_preset_hash(&preset),
             expressions: vec!["idle".into(), "smile".into()],
+            mode: RenderMode::Ai,
         };
         let json = serde_json::to_string(&manifest).expect("serialize");
+        let back: PresetManifest = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(manifest, back);
+    }
+
+    /// Manifests written before `mode` existed must deserialise as `Ai` so
+    /// previously-rendered agents keep showing their `.webp` art.
+    #[test]
+    fn legacy_manifest_without_mode_defaults_to_ai() {
+        let json = r#"{"preset_id":"chiikawa","rendered_at":"2026-01-01T00:00:00Z","sha256":"deadbeef","expressions":["idle"]}"#;
+        let m: PresetManifest = serde_json::from_str(json).expect("deserialize legacy");
+        assert_eq!(m.mode, RenderMode::Ai);
+    }
+
+    /// Vector-mode manifests round-trip with the lowercase tag.
+    #[test]
+    fn vector_mode_round_trips() {
+        let preset = default_blob();
+        let manifest = PresetManifest {
+            preset_id: preset.id.clone(),
+            rendered_at: DateTime::from_timestamp(0, 0).unwrap(),
+            sha256: compute_preset_hash(&preset),
+            expressions: vec![],
+            mode: RenderMode::Vector,
+        };
+        let json = serde_json::to_string(&manifest).expect("serialize");
+        assert!(json.contains("\"mode\":\"vector\""));
         let back: PresetManifest = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(manifest, back);
     }
