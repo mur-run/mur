@@ -20,6 +20,7 @@ pub mod agent_voice;
 /// Track C5 / M5.1 — webhook receiver config + CLI verbs.
 pub(crate) mod agent_webhook;
 pub mod channel;
+pub mod commander;
 pub mod compress;
 pub mod context;
 pub(crate) mod conversations_cmd;

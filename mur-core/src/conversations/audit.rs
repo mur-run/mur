@@ -74,6 +74,13 @@ pub enum AuditAction {
         model: String,
         duration_ms: u64,
     },
+    /// A commander governance directive was honored by a fleet loop.
+    Governance {
+        fleet: String,
+        directive: String, // "kill" | "budget_ceiling" | "read_error"
+        decision: String,  // "halted" | "capped" | "fail_closed"
+        nonce: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

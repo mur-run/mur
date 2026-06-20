@@ -313,6 +313,18 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
             fleet.members
         );
     }
+    // C2a — channel_id must be canonical so the loop (reads fleet.channel_id),
+    // the commander directive path, and the daemon (both reconstruct
+    // fleet-<name>) all govern the SAME channel. A non-canonical id smuggled in
+    // an untrusted bundle would otherwise escape commander kills on a manual run.
+    let canonical_channel_id = format!("fleet-{}", fleet.name);
+    if fleet.channel_id != canonical_channel_id {
+        bail!(
+            "bundle fleet.yaml channel_id '{}' is not canonical (expected '{}') — refusing import",
+            fleet.channel_id,
+            canonical_channel_id
+        );
+    }
 
     store::save_fleet(mur_home, &fleet)?;
 
@@ -886,6 +898,85 @@ mod tests {
                     .map(|mut d| d.next().is_none())
                     .unwrap_or(true),
             "fleet must not be written on name mismatch"
+        );
+    }
+
+    /// Governance bypass guard: a correctly-signed bundle whose fleet.yaml
+    /// `channel_id` is non-canonical (≠ `fleet-<name>`) must be refused — else the
+    /// loop would govern a different channel than the commander/daemon write to.
+    #[test]
+    fn import_refuses_noncanonical_channel_id() {
+        use mur_common::fleet_bundle::{
+            BundleEntry, BundleManifest, FLEET_BUNDLE_FORMAT, content_hash, manifest_sign_input,
+            signer_fingerprint,
+        };
+        use mur_common::identity::AgentIdentity;
+
+        let src = tempfile::tempdir().unwrap();
+        let s = src.path();
+        let id_dir = s.join("agents").join("mur");
+        std::fs::create_dir_all(&id_dir).unwrap();
+        let id = AgentIdentity::generate();
+        id.save(&id_dir).unwrap();
+        let signer_pubkey = id.public_key_multibase();
+
+        // name `dev` (matches manifest, valid) but channel_id smuggles `fleet-evil`.
+        let fleet_yaml = "name: dev\ndisplay_name: \"\"\ngoal: g\nrouter: ~\nmembers: []\nchannel_id: fleet-evil\nrules: []\nskills: []\nloop_cfg: ~\n";
+        let files: Vec<(String, Vec<u8>)> =
+            vec![("fleet.yaml".into(), fleet_yaml.as_bytes().to_vec())];
+        let entries: Vec<BundleEntry> = files
+            .iter()
+            .map(|(p, b)| BundleEntry {
+                path: p.clone(),
+                sha256: content_hash(b),
+            })
+            .collect();
+        let mut manifest = BundleManifest {
+            format_version: FLEET_BUNDLE_FORMAT,
+            fleet_name: "dev".into(),
+            created_at: "2026-06-20T00:00:00Z".into(),
+            signer_fingerprint: signer_fingerprint(&signer_pubkey),
+            signer_pubkey,
+            includes_members: false,
+            members: vec![],
+            entries,
+            sig: None,
+        };
+        let input = manifest_sign_input(&manifest);
+        manifest.sig = Some(multibase::encode(
+            multibase::Base::Base58Btc,
+            id.sign_bytes(&input),
+        ));
+        let bundle_bytes = build_evil_bundle(&manifest, &files);
+        let bundle_path = s.join("noncanon.fleet");
+        std::fs::write(&bundle_path, &bundle_bytes).unwrap();
+
+        let dst = tempfile::tempdir().unwrap();
+        let home = dst.path();
+        let err = cmd_fleet_import(
+            home,
+            &bundle_path,
+            ImportOpts {
+                force: false,
+                no_members: false,
+                yes: true,
+            },
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("not canonical"),
+            "expected canonical-channel refusal, got: {msg}"
+        );
+        // Nothing written
+        assert!(
+            !home.join("fleets").exists()
+                || home
+                    .join("fleets")
+                    .read_dir()
+                    .map(|mut d| d.next().is_none())
+                    .unwrap_or(true),
+            "fleet must not be written on non-canonical channel_id"
         );
     }
 
