@@ -171,6 +171,10 @@ pub async fn get_audit(
         .into_iter()
         .filter(|e| matches!(&e.action, AuditAction::Governance { fleet: f, .. } if *f == fleet))
         .collect();
+    // since_nonce is an optional cursor: drop everything up to and including it.
+    // If it isn't found (rotated out / unknown), fall through and return the FULL
+    // list — fail-safe re-sync. Returning empty/404 here would silently hide
+    // entries from the engine's ComplianceChecker.
     if let Some(since) = q.since_nonce.as_deref()
         && let Some(pos) = entries.iter().position(
             |e| matches!(&e.action, AuditAction::Governance { nonce, .. } if nonce == since),
