@@ -41,6 +41,8 @@ pub struct AgentEntry {
     pub category: PersonaCategory,
     pub status: AgentStatus,
     pub model_id: String,
+    /// Active pet style preset id (e.g. "chiikawa"); drives the card avatar.
+    pub style_preset: String,
 }
 
 /// Background scanner that polls `$mur_home/agents/*/profile.yaml` at 5s intervals.
@@ -104,6 +106,7 @@ pub fn scan_agents(mur_home: &Path) -> Vec<AgentEntry> {
                 category: profile.persona.category,
                 status,
                 model_id: format!("{}/{}", profile.model.provider, profile.model.name),
+                style_preset: profile.appearance.style_preset.clone(),
             })
         })
         .collect();

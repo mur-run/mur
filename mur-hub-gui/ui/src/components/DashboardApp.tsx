@@ -15,12 +15,20 @@ import { WorkView } from "./work/WorkView";
 import { useConversations } from "../conversation/ConversationContext";
 import { Mascot } from "./Mascot";
 import type { MascotMood } from "./Mascot";
+import { PetFace } from "./PetFace";
 import { useT } from "../i18n";
+import { BUILTIN_PRESETS } from "../types";
 import { CATEGORY_COLORS, CATEGORY_ICONS, avatarInitials, timeGreetingKey } from "../utils";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
 const ALL_CATEGORIES = ["research", "automation", "monitor", "notify", "commerce", "custom"];
+
+// preset id → family, for theming the card avatar's vector mascot.
+const PRESET_FAMILY: Record<string, string> = Object.fromEntries(
+  BUILTIN_PRESETS.map((p) => [p.id, p.family]),
+);
+const familyOf = (presetId: string): string => PRESET_FAMILY[presetId] ?? "chibi";
 
 function showToast(msg: string, durationMs = 2000) {
   const el = document.createElement("div");
@@ -175,8 +183,13 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
         onClick={() => setSelected(isSelected ? null : agent.name)}
       >
         <div className="grid-card__head">
-          <div className="grid-card__avatar" style={{ background: color }}>
-            {avatarInitials(agent.display_name)}
+          <div className="grid-card__avatar grid-card__avatar--pet" title={agent.style_preset}>
+            <PetFace
+              presetId={agent.style_preset}
+              family={familyOf(agent.style_preset)}
+              expression="idle"
+              size={44}
+            />
             {unread > 0 && (
               <span className="unread-badge">{unread > 99 ? "99+" : unread}</span>
             )}
