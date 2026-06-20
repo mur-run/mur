@@ -34,7 +34,9 @@ over HTTP. This spec is only the node receiver.
   `sign_input{v:1, channel_id, actor, kind, payload, idempotency_key}` (seq/ts excluded;
   `seq` arrives as a placeholder `0`).
 - **POST success:** `200 { "accepted": true, "seq": <u64> }`.
-- **POST reject:** non-2xx + `{ "accepted": false, "reason": "<msg>" }`.
+- **POST reject:** non-2xx + the node's standard error body `{ "error": "<msg>" }` (the
+  server-wide `AppError` shape — governance reuses it). The engine keys off the HTTP
+  status; its Deliverer should read the human-readable reason from `error` (engine PR note).
 - **GET response:** `{ "entries": [AuditEntry...] }` — the engine matches an entry by
   `action.nonce` and recomputes `content_sha256 = hex(sha256(sign_input(...)))` to judge
   compliance. The existing `AuditEntry` serde shape (`action` tagged

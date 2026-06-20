@@ -476,4 +476,36 @@ mod tests {
         let nonce_val = action["nonce"].as_str().unwrap_or("");
         assert_eq!(nonce_val, nonce2);
     }
+
+    // Security: a directive validly signed for fleet "dev" cannot be retargeted to
+    // another existing fleet by editing the request payload. channel_id derives from
+    // the (now-tampered) payload.fleet, so verify_event_sig runs against fleet-dev2 +
+    // the mutated payload and fails → 403, nothing persisted. Locks the
+    // channel_id-from-signed-payload invariant against future refactors.
+    #[tokio::test]
+    async fn signed_directive_cannot_be_redirected_to_another_fleet() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (state, id) = setup(&tmp); // pins key + creates fleet-dev
+        mur_channel::ChannelService::open(tmp.path())
+            .unwrap()
+            .create_for_fleet("dev2", "mur", &[])
+            .unwrap();
+
+        let mut body = directive_body(&id, "dev", "kill", None);
+        body["event"]["payload"][COMMANDER_DIRECTIVE_KEY]["fleet"] = serde_json::json!("dev2");
+
+        let (status, _) = post(state.clone(), body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let events = mur_channel::ChannelService::open(tmp.path())
+            .unwrap()
+            .load_events("fleet-dev2")
+            .unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|e| e.payload.get(COMMANDER_DIRECTIVE_KEY).is_none()),
+            "redirected directive must not be persisted"
+        );
+    }
 }
