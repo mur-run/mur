@@ -8,6 +8,8 @@ export interface AgentEntry {
   category: "research" | "automation" | "monitor" | "notify" | "commerce" | "custom";
   status: AgentStatus;
   model_id: string;
+  /** Active pet style preset id (e.g. "chiikawa"); drives the card avatar. */
+  style_preset: string;
 }
 
 // RuntimeState matches mur-gui-core::sidecar::RuntimeState (#[serde(tag = "state")])
