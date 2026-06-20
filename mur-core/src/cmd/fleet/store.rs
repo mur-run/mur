@@ -96,6 +96,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            team_id: None,
         };
         let err = save_fleet(home, &bad).unwrap_err();
         assert!(
