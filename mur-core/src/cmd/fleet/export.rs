@@ -227,7 +227,7 @@ mod tests {
 
         // re-open: unpack, read manifest, verify signature + entry hashes
         let bytes = std::fs::read(&out).unwrap();
-        let (manifest, files) = crate::cmd::fleet::import::unpack_for_test(&bytes).unwrap();
+        let (manifest, files) = crate::cmd::fleet::import::unpack_bundle(&bytes).unwrap();
         let (_, pk) = multibase::decode(&manifest.signer_pubkey).unwrap();
         let pk: [u8; 32] = pk.try_into().unwrap();
         assert!(verify_manifest_sig(&manifest, &pk));

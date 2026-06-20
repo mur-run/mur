@@ -22,7 +22,7 @@ pub struct ImportOpts {
 }
 
 /// Unpack the tar.gz into (manifest, path->bytes). Rejects unsafe entry paths.
-pub(crate) fn unpack_for_test(bytes: &[u8]) -> Result<(BundleManifest, HashMap<String, Vec<u8>>)> {
+pub(crate) fn unpack_bundle(bytes: &[u8]) -> Result<(BundleManifest, HashMap<String, Vec<u8>>)> {
     let gz = GzDecoder::new(bytes);
     let mut ar = tar::Archive::new(gz);
     let mut files: HashMap<String, Vec<u8>> = HashMap::new();
@@ -87,7 +87,7 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
     // 1. Read + unpack (transport seam).
     let src = file.to_str().context("bundle path is not UTF-8")?;
     let bytes = LocalFile.read(src)?;
-    let (manifest, files) = unpack_for_test(&bytes)?;
+    let (manifest, files) = unpack_bundle(&bytes)?;
 
     // 2. Verify signature (fail-closed). Unsigned → refuse unless --force.
     let (_, pk) = multibase::decode(&manifest.signer_pubkey).context("decode signer pubkey")?;
@@ -109,6 +109,15 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
             .with_context(|| format!("bundle missing entry {}", e.path))?;
         if content_hash(got) != e.sha256 {
             bail!("hash mismatch for {} — refusing import", e.path);
+        }
+    }
+
+    // 3b. Reject any archive file not declared in the signed manifest (defense-in-depth).
+    let declared: std::collections::HashSet<&str> =
+        manifest.entries.iter().map(|e| e.path.as_str()).collect();
+    for k in files.keys() {
+        if k != "bundle.yaml" && !declared.contains(k.as_str()) {
+            bail!("undeclared bundle entry not covered by the signed manifest: {k}");
         }
     }
 
@@ -138,8 +147,12 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
     // 5. Security-scan each bundled skill; surface findings.
     let mut parsed_skills: Vec<(String, SkillManifest)> = Vec::new();
     for path in &skill_paths {
-        let m: SkillManifest =
-            serde_yaml::from_slice(&files[*path]).with_context(|| format!("parse {path}"))?;
+        let m: SkillManifest = serde_yaml::from_slice(
+            files
+                .get(*path)
+                .with_context(|| format!("bundle missing entry {path}"))?,
+        )
+        .with_context(|| format!("parse {path}"))?;
         let report = mur_common::skill::scan::scan_skill(&m)
             .map_err(|e| anyhow::anyhow!("scan {path}: {e}"))?;
         if report.has_blocking_findings() {
@@ -151,17 +164,17 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
         parsed_skills.push((m.name.clone(), m));
     }
 
-    // 6. HITL confirm — nothing written before approval.
-    if !confirm("Install this fleet + skills?", opts.yes)? {
-        bail!("import cancelled");
-    }
-
-    // 7. Conflict checks (fail-closed unless --force).
+    // 6. Fleet name-conflict check (fail-fast before prompting the user).
     if store::fleet_path(mur_home, &manifest.fleet_name).is_file() && !opts.force {
         bail!(
             "fleet '{}' already exists — re-run with --force to overwrite",
             manifest.fleet_name
         );
+    }
+
+    // 7. HITL confirm — nothing written before approval.
+    if !confirm("Install this fleet + skills?", opts.yes)? {
+        bail!("import cancelled");
     }
 
     // 8. Install skills: scope:Fleet preserved, trust DOWNGRADED to Sandboxed.
@@ -300,16 +313,16 @@ mod tests {
     fn import_refuses_tampered_bundle() {
         let src = tempfile::tempdir().unwrap();
         let bundle = export_fixture(src.path());
-        // flip a byte in the archive
         let mut bytes = std::fs::read(&bundle).unwrap();
         let n = bytes.len();
-        bytes[n / 2] ^= 0xFF;
+        bytes[n / 2] ^= 0xFF; // corrupt the archive
         let bad = src.path().join("bad.fleet");
         std::fs::write(&bad, &bytes).unwrap();
 
         let dst = tempfile::tempdir().unwrap();
+        let home = dst.path();
         let err = cmd_fleet_import(
-            dst.path(),
+            home,
             &bad,
             ImportOpts {
                 force: false,
@@ -318,21 +331,16 @@ mod tests {
             },
         )
         .unwrap_err();
-        // Any rejection error is acceptable: sig/hash mismatch, gzip/archive corruption.
-        let msg = format!("{err:#}").to_lowercase();
+        // fail-closed: refused AND nothing installed (no partial write on tamper).
         assert!(
-            msg.contains("verif")
-                || msg.contains("hash")
-                || msg.contains("gzip")
-                || msg.contains("archive")
-                || msg.contains("deflate")
-                || msg.contains("corrupt")
-                || msg.contains("invalid")
-                || msg.contains("mismatch")
-                || msg.contains("signature")
-                || msg.contains("failed")
-                || msg.contains("error"),
-            "unexpected error: {msg}"
+            !crate::cmd::fleet::store::fleet_path(home, "dev").is_file(),
+            "tampered bundle must not install the fleet; err={err:#}"
+        );
+        assert!(
+            !mur_common::skill::store::global_skill_dir(home, "triage")
+                .join("skill.yaml")
+                .is_file(),
+            "tampered bundle must not install skills; err={err:#}"
         );
     }
 
