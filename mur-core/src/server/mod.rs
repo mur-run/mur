@@ -31,6 +31,7 @@ use crate::store::workflow_yaml::WorkflowYamlStore;
 use crate::store::yaml::YamlStore;
 
 mod context;
+mod governance;
 mod mobile;
 mod patterns;
 mod pipelines;
@@ -121,6 +122,14 @@ impl AppState {
             .unwrap_or(&self.patterns_dir)
             .join("skills")
     }
+
+    /// `~/.mur` — parent of `patterns_dir`.
+    pub(super) fn mur_home(&self) -> std::path::PathBuf {
+        self.patterns_dir
+            .parent()
+            .unwrap_or(&self.patterns_dir)
+            .to_path_buf()
+    }
 }
 
 // ─── Error type ────────────────────────────────────────────────────
@@ -130,6 +139,7 @@ pub enum AppError {
     NotFound(String),
     Readonly,
     BadRequest(String),
+    Forbidden(String),
     Internal(anyhow::Error),
 }
 
@@ -142,6 +152,7 @@ impl IntoResponse for AppError {
                 "Server is in read-only mode".to_string(),
             ),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
             AppError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         };
         let body = serde_json::json!({ "error": message });
@@ -266,7 +277,12 @@ pub fn build_router_with_auth(state: AppState, auth_token: Option<Arc<str>>) -> 
         // WebSocket for real-time events
         .route("/api/v1/ws", get(ws_handler))
         // Agents (Phase 4 read-only routes)
-        .nest("/api/v1/agents", crate::server_agents::router());
+        .nest("/api/v1/agents", crate::server_agents::router())
+        // Commander governance receiver
+        .route(
+            "/api/v1/governance/directive",
+            post(governance::post_directive),
+        );
 
     // When a token is configured (non-loopback bind), require it on /api/*.
     let router = match auth_token {
