@@ -140,6 +140,22 @@ impl AgentIdentity {
     }
 }
 
+/// Verify a multibase-encoded Ed25519 signature over `msg` against `pubkey`.
+/// Fail-closed: any decode/length/verify error returns false.
+pub fn verify_bytes(pubkey: &[u8; 32], msg: &[u8], sig_multibase: &str) -> bool {
+    let Ok((_, sig_bytes)) = multibase::decode(sig_multibase) else {
+        return false;
+    };
+    let Ok(sig_arr): Result<[u8; 64], _> = sig_bytes.try_into() else {
+        return false;
+    };
+    let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(pubkey) else {
+        return false;
+    };
+    vk.verify_strict(msg, &ed25519_dalek::Signature::from_bytes(&sig_arr))
+        .is_ok()
+}
+
 /// Encode an Ed25519 public key to multibase base58btc (`z` prefix).
 pub fn encode_pubkey(key: &VerifyingKey) -> String {
     multibase::encode(multibase::Base::Base58Btc, key.as_bytes())
