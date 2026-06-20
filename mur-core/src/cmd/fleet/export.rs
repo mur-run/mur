@@ -14,7 +14,6 @@ use mur_common::fleet_bundle::{
 use mur_common::identity::AgentIdentity;
 use mur_common::skill::manifest::{SkillManifest, SkillScope};
 
-use super::bundle_transport::{FleetBundleTransport, LocalFile};
 use super::store;
 
 /// Installed skills whose scope targets exactly this fleet.
@@ -122,7 +121,7 @@ pub fn cmd_fleet_export(
     let bytes = build_bundle_bytes(&manifest, &files)?;
     let out = out.unwrap_or_else(|| PathBuf::from(format!("{name}.fleet")));
     let out_str = out.to_str().context("output path is not UTF-8")?;
-    LocalFile.write(out_str, &bytes)?;
+    std::fs::write(&out, &bytes).with_context(|| format!("write bundle {out_str}"))?;
 
     let skill_count = manifest
         .entries

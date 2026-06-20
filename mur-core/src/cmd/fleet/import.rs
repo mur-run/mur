@@ -14,7 +14,6 @@ use mur_common::fleet_bundle::{
 use mur_common::skill::manifest::{SkillManifest, SkillScope};
 use mur_common::skill::types::TrustLevel;
 
-use super::bundle_transport::{FleetBundleTransport, LocalFile};
 use super::store;
 
 pub struct ImportOpts {
@@ -122,9 +121,8 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
 }
 
 pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Result<()> {
-    // 1. Read + unpack (transport seam). I4 size/count caps enforced inside unpack_bundle.
-    let src = file.to_str().context("bundle path is not UTF-8")?;
-    let bytes = LocalFile.read(src)?;
+    // 1. Read + unpack. I4 size/count caps enforced inside unpack_bundle.
+    let bytes = std::fs::read(file).with_context(|| format!("read bundle {}", file.display()))?;
     let (manifest, files) = unpack_bundle(&bytes)?;
 
     // 2. Verify signature (fail-closed). Unsigned → refuse unless --force.
