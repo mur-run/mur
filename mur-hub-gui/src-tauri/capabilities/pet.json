@@ -1,12 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "identifier": "pet",
-  "description": "Capability set for desktop pet windows (one `pet-<agent>` window per agent). Least privilege: pets only need to receive expression/bubble events, read their position, and be dragged around the desktop.",
+  "description": "Capability set for desktop pet windows (one `pet-<agent>` window per agent). Least privilege: pets only need to receive expression/bubble events, read their position, be dragged around the desktop, and hide/show themselves (Hide-1h menu).",
   "windows": ["pet-*"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-outer-position",
-    "core:window:allow-start-dragging"
+    "core:window:allow-start-dragging",
+    "core:window:allow-hide",
+    "core:window:allow-show"
   ]
 }

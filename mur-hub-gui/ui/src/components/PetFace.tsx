@@ -15,6 +15,8 @@ interface PetFaceProps {
   /** One of the 12 canonical expression slots. */
   expression: string;
   size?: number;
+  /** Idle blink/breathe animation. Off for static thumbnails (agent cards). */
+  animate?: boolean;
 }
 
 type Shape = "ellipse" | "roundsquare" | "pixel" | "polaroid";
@@ -264,10 +266,13 @@ function EarTop({ style }: { style: Style }) {
   }
 }
 
-export function PetFace({ presetId, family, expression, size = 140 }: PetFaceProps) {
+export function PetFace({ presetId, family, expression, size = 140, animate = true }: PetFaceProps) {
   const style = resolveStyle(presetId, family);
   const recipe = EXPR[expression] ?? EXPR.idle;
-  const animatable = expression === "idle" || expression === "smile" || expression === "peek";
+  // Only the live pet window animates; card thumbnails pass animate={false} so
+  // N cards don't each run two infinite filtered transform animations.
+  const animatable =
+    animate && (expression === "idle" || expression === "smile" || expression === "peek");
 
   return (
     <svg
