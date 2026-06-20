@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "../i18n";
+import { useConversations } from "../conversation/ConversationContext";
 import { HitlCard } from "./HitlCard";
 import type { HitlRequest } from "../types";
 
@@ -91,6 +92,7 @@ interface Props {
 
 export function ChatTab({ agentName, displayName }: Props) {
   const { t } = useT();
+  const { drafts, clearDraft } = useConversations();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [hitlRequests, setHitlRequests] = useState<HitlRequest[]>([]);
   const [input, setInput] = useState("");
@@ -99,6 +101,15 @@ export function ChatTab({ agentName, displayName }: Props) {
   const [streaming, setStreaming] = useState<string | null>(null);
   // Live "thinking" reasoning, shown transiently until the answer starts.
   const [thinking, setThinking] = useState<string | null>(null);
+
+  // Consume a staged draft (e.g. from dropping a file on this agent's pet):
+  // prefill the input once, then clear it so it doesn't re-apply.
+  useEffect(() => {
+    const d = drafts[agentName];
+    if (!d) return;
+    setInput((prev) => (prev ? `${prev}\n\n${d}` : d));
+    clearDraft(agentName);
+  }, [drafts, agentName, clearDraft]);
   const streamingRef = useRef("");
   const thinkingRef = useRef("");
   const taskIdRef = useRef<string | null>(null);
