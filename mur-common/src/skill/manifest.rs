@@ -19,6 +19,8 @@ pub enum SkillScope {
     Project,
     /// Visible across the current fleet (if active_fleet is set).
     Fleet,
+    /// Visible across the current MUR Server team (if active_team is set).
+    Team,
     /// Visible across the entire enterprise (always visible if scoping is enabled).
     Enterprise,
 }
@@ -30,25 +32,42 @@ impl SkillScope {
     }
 }
 
-/// Is a skill with this (scope, fleet, project) visible in the given active context?
-/// Layers combine: user/enterprise are always visible; fleet/project are visible
+/// Governance identification for Commander integration.
+/// Current code: serde-only seam, never read at runtime.
+/// Commander reads `org_id` + `constitution_hash` to load the applicable
+/// constitution and derive policy. Never stores policy here — policy belongs
+/// in the constitution, not the manifest.
+// ponytail: seam — ignored until Commander ships.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct GovernanceRef {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub org_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub constitution_hash: String,
+}
+
+/// Is a skill with this (scope, fleet, project, team) visible in the given active context?
+/// Layers combine: user/enterprise are always visible; fleet/project/team are visible
 /// only when their selector matches the active context. (specific wins; see spec §6)
 /// Wired into injection via `mur-core` `retrieve::skill_candidates::filter_by_scope`:
 /// project context is auto-derived from the cwd repo root; fleet context remains
-/// env-only until the fleet runtime supplies it.
+/// env-only until the fleet runtime supplies it; team is set from `Fleet.team_id`.
 pub fn scope_visible(
     scope: SkillScope,
     skill_fleet: Option<&str>,
     skill_project: Option<&str>,
+    skill_team: Option<&str>, // required when scope == Team
     active_fleet: Option<&str>,
     active_project: Option<&str>,
+    active_team: Option<&str>, // from MUR_ACTIVE_TEAM env
 ) -> bool {
     match scope {
-        SkillScope::User | SkillScope::Enterprise => true,
-        SkillScope::Fleet => matches!((skill_fleet, active_fleet), (Some(f), Some(a)) if f == a),
-        SkillScope::Project => {
-            matches!((skill_project, active_project), (Some(p), Some(a)) if p == a)
-        }
+        SkillScope::User => true,
+        SkillScope::Enterprise => true,
+        SkillScope::Project => skill_project.is_some() && active_project == skill_project,
+        SkillScope::Fleet => skill_fleet.is_some() && active_fleet == skill_fleet,
+        SkillScope::Team => skill_team.is_some() && active_team == skill_team,
     }
 }
 
@@ -95,6 +114,14 @@ pub struct SkillManifest {
     /// Fleet identifier (required if scope is Fleet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fleet: Option<String>,
+
+    /// Team id this skill is scoped to; required when scope == Team.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+
+    /// Commander governance seam. Current runtime: ignored entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance: Option<GovernanceRef>,
 
     /// Project path (required if scope is Project).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -647,9 +674,19 @@ content:
     #[test]
     fn scope_visible_matrix() {
         // user + enterprise always visible
-        assert!(scope_visible(SkillScope::User, None, None, None, None));
+        assert!(scope_visible(
+            SkillScope::User,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ));
         assert!(scope_visible(
             SkillScope::Enterprise,
+            None,
+            None,
             None,
             None,
             None,
@@ -660,19 +697,25 @@ content:
             SkillScope::Fleet,
             Some("dev"),
             None,
+            None,
             Some("dev"),
+            None,
             None
         ));
         assert!(!scope_visible(
             SkillScope::Fleet,
             Some("dev"),
             None,
+            None,
             Some("ops"),
+            None,
             None
         ));
         assert!(!scope_visible(
             SkillScope::Fleet,
             Some("dev"),
+            None,
+            None,
             None,
             None,
             None
@@ -683,14 +726,85 @@ content:
             None,
             Some("/p"),
             None,
-            Some("/p")
+            None,
+            Some("/p"),
+            None
         ));
         assert!(!scope_visible(
             SkillScope::Project,
             None,
             Some("/p"),
             None,
-            Some("/q")
+            None,
+            Some("/q"),
+            None
         ));
+    }
+
+    #[test]
+    fn team_scope_visibility() {
+        // matches when active_team == skill_team
+        assert!(scope_visible(
+            SkillScope::Team,
+            None,
+            None,
+            Some("org-xyz"),
+            None,
+            None,
+            Some("org-xyz"),
+        ));
+        // mismatch → false
+        assert!(!scope_visible(
+            SkillScope::Team,
+            None,
+            None,
+            Some("org-abc"),
+            None,
+            None,
+            Some("org-xyz"),
+        ));
+        // no active_team → fail-closed
+        assert!(!scope_visible(
+            SkillScope::Team,
+            None,
+            None,
+            Some("org-xyz"),
+            None,
+            None,
+            None,
+        ));
+        // no skill_team selector → never injects (None == None guard)
+        assert!(!scope_visible(
+            SkillScope::Team,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("org-xyz"),
+        ));
+    }
+
+    #[test]
+    fn governance_ref_roundtrip() {
+        let yaml = "name: t\nversion: 1.0.0\npublisher: human:test\ndescription: t\ncategory: workflow\ncontent:\n  abstract: t\ngovernance:\n  org_id: org-1\n  constitution_hash: abc\n";
+        let m: SkillManifest = serde_yaml_ng::from_str(yaml).unwrap();
+        let g = m.governance.unwrap();
+        assert_eq!(g.org_id, "org-1");
+        assert_eq!(g.constitution_hash, "abc");
+    }
+
+    #[test]
+    fn governance_ref_absent_is_none() {
+        let m: SkillManifest = serde_yaml_ng::from_str("name: t\nversion: 1.0.0\npublisher: human:test\ndescription: t\ncategory: workflow\ncontent:\n  abstract: t\n").unwrap();
+        assert!(m.governance.is_none());
+    }
+
+    #[test]
+    fn team_field_roundtrip() {
+        let yaml = "name: t\nversion: 1.0.0\npublisher: human:test\ndescription: t\ncategory: workflow\ncontent:\n  abstract: t\nscope: team\nteam: org-1\n";
+        let m: SkillManifest = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(m.scope, SkillScope::Team);
+        assert_eq!(m.team.as_deref(), Some("org-1"));
     }
 }

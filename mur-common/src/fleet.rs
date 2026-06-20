@@ -13,6 +13,11 @@ pub struct Fleet {
     pub goal: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub router: Option<String>,
+    /// Team identifier for this fleet; set when the fleet is affiliated with a
+    /// MUR Server team. The fleet runner sets MUR_ACTIVE_TEAM from this value
+    /// before each member turn so team-scoped skills inject correctly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
     #[serde(default)]
     pub members: Vec<String>,
     pub channel_id: String,
@@ -131,6 +136,7 @@ mod tests {
             display_name: "Dev Team".into(),
             goal: "ship it".into(),
             router: None,
+            team_id: None,
             members: vec!["pm".into(), "qa".into()],
             channel_id: "fleet-dev".into(),
             rules: vec![],
