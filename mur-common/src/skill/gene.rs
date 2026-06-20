@@ -249,6 +249,8 @@ mod tests {
             category: Category::Workflow,
             scope: Default::default(),
             fleet: None,
+            team: None,
+            governance: None,
             project: None,
             hosts: vec![],
             content: Content {

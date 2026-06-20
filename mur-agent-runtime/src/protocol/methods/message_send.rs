@@ -92,6 +92,7 @@ impl MethodHandler for MessageSendHandler {
             // Direct message/send carries no fleet context — only channel/delegate
             // does, so fleet-scoped skills stay hidden on this path (fail-closed).
             active_fleet: None,
+            active_team: None,
         };
 
         self.emit_progress("pending", "llm_reasoning", None).await;

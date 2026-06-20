@@ -37,6 +37,19 @@ fn verified_active_fleet(mur_home: &Path, agent: &str, channel_id: &str) -> Opti
     is_member.then(|| name.to_string())
 }
 
+/// Derive the active team for a delegated turn from the fleet's `team_id` field.
+///
+/// Like `verified_active_fleet`, this reads the local fleet record rather than
+/// accepting untrusted caller input. If the fleet has no `team_id`, or if the
+/// channel is not a fleet channel, returns `None` (fail-closed).
+fn verified_active_team(mur_home: &Path, channel_id: &str) -> Option<String> {
+    let name = mur_common::fleet::fleet_name_from_channel_id(channel_id)?;
+    let path = mur_home.join("fleets").join(name).join("fleet.yaml");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let fleet: mur_common::fleet::Fleet = serde_yaml_ng::from_str(&raw).ok()?;
+    fleet.team_id
+}
+
 /// Append the specialist's reply to `channel_id` as `Agent{self}`, signed by the
 /// specialist's identity (v3d-2 peer-writes-own).
 #[allow(clippy::too_many_arguments)]
@@ -153,6 +166,9 @@ impl MethodHandler for ChannelDelegateHandler {
             // agent's own fleet's fleet-scoped skills. Untrusted/non-member/
             // non-fleet channel ids yield None (fail-closed).
             active_fleet: verified_active_fleet(&self.mur_home, &self.agent, &channel_id),
+            // Derive the team id from the fleet record (if any) so team-scoped
+            // skills inject for fleet members belonging to that team (fail-closed).
+            active_team: verified_active_team(&self.mur_home, &channel_id),
         };
 
         // Run the turn (non-streaming path; v3d-2 does not need per-delta
@@ -230,6 +246,16 @@ mod tests {
     }
 
     fn write_fleet(home: &Path, name: &str, members: &[&str], router: Option<&str>) {
+        write_fleet_with_team(home, name, members, router, None);
+    }
+
+    fn write_fleet_with_team(
+        home: &Path,
+        name: &str,
+        members: &[&str],
+        router: Option<&str>,
+        team_id: Option<&str>,
+    ) {
         let dir = home.join("fleets").join(name);
         std::fs::create_dir_all(&dir).unwrap();
         let mut yaml = format!("name: {name}\nchannel_id: fleet-{name}\nmembers:\n");
@@ -238,6 +264,9 @@ mod tests {
         }
         if let Some(r) = router {
             yaml.push_str(&format!("router: {r}\n"));
+        }
+        if let Some(t) = team_id {
+            yaml.push_str(&format!("team_id: {t}\n"));
         }
         std::fs::write(dir.join("fleet.yaml"), yaml).unwrap();
     }
@@ -279,5 +308,28 @@ mod tests {
             verified_active_fleet(home, "mur", "fleet-sq").as_deref(),
             Some("sq")
         );
+    }
+
+    #[test]
+    fn verified_active_team_reads_fleet_team_id() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+
+        // fleet with a team_id → returns it
+        write_fleet_with_team(home, "alpha", &["qa"], None, Some("org-x"));
+        assert_eq!(
+            verified_active_team(home, "fleet-alpha").as_deref(),
+            Some("org-x")
+        );
+
+        // fleet without team_id → None
+        write_fleet_with_team(home, "beta", &["qa"], None, None);
+        assert_eq!(verified_active_team(home, "fleet-beta"), None);
+
+        // non-fleet channel → None
+        assert_eq!(verified_active_team(home, "agent:foo:uuid"), None);
+
+        // fleet not on disk → None (fail-closed)
+        assert_eq!(verified_active_team(home, "fleet-ghost"), None);
     }
 }

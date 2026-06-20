@@ -36,6 +36,8 @@ pub fn do_create(mur_home: &Path, name: &str, description: &str, body: &str) -> 
         hosts: vec![],
         scope: Default::default(),
         fleet: None,
+        team: None,
+        governance: None,
         project: None,
         content: Content {
             r#abstract: description.to_string(),

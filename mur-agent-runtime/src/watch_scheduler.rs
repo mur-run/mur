@@ -258,6 +258,7 @@ fn inject(runner: &Arc<TaskRunner>, text: &str) {
                 context_task_id: None,
                 task_id: None,
                 active_fleet: None,
+                active_team: None,
             })
             .await;
     });

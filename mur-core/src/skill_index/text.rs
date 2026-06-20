@@ -60,6 +60,8 @@ mod tests {
             scope: Default::default(),
             fleet: None,
             project: None,
+            team: None,
+            governance: None,
             content: Content {
                 r#abstract: abstract_.into(),
                 context: Some("context text".into()),

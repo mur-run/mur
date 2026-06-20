@@ -548,6 +548,8 @@ async fn accept_proposal_as_skill(
             Default::default()
         },
         fleet: None,
+        team: None,
+        governance: None,
         project: proposal.project.clone(),
         content: Content {
             r#abstract: abstract_text,

@@ -40,6 +40,7 @@ pub fn cmd_fleet_create(
         display_name: String::new(),
         goal: goal.unwrap_or_default(),
         router: canonical_router,
+        team_id: None,
         members,
         channel_id: ch.id.clone(),
         rules: vec![],

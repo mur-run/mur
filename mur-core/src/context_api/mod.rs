@@ -17,6 +17,7 @@ use crate::store::config::load_config;
 use crate::store::yaml::YamlStore;
 
 /// Scope for context retrieval — filters which patterns are relevant.
+/// ponytail: transitional Pattern scope (Phase W3b) — use `scope_visible` / Skills for new code.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContextScope {
     #[serde(default, skip_serializing_if = "Option::is_none")]

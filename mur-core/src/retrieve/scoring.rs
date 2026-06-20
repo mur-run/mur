@@ -9,7 +9,7 @@ use mur_common::pattern::{Origin, Pattern, PatternKind, Tier};
 /// Caller-supplied scope context used to make preference/procedure boosts
 /// accurate rather than using heuristics like `origin.is_some()`.
 #[derive(Debug, Clone, Default)]
-pub struct ScopeContext {
+pub struct ScoringHints {
     /// The active user identifier (matches `Origin::user`).
     pub user: Option<String>,
     /// The active platform/tool (matches `Origin::platform`).
@@ -43,7 +43,7 @@ pub trait Retrievable {
         &self,
         weighted_sum: f64,
         _query_words: &[&str],
-        _scope: Option<&ScopeContext>,
+        _scope: Option<&ScoringHints>,
         _project_language: Option<&str>,
     ) -> f64 {
         weighted_sum
@@ -98,7 +98,7 @@ impl Retrievable for Pattern {
         &self,
         weighted_sum: f64,
         query_words: &[&str],
-        scope: Option<&ScopeContext>,
+        scope: Option<&ScoringHints>,
         project_language: Option<&str>,
     ) -> f64 {
         let scope_mult = if self.applies.projects.is_empty()
@@ -199,7 +199,7 @@ pub fn score_and_rank_generic_with_config<T: Retrievable>(
 fn score_and_rank_inner<T, F>(
     query_words: &[&str],
     candidates: Vec<T>,
-    scope: Option<&ScopeContext>,
+    scope: Option<&ScoringHints>,
     project_language: Option<&str>,
     config: Option<&RetrievalConfig>,
     relevance_fn: F,
@@ -378,7 +378,7 @@ fn tier_priority(tier: &Tier) -> u8 {
 /// A match requires that the scope field is present AND the pattern's origin
 /// contains the same value.  Missing scope = no scope match (no boost).
 #[allow(deprecated)] // transitional: reads legacy origin.user / origin.platform fields
-fn scope_matches_origin(scope: Option<&ScopeContext>, origin: Option<&Origin>) -> bool {
+fn scope_matches_origin(scope: Option<&ScoringHints>, origin: Option<&Origin>) -> bool {
     let Some(sc) = scope else { return false };
     let Some(orig) = origin else { return false };
 
@@ -397,7 +397,7 @@ fn scope_matches_origin(scope: Option<&ScopeContext>, origin: Option<&Origin>) -
 }
 
 /// Returns true when the query or the task description looks like a how-to request.
-fn is_task_query(query_words: &[&str], scope: Option<&ScopeContext>) -> bool {
+fn is_task_query(query_words: &[&str], scope: Option<&ScoringHints>) -> bool {
     const TASK_INDICATORS: &[&str] = &[
         "how",
         "steps",
@@ -468,7 +468,7 @@ pub fn score_sources(
 /// - **Procedure**: +0.1 when the query or `scope.task` indicates a how-to
 ///   request.
 /// - **Technical / Fact / None**: 0.0 (unchanged).
-fn kind_score_boost(pattern: &Pattern, query_words: &[&str], scope: Option<&ScopeContext>) -> f64 {
+fn kind_score_boost(pattern: &Pattern, query_words: &[&str], scope: Option<&ScoringHints>) -> f64 {
     match pattern.effective_kind() {
         PatternKind::Preference | PatternKind::Behavioral => {
             // Only boost when the scope actually matches this pattern's origin.
@@ -745,7 +745,7 @@ mod tests {
             confidence: 1.0,
         });
         // Scope matches origin user → boost
-        let scope = ScopeContext {
+        let scope = ScoringHints {
             user: Some("david".into()),
             ..Default::default()
         };
@@ -786,7 +786,7 @@ mod tests {
             platform: None,
             confidence: 1.0,
         });
-        let scope = ScopeContext {
+        let scope = ScoringHints {
             user: Some("bob".into()), // different user
             ..Default::default()
         };
@@ -809,7 +809,7 @@ mod tests {
     fn test_kind_boost_procedure_via_scope_task() {
         let mut p = make_pattern("deploy-steps", "deploy to production");
         p.kind = Some(PatternKind::Procedure);
-        let scope = ScopeContext {
+        let scope = ScoringHints {
             task: Some("how to set up the environment".into()),
             ..Default::default()
         };
@@ -975,7 +975,7 @@ mod tests {
         let mut p = make_pattern("rust-error", "rust error body");
         p.applies.languages = vec!["rust".into()];
         let query_words = ["rust", "error"];
-        let scope = ScopeContext {
+        let scope = ScoringHints {
             user: None,
             platform: None,
             task: None,
