@@ -27,6 +27,7 @@ pub fn inject_layer2(
     recently_fired: &HashSet<String>,
     active_fleet: Option<&str>,
     active_project: Option<&str>,
+    active_team: Option<&str>,
 ) -> InjectionResult {
     // Adaptive cutoff: skip entirely when remaining context is too small.
     if let Some(ad) = &cfg.adaptive {
@@ -64,8 +65,10 @@ pub fn inject_layer2(
                 s.manifest.scope,
                 s.manifest.fleet.as_deref(),
                 s.manifest.project.as_deref(),
+                s.manifest.team.as_deref(),
                 active_fleet,
                 active_project,
+                active_team,
             )
         })
         .collect();
@@ -181,6 +184,7 @@ content:
                 &HashSet::new(),
                 None,
                 active,
+                None,
             )
             .injected_names
         };
@@ -219,6 +223,7 @@ content:
                 &HashSet::new(),
                 active_fleet,
                 None,
+                None,
             )
             .injected_names
         };
@@ -244,6 +249,7 @@ content:
             &SkillsConfig::default(),
             0.0,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -272,6 +278,7 @@ content:
             &HashSet::new(),
             None,
             None,
+            None,
         );
         assert_eq!(result.injected_names.len(), 2);
         assert_eq!(result.injected_names[0], "trust");
@@ -293,7 +300,7 @@ content:
             }),
             ..SkillsConfig::default()
         };
-        let result = inject_layer2(&[s], &cfg, 0.85, &HashSet::new(), None, None);
+        let result = inject_layer2(&[s], &cfg, 0.85, &HashSet::new(), None, None, None);
         assert!(result.budget_skipped);
         assert!(result.injected_names.is_empty());
     }
@@ -314,7 +321,7 @@ content:
             max_skills_in_prompt: 2,
             ..SkillsConfig::default()
         };
-        let result = inject_layer2(&skills, &cfg, 0.0, &HashSet::new(), None, None);
+        let result = inject_layer2(&skills, &cfg, 0.0, &HashSet::new(), None, None, None);
         assert_eq!(result.injected_names.len(), 2);
     }
 
@@ -334,7 +341,7 @@ content:
         );
         let mut fired = HashSet::new();
         fired.insert("b".to_string());
-        let result = inject_layer2(&[a, b], &SkillsConfig::default(), 0.0, &fired, None, None);
+        let result = inject_layer2(&[a, b], &SkillsConfig::default(), 0.0, &fired, None, None, None);
         assert_eq!(result.injected_names.len(), 2);
         assert_eq!(result.injected_names[0], "b");
     }

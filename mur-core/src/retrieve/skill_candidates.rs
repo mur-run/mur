@@ -66,35 +66,40 @@ impl LoadedSkill {
 pub struct ActiveScope {
     pub fleet: Option<String>,
     pub project: Option<String>,
+    pub team: Option<String>,
 }
 
 impl ActiveScope {
-    /// Detect the active scope. `MUR_ACTIVE_FLEET` / `MUR_ACTIVE_PROJECT` env
-    /// override; otherwise `project` defaults to the current working dir's git
-    /// repo root (so a `scope: Project` skill learned in repo X injects anywhere
-    /// in X, and nowhere else). `fleet` has no cwd-derivable default — it stays
-    /// env-only until the fleet runtime supplies it (ActiveContext for fleets).
+    /// Detect the active scope. `MUR_ACTIVE_FLEET` / `MUR_ACTIVE_PROJECT` /
+    /// `MUR_ACTIVE_TEAM` env override; otherwise `project` defaults to the
+    /// current working dir's git repo root (so a `scope: Project` skill learned
+    /// in repo X injects anywhere in X, and nowhere else). `fleet` and `team`
+    /// have no cwd-derivable default — they stay env-only until the fleet
+    /// runtime supplies them.
     pub fn detect() -> Self {
         let nonempty = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
         Self {
             fleet: nonempty("MUR_ACTIVE_FLEET"),
             // Shared detection (env override → cwd repo root) with the runtime injector.
             project: mur_common::project::active_project_id(),
+            team: nonempty("MUR_ACTIVE_TEAM"),
         }
     }
 }
 
 /// Drop candidate skills not visible in the active scope. `User`/`Enterprise`
-/// always pass; `Fleet`/`Project` pass only when their selector matches `ctx`,
-/// so an unmatched fleet/project skill is excluded, never leaked (fail-closed).
+/// always pass; `Fleet`/`Project`/`Team` pass only when their selector matches
+/// `ctx`, so an unmatched skill is excluded, never leaked (fail-closed).
 pub fn filter_by_scope(candidates: &mut Vec<LoadedSkill>, ctx: &ActiveScope) {
     candidates.retain(|c| {
         mur_common::skill::manifest::scope_visible(
             c.manifest.scope,
             c.manifest.fleet.as_deref(),
             c.manifest.project.as_deref(),
+            c.manifest.team.as_deref(),
             ctx.fleet.as_deref(),
             ctx.project.as_deref(),
+            ctx.team.as_deref(),
         )
     });
 }
@@ -416,18 +421,21 @@ mod tests {
         let ctx = ActiveScope {
             fleet: Some("devteam".into()),
             project: None,
+            team: None,
         };
         assert_eq!(names(&ctx), vec!["f".to_string(), "u".to_string()]);
         // matching project context
         let ctx = ActiveScope {
             fleet: None,
             project: Some("/repo".into()),
+            team: None,
         };
         assert_eq!(names(&ctx), vec!["p".to_string(), "u".to_string()]);
         // wrong fleet → fail-closed (only user)
         let ctx = ActiveScope {
             fleet: Some("other".into()),
             project: None,
+            team: None,
         };
         assert_eq!(names(&ctx), vec!["u".to_string()]);
     }

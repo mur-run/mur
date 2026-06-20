@@ -326,6 +326,7 @@ impl TaskRunner {
         // threaded in by the `channel/delegate` handler. Fleet- and project-scoped
         // skills only surface in their matching context; user/enterprise always.
         let active_project = mur_common::project::active_project_id();
+        let active_team = std::env::var("MUR_ACTIVE_TEAM").ok().filter(|s| !s.trim().is_empty());
         let injection = inject_layer2(
             &skills.loaded,
             &self.skills_cfg,
@@ -333,6 +334,7 @@ impl TaskRunner {
             &recently,
             active_fleet,
             active_project.as_deref(),
+            active_team.as_deref(),
         );
 
         let triggered = match_prompt(&skills.triggers, user_prompt);
