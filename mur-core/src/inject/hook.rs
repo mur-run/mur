@@ -108,13 +108,6 @@ pub fn detect_trigger(message: &str) -> HookTrigger {
     HookTrigger::SessionStart
 }
 
-/// Format scored patterns for injection into a prompt.
-/// Returns content only (no metadata), within token budget.
-#[allow(dead_code)] // Used by tests and as public API
-pub fn format_for_injection(patterns: &[Pattern], max_tokens: usize) -> String {
-    format_for_injection_with_store(patterns, max_tokens, None)
-}
-
 /// Format scored patterns with optional YamlStore for resolving diagram attachments.
 /// Groups patterns by kind when mixed kinds are present.
 pub fn format_for_injection_with_store(
@@ -803,13 +796,13 @@ mod tests {
 
     #[test]
     fn test_empty_patterns() {
-        assert_eq!(format_for_injection(&[], 2000), "");
+        assert_eq!(format_for_injection_with_store(&[], 2000, None), "");
     }
 
     #[test]
     fn test_single_pattern() {
         let p = make_pattern("Use Swift Testing", "Use @Test macro");
-        let result = format_for_injection(&[p], 2000);
+        let result = format_for_injection_with_store(&[p], 2000, None);
         assert!(result.contains("Use Swift Testing"));
         assert!(result.contains("@Test macro"));
     }
@@ -841,7 +834,7 @@ mod tests {
             origin: None,
             attachments: vec![],
         };
-        let result = format_for_injection(&[p], 2000);
+        let result = format_for_injection_with_store(&[p], 2000, None);
         assert!(result.contains("Do X"));
         assert!(result.contains("💡 Because Y"));
     }
@@ -884,7 +877,7 @@ mod tests {
         let patterns: Vec<Pattern> = (0..20)
             .map(|i| make_pattern(&format!("Pattern {}", i), &"x".repeat(500)))
             .collect();
-        let result = format_for_injection(&patterns, 500);
+        let result = format_for_injection_with_store(&patterns, 500, None);
         // Should not include all 20 patterns
         let count = result.matches("###").count();
         assert!(count < 20);
@@ -926,7 +919,7 @@ mod tests {
         };
 
         // Without store, diagram can't be resolved — should show path fallback
-        let result = format_for_injection(&[p], 5000);
+        let result = format_for_injection_with_store(&[p], 5000, None);
         assert!(result.contains("Architecture pattern"));
         assert!(result.contains("Use microservices"));
         assert!(result.contains("Diagram: System architecture"));
@@ -992,7 +985,7 @@ mod tests {
             }],
         };
 
-        let result = format_for_injection(&[p], 5000);
+        let result = format_for_injection_with_store(&[p], 5000, None);
         assert!(result.contains("Dark mode screenshot"));
         // Should NOT contain mermaid code fence
         assert!(!result.contains("```mermaid"));
@@ -1002,7 +995,7 @@ mod tests {
     #[test]
     fn test_pattern_without_attachments_unchanged() {
         let p = make_pattern("No attachments", "Use foo bar.");
-        let result = format_for_injection(&[p], 5000);
+        let result = format_for_injection_with_store(&[p], 5000, None);
         assert!(result.contains("No attachments"));
         assert!(result.contains("Use foo bar"));
         // No attachment markers
@@ -1023,7 +1016,7 @@ mod tests {
         let p_tech = make_pattern("Use @Test", "Use @Test macro for Swift testing");
         // kind is None = Technical
 
-        let result = format_for_injection(&[p_pref, p_proc, p_tech], 5000);
+        let result = format_for_injection_with_store(&[p_pref, p_proc, p_tech], 5000, None);
         assert!(
             result.contains("User Preferences"),
             "Should have Preferences header"
@@ -1042,7 +1035,7 @@ mod tests {
     fn test_all_technical_uses_flat_format() {
         let p1 = make_pattern("Pattern A", "Content A");
         let p2 = make_pattern("Pattern B", "Content B");
-        let result = format_for_injection(&[p1, p2], 5000);
+        let result = format_for_injection_with_store(&[p1, p2], 5000, None);
         // Should use the old flat format header
         assert!(result.contains("Relevant patterns from your learning history"));
         // Should NOT have kind-group headers
@@ -1057,7 +1050,7 @@ mod tests {
         p1.kind = Some(PatternKind::Technical);
         let mut p2 = make_pattern("Pattern B", "Content B");
         p2.kind = Some(PatternKind::Technical);
-        let result = format_for_injection(&[p1, p2], 5000);
+        let result = format_for_injection_with_store(&[p1, p2], 5000, None);
         assert!(result.contains("Relevant patterns from your learning history"));
         assert!(!result.contains("Knowledge"));
     }
@@ -1067,7 +1060,7 @@ mod tests {
         // Fact with explicit kind → grouped (even though it's in Knowledge group)
         let mut p1 = make_pattern("Server address", "prod.example.com:8080");
         p1.kind = Some(PatternKind::Fact);
-        let result = format_for_injection(&[p1], 5000);
+        let result = format_for_injection_with_store(&[p1], 5000, None);
         assert!(
             result.contains("Relevant knowledge from your learning history"),
             "Explicit Fact kind should use grouped header"
@@ -1083,7 +1076,7 @@ mod tests {
         let mut p2 = make_pattern("Tech pattern", "Use Rust");
         p2.kind = Some(PatternKind::Technical);
 
-        let result = format_for_injection(&[p, p2], 5000);
+        let result = format_for_injection_with_store(&[p, p2], 5000, None);
         // Preferences should be bullet points
         assert!(result.contains("- **"));
     }
@@ -1103,7 +1096,7 @@ mod tests {
 
         // Token budget: ~120 tokens (≈480 chars).
         // The preference entry is small; the procedure entry is huge.
-        let result = format_for_injection(&[pref, proc_pattern], 120);
+        let result = format_for_injection_with_store(&[pref, proc_pattern], 120, None);
 
         // Preference should be present
         assert!(

@@ -6,16 +6,6 @@
 
 use mur_common::route::TaskType;
 
-/// Scores a sub-task's difficulty 0.0 (trivial) to 1.0 (needs frontier).
-pub trait DifficultyHeuristic {
-    /// Compute a difficulty score.
-    ///
-    /// * `task_summary` — human-readable description of the work.
-    /// * `task_type` — classified task category.
-    /// * `estimated_tokens` — rough context-window size estimate.
-    fn score(&self, task_summary: &str, task_type: TaskType, estimated_tokens: u64) -> f64;
-}
-
 /// Default difficulty heuristic.
 ///
 /// Combines:
@@ -103,8 +93,8 @@ impl DefaultHeuristic {
     }
 }
 
-impl DifficultyHeuristic for DefaultHeuristic {
-    fn score(&self, task_summary: &str, task_type: TaskType, estimated_tokens: u64) -> f64 {
+impl DefaultHeuristic {
+    pub fn score(&self, task_summary: &str, task_type: TaskType, estimated_tokens: u64) -> f64 {
         let base = task_type.base_difficulty();
         let context = self.context_factor(estimated_tokens);
         let keywords = self.keyword_boost(task_summary);

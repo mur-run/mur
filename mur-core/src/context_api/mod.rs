@@ -193,7 +193,7 @@ fn retrieve_with_config(
     }
 
     // Format within token budget
-    let formatted = hook::format_for_injection(&format_patterns, req.token_budget);
+    let formatted = hook::format_for_injection_with_store(&format_patterns, req.token_budget, None);
     let tokens_used = formatted.len() / 4; // rough estimate
 
     Ok(ContextResponse {

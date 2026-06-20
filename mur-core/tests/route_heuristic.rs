@@ -1,5 +1,5 @@
 use mur_common::route::TaskType;
-use mur_core::route::heuristic::{DefaultHeuristic, DifficultyHeuristic};
+use mur_core::route::heuristic::DefaultHeuristic;
 
 #[test]
 fn heuristic_scores_low_for_execution() {
