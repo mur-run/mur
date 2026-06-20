@@ -161,8 +161,10 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
 
     // I3 — Recompute the signer fingerprint from the verified pubkey and display
     // ONLY the derived value; reject if the manifest's stored value mismatches.
+    // An empty signer_fingerprint is also rejected: export.rs always populates it,
+    // so a missing value indicates a crafted or stripped bundle.
     let derived_fp = signer_fingerprint(&manifest.signer_pubkey);
-    if !manifest.signer_fingerprint.is_empty() && manifest.signer_fingerprint != derived_fp {
+    if manifest.signer_fingerprint != derived_fp {
         bail!("manifest signer_fingerprint does not match signer_pubkey — refusing import");
     }
 
@@ -378,11 +380,10 @@ pub(crate) fn install_bundled_members(
 
         // Parse the bundled profile and overwrite the identity block with the
         // fresh public key so profile.yaml is consistent with identity.pub.
-        // If the bundled profile is a legacy/minimal YAML that doesn't parse as
-        // AgentProfile (e.g., missing required fields), fall back to writing the
-        // raw bytes — the fresh identity.pub is already on disk and takes
-        // precedence for signing; the profile pubkey field will be stale for
-        // legacy bundles, which is the pre-existing behaviour.
+        // Fail-closed: if the bundled profile does not parse as AgentProfile
+        // (missing required fields, wrong schema, or tampered data), bail.
+        // A member created by `mur agent create` always produces a valid profile;
+        // an unparseable one is suspicious and must not be installed.
         match serde_yaml::from_slice::<AgentProfile>(profile_bytes) {
             Ok(mut profile) => {
                 profile.identity.pubkey = fresh_id.public_key_multibase();
@@ -395,10 +396,10 @@ pub(crate) fn install_bundled_members(
                 std::fs::write(dir.join("profile.yaml"), profile_yaml.as_bytes())
                     .with_context(|| format!("write profile for '{canon}'"))?;
             }
-            Err(_) => {
-                // Legacy or minimal profile — write raw bytes; identity.pub is fresh.
-                std::fs::write(dir.join("profile.yaml"), profile_bytes.as_slice())
-                    .with_context(|| format!("write profile for '{canon}'"))?;
+            Err(e) => {
+                bail!(
+                    "member '{canon}' profile.yaml is malformed/unsupported — refusing to install member: {e}"
+                );
             }
         }
 
@@ -571,7 +572,11 @@ mod tests {
             .unwrap();
         let pm_dir = s.join("agents").join("pm");
         std::fs::create_dir_all(&pm_dir).unwrap();
-        std::fs::write(pm_dir.join("profile.yaml"), "name: pm\nentitlements: {}\n").unwrap();
+        // Must be a valid AgentProfile — write a parseable profile with the right name.
+        let mut pm_profile = mur_common::agent::AgentProfile::default_for_tests();
+        pm_profile.name = "pm".into();
+        let pm_profile_yaml = serde_yaml::to_string(&pm_profile).unwrap();
+        std::fs::write(pm_dir.join("profile.yaml"), pm_profile_yaml.as_bytes()).unwrap();
         mur_common::identity::AgentIdentity::generate()
             .save(&pm_dir)
             .unwrap();
@@ -632,7 +637,11 @@ mod tests {
             .unwrap();
         let pm_dir = s.join("agents").join("pm");
         std::fs::create_dir_all(&pm_dir).unwrap();
-        std::fs::write(pm_dir.join("profile.yaml"), "name: pm\nentitlements: {}\n").unwrap();
+        // Must be a valid AgentProfile so the export round-trip succeeds.
+        let mut pm_profile = mur_common::agent::AgentProfile::default_for_tests();
+        pm_profile.name = "pm".into();
+        let pm_profile_yaml = serde_yaml::to_string(&pm_profile).unwrap();
+        std::fs::write(pm_dir.join("profile.yaml"), pm_profile_yaml.as_bytes()).unwrap();
         mur_common::identity::AgentIdentity::generate()
             .save(&pm_dir)
             .unwrap();
@@ -728,7 +737,7 @@ mod tests {
         let evil_skill_yaml = "name: ../../evil\nversion: 1.0.0\npublisher: human:t\n\
             description: bad\ncategory: context\ncontent:\n  abstract: a\n  context: body\n";
 
-        let mut files: Vec<(String, Vec<u8>)> = vec![
+        let files: Vec<(String, Vec<u8>)> = vec![
             ("fleet.yaml".into(), fleet_yaml.as_bytes().to_vec()),
             (
                 "skills/foo/skill.yaml".into(),
@@ -946,6 +955,76 @@ mod tests {
         );
     }
 
+    /// I3 regression — empty signer_fingerprint bypass: a correctly-signed manifest
+    /// whose `signer_fingerprint` is empty string must be refused (the derived
+    /// fingerprint is never empty, so they will never match).
+    #[test]
+    fn import_refuses_empty_signer_fingerprint() {
+        use mur_common::fleet_bundle::{
+            BundleEntry, BundleManifest, FLEET_BUNDLE_FORMAT, content_hash, manifest_sign_input,
+        };
+        use mur_common::identity::AgentIdentity;
+
+        let src = tempfile::tempdir().unwrap();
+        let s = src.path();
+        let id_dir = s.join("agents").join("mur");
+        std::fs::create_dir_all(&id_dir).unwrap();
+        let id = AgentIdentity::generate();
+        id.save(&id_dir).unwrap();
+        let signer_pubkey = id.public_key_multibase();
+
+        let fleet_yaml = "name: dev\ndisplay_name: \"\"\ngoal: g\nrouter: ~\nmembers: []\nchannel_id: fleet-dev\nrules: []\nskills: []\nloop_cfg: ~\n";
+        let files: Vec<(String, Vec<u8>)> =
+            vec![("fleet.yaml".into(), fleet_yaml.as_bytes().to_vec())];
+        let entries: Vec<BundleEntry> = files
+            .iter()
+            .map(|(p, b)| BundleEntry {
+                path: p.clone(),
+                sha256: content_hash(b),
+            })
+            .collect();
+
+        let mut manifest = BundleManifest {
+            format_version: FLEET_BUNDLE_FORMAT,
+            fleet_name: "dev".into(),
+            created_at: "2026-06-20T00:00:00Z".into(),
+            // Empty fingerprint — the old guard would skip the check; the new guard rejects it.
+            signer_fingerprint: String::new(),
+            signer_pubkey,
+            includes_members: false,
+            members: vec![],
+            entries,
+            sig: None,
+        };
+        // Sign correctly so the sig check passes — the empty fingerprint must still be rejected.
+        let input = manifest_sign_input(&manifest);
+        manifest.sig = Some(multibase::encode(
+            multibase::Base::Base58Btc,
+            id.sign_bytes(&input),
+        ));
+        let bundle_bytes = build_evil_bundle(&manifest, &files);
+        let bundle_path = s.join("emptyfp.fleet");
+        std::fs::write(&bundle_path, &bundle_bytes).unwrap();
+
+        let dst = tempfile::tempdir().unwrap();
+        let home = dst.path();
+        let err = cmd_fleet_import(
+            home,
+            &bundle_path,
+            ImportOpts {
+                force: false,
+                no_members: false,
+                yes: true,
+            },
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("signer_fingerprint"),
+            "expected empty-fingerprint refusal, got: {msg}"
+        );
+    }
+
     /// I4 — gzip-bomb: a bundle with an entry exceeding the per-entry cap is refused.
     #[test]
     fn import_refuses_oversized_bundle_entry() {
@@ -956,7 +1035,6 @@ mod tests {
             signer_fingerprint,
         };
         use mur_common::identity::AgentIdentity;
-        use std::io::Write;
 
         let src = tempfile::tempdir().unwrap();
         let s = src.path();
@@ -1157,6 +1235,79 @@ mod tests {
         assert_eq!(
             installed_pubkey, local_pub,
             "installed profile identity.pubkey must match local identity.pub"
+        );
+    }
+
+    /// I6 regression — malformed member profile: a bundle whose member profile.yaml
+    /// cannot be parsed as AgentProfile must be refused (fail-closed), not silently
+    /// written with a stale exporter key.
+    #[test]
+    fn import_with_members_refuses_malformed_member_profile() {
+        use mur_common::fleet::Fleet;
+
+        let src = tempfile::tempdir().unwrap();
+        let s = src.path();
+
+        // Set up exporting side: concierge + pm member with a MALFORMED profile.
+        let mur_dir = s.join("agents").join("mur");
+        std::fs::create_dir_all(&mur_dir).unwrap();
+        let concierge_id = mur_common::identity::AgentIdentity::generate();
+        concierge_id.save(&mur_dir).unwrap();
+
+        let pm_dir = s.join("agents").join("pm");
+        std::fs::create_dir_all(&pm_dir).unwrap();
+        let pm_id = mur_common::identity::AgentIdentity::generate();
+        pm_id.save(&pm_dir).unwrap();
+        // Write a profile that is valid YAML but NOT a valid AgentProfile.
+        std::fs::write(
+            pm_dir.join("profile.yaml"),
+            "totally: not_an_agent_profile\n",
+        )
+        .unwrap();
+
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: "Dev".into(),
+            goal: "g".into(),
+            router: None,
+            members: vec!["pm".into()],
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+        };
+        crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
+        let bundle = s.join("dev.fleet");
+        crate::cmd::fleet::export::cmd_fleet_export(
+            s,
+            "dev",
+            true,
+            Some(bundle.clone()),
+            "2026-06-20T00:00:00Z",
+        )
+        .unwrap();
+
+        let dst = tempfile::tempdir().unwrap();
+        let home = dst.path();
+        let err = cmd_fleet_import(
+            home,
+            &bundle,
+            ImportOpts {
+                force: false,
+                no_members: false,
+                yes: true,
+            },
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("malformed") || msg.contains("refusing to install member"),
+            "expected malformed-profile refusal, got: {msg}"
+        );
+        // Nothing should be installed.
+        assert!(
+            !home.join("agents").join("pm").join("profile.yaml").exists(),
+            "malformed member must not be installed"
         );
     }
 
