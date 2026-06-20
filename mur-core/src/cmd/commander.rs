@@ -235,6 +235,7 @@ mod tests {
             goal: "g".into(),
             router: None,
             members: vec!["pm".into()],
+            team_id: None,
             channel_id: "fleet-dev".into(),
             rules: vec![],
             skills: vec![],

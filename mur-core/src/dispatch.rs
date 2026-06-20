@@ -432,8 +432,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 name,
                 fleet,
                 project,
+                team,
                 user,
-            } => cmd::skill_cmd::cmd_scope(&name, fleet, project, user)?,
+            } => cmd::skill_cmd::cmd_scope(&name, fleet, project, team, user)?,
             crate::cli::SkillAction::Search { query, local } => {
                 cmd::skill_cmd::cmd_search(&query, local)?
             }

@@ -217,6 +217,7 @@ mod tests {
                 deadline: String::new(),
                 done_when: String::new(),
             }),
+            team_id: None,
         }
     }
 

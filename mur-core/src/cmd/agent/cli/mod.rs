@@ -69,7 +69,7 @@ pub async fn cmd_cli(
     let lock = home.join("agents").join(&agent).join("running.lock");
     if !lock.exists() {
         eprintln!(
-            "Agent '{agent}' is not running. Start it first, e.g.:\n    mur agent run {agent}\nthen retry: mur agent cli {agent}"
+            "Agent '{agent}' is not running. Start it first with:\n    mur agent install-service {agent}\nthen retry: mur agent cli {agent}"
         );
         return Ok(());
     }

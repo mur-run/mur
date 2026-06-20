@@ -453,6 +453,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            team_id: None,
         };
         crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
         let out = home.join("dev.fleet");
@@ -602,6 +603,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            team_id: None,
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
         let bundle = s.join("dev.fleet");
@@ -667,6 +669,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            team_id: None,
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
         let bundle = s.join("dev.fleet");
@@ -1282,6 +1285,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            team_id: None,
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
         let bundle = s.join("dev.fleet");
@@ -1366,6 +1370,7 @@ mod tests {
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
+            team_id: None,
         };
         crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
         let bundle = s.join("dev.fleet");
