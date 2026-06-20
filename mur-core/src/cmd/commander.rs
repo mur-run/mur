@@ -33,7 +33,7 @@ pub fn accepted_pubkeys(mur_home: &Path) -> Vec<[u8; 32]> {
 
 /// Fold governance for `fleet` from its channel. Err on channel read failure
 /// (callers fail-closed). No pinned key ⇒ inert default.
-#[allow(dead_code)]
+#[allow(dead_code)] // consumed by Task 5 (daemon fleet_tick) + Task 4 (loop) integration
 pub fn governance_state(mur_home: &Path, fleet: &str) -> Result<GovernanceState> {
     let keys = accepted_pubkeys(mur_home);
     if keys.is_empty() {
@@ -55,6 +55,9 @@ pub fn governance_state(mur_home: &Path, fleet: &str) -> Result<GovernanceState>
 pub fn cmd_commander_pin(mur_home: &Path, pubkey_multibase: &str, force: bool) -> Result<()> {
     let dir = mur_home.join(COMMANDER_DIR);
     std::fs::create_dir_all(&dir)?;
+    if decode_pub(pubkey_multibase).is_none() {
+        bail!("not a valid multibase Ed25519 pubkey (expected 32 bytes)");
+    }
     let path = dir.join(COMMANDER_PUB);
     if path.exists() && !force {
         bail!(
@@ -74,7 +77,8 @@ pub fn cmd_commander_status(mur_home: &Path) -> Result<()> {
         return Ok(());
     }
     let dir = mur_home.join(COMMANDER_DIR);
-    let cur = std::fs::read_to_string(dir.join(COMMANDER_PUB)).unwrap_or_default();
+    let cur = std::fs::read_to_string(dir.join(COMMANDER_PUB))
+        .with_context(|| format!("read {}", dir.join(COMMANDER_PUB).display()))?;
     println!("Commander key pinned: {}", cur.trim());
     if dir.join(COMMANDER_PREV_PUB).exists() {
         println!("  (previous key also accepted for rotation)");
@@ -135,11 +139,15 @@ mod tests {
     fn pin_refuses_overwrite_without_force() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        cmd_commander_pin(home, "z11111", false).unwrap();
-        assert!(cmd_commander_pin(home, "z22222", false).is_err());
-        cmd_commander_pin(home, "z22222", true).unwrap(); // force overwrites
+        let pk1 = mur_common::identity::AgentIdentity::generate().public_key_multibase();
+        let pk2 = mur_common::identity::AgentIdentity::generate().public_key_multibase();
+        cmd_commander_pin(home, &pk1, false).unwrap();
+        assert!(cmd_commander_pin(home, &pk2, false).is_err()); // refuse overwrite
+        cmd_commander_pin(home, &pk2, true).unwrap(); // --force overwrites
         let pinned = std::fs::read_to_string(home.join("commander").join(COMMANDER_PUB)).unwrap();
-        assert_eq!(pinned.trim(), "z22222");
+        assert_eq!(pinned.trim(), pk2);
+        // and an invalid pubkey is rejected even with --force
+        assert!(cmd_commander_pin(home, "not-a-key", true).is_err());
     }
 
     #[test]
