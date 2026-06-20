@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-/// Metadata key injected into A2A envelopes that carry a governance directive.
+/// Key under which a governance directive is placed in a `ChannelEvent.payload`.
 pub const COMMANDER_DIRECTIVE_KEY: &str = "commander_directive";
 
 /// A cryptographically-signed instruction from the Commander governance plane.
 ///
 /// Serialised as a JSON object and placed under [`COMMANDER_DIRECTIVE_KEY`]
-/// in an A2A envelope's `metadata` map.  The signing layer lives in
-/// `mur-core`; this crate only owns the payload shape.
+/// in a `ChannelEvent.payload` appended to the `fleet-<name>` channel. The
+/// signing layer lives in `mur-core`; this crate only owns the payload shape.
+/// Cross-network A2A-envelope delivery is Phase 2.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommanderDirective {
     /// Directive kind, e.g. `"kill"`, `"budget_ceiling"`.
@@ -36,6 +37,13 @@ pub struct GovernanceState {
 
     /// Active budget ceiling (USD), if any has been applied.
     pub budget_ceiling: Option<f64>,
+
+    /// Nonce of the directive that produced `killed == true` (audit binding).
+    /// `None` when not killed, or after a resume clears the kill.
+    pub kill_nonce: Option<String>,
+
+    /// Nonce of the directive that set `budget_ceiling` (audit binding).
+    pub budget_nonce: Option<String>,
 }
 
 #[cfg(test)]

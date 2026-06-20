@@ -55,25 +55,45 @@ pub fn fold_governance(
     let mut seen: HashSet<String> = HashSet::new();
     candidates.retain(|d| seen.insert(d.nonce.clone()));
 
-    // 3. Order by the SIGNED issued_at_ms (then nonce as a deterministic tiebreak).
+    // 3. Order by the SIGNED issued_at_ms. On an EQUAL timestamp, bias toward the
+    //    safe state — a kill outranks a resume (kind_rank) — then nonce as a final
+    //    deterministic tiebreak. This is fail-safe: a same-ms kill/resume pair can
+    //    never resolve to "resumed".
+    fn kind_rank(kind: &str) -> u8 {
+        match kind {
+            "resume" => 0,
+            "kill" => 2,
+            _ => 1,
+        }
+    }
     candidates.sort_by(|a, b| {
         a.issued_at_ms
             .cmp(&b.issued_at_ms)
+            .then_with(|| kind_rank(&a.kind).cmp(&kind_rank(&b.kind)))
             .then_with(|| a.nonce.cmp(&b.nonce))
     });
 
-    // 4. Last-wins per kind in that order.
+    // 4. Last-wins per kind in that order. Bind each decision to the nonce of the
+    //    directive that produced it, so the audit can attest exactly which signed
+    //    directive was honored.
     let mut state = GovernanceState::default();
     for d in &candidates {
         match d.kind.as_str() {
-            "kill" => state.killed = true,
-            "resume" => state.killed = false,
+            "kill" => {
+                state.killed = true;
+                state.kill_nonce = Some(d.nonce.clone());
+            }
+            "resume" => {
+                state.killed = false;
+                state.kill_nonce = None;
+            }
             "budget_ceiling" => {
                 if let Some(v) = d.budget_usd
                     && v.is_finite()
                     && v >= 0.0
                 {
                     state.budget_ceiling = Some(v);
+                    state.budget_nonce = Some(d.nonce.clone());
                 }
             }
             _ => {}
@@ -230,5 +250,64 @@ mod tests {
         let accepted = [cur.verifying_key_bytes(), prev.verifying_key_bytes()];
         let evs = vec![directive_event(&prev, 1, "kill", "dev", None, "k1", 1000)];
         assert!(fold_governance(&evs, CID, "dev", &accepted).killed);
+    }
+
+    #[test]
+    fn ordering_is_by_issued_at_not_log_position() {
+        let cmd = AgentIdentity::generate();
+        let pk = [cmd.verifying_key_bytes()];
+        // kill is NEWER (issued 2000) but appears FIRST in the log; resume is
+        // OLDER (1000) but LAST. Distinct nonces ⇒ dedup keeps both. Only the
+        // issued_at sort keeps the kill; delete the sort and this flips to false.
+        let evs = vec![
+            directive_event(&cmd, 5, "kill", "dev", None, "k1", 2000),
+            directive_event(&cmd, 6, "resume", "dev", None, "r1", 1000),
+        ];
+        assert!(fold_governance(&evs, CID, "dev", &pk).killed);
+    }
+
+    #[test]
+    fn equal_timestamp_kill_beats_resume() {
+        let cmd = AgentIdentity::generate();
+        let pk = [cmd.verifying_key_bytes()];
+        // Same issued_at: the safe state (kill) must win regardless of log order.
+        let evs = vec![
+            directive_event(&cmd, 1, "resume", "dev", None, "r1", 5000),
+            directive_event(&cmd, 2, "kill", "dev", None, "k1", 5000),
+        ];
+        assert!(fold_governance(&evs, CID, "dev", &pk).killed);
+        let evs2 = vec![
+            directive_event(&cmd, 1, "kill", "dev", None, "k2", 5000),
+            directive_event(&cmd, 2, "resume", "dev", None, "r2", 5000),
+        ];
+        assert!(fold_governance(&evs2, CID, "dev", &pk).killed);
+    }
+
+    #[test]
+    fn nonces_bind_to_deciding_directives() {
+        let cmd = AgentIdentity::generate();
+        let pk = [cmd.verifying_key_bytes()];
+        let g = fold_governance(
+            &[directive_event(&cmd, 1, "kill", "dev", None, "k9", 1000)],
+            CID,
+            "dev",
+            &pk,
+        );
+        assert_eq!(g.kill_nonce.as_deref(), Some("k9"));
+        let g2 = fold_governance(
+            &[directive_event(
+                &cmd,
+                1,
+                "budget_ceiling",
+                "dev",
+                Some(3.0),
+                "b9",
+                1000,
+            )],
+            CID,
+            "dev",
+            &pk,
+        );
+        assert_eq!(g2.budget_nonce.as_deref(), Some("b9"));
     }
 }
