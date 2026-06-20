@@ -220,15 +220,50 @@ pub fn cmd_fleet_import(mur_home: &Path, file: &Path, opts: ImportOpts) -> Resul
     Ok(())
 }
 
-/// Task 4 fills this in. Stub: bundled-member install not yet implemented.
+/// Install each bundled member profile. Skips members that already exist locally
+/// (never overwrites). Generates a FRESH local identity for new members.
 pub(crate) fn install_bundled_members(
-    _mur_home: &Path,
-    _manifest: &BundleManifest,
-    _files: &HashMap<String, Vec<u8>>,
+    mur_home: &Path,
+    manifest: &BundleManifest,
+    files: &HashMap<String, Vec<u8>>,
     _force: bool,
-    _yes: bool,
+    yes: bool,
 ) -> Result<()> {
-    bail!("bundled-member install not yet implemented");
+    use mur_common::identity::AgentIdentity;
+
+    for member in &manifest.members {
+        let canon = crate::a2a_dial::canonicalize_agent_name(mur_home, member);
+        let dir = mur_home.join("agents").join(&canon);
+        let key = format!("members/{canon}/profile.yaml");
+        let Some(profile_bytes) = files.get(&key) else {
+            // Bundler skipped this member (not present on exporter) — nothing to install.
+            continue;
+        };
+        if dir.join("profile.yaml").is_file() {
+            println!("  member '{canon}' already exists — skipping");
+            continue;
+        }
+        // Show entitlements before asking.
+        let profile_str = String::from_utf8_lossy(profile_bytes);
+        let ent_line = profile_str
+            .lines()
+            .find(|l| l.trim_start().starts_with("entitlements"))
+            .unwrap_or("entitlements: (none)");
+        println!("  member '{canon}': {ent_line}");
+        if !confirm(&format!("Install agent '{canon}'?"), yes)? {
+            println!("  skipping '{canon}'");
+            continue;
+        }
+        std::fs::create_dir_all(&dir).with_context(|| format!("create agent dir for '{canon}'"))?;
+        std::fs::write(dir.join("profile.yaml"), profile_bytes.as_slice())
+            .with_context(|| format!("write profile for '{canon}'"))?;
+        // Generate a FRESH local identity — never copy the exporter's private key.
+        AgentIdentity::generate()
+            .save(&dir)
+            .with_context(|| format!("generate identity for '{canon}'"))?;
+        println!("  installed member '{canon}' with fresh identity");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -381,5 +416,145 @@ mod tests {
         std::fs::write(pm.join("profile.yaml"), "name: pm\n").unwrap();
         let missing = missing_members(home, &["pm".into(), "qa".into()]);
         assert_eq!(missing, vec!["qa".to_string()]);
+    }
+
+    #[test]
+    fn import_with_members_installs_fresh_identity() {
+        // Setup: source with a concierge, a pm agent, and a fleet.
+        let src = tempfile::tempdir().unwrap();
+        let s = src.path();
+        let mur_dir = s.join("agents").join("mur");
+        std::fs::create_dir_all(&mur_dir).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&mur_dir)
+            .unwrap();
+        let pm_dir = s.join("agents").join("pm");
+        std::fs::create_dir_all(&pm_dir).unwrap();
+        std::fs::write(pm_dir.join("profile.yaml"), "name: pm\nentitlements: {}\n").unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&pm_dir)
+            .unwrap();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            members: vec!["pm".into()],
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+        };
+        crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
+        let bundle = s.join("dev.fleet");
+        crate::cmd::fleet::export::cmd_fleet_export(
+            s,
+            "dev",
+            true,
+            Some(bundle.clone()),
+            "2026-06-20T00:00:00Z",
+        )
+        .unwrap();
+
+        let dst = tempfile::tempdir().unwrap();
+        let home = dst.path();
+        cmd_fleet_import(
+            home,
+            &bundle,
+            ImportOpts {
+                force: false,
+                no_members: false,
+                yes: true,
+            },
+        )
+        .unwrap();
+
+        let pm2 = home.join("agents").join("pm");
+        assert!(pm2.join("profile.yaml").is_file());
+        // fresh identity generated — key must NOT be the same bytes as the source
+        let src_key = std::fs::read(pm_dir.join("identity.key")).unwrap();
+        let dst_key = std::fs::read(pm2.join("identity.key")).unwrap();
+        assert_ne!(
+            src_key, dst_key,
+            "import must regenerate identity, not copy the private key"
+        );
+    }
+
+    #[test]
+    fn import_with_members_never_overwrites_existing_agent() {
+        let src = tempfile::tempdir().unwrap();
+        let s = src.path();
+        let mur_dir = s.join("agents").join("mur");
+        std::fs::create_dir_all(&mur_dir).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&mur_dir)
+            .unwrap();
+        let pm_dir = s.join("agents").join("pm");
+        std::fs::create_dir_all(&pm_dir).unwrap();
+        std::fs::write(pm_dir.join("profile.yaml"), "name: pm\nentitlements: {}\n").unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&pm_dir)
+            .unwrap();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            members: vec!["pm".into()],
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+        };
+        crate::cmd::fleet::store::save_fleet(s, &fleet).unwrap();
+        let bundle = s.join("dev.fleet");
+        crate::cmd::fleet::export::cmd_fleet_export(
+            s,
+            "dev",
+            true,
+            Some(bundle.clone()),
+            "2026-06-20T00:00:00Z",
+        )
+        .unwrap();
+
+        // Pre-create pm on the destination
+        let dst = tempfile::tempdir().unwrap();
+        let home = dst.path();
+        let existing_pm = home.join("agents").join("pm");
+        std::fs::create_dir_all(&existing_pm).unwrap();
+        std::fs::write(
+            existing_pm.join("profile.yaml"),
+            "name: pm\nexisting: true\n",
+        )
+        .unwrap();
+        let original_key = {
+            let id = mur_common::identity::AgentIdentity::generate();
+            id.save(&existing_pm).unwrap();
+            std::fs::read(existing_pm.join("identity.key")).unwrap()
+        };
+
+        cmd_fleet_import(
+            home,
+            &bundle,
+            ImportOpts {
+                force: false,
+                no_members: false,
+                yes: true,
+            },
+        )
+        .unwrap();
+
+        // profile must NOT be overwritten
+        let kept = std::fs::read_to_string(existing_pm.join("profile.yaml")).unwrap();
+        assert!(
+            kept.contains("existing: true"),
+            "existing agent must not be overwritten"
+        );
+        // identity key must NOT be overwritten
+        let key_after = std::fs::read(existing_pm.join("identity.key")).unwrap();
+        assert_eq!(
+            original_key, key_after,
+            "existing identity must not be overwritten"
+        );
     }
 }

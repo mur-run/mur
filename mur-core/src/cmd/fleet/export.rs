@@ -4,7 +4,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use mur_common::fleet_bundle::{
@@ -124,11 +124,16 @@ pub fn cmd_fleet_export(
     let out_str = out.to_str().context("output path is not UTF-8")?;
     LocalFile.write(out_str, &bytes)?;
 
+    let skill_count = manifest
+        .entries
+        .iter()
+        .filter(|e| e.path.starts_with("skills/"))
+        .count();
     println!(
         "Exported fleet '{name}' → {} (signer {}, {} skill(s){})",
         out.display(),
         manifest.signer_fingerprint,
-        manifest.entries.len().saturating_sub(1),
+        skill_count,
         if with_members {
             ", members included"
         } else {
@@ -138,13 +143,24 @@ pub fn cmd_fleet_export(
     Ok(())
 }
 
-/// Task 4 fills this in. Stub: members not yet bundled.
+/// Bundle each member's `profile.yaml` (never the private `identity.key`).
 pub(crate) fn add_member_exports(
-    _mur_home: &Path,
-    _fleet: &mur_common::fleet::Fleet,
-    _files: &mut Vec<(String, Vec<u8>)>,
+    mur_home: &Path,
+    fleet: &mur_common::fleet::Fleet,
+    files: &mut Vec<(String, Vec<u8>)>,
 ) -> Result<()> {
-    bail!("--with-members not yet implemented");
+    for member in &fleet.members {
+        let canon = crate::a2a_dial::canonicalize_agent_name(mur_home, member);
+        let profile = mur_home.join("agents").join(&canon).join("profile.yaml");
+        if !profile.is_file() {
+            // Member not present locally — skip silently (import will report missing).
+            continue;
+        }
+        let body = std::fs::read(&profile)
+            .with_context(|| format!("read profile {}", profile.display()))?;
+        files.push((format!("members/{canon}/profile.yaml"), body));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -192,6 +208,39 @@ mod tests {
         let got = collect_fleet_skills(home, "dev").unwrap();
         let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, vec!["in"]);
+    }
+
+    #[test]
+    fn export_with_members_bundles_profile_without_private_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        seed_concierge(home);
+        // member agent "pm" with a profile + a private key
+        let pm = home.join("agents").join("pm");
+        std::fs::create_dir_all(&pm).unwrap();
+        std::fs::write(pm.join("profile.yaml"), "name: pm\nentitlements: {}\n").unwrap();
+        AgentIdentity::generate().save(&pm).unwrap(); // writes identity.key
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            members: vec!["pm".into()],
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        let out = home.join("dev.fleet");
+        cmd_fleet_export(home, "dev", true, Some(out.clone()), "2026-06-20T00:00:00Z").unwrap();
+
+        let bytes = std::fs::read(&out).unwrap();
+        let (manifest, files) = crate::cmd::fleet::import::unpack_bundle(&bytes).unwrap();
+        assert!(manifest.includes_members);
+        assert!(files.contains_key("members/pm/profile.yaml"));
+        // NO private key travels
+        assert!(!files.keys().any(|k| k.contains("identity.key")));
     }
 
     #[test]
