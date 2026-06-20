@@ -377,8 +377,19 @@ content:
             scope: SkillScope::Global,
             content_hash: String::new(),
         };
-        let result = inject_layer2(&[s], &SkillsConfig::default(), 0.0, &HashSet::new(), None, None, None);
-        assert!(result.injected_names.is_empty(), "team skill must not inject when active_team is None");
+        let result = inject_layer2(
+            &[s],
+            &SkillsConfig::default(),
+            0.0,
+            &HashSet::new(),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            result.injected_names.is_empty(),
+            "team skill must not inject when active_team is None"
+        );
     }
 
     #[test]
@@ -397,7 +408,15 @@ content:
         );
         let mut fired = HashSet::new();
         fired.insert("b".to_string());
-        let result = inject_layer2(&[a, b], &SkillsConfig::default(), 0.0, &fired, None, None, None);
+        let result = inject_layer2(
+            &[a, b],
+            &SkillsConfig::default(),
+            0.0,
+            &fired,
+            None,
+            None,
+            None,
+        );
         assert_eq!(result.injected_names.len(), 2);
         assert_eq!(result.injected_names[0], "b");
     }

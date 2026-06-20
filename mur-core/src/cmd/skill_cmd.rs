@@ -217,7 +217,13 @@ pub(crate) fn set_manifest_scope(
 /// `mur skill scope <name>` — set a skill's visibility scope so the scope-aware
 /// injector (CLI + runtime) only surfaces it in the matching context. `--project`
 /// scopes to the current git repo; `--fleet <name>` to a fleet; `--team <id>` to a team; `--user` resets.
-pub fn cmd_scope(name: &str, fleet: Option<String>, project: bool, team: Option<String>, user: bool) -> Result<()> {
+pub fn cmd_scope(
+    name: &str,
+    fleet: Option<String>,
+    project: bool,
+    team: Option<String>,
+    user: bool,
+) -> Result<()> {
     let home = resolve_mur_home()?;
     let dir = local::installed_path(&home, name);
     let mut m =
@@ -231,7 +237,13 @@ pub fn cmd_scope(name: &str, fleet: Option<String>, project: bool, team: Option<
     } else {
         None
     };
-    set_manifest_scope(&mut m, fleet.as_deref(), proj_id.as_deref(), team.as_deref(), user)?;
+    set_manifest_scope(
+        &mut m,
+        fleet.as_deref(),
+        proj_id.as_deref(),
+        team.as_deref(),
+        user,
+    )?;
     m.updated_at = chrono::Utc::now();
     mur_common::skill::store::write_to_dir(&dir, &m)
         .map_err(|e| anyhow!("write skill '{name}': {e}"))?;

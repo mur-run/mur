@@ -456,7 +456,11 @@ impl TaskRunner {
                 RunnerBackend::Llm(client) => {
                     if self.pending_approvals.is_some() {
                         let system = self
-                            .prepare_system_prompt(&spec.input, spec.active_fleet.as_deref(), spec.active_team.as_deref())
+                            .prepare_system_prompt(
+                                &spec.input,
+                                spec.active_fleet.as_deref(),
+                                spec.active_team.as_deref(),
+                            )
                             .await
                             .unwrap_or_default();
                         self.run_agentic_loop(&id, client.as_ref(), system, &spec.input, sink)

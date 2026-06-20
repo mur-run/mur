@@ -55,19 +55,19 @@ pub struct GovernanceRef {
 /// env-only until the fleet runtime supplies it; team is set from `Fleet.team_id`.
 pub fn scope_visible(
     scope: SkillScope,
-    skill_fleet:    Option<&str>,
-    skill_project:  Option<&str>,
-    skill_team:     Option<&str>,    // required when scope == Team
-    active_fleet:   Option<&str>,
+    skill_fleet: Option<&str>,
+    skill_project: Option<&str>,
+    skill_team: Option<&str>, // required when scope == Team
+    active_fleet: Option<&str>,
     active_project: Option<&str>,
-    active_team:    Option<&str>,    // from MUR_ACTIVE_TEAM env
+    active_team: Option<&str>, // from MUR_ACTIVE_TEAM env
 ) -> bool {
     match scope {
-        SkillScope::User       => true,
+        SkillScope::User => true,
         SkillScope::Enterprise => true,
         SkillScope::Project => skill_project.is_some() && active_project == skill_project,
-        SkillScope::Fleet   => skill_fleet.is_some()   && active_fleet   == skill_fleet,
-        SkillScope::Team    => skill_team.is_some()    && active_team    == skill_team,
+        SkillScope::Fleet => skill_fleet.is_some() && active_fleet == skill_fleet,
+        SkillScope::Team => skill_team.is_some() && active_team == skill_team,
     }
 }
 
@@ -674,15 +674,71 @@ content:
     #[test]
     fn scope_visible_matrix() {
         // user + enterprise always visible
-        assert!(scope_visible(SkillScope::User, None, None, None, None, None, None));
-        assert!(scope_visible(SkillScope::Enterprise, None, None, None, None, None, None));
+        assert!(scope_visible(
+            SkillScope::User,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ));
+        assert!(scope_visible(
+            SkillScope::Enterprise,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ));
         // fleet skill visible only when active fleet matches
-        assert!(scope_visible(SkillScope::Fleet, Some("dev"), None, None, Some("dev"), None, None));
-        assert!(!scope_visible(SkillScope::Fleet, Some("dev"), None, None, Some("ops"), None, None));
-        assert!(!scope_visible(SkillScope::Fleet, Some("dev"), None, None, None, None, None));
+        assert!(scope_visible(
+            SkillScope::Fleet,
+            Some("dev"),
+            None,
+            None,
+            Some("dev"),
+            None,
+            None
+        ));
+        assert!(!scope_visible(
+            SkillScope::Fleet,
+            Some("dev"),
+            None,
+            None,
+            Some("ops"),
+            None,
+            None
+        ));
+        assert!(!scope_visible(
+            SkillScope::Fleet,
+            Some("dev"),
+            None,
+            None,
+            None,
+            None,
+            None
+        ));
         // project skill visible only when active project matches
-        assert!(scope_visible(SkillScope::Project, None, Some("/p"), None, None, Some("/p"), None));
-        assert!(!scope_visible(SkillScope::Project, None, Some("/p"), None, None, Some("/q"), None));
+        assert!(scope_visible(
+            SkillScope::Project,
+            None,
+            Some("/p"),
+            None,
+            None,
+            Some("/p"),
+            None
+        ));
+        assert!(!scope_visible(
+            SkillScope::Project,
+            None,
+            Some("/p"),
+            None,
+            None,
+            Some("/q"),
+            None
+        ));
     }
 
     #[test]
@@ -690,26 +746,42 @@ content:
         // matches when active_team == skill_team
         assert!(scope_visible(
             SkillScope::Team,
-            None, None, Some("org-xyz"),
-            None, None, Some("org-xyz"),
+            None,
+            None,
+            Some("org-xyz"),
+            None,
+            None,
+            Some("org-xyz"),
         ));
         // mismatch → false
         assert!(!scope_visible(
             SkillScope::Team,
-            None, None, Some("org-abc"),
-            None, None, Some("org-xyz"),
+            None,
+            None,
+            Some("org-abc"),
+            None,
+            None,
+            Some("org-xyz"),
         ));
         // no active_team → fail-closed
         assert!(!scope_visible(
             SkillScope::Team,
-            None, None, Some("org-xyz"),
-            None, None, None,
+            None,
+            None,
+            Some("org-xyz"),
+            None,
+            None,
+            None,
         ));
         // no skill_team selector → never injects (None == None guard)
         assert!(!scope_visible(
             SkillScope::Team,
-            None, None, None,
-            None, None, Some("org-xyz"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("org-xyz"),
         ));
     }
 
