@@ -215,6 +215,26 @@ pub fn verify(root_override: Option<&str>) -> Result<bool> {
     Ok(true)
 }
 
+/// Reads and returns all audit log entries in oldest-first order.
+/// If the audit log file does not exist, returns an empty `Vec`.
+pub fn read_entries(root_override: Option<&str>) -> anyhow::Result<Vec<AuditEntry>> {
+    let path = audit_path(root_override);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let f = fs::File::open(&path)?;
+    let mut entries = Vec::new();
+    for line in BufReader::new(f).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let e: AuditEntry = serde_json::from_str(&line)?;
+        entries.push(e);
+    }
+    Ok(entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,5 +385,28 @@ mod tests {
         assert_eq!(window, "2026-W16");
         assert_eq!(model, "qwen3:14b");
         assert_eq!(duration_ms, 1234);
+    }
+
+    #[test]
+    fn read_entries_roundtrips_and_tolerates_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_str().unwrap();
+        assert!(read_entries(Some(root)).unwrap().is_empty()); // missing file → empty
+        let audit = Audit::open(Some(root)).unwrap();
+        audit
+            .append(
+                AuditAction::Governance {
+                    fleet: "dev".into(),
+                    directive: "kill".into(),
+                    decision: "received".into(),
+                    nonce: "n1".into(),
+                },
+                "abc".into(),
+            )
+            .unwrap();
+        let got = read_entries(Some(root)).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].content_sha256, "abc");
+        assert!(matches!(&got[0].action, AuditAction::Governance { nonce, .. } if nonce == "n1"));
     }
 }
