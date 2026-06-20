@@ -31,6 +31,10 @@ pub struct TaskSpec {
     /// `None` for non-fleet turns, so fleet-scoped skills stay hidden outside
     /// their fleet (fail-closed).
     pub active_fleet: Option<String>,
+    /// Active team id for this turn, derived from the fleet's `team_id` field
+    /// by the `channel/delegate` handler. Drives team-scoped skill injection;
+    /// `None` for non-fleet turns or fleets without a team (fail-closed).
+    pub active_team: Option<String>,
 }
 
 #[derive(Debug)]
@@ -280,6 +284,7 @@ impl TaskRunner {
         &self,
         user_prompt: &str,
         active_fleet: Option<&str>,
+        active_team: Option<&str>,
     ) -> (String, Vec<String>) {
         let base = self.system_prompt.clone().unwrap_or_default();
         let Some(skills) = &self.skills else {
@@ -333,6 +338,7 @@ impl TaskRunner {
             &recently,
             active_fleet,
             active_project.as_deref(),
+            active_team,
         );
 
         let triggered = match_prompt(&skills.triggers, user_prompt);
@@ -450,7 +456,11 @@ impl TaskRunner {
                 RunnerBackend::Llm(client) => {
                     if self.pending_approvals.is_some() {
                         let system = self
-                            .prepare_system_prompt(&spec.input, spec.active_fleet.as_deref())
+                            .prepare_system_prompt(
+                                &spec.input,
+                                spec.active_fleet.as_deref(),
+                                spec.active_team.as_deref(),
+                            )
                             .await
                             .unwrap_or_default();
                         self.run_agentic_loop(&id, client.as_ref(), system, &spec.input, sink)
@@ -461,6 +471,7 @@ impl TaskRunner {
                             client.as_ref(),
                             &spec.input,
                             spec.active_fleet.as_deref(),
+                            spec.active_team.as_deref(),
                             sink,
                         )
                         .await
@@ -663,12 +674,13 @@ impl TaskRunner {
         client: &dyn LlmClient,
         input: &Message,
         active_fleet: Option<&str>,
+        active_team: Option<&str>,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
     ) -> Result<Message, TaskError> {
         let prompt = text_of(input);
         let mut messages: Vec<RichMessage> = Vec::new();
 
-        let (system, fired) = self.assemble_system_prompt(&prompt, active_fleet);
+        let (system, fired) = self.assemble_system_prompt(&prompt, active_fleet, active_team);
 
         // Apply hook chain on_prompt_submit if wired.
         let system = if let (Some(chain), Some(ctx), Some(cancel)) =
@@ -789,9 +801,10 @@ impl TaskRunner {
         &self,
         input: &Message,
         active_fleet: Option<&str>,
+        active_team: Option<&str>,
     ) -> Result<String, TaskError> {
         let prompt = text_of(input);
-        let (system, _fired) = self.assemble_system_prompt(&prompt, active_fleet);
+        let (system, _fired) = self.assemble_system_prompt(&prompt, active_fleet, active_team);
         if let (Some(chain), Some(ctx), Some(cancel)) =
             (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
         {
@@ -1335,6 +1348,7 @@ mod tests {
             context_task_id: None,
             task_id: None,
             active_fleet: None,
+            active_team: None,
         }
     }
 
@@ -1382,6 +1396,7 @@ mod tests {
             context_task_id: None,
             task_id: Some("task-fixed-1".to_string()),
             active_fleet: None,
+            active_team: None,
         };
         assert_eq!(spec.task_id.as_deref(), Some("task-fixed-1"));
     }
@@ -1397,6 +1412,7 @@ mod tests {
             context_task_id: None,
             task_id: Some("task-supplied-9".to_string()),
             active_fleet: None,
+            active_team: None,
         };
         let outcome = runner.run_sync(spec).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -1420,6 +1436,7 @@ mod tests {
             context_task_id: None,
             task_id: Some("task-cancelme".to_string()),
             active_fleet: None,
+            active_team: None,
         };
         let r2 = runner.clone();
         let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx).await });
@@ -1637,6 +1654,7 @@ mod tests {
             context_task_id: None,
             task_id: None,
             active_fleet: None,
+            active_team: None,
         };
         let outcome = runner.run_sync(spec).await;
         assert!(matches!(outcome, TaskOutcome::Completed(_)));
@@ -1682,6 +1700,7 @@ mod tests {
             context_task_id: None,
             task_id: None,
             active_fleet: None,
+            active_team: None,
         };
         let outcome = runner.run_sync(spec).await;
         let TaskOutcome::Completed(task) = outcome else {
@@ -1822,6 +1841,7 @@ mod tests {
             context_task_id: None,
             task_id: None,
             active_fleet: None,
+            active_team: None,
         }
     }
 

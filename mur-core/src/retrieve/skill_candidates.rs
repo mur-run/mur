@@ -66,35 +66,40 @@ impl LoadedSkill {
 pub struct ActiveScope {
     pub fleet: Option<String>,
     pub project: Option<String>,
+    pub team: Option<String>,
 }
 
 impl ActiveScope {
-    /// Detect the active scope. `MUR_ACTIVE_FLEET` / `MUR_ACTIVE_PROJECT` env
-    /// override; otherwise `project` defaults to the current working dir's git
-    /// repo root (so a `scope: Project` skill learned in repo X injects anywhere
-    /// in X, and nowhere else). `fleet` has no cwd-derivable default — it stays
-    /// env-only until the fleet runtime supplies it (ActiveContext for fleets).
+    /// Detect the active scope. `MUR_ACTIVE_FLEET` / `MUR_ACTIVE_PROJECT` /
+    /// `MUR_ACTIVE_TEAM` env override; otherwise `project` defaults to the
+    /// current working dir's git repo root (so a `scope: Project` skill learned
+    /// in repo X injects anywhere in X, and nowhere else). `fleet` and `team`
+    /// have no cwd-derivable default — they stay env-only until the fleet
+    /// runtime supplies them.
     pub fn detect() -> Self {
         let nonempty = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
         Self {
             fleet: nonempty("MUR_ACTIVE_FLEET"),
             // Shared detection (env override → cwd repo root) with the runtime injector.
             project: mur_common::project::active_project_id(),
+            team: nonempty("MUR_ACTIVE_TEAM"),
         }
     }
 }
 
 /// Drop candidate skills not visible in the active scope. `User`/`Enterprise`
-/// always pass; `Fleet`/`Project` pass only when their selector matches `ctx`,
-/// so an unmatched fleet/project skill is excluded, never leaked (fail-closed).
+/// always pass; `Fleet`/`Project`/`Team` pass only when their selector matches
+/// `ctx`, so an unmatched skill is excluded, never leaked (fail-closed).
 pub fn filter_by_scope(candidates: &mut Vec<LoadedSkill>, ctx: &ActiveScope) {
     candidates.retain(|c| {
         mur_common::skill::manifest::scope_visible(
             c.manifest.scope,
             c.manifest.fleet.as_deref(),
             c.manifest.project.as_deref(),
+            c.manifest.team.as_deref(),
             ctx.fleet.as_deref(),
             ctx.project.as_deref(),
+            ctx.team.as_deref(),
         )
     });
 }
@@ -246,7 +251,7 @@ impl Retrievable for LoadedSkill {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::retrieve::scoring::ScopeContext;
+    use crate::retrieve::scoring::ScoringHints;
     use chrono::Duration;
     use mur_common::skill::manifest::Content;
     use mur_common::skill::types::Category;
@@ -262,6 +267,8 @@ mod tests {
             scope: Default::default(),
             fleet: None,
             project: None,
+            team: None,
+            governance: None,
             content: Content {
                 r#abstract: format!("abstract about {name}"),
                 context: Some(format!("body of {name}")),
@@ -347,7 +354,7 @@ mod tests {
     #[test]
     fn adjust_score_is_identity_for_skills() {
         let s = fake_loaded("k", Priority::Normal);
-        let scope = ScopeContext::default();
+        let scope = ScoringHints::default();
         assert_eq!(
             s.adjust_score(0.42, &["q"], Some(&scope), Some("rust")),
             0.42
@@ -416,18 +423,21 @@ mod tests {
         let ctx = ActiveScope {
             fleet: Some("devteam".into()),
             project: None,
+            team: None,
         };
         assert_eq!(names(&ctx), vec!["f".to_string(), "u".to_string()]);
         // matching project context
         let ctx = ActiveScope {
             fleet: None,
             project: Some("/repo".into()),
+            team: None,
         };
         assert_eq!(names(&ctx), vec!["p".to_string(), "u".to_string()]);
         // wrong fleet → fail-closed (only user)
         let ctx = ActiveScope {
             fleet: Some("other".into()),
             project: None,
+            team: None,
         };
         assert_eq!(names(&ctx), vec!["u".to_string()]);
     }
@@ -537,5 +547,139 @@ mod tests {
         let text = s.text();
         assert!(text.contains("abstract line"));
         assert!(text.contains("the note body about rust errors"));
+    }
+
+    #[test]
+    fn active_scope_detect_reads_mur_active_team() {
+        unsafe {
+            std::env::set_var("MUR_ACTIVE_TEAM", "org-xyz");
+            std::env::remove_var("MUR_ACTIVE_FLEET");
+        }
+        let scope = ActiveScope::detect();
+        assert_eq!(scope.team.as_deref(), Some("org-xyz"));
+        unsafe {
+            std::env::remove_var("MUR_ACTIVE_TEAM");
+        }
+    }
+
+    #[test]
+    fn filter_by_scope_excludes_team_skill_when_no_active_team() {
+        use mur_common::skill::manifest::SkillScope;
+        use std::fs;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        fs::create_dir_all(skills_dir.join("t")).unwrap();
+
+        let manifest = SkillManifest {
+            name: "t".into(),
+            version: "1.0.0".into(),
+            publisher: "human:test".into(),
+            description: "test team skill".into(),
+            category: Category::Context,
+            hosts: vec![],
+            scope: SkillScope::Team,
+            team: Some("org-x".into()),
+            fleet: None,
+            project: None,
+            governance: None,
+            content: Content {
+                r#abstract: "".into(),
+                context: None,
+                procedure: None,
+                command: None,
+                note: None,
+            },
+            requires: vec![],
+            tags: vec![],
+            triggers: vec![],
+            priority: Priority::Normal,
+            evolution_log: vec![],
+            transfer_chain: vec![],
+            mcp_requirements: vec![],
+            provenance: Default::default(),
+            updated_at: Utc::now(),
+        };
+
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(skills_dir.join("t").join("skill.yaml"), yaml).unwrap();
+
+        let mut candidates = vec![LoadedSkill {
+            manifest,
+            stats: SkillStats::new("t", "1.0.0", "", Utc::now()),
+        }];
+
+        let ctx = ActiveScope {
+            fleet: None,
+            project: None,
+            team: None,
+        };
+        filter_by_scope(&mut candidates, &ctx);
+        assert!(
+            candidates.is_empty(),
+            "team skill must not inject without active team"
+        );
+    }
+
+    #[test]
+    fn filter_by_scope_includes_team_skill_when_team_matches() {
+        use mur_common::skill::manifest::SkillScope;
+        use std::fs;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        fs::create_dir_all(skills_dir.join("t")).unwrap();
+
+        let manifest = SkillManifest {
+            name: "t".into(),
+            version: "1.0.0".into(),
+            publisher: "human:test".into(),
+            description: "test team skill".into(),
+            category: Category::Context,
+            hosts: vec![],
+            scope: SkillScope::Team,
+            team: Some("org-x".into()),
+            fleet: None,
+            project: None,
+            governance: None,
+            content: Content {
+                r#abstract: "".into(),
+                context: None,
+                procedure: None,
+                command: None,
+                note: None,
+            },
+            requires: vec![],
+            tags: vec![],
+            triggers: vec![],
+            priority: Priority::Normal,
+            evolution_log: vec![],
+            transfer_chain: vec![],
+            mcp_requirements: vec![],
+            provenance: Default::default(),
+            updated_at: Utc::now(),
+        };
+
+        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        fs::write(skills_dir.join("t").join("skill.yaml"), yaml).unwrap();
+
+        let mut candidates = vec![LoadedSkill {
+            manifest,
+            stats: SkillStats::new("t", "1.0.0", "", Utc::now()),
+        }];
+
+        let ctx = ActiveScope {
+            fleet: None,
+            project: None,
+            team: Some("org-x".into()),
+        };
+        filter_by_scope(&mut candidates, &ctx);
+        assert!(
+            !candidates.is_empty(),
+            "team skill must inject when team matches"
+        );
+        assert_eq!(candidates[0].name(), "t");
     }
 }
