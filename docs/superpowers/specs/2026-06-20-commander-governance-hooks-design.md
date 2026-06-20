@@ -111,7 +111,10 @@ pub const COMMANDER_DIRECTIVE_KEY: &str = "commander_directive";
 pub struct CommanderDirective { pub kind: String, pub fleet: String,
     pub budget_usd: Option<f64>, pub nonce: String, pub issued_at_ms: u64 }
 #[derive(Default)]
-pub struct GovernanceState { pub killed: bool, pub budget_ceiling: Option<f64> }
+pub struct GovernanceState { pub killed: bool, pub budget_ceiling: Option<f64>,
+    // nonce of the directive that produced each state, so the loop can bind the
+    // audit row (§7) to the exact signed directive it honored:
+    pub kill_nonce: Option<String>, pub budget_nonce: Option<String> }
 
 // mur-channel/src/governance.rs  (needs ChannelEvent + verify_event_sig; pure, no I/O)
 pub fn fold_governance(
@@ -127,12 +130,16 @@ a newer one), plus nonce-dedup:
    `verify_event_sig(channel_id, &e.actor, e.kind, &e.payload, e.idempotency_key.as_deref(), sig, pk)`
    for **some** `pk in accepted_pubkeys`.
 2. **Nonce-dedup:** keep only the first candidate per `nonce` (drops verbatim replays; idempotent).
-3. **Order by signature, not by store:** sort candidates by `(issued_at_ms, nonce)` ascending.
+3. **Order by signature, not by store:** sort candidates by `(issued_at_ms, kind_rank, nonce)`
+   ascending, where `kind_rank` is `resume=0 < other=1 < kill=2`. The `kind_rank` key biases an
+   equal-`issued_at_ms` tie toward the safe state: a `kill` sorts AFTER a same-instant `resume`, so
+   last-wins keeps the kill. `nonce` is the final deterministic tiebreak.
 4. **Last-wins per kind in that order:** `killed` = the last `kill`/`resume` candidate is `kill`;
    `budget_ceiling` = the `budget_usd` of the last `budget_ceiling` candidate, applied iff `>= 0`
-   (negative/NaN → that candidate contributes no ceiling). No `seq`/log-position is consulted, so a
-   replayed older `resume` (sorted before a newer `kill` by its own `issued_at_ms`) cannot clear the
-   kill; store-level dedup-by-`idempotency_key` drops verbatim local replays as defense-in-depth.
+   (negative/NaN → that candidate contributes no ceiling). The nonce of each deciding directive is
+   recorded in `kill_nonce`/`budget_nonce` for audit binding (§7). No `seq`/log-position is consulted,
+   so a replayed older `resume` (sorted before a newer `kill` by its own `issued_at_ms`) cannot clear
+   the kill; store-level dedup-by-`idempotency_key` drops verbatim local replays as defense-in-depth.
 
 `mur-core::cmd::commander::governance_state(mur_home, fleet) -> Result<GovernanceState>` (I/O
 wrapper, for the daemon): load accepted pubkeys (current + optional previous); if none → `Ok(default)`
@@ -193,9 +200,10 @@ Append failure is logged, never blocks the halt (halting is the safety-critical 
 
 ## 8. Daemon integration
 
-`mur-daemon/src/fleet_tick.rs::due_fleets` must skip a fleet where `governance_state(mur_home,
-fleet)?.killed` (don't auto-LAUNCH a killed fleet). A `governance_state` **`Err` → fail-closed**:
-skip the fleet (do not launch). This is a launch gate; an already-running daemon loop honors a kill
+`mur-daemon/src/fleet_tick.rs::due_fleets` must skip a fleet that is `commander_halted` —
+`governance_state(mur_home, fleet)?.killed` **OR** a zero `budget_ceiling` (`Some(0.0)`), which the
+loop treats as a hard `LoopStop::Budget` halt (§6); skipping both keeps the daemon from re-launching a
+halted fleet every tick. A `governance_state` **`Err` → fail-closed**: skip the fleet (do not launch). This is a launch gate; an already-running daemon loop honors a kill
 at its next iteration boundary via §5 (the two together bound exposure to one iteration). Composes
 with `MUR_FLEET_AUTORUN` + positive budget + local kill-switch (defense-in-depth).
 
@@ -252,6 +260,14 @@ the previous key is accepted for ANY directive with no `issued_at_ms` upper boun
 latent (rotation is rare, operator-driven, honest-node model); the closed engine bounds prev-key
 acceptance by `issued_at`/`key_version` when richer rotation lands. Operator mitigation today: remove
 `identity.prev.pub` promptly after rotation.
+
+**Known latent — channel-log line corruption:** `store::load_events` silently skips unparseable
+lines (`filter_map(... .ok())`), so a *corrupted* directive line is dropped rather than erroring — a
+kill on a corrupted line would be silently lost, degrading the governance read. This is pre-existing
+channel-store behavior and within the honest-node model (a node's own on-disk log integrity is
+assumed). A genuine FS-level read fault (not content corruption) still errors → fail-closed halt
+(loop `read_error` arm / daemon skip). The engine's network-side enforcement does not depend on the
+local log's integrity.
 
 ## 12. Testing (headless — no commander engine)
 

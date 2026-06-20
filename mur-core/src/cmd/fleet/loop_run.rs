@@ -305,6 +305,14 @@ pub async fn run_guarded(
                 Err(_) => {
                     // Fail-closed: cannot read governance ⇒ halt, but label the
                     // audit as a read error, not a confirmed commander kill.
+                    // Reachable only via a mid-loop FS-level read fault: a missing
+                    // channel reads as Ok(empty) and corrupt lines are silently
+                    // skipped (store::load_events filter_map), so only a genuine
+                    // read failure errors here. The same fault AT ENTRY surfaces via
+                    // the `?` on the last_seq load above → run_guarded returns Err →
+                    // the caller never runs the loop (also fail-closed). Not
+                    // unit-tested: portable FS-fault injection is brittle (mirrors
+                    // the daemon's analogous Err arm in fleet_tick::due_fleets).
                     emit_governance_audit(mur_home, name, "read_error", "fail_closed", "", "");
                     break LoopStop::CommanderKilled;
                 }
@@ -789,7 +797,22 @@ mod tests {
         let stop = run_loop_for_test(home).await;
         assert_eq!(stop, LoopStop::Budget);
 
-        // audit bound the deciding directive: decision capped + non-empty nonce
+        // The audit row must bind the EXACT deciding directive — pull its real
+        // nonce from the channel and assert the audit references it (guards the
+        // wire-through: the loop passes gov.budget_nonce, not a constant).
+        let nonce = mur_channel::ChannelService::open(home)
+            .unwrap()
+            .load_events("fleet-dev")
+            .unwrap()
+            .iter()
+            .find_map(|e| {
+                e.payload
+                    .get("commander_directive")
+                    .and_then(|d| d.get("nonce"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .expect("directive nonce present in channel");
         let audit =
             std::fs::read_to_string(home.join("conversations").join("audit.jsonl")).unwrap();
         assert!(
@@ -797,8 +820,8 @@ mod tests {
                 && audit.contains("\"directive\":\"budget_ceiling\"")
         );
         assert!(
-            !audit.contains("\"nonce\":\"\""),
-            "nonce must bind to the directive"
+            audit.contains(&format!("\"nonce\":\"{nonce}\"")),
+            "audit must bind the exact deciding directive nonce ({nonce})"
         );
     }
 }
