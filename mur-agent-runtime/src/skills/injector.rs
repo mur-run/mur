@@ -326,6 +326,62 @@ content:
     }
 
     #[test]
+    fn team_scoped_skill_injects_when_team_matches() {
+        let mk = |name: &str, scope_yaml: &str| {
+            let yaml = format!(
+                "name: {name}\nversion: 1.0.0\npublisher: human:t\ndescription: test\n\
+                 category: context\n{scope_yaml}content:\n  abstract: \"a\"\n  context: body\n\
+                 triggers:\n  - type: session_start\n"
+            );
+            LoadedSkill {
+                name: name.to_string(),
+                manifest: parse_canonical(&yaml).unwrap(),
+                trust: TrustLevel::Verified,
+                scope: SkillScope::Global,
+                content_hash: String::new(),
+            }
+        };
+        let skills = vec![mk("u", ""), mk("ts", "scope: team\nteam: org-x\n")];
+        // active_team is the 7th arg; active_fleet and active_project stay None.
+        let names = |active_team: Option<&str>| {
+            inject_layer2(
+                &skills,
+                &SkillsConfig::default(),
+                0.0,
+                &HashSet::new(),
+                None,
+                None,
+                active_team,
+            )
+            .injected_names
+        };
+        // no active team → team skill fail-closed; user always injects
+        let n0 = names(None);
+        assert!(n0.contains(&"u".to_string()) && !n0.contains(&"ts".to_string()));
+        // matching active team → team skill injects
+        assert!(names(Some("org-x")).contains(&"ts".to_string()));
+        // wrong team → fail-closed
+        assert!(!names(Some("org-y")).contains(&"ts".to_string()));
+    }
+
+    #[test]
+    fn team_scoped_skill_excluded_without_active_team() {
+        let yaml = "name: ts\nversion: 1.0.0\npublisher: human:t\ndescription: test\n\
+                    category: context\nscope: team\nteam: org-x\n\
+                    content:\n  abstract: \"a\"\n  context: body\n\
+                    triggers:\n  - type: session_start\n";
+        let s = LoadedSkill {
+            name: "ts".to_string(),
+            manifest: parse_canonical(yaml).unwrap(),
+            trust: TrustLevel::Verified,
+            scope: SkillScope::Global,
+            content_hash: String::new(),
+        };
+        let result = inject_layer2(&[s], &SkillsConfig::default(), 0.0, &HashSet::new(), None, None, None);
+        assert!(result.injected_names.is_empty(), "team skill must not inject when active_team is None");
+    }
+
+    #[test]
     fn recently_fired_breaks_tie_within_same_trust() {
         let a = loaded(
             "a",
