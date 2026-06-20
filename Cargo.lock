@@ -6451,6 +6451,7 @@ dependencies = [
  "lancedb",
  "libc",
  "mime_guess",
+ "multibase",
  "mur-agent-runtime",
  "mur-channel",
  "mur-common",

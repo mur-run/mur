@@ -450,6 +450,16 @@ pub enum FleetAction {
         /// Fleet name
         name: String,
     },
+    /// Export a fleet definition + its fleet-scoped skills to a signed .fleet bundle
+    Export {
+        name: String,
+        /// Also bundle the member agents (profile minus signing key + skills)
+        #[arg(long)]
+        with_members: bool,
+        /// Output path (default: <name>.fleet)
+        #[arg(short = 'o', long)]
+        out: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]

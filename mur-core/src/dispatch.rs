@@ -303,6 +303,17 @@ pub async fn run(cli: Cli) -> Result<()> {
                 FleetAction::Start { name } => {
                     cmd::fleet::control::cmd_fleet_start(&mur_home, &name)?
                 }
+                FleetAction::Export {
+                    name,
+                    with_members,
+                    out,
+                } => cmd::fleet::export::cmd_fleet_export(
+                    &mur_home,
+                    &name,
+                    with_members,
+                    out,
+                    &chrono::Utc::now().to_rfc3339(),
+                )?,
             }
         }
         Commands::Team { action } => match action {
