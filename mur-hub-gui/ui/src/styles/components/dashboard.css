@@ -260,6 +260,9 @@
   transition: transform var(--dur-base) var(--ease-out);
 }
 .grid-card:hover .grid-card__avatar { transform: scale(1.12) translateY(-1px); }
+/* Holds the themed vector mascot (PetFace) instead of a flat colour + initials. */
+.grid-card__avatar--pet { background: transparent; overflow: visible; }
+.grid-card__avatar--pet > svg { width: 44px; height: 44px; }
 .grid-card__name {
   margin: 0;
   font-size: var(--text-base);
