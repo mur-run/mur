@@ -301,6 +301,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Get Hub version from tag
+        id: hub_version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp Hub version into tauri.conf.json
+        run: |
+          VERSION="${{ steps.hub_version.outputs.version }}"
+          cd mur-hub-gui/src-tauri
+          tmp=$(mktemp)
+          jq --arg v "$VERSION" '.version = $v' tauri.conf.json > "$tmp" && mv "$tmp" tauri.conf.json
+
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -379,6 +390,8 @@ jobs:
           # Without it the bundle is ad-hoc signed and notarization returns
           # "Invalid" (notarytool exit code 65).
           APPLE_SIGNING_IDENTITY: "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }} (${{ secrets.APPLE_TEAM_ID }})"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           cd mur-hub-gui/src-tauri
           cargo tauri build --target aarch64-apple-darwin
@@ -401,11 +414,35 @@ jobs:
       - name: Verify Gatekeeper acceptance
         run: spctl -a -t open --context context:primary-signature "dist/MUR-Hub-aarch64-apple-darwin.dmg"
 
-      - name: Upload DMG artifact
+      - name: Collect updater artifacts + build latest.json
+        run: |
+          cp "$(find mur-hub-gui/src-tauri/target -name "*.app.tar.gz" | head -n1)" dist/MUR-Hub.app.tar.gz
+          cp "$(find mur-hub-gui/src-tauri/target -name "*.app.tar.gz.sig" | head -n1)" dist/MUR-Hub.app.tar.gz.sig
+          SIG=dist/MUR-Hub.app.tar.gz.sig
+          VERSION="${{ steps.hub_version.outputs.version }}"
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          cat > dist/latest.json <<JSON
+          {
+            "version": "$VERSION",
+            "pub_date": "$PUB_DATE",
+            "platforms": {
+              "darwin-aarch64": {
+                "url": "https://github.com/mur-run/mur/releases/download/v$VERSION/MUR-Hub.app.tar.gz",
+                "signature": "$(cat "$SIG")"
+              }
+            }
+          }
+          JSON
+
+      - name: Upload DMG + updater artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mur-hub-macos
-          path: dist/MUR-Hub-aarch64-apple-darwin.dmg
+          path: |
+            dist/MUR-Hub-aarch64-apple-darwin.dmg
+            dist/MUR-Hub.app.tar.gz
+            dist/MUR-Hub.app.tar.gz.sig
+            dist/latest.json
 
   release:
     name: Publish Release
@@ -428,6 +465,8 @@ jobs:
             *.zip
             *.pkg
             *.dmg
+            *.sig
+            latest.json
             checksums.txt
 
   update-homebrew:

@@ -39,8 +39,17 @@
       "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "PASTE_PUBKEY_FROM_TASK_0",
+      "endpoints": [
+        "https://github.com/mur-run/mur/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["app", "dmg"],
     "fileAssociations": [
       {

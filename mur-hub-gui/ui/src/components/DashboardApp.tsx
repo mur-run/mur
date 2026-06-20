@@ -375,6 +375,14 @@ export function DashboardApp() {
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    import("@tauri-apps/plugin-updater").then(({ check }) =>
+      check().then((u) => u && import("@tauri-apps/plugin-process").then(({ relaunch }) =>
+        u.downloadAndInstall().then(relaunch)
+      ))
+    ).catch((e) => console.warn("Update check failed:", e));
+  }, []);
+
   // Build a lookup map for runtime statuses.
   const runtimeMap = new Map<string, AgentRuntimeStatus>(
     runtimeStatuses.map((s) => [s.name, s]),
