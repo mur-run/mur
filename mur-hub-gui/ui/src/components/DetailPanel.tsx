@@ -432,7 +432,9 @@ function StyleTab({
     invoke<{ has_ai_art: boolean }>("pet_get_appearance", { agentName: detail.agent_name })
       .then((a) => setHasAiArt(a.has_ai_art))
       .catch(() => setHasAiArt(false));
-  }, [detail.agent_name, detail.render_status]);
+    // depend on the status STRING, not the render_status object (which gets a new
+    // identity every 1.5s poll tick → ~80 redundant IPC reads during a render).
+  }, [detail.agent_name, detail.render_status.status]);
 
   async function triggerRender() {
     setSaveError(null);

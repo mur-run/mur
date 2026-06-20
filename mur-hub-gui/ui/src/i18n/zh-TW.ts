@@ -169,6 +169,7 @@ export const zhTW: Table = {
   "pet.settings": "設定",
   "pet.dropThinking": "讀取中…",
   "pet.dropOpened": "已在聊天開啟 ↗",
+  "pet.dropSkipped": "（{count} 個未讀取）",
   // ── Mascot speech ──
   "mascot.bubble.excited": "還沒有鳥群！快建立你的第一隻 agent 🐦",
   "mascot.bubble.happy": "整個鳥群都在飛翔！🎉",

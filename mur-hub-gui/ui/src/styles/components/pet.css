@@ -149,16 +149,23 @@ body.pet-window {
 
 /* ── Pet Bubble ───────────────────────────────────────────────────────── */
 .pet-bubble {
+  /* The pet OS window is a fixed transparent 200×200; anything painted outside
+     it is clipped (the bubble used to sit at bottom:210px → fully off-window and
+     invisible). Anchor it INSIDE the window over the pet's head, cap the size,
+     and scroll long replies so a multi-sentence quick-take stays readable. */
   position: absolute;
-  bottom: 210px;
+  top: 2px;
   left: 50%;
   transform: translateX(-50%);
-  max-width: 280px;
-  min-width: 120px;
+  max-width: 188px;
+  min-width: 110px;
+  max-height: 150px;
+  overflow-y: auto;
+  overflow-x: hidden;
   background: var(--surface-card);
   border: 1px solid var(--border-line);
   border-radius: var(--radius-md);
-  padding: var(--space-5) 28px var(--space-5) var(--space-5);
+  padding: var(--space-3) 26px var(--space-3) var(--space-4);
   box-shadow: var(--shadow-pop);
   animation: bubbleFadeIn var(--dur-base) var(--ease-out);
   z-index: 100;
