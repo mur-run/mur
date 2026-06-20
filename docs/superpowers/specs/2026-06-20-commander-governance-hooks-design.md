@@ -234,8 +234,24 @@ No pinned key → inert. Bad/unverifiable/stale (not strictly newer) directive �
 replay → dropped by nonce dedup (+ store dedup). Channel **read error** → fail-closed (loop:
 `CommanderKilled`; daemon: skip-launch). `budget_ceiling`: `>=0` honored (0 halts), `<0`/NaN ignored.
 Directive whose `fleet` ≠ channel fleet → ignored. Audit append failure → logged, never blocks halt.
-Key rotation: fold accepts current + previous pubkey; a deeper rotation requires the engine to
-re-issue (re-sign, with a newer `issued_at_ms`) the active directives under the new key.
+Key rotation: `pin --force` preserves the outgoing key as `identity.prev.pub` (so directives it
+already signed keep verifying), prints a warning, and fold accepts current + previous pubkey; a
+deeper rotation requires the engine to re-issue (re-sign, with a newer `issued_at_ms`) the active
+directives under the new key.
+
+**Canonical channel invariant:** `channel_id` must equal `fleet-<name>` so the loop (reads
+`fleet.channel_id`), the directive path, and the daemon (both reconstruct `fleet-<name>`) all govern
+the SAME channel. `mur fleet create` guarantees this; `mur fleet import` now **rejects** any bundle
+whose `fleet.yaml channel_id` is non-canonical (a tampered bundle could otherwise smuggle a fleet
+that escapes commander kills). Hand-editing the local `fleet.yaml` to break this is local-root
+evasion, already conceded by the honest-node threat model.
+
+**Known latent — previous key after rotation:** once `pin --force` populates `identity.prev.pub`,
+the previous key is accepted for ANY directive with no `issued_at_ms` upper bound. A compromised
+*previous* private key could forge a future-dated `resume` that clears a current kill. v1 ships this
+latent (rotation is rare, operator-driven, honest-node model); the closed engine bounds prev-key
+acceptance by `issued_at`/`key_version` when richer rotation lands. Operator mitigation today: remove
+`identity.prev.pub` promptly after rotation.
 
 ## 12. Testing (headless — no commander engine)
 
