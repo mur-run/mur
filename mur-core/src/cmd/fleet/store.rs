@@ -21,7 +21,16 @@ pub fn fleet_path(mur_home: &Path, name: &str) -> PathBuf {
 }
 
 /// Persist a fleet to disk. Creates parent directories as needed.
+///
+/// C2b defense-in-depth: rejects an invalid fleet name at the store layer so
+/// the raw API can never write a traversal path regardless of caller.
 pub fn save_fleet(mur_home: &Path, fleet: &Fleet) -> Result<()> {
+    if !valid_fleet_name(&fleet.name) {
+        bail!(
+            "invalid fleet name '{}': use lowercase letters, digits, '-' or '_'",
+            fleet.name
+        );
+    }
     let dir = fleet_dir(mur_home, &fleet.name);
     std::fs::create_dir_all(&dir).with_context(|| format!("create fleet dir {}", dir.display()))?;
     let path = fleet_path(mur_home, &fleet.name);
@@ -71,6 +80,34 @@ pub fn list_fleets(mur_home: &Path) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use mur_common::fleet::Fleet;
+
+    /// C2b — save_fleet must refuse an invalid (traversal) fleet name at the store layer.
+    #[test]
+    fn save_fleet_refuses_traversal_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let bad = Fleet {
+            name: "../../evil".into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            members: vec![],
+            channel_id: "fleet-evil".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+        };
+        let err = save_fleet(home, &bad).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("invalid fleet name"),
+            "expected traversal refusal, got: {err:#}"
+        );
+        // Nothing must be written outside the home.
+        assert!(
+            !home.join("..").join("evil").exists(),
+            "traversal path must not be created"
+        );
+    }
 
     #[test]
     fn save_load_list_roundtrip() {
