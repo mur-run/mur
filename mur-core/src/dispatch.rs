@@ -314,6 +314,20 @@ pub async fn run(cli: Cli) -> Result<()> {
                     out,
                     &chrono::Utc::now().to_rfc3339(),
                 )?,
+                FleetAction::Import {
+                    file,
+                    force,
+                    no_members,
+                    yes,
+                } => cmd::fleet::import::cmd_fleet_import(
+                    &mur_home,
+                    &file,
+                    cmd::fleet::import::ImportOpts {
+                        force,
+                        no_members,
+                        yes,
+                    },
+                )?,
             }
         }
         Commands::Team { action } => match action {

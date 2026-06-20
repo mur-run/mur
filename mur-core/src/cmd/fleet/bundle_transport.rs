@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 
 /// Reads/writes opaque bundle bytes from/to a location identifier.
 pub trait FleetBundleTransport {
-    #[allow(dead_code)] // Task 3 (import) will use this
     fn read(&self, src: &str) -> Result<Vec<u8>>;
     fn write(&self, dst: &str, bytes: &[u8]) -> Result<()>;
 }

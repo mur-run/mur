@@ -147,44 +147,11 @@ pub(crate) fn add_member_exports(
     bail!("--with-members not yet implemented");
 }
 
-/// Unpack a `.fleet` tar.gz into (manifest, path->bytes). Rejects unsafe paths.
-#[allow(dead_code)] // used in tests here and reused by Task 3 (import)
-pub(crate) fn unpack_for_test(
-    bytes: &[u8],
-) -> anyhow::Result<(
-    mur_common::fleet_bundle::BundleManifest,
-    std::collections::HashMap<String, Vec<u8>>,
-)> {
-    use std::io::Read;
-    let gz = flate2::read::GzDecoder::new(bytes);
-    let mut ar = tar::Archive::new(gz);
-    let mut files = std::collections::HashMap::new();
-    for entry in ar.entries().context("read archive")? {
-        let mut e = entry.context("archive entry")?;
-        let path = e
-            .path()
-            .context("entry path")?
-            .to_string_lossy()
-            .to_string();
-        if path.starts_with('/') || path.split('/').any(|c| c == "..") {
-            anyhow::bail!("unsafe bundle entry path: {path}");
-        }
-        let mut buf = Vec::new();
-        e.read_to_end(&mut buf).context("read entry")?;
-        files.insert(path, buf);
-    }
-    let mb = files
-        .get("bundle.yaml")
-        .context("bundle.yaml missing from archive")?;
-    let manifest = serde_yaml::from_slice(mb).context("parse bundle.yaml")?;
-    Ok((manifest, files))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use mur_common::fleet::Fleet;
-    use mur_common::fleet_bundle::{BundleManifest, content_hash, verify_manifest_sig};
+    use mur_common::fleet_bundle::{content_hash, verify_manifest_sig};
     use mur_common::identity::AgentIdentity;
     use mur_common::skill::manifest::{SkillManifest, SkillScope};
 
@@ -260,7 +227,7 @@ mod tests {
 
         // re-open: unpack, read manifest, verify signature + entry hashes
         let bytes = std::fs::read(&out).unwrap();
-        let (manifest, files) = unpack_for_test(&bytes).unwrap();
+        let (manifest, files) = crate::cmd::fleet::import::unpack_for_test(&bytes).unwrap();
         let (_, pk) = multibase::decode(&manifest.signer_pubkey).unwrap();
         let pk: [u8; 32] = pk.try_into().unwrap();
         assert!(verify_manifest_sig(&manifest, &pk));

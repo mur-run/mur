@@ -460,6 +460,20 @@ pub enum FleetAction {
         #[arg(short = 'o', long)]
         out: Option<std::path::PathBuf>,
     },
+    /// Import a fleet from a .fleet bundle (verifies signature, scans skills, confirms)
+    Import {
+        /// Path to the .fleet bundle
+        file: std::path::PathBuf,
+        /// Overwrite an existing fleet/skill of the same name
+        #[arg(long)]
+        force: bool,
+        /// Skip member-agent install even if the bundle includes them
+        #[arg(long)]
+        no_members: bool,
+        /// Pre-approve the install confirmation (still verifies + scans)
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
