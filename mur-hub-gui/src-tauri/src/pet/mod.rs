@@ -284,6 +284,19 @@ pub fn pet_open_chat(agent_name: String, draft: Option<String>, app: AppHandle) 
 const PET_DROP_MAX_FILES: usize = 5;
 const PET_DROP_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024;
 const PET_DROP_MAX_CHARS_PER_FILE: usize = 8000;
+/// Hard per-file read ceiling (well above the char budget) so a pseudo/special
+/// file can never stream unbounded into memory.
+const PET_DROP_READ_BYTE_CAP: u64 = 256 * 1024;
+
+/// Read at most `max_bytes` from `path` as lossy UTF-8. Returns None if the file
+/// can't be opened/read. Bounded so a symlink to e.g. /dev/zero can't OOM us.
+fn read_text_capped(path: &std::path::Path, max_bytes: u64) -> Option<String> {
+    use std::io::Read as _;
+    let f = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    f.take(max_bytes).read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
 
 /// Extensions we can safely read as UTF-8 text for an inline quick-take.
 fn is_text_like(path: &std::path::Path) -> bool {
@@ -360,25 +373,26 @@ pub async fn pet_drop_files(
             skipped.push(fname);
             continue;
         }
-        let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
-        total = total.saturating_add(len);
-        if total > PET_DROP_MAX_TOTAL_BYTES {
+        // Bounded read: never trust metadata().len() (pseudo-files like a
+        // symlink to /dev/zero report 0 yet read forever → OOM). Cap the bytes
+        // actually read, then truncate to the char budget.
+        let Some(mut c) = read_text_capped(path, PET_DROP_READ_BYTE_CAP) else {
             skipped.push(fname);
             continue;
+        };
+        total = total.saturating_add(c.len() as u64);
+        if total > PET_DROP_MAX_TOTAL_BYTES {
+            skipped.push(fname);
+            break;
         }
-        match std::fs::read_to_string(path) {
-            Ok(mut c) => {
-                if c.chars().count() > PET_DROP_MAX_CHARS_PER_FILE {
-                    c = c
-                        .chars()
-                        .take(PET_DROP_MAX_CHARS_PER_FILE)
-                        .collect::<String>();
-                    c.push_str("\n…(truncated)");
-                }
-                sections.push(format!("=== {fname} ===\n{c}"));
-            }
-            Err(_) => skipped.push(fname),
+        if c.chars().count() > PET_DROP_MAX_CHARS_PER_FILE {
+            c = c
+                .chars()
+                .take(PET_DROP_MAX_CHARS_PER_FILE)
+                .collect::<String>();
+            c.push_str("\n…(truncated)");
         }
+        sections.push(format!("=== {fname} ===\n{c}"));
     }
 
     // Nothing readable (images/binaries): open chat with a reference note only.
@@ -630,6 +644,9 @@ mod tests {
             "core:event:allow-unlisten",
             "core:window:allow-outer-position",
             "core:window:allow-start-dragging",
+            // hide/show back the Hide-1h menu item (ACL-gated, was a silent no-op).
+            "core:window:allow-hide",
+            "core:window:allow-show",
         ] {
             assert!(perms.contains(&perm), "pet windows need {perm}");
         }

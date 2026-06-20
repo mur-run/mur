@@ -258,22 +258,23 @@ pub fn run() {
                 if !label.starts_with("pet-") {
                     return;
                 }
-                // macOS fires Drop twice per gesture (Tauri #14134); coalesce.
-                // ponytail: one global 150ms guard. If pets ever need to accept
-                // simultaneous drops, key this by (label, paths) instead.
+                // macOS fires Drop twice per gesture (Tauri #14134); coalesce
+                // PER WINDOW so a near-simultaneous drop on a *different* pet
+                // isn't swallowed by a global timer.
+                use std::collections::HashMap;
                 use std::sync::Mutex;
                 use std::time::{Duration, Instant};
-                static LAST_DROP: Mutex<Option<Instant>> = Mutex::new(None);
+                static LAST_DROP: Mutex<Option<HashMap<String, Instant>>> = Mutex::new(None);
                 let now = Instant::now();
                 {
-                    let mut last = LAST_DROP.lock().unwrap_or_else(|p| p.into_inner());
-                    if last
-                        .map(|t| now.duration_since(t) < Duration::from_millis(150))
-                        .unwrap_or(false)
+                    let mut guard = LAST_DROP.lock().unwrap_or_else(|p| p.into_inner());
+                    let map = guard.get_or_insert_with(HashMap::new);
+                    if let Some(prev) = map.get(&label)
+                        && now.duration_since(*prev) < Duration::from_millis(150)
                     {
                         return;
                     }
-                    *last = Some(now);
+                    map.insert(label.clone(), now);
                 }
                 let paths: Vec<String> = paths
                     .iter()

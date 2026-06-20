@@ -167,6 +167,7 @@ export const en = {
   "pet.settings": "Settings",
   "pet.dropThinking": "Reading…",
   "pet.dropOpened": "Opened in chat ↗",
+  "pet.dropSkipped": "({count} not read)",
   // ── Mascot speech ──
   "mascot.bubble.excited": "No flock yet! Create your first agent 🐦",
   "mascot.bubble.happy": "Your whole flock is flying! 🎉",

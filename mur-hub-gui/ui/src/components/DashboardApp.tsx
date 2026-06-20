@@ -189,6 +189,7 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
               family={familyOf(agent.style_preset)}
               expression="idle"
               size={44}
+              animate={false}
             />
             {unread > 0 && (
               <span className="unread-badge">{unread > 99 ? "99+" : unread}</span>
