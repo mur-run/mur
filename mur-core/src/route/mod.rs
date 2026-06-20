@@ -11,7 +11,7 @@ use anyhow::Result;
 use mur_common::model::{ModelEntry, ModelRegistry};
 use mur_common::route::{EscalationEvent, RouteDecision, RoutePolicy, RouteTier, TaskType};
 
-use crate::route::heuristic::{DefaultHeuristic, DifficultyHeuristic};
+use crate::route::heuristic::DefaultHeuristic;
 
 /// Default difficulty threshold above which a task escalates to frontier.
 const DEFAULT_ESCALATION_THRESHOLD: f64 = 0.55;
