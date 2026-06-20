@@ -416,10 +416,9 @@ jobs:
 
       - name: Collect updater artifacts + build latest.json
         run: |
-          TARBALL=$(find mur-hub-gui/src-tauri/target -name "*.app.tar.gz" | head -n1)
-          SIG=$(find mur-hub-gui/src-tauri/target -name "*.app.tar.gz.sig" | head -n1)
-          cp "$TARBALL" "dist/MUR-Hub.app.tar.gz"
-          cp "$SIG"     "dist/MUR-Hub.app.tar.gz.sig"
+          cp "$(find mur-hub-gui/src-tauri/target -name "*.app.tar.gz" | head -n1)" dist/MUR-Hub.app.tar.gz
+          cp "$(find mur-hub-gui/src-tauri/target -name "*.app.tar.gz.sig" | head -n1)" dist/MUR-Hub.app.tar.gz.sig
+          SIG=dist/MUR-Hub.app.tar.gz.sig
           VERSION="${{ steps.hub_version.outputs.version }}"
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           cat > dist/latest.json <<JSON
