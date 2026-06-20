@@ -78,7 +78,7 @@ pub enum AuditAction {
     Governance {
         fleet: String,
         directive: String, // "kill" | "budget_ceiling" | "read_error"
-        decision: String,  // "halted" | "capped" | "fail_closed"
+        decision: String,  // "halted" | "capped" | "fail_closed" | "received"
         nonce: String,
     },
 }
