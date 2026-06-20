@@ -249,6 +249,40 @@ pub fn run() {
         .manage(PetState(Mutex::new(std::collections::HashMap::new())))
         .manage(EventBusState(EventBus::new(256)))
         .manage(BridgeState::default())
+        // OS file-drop onto a desktop pet (`pet-<agent>` window) → forward the
+        // dropped paths to that pet's webview. App-level (not per-window) so it
+        // covers pet windows created dynamically after launch.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                let label = window.label().to_string();
+                if !label.starts_with("pet-") {
+                    return;
+                }
+                // macOS fires Drop twice per gesture (Tauri #14134); coalesce.
+                // ponytail: one global 150ms guard. If pets ever need to accept
+                // simultaneous drops, key this by (label, paths) instead.
+                use std::sync::Mutex;
+                use std::time::{Duration, Instant};
+                static LAST_DROP: Mutex<Option<Instant>> = Mutex::new(None);
+                let now = Instant::now();
+                {
+                    let mut last = LAST_DROP.lock().unwrap_or_else(|p| p.into_inner());
+                    if last
+                        .map(|t| now.duration_since(t) < Duration::from_millis(150))
+                        .unwrap_or(false)
+                    {
+                        return;
+                    }
+                    *last = Some(now);
+                }
+                let paths: Vec<String> = paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                // emit_to the pet's own label so only that pet reacts.
+                let _ = window.emit_to(&label, "pet://drop", paths);
+            }
+        })
         .setup(move |app| {
             // `setup` runs on the main thread after the event loop starts, where
             // Tauri's global Tokio runtime is NOT entered as the current context.
@@ -466,6 +500,9 @@ pub fn run() {
             pet::pet_return_to_hub,
             pet::pet_list,
             pet::pet_get_expression,
+            pet::pet_get_appearance,
+            pet::pet_open_chat,
+            pet::pet_drop_files,
             pet::hub_emit_event,
             pet::pet_ack_bubble,
             pet::pet_speak,

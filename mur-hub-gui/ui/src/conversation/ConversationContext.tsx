@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useReducer, useRef } from "react";
+import React, { createContext, useContext, useEffect, useReducer, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   conversationReducer,
@@ -14,6 +14,10 @@ interface ConversationContextValue {
   openConversation: (agent: string) => void;
   closeConversation: (agent: string) => void;
   focusConversation: (agent: string) => void;
+  /** Pending chat-input text per agent (e.g. staged by file-drop on a pet). */
+  drafts: Record<string, string>;
+  setDraft: (agent: string, text: string) => void;
+  clearDraft: (agent: string) => void;
 }
 
 const Ctx = createContext<ConversationContextValue>({
@@ -23,6 +27,9 @@ const Ctx = createContext<ConversationContextValue>({
   openConversation: () => {},
   closeConversation: () => {},
   focusConversation: () => {},
+  drafts: {},
+  setDraft: () => {},
+  clearDraft: () => {},
 });
 
 export function ConversationProvider({ children }: { children: React.ReactNode }) {
@@ -33,6 +40,7 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
   );
   const stateRef = useRef(state);
   stateRef.current = state;
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const unDelta = listen<{ agent: string }>("chat-delta", (e) => {
@@ -66,6 +74,15 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
         openConversation: (agent) => dispatch({ type: "open", agent }),
         closeConversation: (agent) => dispatch({ type: "close", agent }),
         focusConversation: (agent) => dispatch({ type: "focus", agent }),
+        drafts,
+        setDraft: (agent, text) => setDrafts((d) => ({ ...d, [agent]: text })),
+        clearDraft: (agent) =>
+          setDrafts((d) => {
+            if (!(agent in d)) return d;
+            const next = { ...d };
+            delete next[agent];
+            return next;
+          }),
       }}
     >
       {children}

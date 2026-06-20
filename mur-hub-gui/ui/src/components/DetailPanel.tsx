@@ -16,6 +16,7 @@ import {
   type NotifPatch,
   type SkillInstallResult,
 } from "../types";
+import { useAgents } from "../context/AgentContext";
 import { CompanionInbox } from "./CompanionInbox";
 import { ModelCombobox } from "./ModelCombobox";
 import { ModelLibrary } from "./ModelLibrary";
@@ -56,6 +57,7 @@ function showToast(msg: string, durationMs = 2000) {
 
 export function DetailPanel({ agentName, agents, onClose }: Props) {
   const { t } = useT();
+  const { desiredDetailTab, setDesiredDetailTab } = useAgents();
   const [detail, setDetail] = useState<AgentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>("persona");
@@ -68,6 +70,16 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
       .then(setDetail)
       .catch((e) => setError(String(e)));
   }, [agentName]);
+
+  // Honor a requested deep-link tab (e.g. 🎨 on an agent card → Style), then
+  // clear it so it fires once. Runs after the per-agent reset above, so it wins.
+  useEffect(() => {
+    if (!desiredDetailTab) return;
+    if ((ALL_DETAIL_TABS as readonly string[]).includes(desiredDetailTab)) {
+      setActiveTab(desiredDetailTab as DetailTab);
+    }
+    setDesiredDetailTab(null);
+  }, [desiredDetailTab, setDesiredDetailTab]);
 
   const entry = agents.find((a) => a.name === agentName);
   const displayName = entry?.display_name ?? agentName;
@@ -413,6 +425,15 @@ function StyleTab({
     };
   }, [rendering, detail.agent_name, onSaved]);
 
+  // Whether real AI art exists. When false the pet shows the built-in vector
+  // mascot, and we surface a gentle "connect an image model" hint.
+  const [hasAiArt, setHasAiArt] = useState(true);
+  useEffect(() => {
+    invoke<{ has_ai_art: boolean }>("pet_get_appearance", { agentName: detail.agent_name })
+      .then((a) => setHasAiArt(a.has_ai_art))
+      .catch(() => setHasAiArt(false));
+  }, [detail.agent_name, detail.render_status]);
+
   async function triggerRender() {
     setSaveError(null);
     setRendering(true);
@@ -495,6 +516,12 @@ function StyleTab({
             ? t("detail.renderBtnRerender")
             : t("detail.renderBtnRender")}
       </button>
+
+      {!hasAiArt && (
+        <p className="field-muted detail-vector-hint" style={{ fontSize: 12, marginTop: 8 }}>
+          {t("detail.vectorHint")}
+        </p>
+      )}
 
       <label className="field-label" style={{ marginTop: 16 }}>{t("detail.presetGallery")}</label>
       <div className="style-gallery">

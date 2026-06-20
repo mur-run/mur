@@ -3,7 +3,7 @@ use crate::image_gen::{
 };
 use anyhow::Result;
 use mur_common::hub::{
-    preset_manifest::{PresetManifest, compute_preset_hash, manifest_path},
+    preset_manifest::{PresetManifest, RenderMode, compute_preset_hash, manifest_path},
     style_preset::StylePreset,
 };
 use std::path::{Path, PathBuf};
@@ -159,6 +159,7 @@ impl RenderJob {
             rendered_at: chrono::Utc::now(),
             sha256: compute_preset_hash(&self.preset),
             expressions: rendered,
+            mode: RenderMode::Ai,
         };
 
         write_manifest(&self.agent_dir, &manifest).await?;

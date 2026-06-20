@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useT } from "../i18n";
+import { PetFace } from "./PetFace";
+
+interface PetAppearance {
+  style_preset: string;
+  family: string;
+  has_ai_art: boolean;
+}
 
 function getAgentName(): string {
   const hash = window.location.hash; // #/pet/<name>
@@ -28,17 +35,54 @@ export function PetApp() {
   const agentName = getAgentName();
   const [expression, setExpression] = useState<string>("idle");
   const [imageSrc, setImageSrc] = useState<string>("");
+  const [appearance, setAppearance] = useState<PetAppearance | null>(null);
   const [bubble, setBubble] = useState<BubbleState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu>({ visible: false, x: 0, y: 0 });
+  const [muted, setMuted] = useState(false);
+  const mutedRef = useRef(false); // read inside the bubble listener (stable closure)
   const clickTimeRef = useRef<number>(0);
   const pressRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Load expression image whenever expression changes.
+  // Resolve the pet's style/family once; decides AI art vs. vector mascot.
   useEffect(() => {
-    invoke<string>("pet_get_expression", { agentName, expression }).then((src) => {
-      setImageSrc(src);
+    invoke<PetAppearance>("pet_get_appearance", { agentName })
+      .then(setAppearance)
+      .catch(() => setAppearance({ style_preset: "default-blob", family: "chibi", has_ai_art: false }));
+  }, [agentName]);
+
+  // OS file-drop onto this pet (forwarded from the backend): show a "reading"
+  // bubble, then the agent's quick take. The full content also opens in chat.
+  // This is user-initiated, so it shows even when muted.
+  useEffect(() => {
+    const unsub = getCurrentWindow().listen<string[]>("pet://drop", (ev) => {
+      const paths = ev.payload;
+      if (!paths || paths.length === 0) return;
+      setBubble({ text: t("pet.dropThinking"), dwell_ms: 60000, ack_required: false });
+      invoke<{ reply: string; text_files: number; skipped: string[] }>("pet_drop_files", {
+        agentName,
+        paths,
+      })
+        .then((res) => {
+          setBubble({
+            text: res.reply || t("pet.dropOpened"),
+            dwell_ms: res.reply ? 12000 : 6000,
+            ack_required: false,
+          });
+        })
+        .catch((e) => setBubble({ text: String(e), dwell_ms: 6000, ack_required: false }));
     });
-  }, [agentName, expression]);
+    return () => { unsub.then((f) => f()); };
+  }, [agentName, t]);
+
+  // Load the AI expression image when (and only when) real art exists; otherwise
+  // the vector PetFace renders the expression and no fetch is needed.
+  useEffect(() => {
+    if (!appearance?.has_ai_art) {
+      setImageSrc("");
+      return;
+    }
+    invoke<string>("pet_get_expression", { agentName, expression }).then(setImageSrc);
+  }, [agentName, expression, appearance?.has_ai_art]);
 
   // Listen for expression changes from the backend state machine. The listener
   // must be window-targeted: a global listen() (target Any) would also receive
@@ -50,9 +94,11 @@ export function PetApp() {
     return () => { unsub.then((f) => f()); };
   }, []);
 
-  // Listen for bubble messages from the backend.
+  // Listen for bubble messages from the backend. When muted, drop them — this is
+  // the pet's "do not disturb": no pop-up nags.
   useEffect(() => {
     const unsub = getCurrentWindow().listen<string>("pet-bubble", (ev) => {
+      if (mutedRef.current) return;
       if (ev.payload) {
         setBubble({ text: ev.payload, dwell_ms: 6000, ack_required: false });
       } else {
@@ -122,11 +168,49 @@ export function PetApp() {
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault();
-    setContextMenu({ visible: true, x: e.clientX, y: e.clientY });
+    // The pet window is small (200×200); clamp the menu so every item stays
+    // visible (anchor near the edges) instead of clipping past the window.
+    const MENU_W = 150;
+    const MENU_H = 188;
+    const x = Math.max(2, Math.min(e.clientX, window.innerWidth - MENU_W));
+    const y = Math.max(2, Math.min(e.clientY, window.innerHeight - MENU_H));
+    setContextMenu({ visible: true, x, y });
+  }
+
+  function closeMenu() {
+    setContextMenu((m) => ({ ...m, visible: false }));
+  }
+
+  async function handleChat() {
+    closeMenu();
+    await invoke("pet_open_chat", { agentName, draft: null }).catch(() => {});
+  }
+
+  function handleToggleMute() {
+    closeMenu();
+    setMuted((m) => {
+      const next = !m;
+      mutedRef.current = next;
+      if (next) setBubble(null);
+      return next;
+    });
+  }
+
+  function handleHide1h() {
+    closeMenu();
+    const win = getCurrentWindow();
+    win.hide().catch(() => {});
+    // Re-show after an hour; the backend event loop keeps running while hidden.
+    window.setTimeout(() => { win.show().catch(() => {}); }, 60 * 60 * 1000);
+  }
+
+  async function handleSettings() {
+    closeMenu();
+    await invoke("open_dashboard", { agentName }).catch(() => {});
   }
 
   async function handleReturnToHub() {
-    setContextMenu((m) => ({ ...m, visible: false }));
+    closeMenu();
     await invoke("pet_return_to_hub", { agentName });
   }
 
@@ -161,9 +245,18 @@ export function PetApp() {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onDoubleClick={handleChat}
+        title={t("pet.chat")}
       >
         {imageSrc ? (
           <img src={imageSrc} alt={agentName} className="pet-image" draggable={false} />
+        ) : appearance ? (
+          <PetFace
+            presetId={appearance.style_preset}
+            family={appearance.family}
+            expression={expression}
+            size={150}
+          />
         ) : (
           <div className="pet-avatar-fallback">{initials}</div>
         )}
@@ -174,8 +267,14 @@ export function PetApp() {
           className="pet-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <button className="pet-menu-item" onClick={handleReturnToHub}>📥 {t("pet.returnToHub")}</button>
+          <button className="pet-menu-item" onClick={handleChat}>💬 {t("pet.chat")}</button>
+          <button className="pet-menu-item" onClick={handleToggleMute}>
+            {muted ? `🔔 ${t("pet.unmute")}` : `🔇 ${t("pet.mute")}`}
+          </button>
+          <button className="pet-menu-item" onClick={handleHide1h}>👁 {t("pet.hide1h")}</button>
+          <button className="pet-menu-item" onClick={handleSettings}>⚙ {t("pet.settings")}</button>
           <div className="pet-menu-divider" />
+          <button className="pet-menu-item" onClick={handleReturnToHub}>📥 {t("pet.returnToHub")}</button>
           <button className="pet-menu-item pet-menu-item--danger" onClick={handleClose}>✕ {t("common.close")}</button>
         </div>
       )}

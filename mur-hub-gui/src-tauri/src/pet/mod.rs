@@ -263,6 +263,197 @@ pub fn pet_list(state: State<'_, PetState>) -> Vec<String> {
     state.0.lock().unwrap().keys().cloned().collect()
 }
 
+/// Bring the Hub dashboard to the front and ask it to open `agent_name`'s
+/// conversation. `draft`, when present, is pre-filled into the chat input
+/// (used by file-drop). The dashboard webview listens for the `pet-open-chat`
+/// event and calls `openConversation`.
+#[tauri::command]
+pub fn pet_open_chat(agent_name: String, draft: Option<String>, app: AppHandle) {
+    if let Some(dash) = app.get_webview_window("dashboard") {
+        let _ = dash.show();
+        let _ = dash.set_focus();
+    }
+    let _ = app.emit(
+        "pet-open-chat",
+        serde_json::json!({ "agent": agent_name, "draft": draft }),
+    );
+}
+
+// ─── File drop ─────────────────────────────────────────────────────────────
+
+const PET_DROP_MAX_FILES: usize = 5;
+const PET_DROP_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024;
+const PET_DROP_MAX_CHARS_PER_FILE: usize = 8000;
+
+/// Extensions we can safely read as UTF-8 text for an inline quick-take.
+fn is_text_like(path: &std::path::Path) -> bool {
+    const TEXT_EXTS: &[&str] = &[
+        "txt", "md", "markdown", "rst", "log", "csv", "tsv", "json", "yaml", "yml", "toml", "ini",
+        "cfg", "conf", "xml", "html", "htm", "css", "scss", "sh", "bash", "zsh", "rs", "py", "js",
+        "ts", "tsx", "jsx", "go", "c", "h", "cpp", "hpp", "cc", "java", "rb", "php", "sql", "kt",
+        "swift", "lua", "r", "pl", "tex", "env",
+    ];
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => TEXT_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
+        None => false,
+    }
+}
+
+/// Concatenate the text parts of the last agent message in an A2A task result.
+fn extract_reply(task: &serde_json::Value) -> String {
+    task.get("messages")
+        .and_then(|m| m.as_array())
+        .and_then(|msgs| {
+            msgs.iter()
+                .rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("agent"))
+        })
+        .map(|m| {
+            m.get("parts")
+                .and_then(|p| p.as_array())
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+/// Result of dropping file(s) on a pet: the inline quick-take reply (shown as a
+/// bubble) plus what was read vs skipped.
+#[derive(Debug, Clone, Serialize)]
+pub struct PetDropResult {
+    pub reply: String,
+    pub text_files: usize,
+    pub skipped: Vec<String>,
+}
+
+/// Handle file(s) dropped onto `agent_name`'s pet. Reads text-like files, stages
+/// their full content as a draft in the Hub conversation (for follow-up), and
+/// asks the agent for a brief inline take returned to the pet as a bubble.
+/// Non-text files (images/binaries) can't be read by the single-turn send path,
+/// so they only open the chat with a reference note.
+#[tauri::command]
+pub async fn pet_drop_files(
+    agent_name: String,
+    paths: Vec<String>,
+    app: AppHandle,
+) -> Result<PetDropResult, String> {
+    if !valid_agent(&agent_name) {
+        return Err("invalid agent name".into());
+    }
+
+    let mut sections = Vec::new();
+    let mut skipped = Vec::new();
+    let mut total = 0u64;
+    for p in paths.iter().take(PET_DROP_MAX_FILES) {
+        let path = std::path::Path::new(p);
+        let fname = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.clone());
+        if !is_text_like(path) {
+            skipped.push(fname);
+            continue;
+        }
+        let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+        total = total.saturating_add(len);
+        if total > PET_DROP_MAX_TOTAL_BYTES {
+            skipped.push(fname);
+            continue;
+        }
+        match std::fs::read_to_string(path) {
+            Ok(mut c) => {
+                if c.chars().count() > PET_DROP_MAX_CHARS_PER_FILE {
+                    c = c
+                        .chars()
+                        .take(PET_DROP_MAX_CHARS_PER_FILE)
+                        .collect::<String>();
+                    c.push_str("\n…(truncated)");
+                }
+                sections.push(format!("=== {fname} ===\n{c}"));
+            }
+            Err(_) => skipped.push(fname),
+        }
+    }
+
+    // Nothing readable (images/binaries): open chat with a reference note only.
+    if sections.is_empty() {
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.clone())
+            })
+            .collect();
+        let draft = format!(
+            "Dropped: {}\n\n(I can read text files for now — images need a vision model.)",
+            names.join(", ")
+        );
+        let _ = app.emit(
+            "pet-open-chat",
+            serde_json::json!({ "agent": agent_name, "draft": draft }),
+        );
+        return Ok(PetDropResult {
+            reply: String::new(),
+            text_files: 0,
+            skipped,
+        });
+    }
+
+    let body = sections.join("\n\n");
+    // Stage the full content in the Hub conversation for follow-up.
+    let draft = format!("Here are the file(s) I dropped:\n\n{body}");
+    let _ = app.emit(
+        "pet-open-chat",
+        serde_json::json!({ "agent": agent_name, "draft": draft }),
+    );
+
+    // Inline quick-take → returned to the pet as a bubble. Blocking dial runs off
+    // the async worker so it never stalls the runtime (mirrors chat.rs).
+    let prompt =
+        format!("Give me a brief (1-2 sentence) take on the following dropped file(s):\n\n{body}");
+    let agent = agent_name.clone();
+    let dialed = tokio::task::spawn_blocking(move || {
+        let home = mur_home();
+        let task_id = format!(
+            "pet-drop-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let params = serde_json::json!({
+            "message": { "role": "user", "parts": [{ "kind": "text", "text": prompt }] },
+            "task_id": task_id,
+        });
+        mur_core::a2a_dial::dial_method(
+            &home,
+            &agent,
+            "message/send",
+            params,
+            mur_core::a2a_dial::DialMode::Auto,
+        )
+        .map(|task| extract_reply(&task))
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("pet drop task panicked: {e}"))?;
+
+    let reply = dialed.unwrap_or_else(|e| format!("(couldn't reach {agent_name}: {e})"));
+    Ok(PetDropResult {
+        reply,
+        text_files: sections.len(),
+        skipped,
+    })
+}
+
 #[tauri::command]
 pub fn pet_get_expression(agent_name: String, expression: String) -> String {
     // Both segments become path components; reject traversal so a malicious
@@ -288,6 +479,66 @@ pub fn pet_get_expression(agent_name: String, expression: String) -> String {
             format!("data:image/webp;base64,{b64}")
         })
         .unwrap_or_default()
+}
+
+/// The pet's visual style, family, and whether real AI-rendered art exists.
+/// When `has_ai_art` is false the UI renders the built-in vector mascot.
+#[derive(Debug, Clone, Serialize)]
+pub struct PetAppearance {
+    pub style_preset: String,
+    /// chibi | pixel | live2d | polaroid
+    pub family: String,
+    pub has_ai_art: bool,
+}
+
+/// Resolve `agent_name`'s pet appearance: its style preset, family, and whether
+/// real `.webp` art is on disk (vs. the built-in vector mascot). Reads
+/// `profile.yaml` for the preset id and the expressions manifest for the mode.
+#[tauri::command]
+pub fn pet_get_appearance(agent_name: String) -> PetAppearance {
+    use mur_common::hub::preset_manifest::{RenderMode, manifest_path};
+    use mur_common::hub::style_preset::PresetFamily;
+
+    // Default shown if anything is missing/unreadable: the built-in blob, vector.
+    let mut out = PetAppearance {
+        style_preset: "default-blob".to_string(),
+        family: "chibi".to_string(),
+        has_ai_art: false,
+    };
+    if !valid_agent(&agent_name) {
+        return out;
+    }
+    let agent_dir = mur_home().join("agents").join(&agent_name);
+
+    // Style preset id from the profile.
+    if let Ok(yaml) = std::fs::read_to_string(agent_dir.join("profile.yaml"))
+        && let Ok(profile) = serde_yaml_ng::from_str::<mur_common::AgentProfile>(&yaml)
+    {
+        out.style_preset = profile.appearance.style_preset;
+    }
+
+    // Family from the resolved preset (built-in or user).
+    let hub_dir = mur_home().join("hub");
+    if let Ok(preset) = mur_common::hub::preset_loader::find_preset(&out.style_preset, &hub_dir) {
+        out.family = match preset.family {
+            PresetFamily::Chibi => "chibi",
+            PresetFamily::Pixel => "pixel",
+            PresetFamily::Live2d => "live2d",
+            PresetFamily::Polaroid => "polaroid",
+        }
+        .to_string();
+    }
+
+    // Real art only when the manifest says `Ai` AND an idle frame is on disk.
+    if let Ok(json) = std::fs::read_to_string(manifest_path(&agent_dir))
+        && let Ok(manifest) =
+            serde_json::from_str::<mur_common::hub::preset_manifest::PresetManifest>(&json)
+    {
+        out.has_ai_art = manifest.mode == RenderMode::Ai
+            && agent_dir.join("expressions").join("idle.webp").exists();
+    }
+
+    out
 }
 
 /// Publish an arbitrary event onto the bus (called from the pet window UI).
