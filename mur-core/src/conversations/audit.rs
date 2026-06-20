@@ -77,8 +77,8 @@ pub enum AuditAction {
     /// A commander governance directive was honored by a fleet loop.
     Governance {
         fleet: String,
-        directive: String, // "kill" | "budget_ceiling"
-        decision: String,  // "halted" | "capped"
+        directive: String, // "kill" | "budget_ceiling" | "read_error"
+        decision: String,  // "halted" | "capped" | "fail_closed"
         nonce: String,
     },
 }

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use mur_common::channel::{ChannelActor, ChannelEvent};
 use mur_common::fleet::Fleet;
+use sha2::{Digest, Sha256};
 
 use super::run::build_fleet_procedure;
 use super::store;
@@ -209,13 +210,35 @@ fn effective_budget(flag: Option<f64>, fleet: &Fleet) -> Option<f64> {
         .filter(|&b| b > 0.0)
 }
 
-/// Record (best-effort) that a commander directive was honored. Never blocks the halt.
+/// SHA-256 (hex) of the deciding directive's canonical sign-input, so the audit
+/// row binds to exactly the signed directive that was honored. Empty if the
+/// nonce has no matching event (defensive).
+fn directive_content_sha256(events: &[ChannelEvent], nonce: &str, channel_id: &str) -> String {
+    events
+        .iter()
+        .find(|e| e.idempotency_key.as_deref() == Some(nonce))
+        .map(|e| {
+            let input = mur_channel::sign::sign_input(
+                channel_id,
+                &e.actor,
+                e.kind,
+                &e.payload,
+                e.idempotency_key.as_deref(),
+            );
+            hex::encode(Sha256::digest(&input))
+        })
+        .unwrap_or_default()
+}
+
+/// Record (best-effort) that a commander directive was honored. Never blocks the
+/// halt. `content_sha256` binds the row to the exact signed directive.
 fn emit_governance_audit(
     mur_home: &Path,
     fleet: &str,
     directive: &str,
     decision: &str,
     nonce: &str,
+    content_sha256: &str,
 ) {
     let root_str = mur_home.to_str();
     if let Ok(audit) = crate::conversations::audit::Audit::open(root_str) {
@@ -226,7 +249,7 @@ fn emit_governance_audit(
                 decision: decision.to_string(),
                 nonce: nonce.to_string(),
             },
-            String::new(),
+            content_sha256.to_string(),
         );
     }
 }
@@ -277,26 +300,33 @@ pub async fn run_guarded(
         // error halts rather than running ungoverned.
         let mut commander_ceiling: Option<f64> = None;
         if governed {
-            let gov = match svc.load_events(&fleet.channel_id) {
-                Ok(events) => mur_channel::governance::fold_governance(
-                    &events,
-                    &fleet.channel_id,
-                    name,
-                    &commander_keys,
-                ),
+            let events = match svc.load_events(&fleet.channel_id) {
+                Ok(e) => e,
                 Err(_) => {
-                    emit_governance_audit(mur_home, name, "kill", "halted", "");
+                    // Fail-closed: cannot read governance ⇒ halt, but label the
+                    // audit as a read error, not a confirmed commander kill.
+                    emit_governance_audit(mur_home, name, "read_error", "fail_closed", "", "");
                     break LoopStop::CommanderKilled;
                 }
             };
+            let gov = mur_channel::governance::fold_governance(
+                &events,
+                &fleet.channel_id,
+                name,
+                &commander_keys,
+            );
             if gov.killed {
-                emit_governance_audit(mur_home, name, "kill", "halted", "");
+                let nonce = gov.kill_nonce.as_deref().unwrap_or("");
+                let csum = directive_content_sha256(&events, nonce, &fleet.channel_id);
+                emit_governance_audit(mur_home, name, "kill", "halted", nonce, &csum);
                 break LoopStop::CommanderKilled;
             }
-            // budget_ceiling == 0 is a hard halt (existing budget_exceeded guards b>0.0).
+            // A zero budget ceiling is a budget halt (spec §6), not a kill.
             if matches!(gov.budget_ceiling, Some(c) if c == 0.0) {
-                emit_governance_audit(mur_home, name, "budget_ceiling", "capped", "");
-                break LoopStop::CommanderKilled;
+                let nonce = gov.budget_nonce.as_deref().unwrap_or("");
+                let csum = directive_content_sha256(&events, nonce, &fleet.channel_id);
+                emit_governance_audit(mur_home, name, "budget_ceiling", "capped", nonce, &csum);
+                break LoopStop::Budget;
             }
             commander_ceiling = gov.budget_ceiling;
         }
@@ -718,6 +748,57 @@ mod tests {
             std::fs::read_to_string(home.join("conversations").join("audit.jsonl")).unwrap();
         assert!(
             audit.contains("\"kind\":\"governance\"") && audit.contains("\"decision\":\"halted\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn commander_zero_budget_ceiling_halts_loop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let cdir = home.join("commander");
+        std::fs::create_dir_all(&cdir).unwrap();
+        mur_common::identity::AgentIdentity::generate()
+            .save(&cdir)
+            .unwrap();
+        let fleet = Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            members: vec!["pm".into()],
+            channel_id: "fleet-dev".into(),
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        // a zero budget ceiling is a budget halt (spec §6), not a kill
+        crate::cmd::commander::cmd_commander_directive(
+            home,
+            "dev",
+            "budget_ceiling",
+            Some(0.0),
+            1000,
+        )
+        .unwrap();
+
+        let stop = run_loop_for_test(home).await;
+        assert_eq!(stop, LoopStop::Budget);
+
+        // audit bound the deciding directive: decision capped + non-empty nonce
+        let audit =
+            std::fs::read_to_string(home.join("conversations").join("audit.jsonl")).unwrap();
+        assert!(
+            audit.contains("\"decision\":\"capped\"")
+                && audit.contains("\"directive\":\"budget_ceiling\"")
+        );
+        assert!(
+            !audit.contains("\"nonce\":\"\""),
+            "nonce must bind to the directive"
         );
     }
 }

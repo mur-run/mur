@@ -13,7 +13,10 @@ pub const COMMANDER_PREV_PUB: &str = "identity.prev.pub";
 
 fn decode_pub(multibase: &str) -> Option<[u8; 32]> {
     let (_, bytes) = multibase::decode(multibase.trim()).ok()?;
-    bytes.try_into().ok()
+    let arr: [u8; 32] = bytes.try_into().ok()?;
+    // Reject off-curve keys: a pinned-but-invalid key would silently render
+    // governance inert (no directive would ever verify against it).
+    mur_common::identity::valid_ed25519_pubkey(&arr).then_some(arr)
 }
 
 /// Accepted commander pubkeys: current `identity.pub` + optional previous. Empty
@@ -56,32 +59,64 @@ pub fn cmd_commander_pin(mur_home: &Path, pubkey_multibase: &str, force: bool) -
     let dir = mur_home.join(COMMANDER_DIR);
     std::fs::create_dir_all(&dir)?;
     if decode_pub(pubkey_multibase).is_none() {
-        bail!("not a valid multibase Ed25519 pubkey (expected 32 bytes)");
+        bail!("not a valid multibase Ed25519 pubkey (expected 32 on-curve bytes)");
     }
     let path = dir.join(COMMANDER_PUB);
-    if path.exists() && !force {
-        bail!(
-            "a commander key is already pinned at {} — re-pin is a governance change; pass --force",
-            path.display()
-        );
+    if path.exists() {
+        if !force {
+            bail!(
+                "a commander key is already pinned at {} — re-pin is a governance change; pass --force",
+                path.display()
+            );
+        }
+        // Rotation: preserve the outgoing key as identity.prev.pub (which
+        // accepted_pubkeys already loads) so directives it already signed — e.g.
+        // an in-force kill — keep verifying until the operator re-issues them.
+        if let Ok(old) = std::fs::read_to_string(&path) {
+            std::fs::write(dir.join(COMMANDER_PREV_PUB), old)?;
+            eprintln!(
+                "warning: commander key rotated; previous key preserved at {} and still accepted. \
+                 Re-issue any in-force directives with the new key, then remove the previous key.",
+                dir.join(COMMANDER_PREV_PUB).display()
+            );
+        }
     }
     std::fs::write(&path, format!("{}\n", pubkey_multibase.trim()))?;
     println!("Pinned commander key → {}", path.display());
     Ok(())
 }
 
-pub fn cmd_commander_status(mur_home: &Path) -> Result<()> {
+/// Build the human-readable status lines (factored out for testing). Shows the
+/// short fingerprint as the primary identifier, full key indented for OOB compare.
+fn status_lines(mur_home: &Path) -> Result<Vec<String>> {
     let keys = accepted_pubkeys(mur_home);
     if keys.is_empty() {
-        println!("No commander key pinned (governance inert).");
-        return Ok(());
+        return Ok(vec!["No commander key pinned (governance inert).".into()]);
     }
     let dir = mur_home.join(COMMANDER_DIR);
     let cur = std::fs::read_to_string(dir.join(COMMANDER_PUB))
         .with_context(|| format!("read {}", dir.join(COMMANDER_PUB).display()))?;
-    println!("Commander key pinned: {}", cur.trim());
+    let cur = cur.trim();
+    let mut out = vec![
+        format!(
+            "Commander key pinned: {}",
+            mur_common::fleet_bundle::signer_fingerprint(cur)
+        ),
+        format!("  key: {cur}"),
+    ];
     if dir.join(COMMANDER_PREV_PUB).exists() {
-        println!("  (previous key also accepted for rotation)");
+        let prev = std::fs::read_to_string(dir.join(COMMANDER_PREV_PUB)).unwrap_or_default();
+        out.push(format!(
+            "  previous (also accepted): {}",
+            mur_common::fleet_bundle::signer_fingerprint(prev.trim())
+        ));
+    }
+    Ok(out)
+}
+
+pub fn cmd_commander_status(mur_home: &Path) -> Result<()> {
+    for line in status_lines(mur_home)? {
+        println!("{line}");
     }
     Ok(())
 }
@@ -148,6 +183,44 @@ mod tests {
         assert_eq!(pinned.trim(), pk2);
         // and an invalid pubkey is rejected even with --force
         assert!(cmd_commander_pin(home, "not-a-key", true).is_err());
+    }
+
+    #[test]
+    fn force_repin_preserves_previous_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let a = AgentIdentity::generate().public_key_multibase();
+        let b = AgentIdentity::generate().public_key_multibase();
+        cmd_commander_pin(home, &a, false).unwrap();
+        cmd_commander_pin(home, &b, true).unwrap();
+        let dir = home.join("commander");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(COMMANDER_PUB))
+                .unwrap()
+                .trim(),
+            b
+        );
+        // outgoing key preserved so its in-force directives keep verifying
+        assert_eq!(
+            std::fs::read_to_string(dir.join(COMMANDER_PREV_PUB))
+                .unwrap()
+                .trim(),
+            a
+        );
+        assert_eq!(accepted_pubkeys(home).len(), 2); // current + previous both accepted
+    }
+
+    #[test]
+    fn status_shows_fingerprint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let pk = AgentIdentity::generate().public_key_multibase();
+        cmd_commander_pin(home, &pk, false).unwrap();
+        let lines = status_lines(home).unwrap();
+        let fp = mur_common::fleet_bundle::signer_fingerprint(&pk);
+        assert!(lines.iter().any(|l| l.contains(&fp)));
+        // the full key is also present for out-of-band comparison
+        assert!(lines.iter().any(|l| l.contains(&pk)));
     }
 
     #[test]
