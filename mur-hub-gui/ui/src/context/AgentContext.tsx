@@ -8,6 +8,9 @@ interface AgentContextValue {
   runtimeStatuses: AgentRuntimeStatus[];
   selectedAgent: string | null;
   setSelected: (name: string | null) => void;
+  /** When set, the DetailPanel opens focused on this tab (consumed once). */
+  desiredDetailTab: string | null;
+  setDesiredDetailTab: (tab: string | null) => void;
 }
 
 const AgentContext = createContext<AgentContextValue>({
@@ -15,17 +18,21 @@ const AgentContext = createContext<AgentContextValue>({
   runtimeStatuses: [],
   selectedAgent: null,
   setSelected: () => {},
+  desiredDetailTab: null,
+  setDesiredDetailTab: () => {},
 });
 
 type Action =
   | { type: "set_agents"; agents: AgentEntry[] }
   | { type: "set_runtime"; statuses: AgentRuntimeStatus[] }
-  | { type: "set_selected"; name: string | null };
+  | { type: "set_selected"; name: string | null }
+  | { type: "set_desired_tab"; tab: string | null };
 
 interface State {
   agents: AgentEntry[];
   runtimeStatuses: AgentRuntimeStatus[];
   selectedAgent: string | null;
+  desiredDetailTab: string | null;
 }
 
 function reducer(state: State, action: Action): State {
@@ -36,6 +43,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, runtimeStatuses: action.statuses };
     case "set_selected":
       return { ...state, selectedAgent: action.name };
+    case "set_desired_tab":
+      return { ...state, desiredDetailTab: action.tab };
   }
 }
 
@@ -44,6 +53,7 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
     agents: [],
     runtimeStatuses: [],
     selectedAgent: null,
+    desiredDetailTab: null,
   });
 
   useEffect(() => {
@@ -75,6 +85,8 @@ export function AgentProvider({ children }: { children: React.ReactNode }) {
         runtimeStatuses: state.runtimeStatuses,
         selectedAgent: state.selectedAgent,
         setSelected: (name) => dispatch({ type: "set_selected", name }),
+        desiredDetailTab: state.desiredDetailTab,
+        setDesiredDetailTab: (tab) => dispatch({ type: "set_desired_tab", tab }),
       }}
     >
       {children}
