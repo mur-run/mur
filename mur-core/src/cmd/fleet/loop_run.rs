@@ -566,6 +566,7 @@ mod tests {
             router: None,
             members: vec![],
             channel_id: "fleet-x".into(),
+            team_id: None,
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
