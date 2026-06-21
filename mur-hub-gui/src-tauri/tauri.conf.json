@@ -41,7 +41,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "RWQGJ45UcKdmybuQiwwP9Djugt8ciV9DkzNHgUrN7PyOrYPGDXTcwFlu",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkgQzk2NkE3NzA1NDhFMjcwNgpSV1FHSjQ1VWNLZG15YnVRaXd3UDlEanVndDhjaVY5RGt6TkhnVXJON1B5T3JZUEdEWFRjd0ZsdQo=",
       "endpoints": [
         "https://github.com/mur-run/mur/releases/latest/download/latest.json"
       ]
