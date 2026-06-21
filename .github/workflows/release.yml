@@ -322,11 +322,6 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
-      # sccache caches individual compilation units (not whole target dirs), so
-      # adding/changing one dep doesn't blow away the cache for 300 unchanged crates.
-      - name: Configure sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
       # rust-cache still handles registry + git source caching; sccache handles .o files.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -337,10 +332,11 @@ jobs:
           key: hub-macos-${{ hashFiles('Cargo.lock', 'mur-hub-gui/src-tauri/Cargo.lock') }}
           restore-keys: hub-macos-
 
-      - name: Install protobuf
-        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install protobuf
+      - name: Install build tools
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install protobuf sccache
 
       # Build Hub UI and mur sidecars in parallel — both are independent at this point.
+      # sccache (installed via brew above) caches individual .o files using GHA cache backend.
       - name: Build Hub UI + mur sidecars (parallel)
         env:
           RUSTC_WRAPPER: sccache
