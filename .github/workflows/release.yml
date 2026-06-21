@@ -609,7 +609,7 @@ jobs:
       - name: Publish mur-common
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://crates.io/api/v1/crates/mur-common/$VERSION")
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -A "mur-ci/1.0" "https://crates.io/api/v1/crates/mur-common/$VERSION")
           if [ "$STATUS" = "200" ]; then
             echo "mur-common $VERSION already published, skipping"
           else
