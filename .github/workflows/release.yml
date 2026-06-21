@@ -609,7 +609,8 @@ jobs:
       - name: Publish mur-common
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          if cargo search mur-common --limit 1 2>/dev/null | grep -q "^mur-common = \"$VERSION\""; then
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://crates.io/api/v1/crates/mur-common/$VERSION")
+          if [ "$STATUS" = "200" ]; then
             echo "mur-common $VERSION already published, skipping"
           else
             cargo publish -p mur-common --token "${CRATES_IO_TOKEN}"
