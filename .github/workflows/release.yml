@@ -391,7 +391,7 @@ jobs:
           # "Invalid" (notarytool exit code 65).
           APPLE_SIGNING_IDENTITY: "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }} (${{ secrets.APPLE_TEAM_ID }})"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           cd mur-hub-gui/src-tauri
           cargo tauri build --target aarch64-apple-darwin
