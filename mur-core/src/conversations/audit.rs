@@ -78,7 +78,7 @@ pub enum AuditAction {
     Governance {
         fleet: String,
         directive: String, // "kill" | "budget_ceiling" | "read_error"
-        decision: String,  // "halted" | "capped" | "fail_closed"
+        decision: String,  // "halted" | "capped" | "fail_closed" | "received"
         nonce: String,
     },
 }
@@ -168,6 +168,25 @@ fn compute_hash(prev_hash: &str, action: &AuditAction, content_sha256: &str) -> 
     h.update(b"\n");
     h.update(content_sha256.as_bytes());
     hex::encode(h.finalize())
+}
+
+/// Read all audit entries from disk. Returns an empty vec if the file does not exist.
+pub fn read_entries(root_override: Option<&str>) -> Result<Vec<AuditEntry>> {
+    let path = audit_path(root_override);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let f = fs::File::open(&path)?;
+    let mut entries = Vec::new();
+    for line in BufReader::new(f).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let e: AuditEntry = serde_json::from_str(&line)?;
+        entries.push(e);
+    }
+    Ok(entries)
 }
 
 /// Replay chain from disk and verify every entry_hash. True = chain intact.
