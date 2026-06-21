@@ -322,7 +322,7 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
-      # rust-cache still handles registry + git source caching; sccache handles .o files.
+      # rust-cache handles registry + git source + target dir layout.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
@@ -332,6 +332,15 @@ jobs:
           key: hub-macos-${{ hashFiles('Cargo.lock', 'mur-hub-gui/src-tauri/Cargo.lock') }}
           restore-keys: hub-macos-
 
+      # sccache with local filesystem cache — avoids GHA backend auth issues.
+      # Caches individual .o files; persisted across runs via actions/cache.
+      - name: Cache sccache store
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: sccache-hub-macos-${{ hashFiles('Cargo.lock', 'mur-hub-gui/src-tauri/Cargo.lock') }}
+          restore-keys: sccache-hub-macos-
+
       - name: Install build tools
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install protobuf sccache
 
@@ -340,7 +349,7 @@ jobs:
       - name: Build Hub UI + mur sidecars (parallel)
         env:
           RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
+          SCCACHE_DIR: ~/.cache/sccache
         run: |
           (cd mur-hub-gui/ui && npm ci && npm run build) &
           UI_PID=$!
@@ -403,7 +412,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
+          SCCACHE_DIR: ~/.cache/sccache
         run: |
           cd mur-hub-gui/src-tauri
           cargo tauri build --target aarch64-apple-darwin
