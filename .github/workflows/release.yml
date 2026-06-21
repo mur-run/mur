@@ -332,10 +332,10 @@ jobs:
           workspaces: |
             . -> target
             mur-hub-gui/src-tauri -> target
-          key: hub-macos
+          key: hub-macos-${{ hashFiles('Cargo.lock', 'mur-hub-gui/src-tauri/Cargo.lock') }}
 
       - name: Install protobuf
-        run: brew install protobuf
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install protobuf
 
       - name: Build mur + runtime sidecars
         run: |
@@ -355,7 +355,15 @@ jobs:
           key: pip-mlx-server-${{ hashFiles('scripts/build-mlx-server.sh') }}
           restore-keys: pip-mlx-server-
 
+      - name: Cache mlx-server binary
+        id: mlx_cache
+        uses: actions/cache@v4
+        with:
+          path: mur-hub-gui/src-tauri/binaries/mlx-server-aarch64-apple-darwin
+          key: mlx-server-bin-${{ hashFiles('scripts/build-mlx-server.sh') }}
+
       - name: Build mlx-server sidecar
+        if: steps.mlx_cache.outputs.cache-hit != 'true'
         run: bash scripts/build-mlx-server.sh aarch64-apple-darwin
 
       # The bundled model is a multi-GB Hugging Face snapshot. snapshot_download
