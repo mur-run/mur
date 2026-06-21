@@ -215,26 +215,6 @@ pub fn verify(root_override: Option<&str>) -> Result<bool> {
     Ok(true)
 }
 
-/// Reads and returns all audit log entries in oldest-first order.
-/// If the audit log file does not exist, returns an empty `Vec`.
-pub fn read_entries(root_override: Option<&str>) -> anyhow::Result<Vec<AuditEntry>> {
-    let path = audit_path(root_override);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let f = fs::File::open(&path)?;
-    let mut entries = Vec::new();
-    for line in BufReader::new(f).lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let e: AuditEntry = serde_json::from_str(&line)?;
-        entries.push(e);
-    }
-    Ok(entries)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
