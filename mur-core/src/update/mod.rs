@@ -29,6 +29,9 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
 
     if !release::is_newer(current, latest)? {
         println!("Already up to date (v{current})");
+        if let Some(nudge) = hub_staleness_nudge(current) {
+            println!("{nudge}");
+        }
         return Ok(());
     }
 
@@ -95,6 +98,66 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
         println!("Update staged; closing now so it can take effect…");
     }
 
+    if let Some(nudge) = hub_staleness_nudge(latest) {
+        println!("{nudge}");
+    }
+
     drop(tmp_dir);
     Ok(())
+}
+
+/// Best-effort: if MUR Hub is installed and older than `cli_version`, return a
+/// one-line nudge. The Hub records its version in `~/.mur/host_path`
+/// (line 2; format `"<exe_path>\n<version>"`, written by the Hub on launch).
+/// The Hub owns its own update — we only inform, never touch the `.app`.
+/// Any error (no Hub, unreadable file, unparseable version) → `None`.
+fn hub_staleness_nudge(cli_version: &str) -> Option<String> {
+    let home = std::env::var_os("MUR_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".mur")))?;
+    let contents = std::fs::read_to_string(home.join("host_path")).ok()?;
+    stale_hub_nudge_from(&contents, cli_version)
+}
+
+/// Pure core of [`hub_staleness_nudge`]: parse the `host_path` contents and, if
+/// the recorded Hub version is older than `cli_version`, format the nudge.
+fn stale_hub_nudge_from(host_path_contents: &str, cli_version: &str) -> Option<String> {
+    let hub_version = host_path_contents.lines().nth(1)?.trim();
+    if hub_version.is_empty() {
+        return None;
+    }
+    // Hub strictly older than the CLI we just landed on → nudge.
+    if release::is_newer(hub_version, cli_version).ok()? {
+        Some(format!(
+            "ℹ MUR Hub v{hub_version} is installed and out of date — \
+             open it to auto-update."
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stale_hub_nudge_from;
+
+    const HOST_PATH: &str = "/Applications/MUR Hub.app/Contents/MacOS/mur-hub-gui\n2.26.0";
+
+    #[test]
+    fn nudges_when_hub_older() {
+        assert!(stale_hub_nudge_from(HOST_PATH, "2.27.0").is_some());
+    }
+
+    #[test]
+    fn silent_when_hub_equal_or_newer() {
+        assert!(stale_hub_nudge_from(HOST_PATH, "2.26.0").is_none());
+        assert!(stale_hub_nudge_from(HOST_PATH, "2.25.0").is_none());
+    }
+
+    #[test]
+    fn silent_on_malformed_or_missing_version() {
+        assert!(stale_hub_nudge_from("/only/a/path", "2.27.0").is_none());
+        assert!(stale_hub_nudge_from("/path\n   ", "2.27.0").is_none());
+        assert!(stale_hub_nudge_from("", "2.27.0").is_none());
+    }
 }
