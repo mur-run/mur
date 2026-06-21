@@ -315,17 +315,19 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
-
-      - name: Build Hub UI
-        run: cd mur-hub-gui/ui && npm ci && npm run build
+          cache: 'npm'
+          cache-dependency-path: mur-hub-gui/ui/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
 
-      # Caches both the workspace target dir (mur + runtime sidecars) and the
-      # Tauri app's separate target dir (mur-hub-gui/src-tauri/target, the
-      # WebKit/wry dep tree) — the dominant cold-build cost of this job.
+      # sccache caches individual compilation units (not whole target dirs), so
+      # adding/changing one dep doesn't blow away the cache for 300 unchanged crates.
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      # rust-cache still handles registry + git source caching; sccache handles .o files.
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
@@ -333,13 +335,21 @@ jobs:
             . -> target
             mur-hub-gui/src-tauri -> target
           key: hub-macos-${{ hashFiles('Cargo.lock', 'mur-hub-gui/src-tauri/Cargo.lock') }}
+          restore-keys: hub-macos-
 
       - name: Install protobuf
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install protobuf
 
-      - name: Build mur + runtime sidecars
+      # Build Hub UI and mur sidecars in parallel — both are independent at this point.
+      - name: Build Hub UI + mur sidecars (parallel)
+        env:
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: "true"
         run: |
+          (cd mur-hub-gui/ui && npm ci && npm run build) &
+          UI_PID=$!
           cargo build --release --locked --target aarch64-apple-darwin -p mur-core -p mur-agent-runtime
+          wait $UI_PID
           mkdir -p mur-hub-gui/src-tauri/binaries
           cp target/aarch64-apple-darwin/release/mur \
              mur-hub-gui/src-tauri/binaries/mur-aarch64-apple-darwin
@@ -393,13 +403,11 @@ jobs:
         env:
           APPLE_TEAM_NAME: ${{ secrets.APPLE_TEAM_NAME }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Tauri signs the .app, its sidecars, and the .dmg with this identity
-          # (already imported into the keychain by import-codesign-certs above).
-          # Without it the bundle is ad-hoc signed and notarization returns
-          # "Invalid" (notarytool exit code 65).
           APPLE_SIGNING_IDENTITY: "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }} (${{ secrets.APPLE_TEAM_ID }})"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: "true"
         run: |
           cd mur-hub-gui/src-tauri
           cargo tauri build --target aarch64-apple-darwin
