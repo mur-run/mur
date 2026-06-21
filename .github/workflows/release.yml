@@ -337,7 +337,6 @@ jobs:
 
       # Build Hub UI and mur sidecars in parallel — both are independent at this point.
       - name: Build Hub UI + mur sidecars (parallel)
-        env:
         run: |
           (cd mur-hub-gui/ui && npm ci && npm run build) &
           UI_PID=$!
