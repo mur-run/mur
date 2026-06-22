@@ -45,7 +45,18 @@ export const zhTW: Table = {
   "status.idle": "閒置",
   "status.error": "錯誤",
   "settings.language": "語言",
+  // ── Settings panel ──
+  "settings.title": "設定",
+  "settings.section.appearance": "外觀",
+  "settings.section.models": "模型",
+  "settings.section.import": "匯入",
+  "settings.defaultBrain": "預設大腦",
+  "settings.noBrain": "尚未設定",
+  "settings.modelsHint": "每隻 agent 各自選用模型，可於模型庫管理。",
+  "app.settings": "設定",
   // ── Detail panel ──
+  "detail.role": "角色",
+  "detail.rolePlaceholder": "例如 Engineer（也可自填）",
   "detail.category": "分類",
   "detail.description": "描述",
   "detail.descPlaceholder": "這個 agent 的工作…",

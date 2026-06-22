@@ -253,6 +253,20 @@ function withCurrent(options: string[], current: string): string[] {
   return current && !options.includes(current) ? [current, ...options] : options;
 }
 
+// Bundled default roles (suggestions only; the field is free-text so users
+// can pick one or type their own). Grounded in MetaGPT's software roles +
+// generic knowledge-work archetypes. ponytail: a datalist, not a registry.
+const ROLE_SUGGESTIONS = [
+  "Engineer",
+  "Architect",
+  "QA",
+  "Product Manager",
+  "Researcher",
+  "Writer",
+  "Analyst",
+  "Coordinator",
+];
+
 function PersonaTab({
   detail,
   onSaved,
@@ -261,6 +275,7 @@ function PersonaTab({
   onSaved: (d: AgentDetail) => void;
 }) {
   const { t } = useT();
+  const [role, setRole] = useState(detail.role ?? "");
   const [category, setCategory] = useState(detail.persona_category);
   const [description, setDescription] = useState(detail.persona_description);
   const [tone, setTone] = useState(detail.persona_tone);
@@ -275,6 +290,7 @@ function PersonaTab({
     setSaveError(null);
     try {
       const patch: DetailPatch = {
+        role: role.trim(),
         persona_category: category,
         persona_description: description,
         persona_tone: tone,
@@ -296,6 +312,7 @@ function PersonaTab({
   }
 
   const changed =
+    role.trim() !== (detail.role ?? "") ||
     category !== detail.persona_category ||
     description !== detail.persona_description ||
     tone !== detail.persona_tone ||
@@ -308,6 +325,20 @@ function PersonaTab({
 
   return (
     <div className="tab-form">
+      <label className="field-label">{t("detail.role")}</label>
+      <input
+        className="input"
+        list="role-suggestions"
+        value={role}
+        onChange={(e) => { setRole(e.target.value); }}
+        placeholder={t("detail.rolePlaceholder")}
+      />
+      <datalist id="role-suggestions">
+        {ROLE_SUGGESTIONS.map((r) => (
+          <option key={r} value={r} />
+        ))}
+      </datalist>
+
       <label className="field-label">{t("detail.category")}</label>
       <select
         className="input"

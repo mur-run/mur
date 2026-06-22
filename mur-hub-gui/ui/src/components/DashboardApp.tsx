@@ -9,6 +9,7 @@ import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
+import { SettingsModal } from "./SettingsModal";
 import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
@@ -230,6 +231,7 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
           </div>
           <div>
             <p className="grid-card__name">{agent.display_name}</p>
+            {agent.role && <span className="role-chip">{agent.role}</span>}
             <p className="grid-card__cat">{t(`category.${agent.category}` as Parameters<typeof t>[0])}</p>
           </div>
         </div>
@@ -337,6 +339,7 @@ export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
           {avatarInitials(agent.display_name)}
         </div>
         <span className="list-name">{agent.display_name}</span>
+        {agent.role && <span className="role-chip">{agent.role}</span>}
       </div>
       <span className="list-category">{t(`category.${agent.category}` as Parameters<typeof t>[0])}</span>
       <span className="list-model" title={agent.model_id}>
@@ -386,26 +389,10 @@ export function Sidebar({ activeCategory, agents, onSelect }: SidebarProps) {
   );
 }
 
-// ─── BrainBadge ────────────────────────────────────────────────────────────
-
-function BrainBadge() {
-  const { t } = useT();
-  const [model, setModel] = useState<string | null>(null);
-  useEffect(() => {
-    invoke<[boolean, string | null]>("nudge_status").then(([, m]) => setModel(m)).catch(() => {});
-  }, []);
-  if (!model) return null;
-  return (
-    <button className="toolbar-btn brain-badge" title={t("dashboard.brainTooltip")}>
-      🧠 {model}
-    </button>
-  );
-}
-
 // ─── DashboardApp ──────────────────────────────────────────────────────────
 
 export function DashboardApp() {
-  const { t, lang, setLang } = useT();
+  const { t } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
   const { open: openConvs } = useConversations();
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
@@ -416,6 +403,7 @@ export function DashboardApp() {
   const [presetImportOpen, setPresetImportOpen] = useState(false);
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
   const [muragentImportPath, setMuragentImportPath] = useState<string | undefined>(undefined);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [showAppsBanner, setShowAppsBanner] = useState(false);
   const [showUpgradeNudge, setShowUpgradeNudge] = useState(false);
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
@@ -626,60 +614,37 @@ export function DashboardApp() {
         )}
 
         <div className="dashboard__bar">
-          <div className="dashboard__bar-actions">
-            <button className="toolbar-btn" onClick={() => setWizardOpen(true)}>
+          <span className="dashboard__brand">MUR</span>
+          <nav className="surface-toggle dashboard__bar-nav">
+            <button
+              className={surface === "agents" ? "is-active" : ""}
+              onClick={() => setSurface("agents")}
+            >
+              {t("work.toggle.agents")}
+            </button>
+            <button
+              className={surface === "work" ? "is-active" : ""}
+              onClick={() => setSurface("work")}
+            >
+              {t("work.toggle.work")}
+            </button>
+          </nav>
+          <label className="field dashboard__bar-search">
+            <input
+              ref={searchRef}
+              type="search"
+              placeholder={t("dashboard.search")}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+          <div className="dashboard__bar-tools">
+            <button
+              className="toolbar-btn toolbar-btn--primary"
+              onClick={() => setWizardOpen(true)}
+            >
               + {t("app.newAgent")}
             </button>
-            <button
-              className="toolbar-btn"
-              onClick={() => setMuragentImportOpen(true)}
-              title={t("app.importAgentTooltip")}
-            >
-              {t("app.importAgent")}
-            </button>
-            <button
-              className="toolbar-btn"
-              onClick={() => setPresetImportOpen(true)}
-              title={t("app.importPresetTooltip")}
-            >
-              {t("app.importPreset")}
-            </button>
-            <BrainBadge />
-            <label className="field dashboard__bar-search">
-              <input
-                ref={searchRef}
-                type="search"
-                placeholder={t("dashboard.search")}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </label>
-          </div>
-          <div className="dashboard__bar-right">
-            <label className="lang-switch">
-              {t("settings.language")}
-              <select
-                value={lang}
-                onChange={(e) => setLang(e.target.value as "en" | "zh-TW")}
-              >
-                <option value="en">English</option>
-                <option value="zh-TW">繁體中文</option>
-              </select>
-            </label>
-            <div className="surface-toggle">
-              <button
-                className={surface === "agents" ? "is-active" : ""}
-                onClick={() => setSurface("agents")}
-              >
-                {t("work.toggle.agents")}
-              </button>
-              <button
-                className={surface === "work" ? "is-active" : ""}
-                onClick={() => setSurface("work")}
-              >
-                {t("work.toggle.work")}
-              </button>
-            </div>
             <div className="view-toggle">
               <button
                 className={viewMode === "grid" ? "is-active" : ""}
@@ -699,7 +664,7 @@ export function DashboardApp() {
               </button>
             </div>
             <button
-              className="toolbar-btn"
+              className="toolbar-btn toolbar-btn--icon"
               title={t("app.refresh")}
               aria-label={t("app.refresh")}
               onClick={() =>
@@ -709,6 +674,14 @@ export function DashboardApp() {
               }
             >
               ↺
+            </button>
+            <button
+              className="toolbar-btn toolbar-btn--icon"
+              title={t("app.settings")}
+              aria-label={t("app.settings")}
+              onClick={() => setSettingsOpen(true)}
+            >
+              ⚙
             </button>
           </div>
         </div>
@@ -816,6 +789,12 @@ export function DashboardApp() {
           setMuragentImportPath(undefined);
           invoke("list_agents").catch(() => {});
         }}
+      />
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onImportAgent={() => setMuragentImportOpen(true)}
+        onImportPreset={() => setPresetImportOpen(true)}
       />
     </div>
   );

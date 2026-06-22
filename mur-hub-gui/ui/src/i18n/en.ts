@@ -43,7 +43,18 @@ export const en = {
   "status.idle": "idle",
   "status.error": "error",
   "settings.language": "Language",
+  // ── Settings panel ──
+  "settings.title": "Settings",
+  "settings.section.appearance": "Appearance",
+  "settings.section.models": "Models",
+  "settings.section.import": "Import",
+  "settings.defaultBrain": "Default brain",
+  "settings.noBrain": "Not set",
+  "settings.modelsHint": "Each agent picks its own model. Manage them in the Model Library.",
+  "app.settings": "Settings",
   // ── Detail panel ──
+  "detail.role": "Role",
+  "detail.rolePlaceholder": "e.g. Engineer (or type your own)",
   "detail.category": "Category",
   "detail.description": "Description",
   "detail.descPlaceholder": "What this agent does…",
