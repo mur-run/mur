@@ -1108,6 +1108,10 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path) -> Result<bool> {
             "watch-together",
             include_str!("../skills/watch_together.yaml"),
         ),
+        (
+            "parallel-code",
+            include_str!("../skills/parallel_code.yaml"),
+        ),
     ];
 
     let mur_skills_dir = home.join(".mur").join("skills");
