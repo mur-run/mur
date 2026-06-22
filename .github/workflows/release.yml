@@ -298,6 +298,11 @@ jobs:
     name: Build MuR Hub (macOS arm64)
     needs: validate-version
     runs-on: macos-14
+    env:
+      # tauri-cli has no binstall-compatible prebuilt for this version, so a
+      # plain install recompiles it from source (~10 min) every release. Pin the
+      # version and cache the compiled binary; bump this to upgrade the CLI.
+      TAURI_CLI_VERSION: "2.11.3"
     steps:
       - uses: actions/checkout@v6
 
@@ -379,11 +384,21 @@ jobs:
       - name: Fetch bundled model
         run: bash scripts/fetch-bundle-model.sh mlx-community/Qwen3.5-2B-MLX-4bit
 
-      # Prebuilt tauri-cli instead of compiling it from source each release.
+      # Cache the compiled cargo-tauri so we pay the ~10-min source build only on
+      # a cache miss (first run / version bump), not every release. The binary is
+      # platform-specific, so the key is scoped to os + arch + pinned version.
+      - name: Cache tauri CLI
+        id: tauri_cli_cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: cargo-tauri-${{ env.TAURI_CLI_VERSION }}-${{ runner.os }}-${{ runner.arch }}
       - name: Install cargo-binstall
+        if: steps.tauri_cli_cache.outputs.cache-hit != 'true'
         uses: cargo-bins/cargo-binstall@main
       - name: Install tauri CLI
-        run: cargo binstall -y tauri-cli --version "^2"
+        if: steps.tauri_cli_cache.outputs.cache-hit != 'true'
+        run: cargo binstall -y tauri-cli --version "${{ env.TAURI_CLI_VERSION }}"
 
       - name: Import Apple signing certs
         uses: apple-actions/import-codesign-certs@v2
