@@ -119,7 +119,7 @@ export function WorkView({ agents }: Props) {
         <WorkFeed events={events} displayNames={displayNames} nowMs={nowMs} />
       </div>
       <div className="work-view__trace">
-        <WorkTrace channel={manifest} displayNames={displayNames} />
+        <WorkTrace channel={manifest} displayNames={displayNames} agents={agents} />
       </div>
     </div>
   );

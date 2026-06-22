@@ -293,7 +293,17 @@
   align-items: center;
   gap: 6px;
   font-size: 11px;
+  padding: 2px 0;
 }
+.work-trace__pavatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+}
+.work-trace__pavatar--glyph { font-size: 15px; }
 
 .work-trace__pname {
   flex: 1;
