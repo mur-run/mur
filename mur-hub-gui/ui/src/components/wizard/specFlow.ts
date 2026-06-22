@@ -6,7 +6,8 @@
  *
  *   Companion  → existing wizard steps 1–6 (no change)
  *   Specialist → Plan 4 steps: Role → Generating → Review → Eval   (T5–T6)
- *   Both       → same as Specialist (both roles coexist at runtime)
+ *   Both       → Specialist steps, then an Appearance step that gives the
+ *                just-created specialist a companion pet look (style + render)
  *
  * `specReducer` is a pure function: (SpecFlowState, SpecFlowEvent) → SpecFlowState.
  * It has no side-effects and is fully unit-testable with Vitest.
@@ -22,7 +23,8 @@ export type SpecFlowStep =
   | "role"          // Specialist Step 1: Role selection (T5)
   | "generating"    // Specialist Step 2: LLM generation in-progress (T5)
   | "review"        // Specialist Step 3: Review generated draft (T6)
-  | "eval";         // Specialist Step 4: Eval scores (T6)
+  | "eval"          // Specialist Step 4: Eval scores (T6)
+  | "appearance";   // Both Step 5: give the new specialist a pet look
 
 export interface SpecFlowState {
   step: SpecFlowStep;
@@ -94,7 +96,12 @@ export function specReducer(
           return { ...state, step: "review" };
         case "review":
           return { ...state, step: "eval" };
-        // "companion" and "eval" do not NEXT further via this reducer
+        case "eval":
+          // "both" appends a pet-appearance step; plain specialist is terminal.
+          return state.kind === "both"
+            ? { ...state, step: "appearance" }
+            : state;
+        // "companion" and "appearance" do not NEXT further via this reducer
         default:
           return state;
       }

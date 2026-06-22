@@ -14,6 +14,7 @@ import { SpecGenerating } from "./steps/spec/SpecGenerating";
 import type { SpecDraftDto } from "./steps/spec/SpecGenerating";
 import { SpecReview } from "./steps/spec/SpecReview";
 import { SpecEval } from "./steps/spec/SpecEval";
+import { SpecAppearance } from "./steps/spec/SpecAppearance";
 import { specReducer, SPEC_FLOW_INITIAL } from "./specFlow";
 
 interface Props {
@@ -249,6 +250,29 @@ export function WizardModal({ isOpen, onClose }: Props) {
           {/* ── Specialist flow — Eval (T6): results display ── */}
           {specFlow.step === "eval" && specCreatedName && (
             <SpecEval
+              agentName={specCreatedName}
+              doneLabel={
+                specFlow.kind === "both"
+                  ? t("wizard.appearance.next")
+                  : undefined
+              }
+              onDone={(name) => {
+                // "both" appends a pet-appearance step on the new specialist;
+                // plain specialist finishes here.
+                if (specFlow.kind === "both") {
+                  dispatchSpec({ type: "NEXT" });
+                } else {
+                  setSnapshot(null);
+                  setDisplayStep(1);
+                  onClose(name);
+                }
+              }}
+            />
+          )}
+
+          {/* ── "Both" flow — Appearance: give the specialist a pet look ── */}
+          {specFlow.step === "appearance" && specCreatedName && (
+            <SpecAppearance
               agentName={specCreatedName}
               onDone={(name) => {
                 setSnapshot(null);
