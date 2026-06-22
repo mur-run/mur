@@ -721,10 +721,7 @@ impl TaskRunner {
             });
         }
 
-        messages.push(RichMessage::Text {
-            role: input.role.clone(),
-            content: prompt.clone(),
-        });
+        messages.push(user_message(input));
         let req = LlmRequest {
             messages,
             temperature: None,
@@ -946,16 +943,12 @@ impl TaskRunner {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
         let tool_defs: Vec<_> = self.tools_for_loop().iter().map(|t| t.def()).collect();
-        let prompt = text_of(input);
         let mut history: Vec<RichMessage> = vec![
             RichMessage::Text {
                 role: "system".into(),
                 content: system_prompt,
             },
-            RichMessage::Text {
-                role: input.role.clone(),
-                content: prompt,
-            },
+            user_message(input),
         ];
 
         // Snapshot the (per-runner, shared-across-tasks) token counter so the
@@ -1266,6 +1259,34 @@ fn text_of(m: &Message) -> String {
             _ => None,
         })
         .unwrap_or_default()
+}
+
+/// Build the user-turn message: image+text when `input` carries a pasted
+/// image (a screenshot from `mur agent cli`), else plain text. Images skip the
+/// B0 text hook (they're binary, not prompt-injectable). ponytail: OCR-scan
+/// inbound images later if needed.
+fn user_message(input: &Message) -> crate::llm::RichMessage {
+    use crate::llm::RichMessage;
+    let text = text_of(input);
+    let image = input.parts.iter().find_map(|p| match p {
+        MessagePart::Data { mime_type, data } if mime_type.starts_with("image/") => data
+            .get("base64")
+            .and_then(|v| v.as_str())
+            .map(|b64| (mime_type.clone(), b64.to_string())),
+        _ => None,
+    });
+    match image {
+        Some((media_type, data)) => RichMessage::ImageText {
+            role: input.role.clone(),
+            media_type,
+            data,
+            text,
+        },
+        None => RichMessage::Text {
+            role: input.role.clone(),
+            content: text,
+        },
+    }
 }
 
 fn strip_lines_for(text: &str, names: &HashSet<&str>) -> String {
@@ -2124,7 +2145,7 @@ mod tests {
                         result_ids.insert(r.call_id.clone());
                     }
                 }
-                RichMessage::Text { .. } => {}
+                RichMessage::Text { .. } | RichMessage::ImageText { .. } => {}
             }
         }
         assert!(!use_ids.is_empty(), "expected at least one tool_use");
@@ -2135,5 +2156,46 @@ mod tests {
                  result_ids={result_ids:?}"
             );
         }
+    }
+
+    #[test]
+    fn user_message_carries_pasted_image() {
+        let msg = Message {
+            role: "user".into(),
+            parts: vec![
+                MessagePart::Text {
+                    text: "what is this?".into(),
+                },
+                MessagePart::Data {
+                    mime_type: "image/png".into(),
+                    data: serde_json::json!({ "base64": "QkFTRTY0" }),
+                },
+            ],
+        };
+        match user_message(&msg) {
+            crate::llm::RichMessage::ImageText {
+                media_type,
+                data,
+                text,
+                ..
+            } => {
+                assert_eq!(media_type, "image/png");
+                assert_eq!(data, "QkFTRTY0");
+                assert_eq!(text, "what is this?");
+            }
+            other => panic!("expected ImageText, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_message_text_only_when_no_image() {
+        let msg = Message {
+            role: "user".into(),
+            parts: vec![MessagePart::Text { text: "hi".into() }],
+        };
+        assert!(matches!(
+            user_message(&msg),
+            crate::llm::RichMessage::Text { .. }
+        ));
     }
 }
