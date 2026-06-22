@@ -1,0 +1,76 @@
+name: parallel-code
+version: 0.1.0
+publisher: human:mur
+description: "Decide whether a coding task should be fanned out across parallel coder sub-agents. Default is a single coherent writer; propose parallel ONLY for disjoint, mechanical, contract-pinned work, and only after the user approves."
+category: workflow
+content:
+  abstract: |
+    Most coding tasks should NOT be parallelized — default to one single-threaded
+    coherent writer. Use this to recognize the narrow class that genuinely benefits
+    and, only then, PROPOSE a parallel fan-out for the user's approval before running.
+
+    Single-writer principle (why serial is the default): parallel code WRITERS make
+    conflicting, context-starved decisions — mismatched styles, duplicated helpers,
+    semantic contradictions that compile + lint clean but break at runtime; a clean
+    textual merge is NOT proof of correctness. Both canonical sources converge:
+    Anthropic's multi-agent research system wins on breadth-first READ tasks and
+    explicitly excludes most coding; Cognition's "Don't Build Multi-Agents" attacks
+    parallel writers (the Flappy-Bird trap — mismatched styles). Both land on: fan
+    out reads/analysis/review, keep WRITES single-threaded — UNLESS the work is
+    genuinely disjoint files + mechanical, behind a contract frozen BEFORE fan-out
+    (N unrelated adapters, per-module boilerplate, a mechanical cross-file refactor)
+    — never one design whose pieces must share architectural taste.
+  procedure:
+    steps:
+      - description: "DEFAULT: do the change single-threaded. Only even consider parallel when the task is large AND obviously spans many files."
+      - description: |
+          GATE — propose parallel only if ALL hold (any 'no' on 1-4 → stay serial):
+          1. Disjoint files — sub-tasks touch non-overlapping files; NO shared
+             registry/config/router/schema/lockfile is edited by more than one coder.
+          2. Contract frozen first — any shared types/interfaces/API shapes are
+             defined sequentially and frozen read-only BEFORE fan-out; coders read
+             them, none modify them.
+          3. No sequential dependency — no sub-task needs another's intermediate
+             output; each is fully specifiable in isolation.
+          4. Mechanical / breadth-first, not design-coherent (no shared "taste").
+          5. >=3 independent units and the task is worth a ~3-15x token premium.
+          6. You can review the parallel output at least as fast as it is produced.
+      - description: |
+          If the gate FAILS, say so in one line and proceed serially, e.g.
+          "these changes share types → doing this single-threaded for coherence."
+      - description: |
+          If the gate PASSES, PROPOSE (never auto-run). State the contract and the
+          explicit per-file breakdown + rough cost:
+          "This splits cleanly across N files behind <contract>. I can fan out N
+           coders in parallel (~Xk tokens): file1 -> taskA, file2 -> taskB, ...
+           Run it?"
+      - description: |
+          On approval, execute via the proven path — a workflow whose steps are
+          rank-0 `delegate_to: <coder>` (one per disjoint file, run concurrently)
+          plus a final `depends_on`-all verify step (build/test):
+            mur workflow run <name> --channel-new --yes
+          One compliant coder agent handles N concurrent delegates; distinct coder
+          agents are NOT required. If you cannot run shell yourself (e.g. you are a
+          sandboxed MUR agent), hand the user the ready breakdown + the exact
+          `mur workflow run` command and let them run it.
+      - description: |
+          Build discipline (critical for Rust/cargo): coders WRITE their files only.
+          Do NOT have each coder run `cargo check/test` concurrently — N top-level
+          cargo on one `target/` serialize on the build-directory lock AND
+          oversubscribe cores (a single `cargo build` already uses every logical CPU
+          via its jobserver), so parallel builds SUBTRACT throughput. Run ONE
+          build/test AFTER the fan-out (the verify step). Only if a coder must build
+          in isolation, give it its own git worktree with a per-worktree
+          CARGO_TARGET_DIR (costly in disk), and pre-warm `cargo fetch` once (the
+          shared ~/.cargo package-cache lock serializes fetches).
+      - description: |
+          After the run, the verify step's build/test result is the gate. If it
+          fails or the files look incoherent together, fall back to fixing it
+          single-threaded — do not paper over a bad merge.
+tags: [coding, parallel, delegation, orchestration, single-writer]
+triggers:
+  - type: keyword
+    pattern: "(implement|refactor|add|migrate|generate).*(across|multiple|several|all|each|every) (file|module|crate|package|endpoint|component|adapter)"
+  - type: keyword
+    pattern: "parallel|fan.?out|in parallel|split.*across|at the same time"
+priority: normal
