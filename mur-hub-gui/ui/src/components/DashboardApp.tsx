@@ -377,6 +377,12 @@ export function Sidebar({ activeRole, agents, onSelect }: SidebarProps) {
 
 // ─── DashboardApp ──────────────────────────────────────────────────────────
 
+// Subset of @tauri-apps/plugin-updater's DownloadEvent we read for progress.
+type UpdaterEvent =
+  | { event: "Started"; data?: { contentLength?: number } }
+  | { event: "Progress"; data?: { chunkLength?: number } }
+  | { event: "Finished"; data?: unknown };
+
 export function DashboardApp() {
   const { t } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
@@ -395,13 +401,55 @@ export function DashboardApp() {
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
+  // App auto-update. Detect on mount, but never download silently: a Hub update
+  // is a large payload, so surface a banner and let the user choose to install
+  // (with progress + error feedback) instead of an invisible background fetch.
+  const updateRef = useRef<{
+    version: string;
+    downloadAndInstall: (cb?: (e: UpdaterEvent) => void) => Promise<void>;
+  } | null>(null);
+  const [appUpdate, setAppUpdate] = useState<{ version: string } | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
   useEffect(() => {
-    import("@tauri-apps/plugin-updater").then(({ check }) =>
-      check().then((u) => u && import("@tauri-apps/plugin-process").then(({ relaunch }) =>
-        u.downloadAndInstall().then(relaunch)
-      ))
-    ).catch((e) => console.warn("Update check failed:", e));
+    let cancelled = false;
+    import("@tauri-apps/plugin-updater")
+      .then(({ check }) => check())
+      .then((u) => {
+        if (u && !cancelled) {
+          updateRef.current = u;
+          setAppUpdate({ version: u.version });
+        }
+      })
+      .catch((e) => console.warn("Update check failed:", e));
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  async function installUpdate() {
+    const u = updateRef.current;
+    if (!u) return;
+    setUpdateError(null);
+    setUpdateProgress(0);
+    try {
+      let downloaded = 0;
+      let total = 0;
+      await u.downloadAndInstall((e) => {
+        if (e.event === "Started") total = e.data?.contentLength ?? 0;
+        else if (e.event === "Progress") {
+          downloaded += e.data?.chunkLength ?? 0;
+          setUpdateProgress(total ? Math.round((downloaded / total) * 100) : null);
+        } else if (e.event === "Finished") setUpdateProgress(100);
+      });
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    } catch (e) {
+      setUpdateProgress(null);
+      setUpdateError(String(e));
+    }
+  }
 
   // Build a lookup map for runtime statuses.
   const runtimeMap = new Map<string, AgentRuntimeStatus>(
@@ -603,6 +651,35 @@ export function DashboardApp() {
                 {t("dashboard.nudgeAccept")}
               </button>
             </div>
+          </div>
+        )}
+        {appUpdate && (
+          <div className="upgrade-nudge-banner">
+            <span>
+              {updateError
+                ? t("dashboard.updateError", { error: updateError })
+                : updateProgress !== null
+                  ? t("dashboard.updateDownloading", {
+                      version: appUpdate.version,
+                      pct: updateProgress,
+                    })
+                  : t("dashboard.updateAvailable", { version: appUpdate.version })}
+            </span>
+            {updateProgress === null && (
+              <div className="upgrade-nudge-actions">
+                <button className="toolbar-btn" onClick={() => setAppUpdate(null)}>
+                  {t("dashboard.updateLater")}
+                </button>
+                <button
+                  className="toolbar-btn toolbar-btn--primary"
+                  onClick={installUpdate}
+                >
+                  {updateError
+                    ? t("dashboard.updateRetry")
+                    : t("dashboard.updateInstall")}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
