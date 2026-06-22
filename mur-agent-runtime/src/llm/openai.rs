@@ -179,6 +179,17 @@ fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
                     }));
                 }
             }
+            // ponytail: OpenAI vision not wired — keep the caption, drop the
+            // image. Emit image_url content blocks here if an OpenAI-backed
+            // vision agent ever needs to see pasted screenshots.
+            RichMessage::ImageText { role, text, .. } => {
+                let r = if role == "agent" {
+                    "assistant"
+                } else {
+                    role.as_str()
+                };
+                result.push(json!({"role": r, "content": text}));
+            }
         }
     }
     result

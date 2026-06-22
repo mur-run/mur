@@ -243,6 +243,28 @@ fn rich_messages_to_anthropic(
                     .collect();
                 convo.push(json!({"role": "user", "content": parts}));
             }
+            RichMessage::ImageText {
+                role,
+                media_type,
+                data,
+                text,
+            } => {
+                let r = if role == "agent" {
+                    "assistant"
+                } else {
+                    role.as_str()
+                };
+                // Image block first (Anthropic's recommended ordering), then
+                // the caption — skipped when empty so an image-only paste works.
+                let mut parts = vec![json!({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": data},
+                })];
+                if !text.is_empty() {
+                    parts.push(json!({"type": "text", "text": text}));
+                }
+                convo.push(json!({"role": r, "content": parts}));
+            }
         }
     }
 
@@ -569,6 +591,39 @@ mod tests {
         assert_eq!(convo.len(), 1);
         assert_eq!(convo[0]["role"], "user");
         assert_eq!(convo[0]["content"], "hi");
+    }
+
+    #[test]
+    fn image_text_becomes_image_block_then_caption() {
+        let msgs = vec![RichMessage::ImageText {
+            role: "user".into(),
+            media_type: "image/png".into(),
+            data: "QkFTRTY0".into(),
+            text: "what is this?".into(),
+        }];
+        let (_, convo, _) = rich_messages_to_anthropic(&msgs);
+        assert_eq!(convo.len(), 1);
+        let content = convo[0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "image");
+        assert_eq!(content[0]["source"]["type"], "base64");
+        assert_eq!(content[0]["source"]["media_type"], "image/png");
+        assert_eq!(content[0]["source"]["data"], "QkFTRTY0");
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "what is this?");
+    }
+
+    #[test]
+    fn image_text_without_caption_is_image_only() {
+        let msgs = vec![RichMessage::ImageText {
+            role: "user".into(),
+            media_type: "image/png".into(),
+            data: "QQ==".into(),
+            text: String::new(),
+        }];
+        let (_, convo, _) = rich_messages_to_anthropic(&msgs);
+        let content = convo[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1, "no empty text block");
+        assert_eq!(content[0]["type"], "image");
     }
 
     #[test]

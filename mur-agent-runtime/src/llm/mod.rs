@@ -77,6 +77,17 @@ pub enum RichMessage {
     ToolResults {
         results: Vec<ToolResultEntry>,
     },
+    /// A user turn carrying an inline image (base64) plus its text caption —
+    /// e.g. a screenshot pasted into `mur agent cli`. Only the Anthropic
+    /// adapter renders the image today; other adapters drop it to text.
+    ImageText {
+        role: String,
+        /// e.g. "image/png" — passed straight through to the provider.
+        media_type: String,
+        /// Base64-encoded image bytes (no data: prefix).
+        data: String,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone)]

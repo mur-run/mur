@@ -208,6 +208,9 @@ pub struct App {
     pub last_esc_at: Option<std::time::Instant>,
     pub esc_hint: bool,
     pub last_sent: Option<String>,
+    /// Base64 PNG staged by Ctrl+V (a pasted screenshot), sent as an inline
+    /// image with the next message and cleared on send. macOS-only capture.
+    pub pending_image: Option<String>,
 }
 
 impl App {
@@ -236,6 +239,7 @@ impl App {
             last_esc_at: None,
             esc_hint: false,
             last_sent: None,
+            pending_image: None,
         }
     }
 
