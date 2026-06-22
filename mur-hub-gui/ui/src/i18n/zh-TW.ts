@@ -396,6 +396,8 @@ export const zhTW: Table = {
   "wizard.appearance.next": "下一步：外觀 →",
   "work.toggle.agents": "Agents",
   "work.toggle.work": "活動",
+  "work.toggle.chats": "對話",
+  "chats.empty": "尚無 agent — 建立一個就能開始聊天。",
   "work.empty": "目前沒有進行中的工作。啟動 fleet 或 workflow 後會顯示在這裡。（1:1 聊天在各 agent 的對話裡。）",
   "work.pickChannel": "選取頻道以查看其事件。",
   "work.noEvents": "此頻道尚無事件。",

@@ -394,6 +394,8 @@ export const en = {
   "wizard.appearance.next": "Next: appearance →",
   "work.toggle.agents": "Agents",
   "work.toggle.work": "Activity",
+  "work.toggle.chats": "Chats",
+  "chats.empty": "No agents yet — create one to start chatting.",
   "work.empty": "No active runs yet. Start a fleet or workflow and it shows up here. (1:1 chats live with each agent.)",
   "work.pickChannel": "Select a channel to view its events.",
   "work.noEvents": "No events in this channel yet.",

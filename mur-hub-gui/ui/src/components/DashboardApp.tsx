@@ -14,6 +14,7 @@ import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
 import { WorkView } from "./work/WorkView";
+import { ChatsView } from "./ChatsView";
 import { useConversations } from "../conversation/ConversationContext";
 import { Mascot } from "./Mascot";
 import type { MascotMood } from "./Mascot";
@@ -382,7 +383,7 @@ export function DashboardApp() {
   const { open: openConvs } = useConversations();
   const [activeRole, setActiveRole] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [surface, setSurface] = useState<"agents" | "work">("agents");
+  const [surface, setSurface] = useState<"agents" | "chats" | "work">("agents");
   const [query, setQuery] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
@@ -615,6 +616,12 @@ export function DashboardApp() {
               {t("work.toggle.agents")}
             </button>
             <button
+              className={surface === "chats" ? "is-active" : ""}
+              onClick={() => setSurface("chats")}
+            >
+              {t("work.toggle.chats")}
+            </button>
+            <button
               className={surface === "work" ? "is-active" : ""}
               onClick={() => setSurface("work")}
             >
@@ -680,6 +687,8 @@ export function DashboardApp() {
 
         {surface === "work" ? (
           <WorkView agents={agents} />
+        ) : surface === "chats" ? (
+          <ChatsView agents={agents} />
         ) : (
           <>
             <div className="dashboard__hero">
