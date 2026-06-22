@@ -507,6 +507,7 @@ pub fn run() {
             work::channel_events,
             work::channel_get,
             hitl::agent_hitl_respond,
+            hitl::channel_hitl_respond,
             open_dashboard,
             toggle_popover,
             onboarding::wizard_open,

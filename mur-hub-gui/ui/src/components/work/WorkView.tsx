@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { AgentEntry } from "../../types";
 import type { ChannelSummary, ChannelEvent, Channel } from "../../work/types";
 import { WorkChannelList } from "./WorkChannelList";
+import { ChannelHitlBanner } from "./ChannelHitlBanner";
 import { WorkFeed } from "./WorkFeed";
 import { WorkTrace } from "./WorkTrace";
 
@@ -108,6 +109,13 @@ export function WorkView({ agents }: Props) {
         />
       </div>
       <div className="work-view__feed">
+        <ChannelHitlBanner
+          channelId={selectedId}
+          events={events}
+          onResolved={() => {
+            if (selectedId) void loadSelected(selectedId);
+          }}
+        />
         <WorkFeed events={events} displayNames={displayNames} nowMs={nowMs} />
       </div>
       <div className="work-view__trace">
