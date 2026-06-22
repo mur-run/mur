@@ -7,6 +7,49 @@
   overflow: hidden;
 }
 
+/* ── Chats view — agent list + inline chat ─────────────────────────────── */
+.chats-view {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  height: 100%;
+  overflow: hidden;
+}
+.chats-view__list {
+  overflow-y: auto;
+  border-right: 1px solid var(--border-line);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chats-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius-md, 10px);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.chats-item:hover { background: var(--surface-hover); }
+.chats-item.is-active { background: var(--color-brand-soft); }
+.chats-item__avatar { flex: none; width: 30px; height: 30px; display: inline-flex; }
+.chats-item__name { font-size: 13px; color: var(--text-primary); }
+.chats-view__main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.chats-view__empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
 .work-view__rail {
   overflow-y: auto;
   border-right: 1px solid var(--border);
@@ -16,6 +59,31 @@
   overflow-y: auto;
   padding: 8px 12px;
 }
+
+/* ── Activity HITL gate banner (approve/deny inline) ───────────────────── */
+.channel-hitl {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 10px);
+  border: 1px solid var(--color-warn, #F59E0B);
+  background: color-mix(in srgb, var(--color-warn, #F59E0B) 12%, transparent);
+}
+.channel-hitl__info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.channel-hitl__badge {
+  font-size: 11px;
+  font-weight: var(--fw-bold, 700);
+  color: var(--color-warn, #F59E0B);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.channel-hitl__summary { font-size: 13px; color: var(--text-primary); }
+.channel-hitl__actions { display: flex; gap: 8px; flex: none; }
+.channel-hitl__err { width: 100%; margin: 4px 0 0; font-size: 12px; color: var(--color-error, #f44336); }
 
 .work-view__trace {
   overflow-y: auto;
@@ -268,7 +336,17 @@
   align-items: center;
   gap: 6px;
   font-size: 11px;
+  padding: 2px 0;
 }
+.work-trace__pavatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+}
+.work-trace__pavatar--glyph { font-size: 15px; }
 
 .work-trace__pname {
   flex: 1;

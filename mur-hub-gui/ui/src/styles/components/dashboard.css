@@ -68,31 +68,36 @@
 }
 
 /* ── Top bar ──────────────────────────────────────────────────────────── */
+/* Zones: brand · nav tabs · search (grows) · tools. The growing search pushes
+   tools to the right, so each group reads as its own thing. */
 .dashboard__bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 18px 24px 14px;
+  gap: 12px;
+  padding: 16px 24px 12px;
   flex-wrap: wrap;
 }
-.dashboard__bar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
+.dashboard__brand {
+  font-size: 17px;
+  font-weight: var(--fw-heavy);
+  letter-spacing: .14em;
+  color: var(--color-brand);
+  user-select: none;
+  flex: none;
 }
+.dashboard__bar-nav { flex: none; }
 .dashboard__bar-search {
   flex: 1;
   min-width: 140px;
-  max-width: 320px;
+  max-width: 360px;
 }
 .dashboard__bar-search input { width: 100%; }
-.dashboard__bar-right {
+.dashboard__bar-tools {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  flex: none;
+  margin-left: auto;
 }
 
 .toolbar-btn {
@@ -107,6 +112,67 @@
   transition: background 0.1s;
 }
 .toolbar-btn:hover { background: var(--surface-hover); }
+.toolbar-btn--primary {
+  background: var(--color-brand);
+  border-color: var(--color-brand);
+  color: #fff;
+  font-weight: var(--fw-bold);
+}
+.toolbar-btn--primary:hover {
+  background: color-mix(in srgb, var(--color-brand) 88%, #000);
+}
+.toolbar-btn--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  padding: 0;
+  height: 30px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* ── Role chip (on cards/rows) ────────────────────────────────────────── */
+.role-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-brand-soft);
+  color: var(--color-brand-strong);
+  font-size: 11px;
+  font-weight: var(--fw-semi);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.list-row__main .role-chip { margin-left: 8px; }
+
+/* ── Settings panel ───────────────────────────────────────────────────── */
+.settings-section { margin-bottom: 22px; }
+.settings-section:last-child { margin-bottom: 0; }
+.settings-section__title {
+  margin: 0 0 10px;
+  font-size: var(--text-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+}
+.settings-row__label { font-size: 13px; color: var(--text-primary); }
+.settings-row__value { font-size: 13px; color: var(--text-secondary); }
+.settings-row .input { width: 160px; }
+.settings-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ── Hero ─────────────────────────────────────────────────────────────── */
 .dashboard__hero {

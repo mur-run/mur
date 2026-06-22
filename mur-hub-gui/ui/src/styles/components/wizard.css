@@ -134,6 +134,17 @@
 .wz-persona-icon { font-size: 26px; }
 .wz-persona-label { font-size: var(--text-sm); font-weight: var(--fw-bold); color: var(--text-primary); }
 .wz-persona-desc { font-size: var(--text-xs); color: var(--text-secondary); text-align: center; line-height: 1.4; }
+.wz-persona-hint { font-size: var(--text-xs); color: var(--text-secondary); text-align: center; line-height: 1.4; }
+.wz-persona-gets {
+  width: 100%;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-line);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--color-brand-strong);
+}
 
 /* Step 3 — Preset grid */
 .wz-preset-grid {

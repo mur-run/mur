@@ -23,3 +23,19 @@ pub fn agent_hitl_respond(
     .map(|_| ())
     .map_err(|e| format!("{e:#}"))
 }
+
+/// Respond to a CHANNEL/workflow HITL gate (risk-tiered v3c gate) from the
+/// Activity panel — appends a signed HitlResponse to the channel, the same
+/// thing `mur channel approve` does on the CLI. Distinct from
+/// `agent_hitl_respond`, which answers an agent's in-chat tool gate.
+#[tauri::command]
+pub fn channel_hitl_respond(
+    channel_id: String,
+    hitl_id: String,
+    allow: bool,
+    reason: Option<String>,
+) -> Result<(), String> {
+    // `approve` takes `deny`, so invert.
+    mur_core::cmd::channel::approve(&channel_id, &hitl_id, !allow, reason)
+        .map_err(|e| format!("{e:#}"))
+}

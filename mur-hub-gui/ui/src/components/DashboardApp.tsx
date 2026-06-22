@@ -5,44 +5,24 @@ import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useAgents } from "../context/AgentContext";
-import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
+import type { AgentEntry, AgentRuntimeStatus } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
+import { SettingsModal } from "./SettingsModal";
 import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
 import { WorkView } from "./work/WorkView";
+import { ChatsView } from "./ChatsView";
 import { useConversations } from "../conversation/ConversationContext";
 import { Mascot } from "./Mascot";
 import type { MascotMood } from "./Mascot";
 import { PetFace } from "./PetFace";
 import { useT } from "../i18n";
-import { BUILTIN_PRESETS } from "../types";
-import { CATEGORY_COLORS, CATEGORY_ICONS, avatarInitials, timeGreetingKey } from "../utils";
+import { CATEGORY_COLORS, avatarInitials, avatarPreset, familyOf, runtimePill, timeGreetingKey } from "../utils";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
-
-const ALL_CATEGORIES = ["research", "automation", "monitor", "notify", "commerce", "custom"];
-
-// preset id → family, for theming the card avatar's vector mascot.
-const PRESET_FAMILY: Record<string, string> = Object.fromEntries(
-  BUILTIN_PRESETS.map((p) => [p.id, p.family]),
-);
-const familyOf = (presetId: string): string => PRESET_FAMILY[presetId] ?? "chibi";
-
-// Agents created without a chosen style all fall back to the same green blob,
-// making the grid hard to scan. When no preset is set, derive a stable distinct
-// one from the agent name (identicon-style) so each card reads differently.
-// Explicit user choices (e.g. the MUR concierge) are always respected.
-function avatarPreset(agent: AgentEntry): string {
-  // "default-blob" is the value assigned at creation, not a deliberate pick — treat
-  // it (and empty) as unset so the agent gets a distinct name-derived look.
-  if (agent.style_preset && agent.style_preset !== "default-blob") return agent.style_preset;
-  let h = 0;
-  for (let i = 0; i < agent.name.length; i++) h = (h * 31 + agent.name.charCodeAt(i)) >>> 0;
-  return BUILTIN_PRESETS[h % BUILTIN_PRESETS.length].id;
-}
 
 function showToast(msg: string, durationMs = 2000) {
   const el = document.createElement("div");
@@ -52,21 +32,6 @@ function showToast(msg: string, durationMs = 2000) {
   setTimeout(() => el.remove(), durationMs);
 }
 
-// Maps a runtime state to a status pill { className, statusKey } for the new brand.
-function runtimePill(rt: RuntimeState | undefined): {
-  cls: string;
-  key: "status.running" | "status.idle" | "status.error";
-} {
-  switch (rt?.state) {
-    case "running":
-    case "restarting":
-      return { cls: "pill pill--run", key: "status.running" };
-    case "failed":
-      return { cls: "pill pill--fail", key: "status.error" };
-    default:
-      return { cls: "pill pill--idle", key: "status.idle" };
-  }
-}
 
 // Monochrome (currentColor) action glyphs — WKWebView ignores font-variant-emoji,
 // so emoji codepoints render in color; inline SVG is the only reliable mono path.
@@ -230,6 +195,7 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
           </div>
           <div>
             <p className="grid-card__name">{agent.display_name}</p>
+            {agent.role && <span className="role-chip">{agent.role}</span>}
             <p className="grid-card__cat">{t(`category.${agent.category}` as Parameters<typeof t>[0])}</p>
           </div>
         </div>
@@ -337,6 +303,7 @@ export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
           {avatarInitials(agent.display_name)}
         </div>
         <span className="list-name">{agent.display_name}</span>
+        {agent.role && <span className="role-chip">{agent.role}</span>}
       </div>
       <span className="list-category">{t(`category.${agent.category}` as Parameters<typeof t>[0])}</span>
       <span className="list-model" title={agent.model_id}>
@@ -353,69 +320,76 @@ export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
 
 // ─── Sidebar ───────────────────────────────────────────────────────────────
 
+/** Sentinel for the "no role assigned" sidebar bucket. */
+export const NO_ROLE = "__none__";
+
 interface SidebarProps {
-  activeCategory: string | null;
+  activeRole: string | null;
   agents: AgentEntry[];
-  onSelect: (cat: string | null) => void;
+  onSelect: (role: string | null) => void;
 }
 
-export function Sidebar({ activeCategory, agents, onSelect }: SidebarProps) {
+/**
+ * Left rail filters by ROLE (was persona category, which was useless — nearly
+ * every agent is "custom"). Lists each distinct role + a "no role" bucket.
+ */
+export function Sidebar({ activeRole, agents, onSelect }: SidebarProps) {
   const { t } = useT();
   const counts: Record<string, number> = {};
-  for (const a of agents) counts[a.category] = (counts[a.category] ?? 0) + 1;
+  let noRole = 0;
+  for (const a of agents) {
+    const r = a.role?.trim();
+    if (r) counts[r] = (counts[r] ?? 0) + 1;
+    else noRole++;
+  }
+  const roles = Object.keys(counts).sort((x, y) => x.localeCompare(y));
 
   return (
     <nav className="sidebar">
       <button
-        className={`sidebar-item${activeCategory === null ? " sidebar-item--active" : ""}`}
+        className={`sidebar-item${activeRole === null ? " sidebar-item--active" : ""}`}
         onClick={() => onSelect(null)}
       >
         {t("dashboard.all")} <span className="badge">{agents.length}</span>
       </button>
-      {ALL_CATEGORIES.filter((c) => (counts[c] ?? 0) > 0).map((cat) => (
+      {roles.map((role) => (
         <button
-          key={cat}
-          className={`sidebar-item${activeCategory === cat ? " sidebar-item--active" : ""}`}
-          onClick={() => onSelect(cat)}
+          key={role}
+          className={`sidebar-item${activeRole === role ? " sidebar-item--active" : ""}`}
+          onClick={() => onSelect(role)}
         >
-          <span className="sidebar-item__icon">{CATEGORY_ICONS[cat]}</span>
-          {t(`category.${cat}` as Parameters<typeof t>[0])} <span className="badge">{counts[cat]}</span>
+          <span className="sidebar-item__icon">🎭</span>
+          {role} <span className="badge">{counts[role]}</span>
         </button>
       ))}
+      {noRole > 0 && (
+        <button
+          className={`sidebar-item${activeRole === NO_ROLE ? " sidebar-item--active" : ""}`}
+          onClick={() => onSelect(NO_ROLE)}
+        >
+          <span className="sidebar-item__icon">∅</span>
+          {t("dashboard.noRole")} <span className="badge">{noRole}</span>
+        </button>
+      )}
     </nav>
-  );
-}
-
-// ─── BrainBadge ────────────────────────────────────────────────────────────
-
-function BrainBadge() {
-  const { t } = useT();
-  const [model, setModel] = useState<string | null>(null);
-  useEffect(() => {
-    invoke<[boolean, string | null]>("nudge_status").then(([, m]) => setModel(m)).catch(() => {});
-  }, []);
-  if (!model) return null;
-  return (
-    <button className="toolbar-btn brain-badge" title={t("dashboard.brainTooltip")}>
-      🧠 {model}
-    </button>
   );
 }
 
 // ─── DashboardApp ──────────────────────────────────────────────────────────
 
 export function DashboardApp() {
-  const { t, lang, setLang } = useT();
+  const { t } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
   const { open: openConvs } = useConversations();
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [activeRole, setActiveRole] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [surface, setSurface] = useState<"agents" | "work">("agents");
+  const [surface, setSurface] = useState<"agents" | "chats" | "work">("agents");
   const [query, setQuery] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [presetImportOpen, setPresetImportOpen] = useState(false);
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
   const [muragentImportPath, setMuragentImportPath] = useState<string | undefined>(undefined);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [showAppsBanner, setShowAppsBanner] = useState(false);
   const [showUpgradeNudge, setShowUpgradeNudge] = useState(false);
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
@@ -498,6 +472,12 @@ export function DashboardApp() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
+  // Listen for "open-settings" emitted by the app menu's Settings… item (Cmd+,).
+  useEffect(() => {
+    const unlisten = listen("open-settings", () => setSettingsOpen(true));
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
   // Auto-resize window when the detail panel or conversation surface
   // opens/closes, so the dashboard keeps a usable width instead of being
   // squeezed by the side panels. Clamped to the monitor so the window
@@ -566,13 +546,14 @@ export function DashboardApp() {
   const q = query.toLowerCase();
   const visible = agents.filter(
     (a) =>
-      (activeCategory === null || a.category === activeCategory) &&
+      (activeRole === null ||
+        (activeRole === NO_ROLE ? !a.role?.trim() : a.role?.trim() === activeRole)) &&
       (!q || a.name.toLowerCase().includes(q) || a.display_name.toLowerCase().includes(q)),
   );
 
   return (
     <div className="dashboard-root">
-      <Sidebar activeCategory={activeCategory} agents={agents} onSelect={setActiveCategory} />
+      <Sidebar activeRole={activeRole} agents={agents} onSelect={setActiveRole} />
       <div className="dashboard-main dashboard">
         {showAppsBanner && (
           <div className="onboarding-banner">
@@ -626,60 +607,43 @@ export function DashboardApp() {
         )}
 
         <div className="dashboard__bar">
-          <div className="dashboard__bar-actions">
-            <button className="toolbar-btn" onClick={() => setWizardOpen(true)}>
+          <span className="dashboard__brand">MUR</span>
+          <nav className="surface-toggle dashboard__bar-nav">
+            <button
+              className={surface === "agents" ? "is-active" : ""}
+              onClick={() => setSurface("agents")}
+            >
+              {t("work.toggle.agents")}
+            </button>
+            <button
+              className={surface === "chats" ? "is-active" : ""}
+              onClick={() => setSurface("chats")}
+            >
+              {t("work.toggle.chats")}
+            </button>
+            <button
+              className={surface === "work" ? "is-active" : ""}
+              onClick={() => setSurface("work")}
+            >
+              {t("work.toggle.work")}
+            </button>
+          </nav>
+          <label className="field dashboard__bar-search">
+            <input
+              ref={searchRef}
+              type="search"
+              placeholder={t("dashboard.search")}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+          <div className="dashboard__bar-tools">
+            <button
+              className="toolbar-btn toolbar-btn--primary"
+              onClick={() => setWizardOpen(true)}
+            >
               + {t("app.newAgent")}
             </button>
-            <button
-              className="toolbar-btn"
-              onClick={() => setMuragentImportOpen(true)}
-              title={t("app.importAgentTooltip")}
-            >
-              {t("app.importAgent")}
-            </button>
-            <button
-              className="toolbar-btn"
-              onClick={() => setPresetImportOpen(true)}
-              title={t("app.importPresetTooltip")}
-            >
-              {t("app.importPreset")}
-            </button>
-            <BrainBadge />
-            <label className="field dashboard__bar-search">
-              <input
-                ref={searchRef}
-                type="search"
-                placeholder={t("dashboard.search")}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </label>
-          </div>
-          <div className="dashboard__bar-right">
-            <label className="lang-switch">
-              {t("settings.language")}
-              <select
-                value={lang}
-                onChange={(e) => setLang(e.target.value as "en" | "zh-TW")}
-              >
-                <option value="en">English</option>
-                <option value="zh-TW">繁體中文</option>
-              </select>
-            </label>
-            <div className="surface-toggle">
-              <button
-                className={surface === "agents" ? "is-active" : ""}
-                onClick={() => setSurface("agents")}
-              >
-                {t("work.toggle.agents")}
-              </button>
-              <button
-                className={surface === "work" ? "is-active" : ""}
-                onClick={() => setSurface("work")}
-              >
-                {t("work.toggle.work")}
-              </button>
-            </div>
             <div className="view-toggle">
               <button
                 className={viewMode === "grid" ? "is-active" : ""}
@@ -699,7 +663,7 @@ export function DashboardApp() {
               </button>
             </div>
             <button
-              className="toolbar-btn"
+              className="toolbar-btn toolbar-btn--icon"
               title={t("app.refresh")}
               aria-label={t("app.refresh")}
               onClick={() =>
@@ -710,11 +674,21 @@ export function DashboardApp() {
             >
               ↺
             </button>
+            <button
+              className="toolbar-btn toolbar-btn--icon"
+              title={t("app.settings")}
+              aria-label={t("app.settings")}
+              onClick={() => setSettingsOpen(true)}
+            >
+              ⚙
+            </button>
           </div>
         </div>
 
         {surface === "work" ? (
           <WorkView agents={agents} />
+        ) : surface === "chats" ? (
+          <ChatsView agents={agents} />
         ) : (
           <>
             <div className="dashboard__hero">
@@ -793,6 +767,7 @@ export function DashboardApp() {
         <DetailPanel
           agentName={selectedAgent}
           agents={agents}
+          runtime={runtimeMap.get(selectedAgent)}
           onClose={() => setSelected(null)}
         />
       )}
@@ -816,6 +791,12 @@ export function DashboardApp() {
           setMuragentImportPath(undefined);
           invoke("list_agents").catch(() => {});
         }}
+      />
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onImportAgent={() => setMuragentImportOpen(true)}
+        onImportPreset={() => setPresetImportOpen(true)}
       />
     </div>
   );
