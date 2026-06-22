@@ -46,6 +46,20 @@ impl SandboxPolicy {
             fs_write.push(agent_home.to_path_buf());
         }
 
+        // The shared channel store (`<mur_home>/channels`) is runtime-owned: a
+        // delegated agent appends its OWN signed reply there (peer-writes-own,
+        // v3d-2). Always grant write regardless of the user's fs entitlement,
+        // else `channel/delegate` self-reply silently fails on agents whose write
+        // allowlist omits ~/.mur/channels (agent_home is <mur_home>/agents/<name>).
+        if let Some(channels) = agent_home
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|m| m.join("channels"))
+            && !fs_write.contains(&channels)
+        {
+            fs_write.push(channels);
+        }
+
         // Standard system read paths: libraries, certs, DNS config.
         let system_read = system_read_paths();
         for p in system_read {
@@ -197,6 +211,19 @@ mod tests {
         let home = PathBuf::from("/tmp/agent_home");
         let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &home);
         assert!(policy.fs_write.contains(&home));
+    }
+
+    #[test]
+    fn channels_dir_always_in_write() {
+        // agent_home = <mur_home>/agents/<name> → channels = <mur_home>/channels,
+        // granted even though minimal_entitlements lists no write paths.
+        let home = PathBuf::from("/tmp/mur/agents/rs");
+        let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &home);
+        assert!(
+            policy
+                .fs_write
+                .contains(&PathBuf::from("/tmp/mur/channels"))
+        );
     }
 
     #[test]

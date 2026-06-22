@@ -73,5 +73,19 @@ if $INSTALL; then
     sudo cp "$DAEMON_BINARY" /opt/homebrew/bin/murmurd
     echo "Installed murmurd -> /opt/homebrew/bin/murmurd"
   fi
+
+  # mur-agent-runtime (already built by the workspace build above) is what new
+  # agents symlink to via PATH (resolve_runtime_target). Keep the canonical copy at
+  # ~/.local/bin fresh, else newly-created/restarted agents inherit a STALE runtime
+  # (e.g. one missing channel/delegate). Atomic cp+mv avoids ETXTBSY for agents
+  # running off it; they pick up the new binary on their next restart.
+  RUNTIME_BINARY="$(dirname "$BINARY")/mur-agent-runtime"
+  LOCAL_BIN="$HOME/.local/bin"; mkdir -p "$LOCAL_BIN"
+  if [ -f "$RUNTIME_BINARY" ]; then
+    cp "$RUNTIME_BINARY" "$LOCAL_BIN/.mur-agent-runtime.new"
+    mv -f "$LOCAL_BIN/.mur-agent-runtime.new" "$LOCAL_BIN/mur-agent-runtime"
+    echo "Installed mur-agent-runtime -> $LOCAL_BIN/mur-agent-runtime (canonical; keeps new agents current)"
+  fi
+
   echo "✅ Installed: $(mur --version 2>/dev/null || echo 'done')"
 fi
