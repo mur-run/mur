@@ -268,6 +268,7 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             match key.code {
                 KeyCode::Char('d') if ctrl => request_quit(app, tx),
                 KeyCode::Char('c') if ctrl => handle_ctrl_c(app, tx),
+                KeyCode::Char('v') if ctrl => attach_clipboard_image(app),
                 KeyCode::PageUp => app.scroll_back = app.scroll_back.saturating_add(SCROLL_STEP),
                 KeyCode::PageDown => app.scroll_back = app.scroll_back.saturating_sub(SCROLL_STEP),
                 KeyCode::Tab => complete_slash(app),
@@ -335,6 +336,58 @@ fn persist_skin(home: &std::path::Path, name: &str) -> anyhow::Result<()> {
     std::fs::write(&tmp, &text).context("write config tmp")?;
     std::fs::rename(&tmp, &path).context("rename config")?;
     Ok(())
+}
+
+/// Ctrl+V: stage a screenshot from the system clipboard for the next message.
+/// An image-only clipboard produces no bracketed-paste event (no text to
+/// send), so this needs its own key rather than riding `Event::Paste`.
+fn attach_clipboard_image(app: &mut App) {
+    match clipboard_png() {
+        Some(b64) => {
+            app.pending_image = Some(b64);
+            app.push_system("📎 screenshot attached — sent with your next message");
+        }
+        None => app.push_system("no image in clipboard (Ctrl+V attaches a screenshot)"),
+    }
+}
+
+/// Read a PNG off the macOS clipboard and return it base64-encoded.
+///
+/// ponytail: macOS-only via `osascript` (zero new deps — the clipboard already
+/// carries a PNG flavor). Add `arboard` + an encoder for Linux/Windows if asked.
+#[cfg(target_os = "macos")]
+fn clipboard_png() -> Option<String> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let tmp = std::env::temp_dir().join("mur-cli-paste.png");
+    let path = tmp.to_str()?;
+    // Dump the clipboard's PNG flavor to `path`; `the clipboard as «class PNGf»`
+    // throws when there's no image, which the handler maps to "NOIMG".
+    let script = format!(
+        "try\n\
+           set f to open for access (POSIX file \"{path}\") with write permission\n\
+           set eof f to 0\n\
+           write (the clipboard as «class PNGf») to f\n\
+           close access f\n\
+         on error\n\
+           return \"NOIMG\"\n\
+         end try"
+    );
+    let out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .ok()?;
+    if !out.status.success() || String::from_utf8_lossy(&out.stdout).contains("NOIMG") {
+        return None;
+    }
+    let bytes = std::fs::read(&tmp).ok()?;
+    let _ = std::fs::remove_file(&tmp);
+    (!bytes.is_empty()).then(|| STANDARD.encode(&bytes))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clipboard_png() -> Option<String> {
+    None
 }
 
 /// Tab completes a leading-slash command to the first matching name.
@@ -421,7 +474,8 @@ fn decide_hitl_with_note(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: boo
 
 async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     let trimmed = app.input_text().trim().to_string();
-    if trimmed.is_empty() {
+    // Allow an image-only send (caption optional) when a screenshot is staged.
+    if trimmed.is_empty() && app.pending_image.is_none() {
         return;
     }
 
@@ -472,7 +526,13 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         Some(ctx) => format!("{cwd_prefix}{ctx}\n\n{trimmed}"),
         None => format!("{cwd_prefix}{trimmed}"),
     };
-    let params = build_params(&outgoing, &task_id, app.context_task_id.as_deref());
+    let params = build_params(
+        &outgoing,
+        &task_id,
+        app.context_task_id.as_deref(),
+        app.pending_image.as_deref(),
+    );
+    app.pending_image = None;
     spawn_stream(
         app.home.clone(),
         app.agent.clone(),
@@ -682,7 +742,7 @@ fn run_plain(home: &Path, agent: &str, auto: bool) -> Result<()> {
             continue;
         }
         let task_id = uuid::Uuid::now_v7().to_string();
-        let params = build_params(text, &task_id, context.as_deref());
+        let params = build_params(text, &task_id, context.as_deref(), None);
         let streamed = Cell::new(false);
         let result = crate::a2a_dial::dial_message_streaming(
             home,
