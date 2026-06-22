@@ -7,6 +7,7 @@
 
 pub mod brain_badge;
 pub mod chat;
+pub mod chat_window;
 pub mod cli_tools;
 pub mod companion;
 pub mod detail;
@@ -479,6 +480,7 @@ pub fn run() {
             chat::agent_chat_send,
             chat::agent_chat_cancel,
             chat::channel_load,
+            chat_window::open_chat_window,
             work::channel_list,
             work::channel_events,
             work::channel_get,

@@ -1,0 +1,427 @@
+/* ── Standalone Agent Chat Window (M-h9) ──────────────────────────────────── */
+/* Discord-style layout: vibrancy rail left, full-height chat center,         */
+/* floating task pill above composer. Frameless transparent window.           */
+
+/* Window root — fills entire transparent Tauri window with rounded corners.
+   No background here; each section sets its own so glassmorphism works. */
+.cw-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: transparent;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow:
+    0 28px 68px rgba(0, 0, 0, 0.60),
+    0 4px 16px rgba(0, 0, 0, 0.36),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.09);
+}
+
+/* ── Title bar ── */
+.cw-title {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 8px;
+  -webkit-app-region: drag;
+  user-select: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 40px;
+  background: rgba(14, 14, 20, 0.96);
+  backdrop-filter: blur(40px) saturate(1.8);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+}
+
+.cw-title__traffic {
+  display: flex;
+  gap: 7px;
+  /* traffic light buttons must be pointer-events enabled even inside drag region */
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+}
+
+.cw-title__dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: filter var(--dur-fast);
+}
+.cw-title__dot:hover { filter: brightness(0.82); }
+.cw-title__dot--close  { background: #ff5f57; }
+.cw-title__dot--min    { background: #ffbd2e; }
+.cw-title__dot--max    { background: #28c840; }
+
+/* Centered absolutely so traffic lights and status dot stay at edges. */
+.cw-title__info {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+/* Agent avatar circle (initials) in title */
+.cw-title__avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7c6af7 0%, #5b4fcf 100%);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 1px;
+}
+
+.cw-title__name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.88);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.01em;
+}
+
+.cw-title__divider {
+  color: var(--border-line);
+  font-size: var(--text-sm);
+}
+
+.cw-title__channel {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cw-title__status {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  background: var(--status-idle);
+  margin-left: auto;
+}
+.cw-title__status--running { background: var(--status-running); }
+.cw-title__status--failed  { background: var(--status-failed); }
+
+/* ── Body: rail + main ── */
+.cw-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Channel rail ── */
+.cw-rail {
+  width: 200px;
+  min-width: 160px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(10, 10, 14, 0.94);
+  backdrop-filter: blur(36px) saturate(1.6);
+  -webkit-backdrop-filter: blur(36px) saturate(1.6);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.cw-rail__section {
+  padding: 10px 8px 4px;
+}
+
+.cw-rail__group-label {
+  padding: 6px 8px 3px;
+  font-size: 10px;
+  font-weight: var(--fw-semi);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.cw-rail__channel {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  transition: background var(--dur-fast), color var(--dur-fast);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cw-rail__channel:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.cw-rail__channel--active {
+  background: var(--color-brand-soft);
+  color: var(--color-brand-strong);
+  font-weight: var(--fw-semi);
+}
+
+.cw-rail__ch-hash {
+  font-size: 13px;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.cw-rail__ch-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cw-rail__ch-badge {
+  font-size: 10px;
+  background: var(--color-brand);
+  color: #fff;
+  border-radius: var(--radius-full);
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.cw-rail__empty {
+  padding: 32px 10px 16px;
+  font-size: var(--text-xs);
+  color: rgba(255, 255, 255, 0.25);
+  text-align: center;
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+/* Pure CSS circle icon for empty rail state */
+.cw-rail__empty-icon {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* ── Main column: messages + task pill + composer ── */
+.cw-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: rgba(18, 18, 26, 0.92);
+  backdrop-filter: blur(30px) saturate(1.6);
+  -webkit-backdrop-filter: blur(30px) saturate(1.6);
+}
+
+/* Override the shared .chat styles to fill the window column properly.
+   The chat component doesn't know it's in a full-height window. */
+.cw-main .chat {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+}
+
+.cw-main .chat__log {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 8px;
+}
+
+/* Vertically center the empty state in the log flex column */
+.cw-main .chat__empty-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 24px;
+}
+
+.cw-main .chat__empty {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: var(--text-sm);
+  text-align: center;
+  margin: 0;
+}
+
+.cw-main .chat__suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 400px;
+}
+
+.cw-main .chat__suggest-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: var(--text-sm);
+  padding: 10px 16px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+
+.cw-main .chat__suggest-btn:hover {
+  background: rgba(124, 106, 247, 0.12);
+  border-color: rgba(124, 106, 247, 0.35);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.cw-main .chat__msg {
+  font-size: var(--text-base);
+  line-height: 1.55;
+  max-width: 72%;
+}
+
+.cw-main .chat__compose {
+  padding: 10px 14px 14px;
+  background: rgba(12, 12, 18, 0.96);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cw-main .chat__input {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.88);
+  padding: 9px 12px;
+  font-size: var(--text-sm);
+}
+
+.cw-main .chat__input:focus {
+  outline: none;
+  border-color: rgba(124, 106, 247, 0.55);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.cw-main .chat__send {
+  background: #7c6af7;
+  border-radius: 8px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: 8px 16px;
+  border: none;
+  color: #fff;
+}
+
+.cw-main .chat__send:hover:not(:disabled) {
+  background: #8d7df8;
+}
+
+.cw-main .chat__send:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ── Task pill ── */
+.cw-task-pill {
+  margin: 0 16px 8px;
+  padding: 7px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  border: 1px solid var(--border-line);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: background var(--dur-fast);
+  animation: cw-pill-in 200ms var(--ease-out);
+  max-height: 200px;
+  overflow: hidden;
+  transition: max-height var(--dur-slow) var(--ease-out), opacity var(--dur-fast);
+}
+.cw-task-pill:hover { background: var(--surface-hover); }
+
+.cw-task-pill--hidden {
+  max-height: 0;
+  opacity: 0;
+  margin-bottom: 0;
+  padding: 0 12px;
+  pointer-events: none;
+}
+
+.cw-task-pill__icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.cw-task-pill__tasks {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cw-task-pill__item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--surface-hover);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.cw-task-pill__item-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-brand);
+  animation: cw-pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.cw-task-pill__dismiss {
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+.cw-task-pill__dismiss:hover { color: var(--text-secondary); }
+
+@keyframes cw-pill-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes cw-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%       { opacity: 1;   transform: scale(1.25); }
+}
