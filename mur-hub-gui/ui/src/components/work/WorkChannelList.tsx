@@ -41,7 +41,7 @@ export function WorkChannelList({
               </span>
             </div>
             <div className="work-list__sub">
-              {ch.preview || ch.agents.join(", ")}
+              {ch.goal.trim() || ch.preview || ch.agents.join(", ")}
             </div>
             <div className="work-list__meta">
               {ch.turns} turn{ch.turns !== 1 ? "s" : ""} ·{" "}

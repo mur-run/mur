@@ -10,6 +10,8 @@ export interface AgentEntry {
   model_id: string;
   /** Active pet style preset id (e.g. "chiikawa"); drives the card avatar. */
   style_preset: string;
+  /** Coarse role label (e.g. "Engineer") for grouping/filtering; null if unset. */
+  role: string | null;
 }
 
 // RuntimeState matches mur-gui-core::sidecar::RuntimeState (#[serde(tag = "state")])
@@ -124,6 +126,7 @@ export interface AgentDetail {
   model_ref: string | null;
   model_provider: string;
   model_name: string;
+  role: string | null;
   display_name: string;
   agent_name: string;
 }
@@ -131,6 +134,7 @@ export interface AgentDetail {
 export type { ModelOption } from "./components/modelPicker";
 
 export interface DetailPatch {
+  role?: string;
   persona_category?: string;
   persona_description?: string;
   persona_tone?: string;

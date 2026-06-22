@@ -43,6 +43,8 @@ pub struct AgentEntry {
     pub model_id: String,
     /// Active pet style preset id (e.g. "chiikawa"); drives the card avatar.
     pub style_preset: String,
+    /// Coarse role label (e.g. "Engineer") for grouping/filtering; None if unset.
+    pub role: Option<String>,
 }
 
 /// Background scanner that polls `$mur_home/agents/*/profile.yaml` at 5s intervals.
@@ -107,6 +109,7 @@ pub fn scan_agents(mur_home: &Path) -> Vec<AgentEntry> {
                 status,
                 model_id: format!("{}/{}", profile.model.provider, profile.model.name),
                 style_preset: profile.appearance.style_preset.clone(),
+                role: profile.role.clone(),
             })
         })
         .collect();

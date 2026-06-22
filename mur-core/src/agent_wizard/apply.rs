@@ -28,6 +28,18 @@ fn set_model_ref(name: &str, model_ref: &str) -> Result<()> {
     Ok(())
 }
 
+/// Stamp the coarse `role` label (from the chosen catalog role) into profile.yaml.
+fn set_role(name: &str, role: &str) -> Result<()> {
+    let role = role.trim();
+    if role.is_empty() {
+        return Ok(());
+    }
+    let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(name)?;
+    profile.role = Some(role.to_string());
+    crate::cmd::agent::save_profile(&path, &mut profile)?;
+    Ok(())
+}
+
 /// Write the approved draft to disk and start the agent.
 /// Assumes the gate has already approved the draft.
 pub fn apply_draft(draft: &WizardDraft) -> Result<WizardOutcome> {
@@ -44,6 +56,9 @@ pub fn apply_draft(draft: &WizardDraft) -> Result<WizardOutcome> {
 
     // 2. Ensure model_ref resolves under launchd.
     set_model_ref(name, &draft.model_ref)?;
+
+    // 2b. Stamp the coarse role label from the chosen catalog role.
+    set_role(name, &draft.role.display_name)?;
 
     // 3. System prompt.
     crate::cmd::agent::cmd_prompt_set(name, Some(&draft.prompt.markdown), None)?;

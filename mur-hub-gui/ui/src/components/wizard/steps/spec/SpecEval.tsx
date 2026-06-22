@@ -27,9 +27,11 @@ interface Props {
   agentName: string;
   /** Called to close the wizard after the user dismisses eval results. */
   onDone: (agentName: string) => void;
+  /** Override the primary button label (e.g. "Next: appearance" in the Both flow). */
+  doneLabel?: string;
 }
 
-export function SpecEval({ agentName, onDone }: Props) {
+export function SpecEval({ agentName, onDone, doneLabel }: Props) {
   const { t } = useT();
   const [report, setReport] = useState<EvalReport | null>(null);
 
@@ -142,7 +144,7 @@ export function SpecEval({ agentName, onDone }: Props) {
           className="btn btn--primary"
           onClick={() => onDone(agentName)}
         >
-          {t("wizard.eval.finish")}
+          {doneLabel ?? t("wizard.eval.finish")}
         </button>
       </div>
     </div>

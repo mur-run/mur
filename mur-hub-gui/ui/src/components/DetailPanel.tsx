@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { AgentEntry } from "../types";
+import type { AgentEntry, AgentRuntimeStatus } from "../types";
 import {
   ALL_DETAIL_TABS,
   BUILTIN_PRESETS,
@@ -24,7 +24,8 @@ import { MobileTab } from "./MobileTab";
 import { MemoryTab } from "./MemoryTab";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
-import { CATEGORY_COLORS, TAB_ICONS, avatarInitials } from "../utils";
+import { CATEGORY_COLORS, TAB_ICONS, avatarInitials, avatarPreset, familyOf, runtimePill } from "../utils";
+import { PetFace } from "./PetFace";
 
 // Tab → i18n key map (replaces the hardcoded TAB_LABELS lookup).
 const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
@@ -42,6 +43,10 @@ const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
 interface Props {
   agentName: string;
   agents: AgentEntry[];
+  /** Live supervisor runtime for this agent — same source the list uses, so
+   *  the header status matches the card (was derived from the lock-based
+   *  AgentEntry.status, which could disagree). */
+  runtime?: AgentRuntimeStatus;
   onClose: () => void;
 }
 
@@ -55,7 +60,7 @@ function showToast(msg: string, durationMs = 2000) {
   setTimeout(() => el.remove(), durationMs);
 }
 
-export function DetailPanel({ agentName, agents, onClose }: Props) {
+export function DetailPanel({ agentName, agents, runtime, onClose }: Props) {
   const { t } = useT();
   const { desiredDetailTab, setDesiredDetailTab } = useAgents();
   const [detail, setDetail] = useState<AgentDetail | null>(null);
@@ -83,8 +88,11 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
 
   const entry = agents.find((a) => a.name === agentName);
   const displayName = entry?.display_name ?? agentName;
-  const status = entry?.status ?? "idle";
-  const isRunning = status === "running";
+  // Status from the live runtime (same source as the agent list), so the header
+  // pill and the card never disagree.
+  const rtState = runtime?.state.state;
+  const isRunning = rtState === "running" || rtState === "restarting";
+  const statusPill = runtimePill(runtime?.state);
 
   function handleSaved(updated: AgentDetail) {
     setDetail(updated);
@@ -111,21 +119,35 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
   }
 
   function Header({ name }: { name: string }) {
+    const preset = entry ? avatarPreset(entry) : null;
     const avatarColor = CATEGORY_COLORS[entry?.category ?? "custom"] ?? "#64748B";
     return (
       <div className="detail-panel__header">
         <div className="detail-panel__top">
-          <div
-            className="detail-panel__avatar"
-            style={{ background: avatarColor, color: "#fff", fontSize: "18px", fontWeight: 700 }}
-          >
-            {avatarInitials(name)}
-          </div>
+          {preset ? (
+            // The agent's pet face — same avatar the grid card shows, so the
+            // detail header isn't a bare initials square.
+            <div className="detail-panel__avatar detail-panel__avatar--pet">
+              <PetFace
+                presetId={preset}
+                family={familyOf(preset)}
+                expression="idle"
+                size={48}
+              />
+            </div>
+          ) : (
+            <div
+              className="detail-panel__avatar"
+              style={{ background: avatarColor, color: "#fff", fontSize: "18px", fontWeight: 700 }}
+            >
+              {avatarInitials(name)}
+            </div>
+          )}
           <div className="detail-panel__ident">
             <div className="detail-panel__name">{name}</div>
-            <span className={`pill pill--${isRunning ? "run" : "idle"}`}>
+            <span className={statusPill.cls}>
               <span className="pill__dot" />
-              {t(isRunning ? "status.running" : "status.idle")}
+              {t(statusPill.key)}
             </span>
           </div>
           <button
@@ -253,6 +275,20 @@ function withCurrent(options: string[], current: string): string[] {
   return current && !options.includes(current) ? [current, ...options] : options;
 }
 
+// Bundled default roles (suggestions only; the field is free-text so users
+// can pick one or type their own). Grounded in MetaGPT's software roles +
+// generic knowledge-work archetypes. ponytail: a datalist, not a registry.
+const ROLE_SUGGESTIONS = [
+  "Engineer",
+  "Architect",
+  "QA",
+  "Product Manager",
+  "Researcher",
+  "Writer",
+  "Analyst",
+  "Coordinator",
+];
+
 function PersonaTab({
   detail,
   onSaved,
@@ -261,6 +297,7 @@ function PersonaTab({
   onSaved: (d: AgentDetail) => void;
 }) {
   const { t } = useT();
+  const [role, setRole] = useState(detail.role ?? "");
   const [category, setCategory] = useState(detail.persona_category);
   const [description, setDescription] = useState(detail.persona_description);
   const [tone, setTone] = useState(detail.persona_tone);
@@ -275,6 +312,7 @@ function PersonaTab({
     setSaveError(null);
     try {
       const patch: DetailPatch = {
+        role: role.trim(),
         persona_category: category,
         persona_description: description,
         persona_tone: tone,
@@ -296,6 +334,7 @@ function PersonaTab({
   }
 
   const changed =
+    role.trim() !== (detail.role ?? "") ||
     category !== detail.persona_category ||
     description !== detail.persona_description ||
     tone !== detail.persona_tone ||
@@ -308,6 +347,20 @@ function PersonaTab({
 
   return (
     <div className="tab-form">
+      <label className="field-label">{t("detail.role")}</label>
+      <input
+        className="input"
+        list="role-suggestions"
+        value={role}
+        onChange={(e) => { setRole(e.target.value); }}
+        placeholder={t("detail.rolePlaceholder")}
+      />
+      <datalist id="role-suggestions">
+        {ROLE_SUGGESTIONS.map((r) => (
+          <option key={r} value={r} />
+        ))}
+      </datalist>
+
       <label className="field-label">{t("detail.category")}</label>
       <select
         className="input"
@@ -481,13 +534,22 @@ function StyleTab({
   return (
     <div className="tab-form">
       <label className="field-label">{t("detail.currentStyle")}</label>
-      <p className="field-value">
-        {current?.display_name ?? selected}
-        {" "}
-        <span className="field-muted">
-          ({current?.family ?? t("detail.unknown")})
-        </span>
-      </p>
+      <div className="current-style">
+        <PetFace
+          presetId={selected}
+          family={current?.family ?? "chibi"}
+          expression="smile"
+          size={44}
+          animate={false}
+        />
+        <p className="field-value">
+          {current?.display_name ?? selected}
+          {" "}
+          <span className="field-muted">
+            ({current?.family ?? t("detail.unknown")})
+          </span>
+        </p>
+      </div>
 
       <label className="field-label">{t("detail.renderStatus")}</label>
       <p className="field-muted" style={{ fontSize: 12 }}>{statusText()}</p>
@@ -535,6 +597,13 @@ function StyleTab({
             disabled={saving}
             title={p.description}
           >
+            <PetFace
+              presetId={p.id}
+              family={p.family}
+              expression="smile"
+              size={48}
+              animate={false}
+            />
             <div className="style-thumb__label">{p.display_name}</div>
             <div className="style-thumb__family">{p.family}</div>
           </button>

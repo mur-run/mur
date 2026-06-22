@@ -323,6 +323,28 @@ pub fn run() {
                 },
             )?;
 
+            // ── App menu bar: add "Settings…" (Cmd+,) ──────────────────────
+            // Start from the platform default menu (keeps the Edit/Window menus
+            // so text-field copy/paste still works) and insert a Settings item
+            // into the app submenu. Clicking it emits `open-settings`; the
+            // dashboard opens the Settings panel.
+            let app_menu = Menu::default(app.handle())?;
+            let settings_item =
+                MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+            if let Some(first) = app_menu.items()?.first()
+                && let Some(submenu) = first.as_submenu()
+            {
+                // After the "About" item.
+                submenu.insert(&settings_item, 1)?;
+            }
+            app.set_menu(app_menu)?;
+            app.on_menu_event(|app, event| {
+                if event.id.as_ref() == "settings" {
+                    open_dashboard(app.clone(), None);
+                    let _ = app.emit("open-settings", ());
+                }
+            });
+
             // Build tray.
             let open_item = MenuItem::with_id(app, "open", "Open Hub", true, None::<&str>)?;
             let cli_item = MenuItem::with_id(
@@ -485,6 +507,7 @@ pub fn run() {
             work::channel_events,
             work::channel_get,
             hitl::agent_hitl_respond,
+            hitl::channel_hitl_respond,
             open_dashboard,
             toggle_popover,
             onboarding::wizard_open,

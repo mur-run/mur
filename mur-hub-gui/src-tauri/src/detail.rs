@@ -29,6 +29,8 @@ pub struct AgentDetail {
     pub model_ref: Option<String>,
     pub model_provider: String,
     pub model_name: String,
+    // Role (coarse grouping label; editable)
+    pub role: Option<String>,
     // Read-only metadata
     pub display_name: String,
     pub agent_name: String,
@@ -146,6 +148,9 @@ pub struct DetailPatch {
     pub behavior_preset: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_ref: Option<String>,
+    /// Empty string clears the role; non-empty sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 #[tauri::command]
@@ -208,6 +213,7 @@ pub fn get_agent_detail(name: String) -> Result<AgentDetail, String> {
         model_ref: profile.model_ref,
         model_provider: profile.model.provider,
         model_name: profile.model.name,
+        role: profile.role.clone(),
         display_name: profile.display_name,
         agent_name: profile.name,
     })
@@ -274,6 +280,16 @@ pub fn update_agent_detail(name: String, patch: DetailPatch) -> Result<AgentDeta
             "quiet" => mur_common::agent::BehaviorPreset::Quiet,
             "lively" => mur_common::agent::BehaviorPreset::Lively,
             _ => mur_common::agent::BehaviorPreset::Normal,
+        };
+    }
+
+    // Apply role patch (empty string clears it)
+    if let Some(r) = patch.role {
+        let r = r.trim();
+        profile.role = if r.is_empty() {
+            None
+        } else {
+            Some(r.to_string())
         };
     }
 

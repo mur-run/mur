@@ -49,6 +49,12 @@ pub struct AgentProfile {
     pub id: String, // UUIDv7
     pub name: String,
     pub display_name: String,
+    /// Coarse human-facing role for grouping/filtering (e.g. "Engineer").
+    /// A free label, not a registry — bundled defaults are UI suggestions and
+    /// users can type their own. Discovery/job-routing stays on the A2A card's
+    /// skills/tags; this is purely organizational.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     pub version: String,
     pub persona: Persona,
     pub sys_prompt_file: String,
