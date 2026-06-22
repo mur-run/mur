@@ -32,6 +32,12 @@
   box-shadow: 0 2px 8px rgba(16, 40, 80, 0.1);
   flex: none;
 }
+/* Pet-face variant: let the PetFace SVG show, no colored fill/shadow. */
+.detail-panel__avatar--pet {
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
 .detail-panel__ident {
   min-width: 0;
   flex: 1;

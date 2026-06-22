@@ -19,29 +19,9 @@ import { Mascot } from "./Mascot";
 import type { MascotMood } from "./Mascot";
 import { PetFace } from "./PetFace";
 import { useT } from "../i18n";
-import { BUILTIN_PRESETS } from "../types";
-import { CATEGORY_COLORS, avatarInitials, runtimePill, timeGreetingKey } from "../utils";
+import { CATEGORY_COLORS, avatarInitials, avatarPreset, familyOf, runtimePill, timeGreetingKey } from "../utils";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
-
-// preset id → family, for theming the card avatar's vector mascot.
-const PRESET_FAMILY: Record<string, string> = Object.fromEntries(
-  BUILTIN_PRESETS.map((p) => [p.id, p.family]),
-);
-const familyOf = (presetId: string): string => PRESET_FAMILY[presetId] ?? "chibi";
-
-// Agents created without a chosen style all fall back to the same green blob,
-// making the grid hard to scan. When no preset is set, derive a stable distinct
-// one from the agent name (identicon-style) so each card reads differently.
-// Explicit user choices (e.g. the MUR concierge) are always respected.
-function avatarPreset(agent: AgentEntry): string {
-  // "default-blob" is the value assigned at creation, not a deliberate pick — treat
-  // it (and empty) as unset so the agent gets a distinct name-derived look.
-  if (agent.style_preset && agent.style_preset !== "default-blob") return agent.style_preset;
-  let h = 0;
-  for (let i = 0; i < agent.name.length; i++) h = (h * 31 + agent.name.charCodeAt(i)) >>> 0;
-  return BUILTIN_PRESETS[h % BUILTIN_PRESETS.length].id;
-}
 
 function showToast(msg: string, durationMs = 2000) {
   const el = document.createElement("div");

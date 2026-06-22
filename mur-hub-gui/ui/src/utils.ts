@@ -27,7 +27,29 @@ export const TAB_ICONS: Record<string, string> = {
   memory: "🧠",
 };
 
-import type { RuntimeState } from "./types";
+import { BUILTIN_PRESETS, type AgentEntry, type RuntimeState } from "./types";
+
+// preset id → family, for theming the vector mascot avatar (cards + detail).
+const PRESET_FAMILY: Record<string, string> = Object.fromEntries(
+  BUILTIN_PRESETS.map((p) => [p.id, p.family]),
+);
+export const familyOf = (presetId: string): string =>
+  PRESET_FAMILY[presetId] ?? "chibi";
+
+// Agents created without a chosen style all fall back to the same green blob,
+// making them hard to tell apart. When no preset is set, derive a stable
+// distinct one from the agent name (identicon-style). Explicit user choices
+// (e.g. the MUR concierge) are always respected.
+export function avatarPreset(agent: AgentEntry): string {
+  // "default-blob" is the value assigned at creation, not a deliberate pick —
+  // treat it (and empty) as unset so the agent gets a distinct name-derived look.
+  if (agent.style_preset && agent.style_preset !== "default-blob")
+    return agent.style_preset;
+  let h = 0;
+  for (let i = 0; i < agent.name.length; i++)
+    h = (h * 31 + agent.name.charCodeAt(i)) >>> 0;
+  return BUILTIN_PRESETS[h % BUILTIN_PRESETS.length].id;
+}
 
 /**
  * Maps a supervisor runtime state to a status pill. Shared by the agent

@@ -24,7 +24,7 @@ import { MobileTab } from "./MobileTab";
 import { MemoryTab } from "./MemoryTab";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
-import { CATEGORY_COLORS, TAB_ICONS, avatarInitials, runtimePill } from "../utils";
+import { CATEGORY_COLORS, TAB_ICONS, avatarInitials, avatarPreset, familyOf, runtimePill } from "../utils";
 import { PetFace } from "./PetFace";
 
 // Tab → i18n key map (replaces the hardcoded TAB_LABELS lookup).
@@ -119,16 +119,30 @@ export function DetailPanel({ agentName, agents, runtime, onClose }: Props) {
   }
 
   function Header({ name }: { name: string }) {
+    const preset = entry ? avatarPreset(entry) : null;
     const avatarColor = CATEGORY_COLORS[entry?.category ?? "custom"] ?? "#64748B";
     return (
       <div className="detail-panel__header">
         <div className="detail-panel__top">
-          <div
-            className="detail-panel__avatar"
-            style={{ background: avatarColor, color: "#fff", fontSize: "18px", fontWeight: 700 }}
-          >
-            {avatarInitials(name)}
-          </div>
+          {preset ? (
+            // The agent's pet face — same avatar the grid card shows, so the
+            // detail header isn't a bare initials square.
+            <div className="detail-panel__avatar detail-panel__avatar--pet">
+              <PetFace
+                presetId={preset}
+                family={familyOf(preset)}
+                expression="idle"
+                size={48}
+              />
+            </div>
+          ) : (
+            <div
+              className="detail-panel__avatar"
+              style={{ background: avatarColor, color: "#fff", fontSize: "18px", fontWeight: 700 }}
+            >
+              {avatarInitials(name)}
+            </div>
+          )}
           <div className="detail-panel__ident">
             <div className="detail-panel__name">{name}</div>
             <span className={statusPill.cls}>
