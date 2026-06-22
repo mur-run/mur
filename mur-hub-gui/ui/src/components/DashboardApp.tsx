@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useAgents } from "../context/AgentContext";
-import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../types";
+import type { AgentEntry, AgentRuntimeStatus } from "../types";
 import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
@@ -20,11 +20,9 @@ import type { MascotMood } from "./Mascot";
 import { PetFace } from "./PetFace";
 import { useT } from "../i18n";
 import { BUILTIN_PRESETS } from "../types";
-import { CATEGORY_COLORS, CATEGORY_ICONS, avatarInitials, timeGreetingKey } from "../utils";
+import { CATEGORY_COLORS, avatarInitials, runtimePill, timeGreetingKey } from "../utils";
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
-
-const ALL_CATEGORIES = ["research", "automation", "monitor", "notify", "commerce", "custom"];
 
 // preset id → family, for theming the card avatar's vector mascot.
 const PRESET_FAMILY: Record<string, string> = Object.fromEntries(
@@ -53,21 +51,6 @@ function showToast(msg: string, durationMs = 2000) {
   setTimeout(() => el.remove(), durationMs);
 }
 
-// Maps a runtime state to a status pill { className, statusKey } for the new brand.
-function runtimePill(rt: RuntimeState | undefined): {
-  cls: string;
-  key: "status.running" | "status.idle" | "status.error";
-} {
-  switch (rt?.state) {
-    case "running":
-    case "restarting":
-      return { cls: "pill pill--run", key: "status.running" };
-    case "failed":
-      return { cls: "pill pill--fail", key: "status.error" };
-    default:
-      return { cls: "pill pill--idle", key: "status.idle" };
-  }
-}
 
 // Monochrome (currentColor) action glyphs — WKWebView ignores font-variant-emoji,
 // so emoji codepoints render in color; inline SVG is the only reliable mono path.
@@ -356,35 +339,57 @@ export function ListRow({ agent, runtime, isSelected }: ListRowProps) {
 
 // ─── Sidebar ───────────────────────────────────────────────────────────────
 
+/** Sentinel for the "no role assigned" sidebar bucket. */
+export const NO_ROLE = "__none__";
+
 interface SidebarProps {
-  activeCategory: string | null;
+  activeRole: string | null;
   agents: AgentEntry[];
-  onSelect: (cat: string | null) => void;
+  onSelect: (role: string | null) => void;
 }
 
-export function Sidebar({ activeCategory, agents, onSelect }: SidebarProps) {
+/**
+ * Left rail filters by ROLE (was persona category, which was useless — nearly
+ * every agent is "custom"). Lists each distinct role + a "no role" bucket.
+ */
+export function Sidebar({ activeRole, agents, onSelect }: SidebarProps) {
   const { t } = useT();
   const counts: Record<string, number> = {};
-  for (const a of agents) counts[a.category] = (counts[a.category] ?? 0) + 1;
+  let noRole = 0;
+  for (const a of agents) {
+    const r = a.role?.trim();
+    if (r) counts[r] = (counts[r] ?? 0) + 1;
+    else noRole++;
+  }
+  const roles = Object.keys(counts).sort((x, y) => x.localeCompare(y));
 
   return (
     <nav className="sidebar">
       <button
-        className={`sidebar-item${activeCategory === null ? " sidebar-item--active" : ""}`}
+        className={`sidebar-item${activeRole === null ? " sidebar-item--active" : ""}`}
         onClick={() => onSelect(null)}
       >
         {t("dashboard.all")} <span className="badge">{agents.length}</span>
       </button>
-      {ALL_CATEGORIES.filter((c) => (counts[c] ?? 0) > 0).map((cat) => (
+      {roles.map((role) => (
         <button
-          key={cat}
-          className={`sidebar-item${activeCategory === cat ? " sidebar-item--active" : ""}`}
-          onClick={() => onSelect(cat)}
+          key={role}
+          className={`sidebar-item${activeRole === role ? " sidebar-item--active" : ""}`}
+          onClick={() => onSelect(role)}
         >
-          <span className="sidebar-item__icon">{CATEGORY_ICONS[cat]}</span>
-          {t(`category.${cat}` as Parameters<typeof t>[0])} <span className="badge">{counts[cat]}</span>
+          <span className="sidebar-item__icon">🎭</span>
+          {role} <span className="badge">{counts[role]}</span>
         </button>
       ))}
+      {noRole > 0 && (
+        <button
+          className={`sidebar-item${activeRole === NO_ROLE ? " sidebar-item--active" : ""}`}
+          onClick={() => onSelect(NO_ROLE)}
+        >
+          <span className="sidebar-item__icon">∅</span>
+          {t("dashboard.noRole")} <span className="badge">{noRole}</span>
+        </button>
+      )}
     </nav>
   );
 }
@@ -395,7 +400,7 @@ export function DashboardApp() {
   const { t } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
   const { open: openConvs } = useConversations();
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [activeRole, setActiveRole] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [surface, setSurface] = useState<"agents" | "work">("agents");
   const [query, setQuery] = useState("");
@@ -486,6 +491,12 @@ export function DashboardApp() {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
+  // Listen for "open-settings" emitted by the app menu's Settings… item (Cmd+,).
+  useEffect(() => {
+    const unlisten = listen("open-settings", () => setSettingsOpen(true));
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
   // Auto-resize window when the detail panel or conversation surface
   // opens/closes, so the dashboard keeps a usable width instead of being
   // squeezed by the side panels. Clamped to the monitor so the window
@@ -554,13 +565,14 @@ export function DashboardApp() {
   const q = query.toLowerCase();
   const visible = agents.filter(
     (a) =>
-      (activeCategory === null || a.category === activeCategory) &&
+      (activeRole === null ||
+        (activeRole === NO_ROLE ? !a.role?.trim() : a.role?.trim() === activeRole)) &&
       (!q || a.name.toLowerCase().includes(q) || a.display_name.toLowerCase().includes(q)),
   );
 
   return (
     <div className="dashboard-root">
-      <Sidebar activeCategory={activeCategory} agents={agents} onSelect={setActiveCategory} />
+      <Sidebar activeRole={activeRole} agents={agents} onSelect={setActiveRole} />
       <div className="dashboard-main dashboard">
         {showAppsBanner && (
           <div className="onboarding-banner">
@@ -766,6 +778,7 @@ export function DashboardApp() {
         <DetailPanel
           agentName={selectedAgent}
           agents={agents}
+          runtime={runtimeMap.get(selectedAgent)}
           onClose={() => setSelected(null)}
         />
       )}

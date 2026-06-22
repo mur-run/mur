@@ -13,6 +13,7 @@ export const en = {
   "dashboard.greeting": "Good evening, {name} 👋",
   "dashboard.flockStatus": "Your flock is learning — {running} flying, {idle} resting",
   "dashboard.all": "All",
+  "dashboard.noRole": "No role",
   "dashboard.run": "Run",
   "dashboard.stop": "Stop",
   "dashboard.share": "Share",

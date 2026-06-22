@@ -27,6 +27,28 @@ export const TAB_ICONS: Record<string, string> = {
   memory: "🧠",
 };
 
+import type { RuntimeState } from "./types";
+
+/**
+ * Maps a supervisor runtime state to a status pill. Shared by the agent
+ * list/cards AND the detail panel so they never disagree (was a bug: the
+ * detail panel derived status from the lock-based AgentEntry.status instead).
+ */
+export function runtimePill(rt: RuntimeState | undefined): {
+  cls: string;
+  key: "status.running" | "status.idle" | "status.error";
+} {
+  switch (rt?.state) {
+    case "running":
+    case "restarting":
+      return { cls: "pill pill--run", key: "status.running" };
+    case "failed":
+      return { cls: "pill pill--fail", key: "status.error" };
+    default:
+      return { cls: "pill pill--idle", key: "status.idle" };
+  }
+}
+
 export function avatarInitials(displayName: string): string {
   return displayName
     .split(" ")

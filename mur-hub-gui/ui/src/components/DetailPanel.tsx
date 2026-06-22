@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type { AgentEntry } from "../types";
+import type { AgentEntry, AgentRuntimeStatus } from "../types";
 import {
   ALL_DETAIL_TABS,
   BUILTIN_PRESETS,
@@ -24,7 +24,8 @@ import { MobileTab } from "./MobileTab";
 import { MemoryTab } from "./MemoryTab";
 import { useT } from "../i18n";
 import type { TranslationKey } from "../i18n/types";
-import { CATEGORY_COLORS, TAB_ICONS, avatarInitials } from "../utils";
+import { CATEGORY_COLORS, TAB_ICONS, avatarInitials, runtimePill } from "../utils";
+import { PetFace } from "./PetFace";
 
 // Tab → i18n key map (replaces the hardcoded TAB_LABELS lookup).
 const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
@@ -42,6 +43,10 @@ const TAB_LABEL_KEYS: Record<DetailTab, TranslationKey> = {
 interface Props {
   agentName: string;
   agents: AgentEntry[];
+  /** Live supervisor runtime for this agent — same source the list uses, so
+   *  the header status matches the card (was derived from the lock-based
+   *  AgentEntry.status, which could disagree). */
+  runtime?: AgentRuntimeStatus;
   onClose: () => void;
 }
 
@@ -55,7 +60,7 @@ function showToast(msg: string, durationMs = 2000) {
   setTimeout(() => el.remove(), durationMs);
 }
 
-export function DetailPanel({ agentName, agents, onClose }: Props) {
+export function DetailPanel({ agentName, agents, runtime, onClose }: Props) {
   const { t } = useT();
   const { desiredDetailTab, setDesiredDetailTab } = useAgents();
   const [detail, setDetail] = useState<AgentDetail | null>(null);
@@ -83,8 +88,11 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
 
   const entry = agents.find((a) => a.name === agentName);
   const displayName = entry?.display_name ?? agentName;
-  const status = entry?.status ?? "idle";
-  const isRunning = status === "running";
+  // Status from the live runtime (same source as the agent list), so the header
+  // pill and the card never disagree.
+  const rtState = runtime?.state.state;
+  const isRunning = rtState === "running" || rtState === "restarting";
+  const statusPill = runtimePill(runtime?.state);
 
   function handleSaved(updated: AgentDetail) {
     setDetail(updated);
@@ -123,9 +131,9 @@ export function DetailPanel({ agentName, agents, onClose }: Props) {
           </div>
           <div className="detail-panel__ident">
             <div className="detail-panel__name">{name}</div>
-            <span className={`pill pill--${isRunning ? "run" : "idle"}`}>
+            <span className={statusPill.cls}>
               <span className="pill__dot" />
-              {t(isRunning ? "status.running" : "status.idle")}
+              {t(statusPill.key)}
             </span>
           </div>
           <button
@@ -512,13 +520,22 @@ function StyleTab({
   return (
     <div className="tab-form">
       <label className="field-label">{t("detail.currentStyle")}</label>
-      <p className="field-value">
-        {current?.display_name ?? selected}
-        {" "}
-        <span className="field-muted">
-          ({current?.family ?? t("detail.unknown")})
-        </span>
-      </p>
+      <div className="current-style">
+        <PetFace
+          presetId={selected}
+          family={current?.family ?? "chibi"}
+          expression="smile"
+          size={44}
+          animate={false}
+        />
+        <p className="field-value">
+          {current?.display_name ?? selected}
+          {" "}
+          <span className="field-muted">
+            ({current?.family ?? t("detail.unknown")})
+          </span>
+        </p>
+      </div>
 
       <label className="field-label">{t("detail.renderStatus")}</label>
       <p className="field-muted" style={{ fontSize: 12 }}>{statusText()}</p>
@@ -566,6 +583,13 @@ function StyleTab({
             disabled={saving}
             title={p.description}
           >
+            <PetFace
+              presetId={p.id}
+              family={p.family}
+              expression="smile"
+              size={48}
+              animate={false}
+            />
             <div className="style-thumb__label">{p.display_name}</div>
             <div className="style-thumb__family">{p.family}</div>
           </button>

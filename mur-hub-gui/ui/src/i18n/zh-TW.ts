@@ -15,6 +15,7 @@ export const zhTW: Table = {
   "dashboard.greeting": "晚安，{name} 👋",
   "dashboard.flockStatus": "你的鳥群正在學習中 — {running} 隻在飛，{idle} 隻在休息",
   "dashboard.all": "全部",
+  "dashboard.noRole": "未分類",
   "dashboard.run": "啟動",
   "dashboard.stop": "停止",
   "dashboard.share": "分享",
