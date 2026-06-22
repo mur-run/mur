@@ -95,7 +95,13 @@ pub struct SkillView {
 /// parses the file by extension and validates the resulting manifest. Any
 /// failure (missing file, unparseable, invalid) yields `false`.
 fn skill_path_is_loadable(agent_home: &std::path::Path, rel_path: &str) -> bool {
-    let file = agent_home.join(rel_path);
+    let mut file = agent_home.join(rel_path);
+    // Modern per-agent skills are stored as `skills/<name>/skill.yaml`, so the
+    // id in `profile.skills` points at the *directory*. Resolve to the manifest
+    // inside it; legacy ids that already point at a file pass through unchanged.
+    if file.is_dir() {
+        file = file.join("skill.yaml");
+    }
     let Ok(text) = std::fs::read_to_string(&file) else {
         return false;
     };
@@ -299,4 +305,30 @@ pub fn update_agent_detail(name: String, patch: DetailPatch) -> Result<AgentDeta
 
     // Return fresh detail after update
     get_agent_detail(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::skill_path_is_loadable;
+
+    // Regression: per-agent skill ids are directories (`skills/<name>`) holding
+    // a `skill.yaml`. The loadable check must resolve into the dir, not try to
+    // read the dir as a file (which flagged every skill "unloadable" in the Hub).
+    #[test]
+    fn directory_form_skill_is_loadable() {
+        let home = tempfile::tempdir().unwrap();
+        let skill_dir = home.path().join("skills").join("demo");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("skill.yaml"),
+            "name: demo\nversion: 1.0.0\npublisher: human:test\n\
+             description: a demo skill for the loadable check\ncategory: context\n\
+             provenance: human\nhosts:\n- mur-agent\n\
+             content:\n  abstract: demo abstract\n  context: demo context body\n",
+        )
+        .unwrap();
+
+        assert!(skill_path_is_loadable(home.path(), "skills/demo"));
+        assert!(!skill_path_is_loadable(home.path(), "skills/missing"));
+    }
 }
