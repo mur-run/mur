@@ -88,27 +88,19 @@ pub struct SkillView {
     pub loadable: bool,
 }
 
-/// Best-effort check that a legacy per-agent skill path points at a file that
-/// the runtime can still load. Resolves `rel_path` under the agent home, then
-/// parses the file by extension and validates the resulting manifest. Any
-/// failure (missing file, unparseable, invalid) yields `false`.
+/// Best-effort check that a per-agent skill path points at something the
+/// runtime can still load. Delegates to `read_from_dir` — the exact resolver
+/// the runtime uses (`mur_common::skill::loader`) — so this badge never drifts
+/// from real load behavior. It handles all on-disk layouts: the canonical
+/// `skills/<name>/skill.yaml` directory, a nested `skill.md`, and legacy flat
+/// `skills/<name>.md`. Any failure (missing, unparseable, invalid) yields
+/// `false`.
 fn skill_path_is_loadable(agent_home: &std::path::Path, rel_path: &str) -> bool {
-    let file = agent_home.join(rel_path);
-    let Ok(text) = std::fs::read_to_string(&file) else {
-        return false;
-    };
-    let ext = file
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let parsed = match ext.as_str() {
-        "yaml" | "yml" => mur_common::skill::parse_canonical(&text),
-        "md" | "markdown" => mur_common::skill::parse_markdown(&text)
-            .or_else(|_| mur_common::skill::parse_legacy_markdown(&text)),
-        _ => return false,
-    };
-    matches!(parsed, Ok(ref m) if mur_common::skill::validate(m).is_ok())
+    let path = agent_home.join(rel_path);
+    matches!(
+        mur_common::skill::read_from_dir(&path),
+        Ok(ref m) if mur_common::skill::validate(m).is_ok()
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,4 +275,34 @@ pub fn update_agent_detail(name: String, patch: DetailPatch) -> Result<AgentDeta
 
     // Return fresh detail after update
     get_agent_detail(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::skill_path_is_loadable;
+    use mur_common::skill::{parse_canonical, write_to_dir};
+    use tempfile::tempdir;
+
+    fn sample() -> mur_common::skill::SkillManifest {
+        parse_canonical(
+            "name: foo\nversion: 1.0.0\npublisher: human:t\ndescription: test skill foo\ncategory: context\ncontent:\n  abstract: hi\n  context: body\n",
+        )
+        .unwrap()
+    }
+
+    // Regression: canonical `skills/<name>/skill.yaml` directory layout must
+    // read as loadable. The old extension-based check returned false because
+    // the path is a directory with no extension.
+    #[test]
+    fn canonical_skill_dir_is_loadable() {
+        let home = tempdir().unwrap();
+        write_to_dir(&home.path().join("skills").join("foo"), &sample()).unwrap();
+        assert!(skill_path_is_loadable(home.path(), "skills/foo"));
+    }
+
+    #[test]
+    fn missing_path_is_not_loadable() {
+        let home = tempdir().unwrap();
+        assert!(!skill_path_is_loadable(home.path(), "skills/ghost.md"));
+    }
 }
