@@ -9,6 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useT } from "../i18n";
 import { useConversations } from "../conversation/ConversationContext";
 import { HitlCard } from "./HitlCard";
+import { Markdown } from "./Markdown";
 import type { HitlRequest } from "../types";
 
 interface ChatMsg {
@@ -88,9 +89,11 @@ function channelEventsToMessages(events: ChannelEvent[]): ChatMsg[] {
 interface Props {
   agentName: string;
   displayName: string;
+  /** Slot rendered between the message log and the composer (e.g. TaskPill). */
+  aboveCompose?: React.ReactNode;
 }
 
-export function ChatTab({ agentName, displayName }: Props) {
+export function ChatTab({ agentName, displayName, aboveCompose }: Props) {
   const { t } = useT();
   const { drafts, clearDraft } = useConversations();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -318,7 +321,7 @@ export function ChatTab({ agentName, displayName }: Props) {
             key={i}
             className={`chat__msg chat__msg--${m.role}${m.stopped ? " chat__msg--stopped" : ""}`}
           >
-            {m.text}
+            {m.role === "agent" ? <Markdown>{m.text}</Markdown> : m.text}
             {m.stopped && <span className="chat__stopped-tag"> · {t("chat.stopped")}</span>}
           </div>
         ))}
@@ -348,6 +351,7 @@ export function ChatTab({ agentName, displayName }: Props) {
         ))}
         <div ref={endRef} />
       </div>
+      {aboveCompose}
       <div className="chat__compose">
         <textarea
           className="chat__input"

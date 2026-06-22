@@ -34,6 +34,13 @@
   width: 100%;
   text-align: left;
   font-size: 13px;
+  /* strip the native macOS button chrome so inactive tabs are flat dark */
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
   transition: background 0.1s;
 }
 .sidebar-item__icon {
@@ -95,6 +102,7 @@
   background: var(--surface-card);
   color: var(--text-primary);
   font-size: 13px;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.1s;
 }
@@ -300,17 +308,31 @@
   gap: 6px;
   margin-top: 12px;
 }
+/* Icon-only square buttons share the row equally so 5 actions never wrap on the
+   clamped card. Labels live in the title/aria tooltip. */
 .grid-card__actions button {
-  padding: 3px 10px;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0;
   border: 1px solid var(--border-line);
-  border-radius: 5px;
-  font-size: 12px;
+  border-radius: 7px;
+  font-size: 14px;
+  line-height: 1;
   background: var(--surface-card);
-  color: var(--text-primary);
+  color: var(--text-secondary);
   cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
 }
-.grid-card__actions button:hover:not(:disabled) { background: var(--surface-hover); }
-.grid-card__actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+.grid-card__actions button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  border-color: var(--color-brand);
+}
+.grid-card__actions button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* ── List view ────────────────────────────────────────────────────────── */
 .agent-list {
@@ -456,14 +478,22 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 16px;
-  background: #1e3a5f;
-  border-bottom: 1px solid #2d5a9e;
-  font-size: 13px;
+  padding: 6px 16px;
+  background: color-mix(in srgb, #3b82f6 16%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, #3b82f6 28%, transparent);
+  font-size: 12.5px;
   color: #dbeafe;
 }
 .onboarding-banner strong { color: #93c5fd; }
-.onboarding-banner .toolbar-btn { padding: 2px 8px; font-size: 12px; }
+/* lighten the dismiss to a borderless icon so the notice doesn't read as a button bar */
+.onboarding-banner .toolbar-btn {
+  padding: 2px 7px;
+  font-size: 13px;
+  background: transparent;
+  border: none;
+  color: #93c5fd;
+}
+.onboarding-banner .toolbar-btn:hover { background: rgba(255, 255, 255, 0.08); }
 
 /* ── Upgrade nudge banner ─────────────────────────────────────────────── */
 .upgrade-nudge-banner {
@@ -471,10 +501,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 16px;
-  background: #3b1f5e;
-  border-bottom: 1px solid #6d28d9;
-  font-size: 13px;
+  padding: 6px 16px;
+  background: color-mix(in srgb, #8b5cf6 16%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, #8b5cf6 28%, transparent);
+  font-size: 12.5px;
   color: #e9d5ff;
 }
 .upgrade-nudge-actions {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -30,6 +31,19 @@ const PRESET_FAMILY: Record<string, string> = Object.fromEntries(
 );
 const familyOf = (presetId: string): string => PRESET_FAMILY[presetId] ?? "chibi";
 
+// Agents created without a chosen style all fall back to the same green blob,
+// making the grid hard to scan. When no preset is set, derive a stable distinct
+// one from the agent name (identicon-style) so each card reads differently.
+// Explicit user choices (e.g. the MUR concierge) are always respected.
+function avatarPreset(agent: AgentEntry): string {
+  // "default-blob" is the value assigned at creation, not a deliberate pick — treat
+  // it (and empty) as unset so the agent gets a distinct name-derived look.
+  if (agent.style_preset && agent.style_preset !== "default-blob") return agent.style_preset;
+  let h = 0;
+  for (let i = 0; i < agent.name.length; i++) h = (h * 31 + agent.name.charCodeAt(i)) >>> 0;
+  return BUILTIN_PRESETS[h % BUILTIN_PRESETS.length].id;
+}
+
 function showToast(msg: string, durationMs = 2000) {
   const el = document.createElement("div");
   el.className = "toast";
@@ -54,6 +68,26 @@ function runtimePill(rt: RuntimeState | undefined): {
   }
 }
 
+// Monochrome (currentColor) action glyphs — WKWebView ignores font-variant-emoji,
+// so emoji codepoints render in color; inline SVG is the only reliable mono path.
+function Ico({ filled, children }: { filled?: boolean; children: ReactNode }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="15"
+      height="15"
+      fill={filled ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  );
+}
+
 // ─── GridCard ──────────────────────────────────────────────────────────────
 
 interface GridCardProps {
@@ -65,7 +99,6 @@ interface GridCardProps {
 export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
   const { t } = useT();
   const { setSelected, setDesiredDetailTab } = useAgents();
-  const { openConversation } = useConversations();
   const unread = useUnreadCount(agent.name);
   const color = CATEGORY_COLORS[agent.category] ?? "#6B7280";
   const pill = runtimePill(runtime?.state);
@@ -183,10 +216,10 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
         onClick={() => setSelected(isSelected ? null : agent.name)}
       >
         <div className="grid-card__head">
-          <div className="grid-card__avatar grid-card__avatar--pet" title={agent.style_preset}>
+          <div className="grid-card__avatar grid-card__avatar--pet" title={avatarPreset(agent)}>
             <PetFace
-              presetId={agent.style_preset}
-              family={familyOf(agent.style_preset)}
+              presetId={avatarPreset(agent)}
+              family={familyOf(avatarPreset(agent))}
               expression="idle"
               size={44}
               animate={false}
@@ -204,25 +237,37 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
           <button
             disabled={isRunning || isBusy}
             onClick={handleRun}
-            title={t("dashboard.runTooltip")}
+            title={t("dashboard.run")}
+            aria-label={t("dashboard.run")}
           >
-            ▶ {t("dashboard.run")}
+            <Ico filled><polygon points="6 4 20 12 6 20 6 4" /></Ico>
           </button>
           <button
             disabled={!isRunning && !isBusy}
             onClick={handleStop}
-            title={t("dashboard.stopTooltip")}
+            title={t("dashboard.stop")}
+            aria-label={t("dashboard.stop")}
           >
-            ■ {t("dashboard.stop")}
+            <Ico filled><rect x="6" y="6" width="12" height="12" rx="1.5" /></Ico>
           </button>
-          <button onClick={handleShare} title={t("dashboard.shareTooltip")}>
-            ↑ {t("dashboard.share")}
+          <button onClick={handleShare} title={t("dashboard.share")} aria-label={t("dashboard.share")}>
+            <Ico>
+              <path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
+              <polyline points="16 7 12 3 8 7" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </Ico>
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); openConversation(agent.name); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              invoke("open_chat_window", { agentName: agent.name }).catch(console.error);
+            }}
             title={t("detail.chat")}
+            aria-label={t("detail.chat")}
           >
-            💬 {t("detail.chat")}
+            <Ico>
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            </Ico>
           </button>
           <button
             onClick={(e) => {
@@ -230,9 +275,10 @@ export function GridCard({ agent, runtime, isSelected }: GridCardProps) {
               setDesiredDetailTab("style");
               setSelected(agent.name);
             }}
-            title={t("dashboard.styleTooltip")}
+            title={t("dashboard.style")}
+            aria-label={t("dashboard.style")}
           >
-            🎨 {t("dashboard.style")}
+            <Ico><path d="M17 3a2.85 2.85 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" /></Ico>
           </button>
         </div>
         <div className="grid-card__foot">
@@ -361,7 +407,7 @@ function BrainBadge() {
 export function DashboardApp() {
   const { t, lang, setLang } = useT();
   const { agents, runtimeStatuses, selectedAgent, setSelected } = useAgents();
-  const { open: openConvs, openConversation, setDraft } = useConversations();
+  const { open: openConvs } = useConversations();
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [surface, setSurface] = useState<"agents" | "work">("agents");
@@ -426,15 +472,14 @@ export function DashboardApp() {
     };
   }, [setSelected]);
 
-  // Pet "Chat" / file-drop → open that agent's conversation (and stage a draft).
+  // Pet "Chat" / file-drop → open the dedicated chat window for that agent.
   useEffect(() => {
     const unsub = listen<{ agent: string; draft?: string | null }>("pet-open-chat", (e) => {
-      const { agent, draft } = e.payload;
-      if (draft) setDraft(agent, draft);
-      openConversation(agent);
+      const { agent } = e.payload;
+      invoke("open_chat_window", { agentName: agent }).catch(console.error);
     });
     return () => { unsub.then((fn) => fn()); };
-  }, [openConversation, setDraft]);
+  }, []);
 
   // Listen for .muragent file open events from OS file association / deep-link
   useEffect(() => {

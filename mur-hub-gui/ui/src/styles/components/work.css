@@ -94,6 +94,7 @@
 
 .work-badge {
   display: inline-block;
+  align-self: flex-start; /* don't stretch to the pane width in the flex column */
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 10px;

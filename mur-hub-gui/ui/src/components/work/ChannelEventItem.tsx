@@ -1,5 +1,6 @@
 import type { ChannelEvent } from "../../work/types";
 import { eventVariant, eventKindLabel, actorName } from "../../work/format";
+import { Markdown } from "../Markdown";
 
 interface Props {
   event: ChannelEvent;
@@ -35,7 +36,7 @@ export function ChannelEventItem({ event, displayNames, nowMs }: Props) {
         <div className="work-event__author">
           {who} <span className="work-event__ts">{ts}</span>
         </div>
-        <div className="work-event__body">{text}</div>
+        <Markdown className="work-event__body">{text}</Markdown>
       </div>
     );
   }
@@ -46,7 +47,7 @@ export function ChannelEventItem({ event, displayNames, nowMs }: Props) {
         <div className="work-event__author">
           {who} <span className="work-event__ts">{ts}</span>
         </div>
-        <div className="work-event__body work-event__body--note">{text}</div>
+        <Markdown className="work-event__body work-event__body--note">{text}</Markdown>
       </div>
     );
   }
