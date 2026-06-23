@@ -1,4 +1,4 @@
-id: secreviewer
+id: sec-reviewer
 display_name: Security Reviewer
 charter: "Reviews code and dependencies for security: threat modeling, secure-code review, supply-chain and secret hygiene, vuln triage."
 risk: medium
