@@ -230,14 +230,17 @@ pub async fn build_provider_runner(
     // Build MCP pool from the agent profile's configured servers, then discover
     // and filter tools concurrently before constructing the runner.
     let sandbox_policy = SandboxPolicy::from_entitlements(&profile.inner.entitlements, agent_home);
-    let pool = McpPool::new(profile.inner.mcp_servers.clone(), sandbox_policy);
+    // Phase-1 enable/disable: drop servers disabled for this agent so they
+    // are never spawned and never advertised in tools/list.
+    let enabled_mcp = profile.inner.enabled_mcp_servers();
+    let pool = McpPool::new(enabled_mcp.clone(), sandbox_policy);
     let bash_exec: Arc<dyn crate::tools::ToolExecutor> =
         Arc::new(BashTool::new(agent_home.to_path_buf()));
     let bash_def = bash_exec.def();
     let tools_policy = profile.inner.entitlements.tools.clone();
     let (_defs, tool_map) = build_tools(
         Some((bash_def, bash_exec)),
-        &profile.inner.mcp_servers,
+        &enabled_mcp,
         &tools_policy,
         pool.clone(),
     )
@@ -493,6 +496,7 @@ pub(crate) async fn prepare_runtime(
 
     let skills_cfg = mur_common::config::Config::load_or_default(&mur_home).skills;
     let loaded = mur_common::skill::loader::load_all(&mur_home, &profile.inner.name);
+    let loaded = mur_common::skill::loader::filter_enabled(loaded, &profile.inner.disabled_skills);
     let runtime_skills = Arc::new(RuntimeSkills::build(loaded));
 
     Ok((
