@@ -1,10 +1,9 @@
 //! `CompressHook` — size-gated auto-compression of agent tool outputs (Surface 2).
 //!
 //! Mirrors `B0SafetyHook::post_tool_use`: returns a `PostToolUsePatch.replace_output`
-//! so the supervisor can rewrite `ToolResult.output` before it is recorded / shown
-//! to the agent. Like B0 rule 8, the end-to-end effect depends on the supervisor
-//! consuming `replace_output` (tracked separately); the hook + chain folding are
-//! complete and tested here.
+//! so the supervisor rewrites `ToolResult.output` before it is recorded / shown to
+//! the agent. The patch is consumed by `TaskRunner::apply_post_tool_use` in the
+//! agentic loop (same path as B0 rule 8), so the end-to-end offload is now effective.
 
 use std::path::PathBuf;
 
