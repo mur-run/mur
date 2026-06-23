@@ -2,7 +2,7 @@
 //! P0a only implements `run_sync` fully; streaming is P0b.
 
 use crate::hitl::HitlApprovals;
-use crate::hooks::{HookChain, HookCtx, PromptView};
+use crate::hooks::{HookChain, HookCtx, PromptView, ToolCall, ToolResult};
 use crate::llm::{LlmClient, LlmRequest, RichMessage};
 use crate::skills::RuntimeSkills;
 use crate::skills::injector::inject_layer2;
@@ -929,6 +929,50 @@ impl TaskRunner {
         })
     }
 
+    /// Fold the hook chain's `post_tool_use` patch into each tool result,
+    /// rewriting `content` when a hook returns `replace_output` — e.g.
+    /// `CompressHook` offloading an oversized output (size-gated by
+    /// `compress.yaml` `auto.min_tokens`) or B0 rule 8 PII redaction.
+    /// Mutates in place; no-op when no chain is wired or every hook returns
+    /// `None`. Closes the M7.6 gap where the patch was computed but discarded.
+    async fn apply_post_tool_use(
+        &self,
+        calls: &[crate::llm::ToolCallResult],
+        results: &mut [crate::llm::ToolResultEntry],
+    ) {
+        let (Some(chain), Some(ctx), Some(cancel)) =
+            (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
+        else {
+            return;
+        };
+        let mut turn_ctx = ctx.clone();
+        turn_ctx.turn_id = self.turn_counter.load(Ordering::Relaxed);
+        for (call, entry) in calls.iter().zip(results.iter_mut()) {
+            let tc = ToolCall {
+                tool_name: call.tool_name.clone(),
+                mcp_server: None,
+                call_id: call.call_id.clone(),
+                input: call.input.clone(),
+            };
+            let tr = ToolResult {
+                call_id: entry.call_id.clone(),
+                ok: !entry.is_error,
+                output: serde_json::Value::String(entry.content.clone()),
+                duration_ms: 0,
+            };
+            if let Some(v) = chain
+                .post_tool_use(&turn_ctx, &tc, &tr, cancel)
+                .await
+                .replace_output
+            {
+                entry.content = match v {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                };
+            }
+        }
+    }
+
     /// Run the agentic loop. Returns the final agent message plus an optional
     /// `LoopStop` describing which budget (if any) forced an early, graceful
     /// exit. `None` means the model ended the turn naturally.
@@ -1057,6 +1101,14 @@ impl TaskRunner {
                     Err(e) => return Err(e),
                 }
             }
+
+            // Fold post-tool-use hook patches into the results before
+            // fingerprinting / history so the model sees the rewritten text:
+            // CompressHook offloads oversized output (size-gated) and B0 rule 8
+            // redacts PII. Patches are content-deterministic, so the doom-loop
+            // fingerprint below stays stable.
+            self.apply_post_tool_use(&resp.tool_calls, &mut results)
+                .await;
 
             // Doom-loop detection (safety layer): fingerprint every tool call
             // by (tool, args, RESULT) and abort if any single fingerprint
@@ -1357,6 +1409,74 @@ fn text_response(text: &str) -> Message {
 mod tests {
     use super::*;
     use mur_common::a2a::MessagePart;
+
+    /// Stub hook: replaces any tool output longer than 10 chars with
+    /// "OFFLOADED" (stands in for CompressHook's size-gated offload). Proves
+    /// the turn loop consumes `replace_output` rather than discarding it.
+    struct ReplaceBigHook;
+    #[async_trait::async_trait]
+    impl crate::hooks::Hook for ReplaceBigHook {
+        fn name(&self) -> &str {
+            "ReplaceBigHook"
+        }
+        async fn post_tool_use(
+            &self,
+            _ctx: &HookCtx,
+            _call: &ToolCall,
+            result: &ToolResult,
+            _tok: &CancellationToken,
+        ) -> Result<crate::hooks::PostToolUsePatch, crate::hooks::HookError> {
+            let big = result
+                .output
+                .as_str()
+                .map(|s| s.len() > 10)
+                .unwrap_or(false);
+            Ok(crate::hooks::PostToolUsePatch {
+                replace_output: big.then(|| serde_json::Value::String("OFFLOADED".into())),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_post_tool_use_rewrites_oversized_output() {
+        use crate::llm::{ToolCallResult, ToolResultEntry};
+        let chain = Arc::new(HookChain::new(vec![Arc::new(ReplaceBigHook)]));
+        let runner = TaskRunner::new_stub_echo().with_hook_chain(
+            chain,
+            HookCtx::for_test_with_home(std::path::PathBuf::from("."), 0),
+            CancellationToken::new(),
+        );
+        let calls = vec![
+            ToolCallResult {
+                call_id: "c1".into(),
+                tool_name: "big".into(),
+                input: serde_json::json!({}),
+            },
+            ToolCallResult {
+                call_id: "c2".into(),
+                tool_name: "small".into(),
+                input: serde_json::json!({}),
+            },
+        ];
+        let mut results = vec![
+            ToolResultEntry {
+                call_id: "c1".into(),
+                content: "this is a large tool output".into(),
+                is_error: false,
+            },
+            ToolResultEntry {
+                call_id: "c2".into(),
+                content: "ok".into(),
+                is_error: false,
+            },
+        ];
+        runner.apply_post_tool_use(&calls, &mut results).await;
+        assert_eq!(
+            results[0].content, "OFFLOADED",
+            "oversized output rewritten"
+        );
+        assert_eq!(results[1].content, "ok", "small output untouched");
+    }
 
     fn ping_spec() -> TaskSpec {
         TaskSpec {

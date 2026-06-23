@@ -566,12 +566,9 @@ impl Hook for B0SafetyHook {
         // is unchanged. The redactor is permissive (catches obvious
         // email/SSN/cc/phone patterns) and the patch is consumed by
         // the supervisor to rewrite `ToolResult.output` before the
-        // value lands in the persisted memory store.
-        //
-        // NOTE: this hook returns the patch; wiring `chain.post_tool_use`'s
-        // returned `PostToolUsePatch` into the persistence path is
-        // tracked separately. M7.6 only covers the hook + chain folding;
-        // the supervisor caller does not yet act on `replace_output`.
+        // value lands in the persisted memory store. The returned patch is
+        // consumed by `TaskRunner::apply_post_tool_use` in the agentic loop,
+        // which rewrites `ToolResult.output` (folded with CompressHook).
         if !call.name().starts_with("memory.") {
             return Ok(PostToolUsePatch::default());
         }
