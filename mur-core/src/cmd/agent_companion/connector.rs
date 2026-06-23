@@ -641,6 +641,8 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
         file_actions: vec![],
         action_pipeline: mur_common::action::ActionPipelineConfig::default(),
         installed_skills: vec![],
+        disabled_skills: Vec::new(),
+        disabled_mcp: Vec::new(),
         hitl: mur_common::HitlConfig::default(),
         created_at: now.clone(),
         updated_at: now,
