@@ -327,6 +327,14 @@
   background: var(--status-failed);
   color: #fff;
 }
+/* ── Phase-1 enable/disable toggle ────────────────────────────────────── */
+.item-card-off {
+  opacity: 0.55;
+}
+.item-card-toggle {
+  margin-right: 6px;
+  cursor: pointer;
+}
 
 /* ── MCP add form ─────────────────────────────────────────────────────── */
 .mcp-add-form {
