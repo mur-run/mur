@@ -10,6 +10,7 @@ import { WizardModal } from "./wizard/WizardModal";
 import { PresetImportModal } from "./PresetImportModal";
 import { MuragentImportModal } from "./MuragentImportModal";
 import { SettingsModal } from "./SettingsModal";
+import { ModelPickerModal } from "./ModelPickerModal";
 import { useUnreadCount } from "./CompanionInbox";
 import { DetailPanel } from "./DetailPanel";
 import { ConversationsView } from "./ConversationsView";
@@ -396,6 +397,7 @@ export function DashboardApp() {
   const [muragentImportOpen, setMuragentImportOpen] = useState(false);
   const [muragentImportPath, setMuragentImportPath] = useState<string | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [showAppsBanner, setShowAppsBanner] = useState(false);
   const [showUpgradeNudge, setShowUpgradeNudge] = useState(false);
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
@@ -523,6 +525,12 @@ export function DashboardApp() {
   // Listen for "open-settings" emitted by the app menu's Settings… item (Cmd+,).
   useEffect(() => {
     const unlisten = listen("open-settings", () => setSettingsOpen(true));
+    return () => { unlisten.then((fn) => fn()); };
+  }, []);
+
+  // Listen for "need-model" emitted by backend on first run when no model is configured.
+  useEffect(() => {
+    const unlisten = listen("need-model", () => setModelPickerOpen(true));
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
@@ -874,6 +882,10 @@ export function DashboardApp() {
         onClose={() => setSettingsOpen(false)}
         onImportAgent={() => setMuragentImportOpen(true)}
         onImportPreset={() => setPresetImportOpen(true)}
+      />
+      <ModelPickerModal
+        isOpen={modelPickerOpen}
+        onClose={() => setModelPickerOpen(false)}
       />
     </div>
   );
