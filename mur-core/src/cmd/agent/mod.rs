@@ -62,7 +62,9 @@ pub use install::{cmd_inspect, cmd_install, cmd_uninstall};
 #[allow(unused_imports)]
 pub use lifecycle::{cmd_create, cmd_list, cmd_remove, cmd_rename, cmd_status, cmd_stop};
 #[allow(unused_imports)]
-pub use mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_list, cmd_mcp_remove, cmd_mcp_rename};
+pub use mcp::{
+    McpAddPin, cmd_mcp_add, cmd_mcp_list, cmd_mcp_remove, cmd_mcp_rename, cmd_mcp_set_enabled,
+};
 #[allow(unused_imports)]
 pub use peers::cmd_peers;
 #[allow(unused_imports)]

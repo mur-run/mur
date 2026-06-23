@@ -748,6 +748,12 @@ pub enum AgentMcpAction {
         #[arg(long = "publisher-registry-id")]
         publisher_registry_id: Option<String>,
     },
+    /// Enable a previously disabled MCP server for this agent.
+    Enable { name: String, server_id: String },
+    /// Disable an MCP server for this agent WITHOUT removing it. The entry +
+    /// its pin stay in the profile; it simply stops spawning. Applies on the
+    /// agent's next restart.
+    Disable { name: String, server_id: String },
 }
 
 #[derive(Subcommand)]
