@@ -18,6 +18,7 @@ pub mod mcp_skills;
 pub mod memory;
 pub mod mlx_sidecar;
 pub mod mobile;
+pub mod model_download;
 pub mod models_admin;
 pub mod notif;
 pub mod onboarding;
@@ -467,6 +468,25 @@ pub fn run() {
                 }
             }
 
+            // First-run gate: if no usable model is configured, ask the frontend
+            // to open the mandatory model picker. "Configured" means a downloaded
+            // local model is present, OR the concierge profile already points at a
+            // non-stock backend (a `model_ref:` cloud entry, or an ollama fallback
+            // that flipped `provider:` away from the stock `local`).
+            {
+                let home = mur_home_path();
+                let ready = mlx_sidecar::model_available(app.handle())
+                    || std::fs::read_to_string(
+                        home.join("agents").join("mur").join("profile.yaml"),
+                    )
+                    .map(|s| s.contains("model_ref:") || !s.contains("provider: local"))
+                    .unwrap_or(false);
+                if !ready {
+                    let _ = app.handle().emit("need-model", ());
+                    tracing::info!("first-run: no model configured; requested model picker");
+                }
+            }
+
             // Ensure the built-in concierge's runtime is running on EVERY launch
             // (not only on first seed). Idempotent: a no-op if it's already up.
             {
@@ -558,6 +578,8 @@ pub fn run() {
             models_admin::test_provider,
             models_admin::add_models,
             models_admin::remove_model,
+            models_admin::use_registry_model,
+            model_download::download_local_model,
             mcp_skills::agent_skill_install,
             mcp_skills::agent_skill_uninstall,
             mcp_skills::agent_mcp_add,
