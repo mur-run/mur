@@ -39,6 +39,19 @@ pub(crate) const LOCAL_LLM_DEFAULT_BASE_URL: &str = "http://127.0.0.1:50320/v1";
 /// not authenticate. Not a secret.
 pub(crate) const LOCAL_LLM_PLACEHOLDER_KEY: &str = "local-no-key";
 
+/// The external host the agent's configured model talks to, for auto-allowing
+/// it under restricted outbound (so a user never has to `allow-host` their own
+/// provider). `None` for loopback base_urls (handled by `local_llm_port`) and
+/// for entries without a base_url.
+fn provider_host(entry: &ModelEntry) -> Option<String> {
+    let base = entry.base_url.as_deref()?;
+    let host = base.parse::<reqwest::Url>().ok()?.host_str()?.to_string();
+    match host.as_str() {
+        "127.0.0.1" | "localhost" | "::1" => None,
+        _ => Some(host),
+    }
+}
+
 /// The TCP port of the agent's own local LLM endpoint, if its resolved model
 /// points at a loopback address. The runtime grants this port through the B1
 /// sandbox so an agent can always reach its configured model — whatever the
@@ -219,7 +232,19 @@ pub async fn build_provider_runner(
     let outbound = &profile.inner.entitlements.network.outbound;
     let host_guard = match outbound.mode {
         NetworkOutboundMode::Unrestricted => HostGuard::unrestricted(),
-        NetworkOutboundMode::Restricted => HostGuard::restricted(outbound.allow_hosts.clone()),
+        NetworkOutboundMode::Restricted => {
+            // Auto-allow the agent's configured LLM provider host: choosing a
+            // provider implies permission to reach it, so the user never has to
+            // `mur agent perm allow-host` their own model endpoint. Mirrors the
+            // loopback-port auto-grant for local models (`local_llm_port`).
+            let mut hosts = outbound.allow_hosts.clone();
+            if let Some(h) = provider_host(&entry)
+                && !hosts.iter().any(|x| x == &h)
+            {
+                hosts.push(h);
+            }
+            HostGuard::restricted(hosts)
+        }
         NetworkOutboundMode::Off => HostGuard::off(),
     };
     let guarded_http = reqwest::ClientBuilder::new()
@@ -515,6 +540,28 @@ pub(crate) async fn prepare_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_host_extracts_external_host_only() {
+        let mk = |b: Option<&str>| ModelEntry {
+            base_url: b.map(Into::into),
+            ..Default::default()
+        };
+        assert_eq!(
+            provider_host(&mk(Some("https://api.deepseek.com"))).as_deref(),
+            Some("api.deepseek.com")
+        );
+        // path on the base_url doesn't change the host
+        assert_eq!(
+            provider_host(&mk(Some("https://api.deepseek.com/v1"))).as_deref(),
+            Some("api.deepseek.com")
+        );
+        // loopback endpoints are handled by local_llm_port, not allow_hosts
+        assert_eq!(provider_host(&mk(Some("http://127.0.0.1:8088"))), None);
+        assert_eq!(provider_host(&mk(Some("http://localhost:8000/v1"))), None);
+        // no base_url => nothing to auto-allow
+        assert_eq!(provider_host(&mk(None)), None);
+    }
 
     #[test]
     fn local_base_url_prefers_entry_then_env_then_file_then_default() {
