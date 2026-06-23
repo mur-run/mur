@@ -5,8 +5,8 @@
 //! `AgentDetail` so the panel re-renders without a second round-trip.
 
 use crate::detail::{AgentDetail, get_agent_detail};
-use mur_core::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_remove};
-use mur_core::cmd::agent::skill::{cmd_skill_add, cmd_skill_remove};
+use mur_core::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_remove, cmd_mcp_set_enabled};
+use mur_core::cmd::agent::skill::{cmd_skill_add, cmd_skill_remove, cmd_skill_set_enabled};
 use serde::Serialize;
 
 /// Result of a skill install: the refreshed agent detail plus the id under
@@ -79,5 +79,27 @@ pub fn agent_mcp_add(
 #[tauri::command]
 pub fn agent_mcp_remove(name: String, server_id: String) -> Result<AgentDetail, String> {
     cmd_mcp_remove(&name, &server_id).map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}
+
+/// Non-destructive enable/disable of an installed skill (Phase-1 denylist).
+#[tauri::command]
+pub fn agent_skill_toggle(
+    name: String,
+    skill_id: String,
+    enabled: bool,
+) -> Result<AgentDetail, String> {
+    cmd_skill_set_enabled(&name, &skill_id, enabled).map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}
+
+/// Non-destructive enable/disable of a configured MCP server (Phase-1 denylist).
+#[tauri::command]
+pub fn agent_mcp_toggle(
+    name: String,
+    server_id: String,
+    enabled: bool,
+) -> Result<AgentDetail, String> {
+    cmd_mcp_set_enabled(&name, &server_id, enabled).map_err(|e| format!("{e:#}"))?;
     get_agent_detail(name)
 }

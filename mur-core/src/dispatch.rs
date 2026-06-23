@@ -1286,6 +1286,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 publisher_homepage,
                 publisher_registry_id,
             )?,
+            AgentMcpAction::Enable { name, server_id } => {
+                cmd::agent::cmd_mcp_set_enabled(&name, &server_id, true)?
+            }
+            AgentMcpAction::Disable { name, server_id } => {
+                cmd::agent::cmd_mcp_set_enabled(&name, &server_id, false)?
+            }
         },
         AgentAction::Skill { action } => match action {
             AgentSkillAction::List { name } => cmd::agent::cmd_skill_list(&name)?,
@@ -1295,6 +1301,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             }
             AgentSkillAction::Show { name, skill_id } => {
                 cmd::agent::cmd_skill_show(&name, &skill_id)?
+            }
+            AgentSkillAction::Enable { name, skill_id } => {
+                cmd::agent::cmd_skill_set_enabled(&name, &skill_id, true)?
+            }
+            AgentSkillAction::Disable { name, skill_id } => {
+                cmd::agent::cmd_skill_set_enabled(&name, &skill_id, false)?
             }
         },
         AgentAction::Perm { action } => match action {

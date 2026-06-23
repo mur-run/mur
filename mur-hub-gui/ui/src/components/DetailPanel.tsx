@@ -836,6 +836,23 @@ function SkillsTab({
     }
   }
 
+  async function toggleSkill(id: string, enabled: boolean) {
+    setError(null);
+    setBusy(true);
+    try {
+      const updated = await invoke<AgentDetail>("agent_skill_toggle", {
+        name: detail.agent_name,
+        skillId: id,
+        enabled,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="tab-form">
       <button
@@ -872,7 +889,7 @@ function SkillsTab({
           </label>
           <ul className="item-list">
             {detail.installed_skills.map((s) => (
-              <li key={s.name} className="item-card">
+              <li key={s.name} className={s.enabled ? "item-card" : "item-card item-card-off"}>
                 <button
                   className="item-card-remove"
                   title={t("detail.remove")}
@@ -882,6 +899,14 @@ function SkillsTab({
                 >
                   ×
                 </button>
+                <label className="item-card-toggle" title={s.enabled ? "Disable" : "Enable"}>
+                  <input
+                    type="checkbox"
+                    checked={s.enabled}
+                    disabled={busy}
+                    onChange={(e) => toggleSkill(s.name, e.target.checked)}
+                  />
+                </label>
                 <div className="item-card-name">{s.name}</div>
                 {s.version && (
                   <span className="badge-sm">{s.version}</span>
@@ -998,6 +1023,23 @@ function McpTab({
     }
   }
 
+  async function toggleServer(id: string, enabled: boolean) {
+    setError(null);
+    setBusy(true);
+    try {
+      const updated = await invoke<AgentDetail>("agent_mcp_toggle", {
+        name: detail.agent_name,
+        serverId: id,
+        enabled,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="tab-form">
       {!showForm && (
@@ -1080,7 +1122,7 @@ function McpTab({
           </label>
           <ul className="item-list">
             {detail.mcp_servers.map((m) => (
-              <li key={m.name} className="item-card">
+              <li key={m.name} className={m.enabled ? "item-card" : "item-card item-card-off"}>
                 <button
                   className="item-card-remove"
                   title={t("detail.remove")}
@@ -1090,6 +1132,14 @@ function McpTab({
                 >
                   ×
                 </button>
+                <label className="item-card-toggle" title={m.enabled ? "Disable" : "Enable"}>
+                  <input
+                    type="checkbox"
+                    checked={m.enabled}
+                    disabled={busy}
+                    onChange={(e) => toggleServer(m.name, e.target.checked)}
+                  />
+                </label>
                 <div className="item-card-name">{m.name}</div>
                 <code className="item-card-code">{m.command}</code>
                 {m.args.length > 0 && (

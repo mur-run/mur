@@ -584,6 +584,8 @@ pub fn run() {
             mcp_skills::agent_skill_uninstall,
             mcp_skills::agent_mcp_add,
             mcp_skills::agent_mcp_remove,
+            mcp_skills::agent_skill_toggle,
+            mcp_skills::agent_mcp_toggle,
             mobile::mobile_events_read,
             notif::agent_get_notif_config,
             notif::agent_set_notif_config,

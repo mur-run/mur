@@ -667,6 +667,13 @@ pub enum AgentSkillAction {
     /// `skill_id` may be the full id (`skills/foo`), the basename (`foo`),
     /// or the basename without extension.
     Show { name: String, skill_id: String },
+    /// Enable a previously disabled skill for this agent (clears the denylist
+    /// entry). Non-destructive — the skill is never re-installed or removed.
+    Enable { name: String, skill_id: String },
+    /// Disable a skill for this agent WITHOUT uninstalling it. The skill's
+    /// files + stats are kept; it simply stops injecting. Applies on the
+    /// agent's next restart.
+    Disable { name: String, skill_id: String },
 }
 
 #[derive(Subcommand)]
@@ -741,6 +748,12 @@ pub enum AgentMcpAction {
         #[arg(long = "publisher-registry-id")]
         publisher_registry_id: Option<String>,
     },
+    /// Enable a previously disabled MCP server for this agent.
+    Enable { name: String, server_id: String },
+    /// Disable an MCP server for this agent WITHOUT removing it. The entry +
+    /// its pin stay in the profile; it simply stops spawning. Applies on the
+    /// agent's next restart.
+    Disable { name: String, server_id: String },
 }
 
 #[derive(Subcommand)]

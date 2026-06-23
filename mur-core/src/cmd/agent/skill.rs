@@ -161,3 +161,24 @@ pub fn cmd_skill_show(name: &str, query: &str) -> Result<()> {
     }
     Ok(())
 }
+
+/// Enable/disable a skill for an agent by editing the per-agent denylist.
+/// Non-destructive. `skill_id` accepts the full id (`skills/foo`), a basename
+/// (`foo.yaml`), or the bare manifest name (`foo`).
+pub fn cmd_skill_set_enabled(name: &str, skill_id: &str, enabled: bool) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    let skill_name = skill_id
+        .rsplit('/')
+        .next()
+        .unwrap_or(skill_id)
+        .trim_end_matches(".yaml")
+        .trim_end_matches(".yml")
+        .trim_end_matches(".md");
+    profile.set_skill_enabled(skill_name, enabled);
+    save_profile(&path, &mut profile)?;
+    println!(
+        "{} skill '{skill_name}' for '{name}' (restart the agent to apply)",
+        if enabled { "Enabled" } else { "Disabled" }
+    );
+    Ok(())
+}

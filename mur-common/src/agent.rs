@@ -72,6 +72,18 @@ pub struct AgentProfile {
     /// Broadcast in the Agent Card alongside `skills`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub installed_skills: Vec<SkillCardEntry>,
+    /// Per-agent skill denylist (add-on Phase 1). Skill names that are
+    /// installed/visible to this agent but suppressed from injection.
+    /// Non-destructive: the skill's files/stats are untouched. Empty = all
+    /// visible skills enabled (back-compat: absent in old profiles).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_skills: Vec<String>,
+
+    /// Per-agent MCP denylist (add-on Phase 1). `McpServerEntry` names not
+    /// spawned for this agent. Non-destructive: the entry + its pin stay in
+    /// the profile. Empty = all configured servers enabled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_mcp: Vec<String>,
     pub transport: TransportConfig,
     pub communication: CommunicationConfig,
     #[serde(default)]
@@ -723,6 +735,21 @@ pub struct IdleTrigger {
 fn default_idle_cooldown() -> u64 {
     600
 }
+/// True if `name` is not present in a denylist (i.e. enabled).
+pub fn name_enabled(denylist: &[String], name: &str) -> bool {
+    !denylist.iter().any(|n| n == name)
+}
+
+/// Add/remove `name` in a denylist. `enabled=true` removes it (idempotent),
+/// `enabled=false` adds it once (idempotent).
+pub fn set_denylist(list: &mut Vec<String>, name: &str, enabled: bool) {
+    if enabled {
+        list.retain(|n| n != name);
+    } else if !list.iter().any(|n| n == name) {
+        list.push(name.to_string());
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1238,6 +1265,35 @@ impl AgentProfile {
     pub fn default_for_tests() -> Self {
         serde_yaml_ng::from_str(include_str!("../tests/fixtures/minimal_profile.yaml"))
             .expect("minimal profile fixture")
+    }
+
+    /// Whether `skill_name` is enabled for this agent (Phase 1 denylist).
+    pub fn skill_enabled(&self, skill_name: &str) -> bool {
+        name_enabled(&self.disabled_skills, skill_name)
+    }
+
+    /// Whether MCP server `server_id` is enabled for this agent.
+    pub fn mcp_enabled(&self, server_id: &str) -> bool {
+        name_enabled(&self.disabled_mcp, server_id)
+    }
+
+    /// Toggle a skill for this agent without uninstalling it.
+    pub fn set_skill_enabled(&mut self, skill_name: &str, enabled: bool) {
+        set_denylist(&mut self.disabled_skills, skill_name, enabled);
+    }
+
+    /// Toggle an MCP server for this agent without removing it.
+    pub fn set_mcp_enabled(&mut self, server_id: &str, enabled: bool) {
+        set_denylist(&mut self.disabled_mcp, server_id, enabled);
+    }
+
+    /// This agent's MCP servers minus any disabled for it.
+    pub fn enabled_mcp_servers(&self) -> Vec<McpServerEntry> {
+        self.mcp_servers
+            .iter()
+            .filter(|m| self.mcp_enabled(&m.name))
+            .cloned()
+            .collect()
     }
 }
 
@@ -1834,5 +1890,24 @@ mod tool_policy_tests {
         let back: Entitlements = serde_yaml_ng::from_str(&y).unwrap();
         assert_eq!(back.tools.len(), 1);
         assert_eq!(back.tools[0].policy, ToolPolicy::Allow);
+    }
+    #[test]
+    fn denylist_membership_and_mutation() {
+        let mut list: Vec<String> = vec![];
+        assert!(name_enabled(&list, "a"), "empty denylist => enabled");
+
+        set_denylist(&mut list, "a", false); // disable
+        assert!(!name_enabled(&list, "a"));
+        assert_eq!(list, ["a"]);
+
+        set_denylist(&mut list, "a", false); // idempotent disable
+        assert_eq!(list, ["a"], "no duplicate entries");
+
+        set_denylist(&mut list, "a", true); // enable removes
+        assert!(name_enabled(&list, "a"));
+        assert!(list.is_empty());
+
+        set_denylist(&mut list, "b", true); // enabling an absent name is a no-op
+        assert!(list.is_empty());
     }
 }

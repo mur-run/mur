@@ -89,6 +89,7 @@ export interface InstalledSkillView {
   version: string;
   description: string;
   category: string;
+  enabled: boolean;
 }
 
 /** Returned by the `agent_skill_install` command. */
@@ -102,6 +103,7 @@ export interface McpServerView {
   name: string;
   command: string;
   args: string[];
+  enabled: boolean;
 }
 
 export type RenderStatusView =

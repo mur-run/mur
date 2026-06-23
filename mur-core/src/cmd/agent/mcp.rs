@@ -191,3 +191,19 @@ pub fn cmd_mcp_rename(name: &str, old: &str, new: &str) -> Result<()> {
     }
     save_profile(&path, &mut profile)
 }
+
+/// Enable/disable an MCP server for an agent by editing the per-agent
+/// denylist. Non-destructive: the entry (and its pin) stays in the profile.
+pub fn cmd_mcp_set_enabled(name: &str, server_id: &str, enabled: bool) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    if !profile.mcp_servers.iter().any(|s| s.name == server_id) {
+        bail!("MCP server '{server_id}' not found on '{name}'");
+    }
+    profile.set_mcp_enabled(server_id, enabled);
+    save_profile(&path, &mut profile)?;
+    println!(
+        "{} MCP server '{server_id}' for '{name}' (restart the agent to apply)",
+        if enabled { "Enabled" } else { "Disabled" }
+    );
+    Ok(())
+}
