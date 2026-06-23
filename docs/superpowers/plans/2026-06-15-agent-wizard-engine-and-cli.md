@@ -64,7 +64,7 @@ pub enum RiskLevel {
     Low,
     /// Writes code/tests, runs build tools (e.g. QA).
     Medium,
-    /// Performs irreversible repo/release ops (e.g. RepoManager). Triggers security eval suites.
+    /// Performs irreversible repo/release ops (e.g. Repo Manager). Triggers security eval suites.
     High,
 }
 
@@ -349,7 +349,7 @@ skill_topics:
   - mur-repo-pm-context
 ```
 
-Create `qa.yaml`, `repomanager.yaml`, `rustsmith.yaml` with the same shape (use the skill names already authored for those agents; risk: `medium` for qa, `high` for repomanager, `medium` for rustsmith).
+Create `qa.yaml`, `repomanager.yaml`, `rustsmith.yaml` with the same shape (use the skill names already authored for those agents; risk: `medium` for qa, `high` for repo-manager, `medium` for rustsmith).
 
 - [ ] **Step 5: Run, expect pass**
 
@@ -923,6 +923,6 @@ tracked here so later plans pick them up:
   HarmBench security suites run for high-risk agents), not in the base entitlement preset. Revisit
   if a per-tier entitlement difference is wanted.
 - **Guided `custom.yaml` template (→ Plan 2).** Custom roles already work in Plan 1 via a manifest
-  in `~/.mur/wizard/roles/` (the shipped pm/qa/repomanager/rustsmith manifests are the examples).
+  in `~/.mur/wizard/roles/` (the shipped pm/qa/repo-manager/rustsmith manifests are the examples).
   A first-class custom path (describe-a-role → LLM-generate) is the Plan 2 feature; ship a copyable
   `custom.yaml` template alongside it.
