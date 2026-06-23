@@ -4,6 +4,7 @@
 //! reach it.
 
 use std::net::TcpListener;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Reserve a free localhost TCP port by binding to :0 and reading the assigned
@@ -29,10 +30,29 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
 use tracing::{info, warn};
 
-/// Whether the bundled MLX model directory is present, i.e. local in-process
-/// inference is possible. Used to decide whether the built-in concierge needs a
-/// fallback model so it can actually respond on machines without the bundle.
-pub fn model_available(app: &AppHandle) -> bool {
+/// Return the user-downloaded model directory if it exists and has the
+/// `.complete` marker, meaning the download fully succeeded. A partially
+/// downloaded directory is ignored so we never serve a broken model.
+pub(crate) fn downloaded_model_dir(mur_home: &Path) -> Option<PathBuf> {
+    let dir = mur_common::local_llm::local_model_dir(
+        mur_home,
+        mur_common::local_llm::DEFAULT_LOCAL_MODEL_DIR,
+    );
+    mur_common::local_llm::model_complete_marker(&dir)
+        .is_file()
+        .then_some(dir)
+}
+
+/// Resolve the model directory to use for MLX: the user-downloaded model takes
+/// precedence; falls back to the Tauri-bundled resource. Returns `None` when
+/// neither is present.
+fn resolve_model_dir(app: &AppHandle) -> Option<PathBuf> {
+    // 1. User-downloaded model (writable; has .complete marker).
+    let mur_home = crate::mur_home_path();
+    if let Some(dir) = downloaded_model_dir(&mur_home) {
+        return Some(dir);
+    }
+    // 2. Bundled resource (read-only; shipped in the .app bundle).
     ["resources/models/default", "models/default"]
         .iter()
         .filter_map(|rel| {
@@ -40,10 +60,18 @@ pub fn model_available(app: &AppHandle) -> bool {
                 .resolve(rel, tauri::path::BaseDirectory::Resource)
                 .ok()
         })
-        .any(|p| p.is_dir())
+        .find(|p| p.is_dir())
 }
 
-/// Start the bundled `mlx-server` sidecar against the bundled model, write its
+/// Whether a usable MLX model directory is present (downloaded or bundled),
+/// i.e. local in-process inference is possible. Used to decide whether the
+/// built-in concierge needs a fallback model so it can actually respond on
+/// machines without the bundle.
+pub fn model_available(app: &AppHandle) -> bool {
+    resolve_model_dir(app).is_some()
+}
+
+/// Start the bundled `mlx-server` sidecar against the resolved model, write its
 /// base URL to the shared file, and stream its logs. Idempotent at the
 /// application level (call once on setup). Errors are logged, not fatal: if MLX
 /// can't start, agents fall back to echo/cloud providers.
@@ -56,23 +84,14 @@ pub fn start(app: &AppHandle) {
         }
     };
 
-    // Resolve the bundled model directory from app resources. Tauri stages the
-    // `resources/**` bundle glob under `<Resource>/resources/...`, so resolve that
-    // path first and fall back to the bare name for dev / alternate layouts.
-    let model_dir = match ["resources/models/default", "models/default"]
-        .iter()
-        .filter_map(|rel| {
-            app.path()
-                .resolve(rel, tauri::path::BaseDirectory::Resource)
-                .ok()
-        })
-        .find(|p| p.is_dir())
-    {
+    // Resolve the model directory: downloaded (writable) takes priority over
+    // the bundled resource so users who downloaded a model see it served.
+    let model_dir = match resolve_model_dir(app) {
         Some(p) => p,
         None => {
             warn!(
-                "mlx sidecar: bundled model resource not found (resources/models/default); \
-                 skipping local inference"
+                "mlx sidecar: no model available (no downloaded model and no bundled \
+                 resource); skipping local inference"
             );
             return;
         }
@@ -189,5 +208,21 @@ mod tests {
     fn url_helpers_format_correctly() {
         assert_eq!(base_url(50320), "http://127.0.0.1:50320/v1");
         assert_eq!(health_url(50320), "http://127.0.0.1:50320/v1/models");
+    }
+
+    #[test]
+    fn downloaded_model_dir_requires_complete_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        // No marker yet → None.
+        assert!(downloaded_model_dir(home).is_none());
+        // model dir + marker → Some(dir).
+        let dir = mur_common::local_llm::local_model_dir(
+            home,
+            mur_common::local_llm::DEFAULT_LOCAL_MODEL_DIR,
+        );
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(mur_common::local_llm::model_complete_marker(&dir), b"ok").unwrap();
+        assert_eq!(downloaded_model_dir(home), Some(dir));
     }
 }
