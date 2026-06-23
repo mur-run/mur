@@ -29,7 +29,8 @@ pub async fn download_local_model(app: AppHandle) -> Result<(), String> {
     .await
     .map_err(|e| e.to_string())?;
 
-    app.emit("model-download-done", ()).ok();
+    // Start local inference first, then tell the UI it can close the picker.
     crate::mlx_sidecar::start(&app);
+    app.emit("model-download-done", ()).ok();
     Ok(())
 }
