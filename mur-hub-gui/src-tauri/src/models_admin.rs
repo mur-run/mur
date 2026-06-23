@@ -9,6 +9,7 @@ use mur_common::secret::SecretRef;
 use mur_core::model_discovery::{self, default_alias};
 use mur_core::model_prices::{self, PriceInfo};
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
 
 const PROBE_TIMEOUT_SECS: u64 = 3;
 const DISCOVER_TIMEOUT_SECS: u64 = 10;
@@ -200,6 +201,20 @@ pub fn remove_model(ref_name: String) -> Result<(), String> {
     let mut reg = ModelRegistry::load_from(&path).map_err(|e| e.to_string())?;
     reg.models.remove(&ref_name);
     reg.save_to(&path).map_err(|e| e.to_string())
+}
+
+/// Switch the concierge to a registry model, restarting the sidecar.
+#[tauri::command]
+pub async fn use_registry_model(app: AppHandle, ref_name: String) -> Result<(), String> {
+    let home = crate::mur_home_path();
+    crate::seed_mur::set_concierge_model_ref(&home, &ref_name).map_err(|e| e.to_string())?;
+
+    let supervisor = app.state::<crate::SupervisorState>();
+    supervisor.0.stop("mur").await;
+    if let Err(e) = supervisor.0.start("mur").await {
+        tracing::warn!("restart concierge after model change failed: {e}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

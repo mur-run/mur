@@ -18,6 +18,7 @@ pub mod mcp_skills;
 pub mod memory;
 pub mod mlx_sidecar;
 pub mod mobile;
+pub mod model_download;
 pub mod models_admin;
 pub mod notif;
 pub mod onboarding;
@@ -558,6 +559,8 @@ pub fn run() {
             models_admin::test_provider,
             models_admin::add_models,
             models_admin::remove_model,
+            models_admin::use_registry_model,
+            model_download::download_local_model,
             mcp_skills::agent_skill_install,
             mcp_skills::agent_skill_uninstall,
             mcp_skills::agent_mcp_add,
