@@ -548,7 +548,7 @@ Run: `cd mur-hub-gui/ui && npm run build && npx vitest run 2>&1 | tail -8` (buil
 
 Launch the Hub (`./build.sh` per CLAUDE.md, or the Hub's dev command), open create-Agent:
 1. Step 0 shows Companion / Specialist / Both.
-2. Specialist → Role picker lists pm/qa/repomanager/rustsmith (+risk). Pick one → Generating shows progress lines.
+2. Specialist → Role picker lists pm/qa/repo-manager/rustsmith (+risk). Pick one → Generating shows progress lines.
 3. Review screen shows editable prompt + skills + entitlement summary; edit a skill, click Approve.
 4. Agent is created (appears in the Hub agent list); Eval shows scores (or a graceful message if no model).
 5. Companion path is unchanged; Both runs specialist then the appearance steps.

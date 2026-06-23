@@ -6,7 +6,7 @@ Status: Design (approved in brainstorming; pending spec review)
 ## Context
 
 We built a team of specialized MUR agents by hand — `rustsmith`, then `pm` / `qa` /
-`repomanager` — following a repeatable method: define the role → research 2026 best practice →
+`repo-manager` — following a repeatable method: define the role → research 2026 best practice →
 author 4–6 dense skills → write a "definition-of-done" system prompt with HITL gates → set
 least-privilege entitlements → create/attach/start → run a test→record→fix eval loop. That method
 is currently captured only as a human-followed skill (`specialized-agent-builder` in
@@ -117,7 +117,7 @@ The runner executes ordered stages; LLM stages are skippable and emit progress:
   `~/.mur/wizard/roles/` plus shipped defaults (in `mur-core` resources). Users/community add roles
   by dropping a manifest — **no hardcoded list** (honors CLAUDE.md Rule 1).
 - A role manifest references a skill set + DoD-prompt template + entitlement preset + risk level +
-  suggested eval tasks. Seed a categorized starter catalog (~10): PM, QA, RepoManager, RustSmith,
+  suggested eval tasks. Seed a categorized starter catalog (~10): PM, QA, Repo Manager, RustSmith,
   DevOps/SRE, Security reviewer, Tech writer, Data/ML, Frontend, Support-triage.
 
 ### CLI surface
@@ -161,7 +161,7 @@ dir before approval.
   scores to the human; offer to keep or discard the agent.
 - **Validation:** every generated skill must pass `mur skill validate` (schema + security scan)
   before it can appear in the review gate.
-- **Runtime HITL preserved:** the created agent keeps its own HITL gates (e.g. repomanager's
+- **Runtime HITL preserved:** the created agent keeps its own HITL gates (e.g. repo-manager's
   merge/release confirmations); the wizard's scope ends at create + start + eval.
 - **Least privilege:** entitlement preset is scoped to the role/risk; deny sensitive paths by
   default.
