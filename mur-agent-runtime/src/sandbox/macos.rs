@@ -129,6 +129,17 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
         }
         Some(ports) => {
             lines.push("(deny network-outbound)".to_string());
+            // macOS resolves hostnames by talking to mDNSResponder over this
+            // UNIX socket, which is itself a `network-outbound` op. Under the
+            // blanket deny it must be re-allowed or ALL name resolution fails —
+            // every external host errors with "Could not resolve host", so only
+            // loopback IPs (which need no DNS) are reachable. HostGuard still
+            // gates which hostnames the runtime client resolves; this restores
+            // resolution only, not arbitrary egress (TCP stays port-gated).
+            const MDNSRESPONDER_SOCKET: &str = "/private/var/run/mDNSResponder";
+            lines.push(format!(
+                "(allow network-outbound (remote unix-socket (path-literal \"{MDNSRESPONDER_SOCKET}\")))"
+            ));
             for port in ports {
                 lines.push(format!(
                     "(allow network-outbound (remote tcp \"*:{port}\"))"
@@ -238,6 +249,34 @@ mod tests {
         assert!(
             !sbpl.contains("api.anthropic.com"),
             "SBPL must not contain hostnames (invalid `remote tcp` host):\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn restricted_allows_dns_resolution() {
+        // Without the mDNSResponder socket allowance the `(deny network-outbound)`
+        // baseline blocks macOS name resolution, so no external host resolves
+        // and only loopback IPs work. Regression guard for that gap.
+        let mut policy = policy_with(vec![], vec![]);
+        policy.net_allow_ports = Some(vec![443]);
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(
+            sbpl.contains(
+                "(allow network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")))"
+            ),
+            "restricted profile must permit DNS via the mDNSResponder socket:\n{sbpl}"
+        );
+    }
+
+    #[test]
+    fn off_mode_still_blocks_dns() {
+        // Off (deny-all) must NOT get the DNS exception — it stays air-gapped.
+        let mut policy = policy_with(vec![], vec![]);
+        policy.net_allow_ports = Some(vec![]);
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(
+            !sbpl.contains("mDNSResponder"),
+            "Off mode must not allow DNS:\n{sbpl}"
         );
     }
 
