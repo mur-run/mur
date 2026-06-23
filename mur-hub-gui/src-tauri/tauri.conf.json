@@ -80,8 +80,7 @@
       "binaries/mlx-server"
     ],
     "resources": [
-      "resources/mur-agent-template/**/*",
-      "resources/models/**/*"
+      "resources/mur-agent-template/**/*"
     ]
   }
 }
