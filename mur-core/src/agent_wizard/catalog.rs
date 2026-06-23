@@ -107,9 +107,9 @@ skill_topics: ["product-spec-and-prd-writing", "issue-authoring-and-hygiene"]
         // The Plan-5 additions are present.
         for id in [
             "devops",
-            "secreviewer",
-            "techwriter",
-            "dataml",
+            "sec-reviewer",
+            "tech-writer",
+            "data-ml",
             "frontend",
             "support",
         ] {
