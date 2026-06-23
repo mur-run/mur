@@ -1,4 +1,4 @@
-id: dataml
+id: data-ml
 display_name: Data/ML Engineer
 charter: "Builds data pipelines and ML workflows: pipeline design, feature engineering, training/eval, experiment tracking, reproducibility."
 risk: medium

@@ -1,5 +1,5 @@
-id: repomanager
-display_name: RepoManager
+id: repo-manager
+display_name: Repo Manager
 charter: Performs safe, auditable repo and release operations across any git forge.
 risk: high
 category: devops
