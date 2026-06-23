@@ -10,7 +10,7 @@ use super::app::{App, ChatMsg, Role, SPINNER};
 use super::markdown;
 
 /// Draw the whole UI for one frame.
-pub fn render(f: &mut Frame, app: &App) {
+pub fn render(f: &mut Frame, app: &mut App) {
     let input_lines = app.input.lines().len() as u16;
     let input_height = (input_lines + 2).clamp(3, 8);
     let chunks = Layout::default()
@@ -31,7 +31,7 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 }
 
-fn render_transcript(f: &mut Frame, app: &App, area: Rect) {
+fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
     let block = Block::default()
         .borders(Borders::ALL)
@@ -76,6 +76,15 @@ fn render_transcript(f: &mut Frame, app: &App, area: Rect) {
         .wrap(Wrap { trim: false })
         .scroll((offset, 0));
     f.render_widget(output, area);
+
+    // Clamp away over-scroll so PageDown never needs "dead" presses, and record
+    // the page size for the key handler. Done after render: the immutable `lines`
+    // borrow of `app` ends when `output` is consumed above.
+    // ponytail: scroll_back counts logical (pre-wrap) lines while `.scroll()`
+    // takes post-wrap rows, so a page can be a row or two off under heavy
+    // wrapping. Upgrade to wrapped-row accounting if that ever feels wrong.
+    app.scroll_back = app.scroll_back.min(max_off);
+    app.scroll_page = visible;
 }
 
 fn push_message(
