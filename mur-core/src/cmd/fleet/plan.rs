@@ -34,12 +34,51 @@ struct PlanStep {
     depends_on: Vec<String>,
 }
 
-/// Extract the JSON object from a (possibly prose- or fence-wrapped) reply:
-/// the span from the first `{` to the last `}`.
-fn extract_json(text: &str) -> Option<&str> {
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    (end > start).then(|| &text[start..=end])
+/// End byte index of the balanced `{...}` beginning at `start` (a `{`),
+/// ignoring braces inside double-quoted JSON strings. `None` if never balanced.
+fn balanced_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    for (i, &c) in bytes.iter().enumerate().skip(start) {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// First balanced `{...}` span in `text` that parses into a non-empty router
+/// plan. Trying *every* `{` (not just the first, not first-to-last) means stray
+/// prose braces — `use {member}` — or a leading unrelated JSON object can't
+/// defeat extraction, and trailing prose braces aren't swallowed.
+fn extract_plan(text: &str) -> Option<RouterPlan> {
+    let bytes = text.as_bytes();
+    (0..bytes.len())
+        .filter(|&i| bytes[i] == b'{')
+        .find_map(|start| {
+            let end = balanced_end(bytes, start)?;
+            let plan: RouterPlan = serde_json::from_str(&text[start..=end]).ok()?;
+            (!plan.steps.is_empty()).then_some(plan)
+        })
 }
 
 /// Parse a router reply into a validated `Procedure`, or `None` to fall back to
@@ -47,8 +86,8 @@ fn extract_json(text: &str) -> Option<&str> {
 /// `member` is a real fleet member, and (via the executor's own validator)
 /// resolvable `depends_on` with no cycles.
 pub fn parse_router_plan(text: &str, members: &[String]) -> Option<Procedure> {
-    let plan: RouterPlan = serde_json::from_str(extract_json(text)?).ok()?;
-    if plan.steps.is_empty() || plan.steps.len() > MAX_PLAN_STEPS {
+    let plan = extract_plan(text)?;
+    if plan.steps.len() > MAX_PLAN_STEPS {
         return None;
     }
     let member_set: HashSet<&str> = members.iter().map(String::as_str).collect();
@@ -196,5 +235,24 @@ mod tests {
             {"id":"s1","member":"qa","task":"b"}
         ]}"#;
         assert!(parse_router_plan(txt, &members()).is_none());
+    }
+
+    #[test]
+    fn extracts_json_despite_prose_braces() {
+        // A stray brace before the real JSON (and trailing prose braces) must
+        // not defeat extraction — the greedy first-{ to last-} version failed.
+        let txt = "Plan: give work to {member} thus: {\"steps\":[{\"member\":\"pm\",\"task\":\"go\"}]} ok}";
+        let p = parse_router_plan(txt, &members()).unwrap();
+        assert_eq!(p.steps.len(), 1);
+        assert_eq!(p.steps[0].delegate_to.as_deref(), Some("pm"));
+    }
+
+    #[test]
+    fn ignores_braces_inside_strings() {
+        // `}{` inside a task string must not be read as object boundaries.
+        let txt = r#"{"steps":[{"member":"pm","task":"emit }{ verbatim"}]}"#;
+        let p = parse_router_plan(txt, &members()).unwrap();
+        assert_eq!(p.steps.len(), 1);
+        assert_eq!(p.steps[0].intent.as_deref(), Some("emit }{ verbatim"));
     }
 }

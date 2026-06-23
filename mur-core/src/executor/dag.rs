@@ -421,14 +421,26 @@ async fn execute_step(
     step: &ProcedureStep,
     opts: &DagExecOptions<'_>,
     step_index: usize,
+    attempt: u32,
     mur_home: &Path,
 ) -> StepResult {
     let start = std::time::Instant::now();
     let sid = step.id.clone().unwrap_or_else(|| step_index.to_string());
+    // Retries reuse (run_id, step_id); without an attempt discriminator a
+    // succeeding retry's events collide with the failed attempt's idem keys and
+    // are dropped by the dedup-aware writer. attempt 0 keeps the original keys
+    // (back-compat with already-recorded events + the resume cursor).
+    let key = |base: &str| {
+        if attempt == 0 {
+            base.to_string()
+        } else {
+            format!("{base}#a{attempt}")
+        }
+    };
 
     // ── Resume cursor (v3c): skip steps whose ToolResult is already recorded ──
     if let Some(cid) = opts.channel_id.as_deref() {
-        let result_key = idem_key(cid, &opts.run_id, &sid, "result");
+        let result_key = idem_key(cid, &opts.run_id, &sid, &key("result"));
         if let Ok(svc) = ChannelService::open(mur_home)
             && let Ok(evs) = svc.load_events(cid)
             && evs.iter().any(|e| {
@@ -455,8 +467,8 @@ async fn execute_step(
         let start = std::time::Instant::now();
         let canonical = crate::a2a_dial::canonicalize_agent_name(mur_home, target);
         let child_task_id = format!("ct-{}", uuid::Uuid::now_v7());
-        let deleg_key = idem_key(cid, &opts.run_id, &sid, "delegate");
-        let reply_key = idem_key(cid, &opts.run_id, &sid, "reply");
+        let deleg_key = idem_key(cid, &opts.run_id, &sid, &key("delegate"));
+        let reply_key = idem_key(cid, &opts.run_id, &sid, &key("reply"));
 
         // Sub-goal text: explicit intent, else the step description.
         let goal_text = step
@@ -660,7 +672,7 @@ async fn execute_step(
         let mut excerpt = result.output_text.clone();
         excerpt.truncate(2048);
         // Use the deterministic idem_key so the resume cursor can match this row.
-        let result_key = idem_key(cid, &opts.run_id, &sid, "result");
+        let result_key = idem_key(cid, &opts.run_id, &sid, &key("result"));
         let _ = ChannelService::open(mur_home).and_then(|svc| {
             crate::channel_writer::append_as_writer(
                 &svc,
@@ -757,6 +769,7 @@ pub async fn execute_dag(
         let opt_dev_id = opts.device_id.clone();
         let opt_trigger = opts.trigger.to_string();
         let opt_chan_id = opts.channel_id.clone();
+        let opt_run_id = opts.run_id.clone();
         let mut handles = Vec::new();
         for &i in &indices {
             let step = graph.nodes[i].step.clone();
@@ -766,6 +779,7 @@ pub async fn execute_dag(
             let vars = opt_vars.clone();
             let tr = opt_trigger.clone();
             let chan_id = opt_chan_id.clone();
+            let run_id = opt_run_id.clone();
             let mh = mur_home.to_path_buf();
             handles.push(tokio::task::spawn(async move {
                 let opts_clone = DagExecOptions {
@@ -776,9 +790,9 @@ pub async fn execute_dag(
                     device_id: dev_id,
                     trigger: &tr,
                     channel_id: chan_id,
-                    run_id: String::new(),
+                    run_id,
                 };
-                execute_step(&step, &opts_clone, i, &mh).await
+                execute_step(&step, &opts_clone, i, 0, &mh).await
             }));
         }
 
@@ -878,7 +892,7 @@ pub async fn execute_dag(
                                 max_retries
                             );
                             let retry_result =
-                                execute_step(step, opts, indices[ri], mur_home).await;
+                                execute_step(step, opts, indices[ri], attempt + 1, mur_home).await;
                             // Each retry is additional real spend (the original
                             // attempt was already counted once at the per-step
                             // accumulation); count every attempt so the budget

@@ -6,6 +6,7 @@
 //! (state), [`ui`] (ratatui render), [`markdown`] (reply rendering), and
 //! [`persist`] (JSONL session log + resume).
 
+mod access;
 mod app;
 mod manage;
 mod markdown;
@@ -41,9 +42,8 @@ use crate::a2a_dial::{DialMode, canonicalize_agent_name, dial_method};
 
 /// How many recent conversations `/sessions` lists.
 const RECENT_LIMIT: usize = 10;
-/// How many transcript lines PageUp/PageDown scroll.
-const SCROLL_STEP: u16 = 5;
-/// Trackpad fires 10-20 events/sec so step=1 for mouse vs step=5 for keyboard PageUp/Down.
+/// Mouse wheel scrolls one line per event (trackpads fire 10-20 events/sec, so
+/// per-line granularity stays smooth); PageUp/PageDown move a full screenful.
 const MOUSE_SCROLL_STEP: u16 = 1;
 /// Spinner animation cadence.
 const SPINNER_MS: u64 = 90;
@@ -73,6 +73,10 @@ pub async fn cmd_cli(
         );
         return Ok(());
     }
+
+    // If this project dir is outside the agent's filesystem grants, offer to
+    // add it (explicit consent, persisted; sandbox applies it on next restart).
+    access::ensure_cwd_access(&agent)?;
 
     // Non-TTY (piped) → plain streamed text, preserving scriptability.
     if !io::stdout().is_terminal() {
@@ -269,8 +273,12 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
                 KeyCode::Char('d') if ctrl => request_quit(app, tx),
                 KeyCode::Char('c') if ctrl => handle_ctrl_c(app, tx),
                 KeyCode::Char('v') if ctrl => attach_clipboard_image(app),
-                KeyCode::PageUp => app.scroll_back = app.scroll_back.saturating_add(SCROLL_STEP),
-                KeyCode::PageDown => app.scroll_back = app.scroll_back.saturating_sub(SCROLL_STEP),
+                KeyCode::PageUp => {
+                    app.scroll_back = app.scroll_back.saturating_add(app.scroll_page.max(1))
+                }
+                KeyCode::PageDown => {
+                    app.scroll_back = app.scroll_back.saturating_sub(app.scroll_page.max(1))
+                }
                 KeyCode::Tab => complete_slash(app),
                 KeyCode::Enter if alt => {
                     app.input.insert_newline();

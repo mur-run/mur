@@ -182,6 +182,9 @@ pub struct App {
     pub channel: Option<ChannelMeta>,
     /// Lines scrolled up from the bottom (0 = pinned to newest).
     pub scroll_back: u16,
+    /// Transcript viewport height (rows), captured each render so PageUp/Down
+    /// move a screenful and `scroll_back` can be clamped to the real maximum.
+    pub scroll_page: u16,
     pub spinner: usize,
     pub should_quit: bool,
     /// Session-wide auto-approval of every tool call (`/auto` or `--auto`).
@@ -227,6 +230,7 @@ impl App {
             session,
             channel: None,
             scroll_back: 0,
+            scroll_page: 0,
             spinner: 0,
             should_quit: false,
             auto_approve: false,
