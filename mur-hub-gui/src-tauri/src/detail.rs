@@ -125,6 +125,7 @@ pub struct InstalledSkillView {
     pub version: String,
     pub description: String,
     pub category: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +133,7 @@ pub struct McpServerView {
     pub name: String,
     pub command: String,
     pub args: Vec<String>,
+    pub enabled: bool,
 }
 
 /// Partial update to an agent's profile. All fields optional — only set
@@ -166,6 +168,9 @@ pub fn get_agent_detail(name: String) -> Result<AgentDetail, String> {
     let bytes = std::fs::read(&profile_path).map_err(|e| format!("read profile: {e}"))?;
     let profile: mur_common::AgentProfile =
         serde_yaml_ng::from_slice(&bytes).map_err(|e| format!("parse profile: {e}"))?;
+    // Phase-1 enable/disable: per-agent denylists drive the per-row toggles.
+    let disabled_skills = profile.disabled_skills.clone();
+    let disabled_mcp = profile.disabled_mcp.clone();
 
     Ok(AgentDetail {
         persona_category: format!("{:?}", profile.persona.category).to_lowercase(),
@@ -200,6 +205,7 @@ pub fn get_agent_detail(name: String) -> Result<AgentDetail, String> {
             .installed_skills
             .into_iter()
             .map(|s| InstalledSkillView {
+                enabled: !disabled_skills.iter().any(|n| n == &s.name),
                 name: s.name,
                 version: s.version,
                 description: s.description,
@@ -210,6 +216,7 @@ pub fn get_agent_detail(name: String) -> Result<AgentDetail, String> {
             .mcp_servers
             .into_iter()
             .map(|m| McpServerView {
+                enabled: !disabled_mcp.iter().any(|n| n == &m.name),
                 name: m.name,
                 command: m.command,
                 args: m.args,
