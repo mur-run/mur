@@ -6,6 +6,22 @@
 
 use std::path::{Path, PathBuf};
 
+/// HuggingFace repo holding bundled-free local model.
+pub const DEFAULT_LOCAL_MODEL_REPO: &str = "mlx-community/Qwen3.5-2B-MLX-4bit";
+
+/// Directory name (under `<mur_home>/models/`).
+pub const DEFAULT_LOCAL_MODEL_DIR: &str = "Qwen3.5-2B-MLX-4bit";
+
+/// Path to the local model directory under `<mur_home>/models/<model_dir>`.
+pub fn local_model_dir(mur_home: &Path, model_dir: &str) -> PathBuf {
+    mur_home.join("models").join(model_dir)
+}
+
+/// Path to the model-complete marker file (`.complete`) within the model directory.
+pub fn model_complete_marker(model_dir: &Path) -> PathBuf {
+    model_dir.join(".complete")
+}
+
 /// Path to the file holding the local model base URL, under `<mur_home>`.
 pub fn base_url_path(mur_home: &Path) -> PathBuf {
     mur_home.join("runtime").join("local_llm.url")
@@ -54,5 +70,13 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         write_base_url(tmp.path(), "   \n").unwrap();
         assert_eq!(read_base_url(tmp.path()), None);
+    }
+
+    #[test]
+    fn model_dir_and_marker_paths() {
+        let home = Path::new("/tmp/murhome");
+        let dir = local_model_dir(home, DEFAULT_LOCAL_MODEL_DIR);
+        assert_eq!(dir, home.join("models").join("Qwen3.5-2B-MLX-4bit"));
+        assert_eq!(model_complete_marker(&dir), dir.join(".complete"));
     }
 }

@@ -373,16 +373,9 @@ jobs:
         if: steps.mlx_cache.outputs.cache-hit != 'true'
         run: bash scripts/build-mlx-server.sh aarch64-apple-darwin
 
-      # The bundled model is a multi-GB Hugging Face snapshot. snapshot_download
-      # is idempotent, so a restored cache turns the fetch into a quick verify.
-      - name: Cache bundled model
-        uses: actions/cache@v4
-        with:
-          path: mur-hub-gui/src-tauri/resources/models/default
-          key: bundle-model-Qwen3.5-2B-MLX-4bit
-
-      - name: Fetch bundled model
-        run: bash scripts/fetch-bundle-model.sh mlx-community/Qwen3.5-2B-MLX-4bit
+      # The model is no longer bundled into the .dmg (slim build): the Hub
+      # downloads it on first run into ~/.mur/models/. scripts/fetch-bundle-model.sh
+      # remains as a dev/offline helper but is intentionally not run in CI.
 
       # Cache the compiled cargo-tauri so we pay the ~10-min source build only on
       # a cache miss (first run / version bump), not every release. The binary is
