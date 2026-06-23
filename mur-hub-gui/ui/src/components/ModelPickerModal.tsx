@@ -264,7 +264,7 @@ export function ModelPickerModal({ isOpen, onClose }: Props) {
                           color: "var(--text-secondary, #888)",
                         }}
                       >
-                        local
+                        {t("modelPicker.local.badge")}
                       </span>
                     )}
                   </button>

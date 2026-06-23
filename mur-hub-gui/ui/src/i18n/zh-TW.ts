@@ -470,6 +470,7 @@ export const zhTW: Table = {
   "modelPicker.local.error": "下載失敗：{error}",
   "modelPicker.local.retry": "重試",
   "modelPicker.local.done": "✓ 下載完成",
+  "modelPicker.local.badge": "本機",
   "modelPicker.connect.selectProvider": "請在上方選擇 provider。",
   "modelPicker.connect.useModel": "從 registry 選用模型",
   "modelPicker.connect.pickPlaceholder": "選擇模型…",

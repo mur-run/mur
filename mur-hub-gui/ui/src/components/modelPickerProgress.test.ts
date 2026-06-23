@@ -6,7 +6,6 @@ describe("downloadProgress", () => {
     const result = downloadProgress(500, 1000);
     expect(result.indeterminate).toBe(false);
     expect(result.percent).toBe(50);
-    expect(typeof result.label).toBe("string");
   });
 
   it("total=0 → indeterminate", () => {

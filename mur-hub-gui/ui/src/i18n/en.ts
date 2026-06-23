@@ -468,6 +468,7 @@ export const en = {
   "modelPicker.local.error": "Download failed: {error}",
   "modelPicker.local.retry": "Retry",
   "modelPicker.local.done": "✓ Download complete",
+  "modelPicker.local.badge": "local",
   "modelPicker.connect.selectProvider": "Select a provider above to connect.",
   "modelPicker.connect.useModel": "Use a model from your registry",
   "modelPicker.connect.pickPlaceholder": "Pick a model…",

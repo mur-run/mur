@@ -11,15 +11,13 @@ export interface DownloadProgress {
   indeterminate: boolean;
   /** Clamped 0..100 integer. Always 0 when indeterminate. */
   percent: number;
-  /** Human-readable label, e.g. "42%" or "Downloading…" */
-  label: string;
 }
 
 export function downloadProgress(done: number, total: number): DownloadProgress {
   if (total <= 0) {
-    return { indeterminate: true, percent: 0, label: "Downloading…" };
+    return { indeterminate: true, percent: 0 };
   }
   const raw = (done / total) * 100;
   const percent = Math.min(100, Math.max(0, Math.round(raw)));
-  return { indeterminate: false, percent, label: `${percent}%` };
+  return { indeterminate: false, percent };
 }
