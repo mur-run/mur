@@ -1,6 +1,7 @@
 //! TUI application state and the pure (non-IO) state transitions.
 
 use std::collections::HashSet;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use ratatui::style::{Color, Style};
@@ -12,6 +13,7 @@ use super::markdown;
 use super::persist::{ChannelMeta, Session, TurnRecord};
 use super::stream::HitlRequest;
 use super::theme::Theme;
+use super::welcome::{Blink, MascotMode, resolve_mascot_mode};
 
 /// Spinner frames shown while the agent is generating.
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -214,6 +216,12 @@ pub struct App {
     /// Base64 PNG staged by Ctrl+V (a pasted screenshot), sent as an inline
     /// image with the next message and cleared on send. macOS-only capture.
     pub pending_image: Option<String>,
+    /// Mascot blink driver for the startup welcome screen. Render is a pure
+    /// function of elapsed time; the event loop wakes on its next deadline.
+    pub blink: Blink,
+    /// Mascot color/animation mode, resolved once at startup from the theme
+    /// and terminal capabilities (NO_COLOR / non-TTY / TERM=dumb → static).
+    pub mascot_mode: MascotMode,
 }
 
 impl App {
@@ -244,6 +252,9 @@ impl App {
             esc_hint: false,
             last_sent: None,
             pending_image: None,
+            blink: Blink::new(),
+            // Resolve color/animation once: env + TTY don't change mid-session.
+            mascot_mode: resolve_mascot_mode(theme, std::io::stdout().is_terminal()),
         }
     }
 

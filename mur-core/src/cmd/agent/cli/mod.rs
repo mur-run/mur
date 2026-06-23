@@ -15,10 +15,12 @@ pub mod persist;
 mod stream;
 mod theme;
 mod ui;
+mod welcome;
 
 use std::io::{self, IsTerminal, Stdout, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::time::Instant as StdInstant;
 
 use anyhow::{Context, Result};
 use crossterm::event::{
@@ -34,6 +36,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio::time::Instant as TokioInstant;
 
 use self::app::{App, EscAction, Role, SlashCmd, esc_action, parse_slash};
 use self::persist::Session;
@@ -184,7 +187,7 @@ fn build_app(home: &Path, agent: &str, resume: bool, theme: &'static theme::Them
             app.load_history(turns);
             app.refresh_channel();
             app.push_system(format!(
-                "resumed conversation ({} turns) — {HELP}",
+                "resumed conversation ({} turns) · type /help for commands",
                 app.messages.len()
             ));
             return Ok(app);
@@ -195,18 +198,20 @@ fn build_app(home: &Path, agent: &str, resume: bool, theme: &'static theme::Them
             Session::create(home, agent)?,
             theme,
         );
-        app.push_system(format!(
-            "no saved conversation to resume; starting fresh. {HELP}"
-        ));
+        app.push_system(
+            "no saved conversation to resume; starting fresh · type /help for commands".to_string(),
+        );
         return Ok(app);
     }
-    let mut app = App::new(
+    let app = App::new(
         home.to_path_buf(),
         agent.to_string(),
         Session::create(home, agent)?,
         theme,
     );
-    app.push_system(HELP);
+    // No startup HELP dump: an empty transcript renders the welcome screen
+    // (mascot + identity + one example + /help hint). The full cheatsheet stays
+    // reachable via the /help command (SlashCmd::Help below).
     Ok(app)
 }
 
@@ -224,6 +229,12 @@ async fn event_loop(
         if app.should_quit {
             return Ok(());
         }
+        // The idle welcome blinks: schedule a redraw exactly at the next blink
+        // boundary, but ONLY when the mascot animates, the transcript is empty
+        // (so the welcome is actually on screen), and nothing is streaming.
+        // Otherwise this arm is disabled and never wakes the loop.
+        let blink_live = app.mascot_mode.animated() && app.messages.is_empty() && !app.streaming;
+        let blink_at = TokioInstant::from_std(app.blink.next_deadline(StdInstant::now()));
         tokio::select! {
             maybe = events.next() => match maybe {
                 Some(Ok(ev)) => handle_event(app, ev, &tx).await,
@@ -231,6 +242,9 @@ async fn event_loop(
             },
             Some(msg) = rx.recv() => handle_stream(app, msg, &tx),
             _ = spinner.tick(), if app.streaming => app.tick_spinner(),
+            // Wake at the blink deadline; the loop redraws at the top of the
+            // next iteration, advancing the eye frame. No state change needed.
+            _ = tokio::time::sleep_until(blink_at), if blink_live => {}
         }
     }
 }
@@ -674,6 +688,8 @@ async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>
                     app.push_system(format!("unknown skin '{name}' — valid: dark, light, mur"));
                 } else {
                     app.theme = theme::resolve_skin(&name);
+                    app.mascot_mode =
+                        welcome::resolve_mascot_mode(app.theme, std::io::stdout().is_terminal());
                     let h = app.home.clone();
                     match persist_skin(&h, &name) {
                         Ok(()) => app.push_system(format!("skin changed to {name}")),

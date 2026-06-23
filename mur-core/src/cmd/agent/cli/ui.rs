@@ -6,8 +6,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap};
 
+use std::time::Instant;
+
 use super::app::{App, ChatMsg, Role, SPINNER};
 use super::markdown;
+use super::welcome::welcome_lines;
 
 /// Draw the whole UI for one frame.
 pub fn render(f: &mut Frame, app: &mut App) {
@@ -60,10 +63,17 @@ fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     if lines.is_empty() {
-        lines.push(Line::styled(
-            "Say hello — type below and press Enter.",
-            Style::default().fg(theme.system),
-        ));
+        // Empty transcript → progressive-disclosure welcome (mascot + identity +
+        // one example + /help hint) instead of a bare prompt. The eye frame is a
+        // pure function of wall-clock time; the event loop schedules redraws on
+        // the blink deadline so an idle welcome animates without busy-looping.
+        lines = welcome_lines(
+            theme,
+            app.mascot_mode,
+            &app.agent,
+            app.cwd.as_deref(),
+            app.blink.eye_open(Instant::now()),
+        );
     }
 
     let total = lines.len() as u16;
