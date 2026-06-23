@@ -219,6 +219,53 @@ fn rewrite_model_block(yaml: &str, provider: &str, name: &str) -> String {
     joined
 }
 
+/// Point the stock concierge at a `~/.mur/models.yaml` registry alias by setting
+/// the top-level `model_ref:` field (the runtime prefers it over the inline
+/// `model:` block). Returns Ok(true) if the file changed.
+pub fn set_concierge_model_ref(mur_home: &Path, alias: &str) -> std::io::Result<bool> {
+    let profile_path = mur_home.join("agents").join("mur").join("profile.yaml");
+    if !profile_path.is_file() {
+        return Ok(false);
+    }
+    let original = std::fs::read_to_string(&profile_path)?;
+    let out = upsert_model_ref(&original, alias);
+    if out != original {
+        std::fs::write(&profile_path, out)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Insert or replace the top-level `model_ref:` line. Replaces an existing line
+/// in place; otherwise inserts one immediately before the `model:` block (or
+/// appends if neither key exists). A top-level line has no leading indentation.
+fn upsert_model_ref(yaml: &str, alias: &str) -> String {
+    let has_existing = yaml.lines().any(|l| l.starts_with("model_ref:"));
+    let mut out: Vec<String> = Vec::new();
+    for line in yaml.lines() {
+        if has_existing {
+            if line.starts_with("model_ref:") {
+                out.push(format!("model_ref: {alias}"));
+            } else {
+                out.push(line.to_string());
+            }
+        } else {
+            if line.starts_with("model:") {
+                out.push(format!("model_ref: {alias}"));
+            }
+            out.push(line.to_string());
+        }
+    }
+    if !has_existing && !yaml.lines().any(|l| l.starts_with("model:")) {
+        out.push(format!("model_ref: {alias}"));
+    }
+    let mut joined = out.join("\n");
+    if yaml.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
 /// Seed Mur from `template_dir` into `<mur_home>/agents/mur` iff Mur is not already
 /// seeded. Returns Ok(true) if seeding happened, Ok(false) if skipped.
 ///
@@ -332,6 +379,28 @@ mod tests {
         let tpl = TempDir::new().unwrap(); // empty: no profile.yaml
         assert!(seed_mur_if_missing(tpl.path(), home.path()).is_err());
         assert!(!home.path().join("agents/mur").exists());
+    }
+
+    #[test]
+    fn upsert_model_ref_inserts_before_model_block() {
+        let yaml = "name: mur\nmodel:\n  provider: local\n  name: X\ntransport:\n  stdio: true\n";
+        let out = upsert_model_ref(yaml, "claude_sonnet");
+        assert!(
+            out.contains("model_ref: claude_sonnet\nmodel:"),
+            "got:\n{out}"
+        );
+        // Idempotent: applying again replaces, does not duplicate.
+        let again = upsert_model_ref(&out, "claude_opus");
+        assert_eq!(again.matches("model_ref:").count(), 1, "got:\n{again}");
+        assert!(again.contains("model_ref: claude_opus"));
+    }
+
+    #[test]
+    fn upsert_model_ref_replaces_existing() {
+        let yaml = "name: mur\nmodel_ref: old_alias\nmodel:\n  provider: local\n";
+        let out = upsert_model_ref(yaml, "new_alias");
+        assert_eq!(out.matches("model_ref:").count(), 1);
+        assert!(out.contains("model_ref: new_alias"));
     }
 
     #[test]
