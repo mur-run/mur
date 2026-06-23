@@ -1296,6 +1296,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentSkillAction::Show { name, skill_id } => {
                 cmd::agent::cmd_skill_show(&name, &skill_id)?
             }
+            AgentSkillAction::Enable { name, skill_id } => {
+                cmd::agent::cmd_skill_set_enabled(&name, &skill_id, true)?
+            }
+            AgentSkillAction::Disable { name, skill_id } => {
+                cmd::agent::cmd_skill_set_enabled(&name, &skill_id, false)?
+            }
         },
         AgentAction::Perm { action } => match action {
             AgentPermAction::Show { name, section } => {
