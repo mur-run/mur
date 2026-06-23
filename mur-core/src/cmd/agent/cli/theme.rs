@@ -7,9 +7,10 @@ use ratatui::widgets::BorderType;
 
 pub struct Theme {
     // ── labels (bold, identifies speaker) ────────────────────────────────────
-    pub user: Color,  // "› you" label
-    pub agent: Color, // "● agent" label
-    pub shell: Color, // "$ cmd" label for !command output
+    pub user: Color,   // "› you" label
+    pub agent: Color,  // "● agent" label
+    pub accent: Color, // mascot / brand accent (always color-capable)
+    pub shell: Color,  // "$ cmd" label for !command output
     // ── body text ─────────────────────────────────────────────────────────────
     pub user_text: Color,  // continuation lines of a user turn
     pub agent_text: Color, // continuation lines of an agent reply
@@ -33,6 +34,7 @@ pub struct Theme {
 pub const DARK: Theme = Theme {
     user: Color::Green,
     agent: Color::Cyan,
+    accent: Color::Cyan,
     shell: Color::Green,
     user_text: Color::Gray,
     agent_text: Color::White,
@@ -53,6 +55,7 @@ pub const DARK: Theme = Theme {
 pub const LIGHT: Theme = Theme {
     user: Color::Rgb(0x16, 0x65, 0x34),
     agent: Color::Rgb(0x0e, 0x6b, 0x8c),
+    accent: Color::Rgb(0x0e, 0x6b, 0x8c),
     shell: Color::Rgb(0x16, 0x65, 0x34),
     user_text: Color::Rgb(0x22, 0x22, 0x33),
     agent_text: Color::Rgb(0x22, 0x22, 0x33),
@@ -73,6 +76,7 @@ pub const LIGHT: Theme = Theme {
 pub const MUR: Theme = Theme {
     user: Color::Rgb(0xa7, 0x8b, 0xfa),
     agent: Color::Rgb(0xfb, 0xbf, 0x24),
+    accent: Color::Rgb(0xfb, 0xbf, 0x24),
     shell: Color::Rgb(0x88, 0x88, 0xcc),
     user_text: Color::Rgb(0xc8, 0xc8, 0xe8),
     agent_text: Color::Rgb(0xe0, 0xe0, 0xf0),
