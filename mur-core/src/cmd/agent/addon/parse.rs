@@ -1,6 +1,6 @@
 //! Claude plugin → MUR primitive converters (pure, no I/O).
-// Task 4 (import.rs) is the primary consumer of these items.
-// Until it ships, suppress dead_code in the binary compilation path.
+// The whole add-on module is unreachable from the `mur` binary until Task 5
+// wires `cmd_addon_import` into CLI dispatch. Remove this allow in Task 5.
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
@@ -8,8 +8,10 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use serde::Deserialize;
 
-use mur_common::skill::{Category, Content, Priority, Provenance, SkillManifest, Trigger, TriggerKind};
 use mur_common::skill::manifest::SkillScope;
+use mur_common::skill::{
+    Category, Content, Priority, Provenance, SkillManifest, Trigger, TriggerKind,
+};
 
 /// Provenance prefix for skills imported from a Claude plugin (local directory).
 pub(crate) const LOCAL_SOURCE_TAG: &str = "claude-plugin";
@@ -128,16 +130,27 @@ pub fn parse_skill_md(raw: &str) -> SkillMd {
         let body = after.strip_prefix('\n').unwrap_or(after).to_string();
         let (mut name, mut description) = (String::new(), String::new());
         if let Ok(v) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(fm) {
-            name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            name = v
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             description = v
                 .get("description")
                 .and_then(|x| x.as_str())
                 .unwrap_or("")
                 .to_string();
         }
-        return SkillMd { name, description, body };
+        return SkillMd {
+            name,
+            description,
+            body,
+        };
     }
-    SkillMd { body: raw.to_string(), ..Default::default() }
+    SkillMd {
+        body: raw.to_string(),
+        ..Default::default()
+    }
 }
 
 /// Convert a Claude `skills/<dir>/SKILL.md` to a MUR `SkillManifest`.
@@ -160,8 +173,14 @@ pub fn skill_md_to_manifest(dir_name: &str, raw: &str, p: &PluginJson) -> SkillM
         note: None,
     };
     let triggers = vec![
-        Trigger { kind: TriggerKind::Keyword, pattern: Some(name.clone()) },
-        Trigger { kind: TriggerKind::Manual, pattern: None },
+        Trigger {
+            kind: TriggerKind::Keyword,
+            pattern: Some(name.clone()),
+        },
+        Trigger {
+            kind: TriggerKind::Manual,
+            pattern: None,
+        },
     ];
     base_manifest(
         name,
@@ -284,7 +303,11 @@ mod tests {
         // Keyword + Manual triggers, NO SessionStart (no auto-inject).
         assert!(m.triggers.iter().any(|t| t.kind == TriggerKind::Keyword));
         assert!(m.triggers.iter().any(|t| t.kind == TriggerKind::Manual));
-        assert!(!m.triggers.iter().any(|t| t.kind == TriggerKind::SessionStart));
+        assert!(
+            !m.triggers
+                .iter()
+                .any(|t| t.kind == TriggerKind::SessionStart)
+        );
     }
 
     #[test]
@@ -295,12 +318,14 @@ mod tests {
 
     #[test]
     fn command_to_manifest_is_command_category() {
-        let toml_src =
-            "prompt = \"Review the diff: {{args}}\"\ndescription = \"code review\"\n";
+        let toml_src = "prompt = \"Review the diff: {{args}}\"\ndescription = \"code review\"\n";
         let m = command_to_manifest("review", toml_src, &plugin()).unwrap();
         assert_eq!(m.name, "review");
         assert!(matches!(m.category, Category::Command));
-        assert_eq!(m.content.command.as_deref(), Some("Review the diff: {{args}}"));
+        assert_eq!(
+            m.content.command.as_deref(),
+            Some("Review the diff: {{args}}")
+        );
         assert!(m.triggers.iter().any(|t| t.kind == TriggerKind::Command));
     }
 
@@ -323,8 +348,14 @@ mod tests {
         assert_eq!(r.name, "divider-test");
         assert_eq!(r.description, "two sections");
         // Both paragraphs AND the --- divider must be present.
-        assert!(r.body.contains("First paragraph."), "missing first paragraph");
+        assert!(
+            r.body.contains("First paragraph."),
+            "missing first paragraph"
+        );
         assert!(r.body.contains("---"), "body --- divider was dropped");
-        assert!(r.body.contains("Second paragraph."), "missing second paragraph; body was truncated at HR");
+        assert!(
+            r.body.contains("Second paragraph."),
+            "missing second paragraph; body was truncated at HR"
+        );
     }
 }
