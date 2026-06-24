@@ -41,6 +41,22 @@ pub enum AgentAction {
         /// Agent name
         name: String,
     },
+    /// Gracefully restart one or more running agents so they pick up an
+    /// upgraded runtime binary. Sends SIGTERM (drains in-flight turn), waits
+    /// for exit, then polls for the launchd-respawned process.
+    Restart {
+        /// Agent name (mutually exclusive with --all / --stale)
+        name: Option<String>,
+        /// Restart all running agents
+        #[arg(long)]
+        all: bool,
+        /// Restart only agents running a stale binary (build-id differs from on-disk)
+        #[arg(long = "stale")]
+        stale: bool,
+        /// Print targets without restarting
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
     /// Remove an agent (symlink + optionally data)
     Remove {
         /// Agent name

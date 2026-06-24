@@ -1218,6 +1218,9 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::List { json } => cmd::agent::cmd_list(json)?,
         AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
         AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
+        AgentAction::Restart { name, all, stale, dry_run } => {
+            cmd::agent::cmd_restart(name.as_deref(), all, stale, dry_run)?
+        }
         AgentAction::Remove { name, purge, force } => cmd::agent::cmd_remove(&name, purge, force)?,
         AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
         AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,

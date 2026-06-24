@@ -38,11 +38,13 @@ mod peers;
 mod perm;
 mod prompt;
 mod reconnect;
+mod restart;
 mod secret;
 mod service;
 pub mod skill;
 mod snapshot;
 mod stats;
+pub mod stale;
 
 // `pub use` re-exports for the public CLI dispatch API. The lib crate doesn't
 // reference these names internally; consumers (main.rs, agent_admin) reach them
@@ -80,6 +82,8 @@ pub(crate) use prompt::prompt_path_for;
 pub use prompt::{cmd_prompt_edit, cmd_prompt_set, cmd_prompt_show};
 #[allow(unused_imports)]
 pub use reconnect::cmd_agent_reconnect;
+#[allow(unused_imports)]
+pub use restart::cmd_restart;
 #[allow(unused_imports)]
 pub use secret::{cmd_secret_delete, cmd_secret_list, cmd_secret_set};
 #[allow(unused_imports)]
