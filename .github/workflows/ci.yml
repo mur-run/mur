@@ -124,7 +124,13 @@ jobs:
         run: brew install protobuf
       - name: Install protobuf (Windows)
         if: runner.os == 'Windows'
-        run: choco install protoc -y
+        # choco's community feed intermittently serves invalid XML, which makes
+        # `choco install protoc` silently install 0 packages and then break the
+        # lance-encoding build ("Could not find protoc"). Pull protoc straight
+        # from GitHub releases instead — no community-feed dependency.
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Defender exclusions (Windows)
         # Cuts ~5-15% off Windows wall-clock when Defender real-time scan
         # is active on the runner. Harmless no-op if the runner image already
@@ -292,7 +298,13 @@ jobs:
         run: brew install protobuf
       - name: Install protobuf (Windows)
         if: runner.os == 'Windows'
-        run: choco install protoc -y
+        # choco's community feed intermittently serves invalid XML, which makes
+        # `choco install protoc` silently install 0 packages and then break the
+        # lance-encoding build ("Could not find protoc"). Pull protoc straight
+        # from GitHub releases instead — no community-feed dependency.
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install npm deps
         run: cd mur-hub-gui/ui && npm ci
       - name: Frontend build

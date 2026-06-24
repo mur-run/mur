@@ -279,12 +279,17 @@ pub async fn run(cli: Cli) -> Result<()> {
                 FleetAction::Show { name } => cmd::fleet::show::cmd_fleet_show(&mur_home, &name)?,
                 FleetAction::Run {
                     name,
+                    job,
                     loop_flag,
                     max_iterations,
                     deadline,
                     budget_usd,
                 } => {
                     if loop_flag {
+                        // job arg + --loop: enqueue the job first, then the loop drains it.
+                        if let Some(text) = job {
+                            cmd::fleet::jobs::enqueue_job(&mur_home, &name, &text, "cli")?;
+                        }
                         cmd::fleet::loop_run::cmd_fleet_run_loop(
                             &mur_home,
                             &name,
@@ -294,8 +299,14 @@ pub async fn run(cli: Cli) -> Result<()> {
                         )
                         .await?
                     } else {
-                        cmd::fleet::run::cmd_fleet_run(&mur_home, &name).await?
+                        cmd::fleet::run::cmd_fleet_run(&mur_home, &name, job).await?
                     }
+                }
+                FleetAction::Send { name, job } => {
+                    cmd::fleet::jobs::cmd_fleet_send(&mur_home, &name, &job)?
+                }
+                FleetAction::Jobs { name, all } => {
+                    cmd::fleet::jobs::cmd_fleet_jobs(&mur_home, &name, all)?
                 }
                 FleetAction::Stop { name } => {
                     cmd::fleet::control::cmd_fleet_stop(&mur_home, &name)?
@@ -328,6 +339,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                         yes,
                     },
                 )?,
+                FleetAction::Delete { name, yes } => {
+                    cmd::fleet::delete::cmd_fleet_delete(&mur_home, &name, yes)?
+                }
+                FleetAction::Add { name, agents } => {
+                    cmd::fleet::roster::cmd_fleet_add(&mur_home, &name, agents)?
+                }
+                FleetAction::Remove { name, agents } => {
+                    cmd::fleet::roster::cmd_fleet_remove(&mur_home, &name, agents)?
+                }
             }
         }
         Commands::Commander { action } => {
