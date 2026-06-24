@@ -1348,7 +1348,11 @@ impl AgentProfile {
             .iter()
             .flat_map(|g| g.skills.iter().chain(g.commands.iter()).cloned())
             .collect();
-        let mcp: Vec<String> = self.addons.iter().flat_map(|g| g.mcp.iter().cloned()).collect();
+        let mcp: Vec<String> = self
+            .addons
+            .iter()
+            .flat_map(|g| g.mcp.iter().cloned())
+            .collect();
         for g in &mut self.addons {
             g.enabled = false;
         }

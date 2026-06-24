@@ -142,7 +142,6 @@ where
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +218,4 @@ content:
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].scope, SkillScope::Agent);
     }
-
-
 }
