@@ -9,12 +9,10 @@ use mur_common::fleet::{Job, JobStatus, valid_fleet_name};
 
 use super::store;
 
-#[allow(dead_code)] // wired up by Task 3-5
 pub(crate) fn jobs_dir(mur_home: &Path, fleet: &str) -> PathBuf {
     store::fleet_dir(mur_home, fleet).join("jobs")
 }
 
-#[allow(dead_code)] // wired up by Task 3-5
 fn job_path(mur_home: &Path, fleet: &str, id: &str) -> PathBuf {
     jobs_dir(mur_home, fleet).join(format!("{id}.yaml"))
 }
@@ -38,7 +36,6 @@ pub fn enqueue_job(mur_home: &Path, fleet: &str, text: &str, source: &str) -> Re
 }
 
 /// Atomic write (temp + rename), matching `store::save_fleet`.
-#[allow(dead_code)] // wired up by Task 3-5
 pub fn save_job(mur_home: &Path, fleet: &str, job: &Job) -> Result<()> {
     if !valid_fleet_name(fleet) {
         bail!("invalid fleet name '{fleet}': use lowercase letters, digits, '-' or '_'");
@@ -78,7 +75,6 @@ pub fn list_jobs(mur_home: &Path, fleet: &str) -> Result<Vec<Job>> {
 }
 
 /// Next queued job (oldest first), or None.
-#[allow(dead_code)] // wired up by Task 3-5
 pub fn next_queued(mur_home: &Path, fleet: &str) -> Result<Option<Job>> {
     let jobs = list_jobs(mur_home, fleet)?;
     Ok(jobs.into_iter().find(|j| j.status == JobStatus::Queued))

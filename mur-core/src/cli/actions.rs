@@ -427,6 +427,8 @@ pub enum FleetAction {
     Run {
         /// Fleet name
         name: String,
+        /// Optional job text — runs one-shot (jumps ahead of queue)
+        job: Option<String>,
         /// Loop until the router converges or a guard trips (cap/deadline/stuck)
         #[arg(long = "loop")]
         loop_flag: bool,
