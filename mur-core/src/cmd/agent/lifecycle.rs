@@ -440,6 +440,9 @@ pub fn cmd_list(json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(&rows)?);
     } else {
+        let mur_home = resolve_mur_home()?;
+        // Compute on-disk sha ONCE — avoids a subprocess call per agent.
+        let on_disk = super::stale::on_disk_sha();
         println!(
             "{:<20} {:<6} {:<10} {:<20} {:<10} {:<12}",
             "NAME", "EMOJI", "STATUS", "UPTIME", "PID", "CATEGORY"
@@ -450,9 +453,24 @@ pub fn cmd_list(json: bool) -> Result<()> {
                 .map(|p| p.to_string())
                 .unwrap_or_else(|| "-".to_string());
             let uptime = r.uptime.clone().unwrap_or_else(|| "-".to_string());
+            // Append stale marker for running agents whose binary is outdated.
+            let status = if r.status == "running" {
+                let lock_path = mur_home.join("agents").join(&r.name).join("running.lock");
+                let stale = mur_common::lock_file::read(&lock_path)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|lock| super::stale::is_stale(&lock, &on_disk));
+                if stale {
+                    "running — stale runtime (restart to apply)".to_string()
+                } else {
+                    r.status.to_string()
+                }
+            } else {
+                r.status.to_string()
+            };
             println!(
                 "{:<20} {:<6} {:<10} {:<20} {:<10} {:<12}",
-                r.name, r.emoji, r.status, uptime, pid, r.category
+                r.name, r.emoji, status, uptime, pid, r.category
             );
         }
     }
@@ -460,6 +478,7 @@ pub fn cmd_list(json: bool) -> Result<()> {
 }
 
 pub fn cmd_status(name: &str) -> Result<()> {
+    let mur_home = resolve_mur_home()?;
     let rows = collect_agents()?;
     let row = rows
         .iter()
@@ -468,9 +487,21 @@ pub fn cmd_status(name: &str) -> Result<()> {
     println!("● {} - {}", row.name, row.category);
     println!(
         "   Loaded: {}",
-        resolve_mur_home()?.join("agents").join(name).display()
+        mur_home.join("agents").join(name).display()
     );
-    println!("   Active: {}", row.status);
+    // Check for stale runtime when the agent is running.
+    let stale_suffix = if row.status == "running" {
+        let on_disk = super::stale::on_disk_sha();
+        let lock_path = mur_home.join("agents").join(name).join("running.lock");
+        let stale = mur_common::lock_file::read(&lock_path)
+            .ok()
+            .flatten()
+            .is_some_and(|lock| super::stale::is_stale(&lock, &on_disk));
+        if stale { " — stale runtime (restart to apply)" } else { "" }
+    } else {
+        ""
+    };
+    println!("   Active: {}{stale_suffix}", row.status);
     if let Some(pid) = row.pid {
         println!("     Main PID: {pid}");
     }
