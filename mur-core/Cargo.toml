@@ -41,6 +41,7 @@ tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
+toml = "0.8"
 qrcode = "0.14"
 git2 = { version = "0.20", default-features = false }
 diff = "0.1"
