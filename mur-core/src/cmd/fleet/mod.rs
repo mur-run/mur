@@ -8,6 +8,7 @@ pub mod jobs;
 pub mod list;
 pub mod loop_run;
 pub mod plan;
+pub mod roster;
 pub mod run;
 pub mod show;
 pub mod store;

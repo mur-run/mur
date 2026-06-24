@@ -491,6 +491,22 @@ pub enum FleetAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Add agent(s) to a fleet (member + channel role)
+    Add {
+        /// Fleet name
+        name: String,
+        /// Agent name(s) to add
+        #[arg(required = true)]
+        agents: Vec<String>,
+    },
+    /// Remove agent(s) from a fleet (member + channel)
+    Remove {
+        /// Fleet name
+        name: String,
+        /// Agent name(s) to remove
+        #[arg(required = true)]
+        agents: Vec<String>,
+    },
 }
 
 #[derive(clap::Subcommand)]
