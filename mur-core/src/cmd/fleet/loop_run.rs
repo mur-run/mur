@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use mur_common::channel::{ChannelActor, ChannelEvent};
-use mur_common::fleet::Fleet;
+use mur_common::fleet::{Fleet, Job, JobStatus};
 use sha2::{Digest, Sha256};
 
 use super::run::build_fleet_procedure;
@@ -204,6 +204,23 @@ fn fleet_price_per_1k(mur_home: &Path) -> f64 {
     DEFAULT_PRICE_PER_1K
 }
 
+/// Resolve this iteration's goal: oldest queued job (marking it Running) beats
+/// the standing fleet goal. Returns `(goal_text, Some(job))` when a queued job
+/// is claimed, or `(standing_goal, None)` when the queue is empty.
+fn iteration_goal(
+    mur_home: &Path,
+    fleet_name: &str,
+    standing_goal: &str,
+) -> Result<(String, Option<Job>)> {
+    if let Some(mut job) = super::jobs::next_queued(mur_home, fleet_name)? {
+        job.status = JobStatus::Running;
+        super::jobs::save_job(mur_home, fleet_name, &job)?;
+        Ok((job.text.clone(), Some(job)))
+    } else {
+        Ok((standing_goal.to_string(), None))
+    }
+}
+
 /// Resolve the effective budget USD: CLI flag > fleet.yaml `loop.budget_usd` > none.
 fn effective_budget(flag: Option<f64>, fleet: &Fleet) -> Option<f64> {
     flag.or_else(|| fleet.loop_cfg.as_ref().map(|l| l.budget_usd))
@@ -367,8 +384,11 @@ pub async fn run_guarded(
 
         // Router plans this iteration (seeing prior state); falls back to broadcast.
         let pre_events = svc.load_events(&fleet.channel_id).unwrap_or_default();
-        let proc = super::plan::plan_via_router(mur_home, &fleet, &pre_events)
-            .unwrap_or_else(|| build_fleet_procedure(&fleet.goal, &fleet.members));
+        // Drain job queue: oldest queued job is this iteration's goal; else standing goal.
+        let (iter_goal, mut active_job) = iteration_goal(mur_home, name, &fleet.goal)?;
+        let planning_fleet = mur_common::fleet::Fleet { goal: iter_goal.clone(), ..fleet.clone() };
+        let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &pre_events)
+            .unwrap_or_else(|| build_fleet_procedure(&iter_goal, &fleet.members));
         let opts = crate::executor::dag::DagExecOptions {
             // Fail-closed on the unattended loop path: never blanket-approve.
             // (No risk tier on fan-out steps today; this guards future
@@ -384,6 +404,14 @@ pub async fn run_guarded(
             crate::executor::dag::execute_dag(mur_home, &format!("fleet:{name}"), &proc, &opts)
                 .await?;
         iteration += 1;
+        // Terminal stamp: mark the queued job Done with the result of this iteration.
+        if let Some(job) = active_job.as_mut() {
+            job.run_id = Some(opts.run_id.clone());
+            job.finished_at = Some(chrono::Utc::now().to_rfc3339());
+            job.status = JobStatus::Done;
+            job.result = out.output_text.clone().filter(|t| !t.is_empty());
+            let _ = super::jobs::save_job(mur_home, name, job);
+        }
         // Account REAL cost from this iteration's token usage. A 0-token result
         // (older runtime, stub, or a reply that carried no usage) falls back to
         // the projection so the budget guard never silently under-counts.
@@ -703,6 +731,24 @@ mod tests {
             l.max_iterations = 0;
         }
         assert_eq!(effective_max_iterations(None, &f), DEFAULT_MAX_ITERATIONS);
+    }
+
+    #[test]
+    fn iteration_goal_drains_queue_then_falls_back_to_standing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("standing".into())).unwrap();
+
+        // empty queue → standing goal, no job
+        let (g, j) = iteration_goal(home, "dev", "standing").unwrap();
+        assert_eq!(g, "standing");
+        assert!(j.is_none());
+
+        // queued job → job text, marked running
+        super::super::jobs::enqueue_job(home, "dev", "job-1", "cli").unwrap();
+        let (g, j) = iteration_goal(home, "dev", "standing").unwrap();
+        assert_eq!(g, "job-1");
+        assert_eq!(j.unwrap().status, mur_common::fleet::JobStatus::Running);
     }
 
     /// Test seam: run one guarded iteration and return the stop reason.
