@@ -718,7 +718,7 @@ pub fn ensure_git_hook(project_path: &Path, quiet: bool) -> Result<bool> {
     // Resolve mur at hook-run time from PATH (covers brew, cargo, etc.),
     // falling back to the ~/.mur/bin installer location.
     let hook_content = format!(
-        "\n{marker}\nMUR_BIN=\"$(command -v mur || true)\"\n[ -z \"$MUR_BIN\" ] && [ -x \"$HOME/.mur/bin/mur\" ] && MUR_BIN=\"$HOME/.mur/bin/mur\"\nif [ -n \"$MUR_BIN\" ]; then\n  \"$MUR_BIN\" project index \"{path}\" --quiet --background\nfi\n",
+        "\n{marker}\nMUR_BIN=\"$(command -v mur || true)\"\n[ -z \"$MUR_BIN\" ] && [ -x \"$HOME/.mur/bin/mur\" ] && MUR_BIN=\"$HOME/.mur/bin/mur\"\nif [ -n \"$MUR_BIN\" ]; then\n  \"$MUR_BIN\" project index --path \"{path}\" --quiet --background\nfi\n",
         path = project_path.display(),
     );
     if existing.is_empty() {
