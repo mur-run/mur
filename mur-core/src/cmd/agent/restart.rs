@@ -18,8 +18,11 @@ use super::{pid_alive, resolve_mur_home, stale};
 /// drain bound so we never abort a turn mid-flight.
 const RESTART_KILL_GRACE_SECS: u64 = 5;
 
-/// Named constant for the wait to see the respawned lock (no SIGKILL risk here).
-const RESTART_RESPAWN_WAIT_SECS: u64 = 30;
+/// Wait to see the respawned lock (no SIGKILL risk here). Generous on purpose:
+/// real launchd respawn latency = the old process's shutdown + ExitTimeOut + any
+/// ThrottleInterval, observed at ~2 min after rapid restarts. A shorter wait
+/// false-warns "did not respawn" on a restart that actually succeeded.
+const RESTART_RESPAWN_WAIT_SECS: u64 = 120;
 
 /// Compute the total seconds to wait before firing the SIGKILL fallback.
 ///
@@ -247,8 +250,9 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
         }
         None => {
             eprintln!(
-                "warning: '{name}' was stopped but did not respawn within {RESTART_RESPAWN_WAIT_SECS} s \
-                 (is launchd KeepAlive enabled?)"
+                "note: '{name}' was stopped; its respawn was not seen within {RESTART_RESPAWN_WAIT_SECS} s — \
+                 launchd may still be bringing it up. Check 'mur agent runtime-doctor' shortly; \
+                 if it stays down, confirm launchd KeepAlive is enabled."
             );
         }
     }
