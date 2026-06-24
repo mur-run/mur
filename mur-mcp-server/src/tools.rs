@@ -336,6 +336,36 @@ pub fn all_tools() -> Vec<Tool> {
                 required: None,
             },
         },
+        Tool {
+            name: "parallel_jobs".into(),
+            description: "Fan out N distinct jobs to running MUR agents in parallel over an ephemeral channel — no workflow file. Each job is delegated as its own concurrent turn. Before coding fan-out, apply the parallel-code gate: disjoint files (no shared registry/lockfile), contracts frozen first, one writer per file. Targets the agents you name; runtimes must already be running.".into(),
+            input_schema: ToolInputSchema {
+                schema_type: "object".into(),
+                properties: Some(BTreeMap::from([
+                    ("jobs".into(), ToolParam {
+                        param_type: "array".into(),
+                        description: "Jobs to run in parallel. Each: { description: string, agent?: string }.".into(),
+                        default: None,
+                    }),
+                    ("agent".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "Default assignee agent name for jobs that omit their own `agent`.".into(),
+                        default: None,
+                    }),
+                    ("max_concurrency".into(), ToolParam {
+                        param_type: "integer".into(),
+                        description: "Max jobs in flight at once, 1-32 (default 8).".into(),
+                        default: Some(json!(8)),
+                    }),
+                    ("yes".into(), ToolParam {
+                        param_type: "boolean".into(),
+                        description: "Auto-approve risk-tiered steps. Default false (fail-closed).".into(),
+                        default: Some(json!(false)),
+                    }),
+                ])),
+                required: Some(vec!["jobs".into()]),
+            },
+        },
     ]
 }
 
@@ -675,6 +705,63 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 "savings_percent": s.savings_percent,
                 "estimated_cost_saved_usd": s.estimated_cost_saved_usd,
                 "store": { "entries": s.store_entries, "bytes": s.store_bytes },
+            }))
+        }
+
+        "parallel_jobs" => {
+            // Input guardrails (not behaviour config — see spec §3).
+            const MAX_JOBS: usize = 32;
+            const DEFAULT_MAX_CONCURRENCY: u64 = 8;
+
+            let raw = arguments
+                .get("jobs")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| "Missing required parameter: 'jobs' (array)".to_string())?;
+            if raw.is_empty() || raw.len() > MAX_JOBS {
+                return Err(format!(
+                    "'jobs' must have 1..={MAX_JOBS} entries (got {})",
+                    raw.len()
+                ));
+            }
+            let jobs_in: Vec<mur_core::executor::jobs::RawJob> = raw
+                .iter()
+                .map(|j| mur_core::executor::jobs::RawJob {
+                    description: j
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    agent: j
+                        .get("agent")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                })
+                .collect();
+            let default_agent = arguments.get("agent").and_then(|v| v.as_str());
+            let max_concurrency = arguments
+                .get("max_concurrency")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(DEFAULT_MAX_CONCURRENCY)
+                .clamp(1, MAX_JOBS as u64) as usize;
+            let yes = arguments
+                .get("yes")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let home = resolve_mur_home().map_err(|e| format!("parallel_jobs failed: {e}"))?;
+            let jobs = mur_core::executor::jobs::resolve_jobs(&home, &jobs_in, default_agent)
+                .map_err(|e| format!("parallel_jobs: {e}"))?;
+            let (channel_id, out) = mur_core::executor::jobs::run_parallel_jobs(
+                &home,
+                &jobs,
+                Some(max_concurrency),
+                yes,
+            )
+            .await
+            .map_err(|e| format!("parallel_jobs failed: {e}"))?;
+            Ok(json!({
+                "channel_id": channel_id,
+                "output": out.output_text.unwrap_or_default(),
             }))
         }
 
