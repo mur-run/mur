@@ -3,7 +3,7 @@
 
 use crate::hitl::HitlApprovals;
 use crate::hooks::{HookChain, HookCtx, PromptView, ToolCall, ToolResult};
-use crate::llm::{LlmClient, LlmRequest, RichMessage};
+use crate::llm::{LlmClient, LlmRequest};
 use crate::skills::RuntimeSkills;
 use crate::skills::injector::inject_layer2;
 use crate::skills::trigger_matcher::{format_layer3, layer3_body, match_prompt};
@@ -60,6 +60,55 @@ pub enum RunnerBackend {
 /// when this limit is exceeded so long-lived agents don't leak unboundedly.
 const MAX_REGISTRY_ENTRIES: usize = 1_024;
 
+/// Cap on chat threads retained for multi-turn memory (LRU-evicted) so a
+/// long-lived agent serving many conversations doesn't leak unboundedly.
+const MAX_CONVERSATIONS: usize = 256;
+/// Cap on stored messages per conversation (user+assistant turns; the system
+/// prompt is re-prepended fresh each turn, not stored). MUST stay even: stored
+/// history is always user/assistant pairs, and trimming an even count keeps the
+/// first message a `user` turn (Anthropic requires that). ponytail: crude count
+/// cap — switch to a token budget if turn sizes vary wildly.
+const MAX_CONV_MESSAGES: usize = 40;
+
+/// In-memory multi-turn chat memory. The CLI and Hub thread `context.task_id` =
+/// the prior reply's id on every send, so we key stored history by the id of the
+/// turn that produced it; the next turn's `context.task_id` then recalls its
+/// predecessor. Stores text only — a pasted image was seen the turn it arrived
+/// and is not re-sent on later turns. ponytail: resets on runtime restart and is
+/// NOT a `--resume` persistence store; back it with disk if cross-restart model
+/// memory is ever needed.
+#[derive(Default)]
+struct ConversationStore {
+    map: HashMap<String, Vec<crate::llm::RichMessage>>,
+    /// Insertion order for LRU eviction past `MAX_CONVERSATIONS`.
+    order: VecDeque<String>,
+}
+
+impl ConversationStore {
+    /// Prior conversation for `key` (the caller's `context.task_id`), or empty.
+    fn prior(&self, key: Option<&str>) -> Vec<crate::llm::RichMessage> {
+        key.and_then(|k| self.map.get(k))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Store `history` (user/assistant pairs) under `key`, trimming oldest turns
+    /// and evicting the oldest conversation if over the caps.
+    fn remember(&mut self, key: String, mut history: Vec<crate::llm::RichMessage>) {
+        if history.len() > MAX_CONV_MESSAGES {
+            history.drain(0..history.len() - MAX_CONV_MESSAGES);
+        }
+        if self.map.insert(key.clone(), history).is_none() {
+            self.order.push_back(key);
+            while self.order.len() > MAX_CONVERSATIONS {
+                if let Some(old) = self.order.pop_front() {
+                    self.map.remove(&old);
+                }
+            }
+        }
+    }
+}
+
 pub struct TaskRunner {
     backend: RunnerBackend,
     registry: Arc<Mutex<HashMap<String, TaskState>>>,
@@ -98,6 +147,8 @@ pub struct TaskRunner {
     max_token_budget: u64,
     tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
+    /// Multi-turn chat memory keyed by `context.task_id` (see `ConversationStore`).
+    conversations: Mutex<ConversationStore>,
 }
 
 /// Default agentic-loop iteration cap when `HitlConfig.max_iterations` is unset.
@@ -191,7 +242,53 @@ impl TaskRunner {
             max_token_budget: DEFAULT_MAX_TOKEN_BUDGET,
             tools: vec![],
             tools_policy: vec![],
+            conversations: Mutex::new(ConversationStore::default()),
         }
+    }
+
+    /// Build this turn's LLM message list: system prompt, then the prior
+    /// conversation threaded via `ctx` (the caller's `context.task_id`), then the
+    /// current user message. With no `ctx`/no stored history this is just
+    /// `[system, user]` — identical to the old stateless behavior.
+    fn seed_history(
+        &self,
+        ctx: Option<&str>,
+        system: String,
+        input: &Message,
+    ) -> Vec<crate::llm::RichMessage> {
+        let mut h = Vec::new();
+        if !system.is_empty() {
+            h.push(crate::llm::RichMessage::Text {
+                role: "system".into(),
+                content: system,
+            });
+        }
+        h.extend(
+            self.conversations
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .prior(ctx),
+        );
+        h.push(user_message(input));
+        h
+    }
+
+    /// Persist this turn into multi-turn memory keyed by `key` (this turn's id),
+    /// so the next send — whose `context.task_id` equals `key` — recalls it.
+    /// Stores text only (this turn's tool scaffolding and any pasted image stay
+    /// ephemeral). Roles `user`/`agent` map to Anthropic `user`/`assistant`.
+    fn remember_turn(&self, key: &str, ctx: Option<&str>, input: &Message, reply: &Message) {
+        let mut store = self.conversations.lock().unwrap_or_else(|e| e.into_inner());
+        let mut h = store.prior(ctx);
+        h.push(crate::llm::RichMessage::Text {
+            role: "user".into(),
+            content: text_of(input),
+        });
+        h.push(crate::llm::RichMessage::Text {
+            role: "agent".into(),
+            content: text_of(reply),
+        });
+        store.remember(key.to_string(), h);
     }
 
     pub fn with_tools(mut self, tools: Vec<Arc<dyn crate::tools::ToolExecutor>>) -> Self {
@@ -463,13 +560,21 @@ impl TaskRunner {
                             )
                             .await
                             .unwrap_or_default();
-                        self.run_agentic_loop(&id, client.as_ref(), system, &spec.input, sink)
-                            .await
+                        self.run_agentic_loop(
+                            &id,
+                            client.as_ref(),
+                            system,
+                            &spec.input,
+                            spec.context_task_id.as_deref(),
+                            sink,
+                        )
+                        .await
                     } else {
                         self.run_llm(
                             &id,
                             client.as_ref(),
                             &spec.input,
+                            spec.context_task_id.as_deref(),
                             spec.active_fleet.as_deref(),
                             spec.active_team.as_deref(),
                             sink,
@@ -533,6 +638,11 @@ impl TaskRunner {
         match result {
             Ok((reply, stop)) => {
                 self.set_state(&id, TaskState::Completed);
+                // Persist this turn into multi-turn chat memory keyed by `id`, so
+                // the next send (context.task_id == id) recalls it. Only on
+                // success — a failed/cancelled turn must not leave a dangling
+                // user message with no assistant reply.
+                self.remember_turn(&id, spec.context_task_id.as_deref(), &spec.input, &reply);
                 // Report this turn's real token usage (delta of the lifetime
                 // counters) so callers — notably the fleet budget guard — can
                 // account actual spend instead of a projection. When a budget
@@ -668,17 +778,20 @@ impl TaskRunner {
         self.last_activity_at.load(Ordering::Relaxed)
     }
 
+    // ponytail: one private method, one extra threaded id — an args struct would
+    // be ceremony for no caller benefit.
+    #[allow(clippy::too_many_arguments)]
     async fn run_llm(
         &self,
         task_id: &str,
         client: &dyn LlmClient,
         input: &Message,
+        context_task_id: Option<&str>,
         active_fleet: Option<&str>,
         active_team: Option<&str>,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
     ) -> Result<Message, TaskError> {
         let prompt = text_of(input);
-        let mut messages: Vec<RichMessage> = Vec::new();
 
         let (system, fired) = self.assemble_system_prompt(&prompt, active_fleet, active_team);
 
@@ -714,14 +827,9 @@ impl TaskRunner {
             system
         };
 
-        if !system.is_empty() {
-            messages.push(RichMessage::Text {
-                role: "system".into(),
-                content: system.clone(),
-            });
-        }
-
-        messages.push(user_message(input));
+        // Seed with prior conversation threaded via `context.task_id` so the
+        // model has multi-turn memory (was: system + this message only).
+        let messages = self.seed_history(context_task_id, system, input);
         let req = LlmRequest {
             messages,
             temperature: None,
@@ -982,18 +1090,17 @@ impl TaskRunner {
         client: &dyn crate::llm::LlmClient,
         system_prompt: String,
         input: &Message,
+        context_task_id: Option<&str>,
         _sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
         let tool_defs: Vec<_> = self.tools_for_loop().iter().map(|t| t.def()).collect();
-        let mut history: Vec<RichMessage> = vec![
-            RichMessage::Text {
-                role: "system".into(),
-                content: system_prompt,
-            },
-            user_message(input),
-        ];
+        // Seed with prior conversation threaded via `context.task_id` so the
+        // model has multi-turn memory; this turn's tool scaffolding is appended
+        // below and stays ephemeral (never persisted into chat memory).
+        let mut history: Vec<RichMessage> =
+            self.seed_history(context_task_id, system_prompt, input);
 
         // Snapshot the (per-runner, shared-across-tasks) token counter so the
         // budget measures THIS task's spend, not the runner's lifetime total.
@@ -1560,6 +1667,76 @@ mod tests {
             panic!("expected Completed")
         };
         assert_eq!(task.id, "task-supplied-9");
+    }
+
+    fn user_turn(text: &str, task_id: &str, ctx: Option<&str>) -> TaskSpec {
+        TaskSpec {
+            input: mur_common::a2a::Message {
+                role: "user".into(),
+                parts: vec![MessagePart::Text { text: text.into() }],
+            },
+            context_task_id: ctx.map(str::to_string),
+            task_id: Some(task_id.to_string()),
+            active_fleet: None,
+            active_team: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn threads_multi_turn_chat_memory() {
+        let runner = TaskRunner::new_stub_echo();
+        // Turn 1 — no prior context.
+        let _ = runner.run_sync(user_turn("first", "t1", None)).await;
+        // Turn 2 — threads context.task_id = t1 (the prior reply's id), exactly
+        // as the CLI/Hub clients do.
+        let _ = runner.run_sync(user_turn("second", "t2", Some("t1"))).await;
+
+        let store = runner.conversations.lock().unwrap();
+        // t1 holds just its own pair; t2 accumulated the prior turn + this one.
+        assert_eq!(store.map.get("t1").map(|h| h.len()), Some(2));
+        let t2 = store.map.get("t2").expect("turn 2 remembered");
+        assert_eq!(t2.len(), 4, "2 prior + 2 current = 2 user + 2 agent");
+        // Turn 1's user message survives into turn 2's memory (the bug was that
+        // it didn't — every turn started from an empty history).
+        match &t2[0] {
+            crate::llm::RichMessage::Text { role, content } => {
+                assert_eq!(role, "user");
+                assert_eq!(content, "first");
+            }
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn seed_history_prepends_prior_conversation() {
+        use crate::llm::RichMessage;
+        let runner = TaskRunner::new_stub_echo();
+        runner.conversations.lock().unwrap().remember(
+            "ctx".into(),
+            vec![
+                RichMessage::Text {
+                    role: "user".into(),
+                    content: "u1".into(),
+                },
+                RichMessage::Text {
+                    role: "agent".into(),
+                    content: "a1".into(),
+                },
+            ],
+        );
+        let input = mur_common::a2a::Message {
+            role: "user".into(),
+            parts: vec![MessagePart::Text { text: "u2".into() }],
+        };
+        // With context → [system, prior user, prior agent, current user].
+        let seeded = runner.seed_history(Some("ctx"), "SYS".into(), &input);
+        assert_eq!(seeded.len(), 4);
+        assert!(
+            matches!(&seeded[0], RichMessage::Text { role, content } if role == "system" && content == "SYS")
+        );
+        assert!(matches!(&seeded[3], RichMessage::Text { role, .. } if role == "user"));
+        // Without context → just system + the current user message (old behavior).
+        assert_eq!(runner.seed_history(None, "SYS".into(), &input).len(), 2);
     }
 
     #[tokio::test]
