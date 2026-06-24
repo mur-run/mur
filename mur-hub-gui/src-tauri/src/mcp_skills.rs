@@ -103,3 +103,40 @@ pub fn agent_mcp_toggle(
     cmd_mcp_set_enabled(&name, &server_id, enabled).map_err(|e| format!("{e:#}"))?;
     get_agent_detail(name)
 }
+
+// ─── Add-on (Phase-2) commands ────────────────────────────────────────────────
+
+/// Import a Claude plugin directory as a disabled add-on (fail-closed).
+/// `force` skips the interactive confirm prompt; `None` defaults to `false`.
+#[tauri::command]
+pub fn agent_addon_import(
+    name: String,
+    plugin_dir: String,
+    force: Option<bool>,
+) -> Result<AgentDetail, String> {
+    mur_core::cmd::agent::addon::cmd_addon_import(&name, &plugin_dir, force.unwrap_or(false))
+        .map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}
+
+/// Enable or disable an installed add-on group (Phase-2 group denylist).
+/// Only `enabled=true` activates an add-on — import always lands disabled.
+#[tauri::command]
+pub fn agent_addon_toggle(
+    name: String,
+    addon_id: String,
+    enabled: bool,
+) -> Result<AgentDetail, String> {
+    mur_core::cmd::agent::addon::cmd_addon_set_enabled(&name, &addon_id, enabled)
+        .map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}
+
+/// Permanently remove an add-on: deletes skill dirs, MCP entries, and the
+/// `AddonRef`. Non-addon skills and agents are untouched.
+#[tauri::command]
+pub fn agent_addon_remove(name: String, addon_id: String) -> Result<AgentDetail, String> {
+    mur_core::cmd::agent::addon::cmd_addon_remove(&name, &addon_id)
+        .map_err(|e| format!("{e:#}"))?;
+    get_agent_detail(name)
+}
