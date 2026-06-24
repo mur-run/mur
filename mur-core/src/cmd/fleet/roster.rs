@@ -12,6 +12,7 @@ use super::store;
 pub fn cmd_fleet_add(mur_home: &Path, name: &str, agents: Vec<String>) -> Result<()> {
     let mut fleet = store::load_fleet(mur_home, name)?;
     let svc = mur_channel::ChannelService::open(mur_home)?;
+    // ponytail: not transactional across N agents; channel ops are idempotent so re-running reconciles
     for raw in agents {
         let agent = crate::a2a_dial::canonicalize_agent_name(mur_home, &raw);
         if fleet.members.contains(&agent) {
@@ -30,12 +31,20 @@ pub fn cmd_fleet_add(mur_home: &Path, name: &str, agents: Vec<String>) -> Result
 pub fn cmd_fleet_remove(mur_home: &Path, name: &str, agents: Vec<String>) -> Result<()> {
     let mut fleet = store::load_fleet(mur_home, name)?;
     let router = fleet.router_or_concierge().to_string();
-    let svc = mur_channel::ChannelService::open(mur_home)?;
-    for raw in agents {
-        let agent = crate::a2a_dial::canonicalize_agent_name(mur_home, &raw);
+
+    // Upfront validation: reject the entire batch if ANY agent is the router,
+    // before touching the channel or manifest.
+    for raw in &agents {
+        let agent = crate::a2a_dial::canonicalize_agent_name(mur_home, raw);
         if agent == router {
             bail!("router '{agent}' cannot be removed from '{name}'; set a new router first");
         }
+    }
+
+    let svc = mur_channel::ChannelService::open(mur_home)?;
+    // ponytail: not transactional across N agents; channel ops are idempotent so re-running reconciles
+    for raw in agents {
+        let agent = crate::a2a_dial::canonicalize_agent_name(mur_home, &raw);
         if !fleet.members.contains(&agent) {
             println!("'{agent}' is not a member of '{name}'.");
             continue;
@@ -83,5 +92,32 @@ mod tests {
         )
         .unwrap();
         assert!(cmd_fleet_remove(home, "dev", vec!["mur".into()]).is_err());
+    }
+
+    #[test]
+    fn remove_router_mixed_batch_no_partial_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        // router defaults to "mur"; pm is a non-router member
+        create::cmd_fleet_create(
+            home,
+            "dev",
+            vec!["mur".into(), "pm".into()],
+            None,
+            Some("g".into()),
+        )
+        .unwrap();
+
+        // Batch with router in a non-first position: ["pm", "mur"]
+        // Without upfront validation, "pm" would be channel-removed before the router bail.
+        let result = cmd_fleet_remove(home, "dev", vec!["pm".into(), "mur".into()]);
+        assert!(result.is_err(), "should reject batch containing the router");
+
+        // pm must still be a member — no partial mutation occurred
+        let fleet = store::load_fleet(home, "dev").unwrap();
+        assert!(
+            fleet.members.contains(&"pm".to_string()),
+            "pm should not have been removed; upfront validation must prevent partial mutation"
+        );
     }
 }
