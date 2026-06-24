@@ -255,12 +255,22 @@ mod tests {
             "prompt = \"review {{args}}\"\n",
         )
         .unwrap();
-        // MCP pointing at a real, always-present executable so sha256 pins.
-        fs::write(
-            root.join(".mcp.json"),
-            r#"{"mcpServers":{"echo":{"command":"/bin/echo","args":["hi"],"env":{"TOKEN":"x"}}}}"#,
-        )
-        .unwrap();
+        // MCP points at a real file we create here (absolute path) so
+        // resolve_command canonicalizes + sha256 pins on ANY OS. A hardcoded
+        // `/bin/echo` doesn't exist on Windows CI. Build the JSON via serde_json
+        // so the (possibly back-slashed) Windows path is escaped correctly.
+        let mcp_bin = root.join("mcp-bin");
+        fs::write(&mcp_bin, b"dummy mcp binary\n").unwrap();
+        let mcp = serde_json::json!({
+            "mcpServers": {
+                "echo": {
+                    "command": mcp_bin.to_str().unwrap(),
+                    "args": ["hi"],
+                    "env": { "TOKEN": "x" },
+                }
+            }
+        });
+        fs::write(root.join(".mcp.json"), serde_json::to_string(&mcp).unwrap()).unwrap();
     }
 
     #[test]
