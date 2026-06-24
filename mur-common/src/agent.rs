@@ -843,6 +843,14 @@ pub struct LockFile {
     pub transports: LockTransports,
     pub card_digest: String,
     pub capabilities: Vec<String>,
+    /// Git sha the running binary was built from (mur_common::build::SHORT_SHA).
+    /// Empty = an old lock predating this field. Drives stale detection.
+    #[serde(default)]
+    pub build_sha: String,
+    /// A2A method-surface version this runtime supports (A2A_PROTO_VERSION).
+    /// 0 = an old lock; the dial gates versioned methods on it.
+    #[serde(default)]
+    pub proto_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1909,5 +1917,22 @@ mod tool_policy_tests {
 
         set_denylist(&mut list, "b", true); // enabling an absent name is a no-op
         assert!(list.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod lockfile_compat_tests {
+    use super::*;
+
+    #[test]
+    fn lockfile_new_fields_default_for_old_locks() {
+        // An old lock JSON without build_sha/proto_version must still parse,
+        // defaulting to "" / 0 (= "predates this feature → stale/unsupported").
+        let old = r#"{"schema":1,"uuid":"u","name":"a","pid":1,"ppid":1,
+          "started_at":"t","binary_version":"mur-agent-runtime 2.26.9",
+          "transports":{"stdio":true},"card_digest":"d","capabilities":[]}"#;
+        let lock: LockFile = serde_json::from_str(old).unwrap();
+        assert_eq!(lock.build_sha, "");
+        assert_eq!(lock.proto_version, 0);
     }
 }

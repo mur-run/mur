@@ -12,7 +12,7 @@ use mur_common::a2a::{Message, MessagePart, Task, TaskError, TaskState};
 use mur_common::config::SkillsConfig;
 use mur_common::skill::McpInventory;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -149,6 +149,10 @@ pub struct TaskRunner {
     tools_policy: Vec<mur_common::agent::ToolRule>,
     /// Multi-turn chat memory keyed by `context.task_id` (see `ConversationStore`).
     conversations: Mutex<ConversationStore>,
+    /// Set by `begin_drain()` during graceful shutdown. When true, `run_sync_inner`
+    /// rejects new turns immediately with a transient failure so in-flight work
+    /// can finish before transports are torn down.
+    draining: Arc<AtomicBool>,
 }
 
 /// Default agentic-loop iteration cap when `HitlConfig.max_iterations` is unset.
@@ -243,6 +247,40 @@ impl TaskRunner {
             tools: vec![],
             tools_policy: vec![],
             conversations: Mutex::new(ConversationStore::default()),
+            draining: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Signal this runner to stop accepting new turns. Any turn that arrives
+    /// after `begin_drain()` returns a transient `TaskOutcome::Failed` so the
+    /// caller can retry after the runtime restarts. In-flight turns are NOT
+    /// aborted; they complete normally.
+    pub fn begin_drain(&self) {
+        self.draining.store(true, Ordering::SeqCst);
+    }
+
+    /// Returns `true` when no task is in `TaskState::Working`, or `false`
+    /// if `timeout` elapses first.
+    ///
+    /// The registry retains completed/failed/cancelled entries, so the length
+    /// is NOT a reliable idle indicator. Instead this polls for the absence of
+    /// any `TaskState::Working` entry — which is inserted before a turn begins
+    /// and transitioned to a terminal state when it ends (or is cancelled).
+    /// Polls every 50 ms to stay responsive under a typical stop_timeout_secs.
+    pub async fn await_idle(&self, timeout: std::time::Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            {
+                let reg = self.registry.lock().unwrap_or_else(|e| e.into_inner());
+                let working = reg.values().any(|s| matches!(s, TaskState::Working));
+                if !working {
+                    return true;
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
     }
 
@@ -512,6 +550,30 @@ impl TaskRunner {
         spec: TaskSpec,
         sink: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
     ) -> TaskOutcome {
+        // Reject new turns immediately when the runtime is draining for restart.
+        // This is a transient failure — callers should retry after the agent
+        // comes back up. We do NOT register the task in the registry, so
+        // `await_idle` will not be blocked by this rejection.
+        if self.draining.load(Ordering::SeqCst) {
+            let id = spec
+                .task_id
+                .clone()
+                .unwrap_or_else(|| format!("task-{}", Uuid::now_v7()));
+            let now = chrono::Utc::now().to_rfc3339();
+            return TaskOutcome::Failed(Task {
+                id,
+                state: TaskState::Failed,
+                messages: vec![spec.input],
+                created_at: now.clone(),
+                completed_at: Some(now),
+                error: Some(task_error(
+                    "draining",
+                    "agent is draining for restart; retry shortly".into(),
+                    true,
+                )),
+                usage: None,
+            });
+        }
         // Record real inbound activity so idle triggers measure genuine
         // quiescence. Previously only `start_async` (a non-production path)
         // bumped this, leaving `last_activity_at` permanently 0 and causing
@@ -688,6 +750,31 @@ impl TaskRunner {
     }
 
     pub fn start_async(&self, spec: TaskSpec) -> AsyncTaskHandle {
+        // Drain guard: reject new tasks when the runtime is draining for restart.
+        // Must run BEFORE any set_state(_, Working) so await_idle is never blocked
+        // by a phantom Working entry.
+        if self.draining.load(Ordering::SeqCst) {
+            tracing::debug!(
+                "start_async called while draining — returning transient failure without registering a Working entry"
+            );
+            let id = format!("task-{}", Uuid::now_v7());
+            let now = chrono::Utc::now().to_rfc3339();
+            let (tx_done, rx_done) = oneshot::channel::<TaskOutcome>();
+            let _ = tx_done.send(TaskOutcome::Failed(Task {
+                id: id.clone(),
+                state: TaskState::Failed,
+                messages: vec![spec.input],
+                created_at: now.clone(),
+                completed_at: Some(now),
+                error: Some(task_error(
+                    "draining",
+                    "agent is draining for restart; retry shortly".into(),
+                    true,
+                )),
+                usage: None,
+            }));
+            return AsyncTaskHandle { id, done: rx_done };
+        }
         self.last_activity_at
             .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
         let id = format!("task-{}", Uuid::now_v7());
@@ -2494,5 +2581,86 @@ mod tests {
             user_message(&msg),
             crate::llm::RichMessage::Text { .. }
         ));
+    }
+
+    // ── Drain tests ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn drain_idle_runner_returns_true_immediately() {
+        let runner = TaskRunner::new_stub_echo();
+        // An idle runner (no in-flight tasks) must return true within the timeout.
+        let ok = runner
+            .await_idle(std::time::Duration::from_millis(200))
+            .await;
+        assert!(ok, "idle runner should drain immediately");
+    }
+
+    #[tokio::test]
+    async fn drain_rejects_new_turns_after_begin_drain() {
+        let runner = TaskRunner::new_stub_echo();
+        runner.begin_drain();
+        // New turns must be rejected with a transient Failed outcome.
+        let outcome = runner.run_sync(ping_spec()).await;
+        match outcome {
+            TaskOutcome::Failed(task) => {
+                let err = task.error.expect("drained turn must have an error");
+                assert!(
+                    err.recoverable,
+                    "drain rejection must be marked recoverable"
+                );
+                assert!(
+                    err.message.contains("draining"),
+                    "error message must mention draining, got: {}",
+                    err.message
+                );
+            }
+            other => panic!("expected Failed after drain, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_still_idle_after_rejected_turn() {
+        // A rejected turn must NOT register in the registry, so await_idle stays true.
+        let runner = TaskRunner::new_stub_echo();
+        runner.begin_drain();
+        let _ = runner.run_sync(ping_spec()).await;
+        let ok = runner
+            .await_idle(std::time::Duration::from_millis(100))
+            .await;
+        assert!(
+            ok,
+            "registry must be clean after a rejected (draining) turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_start_async_does_not_register_working_entry() {
+        // After begin_drain(), start_async must NOT leave a Working entry, so
+        // await_idle returns true immediately (no phantom task blocks shutdown).
+        let runner = TaskRunner::new_stub_echo();
+        runner.begin_drain();
+        let handle = runner.start_async(ping_spec());
+        // The handle resolves to Failed (transient rejection).
+        let outcome = handle.await_completion().await;
+        match outcome {
+            TaskOutcome::Failed(task) => {
+                let err = task.error.expect("drained async turn must have an error");
+                assert!(err.recoverable, "async drain rejection must be recoverable");
+                assert!(
+                    err.message.contains("draining"),
+                    "error message must mention draining, got: {}",
+                    err.message
+                );
+            }
+            other => panic!("expected Failed from start_async after drain, got {other:?}"),
+        }
+        // await_idle must not hang — no Working entry was registered.
+        let ok = runner
+            .await_idle(std::time::Duration::from_millis(100))
+            .await;
+        assert!(
+            ok,
+            "registry must have no Working entries after start_async drain rejection"
+        );
     }
 }

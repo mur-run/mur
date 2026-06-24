@@ -87,5 +87,14 @@ if $INSTALL; then
     echo "Installed mur-agent-runtime -> $LOCAL_BIN/mur-agent-runtime (canonical; keeps new agents current)"
   fi
 
+  # Nudge: running agents keep their OLD process until restarted, so they're
+  # still on the pre-upgrade runtime. Tell the operator (print-only; never auto-restart).
+  if command -v mur >/dev/null 2>&1; then
+    STALE=$(mur agent runtime-doctor --json 2>/dev/null | grep -c '"stale": *true' || true)
+    if [ "${STALE:-0}" -gt 0 ]; then
+      echo "⚠ $STALE agent(s) are running a stale runtime — run 'mur agent restart --stale' (--dry-run to list)"
+    fi
+  fi
+
   echo "✅ Installed: $(mur --version 2>/dev/null || echo 'done')"
 fi

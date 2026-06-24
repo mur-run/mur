@@ -1218,6 +1218,12 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::List { json } => cmd::agent::cmd_list(json)?,
         AgentAction::Status { name } => cmd::agent::cmd_status(&name)?,
         AgentAction::Stop { name } => cmd::agent::cmd_stop(&name)?,
+        AgentAction::Restart {
+            name,
+            all,
+            stale,
+            dry_run,
+        } => cmd::agent::cmd_restart(name.as_deref(), all, stale, dry_run)?,
         AgentAction::Remove { name, purge, force } => cmd::agent::cmd_remove(&name, purge, force)?,
         AgentAction::Rename { old, new } => cmd::agent::cmd_rename(&old, &new)?,
         AgentAction::Send { name, message } => cmd::agent::cmd_send(&name, &message)?,
@@ -1399,6 +1405,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
         AgentAction::Companion(args) => cmd::agent_companion::run(args).await?,
         AgentAction::Doctor { format, json } => cmd::doctor::run(&format, json)?,
+        AgentAction::RuntimeDoctor { json } => cmd::agent::cmd_doctor(json)?,
         AgentAction::Secret { agent, action } => match action {
             AgentSecretAction::Set { key, value } => {
                 cmd::agent::cmd_secret_set(&agent, &key, value.as_deref()).await?

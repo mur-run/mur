@@ -62,6 +62,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         println!("mur-agent-runtime {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    if crate::subcommand::has_flag(&argv, &["--build-id"]) {
+        println!("{}", mur_common::build::SHORT_SHA);
+        return Ok(());
+    }
 
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -515,6 +519,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         transports: lock_transports,
         card_digest: profile.digest.clone(),
         capabilities: profile.inner.capabilities.clone(),
+        build_sha: mur_common::build::SHORT_SHA.to_string(),
+        proto_version: mur_common::build::A2A_PROTO_VERSION,
     };
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
@@ -646,14 +652,23 @@ pub async fn entrypoint() -> anyhow::Result<()> {
 
     // 11. Graceful shutdown
     info!("begin graceful shutdown");
-    let _deadline = std::time::Duration::from_secs(profile.inner.lifecycle.stop_timeout_secs);
     // Fire observe-hooks before transport teardown so the telemetry
     // event makes it into the JSONL file.
     hook_chain
         .on_shutdown(&hook_ctx, ShutdownReason::Sigterm, &hook_cancel)
         .await;
-    // TaskRunner active-task cancellation is future work (P0b); for now
-    // we just tear down transports and drain telemetry.
+    // Stop accepting new turns, then cooperatively wait for any in-flight turn
+    // to finish before tearing down transports. Never SIGKILL mid-flight work.
+    runner.begin_drain();
+    let drain_timeout = std::time::Duration::from_secs(profile.inner.lifecycle.stop_timeout_secs);
+    if runner.await_idle(drain_timeout).await {
+        info!("task runner drained cleanly");
+    } else {
+        warn!(
+            "task runner did not drain within {}s; tearing down anyway",
+            profile.inner.lifecycle.stop_timeout_secs
+        );
+    }
     for t in transport_tasks {
         t.abort();
     }

@@ -58,6 +58,7 @@ impl MethodHandler for CardHandler {
         // grace window.
         let mut card = json!({
             "protocolVersion": "a2a/0.3",
+            "proto_version": mur_common::build::A2A_PROTO_VERSION,
             "name": p.name,
             "id": p.id,
             "pubkey": p.identity.pubkey,
