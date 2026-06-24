@@ -95,20 +95,37 @@ pub struct SkillMd {
     pub body: String,
 }
 
+/// Find the offset of the REAL closing frontmatter fence in `rest` (the text
+/// after the opening `---`).  A real closing fence is `\n---\n` or `\n---` at
+/// end-of-string.  A bare `\n---` followed by more content (e.g. a Markdown
+/// horizontal-rule) is NOT a closing fence and is skipped.
+fn find_closing_fence(rest: &str) -> Option<usize> {
+    let needle = "\n---";
+    let mut search_from = 0;
+    while let Some(rel) = rest[search_from..].find(needle) {
+        let abs = search_from + rel;
+        let after = abs + needle.len();
+        // Real closing fence: ends with \n or is at end-of-string.
+        if rest[after..].starts_with('\n') || after == rest.len() {
+            return Some(abs);
+        }
+        // Not a real fence — keep scanning past this position.
+        search_from = after;
+    }
+    None
+}
+
 /// Split a SKILL.md into frontmatter fields + body. A leading `---` ... `---`
 /// fence is parsed as YAML; absent fence => whole file is the body.
 pub fn parse_skill_md(raw: &str) -> SkillMd {
     if let Some(rest) = raw.strip_prefix("---")
-        && let Some(end) = rest.find("\n---")
+        && let Some(end) = find_closing_fence(rest)
     {
         let fm = &rest[..end];
-        // Body begins after the closing fence's line.
+        // Body begins after the closing fence line (skip "\n---" then the
+        // trailing newline if present, so the body starts at the next line).
         let after = &rest[end + "\n---".len()..];
-        let body = after
-            .split_once('\n')
-            .map(|(_, b)| b)
-            .unwrap_or("")
-            .to_string();
+        let body = after.strip_prefix('\n').unwrap_or(after).to_string();
         let (mut name, mut description) = (String::new(), String::new());
         if let Ok(v) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(fm) {
             name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
@@ -295,5 +312,19 @@ mod tests {
         assert_eq!(s.command, "weather-mcp");
         assert_eq!(s.args, vec!["--port", "9"]);
         assert!(s.env.contains_key("API_KEY"));
+    }
+
+    #[test]
+    fn parse_skill_md_preserves_body_horizontal_rule() {
+        // A body `---` is a Markdown HR, NOT a closing frontmatter fence.
+        // It must survive intact in the returned body.
+        let md = "---\nname: divider-test\ndescription: two sections\n---\nFirst paragraph.\n\n---\n\nSecond paragraph.\n";
+        let r = parse_skill_md(md);
+        assert_eq!(r.name, "divider-test");
+        assert_eq!(r.description, "two sections");
+        // Both paragraphs AND the --- divider must be present.
+        assert!(r.body.contains("First paragraph."), "missing first paragraph");
+        assert!(r.body.contains("---"), "body --- divider was dropped");
+        assert!(r.body.contains("Second paragraph."), "missing second paragraph; body was truncated at HR");
     }
 }
