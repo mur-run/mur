@@ -112,7 +112,7 @@ pub fn cmd_fleet_list(mur_home: &Path) -> Result<()> {
         "{}  --  ---  ----  {}  {}",
         "─".repeat(name_w),
         "─".repeat(router_w),
-        "─".repeat(goal_w.min(20))
+        "─".repeat(goal_w)
     );
 
     // Print rows
