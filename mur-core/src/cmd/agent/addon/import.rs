@@ -25,7 +25,8 @@ const SHELLISH_TOKENS: &[&str] = &["-c", "eval"];
 
 /// Reject member names escape agent's skills dir.
 pub fn safe_member_name(n: &str) -> Result<()> {
-    if n.is_empty() || n.contains('/') || n.contains('\\') || n.contains("..") {
+    if n.is_empty() || n.contains('/') || n.contains('\\') || n.contains("..") || n.starts_with('.')
+    {
         bail!("unsafe add-on member name: {n:?}");
     }
     Ok(())
@@ -311,6 +312,19 @@ mod tests {
         assert!(safe_member_name("../evil").is_err());
         assert!(safe_member_name("a/b").is_err());
         assert!(safe_member_name("").is_err());
+    }
+
+    #[test]
+    fn safe_member_name_rejects_dot() {
+        // "." resolves to the skills dir itself — remove_dir_all would nuke all skills.
+        assert!(safe_member_name(".").is_err());
+        // ".." is also blocked (covered by contains("..") but belt-and-suspenders).
+        assert!(safe_member_name("..").is_err());
+        // Any dotfile name is rejected (leading-dot rule).
+        assert!(safe_member_name(".hidden").is_err());
+        // Normal names are still allowed.
+        assert!(safe_member_name("my-skill").is_ok());
+        assert!(safe_member_name("skill_2").is_ok());
     }
 
     #[test]

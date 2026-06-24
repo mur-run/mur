@@ -10,11 +10,6 @@ use mur_common::skill::{
     Category, Content, Priority, Provenance, SkillManifest, Trigger, TriggerKind,
 };
 
-/// Provenance prefix for skills imported from a Claude plugin (local directory).
-// Kept for future marketplace importer path (Phase 3); not yet consumed.
-#[allow(dead_code)]
-pub(crate) const LOCAL_SOURCE_TAG: &str = "claude-plugin";
-
 /// `plugin.json` (only the fields we consume).
 #[derive(Debug, Clone, Deserialize)]
 pub struct PluginJson {

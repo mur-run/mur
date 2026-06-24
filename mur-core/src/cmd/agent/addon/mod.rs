@@ -74,6 +74,7 @@ pub fn cmd_addon_remove(name: &str, addon_id: &str) -> Result<()> {
     profile.addons.retain(|g| g.id != addon_id);
 
     save_profile(&path, &mut profile)?;
+    audit_toggle(name, addon_id, false);
     println!("Removed add-on '{addon_id}' from '{name}'.");
     Ok(())
 }
@@ -211,6 +212,74 @@ mod tests {
         assert!(profile.addons.iter().all(|g| g.id != "myplugin"));
         assert!(profile.mcp_servers.iter().all(|m| m.name != "mcp-a"));
         assert!(!home.join("agents/tester/skills/skill-a").exists());
+    }
+
+    #[test]
+    fn remove_does_not_touch_non_addon_skills() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "keeper");
+
+        // Write a NON-add-on skill directly into the agent's skills dir.
+        let skills_base = home.join("agents/keeper/skills");
+        let keep_dir = skills_base.join("skill-keep");
+        fs::create_dir_all(&keep_dir).unwrap();
+        fs::write(keep_dir.join("skill.yaml"), "name: skill-keep\n").unwrap();
+
+        // Inject an add-on with one skill AND one command (to exercise both branches).
+        let profile_path = home.join("agents/keeper/profile.yaml");
+        let yaml = fs::read_to_string(&profile_path).unwrap();
+        let mut profile: mur_common::agent::AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+
+        let addon_skill_dir = skills_base.join("skill-a");
+        fs::create_dir_all(&addon_skill_dir).unwrap();
+        fs::write(addon_skill_dir.join("skill.yaml"), "name: skill-a\n").unwrap();
+
+        let addon_cmd_dir = skills_base.join("cmd-review");
+        fs::create_dir_all(&addon_cmd_dir).unwrap();
+        fs::write(addon_cmd_dir.join("skill.yaml"), "name: cmd-review\n").unwrap();
+
+        profile.addons.push(mur_common::agent::AddonRef {
+            id: "sampleplugin".to_string(),
+            source: "claude-local:sample@1.0.0".to_string(),
+            enabled: false,
+            skills: vec!["skill-a".to_string()],
+            mcp: Vec::new(),
+            commands: vec!["cmd-review".to_string()],
+        });
+        let new_yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        fs::write(&profile_path, new_yaml).unwrap();
+
+        // Remove the add-on.
+        cmd_addon_remove("keeper", "sampleplugin").unwrap();
+
+        // Add-on skill and command dirs must be gone.
+        assert!(
+            !addon_skill_dir.exists(),
+            "add-on skill dir should be deleted"
+        );
+        assert!(
+            !addon_cmd_dir.exists(),
+            "add-on command dir should be deleted"
+        );
+
+        // AddonRef must be gone.
+        let (_p, profile) = crate::cmd::agent::load_profile_for_edit("keeper").unwrap();
+        assert!(profile.addons.iter().all(|g| g.id != "sampleplugin"));
+
+        // Non-add-on skill must survive.
+        assert!(
+            keep_dir.exists(),
+            "non-add-on skill-keep dir must NOT be deleted"
+        );
+        assert!(
+            keep_dir.join("skill.yaml").exists(),
+            "skill-keep/skill.yaml must NOT be deleted"
+        );
     }
 
     #[test]
