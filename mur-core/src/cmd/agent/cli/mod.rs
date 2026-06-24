@@ -11,6 +11,7 @@ mod app;
 mod manage;
 mod markdown;
 mod multiplex;
+mod paste;
 pub mod persist;
 mod stream;
 mod theme;
@@ -286,7 +287,13 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             match key.code {
                 KeyCode::Char('d') if ctrl => request_quit(app, tx),
                 KeyCode::Char('c') if ctrl => handle_ctrl_c(app, tx),
-                KeyCode::Char('v') if ctrl => attach_clipboard_image(app),
+                KeyCode::Char('v') if ctrl => {
+                    if !attach_clipboard_image(app) {
+                        app.push_system(
+                            "no image in clipboard — copy a screenshot then Ctrl+V (or Cmd+V / drag an image file)",
+                        );
+                    }
+                }
                 KeyCode::PageUp => {
                     app.scroll_back = app.scroll_back.saturating_add(app.scroll_page.max(1))
                 }
@@ -332,7 +339,20 @@ async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<StreamMsg>) {
             }
         }
         Event::Paste(text) => {
-            app.input.insert_str(text);
+            // How Cmd+V image paste works: the terminal eats Cmd+V and pastes
+            // the clipboard as bracketed text. For an image it pastes either the
+            // temp-file PATH it wrote (iTerm2/most) or nothing/whitespace. So:
+            //   image-file path  → load that file (covers Cmd+V & drag-drop)
+            //   empty/whitespace → try the clipboard image (covers raw paste)
+            //   otherwise        → ordinary text paste
+            let trimmed = text.trim();
+            if let Some((mime, b64)) = paste::image_from_paste(trimmed) {
+                stage_image(app, mime, b64);
+            } else if trimmed.is_empty() && attach_clipboard_image(app) {
+                // image grabbed off the clipboard
+            } else {
+                app.input.insert_str(text);
+            }
         }
         Event::Mouse(mouse_ev) => match mouse_ev.kind {
             MouseEventKind::ScrollUp => {
@@ -360,16 +380,22 @@ fn persist_skin(home: &std::path::Path, name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ctrl+V: stage a screenshot from the system clipboard for the next message.
-/// An image-only clipboard produces no bracketed-paste event (no text to
-/// send), so this needs its own key rather than riding `Event::Paste`.
-fn attach_clipboard_image(app: &mut App) {
+/// Stage a base64 image (with its mime) to send with the next message.
+fn stage_image(app: &mut App, mime: &str, b64: String) {
+    app.pending_image = Some((mime.to_string(), b64));
+    app.push_system("📎 image attached — sent with your next message");
+}
+
+/// Grab a screenshot off the system clipboard and stage it; returns whether an
+/// image was found. Used by Ctrl+V and by an empty bracketed paste (a Cmd+V of a
+/// raw clipboard image on terminals that emit an empty paste event).
+fn attach_clipboard_image(app: &mut App) -> bool {
     match clipboard_png() {
         Some(b64) => {
-            app.pending_image = Some(b64);
-            app.push_system("📎 screenshot attached — sent with your next message");
+            stage_image(app, "image/png", b64);
+            true
         }
-        None => app.push_system("no image in clipboard (Ctrl+V attaches a screenshot)"),
+        None => false,
     }
 }
 
@@ -552,7 +578,9 @@ async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         &outgoing,
         &task_id,
         app.context_task_id.as_deref(),
-        app.pending_image.as_deref(),
+        app.pending_image
+            .as_ref()
+            .map(|(m, b)| (m.as_str(), b.as_str())),
     );
     app.pending_image = None;
     spawn_stream(

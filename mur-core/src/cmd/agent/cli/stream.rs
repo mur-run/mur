@@ -148,25 +148,22 @@ impl HitlRequest {
     }
 }
 
-/// Mime type for pasted screenshots. The macOS clipboard capture only yields
-/// PNG, so this is fixed; widen if other capture backends are added.
-pub const PASTE_IMAGE_MIME: &str = "image/png";
-
 /// Build the `message/send` params for one turn, threading the previous turn's
 /// task id as `context.task_id` so the agent keeps conversation history.
-/// `image_b64`, when set, is attached as a second A2A `data` part (an inline
-/// screenshot) that the runtime forwards to the model as a vision input.
+/// `image`, when set, is `(mime, base64)` attached as a second A2A `data` part
+/// (an inline screenshot or pasted image file) that the runtime forwards to the
+/// model as a vision input.
 pub fn build_params(
     text: &str,
     task_id: &str,
     context_task_id: Option<&str>,
-    image_b64: Option<&str>,
+    image: Option<(&str, &str)>,
 ) -> Value {
     let mut parts = vec![json!({ "kind": "text", "text": text })];
-    if let Some(b64) = image_b64 {
+    if let Some((mime, b64)) = image {
         parts.push(json!({
             "kind": "data",
-            "mimeType": PASTE_IMAGE_MIME,
+            "mimeType": mime,
             "data": { "base64": b64 },
         }));
     }
@@ -342,13 +339,21 @@ mod tests {
 
     #[test]
     fn build_params_attaches_image_as_data_part() {
-        let p = build_params("what is this?", "t-3", None, Some("QkFTRTY0"));
+        let p = build_params(
+            "what is this?",
+            "t-3",
+            None,
+            Some(("image/png", "QkFTRTY0")),
+        );
         let parts = p["message"]["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 2, "text part + image data part");
         assert_eq!(parts[0]["kind"], "text");
         assert_eq!(parts[1]["kind"], "data");
-        assert_eq!(parts[1]["mimeType"], PASTE_IMAGE_MIME);
+        assert_eq!(parts[1]["mimeType"], "image/png");
         assert_eq!(parts[1]["data"]["base64"], "QkFTRTY0");
+        // A non-PNG paste threads its own mime.
+        let jpg = build_params("x", "t-5", None, Some(("image/jpeg", "QQ==")));
+        assert_eq!(jpg["message"]["parts"][1]["mimeType"], "image/jpeg");
         // No image → no data part (back-compat).
         let plain = build_params("hi", "t-4", None, None);
         assert_eq!(plain["message"]["parts"].as_array().unwrap().len(), 1);

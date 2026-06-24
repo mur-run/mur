@@ -213,9 +213,10 @@ pub struct App {
     pub last_esc_at: Option<std::time::Instant>,
     pub esc_hint: bool,
     pub last_sent: Option<String>,
-    /// Base64 PNG staged by Ctrl+V (a pasted screenshot), sent as an inline
-    /// image with the next message and cleared on send. macOS-only capture.
-    pub pending_image: Option<String>,
+    /// `(mime, base64)` of an image staged for the next message — either a
+    /// clipboard screenshot (Ctrl+V) or an image file the terminal pasted as a
+    /// path (Cmd+V / drag-drop). Sent as an inline image part, cleared on send.
+    pub pending_image: Option<(String, String)>,
     /// Mascot blink driver for the startup welcome screen. Render is a pure
     /// function of elapsed time; the event loop wakes on its next deadline.
     pub blink: Blink,
