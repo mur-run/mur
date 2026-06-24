@@ -38,19 +38,9 @@ pub fn resolve_run_goal(
     standing_goal: &str,
 ) -> Result<(String, Option<Job>)> {
     let mut active: Option<Job> = if let Some(text) = job_arg {
-        // Explicit arg: synthesise a transient job (not persisted to queue).
-        Some(Job {
-            id: uuid::Uuid::now_v7().to_string(),
-            text,
-            source: "arg".to_string(),
-            status: JobStatus::Running,
-            created_at: chrono::Utc::now().to_rfc3339(),
-            started_at: Some(chrono::Utc::now().to_rfc3339()),
-            finished_at: None,
-            run_id: None,
-            result: None,
-            error: None,
-        })
+        // Explicit arg: enqueue and persist (one-shot, marked Done on finish).
+        let job = super::jobs::enqueue_job(mur_home, name, &text, "cli")?;
+        Some(job)
     } else {
         super::jobs::next_queued(mur_home, name)?
     };
@@ -61,10 +51,7 @@ pub fn resolve_run_goal(
     if let Some(job) = active.as_mut() {
         job.status = JobStatus::Running;
         job.started_at = Some(chrono::Utc::now().to_rfc3339());
-        // Only persist queued jobs (transient arg-jobs have source=="arg").
-        if job.source != "arg" {
-            super::jobs::save_job(mur_home, name, job)?;
-        }
+        super::jobs::save_job(mur_home, name, job)?;
     }
     Ok((goal, active))
 }
@@ -97,6 +84,7 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
     // Router plans which members do what (with deps); falls back to broadcast-to-all.
     let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &events)
         .unwrap_or_else(|| build_fleet_procedure(&goal, &fleet.members));
+    let run_id = format!("run-{}", uuid::Uuid::now_v7());
     let opts = crate::executor::dag::DagExecOptions {
         // Fail-closed default: do NOT blanket-approve. Fleet delegation steps carry
         // no risk tier today (member runtimes gate their own tools), but a future
@@ -104,7 +92,7 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
         // unattended. See the best-practice audit (OWASP Agentic ASI06).
         yes: false,
         channel_id: Some(fleet.channel_id.clone()),
-        run_id: format!("run-{}", uuid::Uuid::now_v7()),
+        run_id: run_id.clone(),
         ..Default::default()
     };
     // skill_name here is a readable run-history label; channel routing still uses opts.channel_id.
@@ -112,9 +100,8 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
         crate::executor::dag::execute_dag(mur_home, &format!("fleet:{}", fleet.name), &proc, &opts)
             .await;
     // Stamp job terminal before surfacing any error.
-    if let Some(job) = active_job.as_mut()
-        && job.source != "arg"
-    {
+    if let Some(job) = active_job.as_mut() {
+        job.run_id = Some(run_id);
         job.finished_at = Some(chrono::Utc::now().to_rfc3339());
         match &exec_result {
             Ok(out) => {
@@ -123,7 +110,7 @@ pub async fn cmd_fleet_run(mur_home: &Path, name: &str, job_arg: Option<String>)
             }
             Err(e) => {
                 job.status = JobStatus::Failed;
-                job.error = Some(e.to_string());
+                job.error = Some(format!("{e:#}"));
             }
         }
         super::jobs::save_job(mur_home, name, job)?;
@@ -193,12 +180,16 @@ mod tests {
         assert_eq!(goal, "queued-work");
         assert_eq!(job.as_ref().unwrap().status, JobStatus::Running);
 
-        // explicit arg jumps ahead of queue
+        // explicit arg jumps ahead of queue and is persisted
         let (goal, job) =
-            resolve_run_goal(home, "dev", Some("explicit-task".into()), "standing").unwrap();
-        assert_eq!(goal, "explicit-task");
+            resolve_run_goal(home, "dev", Some("urgent".into()), "standing").unwrap();
+        assert_eq!(goal, "urgent");
         assert_eq!(job.as_ref().unwrap().status, JobStatus::Running);
-        // arg-sourced job is transient, not persisted
-        assert_eq!(job.as_ref().unwrap().source, "arg");
+        // arg job must be persisted (source=="cli")
+        let all_jobs = super::super::jobs::list_jobs(home, "dev").unwrap();
+        assert!(
+            all_jobs.iter().any(|j| j.text == "urgent"),
+            "arg job should be persisted"
+        );
     }
 }
