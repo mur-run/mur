@@ -84,12 +84,22 @@ export interface SkillView {
   loadable: boolean;
 }
 
+export interface InstalledAddonView {
+  id: string;
+  source: string;
+  enabled: boolean;
+  skills: string[];
+  mcp: string[];
+  commands: string[];
+}
+
 export interface InstalledSkillView {
   name: string;
   version: string;
   description: string;
   category: string;
   enabled: boolean;
+  addon_id?: string | null;
 }
 
 /** Returned by the `agent_skill_install` command. */
@@ -104,6 +114,7 @@ export interface McpServerView {
   command: string;
   args: string[];
   enabled: boolean;
+  addon_id?: string | null;
 }
 
 export type RenderStatusView =
@@ -131,6 +142,7 @@ export interface AgentDetail {
   role: string | null;
   display_name: string;
   agent_name: string;
+  addons: InstalledAddonView[];
 }
 
 export type { ModelOption } from "./components/modelPicker";
@@ -156,7 +168,8 @@ export type DetailTab =
   | "permissions"
   | "inbox"
   | "mobile"
-  | "memory";
+  | "memory"
+  | "plugins";
 
 export const ALL_DETAIL_TABS: DetailTab[] = [
   "persona",
@@ -168,6 +181,7 @@ export const ALL_DETAIL_TABS: DetailTab[] = [
   "inbox",
   "mobile",
   "memory",
+  "plugins",
 ];
 
 export interface NotifConfig {
@@ -196,6 +210,7 @@ export const TAB_LABELS: Record<DetailTab, string> = {
   inbox: "Inbox",
   mobile: "Mobile",
   memory: "Memory",
+  plugins: "Plugins",
 };
 
 export interface MemoryView {
