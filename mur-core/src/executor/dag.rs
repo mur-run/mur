@@ -1278,7 +1278,9 @@ mod tests {
                 .collect(),
         };
 
-        // Bounded to 2 -> at least 3 sequential waves -> >= ~0.6s.
+        // Bounded to 2 -> at least 3 sequential waves -> >= ~0.6s (hard floor).
+        // Split threshold is 500ms: well below the ~600ms floor, well above the
+        // ~200-300ms unbounded single-wave time.
         let opts = DagExecOptions {
             max_concurrency: Some(2),
             ..Default::default()
@@ -1289,7 +1291,7 @@ mod tests {
             .unwrap();
         let bounded = t.elapsed();
         assert!(
-            bounded.as_millis() >= 400,
+            bounded.as_millis() >= 500,
             "bounded run finished too fast ({bounded:?}); cap not applied"
         );
 
@@ -1304,7 +1306,7 @@ mod tests {
             .unwrap();
         let unbounded = t2.elapsed();
         assert!(
-            unbounded.as_millis() < 400,
+            unbounded.as_millis() < 500,
             "unbounded run too slow ({unbounded:?}); regression in default path"
         );
     }
