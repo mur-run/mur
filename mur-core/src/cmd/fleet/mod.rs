@@ -4,6 +4,7 @@ pub mod control;
 pub mod create;
 pub mod export;
 pub mod import;
+pub mod jobs;
 pub mod list;
 pub mod loop_run;
 pub mod plan;
