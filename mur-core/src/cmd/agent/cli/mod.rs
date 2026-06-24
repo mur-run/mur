@@ -51,7 +51,7 @@ const MOUSE_SCROLL_STEP: u16 = 1;
 /// Spinner animation cadence.
 const SPINNER_MS: u64 = 90;
 
-const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll";
+const HELP: &str = "commands: /help  /clear (new conversation)  /card  /sessions  /channels [N] (list/switch)  /auto [on|off]  /mcp  /skill  /exit · !cmd runs a local shell command (output shared with the agent) · keys: Enter send · Alt+Enter newline · Ctrl+V attach screenshot · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll (or mouse wheel)";
 
 /// Entry point dispatched from `AgentAction::Cli`.
 pub async fn cmd_cli(
