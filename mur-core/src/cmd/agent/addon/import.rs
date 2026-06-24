@@ -1,15 +1,17 @@
-//! Claude plugin importer (Phase 2). Expands a local plugin dir into
-//! per-agent skills + command-skills + MCP entries, recorded as one
+//! Claude plugin importer (Phase 2). Expands local plugin dir into
+//! per-agent skills + command-skills + MCP entries, recorded under one
 //! fail-closed (disabled) `AddonRef`.
-// Unreachable from the `mur` binary until Task 5 wires `cmd_addon_import` into
-// CLI dispatch. Remove this allow in Task 5.
+// Unreachable `mur` binary until Task 5 wires `cmd_addon_import` into
+// CLI dispatch. Remove allow in Task 5.
 #![allow(dead_code)]
 
 use std::fs;
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use mur_common::agent::AddonRef;
+use mur_common::agent::{AddonRef, McpServerEntry};
+use mur_common::skill::SkillManifest;
 use mur_common::skill::scan::scan_skill;
 use mur_common::skill::write_to_dir;
 
@@ -19,17 +21,25 @@ use super::parse::{
 use crate::cmd::agent::{load_profile_for_edit, save_profile};
 use crate::cmd::agent_mcp_pin::{build_pinned_entry, compute_binary_sha256, resolve_command};
 
-/// Provenance tag for a plugin imported from a local directory (no marketplace).
+/// Provenance tag plugin imported local directory (no marketplace).
 const SOURCE_LOCAL: &str = "claude-local";
-/// Shell-ish argv tokens that warrant an advisory (non-blocking) warning.
+/// Shell-ish argv tokens warrant advisory (non-blocking) warning.
 const SHELLISH_TOKENS: &[&str] = &["-c", "eval"];
 
-/// Reject member names that could escape the agent's skills dir.
+/// Reject member names escape agent's skills dir.
 pub fn safe_member_name(n: &str) -> Result<()> {
     if n.is_empty() || n.contains('/') || n.contains('\\') || n.contains("..") {
         bail!("unsafe add-on member name: {n:?}");
     }
     Ok(())
+}
+
+/// Collected MCP entry plus env-notice keys (notice printed only after all checks pass).
+struct PendingMcp {
+    server_name: String,
+    entry: McpServerEntry,
+    env_keys: Vec<String>,
+    shellish_warn: bool,
 }
 
 pub fn cmd_addon_import(name: &str, plugin_dir: &str, force: bool) -> Result<()> {
@@ -50,11 +60,16 @@ pub fn cmd_addon_import(name: &str, plugin_dir: &str, force: bool) -> Result<()>
         bail!("add-on '{addon_id}' already imported into '{name}'; remove it first");
     }
 
-    let mut skill_members: Vec<String> = Vec::new();
-    let mut cmd_members: Vec<String> = Vec::new();
-    let mut mcp_members: Vec<String> = Vec::new();
+    // ── Phase 1: Collect + validate (NO disk writes) ──────────────────────────
+    // All checks must pass before a single byte is written.
 
-    // 1. skills/<dir>/SKILL.md
+    // Pending skills/commands: (dest_path, manifest)
+    let mut pending_skills: Vec<(PathBuf, SkillManifest)> = Vec::new();
+    let mut pending_cmds: Vec<(PathBuf, SkillManifest)> = Vec::new();
+    // Pending MCP entries.
+    let mut pending_mcp: Vec<PendingMcp> = Vec::new();
+
+    // 1a. skills/<dir>/SKILL.md
     let skills_dir = root.join("skills");
     if skills_dir.is_dir() {
         for entry in fs::read_dir(&skills_dir)? {
@@ -67,13 +82,18 @@ pub fn cmd_addon_import(name: &str, plugin_dir: &str, force: bool) -> Result<()>
             let manifest = skill_md_to_manifest(dir_name, &fs::read_to_string(&md)?, &plugin);
             safe_member_name(&manifest.name)?;
             scan_or_block(&manifest, force)?;
-            write_to_dir(&agent_skills_dir.join(&manifest.name), &manifest)
-                .map_err(|e| anyhow::anyhow!("write skill {}: {e}", manifest.name))?;
-            skill_members.push(manifest.name);
+            let dest = agent_skills_dir.join(&manifest.name);
+            if dest.exists() {
+                bail!(
+                    "skill '{}' already exists for agent '{name}'; remove it first",
+                    manifest.name
+                );
+            }
+            pending_skills.push((dest, manifest));
         }
     }
 
-    // 2. commands/<name>.toml
+    // 1b. commands/<name>.toml
     let cmds_dir = root.join("commands");
     if cmds_dir.is_dir() {
         for entry in fs::read_dir(&cmds_dir)? {
@@ -85,13 +105,18 @@ pub fn cmd_addon_import(name: &str, plugin_dir: &str, force: bool) -> Result<()>
             let manifest = command_to_manifest(cmd_name, &fs::read_to_string(&p)?, &plugin)?;
             safe_member_name(&manifest.name)?;
             scan_or_block(&manifest, force)?;
-            write_to_dir(&agent_skills_dir.join(&manifest.name), &manifest)
-                .map_err(|e| anyhow::anyhow!("write command {}: {e}", manifest.name))?;
-            cmd_members.push(manifest.name);
+            let dest = agent_skills_dir.join(&manifest.name);
+            if dest.exists() {
+                bail!(
+                    "skill '{}' already exists for agent '{name}'; remove it first",
+                    manifest.name
+                );
+            }
+            pending_cmds.push((dest, manifest));
         }
     }
 
-    // 3. .mcp.json — validate command, pin sha256, surface env as a notice only.
+    // 1c. .mcp.json — validate command, pin sha256, surface env notice only.
     let mcp_path = root.join(".mcp.json");
     if mcp_path.is_file() {
         let j = parse_mcp_json(&fs::read_to_string(&mcp_path)?)?;
@@ -105,29 +130,65 @@ pub fn cmd_addon_import(name: &str, plugin_dir: &str, force: bool) -> Result<()>
             let resolved = resolve_command(&srv.command)
                 .map_err(|e| anyhow::anyhow!("MCP '{server}' command {:?}: {e}", srv.command))?;
             let sha = compute_binary_sha256(&resolved)?;
-            if srv
+            let shellish_warn = srv
                 .args
                 .iter()
-                .any(|a| SHELLISH_TOKENS.contains(&a.as_str()))
-            {
-                eprintln!(
-                    "warning: MCP '{server}' args contain shell-ish tokens {SHELLISH_TOKENS:?}; review before enabling"
-                );
-            }
-            if !srv.env.is_empty() {
-                println!("note: MCP '{server}' declares env vars (NOT imported). Wire them with:");
-                for k in srv.env.keys() {
-                    println!("  mur agent secret set {name} {k}");
-                }
-            }
+                .any(|a| SHELLISH_TOKENS.contains(&a.as_str()));
+            let env_keys: Vec<String> = srv.env.keys().cloned().collect();
             let entry =
                 build_pinned_entry(&server, &srv.command, &srv.args, sha, String::new(), None);
-            profile.mcp_servers.push(entry);
-            mcp_members.push(server);
+            pending_mcp.push(PendingMcp {
+                server_name: server,
+                entry,
+                env_keys,
+                shellish_warn,
+            });
         }
     }
 
-    // 4. Record the group — FAIL-CLOSED (disabled). The only choke point.
+    // ── Phase 2: Commit (writes only after all checks passed) ─────────────────
+
+    // 2a. Write skills.
+    let mut skill_members: Vec<String> = Vec::new();
+    for (dest, manifest) in pending_skills {
+        let skill_name = manifest.name.clone();
+        write_to_dir(&dest, &manifest)
+            .map_err(|e| anyhow::anyhow!("write skill {}: {e}", skill_name))?;
+        skill_members.push(skill_name);
+    }
+
+    // 2b. Write commands.
+    let mut cmd_members: Vec<String> = Vec::new();
+    for (dest, manifest) in pending_cmds {
+        let cmd_name = manifest.name.clone();
+        write_to_dir(&dest, &manifest)
+            .map_err(|e| anyhow::anyhow!("write command {}: {e}", cmd_name))?;
+        cmd_members.push(cmd_name);
+    }
+
+    // 2c. Push MCP entries + print notices.
+    let mut mcp_members: Vec<String> = Vec::new();
+    for pm in pending_mcp {
+        if pm.shellish_warn {
+            eprintln!(
+                "warning: MCP '{}' args contain shell-ish tokens {SHELLISH_TOKENS:?}; review before enabling",
+                pm.server_name
+            );
+        }
+        if !pm.env_keys.is_empty() {
+            println!(
+                "note: MCP '{}' declares env vars (NOT imported). Wire them with:",
+                pm.server_name
+            );
+            for k in &pm.env_keys {
+                println!("  mur agent secret set {name} {k}");
+            }
+        }
+        mcp_members.push(pm.server_name);
+        profile.mcp_servers.push(pm.entry);
+    }
+
+    // 2d. Record the group — FAIL-CLOSED (disabled). The only choke point.
     profile.addons.push(AddonRef {
         id: addon_id.clone(),
         source: format!(
@@ -164,6 +225,11 @@ fn scan_or_block(manifest: &mur_common::skill::SkillManifest, force: bool) -> Re
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
+
+    // Guard serializing all MUR_HOME-mutating tests in this module.
+    // ponytail: single env-mutating tests in this file; add serial_test if more land
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     // Minimal agent profile on disk so load_profile_for_edit works.
     fn write_agent(home: &std::path::Path, name: &str) {
@@ -202,6 +268,7 @@ mod tests {
 
     #[test]
     fn import_is_fail_closed_isolated_and_pins_mcp() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         // Point the importer at this home.
@@ -248,5 +315,53 @@ mod tests {
         assert!(safe_member_name("../evil").is_err());
         assert!(safe_member_name("a/b").is_err());
         assert!(safe_member_name("").is_err());
+    }
+
+    #[test]
+    fn import_refuses_to_overwrite_existing_skill() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "charlie");
+        let plugin = home.join("sample-plugin2");
+        write_plugin(&plugin);
+
+        // First import must succeed.
+        cmd_addon_import("charlie", plugin.to_str().unwrap(), false).unwrap();
+
+        // Record the original skill content so we can verify it is not modified.
+        let skill_path = home.join("agents/charlie/skills/brainstorm/skill.yaml");
+        assert!(skill_path.exists(), "skill should exist after first import");
+        let original_content = fs::read_to_string(&skill_path).unwrap();
+
+        // Remove the addon record and MCP entry directly from the on-disk profile
+        // so the duplicate-addon / MCP-collision guards don't fire before the
+        // skill collision guard (the path we want to exercise).
+        let profile_path = home.join("agents/charlie/profile.yaml");
+        let yaml = fs::read_to_string(&profile_path).unwrap();
+        let mut profile: mur_common::agent::AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+        profile.addons.retain(|a| a.id != "sample");
+        profile.mcp_servers.retain(|m| m.name != "echo");
+        let new_yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        fs::write(&profile_path, new_yaml).unwrap();
+
+        // Second import must fail with the overwrite refusal message.
+        let err = cmd_addon_import("charlie", plugin.to_str().unwrap(), false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("already exists") && err.contains("brainstorm"),
+            "expected overwrite-refusal error, got: {err}"
+        );
+
+        // The original skill file must be unchanged (no partial write).
+        let after_content = fs::read_to_string(&skill_path).unwrap();
+        assert_eq!(
+            original_content, after_content,
+            "skill file was modified despite collision bail"
+        );
     }
 }
