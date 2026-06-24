@@ -15,24 +15,32 @@ use super::{pid_alive, resolve_mur_home, stale};
 
 /// Return the names of running agents to restart.
 ///
-/// Selection rules:
+/// Selection rules (exactly one must be active):
 /// - `name = Some(_)` → that single agent (must have a running.lock)
 /// - `all = true` → all agents with a running.lock
 /// - `stale_only = true` → only running agents where `is_stale(lock, on_disk_sha())`
 ///
-/// Exactly one of the three cases is expected to be active; `stale_only`
-/// overrides `all` if both are true.
+/// If none of the three selectors is active an error is returned — bare
+/// `mur agent restart` (no args) must never silently restart everything.
 ///
 /// `home` is the MUR_HOME path (e.g. `~/.mur`). Testable with a temp dir.
 pub(crate) fn select_targets(
     home: &Path,
     name: Option<&str>,
-    // When true enumerate all running agents (the default when not stale_only).
-    // The parameter is present for call-site symmetry with the CLI args;
-    // the loop always enumerates running agents, so the value is logically
-    // used even when `stale_only` narrows the result further.
-    _all: bool,
+    all: bool,
     stale_only: bool,
+) -> Result<Vec<String>> {
+    select_targets_with_on_disk(home, name, all, stale_only, &stale::on_disk_sha())
+}
+
+/// Inner implementation that accepts the on-disk sha as a parameter so tests
+/// can inject a synthetic value without needing a real runtime binary.
+pub(crate) fn select_targets_with_on_disk(
+    home: &Path,
+    name: Option<&str>,
+    all: bool,
+    stale_only: bool,
+    on_disk: &str,
 ) -> Result<Vec<String>> {
     let agents_dir = home.join("agents");
 
@@ -44,16 +52,16 @@ pub(crate) fn select_targets(
         return Ok(vec![n.to_string()]);
     }
 
+    // Require an explicit selector — never enumerate implicitly.
+    if !all && !stale_only {
+        bail!("specify an agent name, --all, or --stale");
+    }
+
     // Enumerate all agents with a running.lock
     let mut targets: Vec<String> = Vec::new();
     if !agents_dir.exists() {
         return Ok(targets);
     }
-    let on_disk = if stale_only {
-        stale::on_disk_sha()
-    } else {
-        String::new()
-    };
 
     for entry in fs::read_dir(&agents_dir)? {
         let entry = entry?;
@@ -71,7 +79,7 @@ pub(crate) fn select_targets(
                 Ok(l) => l,
                 Err(_) => continue,
             };
-            if !stale::is_stale(&lock, &on_disk) {
+            if !stale::is_stale(&lock, on_disk) {
                 continue;
             }
         }
@@ -253,8 +261,30 @@ mod tests {
         fs::write(path, serde_json::to_vec(&lock).unwrap()).unwrap();
     }
 
-    /// `select_targets` with `stale_only=true` returns exactly the agent
-    /// whose `build_sha` differs from `on_disk`.
+    /// Fix 1: bare `mur agent restart` (no name, no --all, no --stale) must
+    /// return an error — never silently enumerate all running agents.
+    #[test]
+    fn select_targets_no_args_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let agents = home.join("agents");
+
+        // Even with a running agent present, no-args must bail.
+        let alpha_dir = agents.join("alpha");
+        fs::create_dir_all(&alpha_dir).unwrap();
+        write_lock(&alpha_dir.join("running.lock"), 1111, "somesha");
+
+        let result = select_targets_with_on_disk(home, None, false, false, "somesha");
+        assert!(result.is_err(), "bare restart with no selector must error");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("--all") || msg.contains("--stale"),
+            "error message should mention --all or --stale, got: {msg}"
+        );
+    }
+
+    /// Fix 2: `select_targets_with_on_disk` stale_only branch returns exactly
+    /// the agent whose build_sha differs from the injected on-disk sha.
     #[test]
     fn select_targets_stale_only_returns_stale_agent() {
         let tmp = tempfile::tempdir().unwrap();
@@ -264,43 +294,16 @@ mod tests {
         // Agent "alpha": stale sha
         let alpha_dir = agents.join("alpha");
         fs::create_dir_all(&alpha_dir).unwrap();
-        write_lock(&alpha_dir.join("running.lock"), 1111, "oldshaold");
+        write_lock(&alpha_dir.join("running.lock"), 1111, "oldsha000000");
 
-        // Agent "beta": up-to-date sha (matches "on_disk" we'll inject)
+        // Agent "beta": up-to-date sha (matches injected on_disk)
         let beta_dir = agents.join("beta");
         fs::create_dir_all(&beta_dir).unwrap();
-        write_lock(&beta_dir.join("running.lock"), 2222, "newsha123");
+        write_lock(&beta_dir.join("running.lock"), 2222, "cur000000000");
 
-        // Temporarily override the runtime path so on_disk_sha() returns "newsha123"
-        // We can't easily mock the binary, so we'll call select_targets with a
-        // manual on_disk override by using a helper that accepts it directly.
-        // Instead, test via the internal is_stale logic + a crafted known sha.
-        // We monkey-patch by testing `select_targets_with_on_disk` if available,
-        // or we can test `is_stale` + manual enumeration.
-        //
-        // Since select_targets calls stale::on_disk_sha() internally (which needs
-        // the real binary), we test the pure filtering path: enumerate locks
-        // and call is_stale manually to verify the logic works.
-        let on_disk = "newsha123";
-        let lock_alpha = {
-            let b = fs::read(alpha_dir.join("running.lock")).unwrap();
-            serde_json::from_slice::<LockFile>(&b).unwrap()
-        };
-        let lock_beta = {
-            let b = fs::read(beta_dir.join("running.lock")).unwrap();
-            serde_json::from_slice::<LockFile>(&b).unwrap()
-        };
-
-        assert!(stale::is_stale(&lock_alpha, on_disk), "alpha should be stale");
-        assert!(!stale::is_stale(&lock_beta, on_disk), "beta should not be stale");
-
-        // Also verify select_targets with stale_only=false (all running) picks both
-        // and select_targets with a specific name works.
-        let all_targets = select_targets(home, None, true, false).unwrap();
-        assert_eq!(all_targets, vec!["alpha", "beta"]);
-
-        let named = select_targets(home, Some("alpha"), false, false).unwrap();
-        assert_eq!(named, vec!["alpha"]);
+        let result =
+            select_targets_with_on_disk(home, None, false, true, "cur000000000").unwrap();
+        assert_eq!(result, vec!["alpha"], "only the stale agent should be returned");
     }
 
     #[test]
