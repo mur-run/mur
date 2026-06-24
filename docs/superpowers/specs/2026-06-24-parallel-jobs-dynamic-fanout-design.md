@@ -113,6 +113,7 @@ All names go through `a2a_dial::canonicalize_agent_name` (`a2a_dial.rs:45`; case
 
 ### 5. Safety
 
+- **Target authorization (deny-by-default)** — `parallel_jobs` may only delegate to agents listed in `parallel_jobs.targets` in `~/.mur/config.yaml`; an empty or absent list makes the tool inert. The check is deterministic and runs pre-action (before any channel mint or dial) in `run_parallel_jobs` via `authorize_targets` + `check_authorization`. A prompt-injected concierge cannot widen the target set (OWASP Agentic ASI02/03/04). Grounded in Open Agent Passport (arXiv 2603.20953).
 - **Bounded concurrency** — §2 cap, default 8 from the tool.
 - **Fail-closed** — `yes:false` always; risk-tiered (`risk: write`+) steps pause at the existing SHA-256-pinned HITL gate (`mur-core/src/hitl/`). The concierge cannot auto-approve destructive work.
 - **Disjoint ownership** — the tool description references the `parallel-code` skill's gate (disjoint files, no shared registry/lockfile, contracts frozen read-only before fan-out). No merge-reconciler is built.

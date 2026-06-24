@@ -35,7 +35,6 @@ mod action_pipeline;
 #[allow(dead_code)]
 mod discovery;
 mod evolve;
-#[allow(dead_code)]
 mod executor;
 mod extract;
 mod extract_llm;

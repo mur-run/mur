@@ -4,10 +4,12 @@
 //! to per-job prompts with a free assignee. See
 //! `docs/superpowers/specs/2026-06-24-parallel-jobs-dynamic-fanout-design.md`.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Result, anyhow, bail};
 use mur_channel::ChannelService;
+use mur_common::config::Config;
 use mur_common::pipeline::PipelineOutput;
 use mur_common::skill::manifest::{Procedure, ProcedureStep};
 
@@ -78,6 +80,38 @@ pub fn resolve_jobs(
         .collect()
 }
 
+/// Pure deterministic gate: every job's assignee must be in `allow`.
+/// Fail-closed: any miss returns an Err immediately. Called before any
+/// channel mint or dial so a prompt-injected concierge cannot widen the
+/// target set (OWASP Agentic ASI02/03/04).
+fn check_authorization(allow: &HashSet<String>, jobs: &[Job]) -> Result<()> {
+    for j in jobs {
+        if !allow.contains(&j.assignee) {
+            bail!(
+                "target '{}' not authorized for parallel_jobs — add it to `parallel_jobs.targets` \
+                 in ~/.mur/config.yaml (deny-by-default)",
+                j.assignee
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Load the allowlist from config, canonicalize each entry, then verify all
+/// jobs' targets are in the allowlist. Deterministic, pre-action, fail-closed.
+/// Mirrors the `verified_active_fleet` pattern (any miss is a denial, never
+/// fail-open).
+fn authorize_targets(mur_home: &Path, jobs: &[Job]) -> Result<()> {
+    let cfg = Config::load_or_default(&mur_home.join("config.yaml"));
+    let allow: HashSet<String> = cfg
+        .parallel_jobs
+        .targets
+        .iter()
+        .map(|t| canonicalize_agent_name(mur_home, t))
+        .collect();
+    check_authorization(&allow, jobs)
+}
+
 /// Run N jobs as one ephemeral, channel-recorded DAG. Mints a throwaway
 /// workflow channel, fans the jobs out (bounded by `max_concurrency`), and
 /// returns `(channel_id, output)`. Per-job replies are persisted on the
@@ -89,6 +123,7 @@ pub async fn run_parallel_jobs(
     max_concurrency: Option<usize>,
     yes: bool,
 ) -> Result<(String, PipelineOutput)> {
+    authorize_targets(mur_home, jobs)?;
     let proc = build_jobs_procedure(jobs);
     let svc = ChannelService::open(mur_home)?;
     let channel_id = svc.create_for_workflow("parallel-jobs")?.id;
@@ -100,7 +135,9 @@ pub async fn run_parallel_jobs(
         max_concurrency,
         ..Default::default()
     };
-    let out = execute_dag(mur_home, "parallel-jobs", &proc, &opts).await?;
+    let out = execute_dag(mur_home, "parallel-jobs", &proc, &opts)
+        .await
+        .map_err(|e| anyhow::anyhow!("parallel_jobs run on channel {channel_id} failed: {e}"))?;
     Ok((channel_id, out))
 }
 
@@ -171,12 +208,111 @@ mod tests {
         assert!(resolve_jobs(home, &raw, None).is_err());
     }
 
+    // ── check_authorization unit tests ───────────────────────────────────────
+
+    #[test]
+    fn check_authorization_is_deny_by_default() {
+        // Empty allowlist => every target is rejected.
+        let allow: HashSet<String> = HashSet::new();
+        let jobs = vec![Job {
+            description: "a".into(),
+            assignee: "rustsmith".into(),
+        }];
+        assert!(
+            check_authorization(&allow, &jobs).is_err(),
+            "empty allowlist must reject any target"
+        );
+    }
+
+    #[test]
+    fn check_authorization_permits_listed_target() {
+        let allow: HashSet<String> = ["rustsmith".to_string()].into();
+        let jobs = vec![Job {
+            description: "a".into(),
+            assignee: "rustsmith".into(),
+        }];
+        assert!(
+            check_authorization(&allow, &jobs).is_ok(),
+            "allowlisted target must be permitted"
+        );
+    }
+
+    #[test]
+    fn check_authorization_rejects_unlisted_target() {
+        let allow: HashSet<String> = ["rustsmith".to_string()].into();
+        let jobs = vec![Job {
+            description: "a".into(),
+            assignee: "unknown-agent".into(),
+        }];
+        let err = check_authorization(&allow, &jobs).unwrap_err();
+        assert!(
+            err.to_string().contains("not authorized"),
+            "error must mention authorization: {err}"
+        );
+    }
+
+    #[test]
+    fn check_authorization_rejects_first_unlisted_in_mixed_list() {
+        // First job is allowed, second is not — gate must fail on the unlisted one.
+        let allow: HashSet<String> = ["rustsmith".to_string()].into();
+        let jobs = vec![
+            Job {
+                description: "a".into(),
+                assignee: "rustsmith".into(),
+            },
+            Job {
+                description: "b".into(),
+                assignee: "intruder".into(),
+            },
+        ];
+        assert!(
+            check_authorization(&allow, &jobs).is_err(),
+            "must reject when any target is not in the allowlist"
+        );
+    }
+
+    // ── run_parallel_jobs integration: gate blocks before channel mint ───────
+
+    #[tokio::test]
+    async fn run_parallel_jobs_blocked_by_empty_allowlist() {
+        // No config.yaml => empty allowlist => gate rejects before any channel is minted.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let jobs = vec![Job {
+            description: "do A".into(),
+            assignee: "nonexistent-agent-xyz".into(),
+        }];
+        let result = run_parallel_jobs(tmp.path(), &jobs, Some(2), false).await;
+        assert!(
+            result.is_err(),
+            "empty allowlist must block run_parallel_jobs"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not authorized"),
+            "error must mention authorization: {err}"
+        );
+        // No channel should have been minted.
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        let channels = svc.list(100).unwrap_or_default();
+        assert!(
+            channels.is_empty(),
+            "no channel must be minted when the gate rejects"
+        );
+    }
+
     #[tokio::test]
     async fn run_parallel_jobs_mints_channel_even_when_delegate_unreachable() {
-        // No runtime is running, so the delegate dial fails fast (RequireRunning).
-        // run_parallel_jobs must still mint the channel and return Ok (the
-        // executor turns a failed delegate into a failed step, not an Err).
+        // Write an allowlisting config.yaml so the gate passes, then verify the
+        // channel is minted even though the delegate is unreachable at runtime.
+        // (No runtime is running, so the delegate dial fails fast (RequireRunning).
+        // run_parallel_jobs must still mint the channel and return Ok — the
+        // executor turns a failed delegate into a failed step, not an Err.)
         let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("config.yaml"),
+            "parallel_jobs:\n  targets:\n    - nonexistent-agent-xyz\n",
+        )
+        .unwrap();
         let jobs = vec![Job {
             description: "do A".into(),
             assignee: "nonexistent-agent-xyz".into(),
