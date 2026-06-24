@@ -1,7 +1,4 @@
 //! Claude plugin → MUR primitive converters (pure, no I/O).
-// The whole add-on module is unreachable from the `mur` binary until Task 5
-// wires `cmd_addon_import` into CLI dispatch. Remove this allow in Task 5.
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 
@@ -14,6 +11,8 @@ use mur_common::skill::{
 };
 
 /// Provenance prefix for skills imported from a Claude plugin (local directory).
+// Kept for future marketplace importer path (Phase 3); not yet consumed.
+#[allow(dead_code)]
 pub(crate) const LOCAL_SOURCE_TAG: &str = "claude-plugin";
 
 /// `plugin.json` (only the fields we consume).
@@ -22,6 +21,8 @@ pub struct PluginJson {
     pub name: String,
     #[serde(default)]
     pub version: String,
+    // Deserialized for completeness; displayed in future UX (Phase 3).
+    #[allow(dead_code)]
     #[serde(default)]
     pub description: String,
     #[serde(default)]

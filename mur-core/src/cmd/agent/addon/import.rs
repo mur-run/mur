@@ -1,9 +1,6 @@
 //! Claude plugin importer (Phase 2). Expands local plugin dir into
 //! per-agent skills + command-skills + MCP entries, recorded under one
 //! fail-closed (disabled) `AddonRef`.
-// Unreachable `mur` binary until Task 5 wires `cmd_addon_import` into
-// CLI dispatch. Remove allow in Task 5.
-#![allow(dead_code)]
 
 use std::fs;
 use std::path::PathBuf;
@@ -225,11 +222,10 @@ fn scan_or_block(manifest: &mur_common::skill::SkillManifest, force: bool) -> Re
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::Mutex;
 
-    // Guard serializing all MUR_HOME-mutating tests in this module.
-    // ponytail: single env-mutating tests in this file; add serial_test if more land
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // Delegate to the shared lock defined at the addon module level so that
+    // tests in import.rs and mod.rs are serialized against each other.
+    use super::super::ADDON_TEST_LOCK as ENV_LOCK;
 
     // Minimal agent profile on disk so load_profile_for_edit works.
     fn write_agent(home: &std::path::Path, name: &str) {

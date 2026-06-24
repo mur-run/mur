@@ -330,6 +330,11 @@ pub enum AgentAction {
         #[command(subcommand)]
         action: AgentTrashAction,
     },
+    /// Manage imported add-ons (Claude plugin-groups).
+    Addon {
+        #[command(subcommand)]
+        action: AgentAddonAction,
+    },
     /// Build a specialized agent: role -> drafts -> human review -> create + start.
     Wizard {
         /// Role preset id from the catalog, or omit for interactive selection / custom.
@@ -754,6 +759,51 @@ pub enum AgentMcpAction {
     /// its pin stay in the profile; it simply stops spawning. Applies on the
     /// agent's next restart.
     Disable { name: String, server_id: String },
+}
+
+#[derive(Subcommand)]
+pub enum AgentAddonAction {
+    /// Import a local Claude plugin directory into this agent (fail-closed: disabled by default).
+    Import {
+        /// Agent name
+        name: String,
+        /// Path to local Claude plugin directory (must contain plugin.json)
+        plugin_dir: String,
+        /// Override security-scan blocks (review the skill first)
+        #[arg(long)]
+        force: bool,
+    },
+    /// List imported add-ons for an agent
+    List {
+        /// Agent name
+        name: String,
+    },
+    /// Enable an add-on for an agent (the only verb that sets enabled=true)
+    Enable {
+        /// Agent name
+        name: String,
+        /// Add-on id (from `mur agent addon list`)
+        addon_id: String,
+    },
+    /// Disable an add-on without removing it
+    Disable {
+        /// Agent name
+        name: String,
+        /// Add-on id (from `mur agent addon list`)
+        addon_id: String,
+    },
+    /// Remove an add-on: deletes skill dirs + MCP entries + AddonRef (non-destructive to agents)
+    Remove {
+        /// Agent name
+        name: String,
+        /// Add-on id (from `mur agent addon list`)
+        addon_id: String,
+    },
+    /// Kill-switch: disable ALL add-ons for an agent at once
+    DisableAll {
+        /// Agent name
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]

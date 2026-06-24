@@ -81,6 +81,12 @@ pub enum AuditAction {
         decision: String,  // "halted" | "capped" | "fail_closed" | "received"
         nonce: String,
     },
+    /// An add-on (plugin-group / skill / mcp) was enabled/disabled for an agent.
+    AddonToggle {
+        agent: String,
+        target: String,
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

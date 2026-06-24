@@ -2,3 +2,264 @@
 
 pub mod import;
 pub mod parse;
+
+use std::fs;
+
+use anyhow::{Result, bail};
+
+use crate::cmd::agent::{load_profile_for_edit, save_profile};
+use crate::conversations::audit::{Audit, AuditAction};
+
+pub use import::cmd_addon_import;
+
+pub fn cmd_addon_list(name: &str) -> Result<()> {
+    let (_path, profile) = load_profile_for_edit(name)?;
+    if profile.addons.is_empty() {
+        println!("No add-ons imported for '{name}'.");
+        return Ok(());
+    }
+    for g in &profile.addons {
+        println!(
+            "{} {} [{}] (skills:{} mcp:{} commands:{})",
+            if g.enabled { "on " } else { "off" },
+            g.id,
+            g.source,
+            g.skills.len(),
+            g.mcp.len(),
+            g.commands.len(),
+        );
+    }
+    Ok(())
+}
+
+pub fn cmd_addon_set_enabled(name: &str, addon_id: &str, enabled: bool) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    if !profile.set_addon_enabled(addon_id, enabled) {
+        bail!("add-on '{addon_id}' not found on '{name}'");
+    }
+    save_profile(&path, &mut profile)?;
+    audit_toggle(name, addon_id, enabled);
+    let verb = if enabled { "Enabled" } else { "Disabled" };
+    println!("{verb} add-on '{addon_id}' for '{name}' (restart the agent to apply).");
+    Ok(())
+}
+
+/// Non-destructive remove: removes add-on skill dirs + MCP entries +
+/// AddonRef. Does NOT remove agents or non-addon skills.
+pub fn cmd_addon_remove(name: &str, addon_id: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    let addon = profile
+        .addons
+        .iter()
+        .find(|g| g.id == addon_id)
+        .ok_or_else(|| anyhow::anyhow!("add-on '{addon_id}' not found on '{name}'"))?
+        .clone();
+
+    let mur_home = crate::cmd::resolve_mur_home()?;
+    let agent_skills_dir = mur_home.join("agents").join(name).join("skills");
+
+    // Remove skill dirs (skills + commands share the same dir).
+    for skill_name in addon.skills.iter().chain(addon.commands.iter()) {
+        let skill_dir = agent_skills_dir.join(skill_name);
+        if skill_dir.exists() {
+            fs::remove_dir_all(&skill_dir)
+                .map_err(|e| anyhow::anyhow!("remove skill dir {}: {e}", skill_dir.display()))?;
+        }
+    }
+
+    // Remove MCP entries.
+    profile.mcp_servers.retain(|m| !addon.mcp.contains(&m.name));
+
+    // Remove the AddonRef.
+    profile.addons.retain(|g| g.id != addon_id);
+
+    save_profile(&path, &mut profile)?;
+    println!("Removed add-on '{addon_id}' from '{name}'.");
+    Ok(())
+}
+
+pub fn cmd_addon_disable_all(name: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    profile.disable_all_addons();
+    save_profile(&path, &mut profile)?;
+    audit_toggle(name, "*", false);
+    println!("Kill-switch: disabled ALL add-ons for '{name}' (restart the agent to apply).");
+    Ok(())
+}
+
+/// Best-effort audit; logging failure must not block toggle.
+fn audit_toggle(agent: &str, target: &str, enabled: bool) {
+    if let Ok(mur_home) = crate::cmd::resolve_mur_home()
+        && let Ok(audit) = Audit::open(Some(mur_home.to_str().unwrap_or("")))
+    {
+        let _ = audit.append(
+            AuditAction::AddonToggle {
+                agent: agent.to_string(),
+                target: target.to_string(),
+                enabled,
+            },
+            String::new(),
+        );
+    }
+}
+
+/// Serializes all MUR_HOME-mutating tests across the addon submodules.
+/// Defined at the `addon` module level so both `mod.rs` and `import.rs`
+/// test blocks can reference it.  Not used outside `#[cfg(test)]`.
+#[cfg(test)]
+pub(super) static ADDON_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    // Use the shared lock so import.rs and mod.rs tests never race on MUR_HOME.
+    use super::ADDON_TEST_LOCK as ENV_LOCK;
+
+    fn write_agent(home: &std::path::Path, name: &str) {
+        let dir = home.join("agents").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        let p = mur_common::agent::AgentProfile::default_for_tests();
+        let yaml = serde_yaml_ng::to_string(&p).unwrap();
+        fs::write(dir.join("profile.yaml"), yaml).unwrap();
+    }
+
+    fn inject_addon(
+        home: &std::path::Path,
+        agent: &str,
+        addon_id: &str,
+        skill_names: &[&str],
+        mcp_names: &[&str],
+    ) {
+        let profile_path = home.join("agents").join(agent).join("profile.yaml");
+        let yaml = fs::read_to_string(&profile_path).unwrap();
+        let mut profile: mur_common::agent::AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+
+        // Write skill dirs.
+        for s in skill_names {
+            let skill_dir = home.join("agents").join(agent).join("skills").join(s);
+            fs::create_dir_all(&skill_dir).unwrap();
+            fs::write(skill_dir.join("skill.yaml"), "name: placeholder\n").unwrap();
+        }
+
+        profile.addons.push(mur_common::agent::AddonRef {
+            id: addon_id.to_string(),
+            source: "claude-local:test@0.1.0".to_string(),
+            enabled: false,
+            skills: skill_names.iter().map(|s| s.to_string()).collect(),
+            mcp: mcp_names.iter().map(|s| s.to_string()).collect(),
+            commands: Vec::new(),
+        });
+
+        // Add a stub MCP entry for each mcp_name.
+        for m in mcp_names {
+            profile.mcp_servers.push(mur_common::agent::McpServerEntry {
+                name: m.to_string(),
+                command: "/bin/echo".to_string(),
+                args: Vec::new(),
+                binary_sha256: None,
+                description_hash: None,
+                publisher: None,
+                installed_at: None,
+                timeout_secs: None,
+            });
+        }
+
+        let new_yaml = serde_yaml_ng::to_string(&profile).unwrap();
+        fs::write(&profile_path, new_yaml).unwrap();
+    }
+
+    #[test]
+    fn toggle_and_remove() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "tester");
+        inject_addon(home, "tester", "myplugin", &["skill-a"], &["mcp-a"]);
+
+        // enable is the ONLY verb that sets enabled=true
+        cmd_addon_set_enabled("tester", "myplugin", true).unwrap();
+        let (_p, profile) = crate::cmd::agent::load_profile_for_edit("tester").unwrap();
+        assert!(
+            profile
+                .addons
+                .iter()
+                .find(|g| g.id == "myplugin")
+                .unwrap()
+                .enabled
+        );
+
+        // disable
+        cmd_addon_set_enabled("tester", "myplugin", false).unwrap();
+        let (_p, profile) = crate::cmd::agent::load_profile_for_edit("tester").unwrap();
+        assert!(
+            !profile
+                .addons
+                .iter()
+                .find(|g| g.id == "myplugin")
+                .unwrap()
+                .enabled
+        );
+
+        // remove: skill dir gone, MCP gone, AddonRef gone
+        cmd_addon_remove("tester", "myplugin").unwrap();
+        let (_p, profile) = crate::cmd::agent::load_profile_for_edit("tester").unwrap();
+        assert!(profile.addons.iter().all(|g| g.id != "myplugin"));
+        assert!(profile.mcp_servers.iter().all(|m| m.name != "mcp-a"));
+        assert!(!home.join("agents/tester/skills/skill-a").exists());
+    }
+
+    #[test]
+    fn list_empty() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "empty-agent");
+        // Should not error on empty list.
+        cmd_addon_list("empty-agent").unwrap();
+    }
+
+    #[test]
+    fn disable_all_kills_switch() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "multi");
+        inject_addon(home, "multi", "plugin-a", &[], &[]);
+        inject_addon(home, "multi", "plugin-b", &[], &[]);
+
+        // enable both first
+        cmd_addon_set_enabled("multi", "plugin-a", true).unwrap();
+        cmd_addon_set_enabled("multi", "plugin-b", true).unwrap();
+
+        // kill-switch
+        cmd_addon_disable_all("multi").unwrap();
+        let (_p, profile) = crate::cmd::agent::load_profile_for_edit("multi").unwrap();
+        assert!(profile.addons.iter().all(|g| !g.enabled));
+    }
+
+    #[test]
+    fn missing_addon_errors() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        unsafe {
+            std::env::set_var("MUR_HOME", home);
+        }
+        write_agent(home, "noop");
+        let err = cmd_addon_set_enabled("noop", "nonexistent", true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not found"));
+    }
+}
