@@ -1,7 +1,7 @@
 //! `mur agent runtime-doctor` — flag running agents whose binary differs from
 //! the on-disk runtime (build-sha compare).
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use mur_common::LockFile;
 
 use super::{resolve_mur_home, stale};
@@ -47,7 +47,7 @@ pub fn cmd_doctor(json: bool) -> Result<()> {
 
     if agents_dir.is_dir() {
         let mut entries: Vec<_> = std::fs::read_dir(&agents_dir)
-            .unwrap_or_else(|_| panic!("cannot read {}", agents_dir.display()))
+            .with_context(|| format!("read {}", agents_dir.display()))?
             .filter_map(|e| e.ok())
             .collect();
         // Stable, deterministic output order.

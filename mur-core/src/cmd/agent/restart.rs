@@ -9,9 +9,24 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use mur_common::LockFile;
+use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 use super::{pid_alive, resolve_mur_home, stale};
+
+/// Extra grace period added on top of the runtime's `stop_timeout_secs` before
+/// the SIGKILL fallback fires.  The SIGKILL wait MUST outlast the runtime's own
+/// drain bound so we never abort a turn mid-flight.
+const RESTART_KILL_GRACE_SECS: u64 = 5;
+
+/// Named constant for the wait to see the respawned lock (no SIGKILL risk here).
+const RESTART_RESPAWN_WAIT_SECS: u64 = 30;
+
+/// Compute the total seconds to wait before firing the SIGKILL fallback.
+///
+/// Pure helper so the math can be unit-tested independently of live processes.
+pub(crate) fn kill_wait_secs(stop_timeout_secs: u64) -> u64 {
+    stop_timeout_secs + RESTART_KILL_GRACE_SECS
+}
 
 /// Return the names of running agents to restart.
 ///
@@ -30,7 +45,14 @@ pub(crate) fn select_targets(
     all: bool,
     stale_only: bool,
 ) -> Result<Vec<String>> {
-    select_targets_with_on_disk(home, name, all, stale_only, &stale::on_disk_sha())
+    // Only invoke the subprocess that computes the on-disk sha when we actually
+    // need it for the stale filter; pass an empty placeholder otherwise.
+    let on_disk = if stale_only {
+        stale::on_disk_sha()
+    } else {
+        String::new()
+    };
+    select_targets_with_on_disk(home, name, all, stale_only, &on_disk)
 }
 
 /// Inner implementation that accepts the on-disk sha as a parameter so tests
@@ -157,14 +179,28 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
     let old_pid = lock.pid;
     let old_sha = lock.build_sha.clone();
 
+    // Load stop_timeout_secs from the agent's profile (mirrors cmd_stop).
+    // The SIGKILL fallback must wait at least this long so the runtime's
+    // cooperative drain can complete before we force-kill.
+    let stop_timeout = {
+        let pp = agent_home.join("profile.yaml");
+        fs::read_to_string(&pp)
+            .ok()
+            .and_then(|y| serde_yaml_ng::from_str::<_AgentProfile>(&y).ok())
+            .map(|p| p.lifecycle.stop_timeout_secs)
+            .unwrap_or(15)
+    };
+
     // ── SIGTERM (drain) ───────────────────────────────────────────────
     #[cfg(unix)]
     unsafe {
         libc::kill(old_pid as libc::pid_t, libc::SIGTERM);
     }
 
-    // Wait for old pid to exit (timeout 30 s, 100 ms poll)
-    let term_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // Wait for the old pid to exit.  Timeout = stop_timeout_secs + RESTART_KILL_GRACE_SECS
+    // so the SIGKILL fallback never fires while the runtime is still draining.
+    let term_deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(kill_wait_secs(stop_timeout));
     while std::time::Instant::now() < term_deadline {
         if !pid_alive(old_pid) {
             break;
@@ -181,9 +217,10 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
     }
 
     // ── Poll for fresh running.lock with a different pid ──────────────
-    // launchd KeepAlive=true respawns on process exit; we wait up to 30 s
-    // for the new lock to appear.
-    let respawn_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // launchd KeepAlive=true respawns on process exit; we wait up to
+    // RESTART_RESPAWN_WAIT_SECS for the new lock to appear.
+    let respawn_deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(RESTART_RESPAWN_WAIT_SECS);
     let new_pid = loop {
         std::thread::sleep(std::time::Duration::from_millis(200));
         if std::time::Instant::now() >= respawn_deadline {
@@ -210,7 +247,7 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
         }
         None => {
             eprintln!(
-                "warning: '{name}' was stopped but did not respawn within 30 s \
+                "warning: '{name}' was stopped but did not respawn within {RESTART_RESPAWN_WAIT_SECS} s \
                  (is launchd KeepAlive enabled?)"
             );
         }
@@ -331,5 +368,21 @@ mod tests {
         fs::create_dir_all(home.join("agents")).unwrap();
         let result = select_targets(home, None, true, false).unwrap();
         assert!(result.is_empty());
+    }
+
+    /// Fix 1: SIGKILL-fallback wait must be derived from stop_timeout_secs so
+    /// it always outlasts the runtime's cooperative drain bound.
+    #[test]
+    fn kill_wait_secs_exceeds_stop_timeout() {
+        // Default: 15 s drain + 5 s grace = 20 s
+        assert_eq!(kill_wait_secs(15), 20);
+        // Raised: 60 s drain + 5 s grace = 65 s  (never truncated to 30)
+        assert_eq!(kill_wait_secs(60), 65);
+        // Grace is always exactly RESTART_KILL_GRACE_SECS
+        assert_eq!(kill_wait_secs(0), RESTART_KILL_GRACE_SECS);
+        // Result always strictly exceeds the drain bound
+        for t in [1u64, 15, 30, 60, 120] {
+            assert!(kill_wait_secs(t) > t, "kill wait must exceed drain bound");
+        }
     }
 }
