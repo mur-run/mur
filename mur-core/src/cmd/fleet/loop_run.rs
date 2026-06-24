@@ -214,6 +214,7 @@ fn iteration_goal(
 ) -> Result<(String, Option<Job>)> {
     if let Some(mut job) = super::jobs::next_queued(mur_home, fleet_name)? {
         job.status = JobStatus::Running;
+        job.started_at = Some(chrono::Utc::now().to_rfc3339());
         super::jobs::save_job(mur_home, fleet_name, &job)?;
         Ok((job.text.clone(), Some(job)))
     } else {
