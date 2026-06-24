@@ -715,15 +715,11 @@ pub fn ensure_git_hook(project_path: &Path, quiet: bool) -> Result<bool> {
     if existing.contains(marker) {
         return Ok(false);
     }
-    let mur_bin = dirs::home_dir()
-        .map(|d| d.join(".mur").join("bin").join("mur"))
-        .unwrap_or_else(|| PathBuf::from("mur"));
+    // Resolve mur at hook-run time from PATH (covers brew, cargo, etc.),
+    // falling back to the ~/.mur/bin installer location.
     let hook_content = format!(
-        "\n{}\nif command -v {} &>/dev/null; then\n  {} project index \"{}\" --quiet --background\nfi\n",
-        marker,
-        mur_bin.display(),
-        mur_bin.display(),
-        project_path.display(),
+        "\n{marker}\nMUR_BIN=\"$(command -v mur || true)\"\n[ -z \"$MUR_BIN\" ] && [ -x \"$HOME/.mur/bin/mur\" ] && MUR_BIN=\"$HOME/.mur/bin/mur\"\nif [ -n \"$MUR_BIN\" ]; then\n  \"$MUR_BIN\" project index \"{path}\" --quiet --background\nfi\n",
+        path = project_path.display(),
     );
     if existing.is_empty() {
         std::fs::write(&hook_path, format!("#!/bin/sh\n{}", hook_content))?;
