@@ -751,10 +751,14 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
             let home = resolve_mur_home().map_err(|e| format!("parallel_jobs failed: {e}"))?;
             let jobs = mur_core::executor::jobs::resolve_jobs(&home, &jobs_in, default_agent)
                 .map_err(|e| format!("parallel_jobs: {e}"))?;
-            let (channel_id, out) =
-                mur_core::executor::jobs::run_parallel_jobs(&home, &jobs, Some(max_concurrency), yes)
-                    .await
-                    .map_err(|e| format!("parallel_jobs failed: {e}"))?;
+            let (channel_id, out) = mur_core::executor::jobs::run_parallel_jobs(
+                &home,
+                &jobs,
+                Some(max_concurrency),
+                yes,
+            )
+            .await
+            .map_err(|e| format!("parallel_jobs failed: {e}"))?;
             Ok(json!({
                 "channel_id": channel_id,
                 "output": out.output_text.unwrap_or_default(),

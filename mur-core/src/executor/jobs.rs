@@ -65,13 +65,11 @@ pub fn resolve_jobs(
             if j.description.trim().is_empty() {
                 bail!("job {i} has an empty description");
             }
-            let assignee = j
-                .agent
-                .as_deref()
-                .or(default_agent)
-                .ok_or_else(|| {
-                    anyhow!("job {i} has no assignee: pass per-job `agent` or a top-level default `agent`")
-                })?;
+            let assignee = j.agent.as_deref().or(default_agent).ok_or_else(|| {
+                anyhow!(
+                    "job {i} has no assignee: pass per-job `agent` or a top-level default `agent`"
+                )
+            })?;
             Ok(Job {
                 description: j.description.clone(),
                 assignee: canonicalize_agent_name(mur_home, assignee),
@@ -113,8 +111,14 @@ mod tests {
     #[test]
     fn build_jobs_procedure_one_rank0_step_per_job() {
         let jobs = vec![
-            Job { description: "add caching to fetch".into(), assignee: "rustsmith".into() },
-            Job { description: "write the README".into(), assignee: "frontend".into() },
+            Job {
+                description: "add caching to fetch".into(),
+                assignee: "rustsmith".into(),
+            },
+            Job {
+                description: "write the README".into(),
+                assignee: "frontend".into(),
+            },
         ];
         let p = build_jobs_procedure(&jobs);
         assert_eq!(p.steps.len(), 2);
@@ -137,21 +141,33 @@ mod tests {
         let home = tmp.path();
 
         // per-job agent wins over the default
-        let raw = vec![RawJob { description: "A".into(), agent: Some("rustsmith".into()) }];
+        let raw = vec![RawJob {
+            description: "A".into(),
+            agent: Some("rustsmith".into()),
+        }];
         let jobs = resolve_jobs(home, &raw, Some("frontend")).unwrap();
         assert_eq!(jobs[0].assignee, "rustsmith");
 
         // falls back to the default agent when a job omits its own
-        let raw = vec![RawJob { description: "B".into(), agent: None }];
+        let raw = vec![RawJob {
+            description: "B".into(),
+            agent: None,
+        }];
         let jobs = resolve_jobs(home, &raw, Some("frontend")).unwrap();
         assert_eq!(jobs[0].assignee, "frontend");
 
         // error when neither a per-job nor a default agent is set
-        let raw = vec![RawJob { description: "C".into(), agent: None }];
+        let raw = vec![RawJob {
+            description: "C".into(),
+            agent: None,
+        }];
         assert!(resolve_jobs(home, &raw, None).is_err());
 
         // error on an empty description
-        let raw = vec![RawJob { description: "  ".into(), agent: Some("rustsmith".into()) }];
+        let raw = vec![RawJob {
+            description: "  ".into(),
+            agent: Some("rustsmith".into()),
+        }];
         assert!(resolve_jobs(home, &raw, None).is_err());
     }
 
