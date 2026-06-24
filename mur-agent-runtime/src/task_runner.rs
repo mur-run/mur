@@ -259,13 +259,13 @@ impl TaskRunner {
         self.draining.store(true, Ordering::SeqCst);
     }
 
-    /// Returns `true` when there are no turns registered in the in-flight
-    /// registry (i.e. every turn has completed/failed/cancelled), or `false`
+    /// Returns `true` when no task is in `TaskState::Working`, or `false`
     /// if `timeout` elapses first.
     ///
-    /// Uses the `registry` length as a proxy for in-flight turns: `set_state`
-    /// always inserts before execution begins and the final outcome always
-    /// updates state, so an empty registry means the runner is fully idle.
+    /// The registry retains completed/failed/cancelled entries, so the length
+    /// is NOT a reliable idle indicator. Instead this polls for the absence of
+    /// any `TaskState::Working` entry — which is inserted before a turn begins
+    /// and transitioned to a terminal state when it ends (or is cancelled).
     /// Polls every 50 ms to stay responsive under a typical stop_timeout_secs.
     pub async fn await_idle(&self, timeout: std::time::Duration) -> bool {
         let deadline = tokio::time::Instant::now() + timeout;
@@ -752,6 +752,29 @@ impl TaskRunner {
     }
 
     pub fn start_async(&self, spec: TaskSpec) -> AsyncTaskHandle {
+        // Drain guard: reject new tasks when the runtime is draining for restart.
+        // Must run BEFORE any set_state(_, Working) so await_idle is never blocked
+        // by a phantom Working entry.
+        if self.draining.load(Ordering::SeqCst) {
+            tracing::debug!("start_async called while draining — returning transient failure without registering a Working entry");
+            let id = format!("task-{}", Uuid::now_v7());
+            let now = chrono::Utc::now().to_rfc3339();
+            let (tx_done, rx_done) = oneshot::channel::<TaskOutcome>();
+            let _ = tx_done.send(TaskOutcome::Failed(Task {
+                id: id.clone(),
+                state: TaskState::Failed,
+                messages: vec![spec.input],
+                created_at: now.clone(),
+                completed_at: Some(now),
+                error: Some(task_error(
+                    "draining",
+                    "agent is draining for restart; retry shortly".into(),
+                    true,
+                )),
+                usage: None,
+            }));
+            return AsyncTaskHandle { id, done: rx_done };
+        }
         self.last_activity_at
             .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
         let id = format!("task-{}", Uuid::now_v7());
@@ -2605,5 +2628,36 @@ mod tests {
             .await_idle(std::time::Duration::from_millis(100))
             .await;
         assert!(ok, "registry must be clean after a rejected (draining) turn");
+    }
+
+    #[tokio::test]
+    async fn drain_start_async_does_not_register_working_entry() {
+        // After begin_drain(), start_async must NOT leave a Working entry, so
+        // await_idle returns true immediately (no phantom task blocks shutdown).
+        let runner = TaskRunner::new_stub_echo();
+        runner.begin_drain();
+        let handle = runner.start_async(ping_spec());
+        // The handle resolves to Failed (transient rejection).
+        let outcome = handle.await_completion().await;
+        match outcome {
+            TaskOutcome::Failed(task) => {
+                let err = task.error.expect("drained async turn must have an error");
+                assert!(err.recoverable, "async drain rejection must be recoverable");
+                assert!(
+                    err.message.contains("draining"),
+                    "error message must mention draining, got: {}",
+                    err.message
+                );
+            }
+            other => panic!("expected Failed from start_async after drain, got {other:?}"),
+        }
+        // await_idle must not hang — no Working entry was registered.
+        let ok = runner
+            .await_idle(std::time::Duration::from_millis(100))
+            .await;
+        assert!(
+            ok,
+            "registry must have no Working entries after start_async drain rejection"
+        );
     }
 }
