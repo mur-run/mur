@@ -90,6 +90,14 @@ impl ChannelIndex {
         Ok(rows)
     }
 
+    /// Delete the read-model row for `id`. Idempotent — no error if not found.
+    pub fn remove(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM channels WHERE id = ?1", [id])
+            .context("remove channel row")?;
+        Ok(())
+    }
+
     /// Drop every row and re-derive from the store's manifests.
     pub fn rebuild_from(&self, store: &ChannelStore) -> Result<usize> {
         self.conn.execute("DELETE FROM channels", [])?;

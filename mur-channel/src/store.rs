@@ -137,6 +137,16 @@ impl ChannelStore {
         Ok(ev)
     }
 
+    /// Delete the channel directory entirely. Idempotent — no error if already absent.
+    pub fn delete(&self, id: &str) -> Result<()> {
+        let dir = self.channel_dir(id);
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| format!("delete channel dir {}", dir.display())),
+        }
+    }
+
     /// List every channel id present on disk.
     pub fn list_ids(&self) -> Result<Vec<String>> {
         if !self.root.exists() {
