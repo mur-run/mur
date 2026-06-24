@@ -507,11 +507,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         let svc = ChannelService::open(home).unwrap();
-        let ch = svc.create_for_fleet("dev", "mur", &["pm".to_string()]).unwrap();
+        let ch = svc
+            .create_for_fleet("dev", "mur", &["pm".to_string()])
+            .unwrap();
 
         // add a Delegate member (idempotent)
-        svc.add_participant(&ch.id, "qa", ParticipantRole::Delegate).unwrap();
-        svc.add_participant(&ch.id, "qa", ParticipantRole::Delegate).unwrap();
+        svc.add_participant(&ch.id, "qa", ParticipantRole::Delegate)
+            .unwrap();
+        svc.add_participant(&ch.id, "qa", ParticipantRole::Delegate)
+            .unwrap();
         let m = svc.store().load_manifest(&ch.id).unwrap();
         let qa_count = m
             .participants

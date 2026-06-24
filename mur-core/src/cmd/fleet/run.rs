@@ -181,8 +181,7 @@ mod tests {
         assert_eq!(job.as_ref().unwrap().status, JobStatus::Running);
 
         // explicit arg jumps ahead of queue and is persisted
-        let (goal, job) =
-            resolve_run_goal(home, "dev", Some("urgent".into()), "standing").unwrap();
+        let (goal, job) = resolve_run_goal(home, "dev", Some("urgent".into()), "standing").unwrap();
         assert_eq!(goal, "urgent");
         assert_eq!(job.as_ref().unwrap().status, JobStatus::Running);
         // arg job must be persisted (source=="cli")

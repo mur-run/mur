@@ -387,7 +387,10 @@ pub async fn run_guarded(
         let pre_events = svc.load_events(&fleet.channel_id).unwrap_or_default();
         // Drain job queue: oldest queued job is this iteration's goal; else standing goal.
         let (iter_goal, mut active_job) = iteration_goal(mur_home, name, &fleet.goal)?;
-        let planning_fleet = mur_common::fleet::Fleet { goal: iter_goal.clone(), ..fleet.clone() };
+        let planning_fleet = mur_common::fleet::Fleet {
+            goal: iter_goal.clone(),
+            ..fleet.clone()
+        };
         let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &pre_events)
             .unwrap_or_else(|| build_fleet_procedure(&iter_goal, &fleet.members));
         let opts = crate::executor::dag::DagExecOptions {
@@ -738,7 +741,14 @@ mod tests {
     fn iteration_goal_drains_queue_then_falls_back_to_standing() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("standing".into())).unwrap();
+        super::super::create::cmd_fleet_create(
+            home,
+            "dev",
+            vec!["pm".into()],
+            None,
+            Some("standing".into()),
+        )
+        .unwrap();
 
         // empty queue → standing goal, no job
         let (g, j) = iteration_goal(home, "dev", "standing").unwrap();

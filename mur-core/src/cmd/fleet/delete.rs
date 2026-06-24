@@ -33,7 +33,10 @@ pub fn cmd_fleet_delete(mur_home: &Path, name: &str, yes: bool) -> Result<()> {
         std::fs::remove_dir_all(&dir)?;
     }
 
-    println!("Fleet '{name}' deleted (channel '{}' removed; member agents left intact).", fleet.channel_id);
+    println!(
+        "Fleet '{name}' deleted (channel '{}' removed; member agents left intact).",
+        fleet.channel_id
+    );
     Ok(())
 }
 
@@ -49,8 +52,8 @@ fn confirm(name: &str) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{create, store};
+    use super::*;
 
     #[test]
     fn delete_removes_fleet_dir_and_channel() {
@@ -63,7 +66,10 @@ mod tests {
 
         cmd_fleet_delete(home, "dev", true).unwrap();
 
-        assert!(!store::fleet_dir(home, "dev").exists(), "fleet dir must be gone");
+        assert!(
+            !store::fleet_dir(home, "dev").exists(),
+            "fleet dir must be gone"
+        );
         let svc = mur_channel::ChannelService::open(home).unwrap();
         assert!(
             svc.store().load_manifest("fleet-dev").is_err(),

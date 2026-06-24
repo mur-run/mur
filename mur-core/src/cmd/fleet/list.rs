@@ -19,17 +19,15 @@ fn status_symbol(stopped: bool, running: bool) -> &'static str {
 
 fn truncate_goal(goal: &str, width: usize) -> String {
     // Collapse all whitespace/newlines to single spaces
-    let collapsed = goal
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let collapsed = goal.split_whitespace().collect::<Vec<_>>().join(" ");
 
     // Truncate to width chars with trailing …
     if collapsed.chars().count() > width {
         collapsed
             .chars()
             .take(width.saturating_sub(1))
-            .collect::<String>() + "…"
+            .collect::<String>()
+            + "…"
     } else {
         collapsed
     }
@@ -102,7 +100,8 @@ pub fn cmd_fleet_list(mur_home: &Path) -> Result<()> {
     // Print header
     println!(
         "{:<name_w$}  ST  MEM  JOBS  {:<router_w$}  GOAL",
-        "NAME", "ROUTER",
+        "NAME",
+        "ROUTER",
         name_w = name_w,
         router_w = router_w
     );
@@ -151,7 +150,11 @@ mod tests {
         assert_eq!(truncate_goal("a\nb\nc", 80), "a b c");
         let long = "x".repeat(100);
         let out = truncate_goal(&long, 10);
-        assert!(out.chars().count() <= 10, "got {} chars", out.chars().count());
+        assert!(
+            out.chars().count() <= 10,
+            "got {} chars",
+            out.chars().count()
+        );
         assert!(out.ends_with('…'));
     }
 }

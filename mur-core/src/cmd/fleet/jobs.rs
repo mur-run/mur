@@ -60,11 +60,14 @@ pub fn list_jobs(mur_home: &Path, fleet: &str) -> Result<Vec<Job>> {
         return Ok(Vec::new());
     }
     let mut jobs = Vec::new();
-    for entry in std::fs::read_dir(&dir).with_context(|| format!("read jobs dir {}", dir.display()))? {
+    for entry in
+        std::fs::read_dir(&dir).with_context(|| format!("read jobs dir {}", dir.display()))?
+    {
         let entry = entry.context("read dir entry")?;
         let path = entry.path();
         if path.extension().is_some_and(|ext| ext == "yaml") {
-            let yaml = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            let yaml = std::fs::read_to_string(&path)
+                .with_context(|| format!("read {}", path.display()))?;
             let job: Job = serde_yaml::from_str(&yaml).context("deserialize job")?;
             jobs.push(job);
         }

@@ -59,8 +59,8 @@ pub fn cmd_fleet_remove(mur_home: &Path, name: &str, agents: Vec<String>) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{create, store};
+    use super::*;
 
     #[test]
     fn add_then_remove_member_syncs_fleet_and_is_idempotent() {

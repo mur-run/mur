@@ -93,7 +93,10 @@ pub enum JobStatus {
 impl JobStatus {
     /// Returns true if the job has reached a terminal state.
     pub fn is_terminal(&self) -> bool {
-        matches!(self, JobStatus::Done | JobStatus::Failed | JobStatus::Canceled)
+        matches!(
+            self,
+            JobStatus::Done | JobStatus::Failed | JobStatus::Canceled
+        )
     }
 }
 
@@ -212,8 +215,14 @@ mod tests {
 
     #[test]
     fn job_status_serde_is_lowercase_and_terminal_predicate() {
-        assert_eq!(serde_yaml::to_string(&JobStatus::Queued).unwrap().trim(), "queued");
-        assert_eq!(serde_yaml::to_string(&JobStatus::Done).unwrap().trim(), "done");
+        assert_eq!(
+            serde_yaml::to_string(&JobStatus::Queued).unwrap().trim(),
+            "queued"
+        );
+        assert_eq!(
+            serde_yaml::to_string(&JobStatus::Done).unwrap().trim(),
+            "done"
+        );
         assert!(!JobStatus::Queued.is_terminal());
         assert!(!JobStatus::Running.is_terminal());
         assert!(JobStatus::Done.is_terminal());
@@ -236,7 +245,10 @@ mod tests {
             error: None,
         };
         let yaml = serde_yaml::to_string(&j).unwrap();
-        assert!(!yaml.contains("started_at"), "None optionals must be skipped: {yaml}");
+        assert!(
+            !yaml.contains("started_at"),
+            "None optionals must be skipped: {yaml}"
+        );
         let back: Job = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(back, j);
     }

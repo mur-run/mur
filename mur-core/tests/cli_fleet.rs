@@ -141,12 +141,23 @@ fn fleet_job_and_roster_round_trip() {
     let home = tmp.path();
 
     // create (members need not exist on disk; names canonicalize themselves)
-    create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("standing".into()))
-        .unwrap();
+    create::cmd_fleet_create(
+        home,
+        "dev",
+        vec!["pm".into()],
+        None,
+        Some("standing".into()),
+    )
+    .unwrap();
 
     // add member → fleet manifest stays in sync
     roster::cmd_fleet_add(home, "dev", vec!["qa".into()]).unwrap();
-    assert!(store::load_fleet(home, "dev").unwrap().members.contains(&"qa".to_string()));
+    assert!(
+        store::load_fleet(home, "dev")
+            .unwrap()
+            .members
+            .contains(&"qa".to_string())
+    );
 
     // send job → lands queued (no execution)
     jobs::cmd_fleet_send(home, "dev", "first job").unwrap();
@@ -165,7 +176,10 @@ fn fleet_job_and_roster_round_trip() {
     let fleet = store::load_fleet(home, "dev").unwrap();
     let channel_id = fleet.channel_id.clone();
     delete::cmd_fleet_delete(home, "dev", true).unwrap();
-    assert!(!store::fleet_dir(home, "dev").exists(), "fleet dir must be gone");
+    assert!(
+        !store::fleet_dir(home, "dev").exists(),
+        "fleet dir must be gone"
+    );
     let svc = mur_channel::ChannelService::open(home).unwrap();
     assert!(
         svc.store().load_manifest(&channel_id).is_err(),
