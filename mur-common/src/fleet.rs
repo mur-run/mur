@@ -79,6 +79,48 @@ pub fn fleet_name_from_channel_id(channel_id: &str) -> Option<&str> {
     valid_fleet_name(name).then_some(name)
 }
 
+/// Job status lifecycle: queued → running → {done, failed, canceled}.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JobStatus {
+    Queued,
+    Running,
+    Done,
+    Failed,
+    Canceled,
+}
+
+impl JobStatus {
+    /// Returns true if the job has reached a terminal state.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, JobStatus::Done | JobStatus::Failed | JobStatus::Canceled)
+    }
+}
+
+/// A job represents a unit of work submitted to a fleet for execution.
+/// Time-sortable by ULID-format `id` (time-sortable, so FIFO ordering just filename sort).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Job {
+    pub id: String,
+    pub text: String,
+    /// "cli" | "a2a:<agent-id>" (a2a follow-on).
+    pub source: String,
+    pub status: JobStatus,
+    /// RFC3339 timestamps.
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    /// Channel run executed job (results live there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +208,36 @@ mod tests {
         assert_eq!(l.trigger, "interval:1h");
         assert_eq!(l.max_iterations, 0);
         assert_eq!(l.budget_usd, 0.0);
+    }
+
+    #[test]
+    fn job_status_serde_is_lowercase_and_terminal_predicate() {
+        assert_eq!(serde_yaml::to_string(&JobStatus::Queued).unwrap().trim(), "queued");
+        assert_eq!(serde_yaml::to_string(&JobStatus::Done).unwrap().trim(), "done");
+        assert!(!JobStatus::Queued.is_terminal());
+        assert!(!JobStatus::Running.is_terminal());
+        assert!(JobStatus::Done.is_terminal());
+        assert!(JobStatus::Failed.is_terminal());
+        assert!(JobStatus::Canceled.is_terminal());
+    }
+
+    #[test]
+    fn job_yaml_roundtrip_with_optional_fields_skipped() {
+        let j = Job {
+            id: "0190f3a2-0000-7000-8000-000000000000".into(),
+            text: "ship it".into(),
+            source: "cli".into(),
+            status: JobStatus::Queued,
+            created_at: "2026-06-24T00:00:00Z".into(),
+            started_at: None,
+            finished_at: None,
+            run_id: None,
+            result: None,
+            error: None,
+        };
+        let yaml = serde_yaml::to_string(&j).unwrap();
+        assert!(!yaml.contains("started_at"), "None optionals must be skipped: {yaml}");
+        let back: Job = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back, j);
     }
 }
