@@ -108,7 +108,7 @@ pub fn cmd_fleet_jobs(mur_home: &Path, fleet: &str, all: bool) -> Result<()> {
     }
     for j in shown {
         let short = &j.id[..j.id.len().min(8)];
-        let status = format!("{:?}", j.status).to_lowercase();
+        let status = j.status.as_str();
         let note = j.error.as_deref().or(j.result.as_deref()).unwrap_or("");
         let text = if j.text.chars().count() > 50 {
             format!("{}…", j.text.chars().take(49).collect::<String>())

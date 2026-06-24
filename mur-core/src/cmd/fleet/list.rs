@@ -17,7 +17,7 @@ fn status_symbol(stopped: bool, running: bool) -> &'static str {
     }
 }
 
-fn truncate_goal(goal: &str, width: usize) -> String {
+pub(crate) fn truncate_goal(goal: &str, width: usize) -> String {
     // Collapse all whitespace/newlines to single spaces
     let collapsed = goal.split_whitespace().collect::<Vec<_>>().join(" ");
 

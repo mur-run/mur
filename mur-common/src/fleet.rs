@@ -98,10 +98,29 @@ impl JobStatus {
             JobStatus::Done | JobStatus::Failed | JobStatus::Canceled
         )
     }
+
+    /// Lowercase name — matches the serde representation and the A2A `TaskState`
+    /// mapping. Use this for display instead of `{:?}`/`Debug`, which is not a
+    /// stable display contract.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            JobStatus::Queued => "queued",
+            JobStatus::Running => "running",
+            JobStatus::Done => "done",
+            JobStatus::Failed => "failed",
+            JobStatus::Canceled => "canceled",
+        }
+    }
+}
+
+impl std::fmt::Display for JobStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// A job represents a unit of work submitted to a fleet for execution.
-/// Time-sortable by ULID-format `id` (time-sortable, so FIFO ordering just filename sort).
+/// The `id` is a UUIDv7 — time-sortable, so FIFO ordering is just a filename sort.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Job {
     pub id: String,
@@ -228,6 +247,25 @@ mod tests {
         assert!(JobStatus::Done.is_terminal());
         assert!(JobStatus::Failed.is_terminal());
         assert!(JobStatus::Canceled.is_terminal());
+    }
+
+    #[test]
+    fn job_status_as_str_and_display_match_serde_for_all_variants() {
+        for s in [
+            JobStatus::Queued,
+            JobStatus::Running,
+            JobStatus::Done,
+            JobStatus::Failed,
+            JobStatus::Canceled,
+        ] {
+            let serde = serde_yaml::to_string(&s).unwrap();
+            assert_eq!(
+                serde.trim(),
+                s.as_str(),
+                "as_str must match serde for {s:?}"
+            );
+            assert_eq!(s.to_string(), s.as_str(), "Display must delegate to as_str");
+        }
     }
 
     #[test]
