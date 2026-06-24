@@ -911,7 +911,9 @@ function SkillsTab({
                   />
                 </label>
                 <div className="item-card-name">{s.name}</div>
-                {!s.enabled && s.addon_id && <span className="badge-sm">plugin off</span>}
+                {s.addon_id && detail.addons.find(a => a.id === s.addon_id)?.enabled === false && (
+                  <span className="badge-sm">{t("detail.pluginOff")}</span>
+                )}
                 {s.version && (
                   <span className="badge-sm">{s.version}</span>
                 )}
@@ -1145,7 +1147,9 @@ function McpTab({
                   />
                 </label>
                 <div className="item-card-name">{m.name}</div>
-                {!m.enabled && m.addon_id && <span className="badge-sm">plugin off</span>}
+                {m.addon_id && detail.addons.find(a => a.id === m.addon_id)?.enabled === false && (
+                  <span className="badge-sm">{t("detail.pluginOff")}</span>
+                )}
                 <code className="item-card-code">{m.command}</code>
                 {m.args.length > 0 && (
                   <div className="item-card-args">

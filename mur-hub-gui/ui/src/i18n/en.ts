@@ -155,6 +155,7 @@ export const en = {
   "detail.quietHours": "Quiet hours",
   "detail.quietFrom": "From",
   "detail.quietUntil": "Until",
+  "detail.pluginOff": "plugin off",
   // ── Header actions ──
   "action.run": "Run",
   "action.stop": "Stop",

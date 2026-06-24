@@ -157,6 +157,7 @@ export const zhTW: Table = {
   "detail.quietHours": "靜音時段",
   "detail.quietFrom": "從",
   "detail.quietUntil": "至",
+  "detail.pluginOff": "外掛已停用",
   // ── Header actions ──
   "action.run": "啟動",
   "action.stop": "停止",
