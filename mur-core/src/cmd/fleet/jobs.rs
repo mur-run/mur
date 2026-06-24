@@ -94,14 +94,19 @@ pub fn cmd_fleet_send(mur_home: &Path, fleet: &str, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Which jobs `mur fleet jobs` shows: all when `all`, else only non-terminal
+/// (queued/running). Pure so the filter is testable without capturing stdout.
+fn visible_jobs(jobs: &[Job], all: bool) -> Vec<&Job> {
+    jobs.iter()
+        .filter(|j| all || !j.status.is_terminal())
+        .collect()
+}
+
 /// `mur fleet jobs <name> [--all]` — list jobs and their status.
 pub fn cmd_fleet_jobs(mur_home: &Path, fleet: &str, all: bool) -> Result<()> {
     let _ = store::load_fleet(mur_home, fleet)?;
     let jobs = list_jobs(mur_home, fleet)?;
-    let shown: Vec<&Job> = jobs
-        .iter()
-        .filter(|j| all || !j.status.is_terminal())
-        .collect();
+    let shown = visible_jobs(&jobs, all);
     if shown.is_empty() {
         println!("No jobs. Queue one: mur fleet send {fleet} \"<job>\"");
         return Ok(());
@@ -124,6 +129,34 @@ pub fn cmd_fleet_jobs(mur_home: &Path, fleet: &str, all: bool) -> Result<()> {
 mod tests {
     use super::*;
     use mur_common::fleet::JobStatus;
+
+    #[test]
+    fn visible_jobs_hides_terminal_unless_all() {
+        let mk = |status| Job {
+            id: "x".into(),
+            text: "t".into(),
+            source: "cli".into(),
+            status,
+            created_at: "now".into(),
+            started_at: None,
+            finished_at: None,
+            run_id: None,
+            result: None,
+            error: None,
+        };
+        let jobs = vec![
+            mk(JobStatus::Queued),
+            mk(JobStatus::Running),
+            mk(JobStatus::Done),
+            mk(JobStatus::Failed),
+        ];
+        // default (all=false): only non-terminal jobs are shown
+        let shown = visible_jobs(&jobs, false);
+        assert_eq!(shown.len(), 2);
+        assert!(shown.iter().all(|j| !j.status.is_terminal()));
+        // --all: every job, including terminal
+        assert_eq!(visible_jobs(&jobs, true).len(), 4);
+    }
 
     #[test]
     fn enqueue_list_next_fifo_and_update() {
