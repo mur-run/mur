@@ -20,6 +20,8 @@ fn sample_lock() -> LockFile {
         },
         card_digest: "sha256:abc".into(),
         capabilities: vec!["a2a.message.send".into()],
+        build_sha: String::new(),
+        proto_version: 0,
     }
 }
 
