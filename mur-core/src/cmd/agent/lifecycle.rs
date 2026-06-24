@@ -262,6 +262,10 @@ fn default_entitlements_custom() -> Entitlements {
 
 // ─── list / status ───────────────────────────────────────────────────────
 
+/// Trailing annotation appended to human-readable output when a running agent's
+/// binary is outdated.  Kept out of --json output.
+const STALE_SUFFIX: &str = " — stale runtime (restart to apply)";
+
 #[derive(Debug, serde::Serialize)]
 struct AgentRow {
     name: String,
@@ -453,24 +457,22 @@ pub fn cmd_list(json: bool) -> Result<()> {
                 .map(|p| p.to_string())
                 .unwrap_or_else(|| "-".to_string());
             let uptime = r.uptime.clone().unwrap_or_else(|| "-".to_string());
-            // Append stale marker for running agents whose binary is outdated.
-            let status = if r.status == "running" {
+            // Detect stale-runtime for running agents. The STATUS column stays
+            // plain "running" so fixed-width alignment is preserved; the marker
+            // is appended as a trailing annotation after the last column.
+            let stale_annotation = if r.status == "running" {
                 let lock_path = mur_home.join("agents").join(&r.name).join("running.lock");
                 let stale = mur_common::lock_file::read(&lock_path)
                     .ok()
                     .flatten()
                     .is_some_and(|lock| super::stale::is_stale(&lock, &on_disk));
-                if stale {
-                    "running — stale runtime (restart to apply)".to_string()
-                } else {
-                    r.status.to_string()
-                }
+                if stale { format!(" ⚠{STALE_SUFFIX}") } else { String::new() }
             } else {
-                r.status.to_string()
+                String::new()
             };
             println!(
-                "{:<20} {:<6} {:<10} {:<20} {:<10} {:<12}",
-                r.name, r.emoji, status, uptime, pid, r.category
+                "{:<20} {:<6} {:<10} {:<20} {:<10} {:<12}{}",
+                r.name, r.emoji, r.status, uptime, pid, r.category, stale_annotation
             );
         }
     }
@@ -497,7 +499,7 @@ pub fn cmd_status(name: &str) -> Result<()> {
             .ok()
             .flatten()
             .is_some_and(|lock| super::stale::is_stale(&lock, &on_disk));
-        if stale { " — stale runtime (restart to apply)" } else { "" }
+        if stale { STALE_SUFFIX } else { "" }
     } else {
         ""
     };
