@@ -491,6 +491,14 @@ pub enum FleetAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Delete fleet + shared channel (member agents NOT deleted)
+    Delete {
+        /// Fleet name
+        name: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
     /// Add agent(s) to a fleet (member + channel role)
     Add {
         /// Fleet name

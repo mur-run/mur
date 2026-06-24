@@ -2,6 +2,7 @@
 
 pub mod control;
 pub mod create;
+pub mod delete;
 pub mod export;
 pub mod import;
 pub mod jobs;

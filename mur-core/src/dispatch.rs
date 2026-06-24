@@ -339,6 +339,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                         yes,
                     },
                 )?,
+                FleetAction::Delete { name, yes } => {
+                    cmd::fleet::delete::cmd_fleet_delete(&mur_home, &name, yes)?
+                }
                 FleetAction::Add { name, agents } => {
                     cmd::fleet::roster::cmd_fleet_add(&mur_home, &name, agents)?
                 }
