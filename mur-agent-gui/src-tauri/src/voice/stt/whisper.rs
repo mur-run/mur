@@ -45,11 +45,13 @@ impl WhisperBackend {
             .collect();
         state.full(params, &samples_f32).context("whisper full")?;
 
-        let n = state.full_n_segments().context("whisper full_n_segments")?;
+        // whisper-rs 0.16: full_n_segments() -> i32; text via get_segment(i) +
+        // to_str_lossy() (was full_get_segment_text -> Result<String>).
+        let n = state.full_n_segments();
         let mut out = String::new();
         for i in 0..n {
-            if let Ok(seg) = state.full_get_segment_text(i) {
-                out.push_str(&seg);
+            if let Some(Ok(text)) = state.get_segment(i).map(|seg| seg.to_str_lossy()) {
+                out.push_str(&text);
             }
         }
         Ok(out.trim().to_string())
