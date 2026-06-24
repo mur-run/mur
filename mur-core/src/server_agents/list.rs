@@ -101,6 +101,8 @@ pub(crate) mod tests {
             },
             card_digest: "sha256:abc123".to_string(),
             capabilities: vec!["a2a.message.send".to_string()],
+            build_sha: String::new(),
+            proto_version: 0,
         }
     }
 

@@ -42,6 +42,8 @@ fn write_running_lock(mur_home: &Path, name: &str, sock: &str) {
         },
         card_digest: "sha256:mock".into(),
         capabilities: vec!["a2a.message.send".into()],
+        build_sha: String::new(),
+        proto_version: 0,
     };
     std::fs::write(lock_path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
 }
