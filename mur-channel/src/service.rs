@@ -331,6 +331,54 @@ impl ChannelService {
         Ok(None)
     }
 
+    /// Add an agent as a participant (idempotent on agent id). Re-indexes.
+    pub fn add_participant(
+        &self,
+        channel_id: &str,
+        agent_id: &str,
+        role: ParticipantRole,
+    ) -> Result<()> {
+        let mut ch = self.store.load_manifest(channel_id)?;
+        let exists = ch
+            .participants
+            .iter()
+            .any(|p| matches!(&p.actor, ChannelActor::Agent { id } if id == agent_id));
+        if !exists {
+            ch.participants.push(Participant {
+                actor: ChannelActor::Agent {
+                    id: agent_id.to_string(),
+                },
+                role,
+                joined_at: Utc::now(),
+            });
+            ch.updated_at = Utc::now();
+            self.store.save_manifest(&ch)?;
+            self.index.upsert(&ch)?;
+        }
+        Ok(())
+    }
+
+    /// Remove an agent participant (no-op if absent). Re-indexes.
+    pub fn remove_participant(&self, channel_id: &str, agent_id: &str) -> Result<()> {
+        let mut ch = self.store.load_manifest(channel_id)?;
+        let before = ch.participants.len();
+        ch.participants
+            .retain(|p| !matches!(&p.actor, ChannelActor::Agent { id } if id == agent_id));
+        if ch.participants.len() != before {
+            ch.updated_at = Utc::now();
+            self.store.save_manifest(&ch)?;
+            self.index.upsert(&ch)?;
+        }
+        Ok(())
+    }
+
+    /// Delete the channel entirely (store dir + read-model row). Idempotent.
+    pub fn delete_channel(&self, channel_id: &str) -> Result<()> {
+        self.store.delete(channel_id)?;
+        self.index.remove(channel_id)?;
+        Ok(())
+    }
+
     pub fn store(&self) -> &ChannelStore {
         &self.store
     }
@@ -451,6 +499,37 @@ mod tests {
         let latest = svc.latest_for_agent("qa").unwrap();
         assert_eq!(latest.as_deref(), Some(ch.id.as_str()));
         assert!(svc.latest_for_agent("other").unwrap().is_none());
+    }
+
+    #[test]
+    fn add_remove_participant_and_delete_channel() {
+        use mur_common::channel::ParticipantRole;
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let svc = ChannelService::open(home).unwrap();
+        let ch = svc.create_for_fleet("dev", "mur", &["pm".to_string()]).unwrap();
+
+        // add a Delegate member (idempotent)
+        svc.add_participant(&ch.id, "qa", ParticipantRole::Delegate).unwrap();
+        svc.add_participant(&ch.id, "qa", ParticipantRole::Delegate).unwrap();
+        let m = svc.store().load_manifest(&ch.id).unwrap();
+        let qa_count = m
+            .participants
+            .iter()
+            .filter(|p| matches!(&p.actor, mur_common::channel::ChannelActor::Agent { id } if id == "qa"))
+            .count();
+        assert_eq!(qa_count, 1, "add must be idempotent");
+
+        // remove it
+        svc.remove_participant(&ch.id, "qa").unwrap();
+        let m = svc.store().load_manifest(&ch.id).unwrap();
+        assert!(!m.participants.iter().any(
+            |p| matches!(&p.actor, mur_common::channel::ChannelActor::Agent { id } if id == "qa")
+        ));
+
+        // delete the whole channel
+        svc.delete_channel(&ch.id).unwrap();
+        assert!(svc.store().load_manifest(&ch.id).is_err());
     }
 
     #[test]
