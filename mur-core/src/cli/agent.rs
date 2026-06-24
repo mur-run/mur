@@ -229,6 +229,14 @@ pub enum AgentAction {
         #[arg(long)]
         json: bool,
     },
+    /// Check running agents for stale runtime binaries (build-sha compare).
+    /// Exits non-zero if any agent is stale.
+    #[command(name = "runtime-doctor")]
+    RuntimeDoctor {
+        /// Emit JSON array instead of human text
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage an agent's keychain-backed secrets (set/list/delete)
     Secret {
         /// Agent name

@@ -1402,6 +1402,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
         AgentAction::Logs { name, tail } => cmd::agent::cmd_logs(&name, tail)?,
         AgentAction::Companion(args) => cmd::agent_companion::run(args).await?,
         AgentAction::Doctor { format, json } => cmd::doctor::run(&format, json)?,
+        AgentAction::RuntimeDoctor { json } => cmd::agent::cmd_doctor(json)?,
         AgentAction::Secret { agent, action } => match action {
             AgentSecretAction::Set { key, value } => {
                 cmd::agent::cmd_secret_set(&agent, &key, value.as_deref()).await?
