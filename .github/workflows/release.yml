@@ -137,14 +137,18 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.name }}.tar.gz mur mur-mcp-server murmurd
+          # Ship mur-agent-runtime too: brew installs it as a sibling of `mur`, so
+          # resolve_runtime_target finds the sibling and `brew upgrade` keeps the
+          # runtime in sync. Without it, brew CLI users have no runtime and running
+          # agents drift on a stale one (the runtime otherwise ships only in the Hub .app).
+          tar czf ../../../${{ matrix.name }}.tar.gz mur mur-mcp-server murmurd mur-agent-runtime
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/mur.exe,target/${{ matrix.target }}/release/mur-mcp-server.exe,target/${{ matrix.target }}/release/murmurd.exe -DestinationPath ${{ matrix.name }}.zip
+          Compress-Archive -Path target/${{ matrix.target }}/release/mur.exe,target/${{ matrix.target }}/release/mur-mcp-server.exe,target/${{ matrix.target }}/release/murmurd.exe,target/${{ matrix.target }}/release/mur-agent-runtime.exe -DestinationPath ${{ matrix.name }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -532,6 +536,7 @@ jobs:
               bin.install "mur"
               bin.install "mur-mcp-server"
               bin.install "murmurd"
+              bin.install "mur-agent-runtime"
               bin.install_symlink "mur" => "murmur"
             end
 
