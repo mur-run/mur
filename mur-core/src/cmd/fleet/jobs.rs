@@ -20,7 +20,6 @@ fn job_path(mur_home: &Path, fleet: &str, id: &str) -> PathBuf {
 }
 
 /// Write a new queued job and return it.
-#[allow(dead_code)] // wired up by Task 3-5
 pub fn enqueue_job(mur_home: &Path, fleet: &str, text: &str, source: &str) -> Result<Job> {
     let job = Job {
         id: uuid::Uuid::now_v7().to_string(),
@@ -55,7 +54,6 @@ pub fn save_job(mur_home: &Path, fleet: &str, job: &Job) -> Result<()> {
 }
 
 /// All jobs sorted oldest-first (UUIDv7 lexical sort == time order).
-#[allow(dead_code)] // wired up by Task 3-5
 pub fn list_jobs(mur_home: &Path, fleet: &str) -> Result<Vec<Job>> {
     if !valid_fleet_name(fleet) {
         bail!("invalid fleet name '{fleet}': use lowercase letters, digits, '-' or '_'");
@@ -84,6 +82,43 @@ pub fn list_jobs(mur_home: &Path, fleet: &str) -> Result<Vec<Job>> {
 pub fn next_queued(mur_home: &Path, fleet: &str) -> Result<Option<Job>> {
     let jobs = list_jobs(mur_home, fleet)?;
     Ok(jobs.into_iter().find(|j| j.status == JobStatus::Queued))
+}
+
+/// `mur fleet send <name> "<job>"` — enqueue a job (asynchronous).
+pub fn cmd_fleet_send(mur_home: &Path, fleet: &str, text: &str) -> Result<()> {
+    let _ = store::load_fleet(mur_home, fleet)?; // validates name + existence
+    let job = enqueue_job(mur_home, fleet, text, "cli")?;
+    println!(
+        "Queued job {} for fleet '{fleet}'. Drain it with `mur fleet run {fleet}` (or the daemon).",
+        job.id
+    );
+    Ok(())
+}
+
+/// `mur fleet jobs <name> [--all]` — list jobs and their status.
+pub fn cmd_fleet_jobs(mur_home: &Path, fleet: &str, all: bool) -> Result<()> {
+    let _ = store::load_fleet(mur_home, fleet)?;
+    let jobs = list_jobs(mur_home, fleet)?;
+    let shown: Vec<&Job> = jobs
+        .iter()
+        .filter(|j| all || !j.status.is_terminal())
+        .collect();
+    if shown.is_empty() {
+        println!("No jobs. Queue one: mur fleet send {fleet} \"<job>\"");
+        return Ok(());
+    }
+    for j in shown {
+        let short = &j.id[..j.id.len().min(8)];
+        let status = format!("{:?}", j.status).to_lowercase();
+        let note = j.error.as_deref().or(j.result.as_deref()).unwrap_or("");
+        let text = if j.text.chars().count() > 50 {
+            format!("{}…", j.text.chars().take(49).collect::<String>())
+        } else {
+            j.text.clone()
+        };
+        println!("{short}  {status:<9}  {text}  {note}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -125,5 +160,21 @@ mod tests {
     fn list_empty_when_no_jobs_dir() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(list_jobs(tmp.path(), "dev").unwrap().is_empty());
+    }
+
+    #[test]
+    fn send_requires_existing_fleet_then_enqueues() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        // no fleet yet → error
+        assert!(cmd_fleet_send(home, "dev", "do it").is_err());
+        super::super::create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, None).unwrap();
+        cmd_fleet_send(home, "dev", "do it").unwrap();
+        let jobs = list_jobs(home, "dev").unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].text, "do it");
+        assert_eq!(jobs[0].source, "cli");
+        // jobs view runs without panicking on existing fleet
+        cmd_fleet_jobs(home, "dev", true).unwrap();
     }
 }

@@ -440,6 +440,21 @@ pub enum FleetAction {
         #[arg(long)]
         budget_usd: Option<f64>,
     },
+    /// Queue a job for a fleet (async; drained by `run` or the daemon)
+    Send {
+        /// Fleet name
+        name: String,
+        /// The job text (becomes the goal for one run)
+        job: String,
+    },
+    /// List a fleet's jobs and their status
+    Jobs {
+        /// Fleet name
+        name: String,
+        /// Include terminal (done/failed/canceled) jobs
+        #[arg(long)]
+        all: bool,
+    },
     /// Stop a fleet (kill-switch): disable auto-run and halt a running loop
     Stop {
         /// Fleet name
