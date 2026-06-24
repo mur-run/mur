@@ -4,7 +4,12 @@
 //! to per-job prompts with a free assignee. See
 //! `docs/superpowers/specs/2026-06-24-parallel-jobs-dynamic-fanout-design.md`.
 
+use std::path::Path;
+
+use anyhow::{Result, anyhow, bail};
 use mur_common::skill::manifest::{Procedure, ProcedureStep};
+
+use crate::a2a_dial::canonicalize_agent_name;
 
 /// A single job: a prompt and the (canonicalized) agent to delegate it to.
 pub struct Job {
@@ -32,6 +37,46 @@ pub fn build_jobs_procedure(jobs: &[Job]) -> Procedure {
     }
 }
 
+/// Untyped job as it arrives from the MCP tool: a description and an optional
+/// explicit assignee. Resolved into a `Job` by `resolve_jobs`.
+pub struct RawJob {
+    pub description: String,
+    pub agent: Option<String>,
+}
+
+/// Resolve each `RawJob` to a `Job` with a concrete, canonicalized assignee.
+/// Precedence per job: explicit `agent` -> `default_agent` -> error.
+/// Rejects empty descriptions. Names are canonicalized so the runtime
+/// spoof check passes (case-insensitive on-disk match, else used verbatim).
+pub fn resolve_jobs(
+    mur_home: &Path,
+    raw: &[RawJob],
+    default_agent: Option<&str>,
+) -> Result<Vec<Job>> {
+    if raw.is_empty() {
+        bail!("no jobs provided");
+    }
+    raw.iter()
+        .enumerate()
+        .map(|(i, j)| {
+            if j.description.trim().is_empty() {
+                bail!("job {i} has an empty description");
+            }
+            let assignee = j
+                .agent
+                .as_deref()
+                .or(default_agent)
+                .ok_or_else(|| {
+                    anyhow!("job {i} has no assignee: pass per-job `agent` or a top-level default `agent`")
+                })?;
+            Ok(Job {
+                description: j.description.clone(),
+                assignee: canonicalize_agent_name(mur_home, assignee),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,5 +100,29 @@ mod tests {
         assert_eq!(p.steps[1].id.as_deref(), Some("job-1"));
         // all rank-0 (no dependencies => all parallel)
         assert!(p.steps.iter().all(|s| s.depends_on.is_empty()));
+    }
+
+    #[test]
+    fn resolve_jobs_precedence_and_validation() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+
+        // per-job agent wins over the default
+        let raw = vec![RawJob { description: "A".into(), agent: Some("rustsmith".into()) }];
+        let jobs = resolve_jobs(home, &raw, Some("frontend")).unwrap();
+        assert_eq!(jobs[0].assignee, "rustsmith");
+
+        // falls back to the default agent when a job omits its own
+        let raw = vec![RawJob { description: "B".into(), agent: None }];
+        let jobs = resolve_jobs(home, &raw, Some("frontend")).unwrap();
+        assert_eq!(jobs[0].assignee, "frontend");
+
+        // error when neither a per-job nor a default agent is set
+        let raw = vec![RawJob { description: "C".into(), agent: None }];
+        assert!(resolve_jobs(home, &raw, None).is_err());
+
+        // error on an empty description
+        let raw = vec![RawJob { description: "  ".into(), agent: Some("rustsmith".into()) }];
+        assert!(resolve_jobs(home, &raw, None).is_err());
     }
 }
