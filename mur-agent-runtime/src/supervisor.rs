@@ -660,8 +660,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // Stop accepting new turns, then cooperatively wait for any in-flight turn
     // to finish before tearing down transports. Never SIGKILL mid-flight work.
     runner.begin_drain();
-    let drain_timeout =
-        std::time::Duration::from_secs(profile.inner.lifecycle.stop_timeout_secs);
+    let drain_timeout = std::time::Duration::from_secs(profile.inner.lifecycle.stop_timeout_secs);
     if runner.await_idle(drain_timeout).await {
         info!("task runner drained cleanly");
     } else {

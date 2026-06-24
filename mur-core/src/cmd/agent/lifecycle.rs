@@ -466,7 +466,11 @@ pub fn cmd_list(json: bool) -> Result<()> {
                     .ok()
                     .flatten()
                     .is_some_and(|lock| super::stale::is_stale(&lock, &on_disk));
-                if stale { format!(" ⚠{STALE_SUFFIX}") } else { String::new() }
+                if stale {
+                    format!(" ⚠{STALE_SUFFIX}")
+                } else {
+                    String::new()
+                }
             } else {
                 String::new()
             };

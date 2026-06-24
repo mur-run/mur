@@ -28,6 +28,7 @@ mod apply;
 pub mod channel_import;
 pub mod cli;
 mod comm;
+mod doctor;
 pub mod export;
 mod hub;
 mod install;
@@ -43,9 +44,8 @@ mod secret;
 mod service;
 pub mod skill;
 mod snapshot;
-mod stats;
 pub mod stale;
-mod doctor;
+mod stats;
 
 // `pub use` re-exports for the public CLI dispatch API. The lib crate doesn't
 // reference these names internally; consumers (main.rs, agent_admin) reach them
@@ -56,6 +56,8 @@ pub use apply::cmd_agent_apply;
 #[allow(unused_imports)]
 pub use cli::cmd_cli;
 pub use comm::{cmd_card, cmd_send};
+#[allow(unused_imports)]
+pub use doctor::cmd_doctor;
 #[allow(unused_imports)]
 pub use export::cmd_export;
 #[allow(unused_imports)]
@@ -85,8 +87,6 @@ pub use prompt::{cmd_prompt_edit, cmd_prompt_set, cmd_prompt_show};
 pub use reconnect::cmd_agent_reconnect;
 #[allow(unused_imports)]
 pub use restart::cmd_restart;
-#[allow(unused_imports)]
-pub use doctor::cmd_doctor;
 #[allow(unused_imports)]
 pub use secret::{cmd_secret_delete, cmd_secret_list, cmd_secret_set};
 #[allow(unused_imports)]

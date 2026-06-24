@@ -96,20 +96,23 @@ pub fn dial_method(
     // Reads the peer's running.lock (cheap, local). Ungated methods (min 0) skip.
     if is_running {
         let needed = mur_common::build::method_min_proto(method);
-        if needed > 0 {
-            if let Ok(bytes) = fs::read(&lock_path) {
-                if let Ok(lock) = serde_json::from_slice::<LockFile>(&bytes) {
-                    if lock.proto_version < needed {
-                        let sha = if lock.build_sha.is_empty() { "unknown" } else { &lock.build_sha };
-                        bail!(
-                            "agent '{agent_name}' is running a stale runtime (proto {}, build {}); \
-                             the requested capability '{method}' needs proto {needed}. \
-                             Run 'mur agent restart {agent_name}' to apply the installed runtime.",
-                            lock.proto_version, sha
-                        );
-                    }
-                }
-            }
+        if needed > 0
+            && let Ok(bytes) = fs::read(&lock_path)
+            && let Ok(lock) = serde_json::from_slice::<LockFile>(&bytes)
+            && lock.proto_version < needed
+        {
+            let sha = if lock.build_sha.is_empty() {
+                "unknown"
+            } else {
+                &lock.build_sha
+            };
+            bail!(
+                "agent '{agent_name}' is running a stale runtime (proto {}, build {}); \
+                 the requested capability '{method}' needs proto {needed}. \
+                 Run 'mur agent restart {agent_name}' to apply the installed runtime.",
+                lock.proto_version,
+                sha
+            );
         }
     }
 
@@ -436,18 +439,31 @@ mod tests {
         let adir = tmp.path().join("agents").join("rustsmith");
         std::fs::create_dir_all(&adir).unwrap();
         // Old lock: proto_version absent → 0 < channel/delegate's min (1).
-        std::fs::write(adir.join("running.lock"), r#"{"schema":1,"uuid":"u",
+        std::fs::write(
+            adir.join("running.lock"),
+            r#"{"schema":1,"uuid":"u",
           "name":"rustsmith","pid":1,"ppid":1,"started_at":"t",
           "binary_version":"old","transports":{"stdio":true,
-          "unix_socket":"/nonexistent.sock"},"card_digest":"d","capabilities":[]}"#).unwrap();
+          "unix_socket":"/nonexistent.sock"},"card_digest":"d","capabilities":[]}"#,
+        )
+        .unwrap();
 
-        let err = dial_method(tmp.path(), "rustsmith", "channel/delegate",
-            serde_json::json!({}), DialMode::RequireRunning).unwrap_err();
+        let err = dial_method(
+            tmp.path(),
+            "rustsmith",
+            "channel/delegate",
+            serde_json::json!({}),
+            DialMode::RequireRunning,
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("stale runtime"), "got: {msg}");
         assert!(msg.contains("mur agent restart rustsmith"), "got: {msg}");
         // It must NOT have tried to connect to the (nonexistent) socket.
-        assert!(!msg.contains("connect"), "gate should fire before dialing: {msg}");
+        assert!(
+            !msg.contains("connect"),
+            "gate should fire before dialing: {msg}"
+        );
     }
 
     #[test]
@@ -457,12 +473,25 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let adir = tmp.path().join("agents").join("a");
         std::fs::create_dir_all(&adir).unwrap();
-        std::fs::write(adir.join("running.lock"), r#"{"schema":1,"uuid":"u","name":"a",
+        std::fs::write(
+            adir.join("running.lock"),
+            r#"{"schema":1,"uuid":"u","name":"a",
           "pid":1,"ppid":1,"started_at":"t","binary_version":"old",
           "transports":{"stdio":true,"unix_socket":"/nonexistent.sock"},
-          "card_digest":"d","capabilities":[]}"#).unwrap();
-        let err = dial_method(tmp.path(), "a", "message/send",
-            serde_json::json!({}), DialMode::RequireRunning).unwrap_err();
-        assert!(!err.to_string().contains("stale runtime"), "must not gate message/send");
+          "card_digest":"d","capabilities":[]}"#,
+        )
+        .unwrap();
+        let err = dial_method(
+            tmp.path(),
+            "a",
+            "message/send",
+            serde_json::json!({}),
+            DialMode::RequireRunning,
+        )
+        .unwrap_err();
+        assert!(
+            !err.to_string().contains("stale runtime"),
+            "must not gate message/send"
+        );
     }
 }

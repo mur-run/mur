@@ -272,9 +272,7 @@ impl TaskRunner {
         loop {
             {
                 let reg = self.registry.lock().unwrap_or_else(|e| e.into_inner());
-                let working = reg
-                    .values()
-                    .any(|s| matches!(s, TaskState::Working));
+                let working = reg.values().any(|s| matches!(s, TaskState::Working));
                 if !working {
                     return true;
                 }
@@ -756,7 +754,9 @@ impl TaskRunner {
         // Must run BEFORE any set_state(_, Working) so await_idle is never blocked
         // by a phantom Working entry.
         if self.draining.load(Ordering::SeqCst) {
-            tracing::debug!("start_async called while draining — returning transient failure without registering a Working entry");
+            tracing::debug!(
+                "start_async called while draining — returning transient failure without registering a Working entry"
+            );
             let id = format!("task-{}", Uuid::now_v7());
             let now = chrono::Utc::now().to_rfc3339();
             let (tx_done, rx_done) = oneshot::channel::<TaskOutcome>();
@@ -2627,7 +2627,10 @@ mod tests {
         let ok = runner
             .await_idle(std::time::Duration::from_millis(100))
             .await;
-        assert!(ok, "registry must be clean after a rejected (draining) turn");
+        assert!(
+            ok,
+            "registry must be clean after a rejected (draining) turn"
+        );
     }
 
     #[tokio::test]

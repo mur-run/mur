@@ -27,7 +27,10 @@ mod tests {
     #[test]
     fn short_sha_is_set() {
         // Either a real 12-char hex sha, or the "unknown" fallback.
-        assert!(SHORT_SHA == "unknown" || SHORT_SHA.len() == 12, "got {SHORT_SHA:?}");
+        assert!(
+            SHORT_SHA == "unknown" || SHORT_SHA.len() == 12,
+            "got {SHORT_SHA:?}"
+        );
     }
 
     #[test]

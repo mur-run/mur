@@ -6,7 +6,7 @@
 //! launchd needs the process to exit, not the lock to disappear.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Result, bail};
 use mur_common::LockFile;
@@ -93,12 +93,7 @@ pub(crate) fn select_targets_with_on_disk(
 ///
 /// - `name` / `all` / `stale`: select targets (mirror `cmd_stop`).
 /// - `dry_run`: print targets and return without acting.
-pub fn cmd_restart(
-    name: Option<&str>,
-    all: bool,
-    stale: bool,
-    dry_run: bool,
-) -> Result<()> {
+pub fn cmd_restart(name: Option<&str>, all: bool, stale: bool, dry_run: bool) -> Result<()> {
     let mur_home = resolve_mur_home()?;
     let agents_dir = mur_home.join("agents");
 
@@ -110,7 +105,11 @@ pub fn cmd_restart(
     }
 
     if dry_run {
-        let on_disk = if stale { stale::on_disk_sha() } else { String::new() };
+        let on_disk = if stale {
+            stale::on_disk_sha()
+        } else {
+            String::new()
+        };
         for t in &targets {
             if stale {
                 let lock_path = agents_dir.join(t).join("running.lock");
@@ -144,7 +143,7 @@ pub fn cmd_restart(
 }
 
 /// Restart a single agent: SIGTERM, wait for exit, poll for fresh lock.
-fn restart_one(name: &str, agents_dir: &PathBuf, on_disk_sha: &str) -> Result<()> {
+fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<()> {
     let agent_home = agents_dir.join(name);
     let lock_path = agent_home.join("running.lock");
 
@@ -152,8 +151,7 @@ fn restart_one(name: &str, agents_dir: &PathBuf, on_disk_sha: &str) -> Result<()
         bail!("agent '{name}' is not running");
     }
 
-    let bytes = fs::read(&lock_path)
-        .map_err(|e| anyhow::anyhow!("read lock for '{name}': {e}"))?;
+    let bytes = fs::read(&lock_path).map_err(|e| anyhow::anyhow!("read lock for '{name}': {e}"))?;
     let lock: LockFile = serde_json::from_slice(&bytes)
         .map_err(|e| anyhow::anyhow!("parse lock for '{name}': {e}"))?;
     let old_pid = lock.pid;
@@ -166,8 +164,7 @@ fn restart_one(name: &str, agents_dir: &PathBuf, on_disk_sha: &str) -> Result<()
     }
 
     // Wait for old pid to exit (timeout 30 s, 100 ms poll)
-    let term_deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let term_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while std::time::Instant::now() < term_deadline {
         if !pid_alive(old_pid) {
             break;
@@ -186,17 +183,16 @@ fn restart_one(name: &str, agents_dir: &PathBuf, on_disk_sha: &str) -> Result<()
     // ── Poll for fresh running.lock with a different pid ──────────────
     // launchd KeepAlive=true respawns on process exit; we wait up to 30 s
     // for the new lock to appear.
-    let respawn_deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let respawn_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let new_pid = loop {
         std::thread::sleep(std::time::Duration::from_millis(200));
         if std::time::Instant::now() >= respawn_deadline {
             break None;
         }
-        if let Ok(Some(new_lock)) = read_lock(&lock_path) {
-            if new_lock.pid != old_pid {
-                break Some((new_lock.pid, new_lock.build_sha));
-            }
+        if let Ok(Some(new_lock)) = read_lock(&lock_path)
+            && new_lock.pid != old_pid
+        {
+            break Some((new_lock.pid, new_lock.build_sha));
         }
     };
 
@@ -205,7 +201,11 @@ fn restart_one(name: &str, agents_dir: &PathBuf, on_disk_sha: &str) -> Result<()
             println!(
                 "agent '{name}' restarted ({} → {})",
                 short8(&old_sha),
-                short8(if new_sha.is_empty() { on_disk_sha } else { &new_sha }),
+                short8(if new_sha.is_empty() {
+                    on_disk_sha
+                } else {
+                    &new_sha
+                }),
             );
         }
         None => {
@@ -252,7 +252,12 @@ mod tests {
             ppid: 1,
             started_at: "2026-01-01T00:00:00Z".to_string(),
             binary_version: "0.0.0".to_string(),
-            transports: LockTransports { stdio: true, unix_socket: None, tcp: None, webhook: None },
+            transports: LockTransports {
+                stdio: true,
+                unix_socket: None,
+                tcp: None,
+                webhook: None,
+            },
             card_digest: "abc".to_string(),
             capabilities: vec![],
             build_sha: build_sha.to_string(),
@@ -301,9 +306,12 @@ mod tests {
         fs::create_dir_all(&beta_dir).unwrap();
         write_lock(&beta_dir.join("running.lock"), 2222, "cur000000000");
 
-        let result =
-            select_targets_with_on_disk(home, None, false, true, "cur000000000").unwrap();
-        assert_eq!(result, vec!["alpha"], "only the stale agent should be returned");
+        let result = select_targets_with_on_disk(home, None, false, true, "cur000000000").unwrap();
+        assert_eq!(
+            result,
+            vec!["alpha"],
+            "only the stale agent should be returned"
+        );
     }
 
     #[test]

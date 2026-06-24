@@ -18,7 +18,11 @@ pub fn on_disk_sha() -> String {
     match out {
         Ok(o) if o.status.success() => {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { "unknown".to_string() } else { s }
+            if s.is_empty() {
+                "unknown".to_string()
+            } else {
+                s
+            }
         }
         _ => "unknown".to_string(),
     }
