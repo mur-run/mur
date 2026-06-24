@@ -130,12 +130,16 @@ impl WhisperStt {
 
         state.full(params, samples).context("whisper inference")?;
 
-        let n = state.full_n_segments().context("segment count")?;
+        // whisper-rs 0.16: full_n_segments() -> i32 (no longer Result); segment
+        // text via get_segment(i) -> Option<WhisperSegment> then to_str_lossy().
+        let n = state.full_n_segments();
         let mut transcript = String::new();
         for i in 0..n {
-            match state.full_get_segment_text(i) {
-                Ok(text) => transcript.push_str(&text),
-                Err(_) => tracing::warn!(segment = i, "whisper segment text unavailable; skipping"),
+            match state.get_segment(i).map(|seg| seg.to_str_lossy()) {
+                Some(Ok(text)) => transcript.push_str(&text),
+                Some(Err(_)) | None => {
+                    tracing::warn!(segment = i, "whisper segment text unavailable; skipping")
+                }
             }
         }
         Ok(transcript.trim().to_string())

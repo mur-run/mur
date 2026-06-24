@@ -52,7 +52,7 @@ fn test_initialize_and_list_tools() {
     );
     let resp = read_response(&mut stdout);
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 18, "Expected 18 tools");
+    assert_eq!(tools.len(), 19, "Expected 19 tools");
 
     // Verify properties is an object (not an array) — MCP spec requires JSON object
     let first_tool_with_props = tools
@@ -85,6 +85,7 @@ fn test_initialize_and_list_tools() {
     assert!(names.contains(&"mur_compress"));
     assert!(names.contains(&"mur_retrieve"));
     assert!(names.contains(&"mur_compress_stats"));
+    assert!(names.contains(&"parallel_jobs"));
 
     child.kill().ok();
 }
@@ -226,6 +227,42 @@ fn calls_mur_compress_tool() {
     assert!(
         resp_str.contains("hash="),
         "mur_compress result should include a retrieval-hash note: {resp_str}"
+    );
+
+    child.kill().ok();
+}
+
+#[test]
+fn parallel_jobs_rejects_empty_jobs() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#,
+    );
+    let _ = read_response(&mut stdout);
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    );
+
+    // Empty jobs array -> tool returns an error envelope (isError), never panics.
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"parallel_jobs","arguments":{"jobs":[],"agent":"rustsmith"}}}"#,
+    );
+    let resp = read_response(&mut stdout);
+    let resp_str = serde_json::to_string(&resp).unwrap();
+    assert!(
+        resp_str.contains("isError") || resp_str.to_lowercase().contains("error"),
+        "empty jobs should yield an error envelope: {resp_str}"
     );
 
     child.kill().ok();
