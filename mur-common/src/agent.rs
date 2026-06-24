@@ -1340,27 +1340,14 @@ impl AgentProfile {
         }
     }
 
-    /// Emergency kill-switch (§7): clear every add-on's `enabled` and add
-    /// all members (skills + commands + mcp) to the denylists.
+    /// Emergency kill-switch (§7): clears every add-on group's `enabled` flag.
+    /// Members are already forced off by the group AND-gate in `skill_enabled` /
+    /// `mcp_enabled`, so no denylist push is needed — and avoiding it means
+    /// `set_addon_enabled(id, true)` fully restores the group without leftover
+    /// per-member denials.
     pub fn disable_all_addons(&mut self) {
-        let skills: Vec<String> = self
-            .addons
-            .iter()
-            .flat_map(|g| g.skills.iter().chain(g.commands.iter()).cloned())
-            .collect();
-        let mcp: Vec<String> = self
-            .addons
-            .iter()
-            .flat_map(|g| g.mcp.iter().cloned())
-            .collect();
         for g in &mut self.addons {
             g.enabled = false;
-        }
-        for s in skills {
-            set_denylist(&mut self.disabled_skills, &s, false);
-        }
-        for m in mcp {
-            set_denylist(&mut self.disabled_mcp, &m, false);
         }
     }
 
@@ -2020,12 +2007,23 @@ mod tool_policy_tests {
         // set_addon_enabled on a missing id reports false
         assert!(!p.set_addon_enabled("nope", true));
 
-        // kill-switch: clears every enabled flag and denies all members (skills+commands+mcp)
-        p.set_skill_enabled("g_skill", true); // un-deny so kill-switch is what disables it
+        // kill-switch: only flips group flags — no denylist push
         p.disable_all_addons();
         assert!(p.addons.iter().all(|g| !g.enabled));
         assert!(!p.skill_enabled("g_skill"));
         assert!(!p.skill_enabled("g_cmd"));
-        assert!(!p.mcp_enabled("g_mcp"));
+        assert!(!p.mcp_enabled("g_mcp")); // mcp kill-switch asserted
+
+        // re-enable restores members — kill-switch is NOT sticky
+        // (g_skill was individually denied in step 4 above and stays off;
+        //  g_cmd and g_mcp were never individually denied so they come back on)
+        assert!(p.set_addon_enabled("grp", true));
+        assert!(!p.skill_enabled("g_skill")); // still individually denied from step 4
+        assert!(p.skill_enabled("g_cmd")); // restored: never individually denied
+        assert!(p.mcp_enabled("g_mcp")); // restored: never individually denied
+
+        // clearing the individual deny fully restores g_skill too
+        p.set_skill_enabled("g_skill", true);
+        assert!(p.skill_enabled("g_skill"));
     }
 }
